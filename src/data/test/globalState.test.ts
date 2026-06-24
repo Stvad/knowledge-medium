@@ -8,7 +8,7 @@
  *
  * Coverage:
  *   - getUserBlock: creates a parent-less user page with the user's
- *     display name as content + alias; deterministic id per
+ *     display name as content + name/id aliases; deterministic id per
  *     (workspace, user); idempotent (memoized — second call returns
  *     same promise + Block); falls back to user.id when name is
  *     undefined; restores tombstoned user page
@@ -22,7 +22,7 @@
  *   - resetBlockSelection: no-op when already empty, clears when set
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ChangeScope,
   codecs,
@@ -35,15 +35,16 @@ import { BlockCache } from '@/data/blockCache'
 import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { addedTypes } from '@/data/properties'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { Repo } from '../repo'
-import { PAGE_TYPE } from '@/data/blockTypes'
+import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes'
 import {
   aliasesProp,
   selectionStateProp,
   showPropertiesProp,
   typesProp,
+  userIdProp,
 } from '@/data/properties'
 import {
   getLayoutSessionBlock,
@@ -65,14 +66,17 @@ interface Harness {
   repo: Repo
 }
 
+// Builds a harness on the shared, already-reset DB. Called from beforeEach
+// AND mid-test (some tests build a second Repo on the SAME data to bypass the
+// per-Repo memoize cache), so it must NOT reset — reset lives in beforeEach.
+// `h.cleanup` disposes this harness's sync observer without closing the shared
+// DB, so every `*.h.cleanup()` call (main or secondary) stays correct.
 const setup = async (types: readonly TypeContribution[] = []): Promise<Harness> => {
-  const h = await createTestDb()
   const cache = new BlockCache()
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: USER,
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   if (types.length > 0) {
@@ -81,7 +85,7 @@ const setup = async (types: readonly TypeContribution[] = []): Promise<Harness> 
       types.map(type => typesFacet.of(type, {source: 'test'})),
     ]))
   }
-  return {h, repo}
+  return {h: {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}, repo}
 }
 
 const registerTypes = (repo: Repo, types: readonly TypeContribution[]): void => {
@@ -91,20 +95,27 @@ const registerTypes = (repo: Repo, types: readonly TypeContribution[]): void => 
   ]))
 }
 
+let sharedDb: TestDb
 let env: Harness
-beforeEach(async () => { env = await setup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+beforeEach(async () => { await resetTestDb(sharedDb.db); env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('getUserBlock', () => {
-  it('creates a parent-less user page with content + alias from user.name', async () => {
+  it('creates a parent-less user page with content + name/id aliases from user.name', async () => {
     const userBlock = await getUserBlock(env.repo, WS, USER)
     const data = userBlock.peek()
 
     expect(data?.parentId).toBeNull()
     expect(data?.workspaceId).toBe(WS)
     expect(data?.content).toBe('Alice')
-    expect(userBlock.peekProperty(aliasesProp)).toEqual(['Alice'])
-    expect(userBlock.peekProperty(typesProp)).toEqual([PAGE_TYPE])
+    // Both the display name and the opaque id are aliases so the page is
+    // addressable either way (the id is what `updated_by` stores).
+    expect(userBlock.peekProperty(aliasesProp)).toEqual(['Alice', 'user-1'])
+    // Navigable as a page, plus the USER_TYPE marker carrying the id.
+    expect(userBlock.peekProperty(typesProp)).toEqual([PAGE_TYPE, USER_TYPE])
+    expect(userBlock.peekProperty(userIdProp)).toBe('user-1')
 
     const events = await env.h.db.getAll<{scope: string; source: string}>(
       'SELECT scope, source FROM command_events ORDER BY created_at',
@@ -126,6 +137,7 @@ describe('getUserBlock', () => {
       const block = await getUserBlock(otherEnv.repo, WS, noNameUser)
       expect(block.peek()?.content).toBe('user-no-name')
       expect(block.peekProperty(aliasesProp)).toEqual(['user-no-name'])
+      expect(block.peekProperty(userIdProp)).toBe('user-no-name')
     } finally {
       await otherEnv.h.cleanup()
     }
@@ -145,8 +157,9 @@ describe('getUserBlock', () => {
       // Pull current data from SQL via the fresh repo's cache.
       await fresh.repo.load(restored.id)
       expect(restored.peek()?.deleted).toBe(false)
-      expect(restored.peekProperty(aliasesProp)).toEqual(['Alice'])
-      expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE])
+      expect(restored.peekProperty(aliasesProp)).toEqual(['Alice', 'user-1'])
+      expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE, USER_TYPE])
+      expect(restored.peekProperty(userIdProp)).toBe('user-1')
     } finally {
       await fresh.h.cleanup()
     }
@@ -174,14 +187,13 @@ describe('getUserPrefsBlock', () => {
     // Phase 2: read-only UserPrefs writes are no longer downgraded to a
     // non-uploading source. They tag source='user' and enter ps_crud
     // like any other write; the server's RLS rejection then lands in
-    // ps_crud_rejected, which the sync-status surface exposes.
+    // ps_crud_rejected, which the status surface exposes.
     const h = await createTestDb()
     const repo = new Repo({
       db: h.db,
       cache: new BlockCache(),
       user: USER,
       isReadOnly: true,
-      registerKernelProcessors: false,
     })
     repo.setActiveWorkspaceId(WS)
 

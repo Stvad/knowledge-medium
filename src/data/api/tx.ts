@@ -15,6 +15,33 @@ export interface TxWriteOpts {
   skipMetadata?: boolean
 }
 
+/** Insert-only opts (`tx.create` / `tx.createOrGet`). `systemMint` is
+ *  deliberately NOT on the shared {@link TxWriteOpts}: a row may only be
+ *  born as a speculative engine default, never *promoted* into one by a
+ *  later update — so `tx.update(..., {systemMint})` is a type error by
+ *  construction. When set, the inserted row stamps `updated_at = 0` (the
+ *  pristine sentinel the reconcile gate's stamp-0 exemption lets yield to the
+ *  server); `created_by` / `updated_by` stay the REAL user (authorship is no
+ *  longer the discriminator). Same-tx follow-up writes HOLD `updated_at` at 0
+ *  rather than advancing it — so the `addTypeInTx` / `setProperty` shaping
+ *  every deterministic-id mint does uploads as one pristine default. The first
+ *  real edit in a LATER tx ratchets the row-version off 0. Ignored alongside
+ *  `skipMetadata` (a system mint is not a metadata-skipping bookkeeping write). */
+export interface TxInsertOpts extends TxWriteOpts {
+  systemMint?: boolean
+  /** Import/restore path: stamp `created_at` (origin) + `user_updated_at`
+   *  (display "last edited") from a trusted external source — e.g. Roam
+   *  `create-time` / `edit-time` — instead of `now()`. The row-version
+   *  `updated_at` is NEVER sourced: it stays the engine's monotonic sync
+   *  discriminator (born at `now`, or `0` under `systemMint`), so a
+   *  historical value can surface in display/recency without regressing the
+   *  server-enforced sync gate. `created_by` / `updated_by` stay the real
+   *  acting user (external author ids don't map to our user ids). Ignored
+   *  alongside `skipMetadata` (a 0-sentinel bookkeeping insert carries no
+   *  source provenance). */
+  sourceTimestamps?: {createdAt: number; userUpdatedAt: number}
+}
+
 /** Tx metadata exposed to mutators / processor `apply` bodies.
  *  - `txId` — uuid for this tx; written into `command_events.tx_id` and
  *    every `row_events.tx_id` for this tx.
@@ -44,6 +71,7 @@ export interface SiblingAnchor {
  *  but are referenced by the Tx interface. */
 import type { Mutator } from './mutator'
 import type { ScheduledArgsFor } from './processor'
+import type { SameTxEventPayload } from './sameTxProcessor'
 
 /** Transactional session. Async reads, no arbitrary queries. Spec §5.3. */
 export interface Tx {
@@ -68,7 +96,7 @@ export interface Tx {
    *  storage trigger's collapsed parent/workspace constraint can surface.
    *  Soft-deleted-parent is a kernel-mutator UX rule and does NOT fire on
    *  raw `tx.create` — see §4.7 Layer 1 (v4.30). */
-  create(data: NewBlockData, opts?: TxWriteOpts): Promise<string>
+  create(data: NewBlockData, opts?: TxInsertOpts): Promise<string>
 
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
    *  resurrection in the primitive** — see §10.4. Throws
@@ -79,7 +107,7 @@ export interface Tx {
    *  The insert path uses the same parent preflight as `tx.create`. */
   createOrGet(
     data: NewBlockData & { id: string },
-    opts?: TxWriteOpts,
+    opts?: TxInsertOpts,
   ): Promise<{ id: string; inserted: boolean }>
 
   /** Soft-delete: sets `deleted = 1`. Fires the UPDATE trigger; row_events
@@ -164,6 +192,18 @@ export interface Tx {
     options?: {includePropertyChildren?: boolean},
   ): Promise<BlockData[]>
 
+  /** Existence probe: does `parentId` have any child row? Live-only by
+   *  default (`SELECT 1 … WHERE parent_id = ? AND deleted = 0 LIMIT 1`,
+   *  index-served via the partial `idx_blocks_parent_order`).
+   *  `{includeDeleted: true}` also counts tombstoned children — used to
+   *  tell a row that ever had children (a real container, even one whose
+   *  whole subtree was soft-deleted) apart from a never-populated stub.
+   *  NOTE: the `includeDeleted` variant cannot use the partial
+   *  (`deleted = 0`) index and falls back to a table scan, so reach for it
+   *  only off hot paths. Cheaper than `childrenOf().length` — no row
+   *  materialization, no `ORDER BY` sort, and stops at the first match. */
+  hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean>
+
   /** Nearest live sibling before/after `anchor` in `(order_key, id)`
    *  order. Unlike `childrenOf`, this is a cursor lookup, so insertion
    *  mutators can compute adjacent order keys without loading a large
@@ -174,6 +214,14 @@ export interface Tx {
   /** Parent of `childId`, or null if `childId` has no parent or doesn't
    *  exist. Reads SQL via the writeTransaction. */
   parentOf(childId: string): Promise<BlockData | null>
+
+  /** True when `potentialAncestorId` is an ancestor of `id` (i.e. `id` is
+   *  a descendant of `potentialAncestorId`). Walks `parent_id` up from `id`
+   *  via the same bounded CTE (`IS_DESCENDANT_OF_SQL`) that backs
+   *  `tx.move`'s cycle guard, so — like that guard — it does NOT filter
+   *  soft-deleted nodes: a tombstone on the ancestor chain is still a real
+   *  structural edge (#183). `id === potentialAncestorId` returns true. */
+  isDescendantOf(id: string, potentialAncestorId: string): Promise<boolean>
 
   /** Look up the live block in `workspaceId` whose `aliases` property
    *  contains the exact `alias` text. Returns null when no such block
@@ -201,6 +249,13 @@ export interface Tx {
     args: ScheduledArgsFor<P>,
     options?: { delayMs?: number },
   ): void
+
+  /** Emit a same-tx domain event. Event processors registered for
+   *  `name` run later in the same writeTransaction, after the user fn
+   *  returns and before commit. The tx must already have performed a
+   *  write so the event has a pinned workspace and rolls back with the
+   *  originating mutation. */
+  emitEvent<P extends string>(name: P, payload: SameTxEventPayload<P>): void
 
   readonly meta: TxMeta
 }

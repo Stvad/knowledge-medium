@@ -37,6 +37,11 @@ const maxBodyBytes = Number.isFinite(configuredMaxBodyBytes) && configuredMaxBod
   : 10 * 1024 * 1024
 const bridgeSecret = await resolveBridgeSecret()
 const bridgeSecretHeader = 'x-agent-runtime-secret'
+// Opt-in, off in production. When set, exposes POST /runtime/test/reset
+// (still gated behind the bridge secret) so a test suite can share one
+// server process and wipe state between cases instead of respawning per
+// test. Inert unless this env var is exactly 'true'.
+const testResetEnabled = process.env.AGENT_RUNTIME_TEST_RESET === 'true'
 const defaultAllowedOrigins = new Set(['https://stvad.github.io'])
 const configuredAllowedOrigins = (process.env.AGENT_RUNTIME_ALLOWED_ORIGINS ?? '')
   .split(',')
@@ -508,6 +513,27 @@ const getStatus = () => ({
   })),
 })
 
+// Wipe all in-memory state. Only reachable via the test-only reset route
+// (see `testResetEnabled`). Pending long-poll waiters carry a timeout and
+// an open response, so cancel + close those before dropping the maps.
+const resetState = (): void => {
+  for (const set of waitersByClient.values()) {
+    for (const waiter of set) {
+      clearTimeout(waiter.timeout)
+      try {
+        waiter.response.end()
+      } catch {
+        /* response already closed */
+      }
+    }
+  }
+  clients.clear()
+  commands.clear()
+  pendingByClient.clear()
+  waitersByClient.clear()
+  tokens.clear()
+}
+
 const handleRequest = async (
   request: http.IncomingMessage,
   response: http.ServerResponse,
@@ -528,6 +554,13 @@ const handleRequest = async (
   cleanup()
 
   try {
+    if (testResetEnabled && request.method === 'POST' && requestUrl.pathname === '/runtime/test/reset') {
+      if (!requireBridgeSecret(request, response)) return
+      resetState()
+      sendJson(response, 200, {ok: true})
+      return
+    }
+
     if (request.method === 'GET' && requestUrl.pathname === '/health') {
       if (requestUrl.searchParams.get('detail') === '1') {
         if (!requireBridgeSecret(request, response)) return

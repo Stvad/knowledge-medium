@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -19,6 +19,7 @@ import { Repo } from '@/data/repo'
 import { UserTypesService } from '@/data/userTypesService'
 
 const WS = 'ws-user-types'
+const SUBSCRIPTION_TIMEOUT_MS = 3_000
 
 interface Harness {
   h: TestDb
@@ -28,7 +29,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -38,8 +40,7 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
@@ -60,11 +61,24 @@ const setup = async (): Promise<Harness> => {
   return {h, repo, service, dispose}
 }
 
+let sharedDb: TestDb
 let env: Harness
-afterEach(async () => {
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+afterEach(() => {
+  // Dispose the per-test service; the shared DB closes once in afterAll.
   env.dispose()
-  await env.h.cleanup()
 })
+
+const waitForTypeRegistration = async (
+  repo: Repo,
+  typeId: string,
+  label: string,
+): Promise<void> => {
+  await vi.waitFor(() => {
+    expect(repo.types.get(typeId)?.label).toBe(label)
+  }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+}
 
 const createBlockTypeBlock = async (
   repo: Repo,
@@ -81,8 +95,7 @@ const createBlockTypeBlock = async (
       await tx.setProperty(id, blockTypePropertiesProp, args.properties)
     }
   }, {scope: ChangeScope.BlockDefault})
-  // Allow the subscription to fire.
-  await new Promise(resolve => setTimeout(resolve, 50))
+  if (args.label) await waitForTypeRegistration(repo, id, args.label)
   return id
 }
 
@@ -133,7 +146,9 @@ describe('UserTypesService subscription', () => {
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypePropertiesProp, [schemaBlockId])
     }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await vi.waitFor(() => {
+      expect(env.repo.types.get(id)?.properties).toEqual([schema])
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
     expect(env.repo.types.get(id)?.properties).toEqual([schema])
   })
@@ -152,7 +167,6 @@ describe('UserTypesService subscription', () => {
     await env.repo.tx(async tx => {
       await tx.setProperty(id, blockTypeLabelProp, 'Renamed')
     }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
     expect(env.repo.types.get(id)).toBeUndefined()
   })
 
@@ -219,7 +233,6 @@ describe('UserTypesService workspace switch', () => {
     // 'Person' into typesFacet under the new workspace. Post-fix it's
     // a no-op (subscriptionPrimed=false + latestBlocks=[] after dispose).
     await env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'})
-    await new Promise(resolve => setTimeout(resolve, 50))
 
     expect(env.repo.types.get(w1TypeBlockId)).toBeUndefined()
   })

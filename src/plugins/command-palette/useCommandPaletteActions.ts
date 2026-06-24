@@ -62,14 +62,14 @@ export function useCommandPaletteActions(): CommandPaletteActionsResult {
     const actions = allActions.filter(action => {
       if (!active.has(action.context)) return false
       if (PALETTE_HIDDEN_FROM_PALETTE.has(action.id)) return false
-      if (!action.canRun) return true
+      if (!action.isVisible) return true
       // The shortcut system stores the active context's dependencies
-      // exactly as the handler will receive them, so canRun can run
-      // against them directly. An action whose canRun returns false
+      // exactly as the handler will receive them, so isVisible can run
+      // against them directly. An action whose isVisible returns false
       // would silently no-op if shown — hide it instead.
       const deps = active.get(action.context)
       if (!deps) return true
-      return action.canRun(deps as never)
+      return action.isVisible(deps as never)
     })
 
     const activeContexts: ActiveContextInfo[] = Array.from(active.entries()).flatMap(

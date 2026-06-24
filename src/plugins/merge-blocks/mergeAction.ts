@@ -6,7 +6,7 @@
  * looking at the two blocks' types, so the kernel mutator stays
  * policy-free (see `core.merge`).
  *
- * Visible for any block (no `canRun` gate) per the design discussion:
+ * Visible for any block (no `isVisible` gate) per the design discussion:
  * for outline blocks the user gets a concat-style merge they could've
  * gotten with Backspace; for pages they get the type-aware page merge.
  */
@@ -16,7 +16,8 @@ import {
   ActionContextTypes,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
-import { openMergePicker } from './events.ts'
+import { openDialog } from '@/utils/dialogs.js'
+import { MergePicker } from './MergePicker.tsx'
 
 export const MERGE_INTO_ACTION_ID = 'merge_blocks.merge_into'
 
@@ -28,7 +29,7 @@ export const mergeIntoAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE
   handler: async ({block}: BlockShortcutDependencies) => {
     const data = block.peek() ?? await block.load()
     if (!data) return
-    openMergePicker({
+    void openDialog(MergePicker, {
       sourceBlockId: block.id,
       workspaceId: data.workspaceId,
     })

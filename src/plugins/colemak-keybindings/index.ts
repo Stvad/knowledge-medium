@@ -1,5 +1,5 @@
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
   keybindingOverridesFacet,

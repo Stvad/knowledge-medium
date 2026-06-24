@@ -17,11 +17,17 @@ const readPackageJson = async (): Promise<PackageJson> => {
 }
 
 describe('@knowledge-medium/agent-cli package manifest', () => {
+  // The invariant npm relies on for `npm exec <name>` is that there is a bin
+  // entry *keyed by the unscoped package name* pointing at the built CLI —
+  // a relationship the build/type system doesn't enforce. Assert that, not
+  // the literal name/path (which would just restate package.json).
   it('exposes a bin matching the unscoped package name for npm exec', async () => {
     const pkg = await readPackageJson()
     const unscopedName = pkg.name.split('/').at(-1)
+    expect(unscopedName).toBeTruthy()
 
-    expect(unscopedName).toBe('agent-cli')
-    expect(pkg.bin?.[unscopedName]).toBe('./dist/cli.js')
+    const binTarget = pkg.bin?.[unscopedName!]
+    expect(binTarget).toBeDefined()
+    expect(binTarget).toMatch(/dist\/.*\.js$/)
   })
 })

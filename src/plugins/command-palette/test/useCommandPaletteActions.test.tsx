@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
 import { actionsFacet, actionContextsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts.js'
 import {
@@ -30,8 +30,8 @@ const renderHookWithRuntime = (runtime: FacetRuntime) =>
     ),
   })
 
-describe('useCommandPaletteActions canRun filter', () => {
-  it('hides actions whose canRun returns false against the active context deps', () => {
+describe('useCommandPaletteActions isVisible filter', () => {
+  it('hides actions whose isVisible returns false against the active context deps', () => {
     const always: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
       id: 'always',
       description: 'Always',
@@ -42,7 +42,7 @@ describe('useCommandPaletteActions canRun filter', () => {
       id: 'gated',
       description: 'Gated',
       context: ActionContextTypes.NORMAL_MODE,
-      canRun: ({block}) => block.id === 'allowed',
+      isVisible: ({block}) => block.id === 'allowed',
       handler: vi.fn(),
     }
     const runtime = resolveFacetRuntimeSync([
@@ -92,7 +92,7 @@ describe('useCommandPaletteActions canRun filter', () => {
     expect(ids).not.toContain(commandPaletteForBlockAction.id)
   })
 
-  it('passes through actions without a canRun predicate (default visible)', () => {
+  it('passes through actions without a isVisible predicate (default visible)', () => {
     const noPred: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
       id: 'no-pred',
       description: 'No predicate',

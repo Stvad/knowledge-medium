@@ -1,4 +1,4 @@
-import { defineFacet } from '@/extensions/facet.js'
+import { dedupById, defineFacet } from '@/facets/facet.js'
 import type { ActionContextType } from '@/shortcuts/types.js'
 
 export interface MobileBottomNavItemContribution {
@@ -21,10 +21,15 @@ export const isMobileBottomNavItemContribution = (
   typeof value.actionId === 'string' &&
   (value.context === undefined || typeof value.context === 'string')
 
+// Nav items render once per contribution keyed by `id` (MobileBottomNav.tsx)
+// — dedup by `id` (last-wins). Keyed by `id`, NOT `actionId`: the same
+// `actionId` can legitimately appear under different `id`s/contexts, but a
+// duplicate `id` is a double-mount (same id-bearing-render hazard as #64).
 export const mobileBottomNavItemsFacet = defineFacet<
   MobileBottomNavItemContribution,
   readonly MobileBottomNavItemContribution[]
 >({
   id: 'mobile-bottom-nav.items',
+  combine: dedupById('mobile-bottom-nav.items'),
   validate: isMobileBottomNavItemContribution,
 })

@@ -1,7 +1,7 @@
 /** CodeMirror surface for the geo plugin: autocomplete theme + `@`
  *  completion source contributed via `EditorState.languageData`. The
  *  single central `autocompletion()` call (in
- *  `src/extensions/editorAutocomplete.ts`) walks language data and
+ *  `src/editor/autocomplete.ts`) walks language data and
  *  picks the source up.
  *
  *  Current-location flow: picking the sentinel does NOT auto-resolve —
@@ -20,9 +20,9 @@ import { EditorView } from '@codemirror/view'
 import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
-} from '@/extensions/editor.js'
-import { typesProp } from '@/data/properties'
-import { aliasesProp } from '@/data/internals/coreProperties'
+} from '@/editor/codeMirrorExtensions.js'
+import { ChangeScope } from '@/data/api'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import {
   placeCompletionSource,
@@ -39,7 +39,8 @@ import {
   type GooglePlacesClient,
   type NearbyCandidate,
 } from './googlePlacesClient'
-import { createOrFindPlace, type PlaceCandidate } from './createOrFindPlace'
+import type { PlaceCandidate } from './createOrFindPlace'
+import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { CurrentLocationError, getCurrentPosition } from './currentLocation'
 
 const GOOGLE_MIN_QUERY_LEN = 2
@@ -74,17 +75,7 @@ const isPlaceBlock = (block: { properties: Record<string, unknown> }): boolean =
   return Array.isArray(raw) && raw.includes(PLACE_TYPE)
 }
 
-const displayName = (
-  block: { properties: Record<string, unknown>, content: string } | null | undefined,
-  fallback: string,
-): string => {
-  if (!block) return fallback
-  const aliases = aliasesOf(block)
-  const friendly = aliases.find(a => !a.startsWith('place:') && !a.startsWith('geo:'))
-  return friendly ?? block.content ?? fallback
-}
-
-const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): CompletionSource => {
+const buildPlaceCompletionSource = ({repo, block}: CodeMirrorExtensionContext): CompletionSource => {
   const apiKey = resolveApiKey()
   const googleClient: GooglePlacesClient | null = apiKey
     ? createGooglePlacesClient({apiKey})
@@ -280,8 +271,9 @@ const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): Complet
           phone: details.phone,
           categories: details.categories,
         }
-        const placeBlock = await createOrFindPlace(repo, workspaceId, candidatePayload)
-        return {kind: 'insert', name: displayName(placeBlock.peek(), details.name)}
+        const resolved = await createOrFindPlaceInteractive(repo, workspaceId, candidatePayload)
+        if (!resolved) return null
+        return {kind: 'insert', name: resolved.linkName}
       } catch (err) {
         console.warn('[geo] Google details / place creation failed', err)
         return null
@@ -297,12 +289,13 @@ const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): Complet
 
     if (candidate.source === 'drop-pin') {
       if (!candidate.coords) return null
-      const block = await createOrFindPlace(repo, workspaceId, {
+      const resolved = await createOrFindPlaceInteractive(repo, workspaceId, {
         name: '',
         lat: candidate.coords.lat,
         lng: candidate.coords.lng,
       })
-      return {kind: 'insert', name: displayName(block.peek(), 'Location')}
+      if (!resolved) return null
+      return {kind: 'insert', name: resolved.linkName}
     }
 
     if (candidate.source === 'create-named') {
@@ -312,18 +305,36 @@ const buildPlaceCompletionSource = ({repo}: CodeMirrorExtensionContext): Complet
         : null
       const trimmed = name?.trim()
       if (!trimmed) return null
-      const block = await createOrFindPlace(repo, workspaceId, {
+      const resolved = await createOrFindPlaceInteractive(repo, workspaceId, {
         name: trimmed,
         lat: candidate.coords.lat,
         lng: candidate.coords.lng,
       })
-      return {kind: 'insert', name: displayName(block.peek(), trimmed)}
+      if (!resolved) return null
+      return {kind: 'insert', name: resolved.linkName}
     }
 
     return null
   }
 
-  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates})
+  // The collision toast (and any slow resolution) outlives the pick:
+  // clicking it blurs the block, the per-block editor unmounts, and the
+  // captured view can't take the insert anymore. Apply the same
+  // replacement to the block's content instead — read-modify-write
+  // inside a tx so a pending editor flush can't be clobbered.
+  const persistInsert = async ({triggerText, insert}: {triggerText: string, insert: string}) => {
+    await repo.tx(async tx => {
+      const data = await tx.get(block.id)
+      if (!data || data.deleted) return
+      const idx = data.content.indexOf(triggerText)
+      if (idx === -1) return
+      const next = data.content.slice(0, idx) + insert
+        + data.content.slice(idx + triggerText.length)
+      await tx.update(block.id, {content: next})
+    }, {scope: ChangeScope.BlockDefault, description: 'insert place link'})
+  }
+
+  return placeCompletionSource({getCandidates, resolvePlace, consumePendingCandidates, persistInsert})
 }
 
 export const geoCodeMirrorExtensions: CodeMirrorExtensionContribution = (ctx) => {

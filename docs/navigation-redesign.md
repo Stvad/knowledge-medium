@@ -2,6 +2,13 @@
 
 Captures the design discussion from the navigation refactor up through step 3 (state preservation). This document is the working spec for step 4 and the post-step-4 extensibility roadmap. Written 2026-05-08.
 
+> **Correction (2026-06-15):** an earlier draft described `ChangeScope.UiState` panel rows as "not synced." That conflates two layers:
+>
+> - **Scope / transport:** `ChangeScope.UiState` does *not* keep writes out of the upload queue. UiState rows upload and sync through PowerSync like any block row; the scope only opts them out of the *undo stack*, not out of sync. (Plugin ui-state blocks under the root ui-state subtree are keyed only by workspace + user, so they genuinely restore across devices — see `getPluginUIStateBlock`.)
+> - **Panel layout specifically:** panel rows live under `ui-state/layout-sessions/{layoutSessionId}`, and `layoutSessionId` is a *device-local* random id (per-tab `sessionStorage` / per-install `localStorage`, see `layoutSessionId.ts`). A second device generates a different layout-session subtree, so it never reads the first device's panel rows. Panel layout / focus / scroll are therefore effectively per-device — not because the rows are excluded from sync, but because the session key that addresses them is device-local. Restore happens on reload / PWA relaunch (same key), not across devices.
+>
+> The inline notes below have been corrected accordingly: UiState rows sync (so "not synced" was wrong), but panel layout stays per-device by virtue of the device-local layout-session key, not by opting out of the upload queue.
+
 ## Where we are now (committed up through 078e426)
 
 - **Step 1 (cf397f0)**: `navigate()` primitive — single entry point for "go to a block" / "open in new panel". Replaces scattered `writeAppHash` + `dispatchEvent('open-panel')` call sites.
@@ -10,7 +17,7 @@ Captures the design discussion from the navigation refactor up through step 3 (s
 
 ## Step 4 goal
 
-Make the URL a first-class projection of panel layout: open/close/reorder operations show up in the URL, browser back operates over panel layout, links share their layout. **Substrate stays in the workspace DB** — panel rows already use `ChangeScope.UiState` (not synced, not undoable). The URL is a bidirectional projection of those rows, not a replacement substrate.
+Make the URL a first-class projection of panel layout: open/close/reorder operations show up in the URL, browser back operates over panel layout, links share their layout. **Substrate stays in the workspace DB** — panel rows already use `ChangeScope.UiState` (rows sync, but are addressed per-device via the layout-session key; not undoable — see the correction note above). The URL is a bidirectional projection of those rows, not a replacement substrate.
 
 This honors Riffle's prelude (one reactive store; scope-as-metadata) while still getting URL-as-address-bar for the things that genuinely need it (browser interop, sharing, deep-linking).
 
@@ -18,7 +25,7 @@ This honors Riffle's prelude (one reactive store; scope-as-metadata) while still
 
 ### Substrate: workspace DB rows, UiState scope
 
-Panel rows stay in the workspace DB. UiState scope already gives "don't sync across devices, don't enter undo stack." Components keep using existing reactive hooks (`usePropertyValue`, `useChildren`, etc.) — no parallel store.
+Panel rows stay in the workspace DB. UiState scope already gives "don't enter undo stack" (it still syncs, like any scope). Components keep using existing reactive hooks (`usePropertyValue`, `useChildren`, etc.) — no parallel store.
 
 The only deviation we considered (a fresh in-memory `panelLayoutStore`) was redundant with what UiState scope already provides, and would have fragmented the substrate for no win.
 
@@ -207,7 +214,10 @@ Per-panel chevrons remain a separate panel-scoped affordance.
 
 ### Modifier-key policy for block link clicks (incl. "open in main")
 
-Current matrix (from `handleBlockLinkClick`):
+Matrix (original design record; now implemented by `blockLinkClickIntent` +
+`defaultNavigationIntent`, the intent-policy default — `target: 'focused'` below
+was later renamed `target: 'panel'`, and the resolver runs as the
+`navigationIntentVerb` default rather than a standalone `handleBlockLinkClick`):
 
 | Modifier | Action | Resulting `navigate()` call |
 |---|---|---|
@@ -223,7 +233,7 @@ Modifier choice: **alt-click** as default. Reasoning:
 - Cmd-click is the universal "open in new browser tab" convention; overriding it costs users that affordance for any block link in the app. High-tax override.
 - Shift is taken (new panel).
 - Alt-click currently falls through to native (which on most browsers is "save link," rarely used inside an SPA). Lowest-tax modifier to repurpose.
-- If alt-click ends up unergonomic, swapping to cmd-click is a one-line change in `handleBlockLinkClick`.
+- If alt-click ends up unergonomic, swapping to cmd-click is a one-line change in `blockLinkClickIntent` (and plugins can now remap it via `navigationIntentVerb`).
 
 Updated matrix:
 
@@ -312,7 +322,7 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 
 - `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Observer classifies as insert → push. Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
 - `handleClose` in `PanelRenderer`: stays as-is (UiState delete of the panel row). Observer classifies as delete → push.
-- `navigate({target: 'focused', panelId})` for a side panel: updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
+- `navigate({target: 'focused', panelId})` for a side panel (the target was later renamed `'panel'` — this section predates the rename): updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
 - Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) handles bare `#<wsId>` by either restoring prior `(layoutSessionId, wsId)` rows or, if none exist, deferring to the landing layer to fill in the daily note (see "Workspace switch + default landing" above). App.tsx's eager daily-note rewrite in `getInitialBlock` is removed in this step.
 - Cmd-[/], forward/back mouse: keep bound to `history.back/forward()` — gets the right semantics for free now that browser history tracks panel layout.
 
@@ -324,7 +334,7 @@ Callers don't talk to the projection directly — they write panel rows. The pro
   - On `visibilitychange` to hidden: flush pending write.
   - On mount + `topLevelBlockId` change: read `scrollTopProp` from row and apply to scrollRef in a post-layout effect (same pattern as the existing `consumeRestore`).
 - Existing in-memory snapshotter / restore queue stays — it's still the right substrate for *intra-session* per-panel back/forward, where we don't want every nav writing to DB.
-- Tests: scroll persists across reload; doesn't sync across devices (UiState); doesn't pollute another layout session's row.
+- Tests: scroll persists across reload; stays out of the undo stack (UiState, not undoable); doesn't pollute another layout session's row.
 
 ### 4e. Cleanup
 
@@ -334,24 +344,101 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 - Delete the legacy `getPanelsBlock` / `PANELS_PATH_PART` indirection if nothing reads from `ui-state/panels` anymore.
 - Confirm no panel-row writes use a non-UiState scope outside the projection.
 
-## Post-step-4: emacs-grade extensibility (separate work)
+## Navigation extensibility model
 
-In priority order (none of these block step 4):
+Navigation is a **pipeline** of distinct concerns, each wanting its own seam.
+The "block shows in a custom view" case is already covered by
+`blockRenderersFacet` (`useRendererRegistry`'s `canRender`/`priority`); the nav
+seams below don't own it.
 
-1. **`navigationFacet`** — turn `navigate(input)` into `runtime.read(navigationFacet)({...})`. Default contribution = current behavior. Plugin contributions can short-circuit (custom block-type viewers) or replace wholesale. Same `combineLastContributionResult` pattern as variants.
-2. **`urlSerializerFacet`** — `parse(hash) → AppState`, `build(state) → hash`. Pluggable URL format.
-3. **`panelHistoryFacet`** — alternative history models (tree-shaped, named bookmarks, time-travel debugger).
+The two verb seams are layered: a gesture is first resolved to a
+`NavigateInput` by the **intent policy** (`navigationIntentVerb`), then applied
+by the **execution** verb (`navigationVerb`). Customize *where a gesture lands*
+at the policy; *what happens when we go there* at the execution verb.
 
-The current navigation code grew before facet was the dominant idiom; once step 4 stabilizes the data flow, these retrofits are mostly mechanical (factor out, expose via runtime).
+1. **`navigationVerb`** *(DONE — `src/utils/navigation.ts`)* — the navigation
+   **execution** seam, built on `defineVerbFacet`. `navigate(repo, input)`
+   applies the (already-resolved) `NavigateInput` through it and returns where it
+   landed (`{panelId, blockId} | null`; never rejects). Plugins `impl` (replace
+   navigation wholesale — `req => myNav(req)`), `decorator` (rewrite via
+   `next({...req, input})` — e.g. redirect by `input.origin` / `input.target` /
+   the target block's type — or veto by returning `null` without calling
+   `next`), or `before`/`after` (observe — analytics, history, confirm-before-
+   leave). Effectful verb on the default `onError: 'rethrow'`, so a throwing
+   override fails that one navigation (logged) without re-running the default —
+   no double-navigation. Covers all user-initiated intent (clicks, zoom,
+   daily-notes, commands), which now all funnel through `navigate()`. Every
+   `NavigateInput` can carry an **`origin`** tag (gesture navs get it from the
+   policy = the surface role; programmatic callers set it — `'zoom'`,
+   `'daily-note'`, `'open-in-panel'`), so a decorator can redirect/observe a
+   *specific source*, not just a resolved target.
+   - **Not** covered, deliberately: URL-driven restoration (the inverse
+     projection URL → rows — routing it through `navigate()`, which goes rows →
+     URL, would re-push history and loop) and per-panel back/forward (history
+     traversal restoring a snapshot, not a "go to block" intent). Both flow
+     through `writePanelContent` — except URL restoration that *inserts* new
+     panels, whose initial content is set by `createPanelRowInTx` (see below).
+2. **`writePanelContent(tx, panelId, blockId, state?)`** *(DONE —
+   `src/utils/panelHistory.ts`)* — the single choke for content *swaps on an
+   existing panel row* (in-panel navigate, back/forward, URL reconcile, merge
+   retarget). A *newly created* row's initial content is set separately by
+   `createPanelRowInTx` (new-panel / sidebar-stack / URL-restore inserts /
+   cold-start first paint). Not yet a facet; a complete "track every view"
+   observe seam would hook both (or route `createPanelRowInTx` through
+   `writePanelContent`).
+3. **`navigationIntentVerb`** *(DONE — `src/utils/navigation.ts`)* — the gesture
+   → intent **policy**, a pure `defineVerbFacet` (`onError: 'fallback'`):
+   `(gesture: {role, modifiers, panelId?, blockId, workspaceId, viewport}) →
+   NavigationDecision`, a tagged union — `{kind:'navigate', input}` |
+   `{kind:'passthrough'}` (let the browser handle the href) | `{kind:'suppress'}`
+   (veto, no-op). Resolved **synchronously** via the verb's `runSync` (the policy
+   is pure, no I/O), so a click surface can gate `preventDefault` on the result.
+   The default impl (`defaultNavigationIntent`, exported & composable) reproduces
+   the canonical modifier matrix + follow-link/navigator role + viewport rule
+   exactly. Plugins `decorator`/`impl` to remap modifiers (the alt-click-for-main
+   choice above is provisional), override the role, **redirect where global
+   commands land** (active vs main — the original motivating example, gap N5), or
+   flip a gesture between in-app navigation and native passthrough (helpers
+   `goTo`/`PASSTHROUGH`/`SUPPRESS`/`mapNavigate`). `useBlockOpener`,
+   `navigateFromGlobalCommand`, and `navigateFromGesture` all resolve through it;
+   click surfaces route the decision through `applyNavigationDecision` (the one
+   place that gates `preventDefault`), commands hand a `navigate` decision's input
+   to `navigate()`. Native passthrough (cmd/ctrl/middle → browser) is therefore
+   **plugin-overridable** — it's the policy's `passthrough` outcome, not a
+   hardcoded carve-out in the handlers (synchronous resolution is what makes this
+   possible; the earlier async design required the non-overridable carve-out).
+   - The **read** side agrees: `resolveGlobalCommandTarget` (the anchor for
+     daily-notes prev/next) resolves its target panel through the same policy +
+     shared `resolveDestination` (probing with a neutral navigator gesture), and
+     returns `{blockId, workspaceId}` — so a redirect of where global commands
+     land (panel *or* workspace) feeds both the anchor and the destination.
+     quick-find's plain-selection `jump` also routes through the policy (via
+     `navigateFromGlobalCommand`), so it's retargetable.
+   - Deliberately *not* policy-routed: quick-find's own *modifier → its
+     three-way `jump`/`stack`/`new-panel` enum* (a bespoke vocabulary +
+     keyboard convention, distinct from `NavigateInput`), and its `stack` /
+     `new-panel` dispatch (explicit panel creation, redirectable at the
+     execution verb by target/origin). The old `handleBlockLinkClick` pure
+     helper was removed (vestigial — no production caller; `useBlockOpener` is
+     the live path and its matrix is covered by `defaultNavigationIntent`).
+4. **`urlSerializerFacet`** *(TODO)* — `parse(hash) → AppState`,
+   `build(state) → hash`. Pluggable URL format.
+5. **`panelHistoryFacet`** *(TODO)* — alternative history models (tree-shaped,
+   named bookmarks, time-travel debugger). The Replace seam over the in-memory
+   model in `panelHistory.ts`, and where per-panel back/forward would become
+   interceptable rather than cramming traversal into `navigate()`.
+
+Optional: `viewTransitionFacet` to override the hardcoded `withMoveTransition`
+crossfade in the swap path.
 
 ## Constraints / non-goals
 
 - No back-compat for the old `#wsId/blockId?panels=...` shape we never shipped. Old `#wsId/blockId` is a special case of the new shape, so it parses fine.
 - Per-panel back/forward block history surviving reload: not in step 4. Punt to a follow-up — promoting `panelHistory` stacks to UiState rows is straightforward but adds row churn we don't need yet.
 - Persistent named layouts: not in step 4. A future feature; URL would carry an opaque layout id (`#wsId/L7`) and the structure would live in a saved-layouts store. Coexists with the inline grammar — opt-in only when the user explicitly names a layout.
-- Cross-device sync of any panel layout: explicitly NOT a goal. UiState scope keeps panel rows out of PowerSync.
+- Cross-device sync of panel layout: not a goal, and not what happens. The rows upload (UiState doesn't opt out of sync), but panel layout is addressed by a device-local `layoutSessionId`, so each device builds its own layout-session subtree and restores only its own layout (on reload / PWA relaunch). See the correction note at the top.
 - GC of orphan layout-session subtrees: not in step 4. Add a heartbeat-based sweep if/when this becomes a real issue (one cascading delete per stale layout session).
 
 ## Relation to Riffle's prelude
 
-The previous draft of this plan introduced a parallel in-memory `panelLayoutStore`. That deviated from Riffle's substrate-uniformity principle for no real gain — `ChangeScope.UiState` already provides the "ephemeral, not synced, not undoable" scope Riffle's essay describes as the right way to handle this kind of state. The current plan stays inside the existing reactive substrate; URL and `sessionStorage` are projections, not separate state authorities.
+The previous draft of this plan introduced a parallel in-memory `panelLayoutStore`. That deviated from Riffle's substrate-uniformity principle for no real gain — `ChangeScope.UiState` already provides a dedicated, not-undoable scope for this kind of state (it still syncs through the normal substrate — see the correction note at the top). The current plan stays inside the existing reactive substrate; URL and `sessionStorage` are projections, not separate state authorities.

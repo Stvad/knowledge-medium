@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   collectPluginInvalidationsFromSnapshots,
   type ChangeSnapshot,
-  type InvalidationRowEvent,
 } from '@/data/invalidation.js'
 import {
   REFERENCES_TARGET_INVALIDATION_CHANNEL,
@@ -17,14 +16,6 @@ const targetInvalidations = (
     collectPluginInvalidationsFromSnapshots([referencesInvalidationRule], snapshots)
       ?.get(REFERENCES_TARGET_INVALIDATION_CHANNEL) ?? [],
   ).sort()
-
-const collectFromRowEvent = (event: InvalidationRowEvent): string[] => {
-  const out: string[] = []
-  referencesInvalidationRule.collectFromRowEvent?.(event, (channel, key) => {
-    if (channel === REFERENCES_TARGET_INVALIDATION_CHANNEL) out.push(key)
-  })
-  return out.sort()
-}
 
 describe('references invalidation rule', () => {
   it('new live row contributes all target ids', () => {
@@ -146,42 +137,5 @@ describe('references invalidation rule', () => {
     ])
 
     expect(targetInvalidations(snapshots)).toEqual(['tgt'])
-  })
-
-  it('row-event collector uses the same effective reference diff', () => {
-    expect(collectFromRowEvent({
-      blockId: 'src',
-      kind: 'update',
-      before: {
-        id: 'src',
-        workspaceId: 'w',
-        parentId: null,
-        referenceTargetId: null,
-        orderKey: 'a0',
-        content: '',
-        properties: {},
-        references: [{id: 'removed', alias: 'R'}, {id: 'kept', alias: 'K'}],
-        createdAt: 0,
-        updatedAt: 0,
-        createdBy: 'u',
-        updatedBy: 'u',
-        deleted: false,
-      },
-      after: {
-        id: 'src',
-        workspaceId: 'w',
-        parentId: null,
-        referenceTargetId: null,
-        orderKey: 'a0',
-        content: '',
-        properties: {},
-        references: [{id: 'kept', alias: 'K'}, {id: 'added', alias: 'A'}],
-        createdAt: 0,
-        updatedAt: 0,
-        createdBy: 'u',
-        updatedBy: 'u',
-        deleted: false,
-      },
-    })).toEqual(['added', 'removed'])
   })
 })

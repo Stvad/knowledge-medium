@@ -1,10 +1,10 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { defineFacet } from '@/extensions/facet.js'
+import { defineFacet } from '@/facets/facet.js'
 
 /** Semantic action invoked by a right-swipe on a block content surface.
  *  The gesture plugin owns the trigger; another plugin owns the baseline
- *  handler and other plugins can decorate it through `actionDecoratorsFacet`. */
+ *  handler and other plugins can decorate it through `actionTransformsFacet`. */
 export const SWIPE_RIGHT_BLOCK_ACTION_ID = 'block.swipe-right'
 
 export interface QuickActionContext {

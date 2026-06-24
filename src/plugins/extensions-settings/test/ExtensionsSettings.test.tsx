@@ -11,14 +11,18 @@
 import {render, screen} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {describe, expect, it, vi} from 'vitest'
-import type {ToggleNode} from '@/extensions/discoverToggleTree.js'
+import type {ToggleNode} from '@/facets/discoverToggleTree.js'
 import {makeBlockData} from '@/data/test/factories.js'
 import {extensionNameProp} from '@/data/properties.js'
 import {
   systemToggle,
-  userExtensionToggle,
   type Overrides,
-} from '@/extensions/togglable.js'
+} from '@/facets/togglable.js'
+import {userExtensionToggle} from '@/extensions/extensionToggles.js'
+import {
+  ExtensionApprovalStatusProvider,
+  ExtensionApprovalStatusStore,
+} from '@/extensions/extensionApprovalStatus.js'
 import {ExtensionsSettings} from '@/plugins/extensions-settings/ExtensionsSettings.js'
 
 const node = (
@@ -291,6 +295,52 @@ describe('ExtensionsSettings', () => {
 
     expect(screen.queryByText(/built-in extensions/i)).not.toBeInTheDocument()
     expect(screen.getByText(/user extensions/i)).toBeInTheDocument()
+  })
+
+  it('renders an "Enable here" affordance for a user extension that needs approval here', async () => {
+    const store = new ExtensionApprovalStatusStore()
+    store.report('block-uuid-1', {kind: 'needs-approval', liveHash: 'h'})
+    const onApprove = vi.fn()
+
+    render(
+      <ExtensionApprovalStatusProvider store={store}>
+        <ExtensionsSettings
+          tree={[userNode('block-uuid-1', 'Custom Editor')]}
+          overrides={new Map([['block-uuid-1', true]])}
+          onToggle={vi.fn()}
+          onApprove={onApprove}
+          workspaceId="ws"
+        />
+      </ExtensionApprovalStatusProvider>,
+    )
+
+    const button = screen.getByRole('button', {name: /enable here/i})
+    await userEvent.click(button)
+    expect(onApprove).toHaveBeenCalledTimes(1)
+    expect((onApprove.mock.calls[0][0] as {id: string}).id).toBe('block-uuid-1')
+  })
+
+  it('renders an "Update" affordance when an approved user extension has drifted', () => {
+    const store = new ExtensionApprovalStatusStore()
+    store.report('block-uuid-1', {
+      kind: 'update-available',
+      liveHash: 'h2',
+      approvedHash: 'h1',
+    })
+
+    render(
+      <ExtensionApprovalStatusProvider store={store}>
+        <ExtensionsSettings
+          tree={[userNode('block-uuid-1', 'Custom Editor')]}
+          overrides={new Map([['block-uuid-1', true]])}
+          onToggle={vi.fn()}
+          onApprove={vi.fn()}
+          workspaceId="ws"
+        />
+      </ExtensionApprovalStatusProvider>,
+    )
+
+    expect(screen.getByRole('button', {name: /update/i})).toBeInTheDocument()
   })
 
   it('groups essentials first within nested children too', () => {

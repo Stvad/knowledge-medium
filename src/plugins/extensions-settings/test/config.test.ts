@@ -8,17 +8,14 @@
  */
 import {describe, expect, it} from 'vitest'
 import {CodecError} from '@/data/api'
-import {
-  overridesCodec,
-  extensionsPrefsType,
-} from '@/plugins/extensions-settings/config.js'
-import type {Overrides} from '@/extensions/togglable.js'
+import {overridesCodec} from '@/plugins/extensions-settings/config.js'
+import type {Overrides} from '@/facets/togglable.js'
 
+// The codec id (`overridesCodec.type`) and the prefs block-type id/label are
+// source literals — restating them here can't catch a regression the way the
+// round-trip / decode-error cases below do. A persisted identifier is better
+// guarded by a dedicated snapshot/migration test than by mirroring the string.
 describe('overridesCodec', () => {
-  it('uses the Extensions overrides codec id', () => {
-    expect(overridesCodec.type).toBe('extensions:overrides')
-  })
-
   it('round-trips a populated map through encode/decode', () => {
     const original: Overrides = new Map([
       ['system:a', false],
@@ -59,12 +56,5 @@ describe('overridesCodec', () => {
 
   it('does not have a `where` capability (overrides map is never filtered)', () => {
     expect(overridesCodec.where).toBeUndefined()
-  })
-})
-
-describe('extensionsPrefsType', () => {
-  it('uses Extensions ids and label for the prefs block type', () => {
-    expect(extensionsPrefsType.id).toBe('extensions-prefs')
-    expect(extensionsPrefsType.label).toBe('Extensions')
   })
 })

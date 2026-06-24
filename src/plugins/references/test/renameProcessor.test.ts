@@ -12,14 +12,14 @@
  *   - R4/R7 (anything else):       `[[α]] → [α](((target-id)))`
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -32,17 +32,17 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll), reset here per test.
+  await resetTestDb(sharedDb.db)
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -50,6 +50,8 @@ const setup = async (): Promise<Harness> => {
     referencesDataExtension,
     aliasDataExtension,
   ]))
+  // h.cleanup disposes this Repo's observer (not the shared DB).
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {
     h,
     cache,
@@ -61,7 +63,10 @@ const setup = async (): Promise<Harness> => {
   }
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   env = await setup()
   vi.useFakeTimers({shouldAdvanceTime: true})
@@ -74,8 +79,11 @@ afterEach(async () => {
 const WS = 'ws-1'
 
 const flush = async () => {
-  await vi.advanceTimersByTimeAsync(1)
-  await env.repo.awaitProcessors()
+  for (let i = 0; i < 3; i++) {
+    await vi.advanceTimersByTimeAsync(1)
+    await env.repo.awaitProcessors()
+    await Promise.resolve()
+  }
 }
 
 const seedTarget = async (

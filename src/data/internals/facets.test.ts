@@ -13,10 +13,10 @@
  *     propertySchemasFacet (Phase 3 — chunk A)
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { createElement, type JSX } from 'react'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   codecs,
@@ -29,7 +29,7 @@ import {
   MutatorNotRegisteredError,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
   mutatorsFacet,
@@ -56,11 +56,16 @@ import {
 } from '@/data/blockTypes'
 import { Repo } from '../repo'
 
+let sharedDb: TestDb
 let h: TestDb
 let cache: BlockCache
 let repo: Repo
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
-  h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  h = sharedDb
   cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -71,11 +76,10 @@ beforeEach(async () => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
     // Start empty so setFacetRuntime is the only registration path.
-    registerKernelMutators: false,
-    registerKernelProcessors: false,
+    installKernelRuntime: false,
   })
 })
-afterEach(async () => { await h.cleanup() })
+afterEach(() => { repo.stopSyncObserver() })
 
 describe('setFacetRuntime + mutatorsFacet', () => {
   it('mutatorsFacet.combine builds a name-keyed map', () => {
@@ -129,7 +133,7 @@ describe('setFacetRuntime + mutatorsFacet', () => {
   })
 
   it('setFacetRuntime replaces the registry — kernel mutators are not implicitly retained', async () => {
-    // We started with registerKernelMutators: false, so the registry begins empty.
+    // We started with installKernelRuntime: false, so the registry begins empty.
     // After setFacetRuntime with only a plugin mutator, kernel calls fail.
     let observed = false
     const plugin = defineMutator<{id: string}, void>({

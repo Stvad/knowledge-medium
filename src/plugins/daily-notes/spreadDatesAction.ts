@@ -1,6 +1,6 @@
 import { Shuffle } from 'lucide-react'
 import type { Block } from '@/data/block'
-import type { FacetRuntime } from '@/extensions/facet.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import { defineBlocksAction } from '@/shortcuts/utils.js'
 import { showError, showSuccess } from '@/utils/toast.js'
 import { openDialog } from '@/utils/dialogs.js'
@@ -50,7 +50,7 @@ const pair = defineBlocksAction({
   blockDescription: 'Spread block date across upcoming days',
   blocksDescription: 'Spread dates across upcoming days',
   appliesTo: (block: Block) => {
-    // canRun runs sync during render; fall back to "permissive"
+    // isVisible runs sync during render; fall back to "permissive"
     // when the runtime isn't installed yet (test setups) so the
     // surface doesn't disappear unconditionally.
     const runtime = block.repo.facetRuntime

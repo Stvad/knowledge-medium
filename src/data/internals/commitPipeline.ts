@@ -32,6 +32,7 @@ import type {
   AnySameTxProcessor,
   ChangedRow,
   RepoTxOptions,
+  SameTxEmittedEvent,
   Tx,
   User,
 } from '@/data/api'
@@ -99,6 +100,7 @@ const collectSameTxFieldMatches = (
   processor: AnySameTxProcessor,
   snapshots: SnapshotsMap,
 ): ChangedRow[] => {
+  if (processor.watches.kind !== 'field') return []
   if (processor.watches.table !== 'blocks') return []
   const out: ChangedRow[] = []
   for (const [id, entry] of snapshots) {
@@ -107,6 +109,15 @@ const collectSameTxFieldMatches = (
     }
   }
   return out
+}
+
+const collectSameTxEventMatches = (
+  processor: AnySameTxProcessor,
+  sameTxEvents: readonly SameTxEmittedEvent[],
+): SameTxEmittedEvent[] => {
+  if (processor.watches.kind !== 'event') return []
+  const names = new Set(processor.watches.events)
+  return sameTxEvents.filter(event => names.has(event.name))
 }
 
 /** Mirror of `processorRunner.fieldChanged`. Duplicated rather than
@@ -169,6 +180,17 @@ export interface RunTxParams<R> {
    *  Throws (e.g. `ProcessorRejection`) propagate out and roll back
    *  the user's tx atomically. */
   sameTxProcessors: ReadonlyMap<string, AnySameTxProcessor>
+  /** When true this tx is an undo/redo replay driven by
+   *  `TxImpl.applyRaw` (see `Repo._replay`). The same-tx processor
+   *  pass is SKIPPED for replays: `applyRaw` is contracted to drive
+   *  each row to EXACTLY the restored snapshot (§10 step 7, the
+   *  `applyRaw` doc in `txEngine.ts`), but its write is still a field
+   *  change in the replay tx — so a value-deriving same-tx processor
+   *  (e.g. one that appends to `content`) would re-fire and override
+   *  the restore, leaving the row at a derived value rather than the
+   *  state being restored to. Post-commit processors are unaffected;
+   *  they dispatch from `_runAndDispatch` regardless. Default false. */
+  isReplay?: boolean
   /** Merged property-schema registry snapshot, captured at the same
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
@@ -213,6 +235,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, now,
     mutators, processors, sameTxProcessors, propertySchemas,
+    isReplay = false,
   } = params
   const {scope, description} = opts
 
@@ -228,6 +251,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const source = sourceForScope(scope)
   const snapshots: SnapshotsMap = newSnapshotsMap()
   const afterCommitJobs: AfterCommitJob[] = []
+  const sameTxEvents: SameTxEmittedEvent[] = []
   // `tx.run` pushes onto this list each time a mutator runs (including
   // the outer call from `repo.mutate.X` / `repo.run` since those open
   // the tx with `fn = tx => tx.run(m, args)`). Pipeline serializes
@@ -270,6 +294,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       mutators,
       processors,
       propertySchemas,
+      sameTxEvents,
       now,
       newId,
     })
@@ -297,13 +322,19 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // Only the snapshot taken at tx start (`sameTxProcessors`) is
     // iterated — mid-tx facet swaps don't affect the running tx,
     // matching the §3/§8 contract.
-    if (sameTxProcessors.size > 0 && snapshots.size > 0) {
+    //
+    // Replay txs (undo/redo) skip this pass entirely (`isReplay`):
+    // `applyRaw` drives each row to EXACTLY the restored snapshot, so
+    // re-deriving here would override the restore. See the `isReplay`
+    // doc on RunTxParams.
+    if (!isReplay && sameTxProcessors.size > 0 && (snapshots.size > 0 || sameTxEvents.length > 0)) {
       const sameTxStartedAt = performance.now()
       for (const processor of sameTxProcessors.values()) {
         const collectStartedAt = performance.now()
         const changedRows = collectSameTxFieldMatches(processor, snapshots)
         const collectMs = performance.now() - collectStartedAt
-        if (changedRows.length === 0) {
+        const emittedEvents = collectSameTxEventMatches(processor, sameTxEvents)
+        if (changedRows.length === 0 && emittedEvents.length === 0) {
           if (collectMs >= 1) {
             timing.sameTxProcessorRuns.push({
               name: processor.name,
@@ -315,18 +346,22 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
           continue
         }
         const applyStartedAt = performance.now()
-        // workspaceId is guaranteed non-null when snapshots.size > 0
-        // (every write pins the workspace; meta.workspaceId is set
-        // by the first write in `pinWorkspace`).
+        // workspaceId is guaranteed here: field matches require a
+        // snapshot-producing write, and tx.emitEvent refuses to run
+        // before the tx has pinned a workspace.
+        if (meta.workspaceId === null) {
+          throw new Error('same-tx processor matched without a pinned workspace')
+        }
         await processor.apply(
           {
             txId,
             scope,
             user,
-            workspaceId: meta.workspaceId!,
+            workspaceId: meta.workspaceId,
             changedRows,
+            emittedEvents,
           },
-          {tx, propertySchemas},
+          {tx, db: txDb, propertySchemas},
         )
         const applyMs = performance.now() - applyStartedAt
         timing.sameTxChangedRows += changedRows.length
@@ -383,11 +418,14 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   timing.snapshotCount = snapshots.size
 
   // Step 6: post-COMMIT cache walk. Update cache to `after` per id
-  // (deepFrozen by BlockCache.setSnapshot). Outside-tx readers begin
+  // (deepFrozen by BlockCache.setSnapshot). A hard-delete drives the
+  // row to a confirmed-missing marker instead of merely evicting the
+  // snapshot so already-loaded Block facades keep observing "absent"
+  // rather than regressing to "not loaded". Outside-tx readers begin
   // observing committed state from this point.
   for (const [id, entry] of snapshots) {
     if (entry.after === null) {
-      cache.deleteSnapshot(id)
+      cache.markMissing(id)
     } else {
       cache.setSnapshot(entry.after)
     }

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { MouseEvent } from 'react'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
 import type { BlockRenderer } from '@/types.js'
@@ -7,33 +6,19 @@ import {
   blockContentRendererFacet,
   BlockInteractionContext,
 } from '@/extensions/blockInteraction.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import {
-  blockEditingContentRenderer,
-  plainOutlinerBlockClickBehavior,
-} from '../interactions.tsx'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types.js'
+import { blockEditingContentRenderer } from '../interactions.tsx'
+import { enterBlockEditModeOnClickAction } from '../clickToEditAction.ts'
+
+const enterEditModeForBlock = vi.hoisted(() => vi.fn())
+vi.mock('@/extensions/blockInteraction.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/extensions/blockInteraction.js')>()),
+  enterEditModeForBlock,
+}))
 
 const PrimaryRenderer: BlockRenderer = () => null
 const SecondaryRenderer: BlockRenderer = () => null
-
-const interactiveTargets: Array<[string, () => HTMLElement]> = [
-  ['anchor', () => {
-    const link = document.createElement('a')
-    link.href = 'https://example.com'
-    return link
-  }],
-  ['button', () => document.createElement('button')],
-  ['ARIA button', () => {
-    const button = document.createElement('span')
-    button.setAttribute('role', 'button')
-    return button
-  }],
-  ['controlled video', () => {
-    const video = document.createElement('video')
-    video.controls = true
-    return video
-  }],
-]
 
 const context = {
   block: {id: 'block-1'} as Block,
@@ -90,50 +75,34 @@ describe('plain outliner interactions', () => {
     expect(variant?.render).toBe(PrimaryRenderer)
   })
 
-  it.each(interactiveTargets)('leaves %s clicks to the interactive descendant', async (_label, createTarget) => {
-    const interactive = createTarget()
-    const child = document.createElement('span')
-    interactive.appendChild(child)
+})
 
-    const event = {
-      target: child,
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-      ctrlKey: false,
-      metaKey: false,
-      shiftKey: false,
-      clientX: 1,
-      clientY: 1,
-    } as unknown as MouseEvent
-
-    const handler = plainOutlinerBlockClickBehavior(context)
-    if (!handler) throw new Error('Expected plain outliner click handler')
-
-    await handler(event)
-
-    expect(event.preventDefault).not.toHaveBeenCalled()
-    expect(event.stopPropagation).not.toHaveBeenCalled()
+describe('plain outliner click-to-edit action', () => {
+  const deps = (): BlockPointerDependencies => ({
+    block: {id: 'block-1'} as Block,
+    uiStateBlock: {id: 'panel'} as Block,
+    targetElement: document.createElement('div'),
+    renderScopeId: 'scope-a',
   })
 
-  it('leaves selection clicks to the default selection shell owner', async () => {
+  const clickEvent = (target: EventTarget): ActionTrigger => ({
+    target,
+    clientX: 4,
+    clientY: 8,
+  }) as unknown as ActionTrigger
+
+  it('enters edit mode at the click position on a plain click', () => {
+    // Interactive-target exclusion is the block-pointer context's job
+    // (pointerTargetFilter), so this action assumes a real surface click and
+    // just enters edit mode at the click position.
+    enterEditModeForBlock.mockClear()
     const target = document.createElement('span')
-    const event = {
-      target,
-      preventDefault: vi.fn(),
-      stopPropagation: vi.fn(),
-      ctrlKey: false,
-      metaKey: false,
-      shiftKey: true,
-      clientX: 1,
-      clientY: 1,
-    } as unknown as MouseEvent
+    const d = deps()
 
-    const handler = plainOutlinerBlockClickBehavior(context)
-    if (!handler) throw new Error('Expected plain outliner click handler')
+    enterBlockEditModeOnClickAction.handler(d, clickEvent(target))
 
-    await handler(event)
-
-    expect(event.preventDefault).not.toHaveBeenCalled()
-    expect(event.stopPropagation).not.toHaveBeenCalled()
+    expect(enterEditModeForBlock).toHaveBeenCalledWith(
+      d.block, d.uiStateBlock, 'scope-a', {x: 4, y: 8},
+    )
   })
 })

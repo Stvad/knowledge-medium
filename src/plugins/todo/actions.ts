@@ -1,5 +1,5 @@
 import { actionsFacet } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
 import { getBlockTypes } from '@/data/properties.js'
@@ -95,6 +95,10 @@ export const todoActions: readonly ActionConfig[] = [
     id: SWIPE_RIGHT_BLOCK_ACTION_ID,
     description: 'Swipe right: cycle todo state',
     context: ActionContextTypes.NORMAL_MODE,
+    // Bound to the swipe recognizer's `swipe-right` commit: the recognizer names
+    // the gesture, this action names the gesture (symmetric with pointerBinding).
+    // The swipe plugin no longer dispatches this action by id.
+    gestureBinding: {gesture: 'swipe-right'},
     handler: async ({block}: BlockShortcutDependencies) => {
       await cycleTodoState(block)
     },

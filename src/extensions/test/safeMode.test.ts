@@ -18,10 +18,10 @@ import {
   appMountsFacet,
   headerItemsFacet,
 } from '@/extensions/core.js'
-import {defineFacet} from '@/extensions/facet.js'
-import {resolveAppRuntimeSync, resolveAppRuntime} from '@/extensions/resolveAppRuntime.js'
+import {defineFacet} from '@/facets/facet.js'
+import {resolveAppRuntimeSync, resolveAppRuntime} from '@/facets/resolveAppRuntime.js'
 import {staticAppExtensions} from '@/extensions/staticAppExtensions.js'
-import {systemToggle, type Overrides} from '@/extensions/togglable.js'
+import {systemToggle, type Overrides} from '@/facets/togglable.js'
 import {COMMAND_PALETTE_ACTION_ID} from '@/plugins/command-palette'
 import {RELOAD_IN_SAFE_MODE_ACTION_ID} from '@/shortcuts/defaultShortcuts.js'
 import {ActionContextTypes} from '@/shortcuts/types.js'

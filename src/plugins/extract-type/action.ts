@@ -9,8 +9,10 @@
  *     the type's properties (optionally with value filters) and retag
  *     matching blocks. Only surfaces on block-type blocks.
  *
- *  Same shape as `rescheduleBlockDateAction`: each handler dispatches
- *  a window CustomEvent the globally-mounted dialog listens for. */
+ *  Each handler opens its dialog through the promise-returning
+ *  `openDialog` queue. `extractType` chains: it awaits the new type id
+ *  from `ExtractTypeDialog`, then opens `FindTypeInstancesDialog` on
+ *  it. */
 
 import { Sparkles, Users } from 'lucide-react'
 import {
@@ -20,10 +22,9 @@ import {
 } from '@/shortcuts/types.js'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { getBlockTypes } from '@/data/properties'
-import {
-  openExtractTypeDialog,
-  openFindTypeInstancesDialog,
-} from './events.ts'
+import { openDialog } from '@/utils/dialogs.js'
+import { ExtractTypeDialog } from './ExtractTypeDialog.tsx'
+import { FindTypeInstancesDialog } from './FindTypeInstancesDialog.tsx'
 
 export const EXTRACT_TYPE_ACTION_ID = 'block.extract_type'
 
@@ -32,8 +33,10 @@ export const extractTypeAction: ActionConfig<typeof ActionContextTypes.NORMAL_MO
   description: 'Extract type from this block',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Sparkles,
-  handler: ({block}: BlockShortcutDependencies) => {
-    openExtractTypeDialog({prototypeBlockId: block.id})
+  handler: async ({block}: BlockShortcutDependencies) => {
+    const created = await openDialog(ExtractTypeDialog, {prototypeBlockId: block.id})
+    if (!created) return
+    await openDialog(FindTypeInstancesDialog, {typeBlockId: created.typeBlockId})
   },
 }
 
@@ -45,12 +48,12 @@ export const findTypeInstancesAction: ActionConfig<typeof ActionContextTypes.NOR
   context: ActionContextTypes.NORMAL_MODE,
   icon: Users,
   // Only meaningful on a block-type block. Surfaces (command palette,
-  // swipe menu) hide the entry when canRun is false.
-  canRun: ({block}) => {
+  // swipe menu) hide the entry when isVisible is false.
+  isVisible: ({block}) => {
     const data = block.peek()
     return !!data && getBlockTypes(data).includes(BLOCK_TYPE_TYPE)
   },
   handler: ({block}: BlockShortcutDependencies) => {
-    openFindTypeInstancesDialog({typeBlockId: block.id})
+    void openDialog(FindTypeInstancesDialog, {typeBlockId: block.id})
   },
 }

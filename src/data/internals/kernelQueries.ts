@@ -53,7 +53,7 @@ import {
   typedBlocksReferenceKey,
   typedBlocksStructureKey,
   typedBlocksTypeKey,
-} from './kernelInvalidation'
+} from '@/data/invalidation.js'
 
 export const SELECT_BLOCK_BY_ID_SQL = `
   SELECT ${SELECT_BLOCK_COLUMNS_SQL}
@@ -264,7 +264,7 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
       WHEN LOWER(b.content) LIKE LOWER(?) || '%' THEN 1
       ELSE 2
     END,
-    b.updated_at DESC
+    coalesce(b.user_updated_at, b.updated_at) DESC
   LIMIT ?
 `
 
@@ -275,7 +275,7 @@ export const SELECT_RECENT_BLOCKS_SQL = `
   WHERE workspace_id = ?
     AND deleted = 0
     AND content != ''
-  ORDER BY updated_at DESC, id ASC
+  ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
 
@@ -347,8 +347,18 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
  *  query token (typically the first 3 chars of each token, see
  *  `buildFilterPrefixes` in fuzzyRank.ts). Permissive on purpose: the
  *  final rank/keep decision happens in JS, where we score per-token
- *  word-start / substring / edit-distance-1 plus recency. Returns
- *  `updated_at` so the JS ranker can boost recently-edited rows.
+ *  word-start / substring / edit-distance-1 plus recency. Returns the
+ *  user-facing stamp (`coalesce(user_updated_at, updated_at)`) so the JS
+ *  ranker can boost recently-edited rows.
+ *
+ *  Orders exact whole-query matches first, then prefix matches, before
+ *  applying `LIMIT`: the prefix is only 3 chars, so a single trigram can
+ *  match far more aliases than the over-fetch budget. Without this an
+ *  unordered LIMIT could evict the very alias the user typed verbatim
+ *  before the JS ranker (which rewards exact matches) ever sees it. The
+ *  full lowered query is bound for the exact/prefix comparisons; pass `''`
+ *  for the empty-query "browse all aliases" path (everything ties as a
+ *  prefix match and falls through to the deterministic created_at order).
  *
  *  Falls back to a workspace-scoped scan when `tokenCount === 0` (empty
  *  query) so the same query handle can also serve the "browse all
@@ -362,12 +372,20 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
       ba.alias AS alias,
       b.id AS blockId,
       b.content AS content,
-      b.updated_at AS updatedAt
+      coalesce(b.user_updated_at, b.updated_at) AS updatedAt
     FROM block_aliases ba
     JOIN blocks b ON b.id = ba.block_id
     WHERE ba.workspace_id = ?
       AND b.deleted = 0
       AND (${filters})
+    ORDER BY
+      CASE
+        WHEN ba.alias_lower = ? THEN 0
+        WHEN ba.alias_lower LIKE ? || '%' THEN 1
+        ELSE 2
+      END,
+      b.created_at,
+      ba.alias
     LIMIT ?
   `
 }
@@ -451,6 +469,9 @@ const blockDataArraySchema: Schema<BlockData[]> = {
 }
 const stringArraySchema: Schema<string[]> = {
   parse: (input) => input as string[],
+}
+const numberSchema: Schema<number> = {
+  parse: (input) => input as number,
 }
 const blockDataOrNullSchema: Schema<BlockData | null> = {
   parse: (input) => input as BlockData | null,
@@ -938,6 +959,33 @@ export const typedBlockIdsQuery = defineQuery<ResolvedTypedBlockQuery, string[]>
   resolve: (query, ctx) => resolveTypedBlockIds(query, ctx),
 })
 
+/** Count projection for typed queries. Same membership semantics and
+ *  invalidation as `resolveTypedBlockIds` — it shares `collectTypedBlockAxisDeps`
+ *  and the compiler's candidate set — but aggregates to a single integer in
+ *  SQLite instead of marshalling the id list. Used by per-block count badges
+ *  (e.g. inline backlink counts) where only the cardinality is needed. */
+export const resolveTypedBlockCount = async (
+  query: ResolvedTypedBlockQuery,
+  ctx: QueryCtx,
+): Promise<number> => {
+  if (!query.workspaceId) return 0
+  const normalized = normalizeTypedBlockQuery(query)
+  const {matchPredicates, excludePredicates} = collectTypedBlockAxisDeps(normalized, ctx)
+  if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
+    await declareAncestorDeps(normalized, ctx, 'structure')
+  }
+  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas, {projection: 'count'})
+  const row = await ctx.db.get<{count: number}>(compiled.sql, [...compiled.params])
+  return row?.count ?? 0
+}
+
+export const typedBlockCountQuery = defineQuery<ResolvedTypedBlockQuery, number>({
+  name: 'core.typedBlockCount',
+  argsSchema: typedBlocksArgsSchema,
+  resultSchema: numberSchema,
+  resolve: (query, ctx) => resolveTypedBlockCount(query, ctx),
+})
+
 /** Substring-match content search. Empty `query` returns []. */
 export const searchByContentQuery = defineQuery<
   {workspaceId: string; query: string; limit?: number},
@@ -1109,13 +1157,14 @@ export const aliasMatchesQuery = defineQuery<
  *  Empty `prefixes` returns every (alias, block) pair in the workspace
  *  up to `limit`, suitable for the "browse all" path. */
 export const aliasMatchesFuzzyQuery = defineQuery<
-  {workspaceId: string; prefixes: string[]; limit?: number},
+  {workspaceId: string; prefixes: string[]; query?: string; limit?: number},
   AliasMatchWithRecency[]
 >({
   name: 'core.aliasMatchesFuzzy',
   argsSchema: z.object({
     workspaceId: z.string(),
     prefixes: z.array(z.string()),
+    query: z.string().optional(),
     limit: z.number().optional(),
   }),
   resultSchema: z.array(z.object({
@@ -1124,7 +1173,7 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     content: z.string(),
     updatedAt: z.number(),
   })),
-  resolve: async ({workspaceId, prefixes, limit = 100}, ctx) => {
+  resolve: async ({workspaceId, prefixes, query = '', limit = 100}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({
       kind: 'plugin',
@@ -1132,7 +1181,10 @@ export const aliasMatchesFuzzyQuery = defineQuery<
       key: kernelAliasesKey(workspaceId),
     })
     const sql = buildFuzzyAliasMatchesSql(prefixes.length)
-    const params: (string | number)[] = [workspaceId, ...prefixes, limit]
+    // The two extra params back the exact/prefix ORDER BY so the LIMIT
+    // retains the verbatim match; `alias_lower` is already lowercased.
+    const queryLower = query.toLowerCase()
+    const params: (string | number)[] = [workspaceId, ...prefixes, queryLower, queryLower, limit]
     const rows = await ctx.db.getAll<AliasMatchWithRecency>(sql, params)
     // Same reasoning as `aliasMatches`: this query returns a custom row
     // shape (no BlockData hydration), so per-row deps have to be
@@ -1198,9 +1250,10 @@ export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, Block
 
 // ──── Bundle ────
 
-/** All kernel queries — registered at construction time when
- *  `RepoOptions.registerKernelQueries` is true (default), and
- *  contributed to the FacetRuntime via `kernelDataExtension`. */
+/** All kernel queries — contributed to the FacetRuntime via
+ *  `kernelDataExtension`, which the Repo installs at construction
+ *  (`installKernelRuntime`, default true) and every `setFacetRuntime`
+ *  swap re-merges. */
 export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   subtreeQuery,
   ancestorsQuery,
@@ -1210,6 +1263,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   byTypeQuery,
   typedBlocksQuery,
   typedBlockIdsQuery,
+  typedBlockCountQuery,
   searchByContentQuery,
   recentBlocksQuery,
   firstChildByContentQuery,
@@ -1236,6 +1290,7 @@ declare module '@/data/api' {
     'core.byType': typeof byTypeQuery
     'core.typedBlocks': typeof typedBlocksQuery
     'core.typedBlockIds': typeof typedBlockIdsQuery
+    'core.typedBlockCount': typeof typedBlockCountQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.recentBlocks': typeof recentBlocksQuery
     'core.firstChildByContent': typeof firstChildByContentQuery

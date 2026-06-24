@@ -1,4 +1,4 @@
-import { FacetRuntime } from '@/extensions/facet.js'
+import { FacetRuntime } from '@/facets/facet.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import { ActionConfig } from '@/shortcuts/types.js'
 

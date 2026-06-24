@@ -12,8 +12,12 @@ export default tseslint.config(
   // copies that shouldn't be re-linted. docs/**/*.ts are design-sketch
   // files (typechecked via docs/tsconfig.json) — they intentionally have
   // unused stub params and let-vs-const looseness so the prose stays
-  // readable; ESLint shouldn't gate on them.
-  { ignores: ['dist', '**/dist/**', '.claude/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**'] },
+  // readable; ESLint shouldn't gate on them. **/*.eval.js are agent-bridge
+  // eval scripts: the bridge wraps the file body in an async function
+  // (top-level `await` + `return` to print back to the CLI), so they aren't
+  // standalone ES modules — espree rejects the top-level `return`. Same
+  // "runtime code, not a module" carve-out as agent-extensions/**.
+  { ignores: ['dist', '**/dist/**', '.claude/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**', '**/*.eval.js'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -48,9 +52,30 @@ export default tseslint.config(
       'block/no-direct-types-prop-writes': ['error', {
         allowIn: [
           'src/data/properties.ts',
-          'src/data/repo.ts',
+          'src/data/typeTagger.ts',
         ],
       }],
+      // Audit B3: the untyped window.CustomEvent UI bus was replaced by
+      // typed channels. Block its reintroduction — dialogs/pickers go
+      // through `openDialog`, toggle/open surfaces through a
+      // `createToggleStore` + an action (reached cross-plugin via
+      // `runActionById`). A genuine broadcast keeps a CustomEvent but
+      // must opt in explicitly with an inline disable + justification
+      // (see runtimeEvents.ts / propertyNavigation.ts / agent-runtime).
+      'no-restricted-syntax': ['error', {
+        selector:
+          "CallExpression[callee.object.name=/^(window|globalThis)$/][callee.property.name='dispatchEvent'] > NewExpression[callee.name='CustomEvent']",
+        message:
+          'Opening/toggling UI via window.dispatchEvent(new CustomEvent(...)) is the retired plugin-bus pattern (audit B3). Use openDialog for dialogs/pickers, and a useSyncExternalStore toggle store (createToggleStore) flipped from an action for toggle/open intents. For a genuine broadcast, add `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.',
+      }],
+    },
+  },
+  {
+    // Tests legitimately dispatch synthetic CustomEvents to drive
+    // components, so the B3 guard above doesn't apply to them.
+    files: ['**/test/**/*.{ts,tsx}', '**/*.test.{ts,tsx}'],
+    rules: {
+      'no-restricted-syntax': 'off',
     },
   },
 )

@@ -3,7 +3,7 @@ import type { Block } from '../../data/block'
 import {
   resolveMarkdownRenderConfig,
 } from '@/markdown/extensions.js'
-import { isFunction } from '@/extensions/facet.js'
+import { isFunction } from '@/facets/facet.js'
 import type { Components } from 'react-markdown'
 import type { Plugin } from 'unified'
 

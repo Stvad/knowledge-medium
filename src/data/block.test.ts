@@ -10,7 +10,7 @@
  *     repo.children
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   BlockNotFoundError,
   BlockNotLoadedError,
@@ -20,7 +20,7 @@ import {
   type BlockData,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Block } from './block'
 import { Repo } from './repo'
 
@@ -31,7 +31,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -45,13 +47,22 @@ const setup = async (): Promise<Harness> => {
   return {h, cache, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const titleProp = defineProperty<string>('title', {
   codec: codecs.string,
   defaultValue: 'untitled',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const tagsProp = defineProperty<string[]>('tags', {
+  codec: codecs.list(codecs.string),
+  defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -119,6 +130,64 @@ describe('Block.data / peek (sync)', () => {
     expect(b.peek()).not.toBeNull()
     expect(b.data.id).toBe('late-arrival')
   })
+
+  it('normalizes a cached tombstone to missing on the public facade', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'deleted-row', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'gone'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(tx => tx.delete('deleted-row'), {scope: ChangeScope.BlockDefault})
+
+    const b = new Block(env.repo, 'deleted-row')
+    expect(env.cache.getSnapshot('deleted-row')?.deleted).toBe(true)
+    expect(b.peek()).toBeNull()
+    expect(b.read()).toBeNull()
+    expect(() => b.data).toThrow(BlockNotFoundError)
+  })
+
+  it('peekRaw exposes a cached tombstone for lifecycle/debug callers', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'raw-deleted-row', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'gone'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(tx => tx.delete('raw-deleted-row'), {scope: ChangeScope.BlockDefault})
+
+    const b = new Block(env.repo, 'raw-deleted-row')
+    expect(b.peek()).toBeNull()
+    expect(b.peekRaw()).toMatchObject({
+      id: 'raw-deleted-row',
+      deleted: true,
+      content: 'gone',
+    })
+  })
+
+  it('delete and restore transition the public facade between null and live data', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'restored-row', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'before'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    const b = env.repo.block('restored-row')
+    const seen: Array<string | null> = []
+    const unsub = b.subscribe(data => seen.push(data?.content ?? null))
+    try {
+      await env.repo.tx(tx => tx.delete('restored-row'), {scope: ChangeScope.BlockDefault})
+      expect(b.peek()).toBeNull()
+      expect(b.read()).toBeNull()
+      expect(b.peekRaw()).toMatchObject({id: 'restored-row', deleted: true})
+
+      await env.repo.tx(
+        tx => tx.restore('restored-row', {content: 'after'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      expect(b.peek()).toMatchObject({id: 'restored-row', content: 'after', deleted: false})
+      expect(b.read()).toMatchObject({id: 'restored-row', content: 'after', deleted: false})
+      expect(b.peekRaw()).toMatchObject({id: 'restored-row', content: 'after', deleted: false})
+      expect(seen).toEqual([null, 'after'])
+    } finally {
+      unsub()
+    }
+  })
 })
 
 describe('Block.get / peekProperty (codec at boundary)', () => {
@@ -145,7 +214,7 @@ describe('Block.get / peekProperty (codec at boundary)', () => {
 })
 
 describe('Block.load', () => {
-  it('skips SQL when the cache already holds a snapshot (cache fast path)', async () => {
+  it('skips SQL when the cache already holds a live snapshot (cache fast path)', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'cached', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
@@ -290,7 +359,7 @@ describe('Block.load', () => {
         content: 'live',
         properties: {},
         references: [],
-        createdAt: 1, updatedAt: 1,
+        createdAt: 1, updatedAt: 1, userUpdatedAt: 1,
         createdBy: 'u', updatedBy: 'u',
         deleted: false,
       }, 'sync')
@@ -404,6 +473,34 @@ describe('Block.set / setContent / delete (write sugar)', () => {
     expect(b.get(titleProp)).toBe('Hello')
   })
 
+  it('set(schema, updater) reads the current value and writes the result', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'fn1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const b = new Block(env.repo, 'fn1')
+    await b.set(tagsProp, ['a'])
+    await b.set(tagsProp, current => [...(current ?? []), 'b'])
+    expect(b.get(tagsProp)).toEqual(['a', 'b'])
+  })
+
+  it('concurrent set(schema, updater) calls both land (no lost update)', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'fn2', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const b = new Block(env.repo, 'fn2')
+    await b.set(tagsProp, [])
+    // Fire both before awaiting: each updater must read the OTHER's
+    // committed write (the serialized write-tx), not the empty snapshot
+    // both started from — that's the lost-update the overload prevents.
+    await Promise.all([
+      b.set(tagsProp, c => [...(c ?? []), 'x']),
+      b.set(tagsProp, c => [...(c ?? []), 'y']),
+    ])
+    expect([...(b.get(tagsProp) ?? [])].sort()).toEqual(['x', 'y'])
+  })
+
   it('setContent routes through repo.mutate.setContent', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'w2', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'pre'}),
@@ -481,11 +578,11 @@ describe('repo.load', () => {
   })
 
   it('concurrent load(id) + load(id, {children: true}) both hydrate fully', async () => {
-    // Regression for a prior bug: `dedupLoad(id, ...)` keyed only by id
-    // could merge the two calls into one promise driven by whichever
-    // started first. The plain loader didn't fetch children, so the
+    // Regression for a prior bug: an id-only in-flight load cache could
+    // merge the two calls into one promise driven by whichever started
+    // first. The plain loader didn't fetch children, so the
     // children-requesting caller's expectation was silently dropped.
-    // The fix is to NOT use the id-keyed dedupLoad path in repo.load
+    // The fix is that repo.load does NOT dedup concurrent loads at all
     // (each call does its own work; cache.setSnapshot is idempotent).
     const [r1, r2] = await Promise.all([
       env.repo.load('p'),

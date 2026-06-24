@@ -24,14 +24,14 @@
  *     NOT re-fire itself (single pass)
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ChangeScope,
   ProcessorRejection,
   type AnySameTxProcessor,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
@@ -42,7 +42,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -52,14 +53,20 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
+  // Undo/redo are scoped to the active workspace (issue #186).
+  repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 interface FireLog {
   events: Array<{name: string; ids: string[]; afterContents: Array<string | null>}>
@@ -119,6 +126,56 @@ describe('Same-tx runner — field-watching dispatch', () => {
     // content-only update should NOT fire a references watcher
     await env.repo.tx(async tx => {
       await tx.update('a', {content: 'updated'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(log.events).toHaveLength(0)
+  })
+})
+
+describe('Same-tx runner — event dispatch', () => {
+  it('fires event watchers inside the active tx with read-your-own-writes DB access', async () => {
+    const seenPayloads: unknown[] = []
+    const watcher: AnySameTxProcessor = {
+      name: 'test.eventWatcher',
+      watches: {kind: 'event', events: ['test.blockTouched']},
+      apply: async (event, ctx) => {
+        seenPayloads.push(...event.emittedEvents.map(e => e.payload))
+        const row = await ctx.db.get<{content: string}>(
+          'SELECT content FROM blocks WHERE id = ?',
+          ['a'],
+        )
+        await ctx.tx.update('a', {content: `${row.content} event`}, {skipMetadata: true})
+      },
+    }
+    env.repo.__setSameTxProcessorsForTesting([watcher])
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'start'})
+      tx.emitEvent('test.blockTouched', {id: 'a'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(seenPayloads).toEqual([{id: 'a'}])
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?',
+      ['a'],
+    )
+    expect(row.content).toBe('start event')
+  })
+
+  it('does not fire event watchers when their event was not emitted', async () => {
+    const log: FireLog = {events: []}
+    const watcher: AnySameTxProcessor = {
+      name: 'test.eventWatcher',
+      watches: {kind: 'event', events: ['test.missing']},
+      apply: async () => {
+        log.events.push({name: 'test.eventWatcher', ids: [], afterContents: []})
+      },
+    }
+    env.repo.__setSameTxProcessorsForTesting([watcher])
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'start'})
+      tx.emitEvent('test.other', {id: 'a'})
     }, {scope: ChangeScope.BlockDefault})
 
     expect(log.events).toHaveLength(0)
@@ -284,6 +341,58 @@ describe('Same-tx runner — ordering', () => {
     // Amendment still landed.
     const row = await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['a'])
     expect(row.content).toBe('final')
+  })
+})
+
+describe('Same-tx runner — undo/redo replay skip (#187)', () => {
+  // A value-deriving same-tx processor: appends '!' to content whenever
+  // content changes (and isn't already suffixed). Non-idempotent in the
+  // sense that re-running on a restore would corrupt the restored value.
+  const appendBang: AnySameTxProcessor = {
+    name: 'test.appendBang',
+    watches: {kind: 'field', table: 'blocks', fields: ['content']},
+    apply: async (event, ctx) => {
+      for (const row of event.changedRows) {
+        if (row.after && !row.after.content.endsWith('!')) {
+          await ctx.tx.update(row.id, {content: `${row.after.content}!`}, {skipMetadata: true})
+        }
+      }
+    },
+  }
+
+  it('does not re-run a value-deriving same-tx processor during undo/redo (restore is exact)', async () => {
+    // Seed content='orig' BEFORE registering the processor, so the
+    // restored snapshot is the bare 'orig' (no '!' suffix). This is
+    // what makes the bug observable: if the same-tx pass re-ran on the
+    // undo's applyRaw write, 'orig' (no trailing '!') would be amended
+    // to 'orig!'.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'orig'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    env.repo.__setSameTxProcessorsForTesting([appendBang])
+
+    // Update to 'changed' → processor appends → 'changed!'. The undo
+    // entry for this tx captures before={content:'orig'},
+    // after={content:'changed!'}.
+    await env.repo.tx(async tx => {
+      await tx.update('a', {content: 'changed'})
+    }, {scope: ChangeScope.BlockDefault})
+    const changed = await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['a'])
+    expect(changed.content).toBe('changed!')
+
+    // Undo: applyRaw drives content back to exactly 'orig'. That's a
+    // content change in the replay tx, so a non-gated same-tx pass
+    // would re-derive to 'orig!'. With the replay-skip gate it stays
+    // 'orig' (#187).
+    expect(await env.repo.undo(ChangeScope.BlockDefault)).toBe(true)
+    const undone = await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['a'])
+    expect(undone.content).toBe('orig')
+
+    // Redo: applyRaw restores the post-update snapshot exactly.
+    expect(await env.repo.redo(ChangeScope.BlockDefault)).toBe(true)
+    const redone = await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['a'])
+    expect(redone.content).toBe('changed!')
   })
 })
 

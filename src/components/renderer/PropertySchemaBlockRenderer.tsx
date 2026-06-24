@@ -10,6 +10,7 @@ import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { valuePresetsFacet } from '@/data/facets.js'
+import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import {
   presetConfigProp,
   presetIdProp,
@@ -38,7 +39,6 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
       id: d.id,
       workspaceId: d.workspaceId,
       properties: d.properties,
-      deleted: d.deleted,
     } : undefined,
   })
   const runtime = useAppRuntime()
@@ -171,9 +171,12 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
     }
   }, [block, data, pendingDelete, performDelete, propertyName])
 
-  if (!data || data.deleted) return null
+  if (!data) return null
 
-  const presetEntries = Array.from(presets.values()).sort((a, b) => a.label.localeCompare(b.label))
+  // Hide presets that opt out of the picker (e.g. `enum`, whose options
+  // can't be set here — switching a schema to it would build an empty,
+  // always-failing codec), but keep the type a schema is already on.
+  const presetEntries = selectablePresets(presets, presetId)
 
   return (
     <div className="w-full space-y-2 py-1">

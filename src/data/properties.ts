@@ -17,7 +17,6 @@
  */
 import type { Block } from './block'
 import type { BlockData, ChangedRow } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
 import {
   ChangeScope,
   codecs,
@@ -219,12 +218,32 @@ export const blockTypePropertiesProp = defineProperty<readonly string[]>('block-
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Re-export of the canonical alias schema (defined under
- *  `@/data/internals/coreProperties.ts` so the kernel parseReferences
- *  processor can reference it without circling back through this
- *  module). Kept here so call-site migrations can import every
- *  descriptor from a single path. */
-export { aliasesProp }
+// ──── user page kernel fields ────
+
+/** Opaque user id (the value stored in `created_by` / `updated_by`) on a
+ *  `'user'` user-page block. Gives the page a structured, queryable link
+ *  between the id and the display name (the block's content) alongside
+ *  the human-friendly alias — so attribution surfaces can resolve either
+ *  direction without parsing aliases. */
+export const userIdProp = defineProperty<string>('user:id', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Alias list stored on alias-target / daily-note blocks (§7). The
+ *  encoded shape in `properties_json` is `string[]`; the codec is the
+ *  list-of-strings combinator.
+ *
+ *  This is the schema `parseReferences` writes when a tx inserts a
+ *  target block (e.g. `[[Inbox]]` produces a target with
+ *  `aliases: ['Inbox']`), and the same schema alias-lookup queries
+ *  consult to resolve `[[alias]]` to a target id. */
+export const aliasesProp: PropertySchema<string[]> = defineProperty<string[]>('alias', {
+  codec: codecs.list(codecs.string),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
 
 // ──── Helpers ────
 
@@ -306,11 +325,11 @@ export const isFocusedBlock = (
   return renderScopeId ? location.renderScopeId === renderScopeId : true
 }
 
-const sameFocusedBlockLocation = (
+export const sameFocusedBlockLocation = (
   a: FocusedBlockLocation | undefined,
-  b: FocusedBlockLocation,
+  b: FocusedBlockLocation | undefined,
 ): boolean =>
-  a?.blockId === b.blockId && a.renderScopeId === b.renderScopeId
+  Boolean(a && b && a.blockId === b.blockId && a.renderScopeId === b.renderScopeId)
 
 const isEditingFromProperties = (
   properties: Record<string, unknown> | undefined,
@@ -410,4 +429,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   blockTypeLabelProp,
   blockTypeDescriptionProp,
   blockTypePropertiesProp,
+  // user page fields
+  userIdProp,
 ] as ReadonlyArray<PropertySchema<unknown>>

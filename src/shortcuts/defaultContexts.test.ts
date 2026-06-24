@@ -8,10 +8,14 @@ describe('default action contexts', () => {
       context => context.type === ActionContextTypes.MULTI_SELECT_MODE,
     )
 
+    expect(multiSelect).toBeDefined()
     expect(multiSelect).toMatchObject({
       type: ActionContextTypes.MULTI_SELECT_MODE,
       modal: true,
     })
+    // No eventFilter: modal multi-select must not silently drop key
+    // events. (Guarded by the toBeDefined above so this can't pass
+    // vacuously via optional chaining on an undefined config.)
     expect(multiSelect?.eventFilter).toBeUndefined()
   })
 })

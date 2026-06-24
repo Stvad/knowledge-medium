@@ -88,24 +88,42 @@ describe('lintExtensionSource — stored-plugin-block-id', () => {
   })
 })
 
-describe('lintExtensionSource — dialog-store-instead-of-event', () => {
-  it('warns when a module-scoped Dialog store is declared', () => {
-    const source = `const dialogStore = createStore({ open: false })`
+describe('lintExtensionSource — dialog-via-window-event', () => {
+  it('warns when a dialog is toggled by dispatching a window CustomEvent', () => {
+    const source = `window.dispatchEvent(new CustomEvent('myplugin:toggle-settings'))`
     const warnings = lintExtensionSource(source)
-    expect(warnings.map(w => w.rule)).toContain('dialog-store-instead-of-event')
+    expect(warnings.map(w => w.rule)).toContain('dialog-via-window-event')
   })
 
-  it('warns when useSyncExternalStore is used (likely subscribing to a dialog store)', () => {
-    const source = `const open = useSyncExternalStore(dialogStore.subscribe, dialogStore.getSnapshot)`
+  it('warns when the event name is an identifier that reads like an open intent', () => {
+    const source = `handler: () => window.dispatchEvent(new CustomEvent(OPEN_EVENT)),`
     const warnings = lintExtensionSource(source)
-    expect(warnings.map(w => w.rule)).toContain('dialog-store-instead-of-event')
+    expect(warnings.map(w => w.rule)).toContain('dialog-via-window-event')
   })
 
-  it('points at the settings-dialog catalog pattern', () => {
+  it('does NOT flag useSyncExternalStore — that is the blessed mechanism', () => {
+    const source = `const open = useSyncExternalStore(subscribe, getSnapshot)`
+    const warnings = lintExtensionSource(source)
+    expect(warnings.find(w => w.rule === 'dialog-via-window-event')).toBeUndefined()
+  })
+
+  it('does NOT flag a module-scoped store declaration', () => {
     const source = `const settingsDialogStore = createStore({open: false})`
-    const warning = lintExtensionSource(source).find(w => w.rule === 'dialog-store-instead-of-event')
+    const warnings = lintExtensionSource(source)
+    expect(warnings.find(w => w.rule === 'dialog-via-window-event')).toBeUndefined()
+  })
+
+  it('does NOT flag genuine broadcast CustomEvents', () => {
+    const source = `window.dispatchEvent(new CustomEvent('myplugin:data-synced', {detail}))`
+    const warnings = lintExtensionSource(source)
+    expect(warnings.find(w => w.rule === 'dialog-via-window-event')).toBeUndefined()
+  })
+
+  it('points at the settings-dialog catalog pattern and openDialog', () => {
+    const source = `window.dispatchEvent(new CustomEvent('myplugin:open-dialog'))`
+    const warning = lintExtensionSource(source).find(w => w.rule === 'dialog-via-window-event')
     expect(warning?.catalogPattern).toBe('settings-dialog')
-    expect(warning?.message).toMatch(/dispatchEvent|CustomEvent/)
+    expect(warning?.message).toMatch(/openDialog/)
   })
 })
 
@@ -127,11 +145,11 @@ describe('lintExtensionSource — suppression via `// lint-ok: <rule>`', () => {
     const source = `
       // lint-ok: config-in-localstorage
       localStorage.setItem('myplugin:config', value)
-      const dialogStore = createStore({open: false})
+      window.dispatchEvent(new CustomEvent('myplugin:toggle-settings'))
     `
     const warnings = lintExtensionSource(source)
     expect(warnings.find(w => w.rule === 'config-in-localstorage')).toBeUndefined()
-    expect(warnings.find(w => w.rule === 'dialog-store-instead-of-event')).toBeDefined()
+    expect(warnings.find(w => w.rule === 'dialog-via-window-event')).toBeDefined()
   })
 })
 
@@ -164,8 +182,13 @@ describe('lintExtensionSource — clean source', () => {
       // Root: deterministic id.
       const rootId = pluginBlockId(repo.activeWorkspaceId, READWISE_NS, 'library-root')
 
-      // Dialog toggle: CustomEvent dispatch + window.addEventListener inside the component.
-      window.dispatchEvent(new CustomEvent('readwise:toggle-settings'))
+      // Dialog visibility: a typed module store read via useSyncExternalStore
+      // (the blessed mechanism), flipped by the configure action — not a
+      // window CustomEvent.
+      const open = useSyncExternalStore(subscribeSettingsOpen, () => settingsOpen)
+
+      // Genuine broadcast (notify listeners that a sync finished) stays a CustomEvent.
+      window.dispatchEvent(new CustomEvent('readwise:data-synced', {detail}))
     `
     expect(lintExtensionSource(source)).toEqual([])
   })
@@ -178,7 +201,7 @@ describe('lintExtensionSource — clean source', () => {
 describe('lintExtensionSource — output shape', () => {
   it('sorts warnings by rule id for deterministic output', () => {
     const source = `
-      const dialogStore = {open: false}
+      window.dispatchEvent(new CustomEvent('myplugin:toggle-dialog'))
       localStorage.setItem('config-blob', value)
     `
     const warnings = lintExtensionSource(source)

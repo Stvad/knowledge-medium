@@ -2,7 +2,7 @@ import { Suspense, useEffect, type ReactNode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
 import {
   ActiveContextsProvider,
@@ -17,7 +17,7 @@ import {
 } from '@/shortcuts/types.js'
 import { Plus } from 'lucide-react'
 import { LeftSidebar, LeftSidebarShortcutsSection } from '../LeftSidebar.tsx'
-import { openLeftSidebarEvent } from '../events.ts'
+import { leftSidebarToggle } from '../toggleStore.ts'
 
 const mocks = vi.hoisted(() => {
   const repo = {id: 'repo'}
@@ -94,6 +94,7 @@ function renderWithActions(
 
 afterEach(() => {
   cleanup()
+  leftSidebarToggle.close()
   mocks.closeSidebar.mockClear()
   mocks.getOrCreateShortcutsBlock.mockClear()
   mocks.openBlock.mockClear()
@@ -131,7 +132,7 @@ describe('LeftSidebarShortcutsSection', () => {
     renderWithActions([createNodeAction], <LeftSidebar/>)
 
     act(() => {
-      window.dispatchEvent(new CustomEvent(openLeftSidebarEvent))
+      leftSidebarToggle.open()
     })
 
     const button = await screen.findByRole('button', {name: 'New node'})

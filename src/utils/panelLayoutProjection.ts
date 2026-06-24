@@ -11,13 +11,14 @@ import {
 } from '@/data/properties'
 import { hasBlockType } from '@/data/properties'
 import { keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
+import { keysImmediatelyAfter } from '@/data/orderKeyPlacement'
 import {
   buildLayoutFromSlots,
   parseLayout,
   preserveHashQueryParams,
   type LayoutSlot,
 } from '@/utils/routing'
-import { panelHistory } from '@/utils/panelHistory'
+import { panelHistory, writePanelContent } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 
@@ -287,11 +288,13 @@ export const insertPanelRow = async (
     const sourceIndex = options.afterPanelId
       ? siblings.findIndex(row => row.id === options.afterPanelId)
       : -1
-    const previous = sourceIndex >= 0 ? siblings[sourceIndex] : siblings.at(-1)
-    const next = sourceIndex >= 0 ? siblings[sourceIndex + 1] : undefined
+    // Insert the new panel EXACTLY after the source panel (between it and its
+    // next sibling), breaking a tie by re-keying the run when the source panel
+    // shares an order_key with its next sibling (#198/#182). Non-tie inputs
+    // reduce to the previous keyBetween bounds.
     const orderKey = sourceIndex >= 0
-      ? keyBetween(previous?.orderKey ?? null, next?.orderKey ?? null)
-      : keyAtEnd(previous?.orderKey ?? null)
+      ? (await keysImmediatelyAfter(tx, layoutSessionBlock.id, siblings, sourceIndex, 1))[0]
+      : keyAtEnd(siblings.at(-1)?.orderKey ?? null)
 
     const panelId = await createPanelRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,
@@ -496,12 +499,7 @@ export const reconcilePanelRows = async (
             }, blockId)
             : null
           panelHistory.enqueueRestore(slot.row.id, restored?.state)
-          await tx.setProperty(slot.row.id, topLevelBlockIdProp, blockId)
-          await tx.setProperty(slot.row.id, focusedBlockLocationProp, restored?.state?.focusedLocation ?? {
-            blockId,
-            renderScopeId: outlineRenderScopeId(blockId),
-          })
-          await tx.setProperty(slot.row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
+          await writePanelContent(tx, slot.row.id, blockId, restored?.state)
         }
       }
     }
@@ -512,6 +510,36 @@ export const reconcilePanelRows = async (
       await deleteLayoutRowSubtreeInTx(tx, stackRow)
     }
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
+}
+
+export const retargetPanelBlockIds = async (
+  repo: Repo,
+  layoutSessionBlock: Block,
+  fromId: string,
+  toId: string,
+): Promise<void> => {
+  if (fromId === toId) return
+
+  await repo.tx(async tx => {
+    const parent = await tx.get(layoutSessionBlock.id)
+    if (!parent) {
+      throw new Error(`retargetPanelBlockIds: layout session block ${layoutSessionBlock.id} not found`)
+    }
+
+    const currentRows = await loadSubtreeRowsInTx(tx, parent)
+    const panelRows = currentRows
+      .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
+      .filter(row => panelBlockId(row) === fromId)
+
+    for (const row of panelRows) {
+      const restored = panelHistory.reconcileUrlNavigation(row.id, {
+        blockId: fromId,
+        state: panelHistory.snapshot(row.id),
+      }, toId)
+      panelHistory.enqueueRestore(row.id, restored?.state)
+      await writePanelContent(tx, row.id, toId, restored?.state)
+    }
+  }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})
 }
 
 export interface ApplyCurrentLayoutUrlArgs {

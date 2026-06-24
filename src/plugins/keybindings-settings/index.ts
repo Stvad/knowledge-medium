@@ -14,8 +14,8 @@
  * via `actionsFacet`-level overrides — turning this plugin off would
  * just hide the settings UI, not the underlying mechanism.
  */
-import type {AppExtension} from '@/extensions/facet.js'
-import {systemToggle} from '@/extensions/togglable.js'
+import type {AppExtension} from '@/facets/facet.js'
+import {systemToggle} from '@/facets/togglable.js'
 import {keybindingsSettingsDataExtension} from './dataExtension.ts'
 
 export const keybindingsSettingsPlugin: AppExtension = systemToggle({

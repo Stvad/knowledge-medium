@@ -20,6 +20,9 @@ const EMPTY_BLOCK_TYPES: readonly string[] = []
 export interface PropertyPanelMetadataRow {
   readonly label: string
   readonly value: string
+  /** When set, the value renders as a link opening this block (e.g.
+   *  "Changed by" → the editing user's page). */
+  readonly linkToBlockId?: string
 }
 
 export interface PropertyPanelModelRow {
@@ -178,6 +181,8 @@ export const buildPropertyPanelModel = (args: {
   blockId: string
   updatedAt: number
   updatedBy: string
+  /** User page block id for `updatedBy`, so "Changed by" can link to it. */
+  updatedByBlockId?: string
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
@@ -245,7 +250,7 @@ export const buildPropertyPanelModel = (args: {
   const metadataRows = [
     {label: 'ID', value: args.blockId},
     {label: 'Last changed', value: new Date(args.updatedAt).toLocaleString()},
-    {label: 'Changed by', value: args.updatedBy},
+    {label: 'Changed by', value: args.updatedBy, linkToBlockId: args.updatedByBlockId},
   ]
 
   return {

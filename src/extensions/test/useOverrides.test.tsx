@@ -8,10 +8,10 @@
  * refresh events a no-op for the runtime resolver.
  */
 import {act, renderHook} from '@testing-library/react'
-import {afterEach, beforeEach, describe, expect, it} from 'vitest'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {useOverrides} from '@/extensions/useOverrides.js'
 import {writeOverridesCache} from '@/extensions/overridesCache.js'
-import {refreshAppRuntime} from '@/extensions/runtimeEvents.js'
+import {refreshAppRuntime} from '@/facets/runtimeEvents.js'
 
 const WS = 'ws-test'
 
@@ -106,20 +106,27 @@ describe('useOverrides', () => {
     expect(result.current.generation).toBe(generationBeforeUnmount)
   })
 
-  it('produces distinct generations on consecutive refreshes', async () => {
-    const {result} = renderHook(() => useOverrides(WS))
-    const g0 = result.current.generation
+  it('produces distinct generations on consecutive refreshes', () => {
+    // The default refresh detail is a `new Date().toISOString()` token;
+    // two dispatches in the same millisecond would collide. Fake timers
+    // (which mock Date) let us advance the clock 1ms deterministically
+    // instead of sleeping and hoping the wall clock ticked.
+    vi.useFakeTimers()
+    try {
+      const {result} = renderHook(() => useOverrides(WS))
+      const g0 = result.current.generation
 
-    dispatchRefresh()
-    const g1 = result.current.generation
-    // The default refresh detail is a Date.now()-based ISO string;
-    // sleep a millisecond to ensure the next dispatch gets a distinct
-    // value (which the runtime context relies on to invalidate memos).
-    await act(() => new Promise(r => setTimeout(r, 2)))
-    dispatchRefresh()
-    const g2 = result.current.generation
+      dispatchRefresh()
+      const g1 = result.current.generation
 
-    expect(g1).not.toBe(g0)
-    expect(g2).not.toBe(g1)
+      vi.advanceTimersByTime(1)
+      dispatchRefresh()
+      const g2 = result.current.generation
+
+      expect(g1).not.toBe(g0)
+      expect(g2).not.toBe(g1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

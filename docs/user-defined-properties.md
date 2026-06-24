@@ -554,7 +554,7 @@ Precedence inside the merge stays as in [type-system.md §1a](type-system.md): t
 User-defined schemas persist as **blocks**, not a side table. A new kernel type `'property-schema'` with three fields:
 
 ```ts
-// src/data/internals/coreProperties.ts (additions)
+// src/data/properties.ts (additions)
 export const propertyNameProp = defineProperty<string>('property-schema:name', {
   codec: codecs.string,
   defaultValue: '',

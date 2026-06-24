@@ -1,0 +1,340 @@
+// @vitest-environment jsdom
+
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BlockCache } from '@/data/blockCache.js'
+import { ChangeScope, type User } from '@/data/api'
+import { Repo } from '@/data/repo.js'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
+import {
+  focusBlock,
+  focusedBlockLocationProp,
+  selectionStateProp,
+  topLevelBlockIdProp,
+} from '@/data/properties.js'
+import {
+  ActionContextTypes,
+  type ActionConfig,
+  type ActionTrigger,
+  type BlockPointerDependencies,
+  type BlockShortcutDependencies,
+  type MultiSelectModeDependencies,
+} from '@/shortcuts/types.js'
+import { extendSelectionDown } from '@/shortcuts/blockActions.js'
+import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
+import { getSpatialNavigationActionDecorators } from '@/plugins/spatial-navigation/actions.js'
+
+const WS = 'ws-1'
+const USER: User = {id: 'user-1'}
+
+interface Harness {
+  h: TestDb
+  repo: Repo
+}
+
+const setup = async (): Promise<Harness> => {
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
+  const repo = new Repo({
+    db: h.db,
+    cache: new BlockCache(),
+    user: USER,
+  })
+  repo.setActiveWorkspaceId(WS)
+  return {h, repo}
+}
+
+const seedPanelAndBlocks = async (repo: Repo): Promise<void> => {
+  await repo.tx(async tx => {
+    await tx.create({
+      id: 'panel',
+      workspaceId: WS,
+      parentId: null,
+      orderKey: 'a0',
+      properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('top')},
+    })
+    await tx.create({
+      id: 'top',
+      workspaceId: WS,
+      parentId: null,
+      orderKey: 'b0',
+      content: 'top',
+    })
+    await tx.create({
+      id: 'A',
+      workspaceId: WS,
+      parentId: 'top',
+      orderKey: 'c0',
+      content: 'A',
+    })
+    await tx.create({
+      id: 'B',
+      workspaceId: WS,
+      parentId: 'top',
+      orderKey: 'd0',
+      content: 'B',
+    })
+    await tx.create({
+      id: 'X',
+      workspaceId: WS,
+      parentId: null,
+      orderKey: 'e0',
+      content: 'backlink result',
+    })
+  }, {scope: ChangeScope.UiState})
+}
+
+const buildPanelDom = (instances: Array<{blockId: string; renderScopeId: string}>): void => {
+  const panel = document.createElement('div')
+  panel.dataset.panelId = 'panel'
+  for (const {blockId, renderScopeId} of instances) {
+    const el = document.createElement('div')
+    el.dataset.blockNavItem = 'true'
+    el.dataset.blockId = blockId
+    el.dataset.renderScopeId = renderScopeId
+    panel.appendChild(el)
+  }
+  document.body.appendChild(panel)
+}
+
+const decorateAction = <T extends typeof ActionContextTypes.NORMAL_MODE | typeof ActionContextTypes.MULTI_SELECT_MODE>(
+  action: ActionConfig<T>,
+): ActionConfig<T> => {
+  const decorator = getSpatialNavigationActionDecorators().find(candidate =>
+    candidate.actionId === action.id && candidate.context === action.context,
+  )
+  if (!decorator) throw new Error(`Missing spatial decorator for ${action.context}:${action.id}`)
+  return decorator.apply(action as ActionConfig) as ActionConfig<T>
+}
+
+let sharedDb: TestDb
+let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+
+beforeEach(async () => {
+  env = await setup()
+  await seedPanelAndBlocks(env.repo)
+})
+
+afterEach(async () => {
+  document.body.innerHTML = ''
+  env.repo.stopSyncObserver()
+})
+
+describe('spatial navigation selection actions', () => {
+  it('extends normal-mode selection through DOM order instead of structural order', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'extend_selection_down',
+      description: 'Extend selection down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async deps => {
+        fallback()
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
+      },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A', 'X'],
+      anchorBlockId: 'A',
+    })
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'X',
+      renderScopeId: 'panel:backlink:X',
+    })
+  })
+
+  it('extends multi-select mode selection through DOM order without block dependencies', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    await panel.set(selectionStateProp, {
+      selectedBlockIds: ['A'],
+      anchorBlockId: 'A',
+    })
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'multi_select.extend_selection_down',
+      description: 'Extend selection down',
+      context: ActionContextTypes.MULTI_SELECT_MODE,
+      handler: async deps => {
+        fallback()
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
+      },
+    })
+
+    await action.handler({
+      uiStateBlock: panel,
+      selectedBlocks: [env.repo.block('A')],
+      anchorBlock: env.repo.block('A'),
+    } satisfies MultiSelectModeDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A', 'X'],
+      anchorBlockId: 'A',
+    })
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'X',
+      renderScopeId: 'panel:backlink:X',
+    })
+  })
+
+  it('treats the spatial edge as handled instead of falling through to hidden structural siblings', async () => {
+    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    await panel.set(selectionStateProp, {
+      selectedBlockIds: ['A'],
+      anchorBlockId: 'A',
+    })
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'multi_select.extend_selection_down',
+      description: 'Extend selection down',
+      context: ActionContextTypes.MULTI_SELECT_MODE,
+      handler: async deps => {
+        fallback()
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
+      },
+    })
+
+    await action.handler({
+      uiStateBlock: panel,
+      selectedBlocks: [env.repo.block('A')],
+      anchorBlock: env.repo.block('A'),
+    } satisfies MultiSelectModeDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A'],
+      anchorBlockId: 'A',
+    })
+  })
+})
+
+describe('spatial navigation shift-click selection', () => {
+  const decoratePointerSelection = (action: ActionConfig): ActionConfig => {
+    const transform = getSpatialNavigationActionDecorators().find(candidate =>
+      candidate.actionId === EXTEND_BLOCK_SELECTION_ACTION_ID &&
+      candidate.context === ActionContextTypes.BLOCK_POINTER,
+    )
+    if (!transform) throw new Error('Missing spatial shift-click transform')
+    return transform.apply(action) as ActionConfig
+  }
+
+  const blockNavItem = (blockId: string): HTMLElement => {
+    const el = document.querySelector<HTMLElement>(`[data-block-id="${blockId}"]`)
+    if (!el) throw new Error(`missing nav item ${blockId}`)
+    return el
+  }
+
+  it('selects the visible DOM range from the anchor to the clicked block', async () => {
+    // Anchor is the focused A; shift-clicking the backlink result X selects the
+    // DOM-order range A..X — across the backlink, not the data tree.
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const structural = vi.fn()
+    const action = decoratePointerSelection({
+      id: EXTEND_BLOCK_SELECTION_ACTION_ID,
+      description: 'Extend block selection to the clicked block',
+      context: ActionContextTypes.BLOCK_POINTER,
+      handler: async () => { structural() },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      targetElement: blockNavItem('X'),
+    } as BlockPointerDependencies, {} as ActionTrigger)
+
+    expect(structural).not.toHaveBeenCalled()
+    expect(panel.peekProperty(selectionStateProp)).toEqual({
+      selectedBlockIds: ['A', 'X'],
+      anchorBlockId: 'A',
+    })
+  })
+
+  it('declines to the structural base when the clicked block is in another panel', async () => {
+    // The load-bearing decline: extendSelectionToSpatialTarget reports a panel
+    // mismatch as "handled" for the keyboard contract, so the transform gates on
+    // the panel match and must fall through to the structural handler here —
+    // otherwise a cross-panel shift-click would be silently swallowed.
+    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A'}])
+    const otherPanel = document.createElement('div')
+    otherPanel.dataset.panelId = 'other-panel'
+    const otherItem = document.createElement('div')
+    otherItem.dataset.blockNavItem = 'true'
+    otherItem.dataset.blockId = 'A'
+    otherItem.dataset.renderScopeId = 'other:A'
+    otherPanel.appendChild(otherItem)
+    document.body.appendChild(otherPanel)
+
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const structural = vi.fn()
+    const action = decoratePointerSelection({
+      id: EXTEND_BLOCK_SELECTION_ACTION_ID,
+      description: 'Extend block selection to the clicked block',
+      context: ActionContextTypes.BLOCK_POINTER,
+      handler: async () => { structural() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      targetElement: otherItem,
+    } as BlockPointerDependencies, {} as ActionTrigger)
+
+    expect(structural).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('spatial navigation vertical actions', () => {
+  it('does not fall through when the focused rendered location is missing and has no safe recovery anchor', async () => {
+    buildPanelDom([{blockId: 'A', renderScopeId: 'panel:A'}])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'X', {renderScopeId: 'panel:missing:X'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'move_down',
+      description: 'Move down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => {
+        fallback()
+      },
+    })
+
+    await action.handler({
+      block: env.repo.block('X'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:missing:X',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'X',
+      renderScopeId: 'panel:missing:X',
+    })
+  })
+})

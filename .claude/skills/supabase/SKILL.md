@@ -1,12 +1,11 @@
 ---
 name: supabase
-description: Supabase + PowerSync CLI cheatsheet for this project. Use when writing or inspecting Supabase migrations, querying the linked Supabase DB, or changing what columns get synced via PowerSync.
-disable-model-invocation: true
+description: Supabase CLI ops for this project — write/inspect migrations, push them to the linked Supabase project (`npx supabase db push`), and query the linked remote DB. Use for Supabase migrations, `db push` / `db pull` / `db query`, or schema changes to PowerSync-synced tables. (Deploying the PowerSync sync rules is the separate `powersync` skill.)
 ---
 
-# Supabase + PowerSync ops
+# Supabase ops
 
-The repo is linked to a hosted Supabase project AND a PowerSync cloud instance. Local Supabase (Docker-based) is not running by default; for normal schema work you don't need it.
+The repo is linked to a hosted Supabase project (and a PowerSync cloud instance — see the `powersync` skill for sync-rule deploys). Local Supabase (Docker-based) is not running by default; for normal schema work you don't need it.
 
 ## Supabase CLI
 
@@ -20,14 +19,19 @@ npx supabase db query --linked "SELECT ..."       # run SQL against the linked r
 npx supabase db query --linked --output table ... # human-friendly output
 ```
 
-## PowerSync CLI
+## Using in a fresh git worktree
+
+Migration / DB commands need the linked-project state in **`supabase/.temp/`** (gitignored), so a fresh worktree isn't linked — `migration list --linked` / `db push` fail with *"Cannot find project ref. Have you run supabase link?"*. Mirror it from the main checkout (copy, don't read its contents):
 
 ```bash
-npx powersync@latest validate                                # validate sync-config.yaml locally
-npx powersync@latest deploy --skip-validations=connections   # deploy sync-config to PowerSync cloud
+mkdir -p supabase/.temp && cp -n <main-checkout>/supabase/.temp/* supabase/.temp/
 ```
 
-`--skip-validations=connections` is needed because the local env has no `PS_DATABASE_URI` (it's a server-side secret). Schema + sync-config validations still run.
+(or `npx supabase link --project-ref <ref>`). The login access token is stored globally, so it carries across worktrees.
+
+## PowerSync
+
+Deploying the sync rules (`powersync/sync-config.yaml`) to PowerSync Cloud is the **separate `powersync` skill** — `npx powersync@latest validate / deploy --skip-validations=connections`, with its own worktree gotcha (`powersync/cli.yaml`). Use it whenever you change what syncs.
 
 ## Adding a column to a synced table — three-layer change
 
@@ -46,6 +50,34 @@ For dev databases that already exist, also add an `ALTER TABLE … ADD COLUMN` b
 - Always **additive** (`add column if not exists`, `create index if not exists`). Never edit an applied migration — write a follow-up.
 - For new non-null columns, always specify a `default` so existing rows backfill cleanly.
 - Wrap in `begin; … commit;`.
+
+## Creating tables on the hosted DB — RLS is non-negotiable
+
+**Every table in the `public` schema is exposed via PostgREST, and Supabase grants `anon` + `authenticated` full CRUD on public tables by default.** `CREATE TABLE` / `CREATE TABLE AS` do **not** enable RLS, so a freshly-created public table is **immediately world-readable and -writable with the anon key** (which ships in the client bundle) until you lock it down. This bit us once: an ad-hoc `blocks_ts_backup_*` snapshot (block ids + timestamps) sat in `public` with no RLS.
+
+This applies to **ad-hoc / backup / snapshot / staging tables created via `db query` or `psql`**, not just app tables in migrations. Whenever you create a table on the hosted project:
+
+```sql
+begin;
+create table public.my_helper as select ...;          -- or create table public.my_helper (...)
+alter table public.my_helper enable row level security; -- RLS on, NO policy = default-deny to anon/authenticated
+revoke all on public.my_helper from anon, authenticated; -- defense-in-depth; harmless if RLS is on
+commit;
+```
+
+- A table that **no client should ever touch** (backups, staging) wants exactly this: RLS on, **no policy** (denies anon/authenticated entirely), grants revoked. The owning `postgres` role and `service_role` still bypass RLS for server-side work.
+- For client-facing data, RLS on **plus** the appropriate policies — never RLS-off.
+- Alternative for pure internal helpers: create them in a schema PostgREST doesn't expose (not in the project's exposed-schemas list) instead of `public`.
+
+After any ad-hoc table creation or schema change on the hosted DB, **verify nothing is left exposed** — this should return zero rows:
+
+```sql
+select c.relname
+from pg_class c join pg_namespace n on n.oid = c.relnamespace
+where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity;
+```
+
+(This is the same check Supabase's Security Advisor runs. To attribute past access to such a table, group `pg_stat_statements` by `userid` → role: any `anon`/`authenticated` rows referencing the table mean external API access actually happened.)
 
 ## Don't push/deploy to remote without explicit user approval
 

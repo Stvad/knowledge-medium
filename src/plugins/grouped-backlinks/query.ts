@@ -10,8 +10,6 @@ import {
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.js'
-import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.js'
-import { manyAncestorsSql } from '@/data/internals/treeQueries.js'
 import {
   TYPED_BLOCKS_LABEL_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
@@ -21,7 +19,7 @@ import {
   typedBlocksPropertyKey,
   typedBlocksRefsOfKey,
   typedBlocksStructureKey,
-} from '@/data/internals/kernelInvalidation.js'
+} from '@/data/invalidation'
 import { typesProp } from '@/data/properties.js'
 import { typesFacet } from '@/data/facets.js'
 import {
@@ -135,13 +133,13 @@ const resolveBacklinkSourceIds = async (
   id: string,
   filter?: Required<BacklinksFilter>,
 ): Promise<string[]> =>
-  (await resolveTypedBlockIds({
+  (await ctx.run('core.typedBlockIds', {
     workspaceId,
     referencedBy: {id},
     match: filter?.include,
     exclude: filter?.exclude,
     order: 'created-desc',
-  }, ctx)).filter(sourceId => sourceId !== id)
+  })).filter(sourceId => sourceId !== id)
 
 const resolveSourceParents = async (
   ctx: QueryCtx,
@@ -150,22 +148,21 @@ const resolveSourceParents = async (
 ): Promise<GroupedBacklinkSourceParents[]> => {
   if (sourceIds.length === 0) return []
 
-  type AncestorRow = BlockRow & {chain_start_id: string}
-  const rows = await ctx.db.getAll<AncestorRow>(manyAncestorsSql(sourceIds.length), [...sourceIds])
-  const rowsBySourceId = new Map<string, BlockRow[]>()
-  for (const id of sourceIds) rowsBySourceId.set(id, [])
-  for (const row of rows) {
-    rowsBySourceId.get(row.chain_start_id)?.push(row)
-  }
-  const ancestorData = ctx.hydrateBlocks(asBlockRows(rows), {declareRowDeps: false})
+  // core.manyAncestors returns one entry per input id (input order), each
+  // with the leaf-to-root chain (depth-asc, excluding self) as hydrated
+  // BlockData — the same ordering manyAncestorsSql produced. deps:'none'
+  // because the context-node deps are declared explicitly below.
+  const entries = await ctx.run('core.manyAncestors', {ids: sourceIds}, {deps: 'none'})
   for (const sourceId of sourceIds) dependOnSourceContextNode(ctx, workspaceId, sourceId)
-  for (const ancestor of ancestorData) {
-    dependOnSourceContextNode(ctx, ancestor.workspaceId, ancestor.id)
+  for (const entry of entries) {
+    for (const ancestor of entry.ancestors) {
+      dependOnSourceContextNode(ctx, ancestor.workspaceId, ancestor.id)
+    }
   }
 
-  return sourceIds.map(sourceId => ({
-    sourceId,
-    parentIds: (rowsBySourceId.get(sourceId) ?? []).map(row => row.id).reverse(),
+  return entries.map(entry => ({
+    sourceId: entry.startId,
+    parentIds: entry.ancestors.map(ancestor => ancestor.id).reverse(),
   }))
 }
 
@@ -226,7 +223,7 @@ export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   FROM group_context_refs cr
   JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
-  ORDER BY cr.source_id, group_block.updated_at DESC, group_block.id
+  ORDER BY cr.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
 export const SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL = `
@@ -262,7 +259,7 @@ export const SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL = `
     AND refs.source_field = ?
     AND refs.target_id != ?
     AND group_block.deleted = 0
-  ORDER BY refs.source_id, group_block.updated_at DESC, group_block.id
+  ORDER BY refs.source_id, coalesce(group_block.user_updated_at, group_block.updated_at) DESC, group_block.id
 `
 
 /** Type enrichment. For each distinct context block C the main query

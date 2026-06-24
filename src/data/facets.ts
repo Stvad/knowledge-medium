@@ -8,7 +8,7 @@
  * machinery comes online.
  */
 
-import { defineFacet } from '@/extensions/facet'
+import { defineFacet, keyedMapFacet } from '@/facets/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
@@ -17,8 +17,11 @@ import type {
   AnyQuery,
   AnySameTxProcessor,
   AnyValuePreset,
+  ChangeScope,
+  Tx,
   TypeContribution,
 } from '@/data/api'
+import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
 
 export interface LocalSchemaDb {
@@ -59,149 +62,91 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
   )
 
+/**
+ * A workspace-scoped, one-shot data backfill that runs through `repo.tx` — the
+ * synced-table counterpart to a `LocalSchemaContribution.backfill`.
+ *
+ * A LocalSchema backfill writes via a raw `db.execute`, which leaves
+ * `tx_context.source = NULL`: fine for local derived-index tables, but a write
+ * to a *synced* table (blocks/workspaces/workspace_members) never fires the
+ * upload trigger and silently never syncs (the daily-note:date bug; guarded by
+ * `syncedTableWriteGuard`). A `WorkspaceBackfill` instead writes through
+ * `repo.tx`, so its rows carry `source = 'user'` and actually upload — the
+ * server, and every other client, converge.
+ *
+ * The repo runs each registered backfill at most once per (workspace, id),
+ * deferred off the workspace-open critical path — see
+ * `Repo.scheduleWorkspaceBackfills`.
+ */
+export interface WorkspaceBackfill {
+  /** Stable id; doubles as the per-workspace completion-marker suffix. Change
+   *  it to force a re-run on every workspace. */
+  readonly id: string
+  run: (ctx: WorkspaceBackfillContext) => Promise<void>
+}
+
+export interface WorkspaceBackfillContext {
+  /** The single workspace this run is scoped to. Every read and write MUST be
+   *  filtered to it — a backfill never touches another workspace (that was the
+   *  cross-workspace cold-start hazard the original raw backfill had). */
+  readonly workspaceId: string
+  /** Raw read against the local DB — use to find candidate rows. */
+  getAll: <T>(sql: string, params?: readonly unknown[]) => Promise<T[]>
+  /** Run a writing transaction. Routes through `repo.tx`, so writes carry
+   *  source='user' and upload (the whole point — a raw write would not). */
+  tx: <R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: {scope: ChangeScope; description?: string},
+  ) => Promise<R>
+}
+
+const isWorkspaceBackfill = (value: unknown): value is WorkspaceBackfill =>
+  isRecord(value) && typeof value.id === 'string' && typeof value.run === 'function'
+
 const isInvalidationRule = (value: unknown): value is InvalidationRule =>
   isRecord(value) &&
   typeof value.id === 'string' &&
   (
     value.collectFromSnapshots === undefined ||
     typeof value.collectFromSnapshots === 'function'
-  ) &&
-  (
-    value.collectFromRowEvent === undefined ||
-    typeof value.collectFromRowEvent === 'function'
   )
+
+const isDefinitionBlockProjector = (value: unknown): value is AnyDefinitionBlockProjector =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.metaType === 'string' &&
+  typeof value.sourceId === 'string' &&
+  typeof value.project === 'function' &&
+  typeof value.keyOf === 'function' &&
+  isRecord(value.targetFacet) &&
+  typeof (value.targetFacet as { id?: unknown }).id === 'string'
 
 /** Key the registry by `Mutator.name`; duplicates log a warning and
  *  last-wins (per §6 convention). Mutators with heterogeneous
  *  Args/Result types share the registry slot via `AnyMutator` (variance
  *  escape); call-site dispatch (`repo.mutate.X`, `tx.run(m, args)`)
  *  recovers precise types via the `MutatorRegistry` augmentation. */
-export const mutatorsFacet = defineFacet<AnyMutator, ReadonlyMap<string, AnyMutator>>({
-  id: 'data.mutators',
-  combine: (values) => {
-    const out = new Map<string, AnyMutator>()
-    for (const m of values) {
-      if (out.has(m.name)) {
-        console.warn(
-          `[mutatorsFacet] duplicate registration for "${m.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(m.name, m)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.name)
 
 /** Future facets — declared empty for now so plugin authors can
  *  reference them at compile time without runtime breakage when no
  *  contributions exist. Wired up in stages 1.5+. */
 
-export const queriesFacet = defineFacet<AnyQuery, ReadonlyMap<string, AnyQuery>>({
-  id: 'data.queries',
-  combine: (values) => {
-    const out = new Map<string, AnyQuery>()
-    for (const q of values) {
-      if (out.has(q.name)) {
-        console.warn(
-          `[queriesFacet] duplicate registration for "${q.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(q.name, q)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
-export const propertySchemasFacet = defineFacet<AnyPropertySchema, ReadonlyMap<string, AnyPropertySchema>>({
-  id: 'data.propertySchemas',
-  combine: (values) => {
-    const out = new Map<string, AnyPropertySchema>()
-    for (const s of values) {
-      if (out.has(s.name)) {
-        console.warn(
-          `[propertySchemasFacet] duplicate registration for "${s.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(s.name, s)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const propertySchemasFacet = keyedMapFacet<AnyPropertySchema>('data.propertySchemas', s => s.name)
 
-export const typesFacet = defineFacet<TypeContribution, ReadonlyMap<string, TypeContribution>>({
-  id: 'data.types',
-  combine: (values) => {
-    const out = new Map<string, TypeContribution>()
-    for (const t of values) {
-      if (out.has(t.id)) {
-        console.warn(
-          `[typesFacet] duplicate registration for "${t.id}"; last-wins per facet convention`,
-        )
-      }
-      out.set(t.id, t)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.id)
 
-export const propertyEditorOverridesFacet = defineFacet<AnyPropertyEditorOverride, ReadonlyMap<string, AnyPropertyEditorOverride>>({
-  id: 'data.property-editor-overrides',
-  combine: (values) => {
-    const out = new Map<string, AnyPropertyEditorOverride>()
-    for (const c of values) {
-      if (out.has(c.name)) {
-        console.warn(
-          `[propertyEditorOverridesFacet] duplicate registration for "${c.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(c.name, c)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const propertyEditorOverridesFacet = keyedMapFacet<AnyPropertyEditorOverride>('data.property-editor-overrides', c => c.name)
 
 /** Open-vocabulary preset registry. Keyed by preset id (matches the
  *  codec `type` for codecs built by the preset). Last-wins on
  *  collision, per facet convention. Plugins register through
  *  `valuePresetsFacet.of(preset, {source: 'plugin'})`. */
-export const valuePresetsFacet = defineFacet<AnyValuePreset, ReadonlyMap<string, AnyValuePreset>>({
-  id: 'data.valuePresets',
-  combine: (values) => {
-    const out = new Map<string, AnyValuePreset>()
-    for (const p of values) {
-      if (out.has(p.id)) {
-        console.warn(
-          `[valuePresetsFacet] duplicate registration for "${p.id}"; last-wins per facet convention`,
-        )
-      }
-      out.set(p.id, p)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const valuePresetsFacet = keyedMapFacet<AnyValuePreset>('data.valuePresets', p => p.id)
 
-export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, ReadonlyMap<string, AnyPostCommitProcessor>>({
-  id: 'data.postCommitProcessors',
-  combine: (values) => {
-    const out = new Map<string, AnyPostCommitProcessor>()
-    for (const p of values) {
-      if (out.has(p.name)) {
-        console.warn(
-          `[postCommitProcessorsFacet] duplicate registration for "${p.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(p.name, p)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const postCommitProcessorsFacet = keyedMapFacet<AnyPostCommitProcessor>('data.postCommitProcessors', p => p.name)
 
 // Sibling to `postCommitProcessorsFacet`. Same-tx processors run
 // inside the user's writeTransaction; the commit pipeline iterates
@@ -214,26 +159,16 @@ export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, Rea
 // pipeline placement — keeping them separate makes "where does this
 // run" a typed reference rather than a string match, and forces a
 // deliberate refactor on the rare cases that need to flip modes.
-export const sameTxProcessorsFacet = defineFacet<AnySameTxProcessor, ReadonlyMap<string, AnySameTxProcessor>>({
-  id: 'data.sameTxProcessors',
-  combine: (values) => {
-    const out = new Map<string, AnySameTxProcessor>()
-    for (const p of values) {
-      if (out.has(p.name)) {
-        console.warn(
-          `[sameTxProcessorsFacet] duplicate registration for "${p.name}"; last-wins per facet convention`,
-        )
-      }
-      out.set(p.name, p)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const sameTxProcessorsFacet = keyedMapFacet<AnySameTxProcessor>('data.sameTxProcessors', p => p.name)
 
 export const localSchemaFacet = defineFacet<LocalSchemaContribution, readonly LocalSchemaContribution[]>({
   id: 'data.localSchema',
   validate: isLocalSchemaContribution,
+})
+
+export const workspaceBackfillsFacet = defineFacet<WorkspaceBackfill, readonly WorkspaceBackfill[]>({
+  id: 'data.workspaceBackfills',
+  validate: isWorkspaceBackfill,
 })
 
 /** Default inner-property to use when filtering a `ref`/`refList`
@@ -255,24 +190,24 @@ export interface RefTargetFilterDefault {
   readonly property: string
 }
 
-export const refTargetFilterDefaultsFacet = defineFacet<RefTargetFilterDefault, ReadonlyMap<string, RefTargetFilterDefault>>({
-  id: 'data.refTargetFilterDefaults',
-  combine: (values) => {
-    const out = new Map<string, RefTargetFilterDefault>()
-    for (const d of values) {
-      if (out.has(d.targetType)) {
-        console.warn(
-          `[refTargetFilterDefaultsFacet] duplicate registration for "${d.targetType}"; last-wins per facet convention`,
-        )
-      }
-      out.set(d.targetType, d)
-    }
-    return out
-  },
-  empty: () => new Map(),
-})
+export const refTargetFilterDefaultsFacet = keyedMapFacet<RefTargetFilterDefault>('data.refTargetFilterDefaults', d => d.targetType)
 
 export const invalidationRulesFacet = defineFacet<InvalidationRule, readonly InvalidationRule[]>({
   id: 'data.invalidationRules',
   validate: isInvalidationRule,
+})
+
+/** Registry of definition-block projectors — the "data-defined
+ *  contributions over facets" pattern (issue #90). Each contribution
+ *  watches blocks of a meta-type and mirrors them into a target
+ *  facet's `'user-data'` bucket; `ProjectorRuntime` drives the shared
+ *  lifecycle. List-valued (started in `dependsOn` order), not keyed,
+ *  since nothing looks a projector up by id through the facet — the
+ *  driver enumerates them. */
+export const definitionBlockProjectorFacet = defineFacet<
+  AnyDefinitionBlockProjector,
+  readonly AnyDefinitionBlockProjector[]
+>({
+  id: 'data.definitionBlockProjectors',
+  validate: isDefinitionBlockProjector,
 })

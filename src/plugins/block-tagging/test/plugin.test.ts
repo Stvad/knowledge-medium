@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { Tag } from 'lucide-react'
 import { actionsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { propertySchemasFacet, propertyEditorOverridesFacet } from '@/data/facets.js'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
@@ -38,7 +38,7 @@ describe('blockTaggingPlugin', () => {
     expect(blocksAction?.context).toBe(ActionContextTypes.MULTI_SELECT_MODE)
     expect(blockAction?.icon).toBe(Tag)
     expect(blocksAction?.icon).toBe(Tag)
-    expect(typeof blocksAction?.canRun).toBe('function')
+    expect(typeof blocksAction?.isVisible).toBe('function')
   })
 
   it('contributes a grouped-backlinks header entry pointing at the multi-select action id', () => {

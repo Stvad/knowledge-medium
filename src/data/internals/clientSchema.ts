@@ -12,6 +12,12 @@
  *      }
  */
 
+import {
+  ALIAS_COLLISION_RAISE_PREFIX,
+  PARENT_DELETED_RAISE_PREFIX,
+  RAISE_FIELD_SEP_SQL,
+} from './raiseProtocol'
+
 // ============================================================================
 // Tables
 // ============================================================================
@@ -45,9 +51,21 @@ export const SEED_TX_CONTEXT_ROW_SQL = `
   INSERT OR IGNORE INTO tx_context (id) VALUES (1)
 `
 
-/** Per-row audit + invalidation log. Trigger-written. tx_id = NULL for
- *  sync-applied writes (see the COALESCE / CASE in the row_events
- *  triggers below). */
+/** Per-row audit / change-history log. Trigger-written on every write to
+ *  `blocks` — local (`repo.tx`) and sync-applied (observer materialize) alike
+ *  — capturing the full before/after row state of each change. `tx_id` = NULL
+ *  for sync-applied writes (see the COALESCE / CASE in the row_events triggers
+ *  below); `source` distinguishes 'user' from 'sync'.
+ *
+ *  This is the substrate for local change history / time-travel, and the ONLY
+ *  place an INCOMING sync change is durably recorded — `command_events` covers
+ *  local `repo.tx` operations only (mutator-grain), never sync apply. Nothing
+ *  reads `row_events` at runtime: the Layout B observer owns invalidation, so
+ *  this is a write-only history log.
+ *
+ *  Intentionally unbounded — full history is kept and never auto-trimmed. Any
+ *  retention policy is a future opt-in, never a silent drop (preserving user
+ *  history is paramount). Client-only; never synced. */
 export const CREATE_ROW_EVENTS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS row_events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -260,11 +278,107 @@ export const CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL = `
 `
 
 // ============================================================================
-// Helpers used inside trigger bodies. Centralised so the SQL fragments
-// match in every trigger.
+// blocks_synced change-capture queue (Layout B, design doc §9.2) — the
+// observer's O(delta) detection signal, replacing an O(N) re-scan of the whole
+// staging table on every startup/tick.
+//
+// PowerSync's sync-apply runs the raw-table put/delete statements
+// (BLOCKS_SYNCED_RAW_TABLE) directly against `blocks_synced` as ordinary SQL,
+// and those INSERT/DELETE statements fire the AFTER triggers below — the
+// signal the observer drains to materialize each change into the live `blocks`
+// table (the production sync-invalidation path).
+//
+// APPEND-ONLY LOG keyed by a monotonic `seq`, drained with a watermark
+// pattern: the observer reads rows up to MAX(seq),
+// processes them, then `DELETE … WHERE seq <= <that max>`. This is robust to
+// the two things a coalescing id-keyed table is NOT:
+//   - Drain race: a delivery that lands mid-drain gets a higher seq, so the
+//     watermark delete can't remove its signal (an id-keyed REPLACE would have
+//     overwritten the very row being processed and lost the newer change).
+//   - Partial failure: if processing throws, the delete is never reached, so
+//     the rows stay queued and retry on the next tick / next startup.
+// Coalescing still happens, in JS at drain time (latest op per id wins), so a
+// hot row is materialized once per batch, not once per delivery.
+//
+//   - INSERT trigger → 'upsert'. The raw put is `INSERT OR REPLACE`, and
+//     PowerSync applies a *changed* synced row as this REPLACE (a DELETE then
+//     an INSERT), never a bare UPDATE. Left alone, every changed block would
+//     enqueue BOTH a 'delete' (the replace's implicit DELETE) and an 'upsert' —
+//     two rows for one logical upsert, inflating the pending count ~2× and
+//     wasting drain windows on no-op delete passes. So the INSERT trigger
+//     COLLAPSES at enqueue: it drops a pending same-id 'delete' before appending
+//     its 'upsert', netting a single 'upsert' per REPLACE. This is safe because
+//     the REPLACE's delete-then-insert is one atomic statement and the drain
+//     reads the queue only after the apply tx commits — it never sees a partial
+//     (delete-without-insert) REPLACE. (No UPDATE trigger: PowerSync never
+//     issues a bare UPDATE against the raw table.)
+//   - DELETE trigger → 'delete'. A real stream-exit (membership revoke /
+//     workspace delete) has no following INSERT, so its 'delete' survives the
+//     collapse and supersedes an un-drained 'upsert'; it is captured DURABLY so
+//     a removal that lands while the observer is down is still drained on next
+//     startup.
+//
+// No source-gating: these are not upload triggers, so they fire on both sync
+// and (the rare) local writes to the staging table. blocks_synced itself
+// carries no upload routing, so this never enqueues a server write.
 // ============================================================================
 
-/** Snapshot a `blocks` row as JSON in domain shape (camelCase) for
+export const CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS blocks_synced_changes (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id  TEXT NOT NULL,
+    op  TEXT NOT NULL CHECK (op IN ('upsert', 'delete'))
+  )
+`
+
+/** Indexes the enqueue-collapse lookup in `blocks_synced_changes_insert`
+ *  (`DELETE … WHERE id = NEW.id AND op = 'delete'`). The table is otherwise
+ *  keyed only by the autoincrement `seq`, so without this index that per-insert
+ *  delete would SCAN the entire pending queue on every staging insert — even a
+ *  brand-new id with no matching 'delete'. During a bulk sync/backfill the queue
+ *  grows (within one PowerSync apply tx) far faster than the observer drains, so
+ *  an unindexed scan turns the apply into O(n²) — the exact large-download case
+ *  this queue exists to keep cheap (the ~310K-row backfill that motivated the
+ *  collapse). With the index the lookup is an O(log n) seek, including the common
+ *  no-match insert. The drain still reads/deletes by `seq` (PK), so this index
+ *  only serves the collapse delete; its maintenance cost on queue insert + the
+ *  drain's `DELETE … WHERE seq <= ?` is O(log n) per row. */
+export const CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_synced_changes_id_op
+  ON blocks_synced_changes (id, op)
+`
+
+export const CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_insert
+  AFTER INSERT ON blocks_synced
+  BEGIN
+    DELETE FROM blocks_synced_changes WHERE id = NEW.id AND op = 'delete';
+    INSERT INTO blocks_synced_changes (id, op) VALUES (NEW.id, 'upsert');
+  END
+`
+
+export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_synced_changes_delete
+  AFTER DELETE ON blocks_synced
+  BEGIN
+    INSERT INTO blocks_synced_changes (id, op) VALUES (OLD.id, 'delete');
+  END
+`
+
+// ============================================================================
+// row_events triggers (3) — the per-row audit / change-history log. Fire for
+// BOTH local (`repo.tx`) and sync-applied (observer materialize) writes to
+// `blocks`; the COALESCE-to-'sync' tag distinguishes them. Nothing reads
+// row_events at runtime — the Layout B observer owns invalidation — so this is
+// a write-only history substrate (local change-history / time-travel; the only
+// durable record of incoming sync changes).
+//
+// Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
+// fires the UPDATE trigger. The body inspects whether `deleted` transitioned
+// from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
+// ============================================================================
+
+/** Serializes a blocks row (NEW or OLD) to the JSON snapshot stored in
  *  `row_events.{before,after}_json`. NEW / OLD references resolve at
  *  trigger time. */
 const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
@@ -279,6 +393,7 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
         'references', json(${rowRef}.references_json),
         'createdAt', ${rowRef}.created_at,
         'updatedAt', ${rowRef}.updated_at,
+        'userUpdatedAt', coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at),
         'createdBy', ${rowRef}.created_by,
         'updatedBy', ${rowRef}.updated_by,
         'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
@@ -286,11 +401,11 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
 `.trim()
 
 /** Belt-and-suspenders: tx_id is the active local tx_id only when source
- *  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is
- *  open during PowerSync's CRUD apply); without this guard a stale tx_id
- *  left in `tx_context` from the previous local tx would leak into the
- *  sync-applied row_events row. The TxEngine clears all four fields at
- *  end-of-tx; the trigger logic is the load-bearing correctness check. */
+ *  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is open
+ *  during the observer's materialize); without this guard a stale tx_id left
+ *  in `tx_context` from the previous local tx would leak into the sync-applied
+ *  row_events row. The TxEngine clears all fields at end-of-tx; the trigger
+ *  logic is the load-bearing correctness check. */
 const triggerTxIdSql = `
       CASE
         WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
@@ -300,8 +415,6 @@ const triggerTxIdSql = `
 `.trim()
 
 const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
-
-const dropTriggerSql = (name: string): string => `DROP TRIGGER IF EXISTS ${name}`
 
 // ============================================================================
 // row_events triggers (3) — fire for both local AND sync writes; the
@@ -351,9 +464,7 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   END
 `
 
-/** DELETE row_event writer is reserved for hard purges. v1 ships no purge
- *  mechanism; the trigger exists for future use (e.g. a job that purges
- *  soft-deleted rows older than N days). Hard deletes do not sync —
+/** DELETE row_event writer captures hard purges. Hard deletes do not sync —
  *  PowerSync sees the row vanish locally; soft-delete via the synced
  *  `deleted` column is what propagates "this row is gone" through sync. */
 export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
@@ -412,6 +523,7 @@ const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
   {name: 'references_json', jsonValue: rowRef => `${rowRef}.references_json`},
   {name: 'created_at', jsonValue: rowRef => `${rowRef}.created_at`},
   {name: 'updated_at', jsonValue: rowRef => `${rowRef}.updated_at`},
+  {name: 'user_updated_at', jsonValue: rowRef => `${rowRef}.user_updated_at`},
   {name: 'created_by', jsonValue: rowRef => `${rowRef}.created_by`},
   {name: 'updated_by', jsonValue: rowRef => `${rowRef}.updated_by`},
   {
@@ -430,11 +542,18 @@ const blockUploadDiffPredicateSql = BLOCK_UPLOAD_COLUMNS
   .map(column => `OLD.${column.name} IS NOT NEW.${column.name}`)
   .join('\n    OR ')
 
+// workspace_id is emitted UNCONDITIONALLY (not gated on OLD IS NOT NEW): the
+// Phase D encrypt-on-upload hook needs it on EVERY PATCH to look up the
+// workspace key and build the per-column AAD, but a content-only edit wouldn't
+// otherwise change workspace_id and so would omit it. A self-write of the
+// unchanged workspace_id is a harmless no-op server-side. The remaining columns
+// stay change-gated to keep PATCHes column-narrow.
 const blockUploadPatchJsonSql = () => `
       json_remove(
         json_set(
           '{}',
-${BLOCK_UPLOAD_COLUMNS.map(column =>
+          '$.workspace_id', NEW.workspace_id,
+${BLOCK_UPLOAD_COLUMNS.filter(column => column.name !== 'workspace_id').map(column =>
   `          CASE WHEN OLD.${column.name} IS NOT NEW.${column.name} THEN '$.${column.name}' ELSE '$.__noop' END, ${column.jsonValue('NEW')}`,
 ).join(',\n')}
         ),
@@ -579,7 +698,7 @@ export const CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL = `
     AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
   BEGIN
     SELECT RAISE(ABORT,
-      'parent_deleted' || char(31) || NEW.parent_id
+      '${PARENT_DELETED_RAISE_PREFIX}' || ${RAISE_FIELD_SEP_SQL} || NEW.parent_id
     )
     WHERE EXISTS (
       SELECT 1 FROM blocks
@@ -597,7 +716,7 @@ export const CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL = `
     AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
   BEGIN
     SELECT RAISE(ABORT,
-      'parent_deleted' || char(31) || NEW.parent_id
+      '${PARENT_DELETED_RAISE_PREFIX}' || ${RAISE_FIELD_SEP_SQL} || NEW.parent_id
     )
     WHERE EXISTS (
       SELECT 1 FROM blocks
@@ -717,9 +836,9 @@ export const CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL = `
     AND NEW.alias != ''
   BEGIN
     SELECT RAISE(ABORT,
-      'alias_collision' || char(31) ||
-      hex(NEW.workspace_id) || char(31) ||
-      hex(NEW.alias) || char(31) ||
+      '${ALIAS_COLLISION_RAISE_PREFIX}' || ${RAISE_FIELD_SEP_SQL} ||
+      hex(NEW.workspace_id) || ${RAISE_FIELD_SEP_SQL} ||
+      hex(NEW.alias) || ${RAISE_FIELD_SEP_SQL} ||
       hex(NEW.block_id)
     )
     WHERE EXISTS (
@@ -909,32 +1028,59 @@ export const BACKFILL_BLOCKS_FTS_SQL = `
     )
 `
 
-/** Planner-stats marker. wa-sqlite ships without an automatic
- *  `sqlite_stat1`, so the planner falls back to row-count heuristics
- *  that consistently mis-rank join orders on `blocks` once the
- *  workspace is large — a 4-id `json_each` lookup with
- *  `(workspace_id, deleted)` filtering scans the workspace partial
- *  index (300k+ rows) instead of driving from the small set into the
- *  PK. Running `ANALYZE` once populates `sqlite_stat1` and flips that
- *  decision; the recorded `completed_at` lets the bootstrap re-run on
- *  a long interval so stats don't drift indefinitely as the workspace
- *  grows. */
-export const ANALYZE_MARKER_KEY = 'analyze_v1'
+/** Planner-stats freshness, decided by *drift* rather than a clock.
+ *  wa-sqlite ships without an automatic `sqlite_stat1`, so the planner
+ *  falls back to row-count heuristics that consistently mis-rank join
+ *  orders on `blocks` once the workspace is large — a 4-id `json_each`
+ *  lookup with `(workspace_id, deleted)` filtering scans the workspace
+ *  partial index (300k+ rows) instead of driving from the small set into
+ *  the PK. Running `ANALYZE` populates `sqlite_stat1` and flips that
+ *  decision.
+ *
+ *  WHEN to re-run is the subtle part: `sqlite_stat1` already records the
+ *  row count seen at the last ANALYZE, so we re-run whenever the live
+ *  `blocks` count has diverged from that baseline by more than
+ *  {@link ANALYZE_GROWTH_FACTOR}×. That one rule covers every case a timer
+ *  can't: the empty-table-at-init race (no baseline → ANALYZE once data
+ *  lands, never over the empty table), a large initial sync, a bulk
+ *  import, and the legacy "0 0" stats bug (baseline ~0 over a huge table →
+ *  force re-ANALYZE). A stable workspace stays within the factor and is
+ *  left alone, so the multi-second scan doesn't repeat every boot. No
+ *  marker row is needed — `sqlite_stat1` itself is the source of truth. */
 
-/** How long stats stay fresh before the bootstrap schedules another
- *  refresh. 30 days is well past steady-state churn for a personal
- *  workspace; users with huge import bursts can clear the marker by
- *  hand. The cost paid per refresh is one ANALYZE pass at idle. */
-export const ANALYZE_REFRESH_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000
+/** Below this many `blocks` rows the planner's join-order choices don't
+ *  cause the multi-second freezes (scanning a sub-thousand-row table is
+ *  cheap either way), so ANALYZE buys nothing — and recording a tiny
+ *  row-estimate mid-sync could itself mislead the planner into scanning a
+ *  table that's actually still filling. Gates whether ANALYZE runs at
+ *  all. */
+export const ANALYZE_MIN_BLOCKS = 1000
 
-export const SELECT_ANALYZE_COMPLETED_AT_SQL = `
-  SELECT completed_at FROM client_schema_state WHERE key = '${ANALYZE_MARKER_KEY}'
+/** Re-ANALYZE once the live `blocks` count diverges from the count baked
+ *  into `sqlite_stat1` by this factor in either direction. 4× keeps the
+ *  estimate within the same order of magnitude the planner cares about
+ *  (join order turns on order-of-magnitude differences, not 4×), so a
+ *  gradually-growing workspace re-analyzes rarely while an import or
+ *  initial sync that multiplies the table triggers it promptly. */
+export const ANALYZE_GROWTH_FACTOR = 4
+
+/** Estimated `blocks` row count recorded at the last ANALYZE. `stat` is a
+ *  space-separated string ("<rows> <avg-rows-per-key>…"); `CAST(... AS
+ *  INTEGER)` parses its leading integer. MAX across the per-index rows is
+ *  the table estimate (the partial workspace index reports live rows, the
+ *  PK reports all rows; MAX takes the table total to match COUNT(*)).
+ *  NULL when ANALYZE has never populated stats for `blocks`. */
+export const SELECT_BLOCKS_STAT_ESTIMATE_SQL = `
+  SELECT MAX(CAST(stat AS INTEGER)) AS rows FROM sqlite_stat1 WHERE tbl = 'blocks'
 `
 
-export const RECORD_ANALYZE_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${ANALYZE_MARKER_KEY}', ?)
+/** `sqlite_stat1` only exists once ANALYZE has run at least once; querying
+ *  it before then throws "no such table". Probe `sqlite_master` first. */
+export const SELECT_SQLITE_STAT1_EXISTS_SQL = `
+  SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1' LIMIT 1
 `
+
+export const SELECT_BLOCKS_COUNT_SQL = `SELECT COUNT(*) AS count FROM blocks`
 
 /** Per-name reprojection markers. Once `reprojectRefTypedProperties`
  *  has done a catch-up pass for property name `X`, a row keyed
@@ -978,6 +1124,39 @@ export const RECORD_PROPERTY_CHILDREN_BACKFILL_MARKER_SQL = `
   VALUES (?, strftime('%s', 'now') * 1000)
 `
 
+/** Completion markers for workspace-scoped repo.tx data backfills
+ *  (`workspaceBackfillsFacet`). Keyed `workspace_backfill:<workspaceId>:<id>`;
+ *  a row lands once a backfill has run for a workspace, so subsequent opens
+ *  skip it. Local (never synced) — like the reproject markers, each device
+ *  records its own completion. */
+export const WORKSPACE_BACKFILL_MARKER_PREFIX = 'workspace_backfill:'
+
+export const SELECT_WORKSPACE_BACKFILL_MARKERS_SQL = `
+  SELECT key FROM client_schema_state WHERE key LIKE '${WORKSPACE_BACKFILL_MARKER_PREFIX}%'
+`
+
+export const RECORD_WORKSPACE_BACKFILL_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+/** One-time post-upgrade marker: this client has re-scanned a workspace's
+ *  staged `blocks_synced` rows under the relaxed reconcile gate, to heal
+ *  deterministic-id shadows the old gate skip-staled (and whose change-queue
+ *  entry it then consumed, so a normal queue-driven drain never re-evaluates
+ *  them). Keyed `reconcile_rescan_v1:<workspaceId>` — once per workspace per
+ *  client. */
+export const RECONCILE_RESCAN_MARKER_PREFIX = 'reconcile_rescan_v1:'
+
+export const SELECT_RECONCILE_RESCAN_MARKER_SQL = `
+  SELECT key FROM client_schema_state WHERE key = ?
+`
+
+export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS` plus targeted
@@ -985,7 +1164,55 @@ export const RECORD_PROPERTY_CHILDREN_BACKFILL_MARKER_SQL = `
 // evolving client schema).
 // ============================================================================
 
-export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
+// A trigger created with `CREATE TRIGGER IF NOT EXISTS` is FROZEN on upgrade:
+// once a trigger of that name exists, SQLite keeps the old body and silently
+// ignores the new definition. So a client whose local DB was bootstrapped
+// before a trigger's body changed keeps running the stale one forever — which
+// is exactly how the pre-D-3.1 `blocks_upload_update` kept stripping
+// workspace_id from content-only PATCHes and stranding e2ee uploads behind the
+// server's ciphertext CHECK (SQLSTATE 23514).
+//
+// Force every CREATE TRIGGER to re-apply from current source by prepending a
+// `DROP TRIGGER IF EXISTS <name>` before it. This is self-maintaining: any
+// future trigger body change auto-installs on next startup, with no per-change
+// migration to remember. Only triggers are force-recreated — tables and indexes
+// keep `IF NOT EXISTS` (dropping a table would destroy data). A dropped trigger
+// is free to rebuild, and the bootstrap runs before the repo serves any write,
+// so there is no window where a write misses its trigger.
+const CREATE_TRIGGER_NAME_RE = /^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)/i
+
+const withTriggerRecreate = (statements: readonly string[]): string[] =>
+  statements.flatMap(stmt => {
+    const name = stmt.match(CREATE_TRIGGER_NAME_RE)?.[1]
+    return name ? [`DROP TRIGGER IF EXISTS ${name}`, stmt] : [stmt]
+  })
+
+/** Run `fn` with `triggerName` temporarily dropped, then recreate it from
+ *  `createSql` (its canonical definition) — even if `fn` throws. For a bulk
+ *  maintenance write that must NOT fan out through an unconditional per-row
+ *  side-effect trigger (e.g. a column backfill that would otherwise write one
+ *  `row_events` row per block — hundreds of thousands of them). SQLite has no
+ *  `DISABLE TRIGGER`, so drop+recreate is the equivalent; pass the same
+ *  `CREATE` constant the bootstrap installs so the recreated trigger can't
+ *  drift. This is the client analog of the server backfill's `DISABLE TRIGGER`
+ *  bracketing, and the same drop-then-recreate move {@link withTriggerRecreate}
+ *  already does to every trigger on boot. Bootstrap-only: there is no
+ *  write-serving window in which the trigger is absent. */
+const withTriggerSuspended = async (
+  db: {execute: (sql: string) => Promise<unknown>},
+  triggerName: string,
+  createSql: string,
+  fn: () => Promise<void>,
+): Promise<void> => {
+  await db.execute(`DROP TRIGGER IF EXISTS ${triggerName}`)
+  try {
+    await fn()
+  } finally {
+    await db.execute(createSql)
+  }
+}
+
+export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   // Tables
   CREATE_TX_CONTEXT_TABLE_SQL,
   SEED_TX_CONTEXT_ROW_SQL,
@@ -1007,16 +1234,14 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_PS_CRUD_REJECTED_TABLE_SQL,
   CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
-  dropTriggerSql('blocks_row_event_insert'),
-  dropTriggerSql('blocks_row_event_update'),
-  dropTriggerSql('blocks_row_event_delete'),
-  dropTriggerSql('blocks_upload_insert'),
-  dropTriggerSql('blocks_upload_update'),
-  // 5 audit/upload triggers
+  // 3 row_events audit/history triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,
+  // 2 upload-routing triggers
   CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,
   // 2 workspace-invariant triggers
@@ -1038,7 +1263,10 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL,
-] as const
+  // 2 blocks_synced change-capture triggers (Layout B observer detection)
+  CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,
+])
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_row_event_insert',
@@ -1060,6 +1288,8 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_fts_insert',
   'blocks_fts_update',
   'blocks_fts_delete',
+  'blocks_synced_changes_insert',
+  'blocks_synced_changes_delete',
 ] as const
 
 interface ClientSchemaBootstrapDb {
@@ -1106,28 +1336,139 @@ export const backfillBlocksFtsIfEmpty = async (
   await db.execute(RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL)
 }
 
-/** Run `ANALYZE` if the marker is missing (first install) or the
- *  recorded `completed_at` is older than `intervalMs`. Caller is
- *  responsible for scheduling this off the cold-start critical path
- *  (see `repoProvider.ts` — runs via `scheduleIdle`), since the scan
- *  itself can take seconds on a multi-GB DB and we don't want to
- *  block first paint behind it.
+/**
+ * Idempotent local-schema migration for the `user_updated_at` split.
+ * `blocks` / `blocks_synced` are created with CREATE TABLE IF NOT EXISTS, so
+ * adding the column to `BLOCK_STORAGE_COLUMNS` does NOT add it to an existing
+ * device's tables — yet it immediately appears in every generated statement
+ * (INSERT_SQL, the observer's upsert, the raw-table put), so an un-migrated
+ * device would fail "no such column" on the first write/sync. PRAGMA
+ * table_info + ALTER TABLE ADD COLUMN on BOTH tables, guarded so a fresh
+ * install (column already present from CREATE) doesn't throw "duplicate column
+ * name".
  *
- *  `now` is injected so tests can drive the interval check
- *  deterministically without `vi.useFakeTimers` reaching into the
- *  trigger bodies that already depend on `julianday('now')`.
- *  Returns `true` iff `ANALYZE` actually ran. */
-export const runAnalyzeIfDue = async (
+ * When the column is newly added, backfill `blocks` once so the stored value
+ * is fully populated (no lingering NULLs — `parseBlockRow` falls back to
+ * `updated_at` on read, but we keep the column honest). The backfill is
+ * bracketed by `withTriggerSuspended`: the only trigger that fires on a
+ * `user_updated_at`-only UPDATE is `blocks_row_event_update` (AFTER UPDATE ON
+ * blocks, no column scope), and a full-table backfill through it would write
+ * one `row_events` row per block. The FTS/alias/type triggers are column-scoped
+ * (content/properties_json/deleted/workspace_id) and the upload trigger is
+ * source-gated, so neither fires here. `blocks_synced` gets the column (the
+ * raw-table put binds it) but no backfill — it's a passive sync landing zone
+ * overwritten by deliveries.
+ */
+export const ensureBlockUserUpdatedAtColumn = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  let backfillBlocks = false
+  for (const table of ['blocks', 'blocks_synced'] as const) {
+    const columns = await db.getAll<{name: string}>(`PRAGMA table_info(${table})`)
+    if (!columns.some(c => c.name === 'user_updated_at')) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN user_updated_at INTEGER`)
+      if (table === 'blocks') backfillBlocks = true
+    }
+  }
+  // Backfill only right after the ALTER — every existing `blocks` row is NULL
+  // then. On later boots the column already exists, so we skip the backfill
+  // (and its full-table scan) entirely.
+  if (backfillBlocks) {
+    await withTriggerSuspended(
+      db,
+      'blocks_row_event_update',
+      CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
+      async () => {
+        await db.execute('UPDATE blocks SET user_updated_at = updated_at')
+      },
+    )
+  }
+}
+
+/** Row count `sqlite_stat1` recorded for `blocks` at the last ANALYZE, or
+ *  `null` if ANALYZE has never run for it. See {@link SELECT_BLOCKS_STAT_ESTIMATE_SQL}. */
+export const getBlocksStatEstimate = async (
   db: ClientSchemaBootstrapDb,
-  now: () => number,
-  intervalMs: number = ANALYZE_REFRESH_INTERVAL_MS,
-): Promise<boolean> => {
-  const existing = await db.getOptional<{completed_at: number}>(SELECT_ANALYZE_COMPLETED_AT_SQL)
-  const nowMs = now()
-  if (existing !== null && nowMs - existing.completed_at < intervalMs) {
-    return false
+): Promise<number | null> => {
+  // sqlite_stat1 doesn't exist until the first ANALYZE — probe to avoid a
+  // "no such table" throw on a fresh device.
+  const hasStatTable = await db.getOptional<{present: number}>(SELECT_SQLITE_STAT1_EXISTS_SQL)
+  if (hasStatTable === null) return null
+  const row = await db.getOptional<{rows: number | null}>(SELECT_BLOCKS_STAT_ESTIMATE_SQL)
+  return row?.rows ?? null
+}
+
+/** Live `blocks` row count — a covering index scan: cheap relative to
+ *  ANALYZE, but not free on a large table, so callers run it at idle. */
+export const getBlocksCount = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<number> => {
+  const row = await db.getOptional<{count: number}>(SELECT_BLOCKS_COUNT_SQL)
+  return row?.count ?? 0
+}
+
+/** Pure drift predicate (no I/O) so the thresholds stay unit-testable
+ *  without a database. Given the count baked into `sqlite_stat1`
+ *  (`estimate`, `null` = never analyzed) and the live `count`, decide
+ *  whether ANALYZE is worth running. See {@link ANALYZE_MIN_BLOCKS} /
+ *  {@link ANALYZE_GROWTH_FACTOR} for the rationale behind each branch. */
+export const analyzeIsWarranted = (
+  estimate: number | null,
+  count: number,
+  minBlocks: number = ANALYZE_MIN_BLOCKS,
+  growthFactor: number = ANALYZE_GROWTH_FACTOR,
+): boolean => {
+  // Too small for join order to matter — and a tiny recorded estimate
+  // could mislead the planner mid-sync. Leave the table's stats alone.
+  if (count < minBlocks) return false
+  // Real data but no baseline yet (fresh sync / first import).
+  if (estimate === null) return true
+  // Grew far past the baseline (import / initial sync / the "0 0" bug,
+  // where estimate≈0 makes any real count exceed estimate*factor).
+  if (count >= estimate * growthFactor) return true
+  // Shrank far below it (e.g. a large prune) — re-tighten the estimate.
+  if (estimate >= count * growthFactor) return true
+  return false
+}
+
+export interface AnalyzeResult {
+  /** Whether `ANALYZE` was run this call. */
+  analyzed: boolean
+  /** Live `blocks` count observed (drives the decision + any toast). */
+  count: number
+  /** Recorded estimate before this call (`null` = never analyzed). */
+  previousEstimate: number | null
+}
+
+/** Run `ANALYZE` only if the live `blocks` count has drifted from the
+ *  `sqlite_stat1` baseline (see {@link analyzeIsWarranted}). Callers MUST
+ *  schedule this off the first-paint critical path (idle / post-sync):
+ *  the count is a full index scan and ANALYZE itself is a multi-second
+ *  pass on a large DB, both on the single SQLite worker. */
+export const runAnalyzeIfStale = async (
+  db: ClientSchemaBootstrapDb,
+  opts: {minBlocks?: number; growthFactor?: number} = {},
+): Promise<AnalyzeResult> => {
+  const minBlocks = opts.minBlocks ?? ANALYZE_MIN_BLOCKS
+  const growthFactor = opts.growthFactor ?? ANALYZE_GROWTH_FACTOR
+  const previousEstimate = await getBlocksStatEstimate(db)
+  const count = await getBlocksCount(db)
+  if (!analyzeIsWarranted(previousEstimate, count, minBlocks, growthFactor)) {
+    return {analyzed: false, count, previousEstimate}
   }
   await db.execute('ANALYZE')
-  await db.execute(RECORD_ANALYZE_DONE_SQL, [nowMs])
-  return true
+  return {analyzed: true, count, previousEstimate}
+}
+
+/** Unconditional `ANALYZE` for the manual command-palette command — runs
+ *  regardless of drift (the user explicitly asked) and reports the table
+ *  size so the caller can surface it. Still belongs off the render
+ *  path. */
+export const runAnalyzeNow = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<{count: number}> => {
+  const count = await getBlocksCount(db)
+  await db.execute('ANALYZE')
+  return {count}
 }

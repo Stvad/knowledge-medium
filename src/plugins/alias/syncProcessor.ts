@@ -6,10 +6,9 @@
  * taken alias) is enforced at the storage layer by the
  * `block_aliases_workspace_alias_unique` trigger; the tx engine
  * translates the trigger's RAISE into a `ProcessorRejection` with
- * `code: 'alias.collision'`. That arrangement means every write path
- * (local mutators, `tx.create`, `tx.restore`, undo replay, future
- * plugins) gets the uniqueness check for free — this processor only
- * needs to worry about keeping the two representations in agreement.
+ * `code: 'alias.collision'`. Content-rename sync preflights the same
+ * lookup before its alias amendment so the rejection can also carry
+ * which source alias the merge action should drop.
  *
  * Decision ladder:
  *   1. Content changed, old value ∈ aliases (A1, A2) → replace that
@@ -34,6 +33,7 @@
  */
 
 import {
+  ProcessorRejection,
   defineSameTxProcessor,
   type AnySameTxProcessor,
   type BlockData,
@@ -41,7 +41,7 @@ import {
   type SameTxCtx,
   type SameTxEvent,
 } from '@/data/api'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp } from '@/data/properties'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
@@ -49,8 +49,10 @@ export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
  *  means no-op for that direction. */
 interface SyncPlan {
   id: string
+  workspaceId: string
   contentNext: string | null
   aliasesNext: readonly string[] | null
+  dropSourceAliasesOnCollision: readonly string[]
 }
 
 const decodeAliases = (block: BlockData): readonly string[] => {
@@ -83,9 +85,9 @@ const dedupe = (values: readonly string[]): string[] => {
 /** Build the plan for one row. Returns null when nothing should be
  *  written — the row was created/deleted in this commit, no rule
  *  applies, the rule's output is identical to current state, or the
- *  rule would propagate a blank value. Collision is a separate
- *  concern handled by the storage-layer trigger; this planner doesn't
- *  need to consider it. */
+ *  rule would propagate a blank value. Storage triggers remain the
+ *  final uniqueness invariant; content-rename plans also carry intent
+ *  metadata so a rejected merge can drop only the replaced alias. */
 export const planSync = (row: ChangedRow): SyncPlan | null => {
   if (row.before === null || row.after === null) return null
   if (row.after.deleted) return null
@@ -112,8 +114,10 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
       if (arraysEqual(replaced, afterAliases)) return null
       return {
         id: row.id,
+        workspaceId: after.workspaceId,
         contentNext: null,
         aliasesNext: replaced,
+        dropSourceAliasesOnCollision: before.content === '' ? [] : [before.content],
       }
     }
     // Rule 2 (A3): old content wasn't an alias anchor — heal
@@ -121,8 +125,10 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     if (afterAliases.includes(after.content)) return null
     return {
       id: row.id,
+      workspaceId: after.workspaceId,
       contentNext: null,
       aliasesNext: [...afterAliases, after.content],
+      dropSourceAliasesOnCollision: [],
     }
   }
 
@@ -137,20 +143,46 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     if (after.content === added[0]) return null
     return {
       id: row.id,
+      workspaceId: after.workspaceId,
       contentNext: added[0],
       aliasesNext: null,
+      dropSourceAliasesOnCollision: [],
     }
   }
 
   return null
 }
 
-/** Apply one plan: issue the amendment writes. The storage-layer
- *  trigger handles collision detection on the alias write below; if
- *  it fires, the user's writeTransaction rolls back atomically and
- *  the tx engine translates the RAISE into `ProcessorRejection`. */
+const assertNoAliasCollision = async (
+  ctx: SameTxCtx,
+  plan: SyncPlan,
+): Promise<void> => {
+  if (plan.aliasesNext === null) return
+  for (const alias of plan.aliasesNext) {
+    const claimant = await ctx.tx.aliasLookup(alias, plan.workspaceId)
+    if (claimant === null || claimant.id === plan.id) continue
+    throw new ProcessorRejection(
+      `Alias "${alias}" is already used by another block`,
+      'alias.collision',
+      {
+        alias,
+        conflictingBlockId: claimant.id,
+        conflictingBlockTitle: claimant.content.slice(0, 80),
+        workspaceId: plan.workspaceId,
+        attemptedOn: plan.id,
+        dropSourceAliases: [...plan.dropSourceAliasesOnCollision],
+        collisionOrigin: 'content-rename',
+      },
+    )
+  }
+}
+
+/** Apply one plan: issue the amendment writes. The preflight above is
+ *  for user-facing merge intent only; the storage-layer trigger still
+ *  handles any write path that reaches the alias index. */
 const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
   if (plan.aliasesNext !== null) {
+    await assertNoAliasCollision(ctx, plan)
     await ctx.tx.setProperty(plan.id, aliasesProp, [...plan.aliasesNext], {skipMetadata: true})
   }
   if (plan.contentNext !== null) {

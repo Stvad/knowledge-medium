@@ -1,12 +1,15 @@
 import {
-  actionDecoratorsFacet,
+  actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
+import type { AppExtension } from '@/facets/facet.js'
 import {
   ActionConfig,
-  type ActionDecorator,
+  type BaseShortcutDependencies,
+  type ActionTransform,
   ActionContextTypes,
+  type BlockPointerDependencies,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import type { BlockAction } from '@/shortcuts/blockActions.js'
@@ -17,13 +20,21 @@ import {
   focusBlock,
   isEditingProp,
   peekFocusedBlockLocation,
+  sameFocusedBlockLocation,
+  selectionStateProp,
   type FocusedBlockLocation,
 } from '@/data/properties'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
 import {
+  blockIdsInOrderedSelectionRange,
+  commitSelectionRange,
+  findBestSelectionAnchorIndex,
+} from '@/utils/selection.js'
+import {
   horizontalNeighborPanel,
   locationOf,
+  panelOf,
   panelInstances,
   resolveCurrentAnchor,
   verticalNeighbor,
@@ -49,6 +60,78 @@ const currentInstance = (
     ? {blockId: block.id, renderScopeId: deps.renderScopeId}
     : peekFocusedBlockLocation(uiStateBlock)
   return resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
+}
+
+const locationsOf = (instances: readonly HTMLElement[]): FocusedBlockLocation[] | null => {
+  const locations = instances.map(locationOf)
+  return locations.every((location): location is FocusedBlockLocation => Boolean(location))
+    ? locations
+    : null
+}
+
+export const extendSelectionToSpatialTarget = async (
+  deps: BaseShortcutDependencies,
+  target: HTMLElement,
+): Promise<boolean> => {
+  const {uiStateBlock} = deps
+  if (!uiStateBlock) return false
+
+  const targetLocation = locationOf(target)
+  if (!targetLocation) return false
+  const panel = panelOf(target)
+  if (!panel || panel.dataset.panelId !== uiStateBlock.id) return true
+
+  const currentState = uiStateBlock.peekProperty(selectionStateProp)
+  const currentLocation = peekFocusedBlockLocation(uiStateBlock)
+  const anchorBlockId = currentState?.anchorBlockId ?? currentLocation?.blockId
+  if (!anchorBlockId) return false
+
+  const instances = panelInstances(panel)
+  const orderedLocations = locationsOf(instances)
+  if (!orderedLocations) return false
+  const targetIndex = instances.indexOf(target)
+  const anchorIndex = findBestSelectionAnchorIndex(orderedLocations, {
+    anchorBlockId,
+    targetIndex,
+    selectedBlockIds: currentState?.selectedBlockIds,
+    currentLocation,
+  })
+  if (anchorIndex < 0) return false
+
+  return commitSelectionRange({
+    uiStateBlock,
+    anchorBlockId,
+    targetLocation,
+    selectedBlockIds: blockIdsInOrderedSelectionRange(orderedLocations, anchorIndex, targetIndex),
+    clearEditing: true,
+    description: 'spatial-navigation extend selection',
+  })
+}
+
+const extendSelectionVertical = async (
+  deps: BaseShortcutDependencies,
+  direction: 'up' | 'down',
+): Promise<boolean> => {
+  const {uiStateBlock} = deps
+  if (!uiStateBlock) return false
+  if (typeof document === 'undefined') return false
+
+  const focusedLocation = peekFocusedBlockLocation(uiStateBlock)
+  if (!focusedLocation) return false
+  const current = resolveCurrentAnchor(uiStateBlock.id, focusedLocation)
+  if (!current) return true
+
+  const currentLocation = locationOf(current)
+  if (!currentLocation) return false
+  if (!sameFocusedBlockLocation(currentLocation, focusedLocation)) {
+    await extendSelectionToSpatialTarget(deps, current)
+    return true
+  }
+
+  const next = verticalNeighbor(current, direction)
+  if (!next) return true
+  await extendSelectionToSpatialTarget(deps, next)
+  return true
 }
 
 /**
@@ -82,8 +165,11 @@ const moveVertical = async (
 ): Promise<boolean> => {
   const {block, uiStateBlock} = deps
   if (!block || !uiStateBlock) return false
+  const expectedLocation = deps.renderScopeId
+    ? {blockId: block.id, renderScopeId: deps.renderScopeId}
+    : peekFocusedBlockLocation(uiStateBlock)
   const current = currentInstance(deps)
-  if (!current) return false
+  if (!current) return Boolean(expectedLocation)
 
   // Recovery-anchor settle: the focused block instance is gone (e.g. a
   // backlink was just rescheduled away) and `resolveCurrentAnchor`
@@ -94,9 +180,6 @@ const moveVertical = async (
   const currentLocation = locationOf(current)
   if (!currentLocation) return false
 
-  const expectedLocation = deps.renderScopeId
-    ? {blockId: block.id, renderScopeId: deps.renderScopeId}
-    : peekFocusedBlockLocation(uiStateBlock)
   if (
     expectedLocation &&
     (
@@ -217,23 +300,77 @@ const verticalDecorator = (
   actionId: 'move_down' | 'move_up',
   direction: 'down' | 'up',
   description: string,
-): ActionDecorator<typeof ActionContextTypes.NORMAL_MODE> => ({
+): ActionTransform => ({
   actionId,
   context: ActionContextTypes.NORMAL_MODE,
-  decorate: action => ({
+  apply: action => ({
     ...action,
     description,
-    handler: async (deps, trigger) => {
-      if (await moveVertical(deps, direction)) return
-      await action.handler(deps, trigger)
+    handler: async (deps, trigger, dispatch) => {
+      if (await moveVertical(deps as BlockShortcutDependencies, direction)) return
+      await action.handler(deps, trigger, dispatch)
     },
   }),
 })
 
-export function getSpatialNavigationActionDecorators(): ActionDecorator<typeof ActionContextTypes.NORMAL_MODE>[] {
+const selectionVerticalDecorator = (
+  actionId: 'extend_selection_down' | 'extend_selection_up' | 'multi_select.extend_selection_down' | 'multi_select.extend_selection_up',
+  context: typeof ActionContextTypes.NORMAL_MODE | typeof ActionContextTypes.MULTI_SELECT_MODE,
+  direction: 'down' | 'up',
+): ActionTransform => ({
+  actionId,
+  context,
+  apply: action => ({
+    ...action,
+    handler: async (deps, trigger, dispatch) => {
+      if (await extendSelectionVertical(deps, direction)) return
+      await action.handler(deps, trigger, dispatch)
+    },
+  }),
+})
+
+/**
+ * Shift-click selection in visible DOM order — an `ActionTransform` on the
+ * structural `extend_block_selection` action, the mouse-side counterpart of
+ * `selectionVerticalDecorator`: anchor → clicked block range across whatever is
+ * on screen (backlinks, embeds), not the data tree. Declines back to the
+ * structural base when no spatial range resolves (e.g. the clicked instance
+ * isn't in this panel / isn't a navigable item).
+ *
+ * `deps.targetElement` is the block shell the block-pointer dispatch captured —
+ * the same element the spatial shell decorator tags with `data-block-nav-item`,
+ * so the walker can locate it. Upstream gating (selection-gesture + exact
+ * shift-only pointer binding) means this only ever sees a plain shift-click, so
+ * it no longer re-checks modifiers or interactive content.
+ */
+export const spatialSelectionClickTransform: ActionTransform = {
+  actionId: EXTEND_BLOCK_SELECTION_ACTION_ID,
+  context: ActionContextTypes.BLOCK_POINTER,
+  apply: action => ({
+    ...action,
+    handler: async (deps, trigger, dispatch) => {
+      const {uiStateBlock, targetElement} = deps as BlockPointerDependencies
+      // Only the clicked block's own panel can resolve a spatial range; for a
+      // mismatched panel defer to the structural base rather than swallow it.
+      // `extendSelectionToSpatialTarget` reports a mismatch as "handled" for
+      // the keyboard contract, so gate on the panel match here.
+      if (panelOf(targetElement)?.dataset.panelId === uiStateBlock.id) {
+        if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement)) return
+      }
+      await action.handler(deps, trigger, dispatch)
+    },
+  }),
+}
+
+export function getSpatialNavigationActionDecorators(): ActionTransform[] {
   return [
     verticalDecorator('move_down', 'down', 'Move focus down (next block, then stack-sibling panel below)'),
     verticalDecorator('move_up', 'up', 'Move focus up (previous block, then stack-sibling panel above)'),
+    selectionVerticalDecorator('extend_selection_down', ActionContextTypes.NORMAL_MODE, 'down'),
+    selectionVerticalDecorator('extend_selection_up', ActionContextTypes.NORMAL_MODE, 'up'),
+    selectionVerticalDecorator('multi_select.extend_selection_down', ActionContextTypes.MULTI_SELECT_MODE, 'down'),
+    selectionVerticalDecorator('multi_select.extend_selection_up', ActionContextTypes.MULTI_SELECT_MODE, 'up'),
+    spatialSelectionClickTransform,
   ]
 }
 
@@ -244,5 +381,5 @@ export const spatialNavigationActionsExtension: AppExtension =
 
 export const spatialNavigationActionDecoratorsExtension: AppExtension =
   getSpatialNavigationActionDecorators().map(decorator =>
-    actionDecoratorsFacet.of(decorator as ActionDecorator, {source: 'spatial-navigation'}),
+    actionTransformsFacet.of(decorator, {source: 'spatial-navigation'}),
   )

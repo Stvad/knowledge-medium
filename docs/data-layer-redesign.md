@@ -579,7 +579,7 @@ export interface Handle<T> {
 
 Identity rule: same `(name, JSON.stringify(args))` → same handle instance. GC after `gcTime` of zero subscribers + zero in-flight loads.
 
-**Missing vs not-loaded**: `repo.block(id): Handle<BlockData | null>`. After load, `null` = confirmed missing; `peek()` returns `BlockData | null` post-load. Before any load, `peek()` returns `undefined`. `status()` distinguishes loading from loaded.
+**Missing vs not-loaded**: `repo.block(id): Handle<BlockData | null>`. `Block` is a live-row facade: `peek()`, `read()`, `load()`, and `subscribe()` never expose `deleted = 1` rows as ordinary `BlockData`. After load, `null` = no live row: confirmed missing, soft-deleted tombstone, or hard-deleted/missing. Before any load, `peek()` returns `undefined`. `status()` distinguishes loading from loaded. Lifecycle/debug code that needs the cached tombstone shape uses `peekRaw()` explicitly.
 
 For multi-result handles (`subtree`, `backlinks`, query results), the type is `Handle<BlockData[]>` — possibly empty, never null.
 
@@ -590,12 +590,15 @@ export interface Block {
   readonly id: string
   readonly repo: Repo
 
-  /** Sync; throws BlockNotLoadedError if not in cache, BlockNotFoundError if confirmed missing. */
+  /** Sync; throws BlockNotLoadedError if not in cache, BlockNotFoundError if no live row exists. */
   readonly data: BlockData
 
-  /** Soft access. */
-  peek(): BlockData | undefined | null   // undefined = not loaded; null = not found
-  load(): Promise<BlockData | null>
+  /** Live-row access. */
+  peek(): BlockData | undefined | null   // undefined = not loaded; null = no live row
+  load(): Promise<BlockData | null>      // null = missing or soft-deleted
+
+  /** Tombstone-aware cache access for lifecycle/debug paths only. */
+  peekRaw(): BlockData | undefined | null
 
   /** Sync property access via descriptor. */
   get<T>(schema: PropertySchema<T>): T                       // returns descriptor.defaultValue if absent
@@ -617,7 +620,7 @@ export interface Block {
   readonly children: LoaderHandle<BlockData[]>
   readonly parent: Block | null
 
-  subscribe(listener: (data: BlockData | null) => void): Unsubscribe
+  subscribe(listener: (data: BlockData | null) => void): Unsubscribe  // null = no live row
 
   /** Single-block write sugar — each is a 1-mutator tx.
    *  These exist because `await block.set(prop, value)` reads dramatically better
@@ -636,14 +639,22 @@ collection state (children, subtree, ancestors, backlinks) lives on
 `LoaderHandle`s registered with `HandleStore`. `BlockData` matches the
 row shape: no `childIds` field; no parent-children index on the cache.
 
-**Cache contents.** `BlockCache` holds per-id `BlockData` snapshots
-plus confirmed-missing markers. It does NOT hold a parent→children
-index, an `allChildrenLoaded` marker, or any other collection-shaped
-state — those concerns live on the `LoaderHandle`s for
-`repo.children(id)` / `repo.childIds(id)`. PowerSync sync-applied
-inserts/moves invalidate matching handles via the `parent-edge` dep
-declared by their loaders; the row_events tail produces a
-`ChangeNotification` listing `parentIds` and the `HandleStore` walks
+**Cache contents.** `BlockCache` holds raw per-id `BlockData` snapshots,
+including tombstones, plus confirmed-missing markers. The raw cache is
+intentionally lower-level than `Block`: local commits and sync row-events
+write tombstones into the cache so lifecycle/debug paths can inspect them,
+while the `Block` facade normalizes tombstones to `null` for ordinary
+readers. Hard-deletes set the confirmed-missing marker instead of merely
+evicting the snapshot, so a previously loaded block keeps observing
+"absent" rather than regressing to "not loaded".
+
+`BlockCache` does NOT hold a parent→children index, an
+`allChildrenLoaded` marker, or any other collection-shaped state — those
+concerns live on the `LoaderHandle`s for `repo.children(id)` /
+`repo.childIds(id)`. PowerSync sync-applied inserts, soft-deletes,
+restores, hard-deletes, and moves invalidate matching handles via the
+`parent-edge` dep declared by their loaders; the row_events tail produces
+a `ChangeNotification` listing `parentIds` and the `HandleStore` walks
 its inverted dep index.
 
 The full `repo.load` signature:
@@ -2073,7 +2084,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 **Scope**:
 - `queriesFacet` defined (chunk B; `queriesFacet` was scaffolded earlier per §6 but not registered against until B).
 - Kernel queries migrated: `subtree`, `ancestors`, `children`, `childIds`, `backlinks`, `byType`, `searchByContent`, `firstChildByContent`, `aliasesInWorkspace`, `aliasMatches`, `aliasLookup`, `findExtensionBlocks`. (`firstRootBlock` from the original list dropped as out-of-scope; `children` / `childIds` added because the legacy reactive factories on `Repo` collapsed into the queries facet during chunk C.)
-- `repo.query.X(args)` accessor surface (typed via module augmentation) and `repo.runQuery('name', args)`. Per-name generation counter folded into the dispatcher's handle-store key so a `setFacetRuntime` swap that replaces a query under the same name produces a fresh `LoaderHandle` bound to the new resolver (reviewer P2 fix).
+- `repo.query.X(args)` accessor surface (typed via module augmentation) and `repo.runQuery('name', args)`. A single global query-registry epoch folded into the dispatcher's handle-store key, bumped by `swapQueries` only when an existing query is REPLACED or REMOVED (or a shadowing add) — NOT on a purely-additive swap, which can't invalidate any live handle's captured snapshot. A bump re-keys every query, so a fresh lookup binds to the new registry while live handles keep serving their captured snapshot (immutable-handle rule). A per-name scheme was tried but under-invalidates *composed* queries (`ctx.run`) whose helper set wasn't observed before the swap; see the `queryEpoch` / `swapQueries` docs on `Repo`.
 - Dispatcher boundaries: `argsSchema.parse(args)` on input AND `resultSchema.parse(raw)` on output (reviewer P2 fix). Kernel queries ship typed pass-through `Schema<BlockData[]>` / `Schema<BlockData | null>` adapters so the runtime cost is zero while the public TypeScript surface from `QueryRegistry` stays precise.
 - `snapshotsToChangeNotification` (TxEngine fast path) and the `row_events` tail both emit `tables: ['blocks']` on any block write so explicit `ctx.depend({kind:'table', table:'blocks'})` calls in resolvers actually fire (reviewer P2 fix).
 - `Query.coarseScope` field dropped from the public surface. Earlier versions had it as a documented prefilter hook + brief auto-declare experiment; in practice no kernel or plugin query needed it (precise `parent-edge` / `row` / `workspace` deps cover every kernel case, and the auto-declare regressed perf on hot paths like `useChildIds`). Plugin queries that genuinely need a coarse table-scan dep declare it explicitly via `ctx.depend({kind:'table', table:'blocks'})`. If a real prefilter implementation is wanted later, reintroduce as a true negative filter ("only consider these tables"), not a positive OR-dep.

@@ -37,6 +37,12 @@ export interface WorkspaceRow {
   owner_user_id: string
   create_time: number
   update_time: number
+  // E2EE (docs/e2ee-design.html §7). encryption_mode is a UX hint /
+  // server-feature-gating projection; wk_canary is the key-check blob a new
+  // device decrypts to validate a pasted WK (NULL for plaintext workspaces).
+  // Synced down read-only; consumed by the paste flow (§8.2) in a later phase.
+  encryption_mode: string
+  wk_canary: string | null
 }
 
 export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
@@ -45,9 +51,37 @@ export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
   {name: 'owner_user_id', definition: 'owner_user_id TEXT NOT NULL'},
   {name: 'create_time', definition: 'create_time INTEGER NOT NULL'},
   {name: 'update_time', definition: 'update_time INTEGER NOT NULL'},
+  // Mirror the server's NOT NULL DEFAULT 'none' so an upgrading device's
+  // existing rows backfill to 'none' until PowerSync replays the real value
+  // (§7). wk_canary stays nullable — NULL is correct for plaintext.
+  {name: 'encryption_mode', definition: "encryption_mode TEXT NOT NULL DEFAULT 'none'"},
+  {name: 'wk_canary', definition: 'wk_canary TEXT'},
 ]
 
 export const CREATE_WORKSPACES_TABLE_SQL = buildCreateTableSql('workspaces', WORKSPACE_COLUMNS)
+
+/**
+ * Idempotent local-schema migration for the E2EE workspace columns (§7).
+ * CREATE TABLE IF NOT EXISTS is a no-op on a device whose `workspaces`
+ * table predates these columns, so add them explicitly. Guarded on column
+ * existence so a fresh install — which already has them from
+ * CREATE_WORKSPACES_TABLE_SQL — doesn't throw "duplicate column name".
+ * The NOT NULL DEFAULT 'none' backfills existing rows to plaintext until
+ * PowerSync replays each row's real value.
+ */
+export const ensureWorkspaceE2eeColumns = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  const columns = await db.getAll<{ name: string }>('PRAGMA table_info(workspaces)')
+  const present = new Set(columns.map((c) => c.name))
+  if (!present.has('encryption_mode')) {
+    await db.execute("ALTER TABLE workspaces ADD COLUMN encryption_mode TEXT NOT NULL DEFAULT 'none'")
+  }
+  if (!present.has('wk_canary')) {
+    await db.execute('ALTER TABLE workspaces ADD COLUMN wk_canary TEXT')
+  }
+}
 
 export const WORKSPACES_RAW_TABLE = {
   put: {
@@ -66,6 +100,8 @@ export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   ownerUserId: row.owner_user_id,
   createTime: row.create_time,
   updateTime: row.update_time,
+  encryptionMode: row.encryption_mode,
+  wkCanary: row.wk_canary,
 })
 
 // ---------------------------------------------------------------------------

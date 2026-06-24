@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { propertySchemasFacet } from '@/data/facets'
@@ -52,7 +52,7 @@ const setup = async (options: {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   const statusProp = makeStatusProp()
   if (activateWorkspace) repo.setActiveWorkspaceId(WS)

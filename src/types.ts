@@ -29,6 +29,13 @@ export interface Workspace {
   ownerUserId: string
   createTime: number
   updateTime: number
+  // E2EE (docs/e2ee-design.html §7). `encryptionMode` is a server-
+  // maintained UX hint / feature-gating projection; `wkCanary` is the
+  // key-check blob a new device decrypts to validate a pasted WK (null for
+  // plaintext workspaces). Carried through the domain so the optimistic
+  // local prime after create_workspace doesn't null them out before sync.
+  encryptionMode: string
+  wkCanary: string | null
 }
 
 export interface WorkspaceMembership {
@@ -96,6 +103,17 @@ export interface BlockContextType {
      *  one rendered occurrence of that block, even when the same block is
      *  visible in the main outline and one or more embeds/backlink rows. */
     renderScopeId?: string
+    /** Id of the block rendered as the root of this surface's visible
+     *  subtree: the panel's zoom root for the main outline, the shown
+     *  block for a backlink entry, the embedded block for an embed, a
+     *  single segment for a breadcrumb. Structural edits (create-below,
+     *  indent/outdent, merge-up) and bounded navigation read this — NOT
+     *  the panel's `topLevelBlockId` — so a block rendered as a root in
+     *  a nested surface behaves like one. Every surface that mounts a
+     *  block as a bounded view declares it; absent only at the very top
+     *  layout boundary, before a panel sets it. See
+     *  `resolveStructuralEditPolicy`. */
+    scopeRootId?: string
     /** Single visible panel mode: widen the panel's scroll target to the
      *  whole layout surface while constraining its document content inside
      *  the panel renderer. */

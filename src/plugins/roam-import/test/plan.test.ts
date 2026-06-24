@@ -1391,6 +1391,32 @@ describe('planImport', () => {
     expect(plan.aliasesUsed.has('doc')).toBe(true)
   })
 
+  it('isa:: bare hashtag values register one alias per tag, not a literal `#…` page', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [
+          // Bare `#tag` syntax inside isa::; previously the whole string
+          // was captured as one literal page alias (`#CFAR #Coaching`).
+          {string: 'isa::#CFAR #Coaching', uid: 'i1'},
+          // Mixed bracketed + hashtag values across bullets.
+          {string: 'isa::', uid: 'i2', children: [
+            {string: '[[person]]', uid: 'i2a'},
+            {string: '#capitalism #critique', uid: 'i2b'},
+          ]},
+        ],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    for (const alias of ['CFAR', 'Coaching', 'person', 'capitalism', 'critique']) {
+      expect(plan.aliasesUsed.has(alias)).toBe(true)
+    }
+    expect([...plan.aliasesUsed].some(a => a.includes('#'))).toBe(false)
+  })
+
   it('case 4: empty `key::` with bullet children promotes the bullets as a list', () => {
     const plan = planImport([{
       title: 'p',

@@ -33,6 +33,17 @@ describe('findKeybindingConflicts', () => {
     expect(conflicts[0]!.actions.map(a => a.actionId)).toEqual(['a', 'b'])
   })
 
+  it('flags alias-equivalent chords and reports the raw authored form', () => {
+    const conflicts = findKeybindingConflicts([
+      action('a', ActionContextTypes.NORMAL_MODE, 'cmd+k'),
+      action('b', ActionContextTypes.NORMAL_MODE, '$mod+k'),
+    ])
+
+    expect(conflicts).toHaveLength(1)
+    expect(conflicts[0]!.chord).toBe('cmd+k')
+    expect(conflicts[0]!.actions.map(a => a.actionId)).toEqual(['a', 'b'])
+  })
+
   it('flags a global vs a scoped action sharing a chord', () => {
     const conflicts = findKeybindingConflicts([
       action('a', ActionContextTypes.GLOBAL, 'cmd+k'),

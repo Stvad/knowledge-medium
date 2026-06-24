@@ -5,13 +5,13 @@ import {
   type AppMountContribution,
   type HeaderItemContribution,
 } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { Search } from 'lucide-react'
 import { FindReplaceDialog } from './FindReplaceDialog.tsx'
 import { FindReplaceHeaderItem } from './HeaderItem.tsx'
-import { toggleFindReplaceEvent } from './events.ts'
+import { findReplaceToggle } from './toggleStore.ts'
 import { findReplaceDataExtension } from './dataExtension.ts'
 
 export {
@@ -21,7 +21,6 @@ export {
 } from './dataExtension.ts'
 export { FindReplaceDialog } from './FindReplaceDialog.tsx'
 export { FindReplaceHeaderItem } from './HeaderItem.tsx'
-export { toggleFindReplaceEvent } from './events.ts'
 
 export const findReplaceMount: AppMountContribution = {
   id: 'find-replace.dialog',
@@ -36,7 +35,7 @@ export const findReplaceAction: ActionConfig<typeof ActionContextTypes.GLOBAL> =
   context: ActionContextTypes.GLOBAL,
   icon: Search,
   handler: () => {
-    window.dispatchEvent(new CustomEvent(toggleFindReplaceEvent))
+    findReplaceToggle.toggle()
   },
   defaultBinding: {
     keys: '$mod+Shift+f',

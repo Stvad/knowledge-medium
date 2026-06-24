@@ -2,7 +2,8 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
-import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.js'
+import { appUpdatePromptExtension } from '@/extensions/appUpdateMount.js'
+import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
 import {
   defaultActionContextsExtension,
   defaultActionsExtension,
@@ -40,13 +41,20 @@ import { appIntentsPlugin } from '@/plugins/app-intents'
 import { roamImportPlugin } from '@/plugins/roam-import'
 import { blockTaggingPlugin } from '@/plugins/block-tagging'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
+import { srsReviewPlugin } from '@/plugins/srs-review'
 import { todoPlugin } from '@/plugins/todo'
-import { syncStatusPlugin } from '@/plugins/sync-status'
+import { systemStatusPlugin } from '@/plugins/system-status'
+import { storagePersistencePlugin } from '@/plugins/storage-persistence'
+import { dataIntegrityPlugin } from '@/plugins/data-integrity'
+import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
+import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
 import { extractTypePlugin } from '@/plugins/extract-type'
-import type { AppExtension } from '@/extensions/facet.js'
+import { birthdayPlugin } from '@/plugins/birthday'
+import { characterCounterPlugin } from '@/plugins/character-counter'
+import type { AppExtension } from '@/facets/facet.js'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // kernelDataExtension contributes KERNEL_MUTATORS and core data
@@ -65,6 +73,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   toastAppMountExtension,
+  appUpdatePromptExtension,
   // The dialog mount (DialogHost reading the openDialog queue) is no
   // longer a top-level toggle — it's pulled in by every dialog-using
   // plugin (block-tagging, daily-notes) inside its own AppExtension
@@ -102,6 +111,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   videoPlayerPlugin,
   referencesPlugin,
   geoPlugin,
+  characterCounterPlugin,
   aliasPlugin,
   mergeBlocksPlugin,
   // The backlinks-view coordinator reads variants registered by
@@ -116,10 +126,16 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   blockTaggingPlugin,
   extractTypePlugin,
   srsReschedulingPlugin,
-  syncStatusPlugin,
+  srsReviewPlugin({repo}),
+  systemStatusPlugin,
+  storagePersistencePlugin,
+  dataIntegrityPlugin({repo}),
+  dbMaintenancePlugin({repo}),
+  startupMetricsPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
   roamImportPlugin({repo}),
+  birthdayPlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session
   // block via getUIStateBlock + getLayoutSessionBlock and then
   // dispatches any PWA-shortcut / share-target / note-taker intent

@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   codecs,
@@ -8,7 +8,8 @@ import {
   type BlockReference,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
 import { propertySchemasFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
@@ -65,7 +66,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -75,7 +78,6 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -91,9 +93,14 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer (some tests start it explicitly)
+// so its db.onChange subscription doesn't leak onto the shared DB.
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
@@ -472,11 +479,31 @@ describe('repo.queryBlocks', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    const out = await env.repo.queryBlocks({workspaceId: WS, 
+    const out = await env.repo.queryBlocks({workspaceId: WS,
       where: {status: 'open'},
       match: [{scope: 'ancestor', id: 'parent'}],
     })
     expect(ids(out)).toEqual(['open-child'])
+  })
+
+  it('exclude keeps rows whose filtered property is unset (NULL is not a match)', async () => {
+    // Regression: a scalar `exclude` where compiles to
+    // `json_extract(...) = ?`, which is NULL when the property is
+    // missing. A bare `NOT (NULL)` is NULL — not TRUE — so it used to
+    // drop every row that never set the property, the opposite of the
+    // documented NOR contract ("exclude iff a predicate matches"; an
+    // unknown does not match). This is exactly how SRS due-cards lost
+    // every card that had never been archived.
+    await create({id: 'unset', types: ['todo']})
+    await create({id: 'explicit-false', types: ['todo'], properties: {[doneProp.name]: doneProp.codec.encode(false)}})
+    await create({id: 'explicit-true', types: ['todo'], properties: {[doneProp.name]: doneProp.codec.encode(true)}})
+
+    const out = await env.repo.queryBlocks({
+      workspaceId: WS,
+      types: ['todo'],
+      exclude: [{scope: 'self', where: {[doneProp.name]: true}}],
+    })
+    expect(ids(out).sort()).toEqual(['explicit-false', 'unset'])
   })
 })
 
@@ -558,19 +585,17 @@ describe('repo.subscribeBlocks', () => {
     })
     await vi.waitFor(() => expect(fired).toEqual([[]]))
 
-    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
-                            properties_json, references_json, created_at,
-                            updated_at, created_by, updated_by, deleted)
-       VALUES (?, ?, NULL, 'a0', '', ?, '[]', 0, 0, 'remote', 'remote', 0)`,
-      ['remote-todo', WS, JSON.stringify({[typesProp.name]: ['todo']})],
-    )
+    env.repo.startSyncObserver({throttleMs: 0})
+    // A brand-new typed block arrives via the sync path: staged into
+    // blocks_synced, materialized by the observer. New id ⇒ no prior local
+    // row, so no pending-upload gate to clear.
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+      id: 'remote-todo', workspaceId: WS, parentId: null, referenceTargetId: null, orderKey: 'a0',
+      content: '', properties: {[typesProp.name]: ['todo']}, references: [],
+      createdAt: 0, updatedAt: 0, userUpdatedAt: 0, createdBy: 'remote', updatedBy: 'remote', deleted: false,
+    }))
 
-    await env.repo.flushRowEventsTail()
+    await env.repo.flushSyncObserver()
     await vi.waitFor(() => expect(fired).toEqual([[], ['remote-todo']]))
     off()
   })

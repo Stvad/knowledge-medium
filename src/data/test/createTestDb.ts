@@ -36,9 +36,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PowerSyncDatabase, Schema } from '@powersync/node'
 import {
-  BLOCKS_RAW_TABLE,
+  BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
@@ -47,6 +48,9 @@ import {
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
+  RECONCILE_RESCAN_MARKER_PREFIX,
+  REPROJECT_REF_MARKER_PREFIX,
+  WORKSPACE_BACKFILL_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
@@ -76,8 +80,12 @@ const localSchemaContributions = resolveLocalSchemaContributions(staticDataExten
 
 const createTestSchema = (): Schema => {
   const schema = new Schema({})
+  // Layout B (design doc §9.2): production maps only `blocks_synced` as a raw
+  // table — `blocks` is a plain local table the observer materializes into —
+  // so the harness mirrors that. Tests drive sync by writing `blocks_synced`
+  // and running the observer / `materializeStagingRows`.
   schema.withRawTables({
-    blocks: BLOCKS_RAW_TABLE,
+    blocks_synced: BLOCKS_SYNCED_RAW_TABLE,
     workspaces: WORKSPACES_RAW_TABLE,
     workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
   })
@@ -102,6 +110,7 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   // client-schema add-ons (auxiliary tables + triggers).
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await ensureBlockStorageColumns(db)
+  await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
@@ -145,6 +154,8 @@ const getTemplateFingerprint = (): string => {
   hash.update(process.cwd())
   hash.update('\0')
   hash.update(CREATE_BLOCKS_TABLE_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')
@@ -248,4 +259,76 @@ export const createTestDb = async (): Promise<TestDb> => {
       rmSync(dbDir, {recursive: true, force: true})
     },
   }
+}
+
+// Data tables cleared by `resetTestDb`, ordered so content/side tables go
+// first (their AFTER-DELETE triggers re-touch the side indexes + audit
+// tables) and the audit/queue tables go last so trigger-written rows are
+// swept too. NOT cleared: `client_schema_state` (backfill markers / schema
+// state), `tx_context` (a singleton row — reset via UPDATE), the FTS shadow
+// tables (`blocks_fts_*` content/idx/etc. — managed by the `blocks_fts`
+// virtual table; touching them directly corrupts the index), and PowerSync's
+// own internals (`ps_buckets`, `ps_oplog`, …) except the upload queue.
+const RESET_CONTENT_TABLES = [
+  'blocks',
+  'blocks_synced',
+  'blocks_synced_changes',
+  'workspaces',
+  'workspace_members',
+  'block_aliases',
+  'block_references',
+  'block_types',
+  'blocks_fts', // virtual FTS table — DELETE clears its shadow tables safely
+  'blocks_fts_rowids',
+] as const
+const RESET_AUDIT_TABLES = ['row_events', 'command_events', 'ps_crud', 'ps_crud_rejected'] as const
+
+/**
+ * Truncate all test data from a `createTestDb` database and reset
+ * `tx_context`, returning it to the same empty state a freshly-opened
+ * harness has — ~100x cheaper than opening a new PowerSyncDatabase
+ * (~2.5ms vs ~260ms). Use with one `beforeAll` open + `afterAll` close and
+ * a `beforeEach(() => resetTestDb(h.db))`, building a fresh `Repo` per test
+ * for registry/cache/handle-store isolation.
+ *
+ * Only clears tables that actually exist, so it tolerates schema variants
+ * (e.g. a plugin's local table that isn't present in a given harness). If a
+ * test installs its OWN extra data table, clear it explicitly in the test.
+ */
+export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
+  const present = new Set(
+    (await db.getAll<{name: string}>(
+      "SELECT name FROM sqlite_master WHERE type='table'",
+    )).map(row => row.name),
+  )
+  const existing = (names: readonly string[]) => names.filter(name => present.has(name))
+
+  await db.writeTransaction(async tx => {
+    // Reset routing context first so the content deletes below are treated
+    // as non-local (no upload-routing into ps_crud) regardless of what the
+    // previous test left behind.
+    await tx.execute(
+      'UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL',
+    )
+    for (const table of existing(RESET_CONTENT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
+    for (const table of existing(RESET_AUDIT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
+    // Clear per-test dynamic markers — reprojection (schema-swap catch-up) and
+    // workspace backfills — so each is re-detected per test. A freshly-opened
+    // harness has none of these; we keep only the alias/type/FTS/ANALYZE
+    // markers from template init.
+    if (present.has('client_schema_state')) {
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${REPROJECT_REF_MARKER_PREFIX}%'`,
+      )
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${WORKSPACE_BACKFILL_MARKER_PREFIX}%'`,
+      )
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
+      )
+    }
+    // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id
+    // expectations stay stable.
+    if (present.has('sqlite_sequence')) await tx.execute('DELETE FROM sqlite_sequence')
+  })
 }

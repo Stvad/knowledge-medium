@@ -108,5 +108,6 @@ export const agentTokensChangedEvent = 'agent-runtime-bridge:tokens-changed'
 /** Notify any listeners (e.g. the bridge hook) that the persisted
  *  token set changed and registration should be re-sent. */
 export const notifyAgentTokensChanged = () => {
+  // eslint-disable-next-line no-restricted-syntax -- genuine broadcast: signals the running bridge effect to re-register tokens
   window.dispatchEvent(new CustomEvent(agentTokensChangedEvent))
 }

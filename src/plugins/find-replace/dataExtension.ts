@@ -6,11 +6,11 @@ import {
   type Schema,
 } from '@/data/api'
 import { mutatorsFacet, queriesFacet } from '@/data/facets.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import {
   KERNEL_CONTENT_CHANNEL,
   kernelContentKey,
-} from '@/data/internals/kernelInvalidation.js'
+} from '@/data/invalidation'
 import {
   DEFAULT_FIND_REPLACE_OPTIONS,
   buildContentSearchMatch,
@@ -87,7 +87,7 @@ const SELECT_CONTENT_CANDIDATES_SQL = `
       (? != 0 AND instr(content, ?) > 0)
       OR (? = 0 AND instr(LOWER(content), LOWER(?)) > 0)
     )
-  ORDER BY updated_at DESC, id ASC
+  ORDER BY coalesce(user_updated_at, updated_at) DESC, id ASC
   LIMIT ?
 `
 

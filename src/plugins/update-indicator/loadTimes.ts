@@ -7,7 +7,7 @@ import {
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
-import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 
 export const previousLoadTimeProp = defineProperty<number | undefined>('previousLoadTime', {
   codec: codecs.optionalNumber,
@@ -61,13 +61,15 @@ export const recordUpdateIndicatorLoadTime = async (
  *  The indicator only needs to know "when did *the previous* load
  *  finish" — it doesn't need to write *this* load's timestamp before
  *  any rendering, just before the next reload. So pushing the SQL to
- *  idle time is correctness-preserving and removes the writeTransaction
- *  + its `getUserPrefsBlock` ensure-tx from the bootstrap window. */
+ *  deep idle is correctness-preserving and removes the writeTransaction
+ *  + its `getUserPrefsBlock` ensure-tx from the bootstrap window. The
+ *  next-reload deadline is far off, so genuine idle (never near boot,
+ *  fine to skip a never-idle session) is the right cadence. */
 export const updateIndicatorLoadTimeEffect: AppEffect = {
   id: 'update-indicator.load-time',
   start: ({repo, workspaceId}) => {
-    scheduleIdle(() => {
+    scheduleDeepIdle(() => {
       void recordUpdateIndicatorLoadTime(repo, workspaceId)
-    })
+    }, LAZY_DEEP_IDLE)
   },
 }

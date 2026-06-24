@@ -1,24 +1,28 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types'
 import { cycleTodoState, todoActions } from '../actions'
 import { todoDataExtension } from '../dataExtension'
 import { statusProp, TODO_TYPE } from '../schema'
 
+let sharedDb: TestDb
 let h: TestDb
 let repo: Repo
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
-  h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  h = sharedDb
   let now = 1700_000_000_000
   let id = 0
   repo = new Repo({
@@ -27,7 +31,6 @@ beforeEach(async () => {
     user: {id: 'user-1'},
     now: () => ++now,
     newId: () => `generated-${++id}`,
-    registerKernelProcessors: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -42,9 +45,7 @@ beforeEach(async () => {
   }), {scope: ChangeScope.BlockDefault, description: 'create block'})
 })
 
-afterEach(async () => {
-  await h.cleanup()
-})
+afterEach(() => { repo.stopSyncObserver() })
 
 describe('cycleTodoState', () => {
   it('rotates not todo -> open -> done -> not todo', async () => {
@@ -59,6 +60,16 @@ describe('cycleTodoState', () => {
     expect(block.get(statusProp)).toBe('done')
 
     await cycleTodoState(block)
+    expect(block.types).not.toContain(TODO_TYPE)
+    expect(block.peekProperty(statusProp)).toBeUndefined()
+  })
+
+  it('is a no-op on a read-only repo (read-only guard short-circuits before any write)', async () => {
+    const block = repo.block('block-1')
+    repo.isReadOnly = true
+
+    await cycleTodoState(block)
+
     expect(block.types).not.toContain(TODO_TYPE)
     expect(block.peekProperty(statusProp)).toBeUndefined()
   })

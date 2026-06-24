@@ -15,16 +15,7 @@ import type {
   BlockLayout,
   BlockLayoutContribution,
 } from '@/extensions/blockInteraction.js'
-import {
-  currentTimeRequestEventName,
-  CurrentTimeRequestEventDetail,
-  focusVideoPlayerEventName,
-  FocusVideoPlayerEventDetail,
-  seekToEventName,
-  SeekToEventDetail,
-  videoPlayerFocusStateRequestEventName,
-  VideoPlayerFocusStateRequestEventDetail,
-} from './events.ts'
+import { registerVideoPlayer } from './registry.ts'
 import { enterVideoNotesView } from './notes.ts'
 import { videoNotesPaneRatioProp, videoPlayerViewProp } from './view.ts'
 
@@ -99,62 +90,25 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
     return Boolean(playerElement?.shadowRoot?.activeElement)
   }, [])
 
-  useEffect(() => {
-    const handleSeekTo = (event: CustomEvent<SeekToEventDetail>) => {
-      if (event.detail.blockId === block.id && player.current) {
-        player.current.currentTime = event.detail.seconds
+  const renderScopeId = typeof blockContext.renderScopeId === 'string'
+    ? blockContext.renderScopeId
+    : undefined
 
-        focusPlayer()
-        setIsPlaying(true)
-      }
-    }
-
-    window.addEventListener(seekToEventName, handleSeekTo as EventListener)
-
-    return () => window.removeEventListener(seekToEventName, handleSeekTo as EventListener)
-  }, [block.id, focusPlayer])
-
-  useEffect(() => {
-    const handleCurrentTimeRequest = (event: CustomEvent<CurrentTimeRequestEventDetail>) => {
-      if (event.detail.blockId === block.id && player.current) {
-        event.detail.respond(player.current.currentTime)
-      }
-    }
-
-    window.addEventListener(currentTimeRequestEventName, handleCurrentTimeRequest as EventListener)
-
-    return () => window.removeEventListener(
-      currentTimeRequestEventName,
-      handleCurrentTimeRequest as EventListener,
-    )
-  }, [block.id])
-
-  useEffect(() => {
-    const handleFocusRequest = (event: CustomEvent<FocusVideoPlayerEventDetail>) => {
-      if (event.detail.blockId !== block.id) return
-      event.detail.respond(focusPlayer())
-    }
-    const handleFocusStateRequest = (
-      event: CustomEvent<VideoPlayerFocusStateRequestEventDetail>,
-    ) => {
-      if (event.detail.blockId !== block.id) return
-      event.detail.respond(hasPlayerFocus())
-    }
-
-    window.addEventListener(focusVideoPlayerEventName, handleFocusRequest as EventListener)
-    window.addEventListener(
-      videoPlayerFocusStateRequestEventName,
-      handleFocusStateRequest as EventListener,
-    )
-
-    return () => {
-      window.removeEventListener(focusVideoPlayerEventName, handleFocusRequest as EventListener)
-      window.removeEventListener(
-        videoPlayerFocusStateRequestEventName,
-        handleFocusStateRequest as EventListener,
-      )
-    }
-  }, [block.id, focusPlayer, hasPlayerFocus])
+  // Register a typed imperative handle for this rendered player, keyed by
+  // block id + render scope. Replaces the old window.CustomEvent
+  // request/response bus — actions and timestamp links resolve the
+  // player in their own render scope and call it synchronously.
+  useEffect(() => registerVideoPlayer(block.id, renderScopeId, {
+    getCurrentTime: () => player.current?.currentTime,
+    focus: focusPlayer,
+    hasFocus: hasPlayerFocus,
+    seekTo: seconds => {
+      if (!player.current) return
+      player.current.currentTime = seconds
+      focusPlayer()
+      setIsPlaying(true)
+    },
+  }), [block.id, renderScopeId, focusPlayer, hasPlayerFocus])
 
   return (
     <div

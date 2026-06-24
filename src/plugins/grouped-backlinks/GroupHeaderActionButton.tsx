@@ -3,6 +3,7 @@ import type { Block } from '@/data/block'
 import { Button } from '@/components/ui/button.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useUIStateBlock } from '@/data/globalState.js'
+import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import {
   ActionContextTypes,
@@ -31,7 +32,7 @@ interface GroupHeaderActionButtonProps {
  *  Resolves the action from the runtime at render time rather than
  *  at facet-contribution time so contributions don't have to be
  *  ordered with the action registration. If the action isn't
- *  registered, or its `canRun` predicate rejects the synthesized
+ *  registered, or its `isVisible` predicate rejects the synthesized
  *  deps, the button renders nothing — same affordance-hiding
  *  contract as the command palette. */
 export const GroupHeaderActionButton = ({
@@ -65,7 +66,7 @@ export const GroupHeaderActionButton = ({
     anchorBlock: null,
     uiStateBlock,
   }
-  if (action.canRun && !action.canRun(deps)) return null
+  if (action.isVisible && !action.isVisible(deps)) return null
 
   const Icon = iconOverride ?? action.icon
   const label = labelOverride ?? action.description
@@ -75,9 +76,13 @@ export const GroupHeaderActionButton = ({
     const trigger = new CustomEvent(`group-header:${actionId}`, {
       detail: triggerDetail,
     })
-    void Promise.resolve(action.handler(deps, trigger)).catch(error => {
-      console.error(`[group-header] Action ${actionId} failed`, error)
-    })
+    // Route through the supplied-deps dispatch (resolveDeps validation +
+    // canDispatch gate + error logging) rather than invoking the handler
+    // directly. The button only renders once `isVisible` passed and the
+    // synthesized MULTI_SELECT_MODE deps validate, so the action resolves; the
+    // returned boolean is unused — an unclaimed click is a no-op, there's no
+    // fallback to fall through to.
+    dispatchActionWithDeps(actionId, deps, trigger)
   }
 
   return (

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -12,9 +12,9 @@ import {
   peekFocusedBlockLocation,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   __resetLayoutSessionIdForTesting,
   getLayoutSessionId,
@@ -42,14 +42,14 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   let id = 0
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: USER,
     newId: () => `gen-${++id}`,
-    registerKernelProcessors: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -59,7 +59,10 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
@@ -70,7 +73,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers()
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 const contentChildIds = async (parentId: string): Promise<string[]> =>

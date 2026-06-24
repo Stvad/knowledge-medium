@@ -75,6 +75,7 @@ export const BreadcrumbList = ({
               <NestedBlockContextProvider
                 overrides={{
                   ...overrides,
+                  scopeRootId: parent.id,
                   renderScopeId: breadcrumbRenderScopeId(
                     parentRenderScopeId,
                     parent.id,

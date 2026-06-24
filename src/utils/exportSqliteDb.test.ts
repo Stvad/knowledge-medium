@@ -61,6 +61,73 @@ describe('exportRawSqliteDb', () => {
     expect(result.blob).toBe(snapshotFile)
     expect(result.filename).toMatch(/^kmp-v6-user-1-export-\d+\.db$/)
   })
+
+  it('fails fast with a storage-space message when free OPFS space is below the DB size', async () => {
+    const MiB = 1024 * 1024
+    const sourceFile = {size: 100 * MiB, stream: vi.fn()} as unknown as File
+    const sourceHandle = {getFile: vi.fn(async () => sourceFile)}
+    const getFileHandle = vi.fn(async () => sourceHandle)
+    const getDirectory = vi.fn(async () => ({getFileHandle}))
+    // quota 120 MiB, usage 100 MiB -> only 20 MiB free, but the snapshot needs 100 MiB.
+    const estimate = vi.fn(async () => ({quota: 120 * MiB, usage: 100 * MiB}))
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {getDirectory, estimate},
+    })
+    const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
+
+    const promise = exportRawSqliteDb({
+      user: {id: 'user-1'},
+      db: {readLock},
+    } as unknown as Repo)
+
+    await expect(promise).rejects.toThrow(/Not enough browser storage/)
+    await expect(promise).rejects.toThrow(/100\.0 MiB/) // required
+    await expect(promise).rejects.toThrow(/20\.0 MiB/) // available
+    // Bails before locking the DB or creating the doomed snapshot file.
+    expect(readLock).not.toHaveBeenCalled()
+    expect(getFileHandle).not.toHaveBeenCalledWith(
+      expect.stringContaining('export-snapshot'),
+      {create: true},
+    )
+  })
+
+  it('rewraps a QuotaExceededError from the snapshot write and removes the partial snapshot', async () => {
+    const pipeTo = vi.fn(async () => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError')
+    })
+    const sourceFile = {
+      size: 10,
+      stream: vi.fn(() => ({pipeTo})),
+    } as unknown as File
+    const sourceHandle = {getFile: vi.fn(async () => sourceFile)}
+    const snapshotHandle = {
+      createWritable: vi.fn(async () => ({}) as FileSystemWritableFileStream),
+      getFile: vi.fn(),
+    }
+    const getFileHandle = vi.fn(async (name: string) => (
+      name.includes('export-snapshot') ? snapshotHandle : sourceHandle
+    ))
+    const removeEntry = vi.fn(async () => undefined)
+    const getDirectory = vi.fn(async () => ({getFileHandle, removeEntry}))
+    // Plenty of free space, so the precheck passes and the failure comes from the write itself.
+    const estimate = vi.fn(async () => ({quota: 1000, usage: 0}))
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {getDirectory, estimate},
+    })
+    const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
+
+    await expect(exportRawSqliteDb({
+      user: {id: 'user-1'},
+      db: {readLock},
+    } as unknown as Repo)).rejects.toThrow(/Not enough browser storage/)
+
+    expect(removeEntry).toHaveBeenCalledWith(
+      expect.stringMatching(/^\.kmp-v6-user-1\.db\.export-snapshot-/),
+    )
+    expect(snapshotHandle.getFile).not.toHaveBeenCalled()
+  })
 })
 
 describe('importRawSqliteDb', () => {

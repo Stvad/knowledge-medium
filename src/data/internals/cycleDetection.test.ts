@@ -13,124 +13,119 @@
  *      hands the same payload to a test `onCycleDetected` callback so
  *      tests can assert shape without grepping log output.
  *
+ * Sync writes are modeled the Layout B way: stage the row into
+ * `blocks_synced` and let the observer materialize it into `blocks` with
+ * source=NULL — bypassing the workspace-invariant trigger exactly as
+ * PowerSync's CRUD-apply does, so a cross-block parent cycle can form.
+ *
  * Why test against `onCycleDetected` rather than a `repo.events` pub/
  * sub: there are no in-product subscribers in v1 — the alpha policy is
  * "console.warn for operators; manual fix via the §4.7 SQL runbook" —
  * so a pub/sub surface on `Repo` would be plumbing for nobody. The
- * callback option exists on the tail for tests + future telemetry
+ * callback option exists on the observer for tests + future telemetry
  * hooks; if a third caller needs it, that's the right time to build a
  * subscriber surface.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CycleDetectedEvent } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
 interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   const repo = new Repo({
     db: h.db,
     cache,
     user: { id: 'u1' },
-    startRowEventsTail: false, // tests start it explicitly with throttleMs: 0
+    startSyncObserver: false, // tests start it explicitly with throttleMs: 0
   })
   env = { h, cache, repo }
 })
-afterEach(async () => {
-  if (env) {
-    env.repo.stopRowEventsTail()
-    await env.h.cleanup()
-  }
+afterEach(() => {
+  if (env) env.repo.stopSyncObserver()
 })
 
-/** Insert a row directly via SQL with `tx_context.source = NULL`, so the
- *  row_events trigger COALESCEs to 'sync' — closest in-test approximation
- *  to PowerSync's CRUD-apply path. Same shape as the helpers in
- *  invalidation.test.ts. */
-const seedSync = async (
-  args: { id: string; workspaceId?: string; parentId?: string | null; orderKey?: string },
-): Promise<void> => {
-  await env.h.db.execute(
-    `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-  )
-  await env.h.db.execute(
-    `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
-                          properties_json, references_json, created_at,
-                          updated_at, created_by, updated_by, deleted)
-     VALUES (?, ?, ?, ?, '', '{}', '[]', 0, 0, 'remote', 'remote', 0)`,
-    [
-      args.id,
-      args.workspaceId ?? 'ws-1',
-      args.parentId ?? null,
-      args.orderKey ?? 'a0',
-    ],
-  )
-}
+// "Newer than the seeded rows" (which carry updated_at = 0), so a sync-applied
+// move wins the materialize LWW gate over the seed it replaces.
+const NEWER = 9_000_000_000_000
 
-/** Repoint an existing block's parent via direct SQL (sync-applied). The
- *  workspace-invariant trigger is gated on `source IS NOT NULL`, so this
- *  bypasses parent-existence checks the same way PowerSync's CRUD-apply
- *  path does. */
-const movePartySync = async (id: string, parentId: string | null): Promise<void> => {
-  await env.h.db.execute(
-    `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-  )
-  await env.h.db.execute(
-    `UPDATE blocks SET parent_id = ? WHERE id = ?`,
-    [parentId, id],
-  )
-}
+/** Stage a plaintext row into `blocks_synced` (the sync landing zone). The
+ *  observer materializes it into `blocks` on the next flush, with source=NULL —
+ *  no `ps_crud` entry is created, so these rows behave like genuine downloaded
+ *  rows (no pending-upload gate to clear). */
+const stage = (o: {
+  id: string
+  workspaceId?: string
+  parentId?: string | null
+  orderKey?: string
+  content?: string
+  updatedAt?: number
+}): Promise<unknown> =>
+  env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+    id: o.id,
+    workspaceId: o.workspaceId ?? 'ws-1',
+    parentId: o.parentId ?? null,
+    referenceTargetId: null,
+    orderKey: o.orderKey ?? 'a0',
+    content: o.content ?? '',
+    properties: {},
+    references: [],
+    createdAt: 0,
+    updatedAt: o.updatedAt ?? 0,
+    userUpdatedAt: o.updatedAt ?? 0,
+    createdBy: 'remote',
+    updatedBy: 'remote',
+    deleted: false,
+  }))
+
+/** Seed a non-cyclic row via the sync path (an insert — never a cycle
+ *  candidate, even once materialized). Caller flushes the observer. */
+const seedSync = (args: { id: string; workspaceId?: string; parentId?: string | null; orderKey?: string }) =>
+  stage(args)
+
+/** Re-parent an existing row via a sync-applied UPSERT — a concurrent client's
+ *  move arriving over sync. NEWER stamp so it wins the LWW gate over the seed. */
+const movePartySync = (id: string, parentId: string | null) =>
+  stage({ id, parentId, updatedAt: NEWER })
 
 describe('cycle detection (§4.7)', () => {
   it('emits cycleDetected with startIds covering both members of a sync-induced 2-cycle', async () => {
-    // Initial seed: A and B in the same workspace, neither cyclic.
-    await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
-    await seedSync({ id: 'B', parentId: null, orderKey: 'a1' })
-
     const events: CycleDetectedEvent[] = []
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    env.repo.startSyncObserver({ throttleMs: 0, onCycleDetected: e => events.push(e) })
 
-    // Start the tail consuming from the highest existing id so the
-    // initial seed inserts (which DO write row_events with source=sync,
-    // but with no parent_id transitions) don't appear as cycle
-    // candidates. We want exactly the upcoming UPDATE rows in the scan.
-    env.repo.startRowEventsTail({
-      throttleMs: 0,
-      onCycleDetected: e => events.push(e),
-    })
-    await env.repo.flushRowEventsTail() // settle the catch-up read
+    // Seed A and B (inserts — never cycle candidates, even once materialized).
+    await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
+    await seedSync({ id: 'B', parentId: null, orderKey: 'a1' })
+    await env.repo.flushSyncObserver()
 
     // Two concurrent sync-applied moves close the loop:
-    //   client X moved A under B
-    //   client Y moved B under A
-    // Both land via PowerSync's CRUD-apply path → source=NULL → tagged
-    // 'sync' by the row_events trigger.
+    //   client X moved A under B; client Y moved B under A.
     await movePartySync('A', 'B')
     await movePartySync('B', 'A')
+    await env.repo.flushSyncObserver()
 
-    await env.repo.flushRowEventsTail()
-
-    // Under throttleMs=0 the tail may drain once (coalesced — both
-    // moves visible in one pass) or twice (move 2 lands after move 1's
-    // throttled drain fired). Either is correct per §4.7 ("an event
-    // per drain pass that finds a cycle"). The contract callers care
-    // about: (a) at least one event fired, (b) every event names
-    // ws-1, (c) txIdsInvolved is empty (the trigger writes tx_id =
-    // NULL on sync writes), (d) the union of startIds covers both
-    // affected rows, (e) console.warn is emitted alongside.
+    // Coalesced into one drain pass → one event whose startIds cover both
+    // moved rows. Contract: (a) at least one event, (b) every event names
+    // ws-1, (c) txIdsInvolved empty (sync writes carry no tx_id), (d) the
+    // union of startIds is {A,B}, (e) console.warn fires alongside.
     expect(events.length).toBeGreaterThanOrEqual(1)
     const allStartIds = new Set<string>()
     for (const ev of events) {
       expect(ev.workspaceId).toBe('ws-1')
-      // sync-applied row_events have tx_id = NULL by trigger logic;
-      // assert empty here so a future implementation change that
-      // starts tagging sync tx_ids has to update the test.
+      // sync-applied materialize writes carry no tx_id; assert empty so a
+      // future change that starts tagging them has to update the test.
       expect(ev.txIdsInvolved).toEqual([])
       for (const id of ev.startIds) allStartIds.add(id)
     }
@@ -145,10 +140,12 @@ describe('cycle detection (§4.7)', () => {
   })
 
   it('repo.query.subtree on a cyclic root returns each member exactly once', async () => {
+    env.repo.startSyncObserver({ throttleMs: 0 })
     await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
     await seedSync({ id: 'B', parentId: null, orderKey: 'a1' })
     await movePartySync('A', 'B')
     await movePartySync('B', 'A')
+    await env.repo.flushSyncObserver()
 
     const fromA = await env.repo.query.subtree({ id: 'A' }).load()
     const fromB = await env.repo.query.subtree({ id: 'B' }).load()
@@ -157,49 +154,36 @@ describe('cycle detection (§4.7)', () => {
   })
 
   it('does not fire when sync-applied parent_id changes do not close a loop', async () => {
-    // A live, non-cyclic re-parent: B under A. No cycle should be
-    // reported.
-    await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
-    await seedSync({ id: 'B', parentId: null, orderKey: 'a1' })
-
     const events: CycleDetectedEvent[] = []
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    env.repo.startSyncObserver({ throttleMs: 0, onCycleDetected: e => events.push(e) })
 
-    env.repo.startRowEventsTail({
-      throttleMs: 0,
-      onCycleDetected: e => events.push(e),
-    })
-    await env.repo.flushRowEventsTail()
+    await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
+    await seedSync({ id: 'B', parentId: null, orderKey: 'a1' })
+    await env.repo.flushSyncObserver()
 
-    await movePartySync('B', 'A')
-    await env.repo.flushRowEventsTail()
+    await movePartySync('B', 'A') // one move, no loop
+    await env.repo.flushSyncObserver()
 
     expect(events).toEqual([])
-    // Filter for our cycle channel — other warnings (e.g. tail drain
-    // diagnostics) shouldn't make this test flaky.
-    const cycleWarns = warn.mock.calls.filter(c =>
-      String(c[0]).includes('cycleDetected'),
-    )
+    // Filter for our cycle channel — other warnings (e.g. drain diagnostics)
+    // shouldn't make this test flaky.
+    const cycleWarns = warn.mock.calls.filter(c => String(c[0]).includes('cycleDetected'))
     expect(cycleWarns).toEqual([])
     warn.mockRestore()
   })
 
   it('does not fire on pure content edits', async () => {
-    await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
-
     const events: CycleDetectedEvent[] = []
-    env.repo.startRowEventsTail({
-      throttleMs: 0,
-      onCycleDetected: e => events.push(e),
-    })
-    await env.repo.flushRowEventsTail()
+    env.repo.startSyncObserver({ throttleMs: 0, onCycleDetected: e => events.push(e) })
 
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(`UPDATE blocks SET content = 'remote-edit' WHERE id = 'A'`)
+    await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
+    await env.repo.flushSyncObserver()
 
-    await env.repo.flushRowEventsTail()
+    // A content edit (same parent_id) is not a cycle candidate.
+    await stage({ id: 'A', parentId: null, orderKey: 'a0', content: 'remote-edit', updatedAt: NEWER })
+    await env.repo.flushSyncObserver()
+
     expect(events).toEqual([])
   })
 })

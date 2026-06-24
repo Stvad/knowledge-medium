@@ -4,12 +4,13 @@ import type { AbstractPowerSyncDatabase } from '@powersync/common'
 import { Repo } from '../data/repo'
 import { BlockCache } from '@/data/blockCache'
 import { useIsLocalOnly, useUser } from '@/components/Login'
-import { ensurePowerSyncReady, getPowerSyncDb } from '@/data/repoProvider'
+import { ensurePowerSyncReady, getPowerSyncDb, syncObserverDepsFor } from '@/data/repoProvider'
 import { User } from '@/types.js'
-import { memoize } from 'lodash'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { memoize } from 'lodash-es'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
-import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.js'
+import { surfaceProcessorRejection } from '@/extensions/processorRejectionToast.js'
+import { markStartup } from '@/utils/startupTimeline.js'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
@@ -20,7 +21,15 @@ const initRepo = memoize(
     await ensurePowerSyncReady(user.id, useRemoteSync)
     const db = getPowerSyncDb(user.id)
     const cache = new BlockCache()
-    const repo = new Repo({db, cache, user: {id: user.id, name: user.name}})
+    // §6 mode/key resolver is built once in repoProvider and shared with the
+    // upload connector; the observer deps (decrypt/copy/defer + key lookup)
+    // are drawn from it here.
+    const repo = new Repo({
+      db,
+      cache,
+      user: {id: user.id, name: user.name},
+      syncObserverDeps: syncObserverDepsFor(user.id),
+    })
     repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
       repo,
       workspaceId: null,
@@ -28,11 +37,15 @@ const initRepo = memoize(
       generation: 'repo-bootstrap',
     }))
     // Subscribe at bootstrap so user-surfaceable errors from any
-    // `repo.tx` call site (mutators, palette actions, programmatic
-    // writes, etc.) route through the toast layer without each call
-    // site having to know about `ProcessorRejection`. The Repo is a
-    // process singleton in practice; we don't bother unsubscribing.
-    repo.onUserError(surfaceProcessorRejectionFor(repo))
+    // `repo.tx` call site (mutators, palette actions, bootstrap writes)
+    // route through the toast layer from the moment the repo exists. The
+    // subscriber is a GENERIC router (no plugin knowledge): it reads the
+    // per-rejection toast contributions off `repo.facetRuntime`, so plugin
+    // toasts apply once the app runtime is installed, while early/bootstrap
+    // rejections (data-only runtime) surface via the raw-message fallback.
+    // The Repo is a process singleton; we don't unsubscribe.
+    repo.onUserError(error => surfaceProcessorRejection(error, repo))
+    markStartup('repoReady')
     return repo
   },
   (user, useRemoteSync) => `${user.id}:${useRemoteSync ? 'remote' : 'local'}`,

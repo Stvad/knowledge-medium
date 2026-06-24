@@ -2,9 +2,12 @@
  *
  *  Trigger shape: `@<query>` at start of line or after whitespace, with
  *  no `[` in the query (so we don't fire inside `[[`) and no preceding
- *  word character (so we don't fire mid-email `a@b`). The query may be
- *  empty — that's the moment to surface the "Use current location"
- *  sentinel (Phase F).
+ *  word character (so we don't fire mid-email `a@b`). The query may
+ *  contain single spaces ("Blue Bottle Coffee") — a double space, other
+ *  whitespace, or the length/word caps end it so prose after a bare
+ *  `@word` doesn't keep the dropdown alive. The query may be empty —
+ *  that's the moment to surface the "Use current location" sentinel
+ *  (Phase F).
  *
  *  On select: the caller-supplied `resolvePlace` returns a
  *  `PlaceResolveResult`. Two kinds:
@@ -98,6 +101,14 @@ export interface PlaceAutocompleteOptions {
     span: {from: number, to: number}
     candidates: PlaceAutocompleteCandidate[]
   } | null
+  /** Persistence fallback for the resolved wikilink. `resolvePlace` can
+   *  settle long after the pick (details fetch, collision toast) — by
+   *  then the interaction may have moved focus out of the editor, and
+   *  the per-block CodeMirror view unmounts with it, so dispatching the
+   *  insert into the captured view goes nowhere. When the view can no
+   *  longer take the change, this is called to apply the same
+   *  trigger-text → wikilink replacement to the underlying block. */
+  persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
 }
 
 interface TriggerMatch {
@@ -123,21 +134,42 @@ const isInsideUnclosedWikilink = (text: string, beforePos: number): boolean => {
   return opens > closes
 }
 
+/** Place names routinely contain spaces ("Blue Bottle Coffee"), so the
+ *  query may span words. The caps below decide when an `@` earlier in
+ *  the line stops owning what the user types: a double space or any
+ *  non-space whitespace ends the query immediately, and a query longer
+ *  than this many chars/words is prose, not a place name. Without the
+ *  caps, every sentence containing a bare `@word` would re-open the
+ *  dropdown on each keystroke until end of line. */
+const MAX_QUERY_LEN = 50
+const MAX_QUERY_WORDS = 6
+
 /** Pure trigger-detection helper. Exported for direct testing — the
  *  CompletionSource glue just adapts to CodeMirror's call shape. */
 export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null => {
-  // Walk backward from the cursor to find the most recent `@`. Bail on
-  // whitespace or wikilink brackets between the cursor and the `@` —
-  // those interrupt the trigger sequence.
+  // Walk backward from the cursor to find the most recent `@`. Single
+  // spaces are part of the query; wikilink brackets, non-space
+  // whitespace, a double space, or an over-long scan interrupt the
+  // trigger sequence.
   let i = pos
   while (i > 0) {
     const c = text[i - 1]
     if (c === '@') break
-    if (/\s/.test(c)) return null
+    if (c === ' ') {
+      if (i >= 2 && text[i - 2] === ' ') return null
+    } else if (/\s/.test(c)) {
+      return null
+    }
     if (c === '[' || c === ']') return null
+    if (pos - i >= MAX_QUERY_LEN) return null
     i -= 1
   }
   if (i === 0 || text[i - 1] !== '@') return null
+
+  const query = text.slice(i, pos)
+  // `@ 5pm` is prose, not a half-typed place query.
+  if (query.startsWith(' ')) return null
+  if (query.split(' ').filter(w => w.length > 0).length > MAX_QUERY_WORDS) return null
 
   const atPos = i - 1
   // Word char immediately before `@` → email-like (`a@b`); skip.
@@ -148,28 +180,74 @@ export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null =
   // line → the wikilink autocomplete owns this input.
   if (isInsideUnclosedWikilink(text, atPos)) return null
 
-  return {from: atPos, query: text.slice(i, pos)}
+  return {from: atPos, query}
+}
+
+/** Where to apply the trigger-text → wikilink replacement once the
+ *  resolution settles. Prefers the recorded span if the text is still
+ *  there; re-locates by content when the doc drifted around it (other
+ *  edits landed while the resolution was pending); `null` when the
+ *  trigger text is gone — the user deleted it, nothing to replace.
+ *  Exported for direct testing. */
+export const planResolvedInsert = (
+  doc: string,
+  span: {from: number; to: number},
+  triggerText: string,
+): {from: number; to: number} | null => {
+  if (triggerText.length === 0) return null
+  if (doc.slice(span.from, span.to) === triggerText) return span
+  const idx = doc.indexOf(triggerText)
+  if (idx === -1) return null
+  return {from: idx, to: idx + triggerText.length}
+}
+
+/** Try to deliver the insert through the editor view. False when the
+ *  view is unmounted/destroyed or the trigger text is no longer in its
+ *  doc — the caller falls back to `persistInsert`. */
+const applyInsertToView = (
+  view: EditorView,
+  span: {from: number; to: number},
+  triggerText: string,
+  insert: string,
+): boolean => {
+  // `EditorView.destroyed` is private API; a detached root is the
+  // observable signature of an unmounted per-block editor.
+  if (!view.dom.isConnected) return false
+  const plan = planResolvedInsert(view.state.doc.toString(), span, triggerText)
+  if (plan === null) return false
+  try {
+    view.dispatch({
+      changes: {from: plan.from, to: plan.to, insert},
+      selection: EditorSelection.cursor(plan.from + insert.length),
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
 const candidateToOption = (
   candidate: PlaceAutocompleteCandidate,
-  resolve: PlaceAutocompleteOptions['resolvePlace'],
+  options: PlaceAutocompleteOptions,
 ): Completion => ({
   label: candidate.label,
   detail: candidate.detail,
   type: candidate.source === 'sentinel:current-location' ? 'keyword' : 'class',
   apply: (view, _completion, applyFrom, applyTo) => {
+    // Snapshot the trigger text now — by the time the resolution
+    // settles the doc (or the view itself) may be gone.
+    const triggerText = view.state.doc.sliceString(applyFrom, applyTo)
     // Fire-and-forget — the dropdown closes immediately. Errors
     // surface via the resolvePlace impl (toast, console).
     void (async () => {
-      const resolved = await resolve(candidate, {view, from: applyFrom, to: applyTo})
+      const resolved = await options.resolvePlace(candidate, {view, from: applyFrom, to: applyTo})
       if (!resolved) return
       if (resolved.kind === 'handled') return
       const insert = `[[${resolved.name}]]`
-      view.dispatch({
-        changes: {from: applyFrom, to: applyTo, insert},
-        selection: EditorSelection.cursor(applyFrom + insert.length),
-      })
+      const delivered = applyInsertToView(
+        view, {from: applyFrom, to: applyTo}, triggerText, insert,
+      )
+      if (!delivered) await options.persistInsert?.({triggerText, insert})
     })()
   },
 })
@@ -184,7 +262,7 @@ export const placeCompletionSource = (
         from: pending.span.from,
         to: pending.span.to,
         filter: false,
-        options: pending.candidates.map(c => candidateToOption(c, options.resolvePlace)),
+        options: pending.candidates.map(c => candidateToOption(c, options)),
       }
     }
 
@@ -211,7 +289,7 @@ export const placeCompletionSource = (
       // filter would hide e.g. a "Use current location" sentinel whose
       // label doesn't contain the typed text.
       filter: false,
-      options: candidates.map(c => candidateToOption(c, options.resolvePlace)),
+      options: candidates.map(c => candidateToOption(c, options)),
     }
   }
 }

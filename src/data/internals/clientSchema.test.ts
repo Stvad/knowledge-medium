@@ -8,11 +8,9 @@
  * dependency added.
  *
  * What this covers (data-layer-redesign §4.3 / §4.5 / §4.1.1):
- *   - row_events triggers fire for INSERT / UPDATE / DELETE
- *   - source COALESCE: NULL → 'sync'; 'user' passes through
- *   - tx_id belt-and-suspenders: NULL when source is NULL, even with a
- *     stale tx_id left in tx_context
- *   - soft-delete UPDATE emits kind='soft-delete'
+ *   - row_events audit/history triggers fire for both local and sync-applied
+ *     writes; source COALESCEs NULL → 'sync', 'user' passes through; tx_id is
+ *     NULL on sync apply; soft-delete UPDATE emits kind='soft-delete'
  *   - upload-routing triggers fire on every repo.tx write (source IS NOT NULL),
  *     and skip sync-applied writes (source = NULL)
  *   - workspace-invariant triggers reject cross-workspace + dangling
@@ -28,9 +26,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import {
-  BLOCKS_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
@@ -42,16 +40,19 @@ import {
 } from '@/data/workspaceSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
-  ANALYZE_MARKER_KEY,
-  ANALYZE_REFRESH_INTERVAL_MS,
+  ANALYZE_GROWTH_FACTOR,
+  ANALYZE_MIN_BLOCKS,
   BACKFILL_BLOCK_ALIASES_SQL,
   BACKFILL_BLOCKS_FTS_SQL,
   BLOCKS_FTS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
-  CLIENT_SCHEMA_TRIGGER_NAMES,
+  analyzeIsWarranted,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
-  runAnalyzeIfDue,
+  ensureBlockUserUpdatedAtColumn,
+  getBlocksStatEstimate,
+  runAnalyzeIfStale,
+  runAnalyzeNow,
 } from './clientSchema'
 
 interface TestDb {
@@ -62,9 +63,20 @@ interface TestDb {
   insertWorkspaceMember: (overrides?: Partial<WorkspaceMemberInsert>) => void
   updateBlock: (id: string, set: Record<string, unknown>) => void
   deleteBlock: (id: string) => void
-  rowEvents: () => Array<RowEventRow>
   psCrud: () => Array<{ id: number; data: string; tx_id: number | null }>
+  rowEvents: () => Array<RowEventRow>
   rowEventCount: () => number
+}
+
+interface RowEventRow {
+  id: number
+  tx_id: string | null
+  block_id: string
+  kind: string
+  before_json: string | null
+  after_json: string | null
+  source: string
+  created_at: number
 }
 
 interface WorkspaceMemberInsert {
@@ -83,17 +95,6 @@ const defaultMember: WorkspaceMemberInsert = {
   create_time: 1700000000000,
 }
 
-interface RowEventRow {
-  id: number
-  tx_id: string | null
-  block_id: string
-  kind: string
-  before_json: string | null
-  after_json: string | null
-  source: string
-  created_at: number
-}
-
 interface BlockInsert {
   id: string
   workspace_id: string
@@ -105,6 +106,7 @@ interface BlockInsert {
   references_json: string
   created_at: number
   updated_at: number
+  user_updated_at: number | null
   created_by: string
   updated_by: string
   deleted: 0 | 1
@@ -121,6 +123,7 @@ const defaultBlock: BlockInsert = {
   references_json: '[]',
   created_at: 1700000000000,
   updated_at: 1700000000000,
+  user_updated_at: 1700000000000,
   created_by: 'user-1',
   updated_by: 'user-1',
   deleted: 0,
@@ -148,6 +151,9 @@ const setupDb = (): TestDb => {
 
   // The blocks table (built from the same column list as production).
   db.exec(CREATE_BLOCKS_TABLE_SQL)
+  // Layout B staging table — the blocks_synced change-capture triggers in
+  // CLIENT_SCHEMA_STATEMENTS attach to it, so it must exist first.
+  db.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
@@ -197,8 +203,8 @@ const setupDb = (): TestDb => {
     deleteBlock: (id) => {
       db.prepare('DELETE FROM blocks WHERE id = ?').run(id)
     },
-    rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
     psCrud: () => db.prepare('SELECT * FROM ps_crud ORDER BY id').all() as unknown as { id: number; data: string; tx_id: number | null }[],
+    rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
     rowEventCount: () => (db.prepare('SELECT COUNT(*) AS n FROM row_events').get() as {n: number}).n,
   }
 }
@@ -210,20 +216,11 @@ beforeEach(() => { h = setupDb() })
 afterEach(() => { h.db.close() })
 
 describe('client schema bootstrap', () => {
-  it('creates the documented set of client-schema triggers', () => {
-    // CLIENT_SCHEMA_TRIGGER_NAMES covers triggers on `blocks` (the
-    // bulk of them — row_events, upload routing, workspace
-    // invariants, side-index maintenance) AND on `block_aliases`
-    // (the uniqueness-enforcement trigger). Query against both
-    // tables so the inventory test catches additions on either side.
-    const triggers = (h.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases') ORDER BY name")
-      .all() as Array<{name: string}>)
-      .map(r => r.name)
-    expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
-    expect(triggers).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
-  })
-
+  // The trigger *names* are exported as CLIENT_SCHEMA_TRIGGER_NAMES purely so
+  // a test can re-list them; asserting "the DB has exactly that list" only
+  // restates the constant. What the triggers actually *do* is covered by the
+  // row_events / upload-routing behavior tests below, and the harness already
+  // verifies the production trigger set installs (createTestDb.test.ts).
   it('seeds tx_context with one row that starts NULL across all five tx fields', () => {
     const ctx = h.db.prepare('SELECT * FROM tx_context').get() as Record<string, unknown>
     expect(ctx).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null})
@@ -257,6 +254,60 @@ describe('client schema bootstrap', () => {
   })
 })
 
+// The body a client bootstrapped before D-3.1 (commit b3b1bc52) still carries:
+// workspace_id is CHANGE-GATED, so a content-only edit drops it from the upload
+// envelope. That strands e2ee PATCH uploads — the encrypt-on-upload hook routes
+// on payload.workspace_id, so without it the plaintext content reaches the
+// server and the e2ee ciphertext CHECK rejects it (SQLSTATE 23514). Faithful to
+// the trigger pulled off a live affected client. `CREATE TRIGGER IF NOT EXISTS`
+// would never replace this on upgrade — the schema applier must drop+recreate.
+const STALE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
+  CREATE TRIGGER blocks_upload_update
+  AFTER UPDATE ON blocks
+  WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
+  BEGIN
+    INSERT INTO ps_crud (tx_id, data) VALUES (
+      (SELECT tx_seq FROM tx_context WHERE id = 1),
+      json_object(
+        'op', 'PATCH',
+        'type', 'blocks',
+        'id', NEW.id,
+        'data', json_remove(
+          json_set(
+            '{}',
+            CASE WHEN OLD.workspace_id IS NOT NEW.workspace_id THEN '$.workspace_id' ELSE '$.__noop' END, NEW.workspace_id,
+            CASE WHEN OLD.content IS NOT NEW.content THEN '$.content' ELSE '$.__noop' END, NEW.content
+          ),
+          '$.__noop'
+        )
+      )
+    );
+  END
+`
+
+describe('client schema upgrade — trigger bodies re-apply on a stale DB', () => {
+  it('replaces a stale blocks_upload_update so content-only PATCHes still carry workspace_id', () => {
+    // Regress the freshly-bootstrapped DB to a pre-D-3.1 client: clobber the
+    // current trigger with the stale (workspace_id change-gated) body.
+    h.db.exec('DROP TRIGGER blocks_upload_update')
+    h.db.exec(STALE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL)
+
+    // App startup after the fix shipped re-runs the schema set. With plain
+    // CREATE TRIGGER IF NOT EXISTS this is a no-op (stale body persists); the
+    // drop+recreate applier re-installs the current body.
+    for (const stmt of CLIENT_SCHEMA_STATEMENTS) h.db.exec(stmt)
+
+    h.insertBlock({id: 'b1', content: 'old'}) // source NULL → no upload noise
+    h.setTxContext({txId: 'tx-1', txSeq: 1, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {content: 'new'}) // content-only edit; workspace_id unchanged
+    h.clearTxContext()
+
+    const payload = JSON.parse(h.psCrud()[0].data)
+    expect(payload).toMatchObject({op: 'PATCH', id: 'b1'})
+    expect(payload.data.workspace_id).toBe('ws1')
+  })
+})
+
 describe('row_events trigger — INSERT', () => {
   it("tags source='user' and writes tx_id when local user tx is open", () => {
     h.setTxContext({txId: 'tx-A', userId: 'user-1', scope: 'block-default', source: 'user'})
@@ -281,7 +332,8 @@ describe('row_events trigger — INSERT', () => {
   })
 
   it("COALESCEs NULL source to 'sync' and ZEROES tx_id (sync apply)", () => {
-    // tx_context stays at its post-clear state: source IS NULL
+    // tx_context stays at its post-clear state: source IS NULL — the shape an
+    // observer materialize of an incoming change leaves it in.
     h.insertBlock({id: 'b3'})
     expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
   })
@@ -332,31 +384,6 @@ describe('row_events trigger — UPDATE', () => {
   })
 })
 
-describe('PowerSync raw-table put', () => {
-  it('does not fire UPDATE triggers for identical sync replays', () => {
-    const put = h.db.prepare(BLOCKS_RAW_TABLE.put.sql)
-    const row = {...defaultBlock, id: 'raw-put'}
-
-    put.run(...blockValues(row))
-    expect(h.rowEvents()).toHaveLength(1)
-    expect(h.rowEvents()[0]).toMatchObject({block_id: 'raw-put', kind: 'create', source: 'sync'})
-
-    put.run(...blockValues(row))
-    expect(h.rowEvents()).toHaveLength(1)
-
-    put.run(...blockValues({
-      ...row,
-      content: 'changed',
-      updated_at: row.updated_at + 1,
-    }))
-    const events = h.rowEvents()
-    expect(events).toHaveLength(2)
-    expect(events[1]).toMatchObject({block_id: 'raw-put', kind: 'update', source: 'sync'})
-    expect(events[1].before_json).toContain('"content":""')
-    expect(events[1].after_json).toContain('"content":"changed"')
-  })
-})
-
 describe('row_events trigger — DELETE', () => {
   it("emits kind='delete' on hard delete with before snapshot only", () => {
     h.insertBlock({id: 'b1'})
@@ -391,7 +418,7 @@ describe('upload-routing triggers', () => {
     expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PATCH', id: 'b1'})
   })
 
-  it('forwards only changed columns in UPDATE PATCH payloads', () => {
+  it('forwards changed columns plus the always-present workspace_id in PATCH payloads', () => {
     h.insertBlock({
       id: 'b1',
       content: 'old',
@@ -408,21 +435,25 @@ describe('upload-routing triggers', () => {
 
     const payload = JSON.parse(h.psCrud()[0].data)
     expect(payload).toMatchObject({op: 'PATCH', type: 'blocks', id: 'b1'})
+    // workspace_id is always emitted (even on a content-only edit) so the
+    // encrypt-on-upload hook can look up the WK + build AAD; the rest are
+    // change-gated.
     expect(payload.data).toEqual({
+      workspace_id: 'ws1',
       content: 'new',
       updated_at: 1700000999000,
       updated_by: 'user-2',
     })
   })
 
-  it('keeps explicit nulls in changed UPDATE PATCH payloads', () => {
+  it('keeps explicit nulls in changed UPDATE PATCH payloads (alongside workspace_id)', () => {
     h.insertBlock({id: 'b1', parent_id: 'old-parent'})
     h.setTxContext({txId: 'tx-1', txSeq: 5151, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.updateBlock('b1', {parent_id: null})
     h.clearTxContext()
 
     const payload = JSON.parse(h.psCrud()[0].data)
-    expect(payload.data).toEqual({parent_id: null})
+    expect(payload.data).toEqual({workspace_id: 'ws1', parent_id: null})
   })
 
   it('does not queue an empty PATCH for no-op UPDATE statements', () => {
@@ -921,65 +952,281 @@ describe('block_aliases backfill', () => {
   })
 })
 
-describe('runAnalyzeIfDue', () => {
-  // Adapter that records every `execute` call so the assertions can
-  // tell whether ANALYZE actually ran without poking at sqlite_stat1
-  // (which depends on how much data was indexed).
-  const buildRunner = (now: () => number) => {
-    const executed: string[] = []
-    const run = async () => {
-      const ran = await runAnalyzeIfDue({
-        execute: async (sql, params) => {
-          executed.push(sql.trim())
-          if (params && params.length > 0) {
-            h.db.prepare(sql).run(...(params as Array<string | number | null>))
-          } else {
-            h.db.exec(sql)
-          }
-        },
-        getOptional: async <T,>(sql: string) => {
-          const row = h.db.prepare(sql).get() as T | undefined
-          return row ?? null
-        },
-      }, now)
-      return {ran, executed}
+// Real-SQLite adapter recording every executed statement, so a test can
+// assert whether ANALYZE actually ran in addition to inspecting the result.
+const buildRecordingDb = () => {
+  const executed: string[] = []
+  const db = {
+    execute: async (sql: string, params?: unknown[]) => {
+      executed.push(sql.trim())
+      const stmt = h.db.prepare(sql)
+      if (params && params.length > 0) {
+        stmt.run(...(params as Array<string | number | null>))
+      } else {
+        stmt.run()
+      }
+    },
+    getOptional: async <T,>(sql: string) => {
+      const row = h.db.prepare(sql).get() as T | undefined
+      return row ?? null
+    },
+  }
+  return {db, executed, ranAnalyze: () => executed.includes('ANALYZE')}
+}
+
+// `analyzeIsWarranted` is the pure drift predicate; `runAnalyzeIfStale`
+// wires it to the DB. wa-sqlite never auto-populates `sqlite_stat1`, so a
+// large `blocks` table gets pessimal join orders until ANALYZE runs — but
+// running it on an empty table (the init-before-sync race) records "0 rows"
+// stats that are WORSE than none. The decision is therefore drift-based:
+// re-ANALYZE only once the live count has diverged from the count baked
+// into `sqlite_stat1` (the implicit marker — no separate state row).
+describe('analyzeIsWarranted (drift predicate)', () => {
+  it('skips a table too small for join order to matter, whatever the stats', () => {
+    expect(analyzeIsWarranted(null, ANALYZE_MIN_BLOCKS - 1)).toBe(false)
+    // Even badly-stale stats on a sub-threshold table aren't worth a scan —
+    // and recording a tiny estimate could itself mislead the planner.
+    expect(analyzeIsWarranted(0, ANALYZE_MIN_BLOCKS - 1)).toBe(false)
+  })
+
+  it('analyzes once there is real data but no stats yet', () => {
+    // Fresh device after the first sync lands: no sqlite_stat1 baseline.
+    expect(analyzeIsWarranted(null, ANALYZE_MIN_BLOCKS)).toBe(true)
+  })
+
+  it('leaves a stable workspace alone (no repeat multi-second scan)', () => {
+    expect(analyzeIsWarranted(320_000, 321_000)).toBe(false)
+  })
+
+  it('force-corrects the legacy "0 rows" stats over a large table', () => {
+    expect(analyzeIsWarranted(0, 320_000)).toBe(true)
+  })
+
+  it('re-analyzes after growth past the factor (import / initial sync)', () => {
+    expect(analyzeIsWarranted(1_000, 1_000 * ANALYZE_GROWTH_FACTOR)).toBe(true)
+    expect(analyzeIsWarranted(1_000, 1_000 * ANALYZE_GROWTH_FACTOR - 1)).toBe(false)
+  })
+
+  it('re-analyzes after a large prune below the factor', () => {
+    // Both ends above the floor, estimate >> count → re-tighten.
+    const estimate = ANALYZE_MIN_BLOCKS * ANALYZE_GROWTH_FACTOR * 2
+    const count = ANALYZE_MIN_BLOCKS * 2
+    expect(estimate).toBeGreaterThanOrEqual(count * ANALYZE_GROWTH_FACTOR)
+    expect(analyzeIsWarranted(estimate, count)).toBe(true)
+  })
+})
+
+describe('runAnalyzeIfStale', () => {
+  // Small thresholds keep the seeded row count tiny; the constants
+  // themselves (1000 / 4×) aren't restated, only their behavior.
+  const opts = {minBlocks: 4, growthFactor: 2}
+
+  const seedBlocks = (n: number, startIndex = 0) => {
+    for (let i = startIndex; i < startIndex + n; i++) {
+      h.insertBlock({id: `blk-${i}`, order_key: `a${i}`})
     }
-    return run
   }
 
-  const recordedAt = (): number | null => {
-    const row = h.db
-      .prepare(`SELECT completed_at FROM client_schema_state WHERE key = '${ANALYZE_MARKER_KEY}'`)
-      .get() as {completed_at: number} | undefined
-    return row?.completed_at ?? null
+  it('does not ANALYZE an empty table — never records the "0 rows" stats', async () => {
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(false)
+    expect(ranAnalyze()).toBe(false)
+    // The original bug: ANALYZE on empty wrote a sqlite_stat1 estimate the
+    // planner then trusted for 30 days. With no ANALYZE, no such estimate.
+    expect(await getBlocksStatEstimate(db)).toBeNull()
+  })
+
+  it('runs ANALYZE once data is present and records the real row count', async () => {
+    seedBlocks(opts.minBlocks)
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
+    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks)
+  })
+
+  it('does not re-run on a stable table', async () => {
+    seedBlocks(opts.minBlocks)
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(false)
+    expect(ranAnalyze()).toBe(false)
+  })
+
+  it('re-runs after the table grows past the drift factor', async () => {
+    seedBlocks(opts.minBlocks)
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    // Grow well past the baseline * growthFactor.
+    seedBlocks(opts.minBlocks * opts.growthFactor, opts.minBlocks)
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
+    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks + opts.minBlocks * opts.growthFactor)
+  })
+
+  it('force-corrects stale near-empty stats over a now-large table', async () => {
+    seedBlocks(opts.minBlocks)
+    await runAnalyzeIfStale(buildRecordingDb().db, opts)
+    // Simulate the legacy "0 0" bug state: stats say ~empty, table isn't.
+    h.db.prepare("UPDATE sqlite_stat1 SET stat = '0' WHERE tbl = 'blocks'").run()
+    expect(await getBlocksStatEstimate(buildRecordingDb().db)).toBe(0)
+    const {db, ranAnalyze} = buildRecordingDb()
+    const result = await runAnalyzeIfStale(db, opts)
+    expect(result.analyzed).toBe(true)
+    expect(ranAnalyze()).toBe(true)
+    expect(await getBlocksStatEstimate(db)).toBe(opts.minBlocks)
+  })
+})
+
+describe('runAnalyzeNow', () => {
+  it('runs ANALYZE unconditionally and reports the live count', async () => {
+    // No drift gate: a single block (well below the floor) still analyzes.
+    h.insertBlock({id: 'only-block'})
+    const {db, ranAnalyze} = buildRecordingDb()
+    const {count} = await runAnalyzeNow(db)
+    expect(count).toBe(1)
+    expect(ranAnalyze()).toBe(true)
+  })
+})
+
+// The block_types side-index backs byType / typedBlocks — among the most
+// subscribed queries in the app — yet (unlike block_aliases / blocks_fts)
+// its three maintenance triggers had no dedicated coverage. A silent
+// regression here corrupts every typed-block result with nothing catching
+// it.
+describe('block_types side-index triggers', () => {
+  const types = (): Array<{block_id: string; workspace_id: string; type: string}> =>
+    h.db
+      .prepare('SELECT block_id, workspace_id, type FROM block_types ORDER BY block_id, type')
+      .all() as unknown as Array<{block_id: string; workspace_id: string; type: string}>
+
+  const withTypes = (...t: unknown[]) => JSON.stringify({types: t})
+
+  it('insert: indexes every text entry in properties_json.$.types', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', properties_json: withTypes('todo', 'project')})
+    expect(types()).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', type: 'project'},
+      {block_id: 'b1', workspace_id: 'ws1', type: 'todo'},
+    ])
+  })
+
+  it('insert: ignores non-text entries and skips soft-deleted rows', () => {
+    h.insertBlock({id: 'b1', properties_json: withTypes('todo', 42, null)})
+    expect(types().map(t => t.type)).toEqual(['todo'])
+
+    h.insertBlock({id: 'b2', deleted: 1, properties_json: withTypes('todo')})
+    expect(types().filter(t => t.block_id === 'b2')).toEqual([])
+  })
+
+  it('update: re-derives the whole type set when properties_json changes', () => {
+    h.insertBlock({id: 'b1', properties_json: withTypes('todo')})
+    h.updateBlock('b1', {properties_json: withTypes('project', 'area')})
+    expect(types().map(t => t.type)).toEqual(['area', 'project'])
+  })
+
+  it('update: a soft-delete removes the type rows', () => {
+    h.insertBlock({id: 'b1', properties_json: withTypes('todo')})
+    expect(types()).toHaveLength(1)
+    h.updateBlock('b1', {deleted: 1})
+    expect(types()).toEqual([])
+  })
+
+  it('update: a workspace move re-homes the type rows', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', properties_json: withTypes('todo')})
+    h.updateBlock('b1', {workspace_id: 'ws2'})
+    expect(types()).toEqual([{block_id: 'b1', workspace_id: 'ws2', type: 'todo'}])
+  })
+
+  it('delete: removes the type rows', () => {
+    h.insertBlock({id: 'b1', properties_json: withTypes('todo', 'project')})
+    expect(types()).toHaveLength(2)
+    h.deleteBlock('b1')
+    expect(types()).toEqual([])
+  })
+})
+
+// Table-aware db stand-in: PRAGMA table_info(<t>) returns the columns declared
+// for <t>, and every executed statement is recorded in order.
+const fakeMigrationDb = (columnsByTable: Record<string, string[]>) => {
+  const executed: string[] = []
+  return {
+    executed,
+    execute: async (sql: string) => { executed.push(sql) },
+    getAll: async <T,>(sql: string): Promise<T[]> => {
+      const table = sql.match(/table_info\((\w+)\)/)?.[1] ?? ''
+      return (columnsByTable[table] ?? []).map((name) => ({name})) as unknown as T[]
+    },
   }
+}
 
-  it('runs ANALYZE and records the marker on first call', async () => {
-    expect(recordedAt()).toBeNull()
-    const run = buildRunner(() => 1_700_000_000_000)
-    const {ran, executed} = await run()
-    expect(ran).toBe(true)
-    expect(executed.some(sql => sql === 'ANALYZE')).toBe(true)
-    expect(recordedAt()).toBe(1_700_000_000_000)
+describe('ensureBlockUserUpdatedAtColumn — local migration', () => {
+  it('adds the column to BOTH tables and backfills blocks with the audit trigger suspended', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at'],
+      blocks_synced: ['id', 'updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    const e = db.executed
+
+    expect(e.filter(s => s.includes('ADD COLUMN user_updated_at'))).toHaveLength(2)
+    expect(e.some(s => s.includes('ALTER TABLE blocks ADD COLUMN user_updated_at'))).toBe(true)
+    expect(e.some(s => s.includes('ALTER TABLE blocks_synced ADD COLUMN user_updated_at'))).toBe(true)
+
+    // The backfill is bracketed: drop the unconditional row_event trigger, run
+    // the UPDATE trigger-free, then recreate it — so it never writes one
+    // row_events row per block (the burst this fix exists to prevent).
+    const dropAt = e.findIndex(s => /DROP TRIGGER IF EXISTS blocks_row_event_update/.test(s))
+    const updateAt = e.findIndex(s => /UPDATE blocks SET user_updated_at = updated_at/.test(s))
+    const recreateAt = e.findIndex(s => /CREATE TRIGGER IF NOT EXISTS\s+blocks_row_event_update/.test(s))
+    expect(dropAt).toBeGreaterThanOrEqual(0)
+    expect(dropAt).toBeLessThan(updateAt)     // dropped before the backfill UPDATE
+    expect(updateAt).toBeLessThan(recreateAt) // recreated after it
   })
 
-  it('is a no-op within the refresh interval', async () => {
-    await buildRunner(() => 1_700_000_000_000)()
-    // One ms before the interval elapses — still fresh, must skip.
-    const run = buildRunner(() => 1_700_000_000_000 + ANALYZE_REFRESH_INTERVAL_MS - 1)
-    const {ran, executed} = await run()
-    expect(ran).toBe(false)
-    expect(executed).toEqual([])
-    expect(recordedAt()).toBe(1_700_000_000_000)
+  it('does NOT backfill or touch the trigger when the column already exists (fresh install / steady state)', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at', 'user_updated_at'],
+      blocks_synced: ['id', 'updated_at', 'user_updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    expect(db.executed.some(s => s.includes('ADD COLUMN'))).toBe(false)
+    expect(db.executed.some(s => /UPDATE blocks SET user_updated_at/.test(s))).toBe(false)
+    expect(db.executed.some(s => /blocks_row_event_update/.test(s))).toBe(false)
   })
 
-  it('refreshes once the interval has elapsed', async () => {
-    await buildRunner(() => 1_700_000_000_000)()
-    const refreshAt = 1_700_000_000_000 + ANALYZE_REFRESH_INTERVAL_MS + 1
-    const run = buildRunner(() => refreshAt)
-    const {ran, executed} = await run()
-    expect(ran).toBe(true)
-    expect(executed.some(sql => sql === 'ANALYZE')).toBe(true)
-    expect(recordedAt()).toBe(refreshAt)
+  it('adds only blocks_synced (no backfill) when only it is missing the column', async () => {
+    const db = fakeMigrationDb({
+      blocks: ['id', 'updated_at', 'user_updated_at'],
+      blocks_synced: ['id', 'updated_at'],
+    })
+    await ensureBlockUserUpdatedAtColumn(db)
+    const alters = db.executed.filter(s => s.includes('ADD COLUMN'))
+    expect(alters).toHaveLength(1)
+    expect(alters[0]).toContain('ALTER TABLE blocks_synced')
+    // blocks already had the column → no backfill, trigger untouched.
+    expect(db.executed.some(s => /UPDATE blocks SET user_updated_at/.test(s))).toBe(false)
+    expect(db.executed.some(s => /blocks_row_event_update/.test(s))).toBe(false)
+  })
+})
+
+describe('blocks_synced_changes enqueue-collapse', () => {
+  it('serves the collapse delete from an index, not a full table scan', () => {
+    // The blocks_synced_changes_insert trigger runs
+    // `DELETE ... WHERE id = NEW.id AND op = 'delete'` on EVERY staging insert.
+    // Without an index that scans the whole pending queue, turning a bulk apply
+    // (the queue fills within one PowerSync apply tx before the observer drains)
+    // into O(n^2). Pin the load-bearing invariant — the lookup is index-backed —
+    // so dropping the index, or the trigger predicate drifting off it, fails
+    // loudly instead of silently regressing large syncs.
+    const plan = (h.db
+      .prepare("EXPLAIN QUERY PLAN DELETE FROM blocks_synced_changes WHERE id = ? AND op = 'delete'")
+      .all('b1') as Array<{ detail: string }>)
+      .map(r => r.detail)
+      .join(' | ')
+    expect(plan).toContain('USING INDEX')
+    expect(plan).not.toContain('SCAN')
   })
 })

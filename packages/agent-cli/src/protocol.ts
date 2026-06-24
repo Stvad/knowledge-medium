@@ -217,6 +217,65 @@ export const evalCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** Backlinks for a block. `filter` is either a mode string
+ *  ('none' | 'stored' | 'effective') or an explicit BacklinksFilter
+ *  object — validated/coerced kernel-side, so it stays `unknown` here. */
+export const backlinksCommandSchema = z.looseObject({
+  type: z.literal('backlinks'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  filter: z.unknown().optional(),
+  ...commandIdField,
+})
+
+/** Grouped-backlinks (the grouped-references view) for a block.
+ *  `filter` is as above; `grouping` is a mode string ('user' | 'none')
+ *  or an explicit grouping-config object. Both coerced kernel-side. */
+export const groupedBacklinksCommandSchema = z.looseObject({
+  type: z.literal('grouped-backlinks'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  workspaceId: z.string().optional(),
+  filter: z.unknown().optional(),
+  grouping: z.unknown().optional(),
+  ...commandIdField,
+})
+
+/** Print the agent-facing data-model guide. No body beyond the type. */
+export const dataModelCommandSchema = z.looseObject({
+  type: z.literal('data-model'),
+  ...commandIdField,
+})
+
+/** Resolve a page by alias/title — exact hit plus substring candidates. */
+export const pageCommandSchema = z.looseObject({
+  type: z.literal('page'),
+  name: z.string(),
+  workspaceId: z.string().optional(),
+  limit: z.number().optional(),
+  ...commandIdField,
+})
+
+/** Resolve a date expression to its daily-note block. `date` accepts
+ *  today | yesterday | an ISO date | the literal title ("June 17th, 2026")
+ *  | natural-language ("next monday"). */
+export const dailyNoteCommandSchema = z.looseObject({
+  type: z.literal('daily-note'),
+  date: z.string(),
+  workspaceId: z.string().optional(),
+  ...commandIdField,
+})
+
+/** Full-text search over block content. */
+export const searchCommandSchema = z.looseObject({
+  type: z.literal('search'),
+  query: z.string(),
+  workspaceId: z.string().optional(),
+  limit: z.number().optional(),
+  ...commandIdField,
+})
+
 /** Canonical commands the CLI emits. The 1:1 mapping to kmagent
  *  verbs makes this the right type for CLI construction sites. */
 export const knownCommandSchema = z.discriminatedUnion('type', [
@@ -234,6 +293,12 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   uninstallExtensionCommandSchema,
   runActionCommandSchema,
   evalCommandSchema,
+  backlinksCommandSchema,
+  groupedBacklinksCommandSchema,
+  dataModelCommandSchema,
+  pageCommandSchema,
+  dailyNoteCommandSchema,
+  searchCommandSchema,
 ])
 
 /** Strict shape for any known wire command. CLI authors construct
@@ -264,6 +329,12 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   runActionCommandSchema,
   actionCommandSchema,
   evalCommandSchema,
+  backlinksCommandSchema,
+  groupedBacklinksCommandSchema,
+  dataModelCommandSchema,
+  pageCommandSchema,
+  dailyNoteCommandSchema,
+  searchCommandSchema,
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 
@@ -332,15 +403,15 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'enable-extension': {
     usage: 'kmagent enable-extension <id|label>',
-    description: 'Enable an installed extension by id or label.',
+    description: 'Enable an installed extension by id or label. Sets the synced enabled intent AND approves the current source on this device (pins its hash) so it runs here. Re-run after editing the source to re-pin the new version.',
   },
   'disable-extension': {
     usage: 'kmagent disable-extension <id|label>',
-    description: 'Disable an installed extension by id or label.',
+    description: 'Disable an installed extension by id or label (clears the synced intent; the device trust grant persists for a frictionless re-enable).',
   },
   'uninstall-extension': {
     usage: 'kmagent uninstall-extension <id|label>',
-    description: 'Uninstall an extension by id or label.',
+    description: 'Uninstall an extension by id or label (deletes the block and revokes this device’s trust grant).',
   },
   'run-action': {
     usage: 'kmagent run-action <id> [depsJson]',
@@ -349,6 +420,30 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'eval': {
     usage: 'kmagent eval [--raw] [--file <path>] [--data <path> | --data-json <json>] <code>',
     description: 'Run JS in the app. Use "return …" to print a value. The code runs with `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` already in scope. `--data <path>` reads JSON from a file (or `--data-json <inline>` for an inline payload) and binds the parsed value as `data` — avoids template-embedding structured input in the code string.',
+  },
+  'backlinks': {
+    usage: "kmagent backlinks <blockId> [--filter none|stored|effective|<json>] [--workspace <id>]",
+    description: 'Hydrated backlinks of a block (blocks whose references point at it). --filter defaults to none. See `kmagent data-model`.',
+  },
+  'grouped-backlinks': {
+    usage: "kmagent grouped-backlinks <blockId> [--filter none|stored|effective|<json>] [--grouping user|none|<json>] [--workspace <id>]",
+    description: 'The grouped-references view for a block: hydrated groups (+ Other fallback). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
+  },
+  'data-model': {
+    usage: 'kmagent data-model',
+    description: "Print the agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links). Read this first when working with a user's data.",
+  },
+  'page': {
+    usage: 'kmagent page <name> [--limit <n>] [--workspace <id>]',
+    description: 'Resolve a page by alias/title: exact match plus substring candidates, hydrated.',
+  },
+  'daily-note': {
+    usage: 'kmagent daily-note <date> [--workspace <id>]',
+    description: 'Resolve a date (today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday") to its daily-note block (deterministic id; reports whether it exists yet).',
+  },
+  'search': {
+    usage: 'kmagent search <query> [--limit <n>] [--workspace <id>]',
+    description: 'Full-text search over block content; hydrated results.',
   },
 }
 

@@ -11,7 +11,7 @@
  * offline clients converging on the same row when they later sync.
  */
 
-import { memoize } from 'lodash'
+import { memoize } from 'lodash-es'
 import { v5 as uuidv5 } from 'uuid'
 import {
   ChangeScope,
@@ -28,10 +28,11 @@ import {
   hasBlockType,
   selectionStateProp,
   showPropertiesProp,
+  userIdProp,
   type BlockSelectionState,
 } from '@/data/properties'
 import { USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
-import { PAGE_TYPE } from '@/data/blockTypes.js'
+import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes.js'
 
 // ──── Deterministic-id namespaces ────
 
@@ -45,7 +46,12 @@ const USER_PAGE_NS = '99b1b4e5-6f58-4fd2-9089-dc3b358dd4df'
 // to the same block id across clients.
 const STATE_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
 
-const userPageBlockId = (workspaceId: string, userId: string): string =>
+/** Deterministic id of a user's "user page" block. Exported so display
+ *  surfaces can resolve an arbitrary `userId` (e.g. a row's `updatedBy`)
+ *  back to its page — and thus its display name — without knowing the
+ *  namespace. Two offline clients derive the same id, so a user's page
+ *  authored on one device resolves the same on every other. */
+export const userPageBlockId = (workspaceId: string, userId: string): string =>
   uuidv5(`${workspaceId}:${userId}`, USER_PAGE_NS)
 
 const stateChildBlockId = (parentId: string, content: string): string =>
@@ -121,7 +127,7 @@ const ensureStateChild = async (
   const childId = stateChildBlockId(parent.id, namespace)
 
   const live = await repo.load(childId)
-  if (live && !live.deleted) {
+  if (live) {
     if (type && !hasBlockType(live, type.id)) {
       const typeSnapshot = snapshotIncludingType(repo, type)
       await repo.tx(async tx => {
@@ -160,7 +166,7 @@ const ensureStateChild = async (
       orderKey: 'a0',
       content: displayContent,
       properties: initialProperties,
-    })
+    }, {systemMint: true})
     if (type) {
       await repo.addTypeInTx(tx, childId, type.id, {}, typeSnapshot)
     }
@@ -171,8 +177,15 @@ const ensureStateChild = async (
   return child
 }
 
-const ensureUiChild = (repo: Repo, parent: Block, namespace: string): Promise<Block> =>
-  ensureStateChild(repo, parent, namespace, ChangeScope.UiState)
+const ensureUiChild = (
+  repo: Repo,
+  parent: Block,
+  namespace: string,
+  /** Optional display title; defaults to `namespace` (the internal key). Lets a
+   *  caller key a child by an opaque id but title it legibly. */
+  content?: string,
+): Promise<Block> =>
+  ensureStateChild(repo, parent, namespace, ChangeScope.UiState, {}, content)
 
 const ensureUserPrefsChild = (repo: Repo, parent: Block): Promise<Block> =>
   ensureStateChild(
@@ -186,10 +199,54 @@ const ensureUserPrefsChild = (repo: Repo, parent: Block): Promise<Block> =>
 
 // ──── Bootstrap blocks ────
 
+const dedupe = (values: readonly string[]): string[] => [...new Set(values)]
+
+/** Repair an existing user page to the current shape: the user id as an
+ *  alias, the `USER_TYPE` marker, and the `user:id` property. Pages
+ *  created before any of these existed (or restored by an older client)
+ *  are upgraded in place on first access. Idempotent and additive —
+ *  never rewrites the display-name alias or content, so a user who
+ *  renamed their own page keeps that. Runs at most once per memoized
+ *  (repo, workspace, user) since the caller is itself memoized; the peek
+ *  skips the tx entirely once the page is up to date. Best-effort: an
+ *  alias-collision rejection (the id already claimed elsewhere — not
+ *  expected for opaque ids) is swallowed so it can't break user-page
+ *  resolution. */
+const reconcileUserPage = async (repo: Repo, id: string, userId: string): Promise<void> => {
+  const block = repo.block(id)
+  const data = block.peek()
+  if (!data) return
+  const aliases = block.peekProperty(aliasesProp) ?? []
+  const upToDate =
+    aliases.includes(userId) &&
+    hasBlockType(data, USER_TYPE) &&
+    (block.peekProperty(userIdProp) ?? '') === userId
+  if (upToDate) return
+
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  try {
+    await repo.tx(async tx => {
+      const row = await tx.get(id)
+      if (!row || row.deleted) return
+      const txAliases = await tx.getProperty(id, aliasesProp)
+      if (!txAliases.includes(userId)) {
+        await tx.setProperty(id, aliasesProp, [...txAliases, userId])
+      }
+      if ((await tx.getProperty(id, userIdProp)) !== userId) {
+        await tx.setProperty(id, userIdProp, userId)
+      }
+      await repo.addTypeInTx(tx, id, USER_TYPE, {}, typeSnapshot)
+    }, {scope: ChangeScope.UserPrefs, description: 'user-page reconcile'})
+  } catch (err) {
+    console.warn(`[stateBlocks] could not reconcile user page ${id}:`, err)
+  }
+}
+
 /** Per-user "user page" block — created (or restored) on first access.
- *  The alias matches the user's display name so alias-based lookup
- *  surfaces can target it directly. Memoized per (repo, workspaceId,
- *  userId) — `use()` requires a stable promise per render.
+ *  The aliases match the user's display name *and* opaque id so
+ *  alias-based lookup surfaces can target it either way. Memoized per
+ *  (repo, workspaceId, userId) — `use()` requires a stable promise per
+ *  render.
  *
  *  The fast path uses `repo.load` to skip the tx entirely when the row
  *  is already live in cache or in SQL. Tombstone branch lives INSIDE
@@ -199,12 +256,20 @@ export const getUserBlock = memoize(
   async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
     const id = userPageBlockId(workspaceId, user.id)
     const live = await repo.load(id)
-    if (live && !live.deleted) return repo.block(id)
+    if (live) {
+      await reconcileUserPage(repo, id, user.id)
+      return repo.block(id)
+    }
 
     // User.name is optional in the data-layer User shape; fall back
     // to the id so the user-page block always has *some* content
     // and an addressable alias.
     const displayName = user.name ?? user.id
+    // The id rides alongside the display name as an alias so the
+    // user-page is addressable both ways — by name (`[[Alice]]`) and by
+    // the opaque id stored in `created_by`/`updated_by`. Deduped for the
+    // no-name case where displayName === user.id.
+    const aliases = dedupe([displayName, user.id])
     const typeSnapshot = repo.snapshotTypeRegistries()
 
     await repo.tx(async tx => {
@@ -218,7 +283,8 @@ export const getUserBlock = memoize(
       if (existing && !existing.deleted) return
       if (existing && existing.deleted) {
         await tx.restore(id, {content: displayName})
-        await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [displayName]}, typeSnapshot)
+        await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
+        await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
         return
       }
       await tx.create({
@@ -227,13 +293,14 @@ export const getUserBlock = memoize(
         parentId: null,
         orderKey: 'a0',
         content: displayName,
-      })
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [displayName]}, typeSnapshot)
+      }, {systemMint: true})
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, USER_TYPE, {[userIdProp.name]: user.id}, typeSnapshot)
     }, {scope: ChangeScope.UserPrefs})
 
     return repo.block(id)
   },
-  (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}`,
+  (repo, workspaceId, user) => instanceKey(repo, workspaceId, user.id),
 )
 
 export const getUserPrefsBlock = memoize(
@@ -241,7 +308,7 @@ export const getUserPrefsBlock = memoize(
     const userBlock = await getUserBlock(repo, workspaceId, user)
     return ensureUserPrefsChild(repo, userBlock)
   },
-  (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}:__user_prefs__`,
+  (repo, workspaceId, user) => instanceKey(repo, workspaceId, user.id, '__user_prefs__'),
 )
 
 /** Per-plugin preferences sub-block under the root user-prefs block.
@@ -271,7 +338,7 @@ export const getPluginPrefsBlock = memoize(
     )
   },
   (repo, workspaceId, user, type) =>
-    `${repoIdentity(repo)}:${workspaceId}:${user.id}:plugin-prefs:${type.id}`,
+    instanceKey(repo, workspaceId, user.id, 'plugin-prefs', type.id),
 )
 
 /** Resolve the UI-state block scoped to the current panel context.
@@ -294,7 +361,7 @@ export const getUIStateBlock = memoize(
     return ensureUiChild(repo, userBlock, 'ui-state')
   },
   (repo, workspaceId, user, context) =>
-    `${repoIdentity(repo)}:${workspaceId}:${user.id}:${context.panelId ?? '__root__'}`,
+    instanceKey(repo, workspaceId, user.id, context.panelId ?? '__root__'),
 )
 
 const LAYOUT_SESSIONS_PATH_PART = 'layout-sessions'
@@ -303,14 +370,14 @@ export const getLayoutSessionBlock = memoize(
     const layoutSessionsBlock = await ensureUiChild(uiStateBlock.repo, uiStateBlock, LAYOUT_SESSIONS_PATH_PART)
     return ensureUiChild(uiStateBlock.repo, layoutSessionsBlock, layoutSessionId)
   },
-  (uiBlock, layoutSessionId) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}:${layoutSessionId}`,
+  (uiBlock, layoutSessionId) => instanceKey(uiBlock.repo, uiBlock.id, layoutSessionId),
 )
 
 /** Per-plugin ui-state sub-block under the root ui-state block. The
- *  mirror of `getPluginPrefsBlock` for state that is persistent but
- *  per-device (and therefore should NOT sync) — e.g. "what blocks did
- *  the user open recently on this device". Writes flow through
- *  `ChangeScope.UiState` so they stay out of the upload queue. */
+ *  mirror of `getPluginPrefsBlock` for persistent UI state — e.g.
+ *  "what blocks did the user open recently". Writes flow through
+ *  `ChangeScope.UiState`: not undoable, but they upload and sync
+ *  across devices like any other write. */
 export const getPluginUIStateBlock = memoize(
   async (
     repo: Repo,
@@ -330,7 +397,23 @@ export const getPluginUIStateBlock = memoize(
     )
   },
   (repo, workspaceId, user, type) =>
-    `${repoIdentity(repo)}:${workspaceId}:${user.id}:plugin-ui-state:${type.id}`,
+    instanceKey(repo, workspaceId, user.id, 'plugin-ui-state', type.id),
+)
+
+/** A per-key child under a plugin's ui-state sub-block, so a plugin can
+ *  partition its ui-state (e.g. one frozen review session per deck)
+ *  instead of overloading a single block and discriminating by hand.
+ *  Inherits the parent's `ChangeScope.UiState` (undo-segregated from
+ *  document edits). Mirrors `getLayoutSessionBlock`. */
+export const getPluginUIStateChild = memoize(
+  async (pluginUIStateBlock: Block, key: string, content?: string): Promise<Block> =>
+    ensureUiChild(pluginUIStateBlock.repo, pluginUIStateBlock, key, content),
+  // Memo key ignores `content`: the child is identified by `key`, and `content`
+  // is a display title set only on first creation (ensureStateChild never
+  // rewrites a live row's content), so a later call with a different title still
+  // returns the existing block.
+  (pluginUIStateBlock, key) =>
+    instanceKey(pluginUIStateBlock.repo, pluginUIStateBlock.id, key),
 )
 
 // ──── Selection-state helpers (pure operations on a Block) ────
@@ -348,4 +431,11 @@ export const resetBlockSelection = async (uiStateBlock: Block): Promise<void> =>
 }
 
 // ──── Internal: shorthand for instance-scoped memo keys ────
-const repoIdentity = (repo: Repo): number => repo.instanceId
+/** Build a memo key scoped to a Repo instance: the repo's `instanceId`
+ *  followed by the caller's discriminating parts, ':'-joined. Every
+ *  cache below shares this convention (a stale/unscoped key would hand a
+ *  `use()` consumer a promise from a disposed repo), so single-sourcing
+ *  it here keeps a new cache from silently picking a colliding or
+ *  unscoped key. */
+const instanceKey = (repo: Repo, ...parts: (string | number)[]): string =>
+  [repo.instanceId, ...parts].join(':')

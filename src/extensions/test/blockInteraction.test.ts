@@ -12,8 +12,8 @@ import {
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
-import { codeMirrorEditModeActivation } from '@/extensions/defaultEditorInteractions.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { codeMirrorEditModeActivation } from '@/editor/defaultInteractions.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 
 const context = {

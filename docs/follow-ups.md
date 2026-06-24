@@ -1,5 +1,11 @@
 # Follow-ups
 
+> **Deprecated — track new follow-ups as GitHub issues, not here.** This file
+> is frozen: open an issue at https://github.com/Stvad/knowledge-medium/issues
+> instead of appending. The entries below predate that decision and are kept as
+> historical context until they're migrated or closed. **Future agents: create
+> a GitHub issue rather than adding to this doc.**
+
 Sorted by priority. **P0** = security/data-loss risk active. **P1** = clear user impact or near-term blocker. **P2** = improvement with a mild trigger present. **P3** = deferred until a measured trigger fires. The "Architectural ideas" section at the bottom holds shapes with no current trigger — they exist so future-us doesn't re-derive the analysis from scratch.
 
 ## P0 — Security
@@ -95,20 +101,6 @@ Apply uniformly across every name-keyed facet — the convention should be consi
 
 **Trigger to build:** plugin authors stepping on each other's schema / mutator / processor names in the wild and the warn-and-last-wins not catching it in code review. Until then, the existing convention works for the alpha-stage plugin surface and the [docs/type-system.md §1a](docs/type-system.md) schema-lift handles the most acute case (object-identity dedup for multi-type-shared schemas means the warn fires only on real conflicts).
 
-### Block facade soft-delete contract drift between `peek` / `data` / `load`
-
-`Block`'s three read surfaces disagree on what a soft-deleted (`deleted: true`) row means:
-
-- `peek()` returns the tombstone snapshot.
-- `data` (sync getter) returns the tombstone snapshot too — including `deleted: true` — and expects callers to self-filter.
-- `load()` returns `null` for soft-deleted rows (its underlying `repo.load`'s SQL filters `WHERE deleted = 0` and side-effects `markMissing` to wipe the cache entry).
-
-The cache fast-path in [block.ts:96](src/data/block.ts:96) had to special-case tombstones (fall through to SQL when `cached.deleted`) to preserve the `null`-for-soft-deleted contract that callers like [RefPropertyEditor.tsx:54](src/components/propertyEditors/RefPropertyEditor.tsx:54)'s `blockMatchesTargetTypes` rely on (`if (!data) return false` — would silently accept a soft-deleted block as a valid ref target without that branch).
-
-Coherent shape: all three surfaces return the snapshot (incl. tombstones), callers self-filter on `.deleted` for live-only views — same as today's `data` getter. Removes the inconsistency, removes the `markMissing` side-effect that wipes a cached tombstone, and removes the cache-fast-path's tombstone special case.
-
-**Trigger to build:** the next caller that gets bitten by the inconsistency, OR a refactor that makes `markMissing`'s "wipes cached snapshot" side-effect a problem (e.g. wanting to surface the tombstone to undo flows after a soft-delete-then-load sequence). Migration cost is real — every `await block.load()` site that uses `null` as "doesn't exist for me" needs to be revisited (`!data` → `!data || data.deleted`). Manageable but not zero.
-
 ### Route swipe-quick-action invocation through the dispatcher
 
 `SwipeActionMenu.handleRun` calls `action.handler({block, uiStateBlock}, trigger)` directly — bypassing `useRunAction` / `runActionById`. The rationale is mobile-pragmatic: the swipe gesture targets blocks regardless of which one (if any) is currently focused, so requiring the action's declared context to be active upfront would mean the menu couldn't expose NORMAL_MODE actions on a non-focused block. Manufacturing `{block, uiStateBlock}` deps and invoking the handler lets the same primary-row items (copy, delete, etc.) work without first promoting the swiped block into focus.
@@ -121,21 +113,21 @@ Lower-effort variant: leave the direct-call pattern, but lift the focus dance in
 
 Originally surfaced while debugging codex-flagged P2s on PR #21 (palette quick-action race + edit-mode latch). The handler-level workaround landed; this is the architectural cleanup.
 
-### Semantic action groups for decorator targets
+### Semantic action groups for transform targets
 
-SRS and Readwise both want to intercept the same user intent — "mark this block as complete/reviewed" — across three concrete actions: `todo.cycle`, `edit.cm.todo.cycle`, and `block.swipe-right`. Today each plugin contributes three decorators. That is locally simple and matches the current `actionDecoratorsFacet` contract, but it leaks the physical action list into every plugin that wants to specialize the semantic behavior.
+SRS and Readwise both want to intercept the same user intent — "mark this block as complete/reviewed" — across three concrete actions: `todo.cycle`, `edit.cm.todo.cycle`, and `block.swipe-right`. Today each plugin contributes three transforms. That is locally simple and matches the current `actionTransformsFacet` contract, but it leaks the physical action list into every plugin that wants to specialize the semantic behavior.
 
-Important distinction: the todo actions already delegate to one implementation function (`cycleTodoState`), but decorators do not wrap implementation calls. They wrap registered `ActionConfig` records by exact `action.id` plus optional context. So "decorate only todo cycle" would miss edit-mode and swipe-right unless those actions stopped being distinct action records.
+Important distinction: the todo actions already delegate to one implementation function (`cycleTodoState`), but transforms do not wrap implementation calls. They wrap registered `ActionConfig` records by exact `action.id` plus optional context. So "transform only todo cycle" would miss edit-mode and swipe-right unless those actions stopped being distinct action records.
 
-Explore adding semantic grouping metadata to actions, e.g. `groups: ['block.primary-complete']`, and letting decorators target a group as well as an id. Todo would mark all three concrete actions with the group; SRS/Readwise would contribute one group decorator that checks the block type and either consumes the action or falls through. Keep group membership as metadata during `getEffectiveActions` expansion — not a dispatch alias — so `block.swipe-right` remains a gesture-owned action and the swipe menu does not have to route through keyboard active-context dispatch.
+Explore adding semantic grouping metadata to actions, e.g. `groups: ['block.primary-complete']`, and letting transforms target a group as well as an id. Todo would mark all three concrete actions with the group; SRS/Readwise would contribute one group transform that checks the block type and either consumes the action or falls through. Keep group membership as metadata during `getEffectiveActions` expansion — not a dispatch alias — so `block.swipe-right` remains a gesture-owned action and the swipe menu does not have to route through keyboard active-context dispatch.
 
 Questions to answer before building:
 
-- Does `ActionDecorator` grow `groupId?: string`, or do actions expose `aliases?: readonly string[]` and decorators keep the single `actionId` field?
-- What is the ordering rule when both id-targeted and group-targeted decorators match the same action? Preserve contribution order if possible.
-- Should group decorators optionally constrain context, same as id decorators do today?
+- Does `ActionTransform` grow `groupId?: string`, or do actions expose `aliases?: readonly string[]` and transforms keep the single `actionId` field?
+- What is the ordering rule when both id-targeted and group-targeted transforms match the same action? Preserve contribution order if possible.
+- Should group transforms optionally constrain context, same as id transforms do today?
 - How should command palette / shortcut settings display grouped semantics without hiding the concrete action id that the user binds?
-- Is this worth a runtime semantic change, or is a helper like `decorateActions([ids...], factory)` enough until a third plugin needs the same pattern?
+- Is this worth a runtime semantic change, or is a helper like `transformActions([ids...], factory)` enough until a third plugin needs the same pattern?
 
 Acceptance for the exploration: produce a small design note or spike with tests around `getEffectiveActions`, compare it against the helper-only option, and only then migrate SRS/Readwise. Avoid making `block.swipe-right` delegate to `todo.cycle`; that would blur gesture deps with active keyboard contexts and make swipe behavior harder to reason about.
 

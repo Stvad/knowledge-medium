@@ -22,6 +22,7 @@ export const makeBlockData = (overrides: BlockDataOverrides): BlockData => ({
   references: [],
   createdAt: 0,
   updatedAt: 0,
+  userUpdatedAt: 0,
   createdBy: 'test-user',
   updatedBy: 'test-user',
   deleted: false,

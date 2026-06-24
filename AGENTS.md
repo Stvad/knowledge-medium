@@ -10,3 +10,27 @@ secret handling:
 
 testing:
 - don't add tests that just re-state the code (like testing what is our default shortcut binding is. this just duplicates the shortcut string for no benefit)
+- share one DB per test file: open with `createTestDb()` once in module scope / `beforeAll`, reset with `resetTestDb()` in `beforeEach`. Don't call `createTestDb()` per test.
+- don't `await new Promise(r => setTimeout(r, N))` to wait on a DB/subscription/BroadcastChannel round-trip — it's slow and flaky. Poll the outcome with `vi.waitFor`.
+- proving a write does NOT fire/invalidate:
+  - loader-backed query handles (`repo.query.*`): assert the invalidation counter, NOT `fired.length`. Subscriber notifications sit downstream of the loader's structural-diff dedup + mid-load coalescing, so an erroneous invalidation that re-resolves to an equal value (or coalesces with a later control write) is deduped and never reaches a subscriber — `fired` can't see it. Snapshot `env.repo.handleStore.metrics.loaderInvalidations`, do the no-op write, then assert it's unchanged: the post-commit fan-out is synchronous inside `repo.tx` and the counter increments before any dedup, so the count is complete the moment `tx` resolves — provided nothing can re-invalidate the handle a tick later (in the kernel tests that holds because the writes are local `blocks`-only, the post-commit processor registry is empty via `registerKernelProcessors: false`, and the default sync observer only reacts to `blocks_synced`). Keep a control-write fence (`vi.waitFor` a real change) as a liveness check. (see `src/data/internals/kernelQueries.test.ts`)
+  - raw event listeners (BroadcastChannel / EventEmitter, no dedup layer): a FIFO fence IS sound — after the no-op signal, send a signal that DOES fire and `vi.waitFor` it; in-order delivery proves the no-op produced nothing.
+
+design docs (`docs/*.html`) are intent/history, not ground truth:
+- they drift; several are stale in places. CODE + TESTS are authoritative, then the load-bearing rationale in nearby code comments (which move with the code). A design doc is a dated snapshot of intent.
+- the `docs/*.html` design docs carry a status banner at the top — an `<aside class="doc-status">` with `Status:` + "last verified against code"; `.md` design docs use a `> **Status:** …` blockquote with the same two fields. Read it first. `unverified` / `superseded` / `partially current` means don't rely on the doc's claims without checking the code. A design doc with NO banner (most `docs/*.md` predate this) is itself `unverified` — treat it that way; absence of a banner is not a sign the file is wrong.
+- before relying on a doc claim that matters to the task, confirm it's reflected in the code. If the doc describes a mechanism the code doesn't have, presume it was abandoned or never built — NOT "planned/coming" — and flag the divergence instead of designing around it.
+- when a doc contradicts the code, say so in your output and (if cheap) fix or re-stamp the doc; don't silently inherit the stale claim.
+
+cloud / remote sessions (Claude Code on the web):
+- when running in a cloud/remote execution environment, open a pull request as soon as the branch has its first commit — don't wait to be asked — then subscribe to the PR's activity so review comments and CI failures come back into the session and can be addressed. (This standing authorization applies only to cloud sessions; local runs still default to not opening a PR unless asked.)
+
+ui event channels (audit B3 — do not reintroduce the untyped window.CustomEvent UI bus):
+- dialogs / pickers / one-shot prompts: `openDialog(Component, props)` from `@/utils/dialogs` (returns a promise; the component takes `resolve`/`cancel` via `DialogContextProps`). The plugin must pull in `dialogAppMountExtension` so DialogHost is mounted.
+- toggle/open surfaces (palette, sidebar, search overlays): a module store from `createToggleStore` (`@/utils/toggleStore`) read with `useSyncExternalStore`; the action/header flips it directly. Cross-plugin or external callers trigger it via `runActionById(ACTION_ID)`, never by importing the store or an event name.
+- request/response between components: a typed module registry of imperative handles (see `video-player/registry.ts`), not `respond()` callbacks in event detail.
+- `window.dispatchEvent(new CustomEvent(...))` is reserved for GENUINE broadcast and is blocked in non-test `src/` by a `no-restricted-syntax` ESLint error — opt in per-site with `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.
+
+supabase / hosted database:
+- never create a table in the `public` schema of the hosted Supabase project without RLS. Supabase grants `anon`/`authenticated` full CRUD on public tables by default, and `CREATE TABLE` / `CREATE TABLE AS` do NOT enable RLS — so the table is immediately world-readable/writable via the anon key until locked down. This includes ad-hoc backup/snapshot/staging tables created via `db query` or `psql`, not just app tables in migrations.
+- create such tables with `enable row level security` (no policy = default-deny) + `revoke all ... from anon, authenticated` in the same transaction, or in a schema PostgREST doesn't expose. After any ad-hoc table creation, confirm `select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' and not c.relrowsecurity` returns zero rows. See the supabase skill for the full recipe.

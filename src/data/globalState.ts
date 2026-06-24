@@ -18,6 +18,7 @@ import { useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
 import {
   ChangeScope,
+  isSystemAuthor,
   type PropertySchema,
   type TypeContribution,
 } from '@/data/api'
@@ -35,10 +36,12 @@ import {
   getLayoutSessionBlock,
   getPluginPrefsBlock,
   getPluginUIStateBlock,
+  getPluginUIStateChild,
   getUIStateBlock,
   getUserBlock,
   requireSchemaScope,
   requireWorkspaceId,
+  userPageBlockId,
 } from '@/data/stateBlocks.js'
 export { USER_PREFS_PATH_PART } from '@/data/userPrefs.js'
 
@@ -74,6 +77,36 @@ export function useUserBlock(): Block {
   const workspaceId = requireWorkspaceId(repo, 'useUserBlock')
 
   return use(getUserBlock(repo, workspaceId, user))
+}
+
+/** Resolve a `userId` (as stored in `created_by` / `updated_by`) to its
+ *  user page: the display name plus — only when the page block actually
+ *  exists in this workspace — its block id, so callers can link to it.
+ *
+ *  Reads the user-page block's content (which the page's owning client
+ *  keeps in sync with their name) via its deterministic id, so it works
+ *  for any user whose page has synced here, not just the current one.
+ *  While the page is loading or absent (e.g. a peer who hasn't synced
+ *  yet) `name` falls back to the raw id and `blockId` is omitted — so
+ *  attribution degrades to the prior plain-text behaviour rather than
+ *  rendering a link to a block that doesn't exist. */
+export function useUserPage(userId: string): {name: string; blockId?: string} {
+  const repo = useRepo()
+  const workspaceId = requireWorkspaceId(repo, 'useUserPage')
+  const id = userPageBlockId(workspaceId, userId)
+  const block = repo.block(id)
+  const resolved = useHandle(block, {
+    selector: doc => doc
+      ? {name: doc.content || userId, blockId: id}
+      : {name: userId},
+  })
+  // A system author (`system:<userId>`, written to `updated_by` on a pristine
+  // deterministic-id mint) is not a user — render it as "System" with no link
+  // rather than leaking the raw prefixed id into attribution surfaces. (The
+  // useHandle subscription above runs unconditionally per the rules of hooks;
+  // its result is simply unused for system authors.)
+  if (isSystemAuthor(userId)) return {name: 'System'}
+  return resolved
 }
 
 /** Hook to access and modify a UI-state property on the active UI-state
@@ -118,8 +151,10 @@ export const usePluginPrefsProperty = <T>(
 
 /** Resolve the per-plugin ui-state sub-block for a given type
  *  contribution. The mirror of `usePluginPrefsBlock` for persistent
- *  per-device state — the block lives under the root ui-state subtree
- *  and never enters the upload queue. */
+ *  ui-state — the block lives under the root ui-state subtree. Like all
+ *  `ChangeScope.UiState` writes it is non-undoable but still uploads and
+ *  syncs through the normal queue, so the state is restored across
+ *  devices (a deliberate uniform-substrate decision). */
 export function usePluginUIStateBlock(type: TypeContribution): Block {
   const repo = useRepo()
   const user = useUser()
@@ -128,11 +163,19 @@ export function usePluginUIStateBlock(type: TypeContribution): Block {
   return use(getPluginUIStateBlock(repo, workspaceId, user, type))
 }
 
+/** Resolve a per-`key` child of the plugin's ui-state sub-block, for
+ *  plugins that partition their ui-state (e.g. one frozen review session
+ *  per deck, keyed by deck id) instead of overloading a single block. The
+ *  child is bootstrapped on first access. */
+export function usePluginUIStateChildBlock(type: TypeContribution, key: string): Block {
+  return use(getPluginUIStateChild(usePluginUIStateBlock(type), key))
+}
+
 /** Read/write a ui-state property on the plugin's own ui-state
  *  sub-block. The schema must declare `changeScope: ChangeScope.UiState`
- *  so writes route into the device-local ui-state subtree (and stay
- *  undo-segregated from document edits). They still upload through the
- *  normal queue. */
+ *  so writes route into the ui-state subtree (and stay undo-segregated
+ *  from document edits). They still upload and sync through the normal
+ *  queue. */
 export const usePluginUIStateProperty = <T>(
   type: TypeContribution,
   schema: PropertySchema<T>,

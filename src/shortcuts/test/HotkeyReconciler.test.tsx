@@ -1,14 +1,22 @@
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
+import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.js'
+import { dispatchPointerAction } from '@/shortcuts/pointerAction.js'
+import {
+  dispatchGesture,
+  beginGestureProgress,
+  GESTURE_PROGRESS_CANCEL_EVENT,
+} from '@/shortcuts/gestureAction.js'
+import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import {
   ActiveContextsProvider,
   useActiveContextsState,
   useActiveContextsDispatch,
 } from '@/shortcuts/ActiveContexts.js'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.js'
-import { actionContextsFacet, actionDecoratorsFacet, actionsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { actionContextsFacet, actionTransformsFacet, actionsFacet } from '@/extensions/core.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -52,6 +60,77 @@ const secondModalContextConfig: ActionContextConfig = {
     typeof deps === 'object' && deps !== null,
 }
 
+const BLOCK_POINTER_CONTEXT = 'block-pointer' as ActionContextType
+const blockPointerContextConfig: ActionContextConfig = {
+  type: BLOCK_POINTER_CONTEXT,
+  displayName: 'Block Pointer',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const FILTERED_POINTER_CONTEXT = 'filtered-pointer' as ActionContextType
+const filteredPointerContextConfig: ActionContextConfig = {
+  type: FILTERED_POINTER_CONTEXT,
+  displayName: 'Filtered Pointer',
+  // Reject events whose target is an anchor — stands in for block-pointer's
+  // "exclude interactive descendants" pointerTargetFilter.
+  pointerTargetFilter: event => (event.target as HTMLElement | null)?.tagName !== 'A',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const pointerEvent = (
+  overrides: Partial<{
+    type: string; button: number; detail: number
+    shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean
+    target: EventTarget
+  }> = {},
+): ReactMouseEvent<HTMLElement> => ({
+  type: 'click',
+  button: 0,
+  detail: 1,
+  shiftKey: false,
+  altKey: false,
+  ctrlKey: false,
+  metaKey: false,
+  preventDefault: vi.fn(),
+  stopPropagation: vi.fn(),
+  ...overrides,
+}) as unknown as ReactMouseEvent<HTMLElement>
+
+// A touch gesture is discriminated from a mouse event by `changedTouches`; the
+// surface has already recognised the tap by the time it dispatches.
+const touchEvent = (
+  overrides: Partial<{target: EventTarget}> = {},
+): ReactTouchEvent<HTMLElement> => ({
+  type: 'touchend',
+  changedTouches: [{clientX: 1, clientY: 1}],
+  preventDefault: vi.fn(),
+  stopPropagation: vi.fn(),
+  ...overrides,
+}) as unknown as ReactTouchEvent<HTMLElement>
+
+const HIGH_CONTEXT = 'high-priority-mode' as ActionContextType
+const highContextConfig: ActionContextConfig = {
+  type: HIGH_CONTEXT,
+  displayName: 'High Priority Mode',
+  priority: 'high',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+// Mirrors EDIT_MODE_CM: a context whose default is "don't preventDefault".
+// Used to test that a binding's eventOptions override the context default
+// (the precedence merge the Shift+Arrow regression got wrong).
+const NO_PREVENT_DEFAULT_CONTEXT = 'no-prevent-default-mode' as ActionContextType
+const noPreventDefaultContextConfig: ActionContextConfig = {
+  type: NO_PREVENT_DEFAULT_CONTEXT,
+  displayName: 'No-preventDefault Mode',
+  defaultEventOptions: {preventDefault: false},
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
 interface MockDeps extends BaseShortcutDependencies {
   marker: string
 }
@@ -74,14 +153,18 @@ const codeFor = (key: string) => {
   return key.length === 1 && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key
 }
 
-const dispatchKey = (type: 'keydown' | 'keyup', key: string) => {
+const dispatchKey = (type: 'keydown' | 'keyup', key: string): KeyboardEvent => {
   // tinykeys matches via event.key / event.code. Synthesise both so
   // single-letter chords ('k') match event.key and code-form chords
   // ('KeyK') match event.code. Bare modifier names ('Shift') get the
   // matching code-form ('ShiftLeft') for keyup tests where event.key
   // is the modifier itself.
   const init: KeyboardEventInit = {key, code: codeFor(key), bubbles: true, cancelable: true}
-  window.dispatchEvent(new KeyboardEvent(type, init))
+  // Returned so callers can read event.defaultPrevented after dispatch (the
+  // event-options tests assert on it); existing callers ignore the return.
+  const event = new KeyboardEvent(type, init)
+  window.dispatchEvent(event)
+  return event
 }
 
 const dispatchKeydown = (key: string) => dispatchKey('keydown', key)
@@ -129,19 +212,19 @@ const LayoutKeydownWhenActive = ({
 
 const Harness = ({
   actions,
-  decorators = [],
+  transforms = [],
   contexts,
   children,
 }: {
   actions: readonly ActionConfig[]
-  decorators?: Parameters<typeof actionDecoratorsFacet.of>[0][]
+  transforms?: Parameters<typeof actionTransformsFacet.of>[0][]
   contexts: readonly ActionContextConfig[]
   children?: ReactNode
 }) => {
   const runtime = resolveFacetRuntimeSync([
     ...contexts.map(c => actionContextsFacet.of(c)),
     ...actions.map(a => actionsFacet.of(a)),
-    ...decorators.map(d => actionDecoratorsFacet.of(d)),
+    ...transforms.map(t => actionTransformsFacet.of(t)),
   ])
 
   return (
@@ -198,10 +281,10 @@ describe('HotkeyReconciler', () => {
     render(
       <Harness
         actions={[action]}
-        decorators={[{
+        transforms={[{
           actionId: action.id,
           context: TEST_CONTEXT,
-          decorate: current => ({
+          apply: current => ({
             ...current,
             handler: (deps, trigger) => {
               calls.push('decorated')
@@ -452,6 +535,799 @@ describe('HotkeyReconciler', () => {
     })
   })
 
+  describe('single winner (no double-fire)', () => {
+    it('fires only the highest-precedence action when two contexts share a chord', () => {
+      // Both global and the base context bind 'k' and are active. The old
+      // per-action-listener model fired BOTH (the double-fire bug); the
+      // coordinator must dispatch exactly one — global, as the reserved top
+      // tier.
+      const globalHandler = vi.fn()
+      const baseHandler = vi.fn()
+      const globalAction = buildAction({
+        id: 'test.global-k',
+        context: GLOBAL_CONTEXT,
+        handler: globalHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const baseAction = buildAction({
+        id: 'test.base-k',
+        context: TEST_CONTEXT,
+        handler: baseHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[globalAction, baseAction]}
+          contexts={[testContextConfig, globalContextConfig]}
+        >
+          <SequentialActivator contexts={[GLOBAL_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(globalHandler).toHaveBeenCalledTimes(1)
+      expect(baseHandler).not.toHaveBeenCalled()
+    })
+
+    it('a higher-priority context wins a shared chord even when activated earlier', () => {
+      // The early/late inversion: the high-priority context is activated
+      // FIRST (older) and the default context LATER (newer). Recency alone
+      // would pick the newer one; priority must override it.
+      const highHandler = vi.fn()
+      const lowHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-k',
+        context: HIGH_CONTEXT,
+        handler: highHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-k',
+        context: TEST_CONTEXT,
+        handler: lowHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(highHandler).toHaveBeenCalledTimes(1)
+      expect(lowHandler).not.toHaveBeenCalled()
+    })
+
+    it('falls through to the next candidate when the winner returns false', () => {
+      // Option D: a handler declares "not mine" by returning a synchronous
+      // `false`. The high-priority context would win 'k', but its handler
+      // declines, so the coordinator falls through to the lower context.
+      const declinedHandler = vi.fn(() => false as const)
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-return-false',
+        context: HIGH_CONTEXT,
+        handler: declinedHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-return-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(declinedHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
+
+    it('treats a void return as handled — the next candidate does not run', () => {
+      const winnerHandler = vi.fn(() => undefined)
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-void',
+        context: HIGH_CONTEXT,
+        handler: winnerHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-void-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(winnerHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).not.toHaveBeenCalled()
+    })
+
+    it('does not fall through for a Promise that resolves to false (sync sentinel only)', () => {
+      // The loop chooses the next candidate within the same synchronous event
+      // and cannot await — so a Promise counts as handled the moment it
+      // returns, even if it later resolves to false. Only a synchronous false
+      // falls through. This pins that contract.
+      const asyncDeclineHandler = vi.fn(
+        // Returns Promise<false> at runtime; typed loosely since the public
+        // handler signature forbids it (Promise<false> ⊄ Promise<void>).
+        (() => Promise.resolve(false)) as unknown as () => void,
+      )
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-async-false',
+        context: HIGH_CONTEXT,
+        handler: asyncDeclineHandler,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-async-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(asyncDeclineHandler).toHaveBeenCalledTimes(1)
+      expect(fallbackHandler).not.toHaveBeenCalled()
+    })
+
+    it('skips a candidate whose canDispatch declines and dispatches the next', () => {
+      // The high-priority context would win 'k', but its canDispatch returns
+      // false, so the coordinator falls through to the lower context's 'k'.
+      const declinedHandler = vi.fn()
+      const fallbackHandler = vi.fn()
+      const highAction = buildAction({
+        id: 'test.high-decline',
+        context: HIGH_CONTEXT,
+        handler: declinedHandler,
+        canDispatch: () => false,
+        defaultBinding: {keys: 'k'},
+      })
+      const lowAction = buildAction({
+        id: 'test.low-fallback',
+        context: TEST_CONTEXT,
+        handler: fallbackHandler,
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness
+          actions={[highAction, lowAction]}
+          contexts={[highContextConfig, testContextConfig]}
+        >
+          <SequentialActivator contexts={[HIGH_CONTEXT, TEST_CONTEXT]}/>
+        </Harness>,
+      )
+
+      act(() => dispatchKeydown('k'))
+      expect(declinedHandler).not.toHaveBeenCalled()
+      expect(fallbackHandler).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // The event-option application seam: a matched binding's eventOptions decide
+  // whether the keydown's native default is suppressed. Precedence is
+  // built-in default (preventDefault: true) -> context defaultEventOptions ->
+  // binding eventOptions. The Shift+Arrow text-selection regression lived
+  // exactly here: an EDIT_MODE_CM binding inherited preventDefault: true and
+  // swallowed CodeMirror's native shift-selection. These pin the contract
+  // end-to-end via event.defaultPrevented (only the binding-config value is
+  // unit-tested elsewhere).
+  describe('event options (preventDefault)', () => {
+    it('suppresses the native default when the binding asks for preventDefault: true', () => {
+      const handler = vi.fn()
+      const action = buildAction({
+        id: 'test.prevent-true',
+        handler,
+        defaultBinding: {keys: 'k', eventOptions: {preventDefault: true}},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(true)
+    })
+
+    it('leaves the native default intact when the binding asks for preventDefault: false', () => {
+      // The regression class: the handler runs, but the native key action
+      // (e.g. CodeMirror shift-selection) must survive.
+      const handler = vi.fn()
+      const action = buildAction({
+        id: 'test.prevent-false',
+        handler,
+        defaultBinding: {keys: 'k', eventOptions: {preventDefault: false}},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(false)
+    })
+
+    it('preventDefaults by default when a binding sets no eventOptions', () => {
+      // Documents the dangerous default that bit the regression: a binding
+      // with no eventOptions suppresses the native default.
+      const action = buildAction({
+        id: 'test.prevent-default-default',
+        handler: vi.fn(),
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(event.defaultPrevented).toBe(true)
+    })
+
+    it('lets the context defaultEventOptions set the default (no preventDefault)', () => {
+      // Mirrors EDIT_MODE_CM: context default is preventDefault: false, and a
+      // binding without its own eventOptions inherits it.
+      const action = buildAction({
+        id: 'test.ctx-default',
+        context: NO_PREVENT_DEFAULT_CONTEXT,
+        handler: vi.fn(),
+        defaultBinding: {keys: 'k'},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[noPreventDefaultContextConfig]}>
+          <Activator context={NO_PREVENT_DEFAULT_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(event.defaultPrevented).toBe(false)
+    })
+
+    it('lets a binding override the context defaultEventOptions (this is the regression mechanism)', () => {
+      // Exactly the shape of the bug: the context says "don't preventDefault",
+      // but the binding's eventOptions win and re-enable it. In the real bug
+      // EDIT_MODE_CM (default false) inherited a binding with preventDefault:
+      // true, so the native default was wrongly suppressed.
+      const action = buildAction({
+        id: 'test.binding-overrides-ctx',
+        context: NO_PREVENT_DEFAULT_CONTEXT,
+        handler: vi.fn(),
+        defaultBinding: {keys: 'k', eventOptions: {preventDefault: true}},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[noPreventDefaultContextConfig]}>
+          <Activator context={NO_PREVENT_DEFAULT_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(event.defaultPrevented).toBe(true)
+    })
+
+    it('does not preventDefault when the matched handler declines (sync false)', () => {
+      // A declined candidate must not apply its event options: the coordinator
+      // only applies them for the handler it actually dispatches. Even with
+      // preventDefault: true on the binding, a decline leaves the default
+      // intact (and here no other candidate handles the key).
+      const declinedHandler = vi.fn(() => false as const)
+      const action = buildAction({
+        id: 'test.declined-no-prevent',
+        handler: declinedHandler,
+        defaultBinding: {keys: 'k', eventOptions: {preventDefault: true}},
+      })
+
+      render(
+        <Harness actions={[action]} contexts={[testContextConfig]}>
+          <Activator context={TEST_CONTEXT}/>
+        </Harness>,
+      )
+
+      let event!: KeyboardEvent
+      act(() => { event = dispatchKeydown('k') })
+      expect(declinedHandler).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(false)
+    })
+  })
+
+  describe('pointer dispatch', () => {
+    const pointerAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test pointer action',
+      context: BLOCK_POINTER_CONTEXT,
+      pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
+      ...overrides,
+    } as ActionConfig)
+
+    it('dispatches a matching shift-click to a pointer-bound action with supplied deps', () => {
+      const handler = vi.fn()
+      const action = pointerAction({id: 'pointer.shift', handler})
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      const supplied = {marker: 'clicked'} as unknown as BaseShortcutDependencies
+      let handled = false
+      act(() => {
+        handled = dispatchPointerAction(pointerEvent({shiftKey: true}), supplied as never)
+      })
+
+      // The context is NOT active — the click supplies the deps, which reach
+      // the handler unchanged.
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+    })
+
+    it('does not dispatch when the modifier set differs (ctrl+shift is not shift)', () => {
+      const handler = vi.fn()
+      const action = pointerAction({id: 'pointer.shift-only', handler})
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({shiftKey: true, ctrlKey: true}),
+          {marker: 'x'} as never,
+        )
+      })
+
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('does not dispatch when the context pointerTargetFilter rejects the target', () => {
+      const handler = vi.fn()
+      const action = {
+        id: 'pointer.filtered',
+        description: 'filtered pointer action',
+        context: FILTERED_POINTER_CONTEXT,
+        pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
+        handler,
+      } as ActionConfig
+
+      render(<Harness actions={[action]} contexts={[filteredPointerContextConfig]}/>)
+
+      // Target is an anchor → the context filter rejects it → no candidate.
+      let handled = true
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({shiftKey: true, target: document.createElement('a')}),
+          {marker: 'x'} as never,
+        )
+      })
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+
+      // A non-anchor target passes the filter.
+      act(() => {
+        dispatchPointerAction(
+          pointerEvent({shiftKey: true, target: document.createElement('span')}),
+          {marker: 'x'} as never,
+        )
+      })
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('matches when any of several pointer bindings matches (ctrl-OR-meta style)', () => {
+      const handler = vi.fn()
+      const action = {
+        id: 'pointer.multi',
+        description: 'multi-binding pointer action',
+        context: BLOCK_POINTER_CONTEXT,
+        pointerBinding: [
+          {kind: 'mouse', mods: ['Shift'], phase: 'click'},
+          {kind: 'mouse', mods: ['Alt'], phase: 'click'},
+        ],
+        handler,
+      } as ActionConfig
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => { dispatchPointerAction(pointerEvent({shiftKey: true}), {marker: 'x'} as never) })
+      act(() => { dispatchPointerAction(pointerEvent({altKey: true}), {marker: 'x'} as never) })
+      expect(handler).toHaveBeenCalledTimes(2)
+
+      // A plain click matches neither binding.
+      let handled = true
+      act(() => { handled = dispatchPointerAction(pointerEvent({}), {marker: 'x'} as never) })
+      expect(handled).toBe(false)
+      expect(handler).toHaveBeenCalledTimes(2)
+    })
+
+    it('falls through to the next pointer candidate when the first declines', () => {
+      const declined = vi.fn(() => false as const)
+      const fallback = vi.fn()
+      const first = pointerAction({id: 'pointer.declines', handler: declined})
+      const second = pointerAction({id: 'pointer.fallback', handler: fallback})
+
+      render(<Harness actions={[first, second]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => {
+        dispatchPointerAction(pointerEvent({shiftKey: true}), {marker: 'x'} as never)
+      })
+
+      expect(declined).toHaveBeenCalledTimes(1)
+      expect(fallback).toHaveBeenCalledTimes(1)
+    })
+
+    it('dispatches a double-click (pointerdown, detail 2) but not a single click', () => {
+      const handler = vi.fn()
+      const action = pointerAction({
+        id: 'pointer.double',
+        handler,
+        pointerBinding: {kind: 'mouse', detail: 2, phase: 'pointerdown'},
+      })
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      // A single mousedown (detail 1) at the same phase doesn't match.
+      let handled = true
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({type: 'mousedown', detail: 1}),
+          {marker: 'x'} as never,
+        )
+      })
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+
+      act(() => {
+        handled = dispatchPointerAction(
+          pointerEvent({type: 'mousedown', detail: 2}),
+          {marker: 'x'} as never,
+        )
+      })
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+    })
+
+    it('dispatches a touch tap to a touch-bound action', () => {
+      const handler = vi.fn()
+      const supplied = {marker: 'tapped'} as unknown as BaseShortcutDependencies
+      const action = pointerAction({
+        id: 'pointer.tap',
+        handler,
+        pointerBinding: {kind: 'touch', phase: 'tap'},
+      })
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      let handled = false
+      act(() => { handled = dispatchPointerAction(touchEvent(), supplied as never) })
+
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+    })
+
+    it('does not cross-match a mouse gesture to a touch binding (or vice versa)', () => {
+      const tapHandler = vi.fn()
+      const clickHandler = vi.fn()
+      const tapAction = pointerAction({
+        id: 'pointer.tap-only',
+        handler: tapHandler,
+        pointerBinding: {kind: 'touch', phase: 'tap'},
+      })
+      const clickAction = pointerAction({
+        id: 'pointer.click-only',
+        handler: clickHandler,
+        pointerBinding: {kind: 'mouse', mods: [], phase: 'click'},
+      })
+
+      render(<Harness actions={[tapAction, clickAction]} contexts={[blockPointerContextConfig]}/>)
+
+      // A plain click reaches the mouse action, not the touch one.
+      act(() => { dispatchPointerAction(pointerEvent({}), {marker: 'x'} as never) })
+      expect(clickHandler).toHaveBeenCalledTimes(1)
+      expect(tapHandler).not.toHaveBeenCalled()
+
+      // A tap reaches the touch action, not the mouse one.
+      act(() => { dispatchPointerAction(touchEvent(), {marker: 'x'} as never) })
+      expect(tapHandler).toHaveBeenCalledTimes(1)
+      expect(clickHandler).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('gesture dispatch', () => {
+    // The commit event a recognizer hands the dispatcher — any ActionTrigger;
+    // a CustomEvent stands in here. Spied so we can assert the dispatch ate it
+    // (suppressing the trailing synthesized click).
+    const gestureTrigger = (): import('@/shortcuts/types.js').ActionTrigger => ({
+      type: 'gesture-commit',
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    }) as never
+
+    const gestureAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test gesture action',
+      context: BLOCK_POINTER_CONTEXT,
+      gestureBinding: {gesture: 'swipe-right'},
+      ...overrides,
+    } as ActionConfig)
+
+    it('dispatches a matching gesture to a gesture-bound action with supplied deps', () => {
+      const handler = vi.fn()
+      const action = gestureAction({id: 'gesture.swipe-right', handler})
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      // The context is NOT active — the gesture supplies the deps, which reach
+      // the handler unchanged.
+      const supplied = {marker: 'swiped'} as unknown as BaseShortcutDependencies
+      const trigger = gestureTrigger()
+      let handled = false
+      act(() => { handled = dispatchGesture('swipe-right', supplied, trigger) })
+
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+      // Default event options ate the commit event.
+      expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not dispatch when the emitted gesture name differs from the binding', () => {
+      const handler = vi.fn()
+      render(
+        <Harness actions={[gestureAction({id: 'g', handler})]} contexts={[blockPointerContextConfig]}/>,
+      )
+
+      let handled = true
+      act(() => { handled = dispatchGesture('swipe-left', {marker: 'x'} as never, gestureTrigger()) })
+
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('matches when any of several gesture bindings names the gesture', () => {
+      const handler = vi.fn()
+      const action = gestureAction({
+        id: 'g.multi',
+        handler,
+        gestureBinding: [{gesture: 'swipe-left'}, {gesture: 'swipe-right'}],
+      })
+
+      render(<Harness actions={[action]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => { dispatchGesture('swipe-left', {marker: 'x'} as never, gestureTrigger()) })
+      act(() => { dispatchGesture('swipe-right', {marker: 'x'} as never, gestureTrigger()) })
+      expect(handler).toHaveBeenCalledTimes(2)
+
+      // A gesture neither binding names matches nothing.
+      let handled = true
+      act(() => { handled = dispatchGesture('two-finger-scrub', {marker: 'x'} as never, gestureTrigger()) })
+      expect(handled).toBe(false)
+      expect(handler).toHaveBeenCalledTimes(2)
+    })
+
+    it('falls through to the next gesture candidate when the first declines', () => {
+      const declined = vi.fn(() => false as const)
+      const fallback = vi.fn()
+      const first = gestureAction({id: 'g.declines', handler: declined})
+      const second = gestureAction({id: 'g.fallback', handler: fallback})
+
+      render(<Harness actions={[first, second]} contexts={[blockPointerContextConfig]}/>)
+
+      act(() => { dispatchGesture('swipe-right', {marker: 'x'} as never, gestureTrigger()) })
+
+      expect(declined).toHaveBeenCalledTimes(1)
+      expect(fallback).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('gesture progress dispatch', () => {
+    // The progress dispatcher (the single-winner preview channel) has only ever
+    // been exercised through the controller's mock; these drive the real
+    // `beginGestureProgress` the reconciler installs. Swipe-left is its only
+    // production caller today, so the contract lives here.
+    const progressTick = (): import('@/shortcuts/types.js').ActionTrigger =>
+      new CustomEvent('date-scrub-tick', {detail: {deltaDays: 1}})
+
+    const progressAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test progress action',
+      context: BLOCK_POINTER_CONTEXT,
+      gestureBinding: {gesture: 'date-scrub', phase: 'progress'},
+      ...overrides,
+    } as ActionConfig)
+
+    it('streams every tick and the terminal settle to one resolved winner', () => {
+      const handler = vi.fn()
+      render(<Harness actions={[progressAction({id: 'p.scrub', handler})]} contexts={[blockPointerContextConfig]}/>)
+
+      // The context is NOT active — the gesture supplies the deps, which reach
+      // every tick unchanged (resolved once, not re-resolved per tick).
+      const supplied = {marker: 'scrubbing'} as unknown as BaseShortcutDependencies
+      let dispatch: ReturnType<typeof beginGestureProgress> = null
+      act(() => { dispatch = beginGestureProgress('date-scrub', supplied) })
+      expect(dispatch).not.toBeNull()
+
+      act(() => { dispatch!.update(progressTick()) })
+      act(() => { dispatch!.update(progressTick()) })
+      act(() => { dispatch!.settle() })
+
+      expect(handler).toHaveBeenCalledTimes(3)
+      expect(handler.mock.calls.every(call => call[0] === supplied)).toBe(true)
+      // Active ticks carry the recognizer's own event; the settle arrives as the
+      // synthesized cancel event so a progress action can tell them apart.
+      expect((handler.mock.calls[0]?.[1] as CustomEvent).type).toBe('date-scrub-tick')
+      expect((handler.mock.calls[2]?.[1] as CustomEvent).type).toBe(GESTURE_PROGRESS_CANCEL_EVENT)
+    })
+
+    it('returns null when only a commit binding names the gesture', () => {
+      const handler = vi.fn()
+      // Defaults to the commit phase, so no progress binding matches.
+      const commitOnly = progressAction({id: 'p.commit', handler, gestureBinding: {gesture: 'date-scrub'}})
+      render(<Harness actions={[commitOnly]} contexts={[blockPointerContextConfig]}/>)
+
+      let dispatch: ReturnType<typeof beginGestureProgress> = {} as never
+      act(() => { dispatch = beginGestureProgress('date-scrub', {marker: 'x'} as never) })
+
+      expect(dispatch).toBeNull()
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('binds a single winner — a second matching action never receives ticks', () => {
+      const winner = vi.fn()
+      const other = vi.fn()
+      render(
+        <Harness
+          actions={[
+            progressAction({id: 'p.winner', handler: winner}),
+            progressAction({id: 'p.other', handler: other}),
+          ]}
+          contexts={[blockPointerContextConfig]}
+        />,
+      )
+
+      let dispatch: ReturnType<typeof beginGestureProgress> = null
+      act(() => { dispatch = beginGestureProgress('date-scrub', {marker: 'x'} as never) })
+      act(() => { dispatch!.update(progressTick()) })
+
+      expect(winner).toHaveBeenCalledTimes(1)
+      expect(other).not.toHaveBeenCalled()
+    })
+
+    it('skips a candidate whose canDispatch declines and binds the next', () => {
+      const declinedHandler = vi.fn()
+      const fallback = vi.fn()
+      const declines = progressAction({
+        id: 'p.declines',
+        handler: declinedHandler,
+        canDispatch: () => false,
+      })
+      const second = progressAction({id: 'p.fallback', handler: fallback})
+      render(<Harness actions={[declines, second]} contexts={[blockPointerContextConfig]}/>)
+
+      let dispatch: ReturnType<typeof beginGestureProgress> = null
+      act(() => { dispatch = beginGestureProgress('date-scrub', {marker: 'x'} as never) })
+      act(() => { dispatch!.update(progressTick()) })
+
+      expect(declinedHandler).not.toHaveBeenCalled()
+      expect(fallback).toHaveBeenCalledTimes(1)
+    })
+
+    it('contains a throwing progress handler instead of letting it escape the tick', () => {
+      const handler = vi.fn(() => { throw new Error('bad tick') })
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      render(<Harness actions={[progressAction({id: 'p.throws', handler})]} contexts={[blockPointerContextConfig]}/>)
+
+      let dispatch: ReturnType<typeof beginGestureProgress> = null
+      act(() => { dispatch = beginGestureProgress('date-scrub', {marker: 'x'} as never) })
+
+      expect(() => act(() => { dispatch!.update(progressTick()) })).not.toThrow()
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(errorSpy).toHaveBeenCalled()
+      errorSpy.mockRestore()
+    })
+  })
+
+  describe('supplied-deps action dispatch', () => {
+    const byIdAction = (
+      overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' | 'handler'>,
+    ): ActionConfig => ({
+      description: 'test supplied action',
+      context: TEST_CONTEXT,
+      ...overrides,
+    } as ActionConfig)
+
+    it('runs an action by id with supplied deps when its context is not active', () => {
+      const handler = vi.fn()
+      const action = byIdAction({id: 'block.swipe-right', handler})
+
+      // TEST_CONTEXT is never activated (no Activator) — the deps are supplied.
+      render(<Harness actions={[action]} contexts={[testContextConfig]}/>)
+
+      const supplied = {marker: 'swiped'} as unknown as BaseShortcutDependencies
+      let handled = false
+      act(() => {
+        handled = dispatchActionWithDeps('block.swipe-right', supplied, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(true)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(handler.mock.calls[0]?.[0]).toBe(supplied)
+    })
+
+    it('returns false when no action matches the id', () => {
+      render(<Harness actions={[]} contexts={[testContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchActionWithDeps('nope', {marker: 'x'} as never, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(false)
+    })
+
+    it('falls through (not handled) when canDispatch declines', () => {
+      const handler = vi.fn()
+      const action = byIdAction({id: 'gated', handler, canDispatch: () => false})
+
+      render(<Harness actions={[action]} contexts={[testContextConfig]}/>)
+
+      let handled = true
+      act(() => {
+        handled = dispatchActionWithDeps('gated', {marker: 'x'} as never, new CustomEvent('swipe'))
+      })
+
+      expect(handled).toBe(false)
+      expect(handler).not.toHaveBeenCalled()
+    })
+  })
+
   it('observes the latest dependencies after the context re-activates with new ones', () => {
     const handler = vi.fn()
     const action = buildAction({
@@ -695,6 +1571,34 @@ describe('HotkeyReconciler', () => {
 
           act(() => vi.advanceTimersByTime(1))
           expect(handler).toHaveBeenCalledTimes(1)
+        } finally {
+          vi.useRealTimers()
+        }
+      })
+
+      it('does not fire when canDispatch declines, even after the threshold', () => {
+        // Hold dispatch must honour the same canDispatch gate the keydown/keyup
+        // coordinator enforces — otherwise hold bindings are the one path that
+        // fires in a state the action opted out of.
+        vi.useFakeTimers()
+        try {
+          const handler = vi.fn()
+          const action = buildAction({
+            id: 'test.hold-candispatch',
+            handler,
+            canDispatch: () => false,
+            defaultBinding: {keys: 's', phase: 'hold', holdMs: 200},
+          })
+
+          render(
+            <Harness actions={[action]} contexts={[testContextConfig]}>
+              <Activator context={TEST_CONTEXT}/>
+            </Harness>,
+          )
+
+          act(() => dispatchKeydown('s'))
+          act(() => vi.advanceTimersByTime(300))
+          expect(handler).not.toHaveBeenCalled()
         } finally {
           vi.useRealTimers()
         }
@@ -983,6 +1887,10 @@ describe('HotkeyReconciler', () => {
         const input = document.createElement('input')
         document.body.appendChild(input)
         input.focus()
+        // Guard against a silent false-green: if focus didn't take, the
+        // "filtered out" path wouldn't be exercised and the test would
+        // pass for the wrong reason.
+        expect(document.activeElement).toBe(input)
         try {
           const handler = vi.fn()
           const action = buildAction({

@@ -3,6 +3,7 @@ import {
   codecs,
   defineBlockType,
   defineProperty,
+  type BlockData,
   type Codec,
 } from '@/data/api'
 
@@ -120,6 +121,19 @@ export const mergeGroupedBacklinksConfig = (
   excludedTags: overrides.excludedTags ?? defaults.excludedTags,
   excludedPatterns: overrides.excludedPatterns ?? defaults.excludedPatterns,
 })
+
+/** Read a target block's per-block grouping overrides off its decoded
+ *  block data. Shared by the React hook (`useGroupedBacklinksConfig`)
+ *  and the non-React resolver (`resolveGroupedBacklinksConfig`) so both
+ *  read the override property the same way. */
+export const selectGroupedBacklinksOverrides = (
+  data: Pick<BlockData, 'properties'> | null | undefined,
+): GroupedBacklinksOverrides => {
+  const stored = data?.properties[groupedBacklinksOverridesProp.name]
+  return stored === undefined
+    ? groupedBacklinksOverridesProp.defaultValue
+    : groupedBacklinksOverridesProp.codec.decode(stored)
+}
 
 const groupedBacklinksConfigCodec: Codec<GroupedBacklinksConfig> = {
   type: 'groupedBacklinks:config',

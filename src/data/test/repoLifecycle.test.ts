@@ -19,10 +19,10 @@
  * contract).
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope } from '@/data/api'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
 interface Harness {
@@ -30,19 +30,25 @@ interface Harness {
   repo: Repo
 }
 
+// Builds a harness on the shared, already-reset DB. Called from beforeEach
+// AND mid-test (some tests build a second Repo to prove per-Repo identity), so
+// it must NOT reset — reset lives in beforeEach. `h.cleanup` disposes this
+// harness's observer without closing the shared DB.
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
   const cache = new BlockCache()
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: {id: 'user-1'},
   })
-  return {h, repo}
+  return {h: {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
-beforeEach(async () => { env = await setup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+beforeEach(async () => { await resetTestDb(sharedDb.db); env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('repo.block(id) identity stability', () => {
@@ -84,19 +90,17 @@ describe('repo.setReadOnly', () => {
     expect(env.repo.isReadOnly).toBe(false)
   })
 
-  it('respects opts.isReadOnly at construction', async () => {
-    const h = await createTestDb()
-    try {
-      const repo = new Repo({
-        db: h.db,
-        cache: new BlockCache(),
-        user: {id: 'u'},
-        isReadOnly: true,
-      })
-      expect(repo.isReadOnly).toBe(true)
-    } finally {
-      await h.cleanup()
-    }
+  it('respects opts.isReadOnly at construction', () => {
+    // Construction-only assertion — no DB I/O — so it rides the shared DB
+    // with the observer off rather than opening its own harness.
+    const repo = new Repo({
+      db: sharedDb.db,
+      cache: new BlockCache(),
+      user: {id: 'u'},
+      isReadOnly: true,
+      startSyncObserver: false,
+    })
+    expect(repo.isReadOnly).toBe(true)
   })
 })
 
@@ -151,7 +155,7 @@ describe('repo.metrics() / resetMetrics()', () => {
     env.repo.cache.setSnapshot({
       id: 'block-1', workspaceId: 'ws', parentId: null, referenceTargetId: null, orderKey: 'a',
       content: '', properties: {}, references: [],
-      createdAt: 0, updatedAt: 0, createdBy: 'u', updatedBy: 'u', deleted: false,
+      createdAt: 0, updatedAt: 0, userUpdatedAt: 0, createdBy: 'u', updatedBy: 'u', deleted: false,
     })
     const before = env.repo.metrics()
     expect(before.blockCache.setSnapshotCalls).toBe(1)
@@ -232,5 +236,56 @@ describe('repo.metrics() / resetMetrics()', () => {
     expect(Object.keys(after.queries)).toEqual([])
     expect(after.db.getAll.calls).toBe(0)
     expect(after.db.writeTransaction.calls).toBe(0)
+  })
+})
+
+describe('repo.scheduleReconcileRescan — one-time shadow recovery', () => {
+  // Let the deferred run() fire (setTimeout(0) under node, no requestIdleCallback)
+  // and then await the drainWorkspace it enqueues.
+  const settle = async (repo: Repo) => {
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await repo.awaitReconcileRescans()
+  }
+
+  it('re-scans a workspace once, marks it done, and no-ops on the next open', async () => {
+    // The rescan re-reads blocks_synced directly via drainSyncWorkspace; the
+    // server-monotonic gate heals shadows without a separate mode.
+    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue()
+
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith('ws-1')
+
+    // Marker now present → a later open is a no-op.
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-scans each workspace independently (per-workspace marker)', async () => {
+    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace').mockResolvedValue()
+
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    env.repo.scheduleReconcileRescan('ws-2')
+    await settle(env.repo)
+
+    expect(spy.mock.calls.map(call => call[0])).toEqual(['ws-1', 'ws-2'])
+  })
+
+  it('leaves the marker unset on failure so the next open retries', async () => {
+    const spy = vi.spyOn(env.repo, 'drainSyncWorkspace')
+      .mockRejectedValueOnce(new Error('drain failed'))
+      .mockResolvedValue()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    expect(spy).toHaveBeenCalledTimes(1) // failed, marker not written
+
+    env.repo.scheduleReconcileRescan('ws-1')
+    await settle(env.repo)
+    expect(spy).toHaveBeenCalledTimes(2) // retried
   })
 })

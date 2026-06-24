@@ -10,7 +10,7 @@ import { PropertyValueBlockRenderer } from '@/components/renderer/PropertyValueB
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.js'
 import { TypesPageBlockRenderer } from '@/components/renderer/TypesPageBlockRenderer.js'
 import { blockRenderersFacet, createRendererRegistry, RendererContribution } from '@/extensions/core.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.js'
 

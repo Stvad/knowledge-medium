@@ -292,6 +292,17 @@ const rewriteHashTags = (
       : `${lead}[[${label}]]`
   })
 
+// Rewrite Roam hashtag syntax to wikilinks: `#[[multi word]]` → `[[multi
+// word]]` and `#word` → `[[word]]`, leaving hashes inside protected
+// syntax (existing page refs, code, markdown links, URLs) untouched.
+// Exposed so non-content surfaces — e.g. hoisted `isa::` property values
+// — apply the identical hashtag grammar instead of treating `#tag` text
+// as a literal page title.
+export const rewriteRoamHashtags = (content: string): string => {
+  const protectedRanges = collectHashRewriteProtectedRanges(content)
+  return rewriteHashTags(rewriteHashPages(content, protectedRanges), protectedRanges)
+}
+
 export const rewriteRoamContent = (
   raw: string,
   uidMap: ReadonlyMap<string, string>,
@@ -322,9 +333,7 @@ export const rewriteRoamContent = (
   // Hash-tag rewrites operate on the post-block-ref string, but must not
   // touch syntax that merely contains a hash: existing page refs like
   // `[[Promotion #L6]]`, URLs, or code snippets.
-  const protectedRanges = collectHashRewriteProtectedRanges(out)
-  out = rewriteHashPages(out, protectedRanges)
-  out = rewriteHashTags(out, protectedRanges)
+  out = rewriteRoamHashtags(out)
 
   return {content: out, unresolvedBlockUids: [...unresolved], embedPathTargets}
 }

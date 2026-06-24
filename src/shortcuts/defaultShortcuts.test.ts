@@ -1,18 +1,20 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
 import type { EditorView } from '@codemirror/view'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   editorSelection,
   focusBlock,
   focusedBlockLocationProp,
+  isCollapsedProp,
   isEditingProp,
   peekFocusedBlockLocation,
+  selectionStateProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/data/stateBlocks'
@@ -39,6 +41,7 @@ import {
   type BlockShortcutDependencies,
   type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
+import { createSharedBlockActions } from '@/shortcuts/blockActions'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
@@ -49,13 +52,13 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   const repo = new Repo({
     db: h.db,
     cache,
     user: USER,
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
@@ -181,12 +184,15 @@ const isDeleted = async (id: string): Promise<boolean> => {
   return row.deleted === 1
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
   env = await setup()
 })
-afterEach(async () => { await env.h.cleanup() })
+afterEach(async () => { env.repo.stopSyncObserver() })
 
 describe('default CodeMirror shortcuts', () => {
   it('prevents native CodeMirror handling for structural move shortcuts', () => {
@@ -197,12 +203,133 @@ describe('default CodeMirror shortcuts', () => {
     expect(moveBlockDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })
 
-  it('prevents native CodeMirror text selection for block selection expansion shortcuts', () => {
-    const extendSelectionUpAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_up')
-    const extendSelectionDownAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_down')
+  // The tests below pin the edit-mode HANDLER contract (when it takes over vs.
+  // stands aside). They call the handler directly, so they observe only the
+  // handler's own trigger.preventDefault() — NOT the dispatcher's event-option
+  // application. The dispatcher-level guarantee (a binding's preventDefault:
+  // false leaves the native default intact, which is what makes Shift+Arrow
+  // text-selection survive) is covered end-to-end in HotkeyReconciler.test.tsx
+  // ('event options (preventDefault)').
+  it('does not take over (no manual preventDefault, stays in edit mode) when the caret is mid-text', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'prev', content: 'previous'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current text'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
 
-    expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
-    expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const deps = {
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current text', 4), // caret mid-text
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies
+
+    const upTrigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    const downTrigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(deps, upTrigger)
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_down').handler(deps, downTrigger)
+
+    expect(upTrigger.preventDefault).not.toHaveBeenCalled()
+    expect(downTrigger.preventDefault).not.toHaveBeenCalled()
+    // Still editing — block selection was not triggered. Safe to peek
+    // synchronously: the mid-text path returns before any setIsEditing write,
+    // so nothing races the value set above (the edge test, which does write,
+    // uses waitFor).
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('escalates to block selection (preventDefault, exits edit mode) when the caret is at the block edge', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'prev', content: 'previous'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler({
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 0), // caret at block start
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
+    // Escalation actually committed a block selection (and clearEditing folded
+    // the edit-mode exit into the same transaction) — not just exited edit mode.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['prev', 'current'])
+  })
+
+  it('stays in edit mode when Shift+ArrowUp at block start has no previous block to escalate into', async () => {
+    // Editing the surface root itself (e.g. a zoomed-in single block): there
+    // is no previous visible block, so escalation must NOT drop the user out
+    // of edit mode into a dead state with nothing selected.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'only', content: 'only'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'only')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler({
+      block: env.repo.block('only'),
+      editorView: codeMirrorEditorView('only', 0), // caret at start
+      uiStateBlock,
+      scopeRootId: 'only', // focused block IS the surface root → no previous visible block
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    // No neighbour to escalate into → no takeover: the key is left for native
+    // (a no-op at head 0) and we stay in edit mode. preventDefault is the
+    // deterministic signal; isEditing is reliable here too because the
+    // no-target path issues no setIsEditing write to race the value set above.
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('stays in edit mode when Shift+ArrowDown at block end has no next block to escalate into', async () => {
+    // Editing the last block in a panel: there is no next visible block, so
+    // escalation must NOT eject the user from edit mode with nothing selected.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'last', content: 'last'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'last')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_down').handler({
+      block: env.repo.block('last'),
+      editorView: codeMirrorEditorView('last', 'last'.length), // caret at end
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
   it('opens the root preferences block from the global action', async () => {
@@ -344,6 +471,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 'current'.length),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -373,6 +501,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -402,10 +531,12 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('empty'),
       editorView: emptyEditorView(),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
-    expect(env.repo.block('empty').peek()?.deleted).toBe(true)
+    expect(env.repo.block('empty').peek()).toBeNull()
+    expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('prev')
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'prev',
@@ -433,11 +564,13 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
     expect(env.repo.block('parent').peek()?.content).toBe('parent current')
-    expect(env.repo.block('current').peek()?.deleted).toBe(true)
+    expect(env.repo.block('current').peek()).toBeNull()
+    expect(env.repo.block('current').peekRaw()?.deleted).toBe(true)
     expect(await childIds('parent')).toEqual(['child'])
     expect(env.repo.block('child').peek()?.deleted).toBe(false)
     expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('parent')
@@ -468,6 +601,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).not.toHaveBeenCalled()
@@ -496,6 +630,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('current'),
       editorView,
       uiStateBlock,
+      scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     const rootChildren = await childIds('root')
@@ -513,5 +648,150 @@ describe('default CodeMirror shortcuts', () => {
       blockId: 'current',
       start: 0,
     })
+  })
+
+  // Scope-root behaviour: when the focused block is the root of the
+  // surface's visible subtree (e.g. a backlink entry's shown block,
+  // where scopeRootId === the block's own id) a "new block below" must
+  // land as a first child so it stays visible — a sibling would be
+  // created outside the surface. These mirror what happens for a
+  // panel's top-level block but now key off scopeRootId, so any nested
+  // surface gets the same behaviour.
+  it('creates a first child (not a sibling) when Enter is pressed at the end of a scope-root block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'shown', content: 'shown'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'shown')
+
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await action.handler({
+      block: env.repo.block('shown'),
+      editorView: codeMirrorEditorView('shown', 'shown'.length),
+      uiStateBlock,
+      // The shown block is its own scope root (no children yet).
+      scopeRootId: 'shown',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // New block lands as a child of the scope root, not a sibling under root.
+    expect(await childIds('root')).toEqual(['shown'])
+    expect(await childIds('shown')).toHaveLength(1)
+  })
+
+  it('reveals a COLLAPSED scope-root block when Enter creates its first child', async () => {
+    // A nested scope root (backlink/embed) isn't isTopLevel, so a
+    // collapsed root would hide the new child inside a closed
+    // Collapsible. Enter must reveal the root so the inserted+focused
+    // block is visible.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'shown', content: 'shown'})
+    await env.repo.mutate.createChild({parentId: 'shown', id: 'existing', content: 'existing'})
+    await env.repo.mutate.setProperty({id: 'shown', schema: isCollapsedProp, value: true})
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'shown')
+
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await action.handler({
+      block: env.repo.block('shown'),
+      editorView: codeMirrorEditorView('shown', 'shown'.length),
+      uiStateBlock,
+      scopeRootId: 'shown',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // Root revealed, and the new block is its first child (above 'existing').
+    expect(env.repo.block('shown').peek()?.properties[isCollapsedProp.name]).toBe(false)
+    const children = await childIds('shown')
+    expect(children).toHaveLength(2)
+    expect(children[1]).toBe('existing')
+  })
+
+  it('keeps the before-text in a scope-root block and pushes the suffix into a new first child on mid-text split', async () => {
+    // A normal mid-text split makes the before-text a preceding sibling;
+    // at the scope root that sibling is outside the surface, so the root
+    // keeps the before-text and the continuation becomes its first child.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'shown', content: 'left right'})
+    await env.repo.mutate.createChild({parentId: 'shown', id: 'existing', content: 'existing'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'shown')
+
+    const editorView = codeMirrorEditorView('left right', 'left '.length)
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await action.handler({
+      block: env.repo.block('shown'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'shown',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // Root unchanged in the parent's children; before-text stays in it.
+    expect(await childIds('root')).toEqual(['shown'])
+    expect(env.repo.block('shown').peek()?.content).toBe('left ')
+
+    // Suffix lands as the new first child, ahead of the existing child.
+    const children = await childIds('shown')
+    const suffixId = children[0]
+    expect(children).toEqual([suffixId, 'existing'])
+    expect(env.repo.block(suffixId).peek()?.content).toBe('right')
+
+    // Editor and focus follow the suffix block.
+    expect(editorView.state.doc.toString()).toBe('left ')
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe(suffixId)
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({blockId: suffixId, start: 0})
+  })
+
+  it('makes Tab a no-op on a scope-root block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'shown', content: 'shown'})
+
+    const uiStateBlock = env.repo.block('ui')
+    const action = findEditModeAction(env.repo, 'edit.cm.indent_block')
+    await action.handler({
+      block: env.repo.block('shown'),
+      editorView: codeMirrorEditorView('shown', 0),
+      uiStateBlock,
+      // 'shown' is the scope root even though it has a previous sibling
+      // ('first') in the real tree — indenting would escape the surface.
+      scopeRootId: 'shown',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // Unchanged: still a direct child of root, not reparented under 'first'.
+    expect(await childIds('root')).toEqual(['first', 'shown'])
+    expect(await childIds('first')).toEqual([])
+  })
+
+  it('deletes a block even without a scopeRootId (non-React action runners)', async () => {
+    // scopeRootId only locates the post-delete focus target; imperative
+    // runners (agent-runtime bridge) may not supply one, but the delete
+    // itself must still happen.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'victim', content: 'x'})
+
+    const {deleteBlock} = createSharedBlockActions({repo: env.repo})
+    await deleteBlock.handler(
+      {block: env.repo.block('victim'), uiStateBlock: env.repo.block('ui')},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    expect(env.repo.block('victim').peek()).toBeNull()
+    expect(env.repo.block('victim').peekRaw()?.deleted).toBe(true)
   })
 })

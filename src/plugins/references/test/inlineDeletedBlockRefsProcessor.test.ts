@@ -1,0 +1,265 @@
+// @vitest-environment node
+/**
+ * Same-tx inlining of a deleted block's content into the blocks that
+ * referenced it — exercised end-to-end through the `core.delete` mutator.
+ * Deleting a block rewrites every `((id))` / `!((id))` / `[label](((id)))`
+ * mark in other blocks to the text it displayed and drops the now-stale
+ * block-ref entry from their `references`, atomically with the delete.
+ */
+
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { ChangeScope, normalizeReferences, type BlockData } from '@/data/api'
+import { BlockCache } from '@/data/blockCache'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
+import { Repo } from '@/data/repo'
+import { aliasesProp } from '@/data/properties'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
+import { referencesDataExtension } from '../dataExtension.ts'
+
+const WS = 'ws-1'
+
+// `((id))` only parses as a block-ref when `id` is UUID-shaped, so the
+// deleted blocks use real UUIDs; referrers/parents can use short ids.
+const D = '11111111-1111-4111-8111-111111111111'
+const C = '22222222-2222-4222-8222-222222222222'
+const OTHER = '33333333-3333-4333-8333-333333333333'
+
+interface Harness {
+  h: TestDb
+  repo: Repo
+  read(id: string): BlockData | undefined
+}
+
+const setup = async (): Promise<Harness> => {
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
+  const cache = new BlockCache()
+  let timeCursor = 1700_000_000_000
+  let idCursor = 0
+  const repo = new Repo({
+    db: h.db,
+    cache,
+    user: {id: 'user-1'},
+    now: () => ++timeCursor,
+    newId: () => `gen-${++idCursor}`,
+  })
+  // The constructor installs a kernel-only runtime; this swap REPLACES it
+  // with the kernel + references + alias registry these tests exercise.
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    referencesDataExtension,
+    aliasDataExtension,
+  ]))
+  // Undo/redo are scoped to the active workspace (issue #186).
+  repo.setActiveWorkspaceId(WS)
+  return {
+    h,
+    repo,
+    read: id => cache.getSnapshot(id),
+  }
+}
+
+let sharedDb: TestDb
+let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+beforeEach(async () => { env = await setup() })
+afterEach(() => { env.repo.stopSyncObserver() })
+
+const aliasProperty = (aliases: readonly string[]) => ({
+  [aliasesProp.name]: aliasesProp.codec.encode([...aliases]),
+})
+
+describe('references.inlineDeletedBlockReferences', () => {
+  it('inlines a deleted block\'s content into a referrer and drops the block-ref', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'deleted body'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `before ((${D})) after`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read(D)!.deleted).toBe(true)
+    expect(env.read('s')!.content).toBe('before deleted body after')
+    expect(env.read('s')!.references).toEqual([])
+  })
+
+  it('inlines plain and embed marks as content but keeps an aliased mark\'s label', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'BODY'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `ref ((${D})) embed !((${D})) alias [label](((${D})))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('s')!.content).toBe('ref BODY embed BODY alias label')
+    expect(env.read('s')!.references).toEqual([])
+  })
+
+  it('only rewrites refs to the deleted block — wikilink and other block refs survive', async () => {
+    await env.repo.tx(async tx => {
+      // D carries the alias `Page`, so parse resolves `[[Page]]` to D
+      // (a wikilink ref, alias !== id) alongside the `((D))` block ref.
+      await tx.create({
+        id: D, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'DBODY', properties: aliasProperty(['Page']),
+      })
+      await tx.create({id: OTHER, workspaceId: WS, parentId: null, orderKey: 'a1', content: 'other'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a2',
+        content: `[[Page]] ((${D})) and ((${OTHER}))`,
+        references: [
+          {id: D, alias: 'Page'},
+          {id: D, alias: D},
+          {id: OTHER, alias: OTHER},
+        ],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    // `((D))` inlined; `[[Page]]` (wikilink to D) and `((OTHER))` untouched.
+    expect(env.read('s')!.content).toBe(`[[Page]] DBODY and ((${OTHER}))`)
+    expect(env.read('s')!.references).toEqual(normalizeReferences([
+      {id: D, alias: 'Page'},
+      {id: OTHER, alias: OTHER},
+    ]))
+  })
+
+  it('inlines an embed of a block-with-children as the root content only, not the subtree', async () => {
+    // Decision: `!((id))` renders the whole subtree, but on delete we inline
+    // only the deleted block's own content line — the subtree is deleted too,
+    // and dumping its flat text into the referrer is not what we want.
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'ROOT'})
+      await tx.create({id: C, workspaceId: WS, parentId: D, orderKey: 'a0', content: 'CHILD'})
+      await tx.create({
+        id: 'x', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `embed !((${D}))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('x')!.content).toBe('embed ROOT')
+    expect(env.read('x')!.references).toEqual([])
+  })
+
+  it('inlines refs to every block in a deleted subtree (parent and child)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'PARENT'})
+      await tx.create({id: C, workspaceId: WS, parentId: D, orderKey: 'a0', content: 'CHILD'})
+      await tx.create({
+        id: 'x', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `((${D})) | ((${C}))`,
+        references: [{id: D, alias: D}, {id: C, alias: C}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read(D)!.deleted).toBe(true)
+    expect(env.read(C)!.deleted).toBe(true)
+    expect(env.read('x')!.content).toBe('PARENT | CHILD')
+    expect(env.read('x')!.references).toEqual([])
+  })
+
+  it('does not inline into a referrer that is itself being deleted in the subtree', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'PARENT'})
+      await tx.create({
+        id: 'c', workspaceId: WS, parentId: D, orderKey: 'a0',
+        content: `child sees ((${D}))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    // The dying child is left as-is: inlining into a tombstone is pointless,
+    // and the staged-state guard skips it.
+    expect(env.read('c')!.deleted).toBe(true)
+    expect(env.read('c')!.content).toBe(`child sees ((${D}))`)
+    expect(env.read('c')!.references).toEqual([{id: D, alias: D}])
+  })
+
+  it('resolves nested refs between deleted blocks — no fresh dangling ref is created', async () => {
+    // P's own content references C; both are deleted together (subtree).
+    // The external referrer x must end up with C's content inlined too, NOT
+    // a literal `((C))` mark that post-commit parse would turn into a new
+    // dangling reference.
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: D, workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: `parent refs ((${C}))`,
+      })
+      await tx.create({id: C, workspaceId: WS, parentId: D, orderKey: 'a0', content: 'child body'})
+      await tx.create({
+        id: 'x', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `see ((${D}))`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('x')!.content).toBe('see parent refs child body')
+    expect(env.read('x')!.references).toEqual([])
+  })
+
+  it('inlines an empty deleted block to empty text (the ref resolves to nothing)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `before ((${D})) after`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+
+    expect(env.read('s')!.content).toBe('before  after')
+    expect(env.read('s')!.references).toEqual([])
+  })
+
+  it('inline rides on the delete\'s undo step — undo restores referrer and target together', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: D, workspaceId: WS, parentId: null, orderKey: 'a0', content: 'BODY'})
+      await tx.create({
+        id: 's', workspaceId: WS, parentId: null, orderKey: 'a1',
+        content: `pre ((${D})) post`,
+        references: [{id: D, alias: D}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    await env.repo.mutate.delete({id: D})
+    expect(env.read('s')!.content).toBe('pre BODY post')
+    expect(env.read('s')!.references).toEqual([])
+
+    await env.repo.undo(ChangeScope.BlockDefault)
+    expect(env.read(D)!.deleted).toBe(false)
+    expect(env.read('s')!.content).toBe(`pre ((${D})) post`)
+    expect(env.read('s')!.references).toEqual([{id: D, alias: D}])
+  })
+})

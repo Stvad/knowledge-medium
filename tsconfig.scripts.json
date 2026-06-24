@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.scripts.tsbuildinfo",
+    // scripts run under Node (vite-node / tsx), so they need the Node globals
+    // and `node:*` modules that the browser-oriented app config omits.
+    "types": ["node"]
+  },
+  "include": ["scripts"],
+  // scripts/bench/* is quarantined dead code: it predates the Layout B sync
+  // redesign (raw-maps `blocks` instead of `blocks_synced`, drives the removed
+  // row-events tail, imports the relocated `@/data/internals/repo`) so it
+  // neither compiles nor runs against the current data layer. Its `bench` npm
+  // script has been removed so there's no live entry point to broken code;
+  // it's kept (not deleted) only as a base for a future harness resurrection
+  // against `createTestDb`'s Layout B setup. Everything else under scripts/ is
+  // part of the `tsc -b` gate.
+  "exclude": ["scripts/bench"]
+}

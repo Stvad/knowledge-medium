@@ -1,4 +1,4 @@
-import { memoize } from 'lodash'
+import { memoize } from 'lodash-es'
 import { v5 as uuidv5 } from 'uuid'
 import type { Block } from '@/data/block.js'
 import { ChangeScope } from '@/data/api'
@@ -33,7 +33,7 @@ export const getOrCreateShortcutsBlock = memoize(
     const shortcutsId = shortcutsBlockId(userBlock.id)
 
     const live = await repo.load(shortcutsId)
-    if (live && !live.deleted) return repo.block(shortcutsId)
+    if (live) return repo.block(shortcutsId)
 
     const journal = await getOrCreateJournalBlock(repo, userData.workspaceId)
 
@@ -50,6 +50,7 @@ export const getOrCreateShortcutsBlock = memoize(
         parentId: userBlock.id,
         orderKey: keyAtEnd(siblings.at(-1)?.orderKey ?? null),
         freshContent: SHORTCUTS_BLOCK_CONTENT,
+        systemMint: true,
       })
 
       // Only seed default children on first creation / restore of the
@@ -63,6 +64,7 @@ export const getOrCreateShortcutsBlock = memoize(
         parentId: shortcutsId,
         orderKey: keyAtEnd(),
         freshContent: JOURNAL_SHORTCUT_CONTENT,
+        systemMint: true,
         onInsertedOrRestored: async (tx, id) => {
           await tx.update(id, {
             references: [{id: journal.id, alias: JOURNAL_SHORTCUT_ALIAS}],

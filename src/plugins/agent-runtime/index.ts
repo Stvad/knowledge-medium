@@ -1,17 +1,16 @@
 import {
   actionsFacet,
   appEffectsFacet,
-  appMountsFacet,
   type AppEffect,
-  type AppMountContribution,
 } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
-import { AgentTokensDialogMount, openAgentTokensDialogEvent } from './AgentTokensDialog.tsx'
+import { openDialog } from '@/utils/dialogs.js'
+import { AgentTokensDialog } from './AgentTokensDialog.tsx'
 import { agentRuntimeBridgeRestartEvent, startAgentRuntimeBridge } from './bridge.ts'
 
-export { openAgentTokensDialogEvent } from './AgentTokensDialog.tsx'
 export { agentRuntimeBridgeRestartEvent } from './bridge.ts'
 
 export const agentRuntimeBridgeEffect: AppEffect = {
@@ -19,16 +18,14 @@ export const agentRuntimeBridgeEffect: AppEffect = {
   start: startAgentRuntimeBridge,
 }
 
-export const agentRuntimeTokensDialogMount: AppMountContribution = {
-  id: 'agent-runtime.tokens-dialog',
-  component: AgentTokensDialogMount,
-}
-
 export const restartAgentRuntimeBridgeAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: 'restart_agent_runtime_bridge',
   description: 'Restart agent runtime bridge',
   context: ActionContextTypes.GLOBAL,
+  // Genuine broadcast to the running bridge effect (not a dialog/mount):
+  // the poll loop listens for this to wake and re-register.
   handler: () => {
+    // eslint-disable-next-line no-restricted-syntax -- genuine broadcast: wakes the running bridge poll loop
     window.dispatchEvent(new CustomEvent(agentRuntimeBridgeRestartEvent))
   },
 }
@@ -38,7 +35,7 @@ export const manageAgentTokensAction: ActionConfig<typeof ActionContextTypes.GLO
   description: 'Manage agent runtime tokens',
   context: ActionContextTypes.GLOBAL,
   handler: () => {
-    window.dispatchEvent(new CustomEvent(openAgentTokensDialogEvent))
+    void openDialog(AgentTokensDialog)
   },
 }
 
@@ -47,8 +44,10 @@ export const agentRuntimePlugin: AppExtension = systemToggle({
   name: 'Agent runtime',
   description: 'Bridge that lets external agents drive the app through a typed command protocol (also exposes per-token management UI).',
 }).of([
+  // The tokens dialog opens via `openDialog`; pull DialogHost in
+  // (deduped by reference).
+  dialogAppMountExtension,
   appEffectsFacet.of(agentRuntimeBridgeEffect, {source: 'agent-runtime'}),
-  appMountsFacet.of(agentRuntimeTokensDialogMount, {source: 'agent-runtime'}),
   actionsFacet.of(restartAgentRuntimeBridgeAction, {source: 'agent-runtime'}),
   actionsFacet.of(manageAgentTokensAction, {source: 'agent-runtime'}),
 ])

@@ -115,22 +115,28 @@ export const manyAncestorsSql = (idCount: number): string => {
 /** Existence check: is :potentialAncestor an ancestor of :id?
  *  Used by `tx.move`'s cycle-validation: would the new parent be a
  *  descendant of `id`? Parameter order in the SQL: `?, ?` for
- *  `(id, potentialAncestor)`. */
+ *  `(id, potentialAncestor)`.
+ *
+ *  Deliberately does NOT filter `deleted = 0`: cycle-freedom is a
+ *  structural invariant of `parent_id` that is independent of
+ *  soft-delete. A soft-deleted node on the ancestor chain still forms a
+ *  real edge — stopping the walk at it would let `move()` create a
+ *  durable structural cycle that becomes a live cycle once the deleted
+ *  node is restored (see issue #183). */
 export const IS_DESCENDANT_OF_SQL = `
   WITH RECURSIVE chain AS (
     SELECT id, parent_id,
            '!' || hex(id) || '/' AS path,
            0 AS depth
       FROM blocks
-     WHERE id = ? AND deleted = 0
+     WHERE id = ?
     UNION ALL
     SELECT b.id, b.parent_id,
            chain.path || '!' || hex(b.id) || '/',
            chain.depth + 1
       FROM blocks AS b
       JOIN chain ON chain.parent_id = b.id
-     WHERE b.deleted = 0
-       AND chain.depth < 100
+     WHERE chain.depth < 100
        AND INSTR(chain.path, '!' || hex(b.id) || '/') = 0
   )
   SELECT 1 AS hit FROM chain WHERE id = ? LIMIT 1
@@ -160,7 +166,13 @@ export const IS_DESCENDANT_OF_SQL = `
  *
  *  Why scoped to affected ids (not all blocks): cycle scans are O(n)
  *  per starting row and we don't need to find every cycle in the DB
- *  — only the ones the just-applied sync writes might have closed. */
+ *  — only the ones the just-applied sync writes might have closed.
+ *
+ *  Why no `deleted = 0` filter: a cycle is a structural property of
+ *  `parent_id` regardless of soft-delete. A soft-deleted node on the
+ *  closing chain still forms a real edge, and filtering it out would
+ *  leave the same blind spot that let the cycle through `move()` in the
+ *  first place (issue #183). The detector must see the full structure. */
 export const cycleScanSql = (idCount: number): string => {
   if (idCount <= 0) throw new Error('cycleScanSql: idCount must be >= 1')
   const placeholders = Array(idCount).fill('?').join(',')
@@ -168,12 +180,12 @@ export const cycleScanSql = (idCount: number): string => {
     WITH RECURSIVE chain(start_id, id, parent_id, depth) AS (
       SELECT id, id, parent_id, 0
         FROM blocks
-       WHERE id IN (${placeholders}) AND deleted = 0
+       WHERE id IN (${placeholders})
       UNION ALL
       SELECT chain.start_id, b.id, b.parent_id, chain.depth + 1
         FROM chain
         JOIN blocks AS b ON b.id = chain.parent_id
-       WHERE b.deleted = 0 AND chain.depth < 100
+       WHERE chain.depth < 100
     ),
     cyclic AS (
       SELECT DISTINCT start_id FROM chain WHERE depth > 0 AND id = start_id

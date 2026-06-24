@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { editorSelection } from '@/data/properties'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   __resetLayoutSessionIdForTesting,
   getLayoutSessionId,
@@ -22,9 +22,17 @@ import { __resetAppIntentForTesting, consumeAppIntent, formatSharedContent } fro
 import {
   dailyNotesDataExtension,
   getOrCreateDailyNote,
-  openDailyNotePickerEvent,
+  OPEN_DAILY_NOTE_PICKER_ACTION_ID,
 } from '@/plugins/daily-notes'
-import { toggleQuickFindEvent } from '@/plugins/quick-find'
+import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
+import { runActionById } from '@/shortcuts/runAction.js'
+
+vi.mock('@/shortcuts/runAction.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/shortcuts/runAction.js')>()),
+  runActionById: vi.fn(),
+}))
+
+const runActionByIdMock = vi.mocked(runActionById)
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -35,14 +43,14 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   let id = 0
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: USER,
     newId: () => `gen-${++id}`,
-    registerKernelProcessors: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -60,11 +68,15 @@ const setLocationSearch = (search: string): void => {
   window.history.replaceState(null, '', `/${search}`)
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
   __resetAppIntentForTesting()
+  runActionByIdMock.mockClear()
   vi.useFakeTimers()
   vi.setSystemTime(new Date(2026, 4, 13, 12))
   setLocationSearch('')
@@ -74,7 +86,7 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   setLocationSearch('')
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 const seedLandingLayout = async () => {
@@ -184,37 +196,31 @@ describe('consumeAppIntent', () => {
     expect(dailyChildren).toHaveLength(1)
   })
 
-  it('on intent=open-picker fires the daily-note picker event and clears params', async () => {
+  it('on intent=open-picker runs the daily-note picker action and clears params', async () => {
     const {daily, layoutSession} = await seedLandingLayout()
     setLocationSearch('?intent=open-picker')
-    const handler = vi.fn()
-    window.addEventListener(openDailyNotePickerEvent, handler)
 
     await consumeAppIntent(env.repo, layoutSession)
 
-    expect(handler).toHaveBeenCalledTimes(1)
+    expect(runActionByIdMock).toHaveBeenCalledTimes(1)
+    expect(runActionByIdMock.mock.calls[0][0]).toBe(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
     expect(window.location.search).toBe('')
     // Picker is a UI-only intent — must not create a block.
     const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(0)
-
-    window.removeEventListener(openDailyNotePickerEvent, handler)
   })
 
-  it('on intent=quick-find fires the quick-find toggle and clears params', async () => {
+  it('on intent=quick-find runs the quick-find action and clears params', async () => {
     const {daily, layoutSession} = await seedLandingLayout()
     setLocationSearch('?intent=quick-find')
-    const handler = vi.fn()
-    window.addEventListener(toggleQuickFindEvent, handler)
 
     await consumeAppIntent(env.repo, layoutSession)
 
-    expect(handler).toHaveBeenCalledTimes(1)
+    expect(runActionByIdMock).toHaveBeenCalledTimes(1)
+    expect(runActionByIdMock.mock.calls[0][0]).toBe(QUICK_FIND_ACTION_ID)
     expect(window.location.search).toBe('')
     const dailyChildren = await contentChildIds(daily.id)
     expect(dailyChildren).toHaveLength(0)
-
-    window.removeEventListener(toggleQuickFindEvent, handler)
   })
 
   it('preserves URL params when the dispatch no-ops in read-only mode', async () => {

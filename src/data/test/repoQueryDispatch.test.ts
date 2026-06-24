@@ -18,9 +18,9 @@
  *   - empty-args queries dispatch + identity-stabilize correctly
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   defineQuery,
   QueryNotRegisteredError,
@@ -35,22 +35,24 @@ import { Repo } from '../repo'
 let h: TestDb
 let cache: BlockCache
 let repo: Repo
-beforeEach(async () => {
-  h = await createTestDb()
+// These tests never write blocks (echo queries only call ctx.depend and
+// return), so one shared DB is safe; a fresh Repo per test keeps the
+// query registry / handle store / cache isolated. This avoids paying the
+// ~500ms PowerSync open cost on every one of the 23 cases.
+beforeAll(async () => { h = await createTestDb() })
+afterAll(async () => { await h.cleanup() })
+beforeEach(() => {
   cache = new BlockCache()
   repo = new Repo({
     db: h.db,
     cache,
     user: {id: 'user-1'},
     // Empty registries — chunk A test surface is the dispatcher itself,
-    // not any registered query. Kernel mutators / processors stay off
-    // for the same reason.
-    registerKernelMutators: false,
-    registerKernelProcessors: false,
-    registerKernelQueries: false,
+    // not any registered query. Skip the kernel-runtime install so the
+    // registries start empty.
+    installKernelRuntime: false,
   })
 })
-afterEach(async () => { await h.cleanup() })
 
 const makeEchoQuery = (name: string): Query<{value: string}, string> =>
   defineQuery<{value: string}, string>({

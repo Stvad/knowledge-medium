@@ -1,16 +1,16 @@
-import { defineFacet } from '@/extensions/facet.js'
-import type { FacetRuntime } from '@/extensions/facet.js'
+import { dedupById, defineFacet, keyedMapFacet } from '@/facets/facet.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import type { Repo } from '../data/repo'
 import type { Block } from '../data/block'
+import type { ProcessorRejection } from '@/data/api'
 import {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
-  type ActionDecorator,
-  type ActionOverride,
+  type ActionTransform,
 } from '@/shortcuts/types.js'
 import { BlockRenderer, RendererRegistry } from '@/types.js'
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactElement } from 'react'
 
 export interface AppEffectContext {
   repo: Repo
@@ -49,6 +49,32 @@ export type WorkspaceLandingResolver = (
 
 export type AppEffectCleanup = () => void | Promise<void>
 
+/**
+ * A long-lived side-effect (subscription, interval, window listener, the
+ * agent-runtime bridge) tied to the extension lifecycle. `start` runs once
+ * when the effect first appears and returns an optional cleanup.
+ *
+ * Lifecycle contract — the reconciler restarts (cleanup + re-`start`) an
+ * effect only when:
+ *   1. `repo` / `workspaceId` / `safeMode` change (values `start` captures
+ *      directly, not through the runtime), or
+ *   2. the effect's *contribution object identity* changes — i.e. a
+ *      different `AppEffect` reference is registered under the same `id`.
+ *
+ * Otherwise the effect keeps running across runtime swaps (extension
+ * toggles, dynamic-plugin loads); the `runtime` it received is a live
+ * handle that re-points itself at the fresh runtime, so `read` /
+ * `onFacetChange` / `setRuntimeContributions` stay valid without a restart.
+ *
+ * This means the AppEffect object MUST be a stable reference across
+ * resolves unless its code actually changed. Build it once at module scope
+ * (or memoize it); do NOT construct `{id, start}` inline inside a
+ * function-valued extension, and for dynamic extensions export an array,
+ * not a function — a fresh object every resolve reads as "identity
+ * changed" and silently restarts the effect on every unrelated swap.
+ * Duplicate `id`s are last-wins with a warn (per the facet convention).
+ * Cleanup must be idempotent and fast.
+ */
 export interface AppEffect {
   id: string
   start: (
@@ -121,17 +147,11 @@ export const isActionConfig = (value: unknown): value is ActionConfig =>
   typeof value.handler === 'function' &&
   (value.defaultBinding === undefined || isShortcutBindingInput(value.defaultBinding))
 
-const isActionOverride = (value: unknown): value is ActionOverride =>
+const isActionTransform = (value: unknown): value is ActionTransform =>
   isRecord(value) &&
   typeof value.actionId === 'string' &&
   (value.context === undefined || isActionContextType(value.context)) &&
   typeof value.apply === 'function'
-
-const isActionDecorator = (value: unknown): value is ActionDecorator =>
-  isRecord(value) &&
-  typeof value.actionId === 'string' &&
-  (value.context === undefined || isActionContextType(value.context)) &&
-  typeof value.decorate === 'function'
 
 export const createRendererRegistry = (
   contributions: readonly RendererContribution[],
@@ -160,14 +180,14 @@ export const actionsFacet = defineFacet<ActionConfig, readonly ActionConfig[]>({
   validate: isActionConfig,
 })
 
-export const actionOverridesFacet = defineFacet<ActionOverride, readonly ActionOverride[]>({
-  id: 'core.action-overrides',
-  validate: isActionOverride,
-})
-
-export const actionDecoratorsFacet = defineFacet<ActionDecorator, readonly ActionDecorator[]>({
-  id: 'core.action-decorators',
-  validate: isActionDecorator,
+/**
+ * The one facet for contributing action transforms (replace / wrap /
+ * unbind). The effective-actions pipeline runs every contribution in a
+ * single ordered pass.
+ */
+export const actionTransformsFacet = defineFacet<ActionTransform, readonly ActionTransform[]>({
+  id: 'core.action-transforms',
+  validate: isActionTransform,
 })
 
 export const isAppEffect = (value: unknown): value is AppEffect =>
@@ -185,18 +205,47 @@ export const isAppMountContribution = (value: unknown): value is AppMountContrib
   typeof value.id === 'string' &&
   typeof value.component === 'function'
 
+// Dedup by logical `id` (last-wins) rather than the default keep-all: an
+// app mount is rendered once per contribution keyed by `id` (see
+// `AppMounts` in AppRuntimeProvider), and mounts are minted fresh inside
+// plugin factories, so resolver identity dedup can't catch a logical
+// duplicate — two same-id contributions would otherwise double-mount
+// (#64). See `dedupById` for the tie-break rationale.
 export const appMountsFacet = defineFacet<AppMountContribution, readonly AppMountContribution[]>({
   id: 'core.app-mounts',
+  combine: dedupById('core.app-mounts'),
   validate: isAppMountContribution,
 })
+
+/** A plugin's toast for a `ProcessorRejection` code it emits. The plugin
+ *  owns the body (copy, actions); core owns the imperative envelope
+ *  (`showCustom`, duration) and the unknown-code fallback — see
+ *  `extensions/processorRejectionToast`. Keyed by `code` (last-wins). */
+export interface RejectionToastContribution {
+  /** `ProcessorRejection.code` this renderer handles. */
+  code: string
+  /** Toast body for `error`. `toastId` lets the body dismiss itself;
+   *  `repo` lets action buttons dispatch. Returning an element for
+   *  malformed meta (rather than throwing) keeps a can't-happen case
+   *  visible. */
+  render: (error: ProcessorRejection, repo: Repo, toastId: string | number) => ReactElement
+}
+
+export const rejectionToastFacet = keyedMapFacet<RejectionToastContribution>(
+  'core.rejection-toasts',
+  c => c.code,
+)
 
 export const isPanelMountContribution = (value: unknown): value is PanelMountContribution =>
   isRecord(value) &&
   typeof value.id === 'string' &&
   typeof value.component === 'function'
 
+// Per-panel render mount keyed by `id` — same double-mount hazard as
+// `appMountsFacet`, so dedup by id (last-wins).
 export const panelMountsFacet = defineFacet<PanelMountContribution, readonly PanelMountContribution[]>({
   id: 'core.panel-mounts',
+  combine: dedupById('core.panel-mounts'),
   validate: isPanelMountContribution,
 })
 
@@ -209,8 +258,15 @@ export const isHeaderItemContribution = (value: unknown): value is HeaderItemCon
   isHeaderItemRegion(value.region) &&
   typeof value.component === 'function'
 
+// Header items are split into `start`/`end` regions and each region is
+// rendered as its own list keyed by `id` (see Header.tsx), so the real
+// render-key scope is `(region, id)` — dedup on that, NOT plain `id`.
+// Plain-id dedup would wrongly collapse a `start` and an `end` item that
+// share a logical id (dropping one) even though there's no key collision;
+// region-scoped dedup still catches a genuine same-region double-render.
 export const headerItemsFacet = defineFacet<HeaderItemContribution, readonly HeaderItemContribution[]>({
   id: 'core.header-items',
+  combine: dedupById('core.header-items', item => `${item.region}:${item.id}`),
   validate: isHeaderItemContribution,
 })
 

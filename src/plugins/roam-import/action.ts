@@ -6,6 +6,8 @@ import {
 import { parseAppHash } from '@/utils/routing.js'
 import { importRoam } from './import.ts'
 import { showProgress } from '@/utils/toast.js'
+import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { runAnalyzeIfStale } from '@/data/maintenance'
 import type { RoamExport } from './types.ts'
 
 export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
@@ -67,6 +69,16 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
             `${summary.pagesMerged} merged, ${summary.pagesDaily} daily, ` +
             `${summary.blocksWritten} blocks (${(summary.durationMs / 1000).toFixed(1)}s)`,
           )
+          // A bulk import can multiply the workspace; the planner's
+          // `sqlite_stat1` is now stale and would mis-rank join orders
+          // until the next boot. Re-check drift at idle so good plans land
+          // this session without a reload (no-op unless the import grew
+          // `blocks` past the drift factor — see clientSchema.runAnalyzeIfStale).
+          scheduleIdle(() => {
+            void runAnalyzeIfStale(repo.db).catch(error => {
+              console.warn('[roam-import] ANALYZE check failed:', error)
+            })
+          })
         } catch (err) {
           console.error('[roam-import] failed:', err)
           banner.fail(`Roam import failed: ${err instanceof Error ? err.message : String(err)}`)

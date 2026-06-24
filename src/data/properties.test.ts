@@ -21,6 +21,7 @@ const blockData = (types: readonly string[]): BlockData => ({
   references: [],
   createdAt: 0,
   updatedAt: 0,
+  userUpdatedAt: 0,
   createdBy: 'user-1',
   updatedBy: 'user-1',
   deleted: false,

@@ -1,7 +1,7 @@
 import type { BlockData } from '@/data/api'
 import { PAGE_TYPE } from '@/data/blockTypes.js'
 import { hasBlockType } from '@/data/properties.js'
-import type { ContentStrategy } from '@/data/internals/kernelMutators.js'
+import type { ContentStrategy } from '@/data/mutators'
 
 /**
  * Pick the `contentStrategy` for a binary merge based on the two blocks'

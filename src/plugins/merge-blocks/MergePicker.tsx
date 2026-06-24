@@ -1,6 +1,7 @@
 /**
  * Picker modal for "merge this block into…". Opened via
- * `openMergePicker(event)` from the `merge_blocks.merge_into` action.
+ * `openDialog(MergePicker, {sourceBlockId, workspaceId})` from the
+ * `merge_blocks.merge_into` action.
  *
  * Direction: the currently-focused block is the SOURCE (folds into the
  * pick and is soft-deleted); the picked block is the TARGET. Picker
@@ -12,7 +13,7 @@
  * (page-involving merges keep target, outline-block merges concat) so
  * the kernel `core.merge` mutator stays generic.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   CommandDialog,
   CommandInput,
@@ -30,7 +31,7 @@ import {
   type LinkTargetAliasMatch,
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.js'
-import { openMergePickerEvent, type OpenMergePickerEventDetail } from './events.ts'
+import type { DialogContextProps } from '@/utils/dialogs.js'
 import { pickMergeContentStrategy } from './strategy.ts'
 
 const SEARCH_LIMIT = 25
@@ -54,7 +55,17 @@ interface SearchResultState {
   blocks: LinkTargetBlockMatch[]
 }
 
-export function MergePicker() {
+export interface MergePickerProps {
+  sourceBlockId: string
+  workspaceId: string
+}
+
+export function MergePicker({
+  sourceBlockId,
+  workspaceId,
+  resolve,
+  cancel,
+}: DialogContextProps<void> & MergePickerProps) {
   const repo = useRepo()
   const navigate = useNavigate()
 
@@ -68,38 +79,35 @@ export function MergePicker() {
     blocks: [],
   })
 
-  const dismiss = () => {
-    setSession(null)
-    setQuery('')
-    setValue('')
-    setPending(false)
-    setSearchResults({query: '', aliases: [], blocks: []})
-  }
-
+  // The finalize callbacks are fresh closures from the DialogHost on
+  // each of its renders; read them through a ref so the load effect can
+  // bail without depending on (and re-running for) their identity.
+  const cancelRef = useRef(cancel)
   useEffect(() => {
-    const handleOpen = (event: Event) => {
-      const detail = (event as CustomEvent<OpenMergePickerEventDetail>).detail
-      if (!detail) return
-      void (async () => {
-        const sourceBlock = repo.block(detail.sourceBlockId)
-        const data = sourceBlock.peek() ?? await sourceBlock.load()
-        if (!data) {
-          console.error(`[merge-blocks] source ${detail.sourceBlockId} not found`)
-          return
-        }
-        setSession({
-          sourceBlockId: detail.sourceBlockId,
-          workspaceId: detail.workspaceId,
-          sourceIsPage: hasBlockType(data, PAGE_TYPE),
-        })
-        setQuery('')
-        setValue('')
-        setPending(false)
-      })()
-    }
-    window.addEventListener(openMergePickerEvent, handleOpen)
-    return () => window.removeEventListener(openMergePickerEvent, handleOpen)
-  }, [repo])
+    cancelRef.current = cancel
+  })
+
+  // Resolve the source block once on mount to decide page-vs-block
+  // search filtering. Closes the dialog if the source vanished.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const sourceBlock = repo.block(sourceBlockId)
+      const data = sourceBlock.peek() ?? await sourceBlock.load()
+      if (cancelled) return
+      if (!data) {
+        console.error(`[merge-blocks] source ${sourceBlockId} not found`)
+        cancelRef.current()
+        return
+      }
+      setSession({
+        sourceBlockId,
+        workspaceId,
+        sourceIsPage: hasBlockType(data, PAGE_TYPE),
+      })
+    })()
+    return () => { cancelled = true }
+  }, [repo, sourceBlockId, workspaceId])
 
   const trimmedQuery = query.trim()
 
@@ -157,7 +165,7 @@ export function MergePicker() {
       // come later if this surface grows teeth.
       console.error('[merge-blocks] merge failed', error)
     } finally {
-      dismiss()
+      resolve()
     }
   }
 
@@ -175,9 +183,13 @@ export function MergePicker() {
     : []
 
   return (
+    // Unlike the other openDialog dialogs (which render with a bare
+    // `open`), this one gates visibility on `session` — the async
+    // source-block load that decides page-vs-block search — so the
+    // CommandDialog doesn't flash before `sourceIsPage` is known.
     <CommandDialog
       open={session !== null}
-      onOpenChange={isOpen => { if (!isOpen) dismiss() }}
+      onOpenChange={isOpen => { if (!isOpen) cancel() }}
       title={session.sourceIsPage ? 'Merge this page into…' : 'Merge this block into…'}
       description={
         session.sourceIsPage

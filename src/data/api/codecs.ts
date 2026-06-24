@@ -57,6 +57,22 @@ export interface RefCodec extends Codec<string> {
 export interface RefListCodec extends Codec<readonly string[]> {
   readonly type: 'refList'
   readonly targetTypes: readonly string[]
+  /** Lenient element-wise decode for reference projection. Decodes each
+   *  element through the element codec, *dropping* (never throwing on)
+   *  the ones that fail, and returns the well-formed ids. Non-array input
+   *  yields `[]`. This is the projection-safe counterpart to `decode`:
+   *  one malformed element must not strip the whole field's backlinks to
+   *  `[]` (issue #189). `decode` stays strict for the write/read boundary
+   *  call sites that want shape errors surfaced.
+   *
+   *  Optional because `RefListCodec` is a public, exported boundary that
+   *  predates this method: a third-party or older plugin may implement
+   *  only the original shape. Reference projection must reach it through
+   *  `decodeRefListIds`, which feature-detects this method so a legacy
+   *  codec can't throw `decodeValid is not a function` and abort the
+   *  block's whole projection. Codecs built by `codecs.refList()` always
+   *  provide it. */
+  decodeValid?(json: unknown): string[]
 }
 
 const stringCodec: Codec<string> = {
@@ -171,14 +187,112 @@ const refList = (options?: RefCodecOptions): RefListCodec => {
       if (!Array.isArray(j)) throw new CodecError('array', j)
       return j.map(item => stringCodec.decode(item))
     },
+    decodeValid: j => {
+      // Element-wise + fault-tolerant: a non-array has nothing to recover,
+      // and a single bad element drops only itself. Never strips the whole
+      // field's derived refs to [] (issue #189).
+      if (!Array.isArray(j)) return []
+      const out: string[] = []
+      for (const item of j) {
+        try {
+          out.push(stringCodec.decode(item))
+        } catch {
+          // Drop only the malformed element; keep the well-formed ids.
+        }
+      }
+      return out
+    },
   }
 }
+
+/** One choice in an `enum` codec — the stored `value` plus a human
+ *  `label` for the select editor. */
+export interface EnumOption<T extends string = string> {
+  readonly value: T
+  readonly label: string
+}
+
+/** A `Codec<T>` constrained to a fixed set of string `options`. The
+ *  options ride on the codec so the `enum` ValuePreset editor can render
+ *  a `<select>` from `schema.codec.options` without a per-property
+ *  component. `T` is the literal union of allowed values (inferred from
+ *  the options), so consumers keep precise typing. Queryable like any
+ *  string (carries `where`). */
+export interface EnumCodec<T extends string = string> extends Codec<T> {
+  readonly type: 'enum'
+  readonly options: readonly EnumOption<T>[]
+}
+
+const normalizeEnumOptions = <T extends string>(
+  options: readonly (T | EnumOption<T>)[],
+): readonly EnumOption<T>[] =>
+  Object.freeze(
+    options.map(option =>
+      typeof option === 'string'
+        ? {value: option, label: option}
+        : {value: option.value, label: option.label},
+    ),
+  )
+
+/** Build a codec that accepts the given string `options`. Writes are
+ *  strict — `encode` (and `where`) reject any out-of-set value, so a
+ *  hand-edit or a setProperty can't store an invalid choice. Reads are
+ *  lenient on membership: `decode` only checks the value is a string, so
+ *  a value stored *before* an option was removed/renamed still decodes
+ *  and stays editable in the select (which surfaces it as an unknown
+ *  option) instead of rendering as a decode failure / raw JSON. A
+ *  non-string is still a genuine shape error and throws.
+ *
+ *  The `const` type parameter infers `T` as the literal union from a bare
+ *  string-array call (`codecs.enum(['a', 'b'])` → `EnumCodec<'a' | 'b'>`). */
+const enumCodec = <const T extends string>(
+  options: readonly (T | EnumOption<T>)[],
+): EnumCodec<T> => {
+  const normalized = normalizeEnumOptions(options)
+  const allowed = new Set<string>(normalized.map(option => option.value))
+  const expected = `enum(${normalized.map(option => option.value).join('|')})`
+  const requireString = (value: unknown): T => {
+    if (typeof value !== 'string') throw new CodecError(expected, value)
+    return value as T
+  }
+  const requireMember = (value: unknown): T => {
+    const str = requireString(value)
+    if (!allowed.has(str)) throw new CodecError(expected, value)
+    return str
+  }
+  return {
+    type: 'enum',
+    options: normalized,
+    encode: requireMember,
+    decode: requireString,
+    where: {encode: requireMember},
+  }
+}
+
+export const isEnumCodec = (codec: unknown): codec is EnumCodec =>
+  typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'enum'
 
 export const isRefCodec = (codec: unknown): codec is RefCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'ref'
 
 export const isRefListCodec = (codec: unknown): codec is RefListCodec =>
   typeof codec === 'object' && codec !== null && (codec as Codec<unknown>).type === 'refList'
+
+/** Project a refList codec's value to its well-formed ref ids — the
+ *  reference-projection-safe entry point. Prefers the codec's own lenient
+ *  `decodeValid`; falls back to a method-free string filter for a
+ *  `RefListCodec` authored against the pre-`decodeValid` public interface
+ *  (`isRefListCodec` narrows on the discriminator alone, so such a codec
+ *  reaches here). `RefListCodec` is `Codec<readonly string[]>`, so
+ *  well-formed elements are strings — keep those, drop the rest. Total by
+ *  construction: never throws, so one malformed element OR a missing
+ *  method drops only what it must and never aborts the block's projection
+ *  (issue #189 + its follow-up). */
+export const decodeRefListIds = (codec: RefListCodec, value: unknown): string[] => {
+  if (typeof codec.decodeValid === 'function') return codec.decodeValid(value)
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string')
+}
 
 /** URL codec: plain string with light validation on encode/decode.
  *  Currently accepts any non-empty string; tightening the validation
@@ -264,6 +378,9 @@ export const codecs = {
    *  user-defined-properties.md "Why no codecs.optional" section. */
   date: dateCodec,
   url: urlCodec,
+  /** Fixed-set string codec; options ride on the codec for the select
+   *  editor. See `EnumCodec`. */
+  enum: enumCodec,
   list,
   ref,
   refList,

@@ -5,14 +5,28 @@ import {
   UpdateType,
   type CrudTransaction,
 } from '@powersync/common'
-import { supabase, hasSupabaseAuthConfig } from '@/services/supabase.js'
+import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
+import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
 const MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH = 10_000
 const MAX_TRANSACTIONS_PER_UPLOAD_BATCH = 25
 const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
+
+/** Upper bound on patches shipped in a single `apply_block_patches` RPC.
+ *  That RPC runs one UPDATE per patch (each firing the per-write server
+ *  triggers) inside one statement, so an uncapped batch — a schema-swap
+ *  reprojection or a bulk import lands as one big repo.tx, and
+ *  `collectUploadBatch` always takes the first tx whole — runs tens of
+ *  thousands of UPDATEs in one statement and trips Postgres
+ *  `statement_timeout` (SQLSTATE 57014). A timeout classifies transient,
+ *  so PowerSync retries the same oversized batch forever and the queue
+ *  stops draining. Chunking keeps each RPC well under the timeout; the
+ *  patches are column-narrow and idempotent, so splitting them across
+ *  separate RPC transactions is safe. Mirrors `MAX_BLOCKS_PER_SUPABASE_UPSERT`. */
+export const MAX_PATCHES_PER_SUPABASE_RPC = 500
 
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
@@ -52,7 +66,76 @@ export interface UploadDeps {
     transaction: CrudTransaction,
     error: unknown,
   ) => Promise<void>
+  /** Encrypt-on-upload transform (§9.2), applied to the compacted ops before
+   *  they hit the wire. Optional so test deps can omit it; absent ⇒ identity. */
+  encryptOps?: (
+    operations: readonly CompactedBlockOperation[],
+  ) => Promise<readonly CompactedBlockOperation[]>
 }
+
+/** Resolve a workspace's sync mode for the encrypt-on-upload decision. The
+ *  policy (mode pin, §6) is injected; today's default is uniformly 'none'
+ *  (no e2ee workspace exists pre-rollout), so encryption is a no-op until the
+ *  §8 flows wire a real resolver + key store. */
+export type GetWorkspaceMode = (workspaceId: string) => SyncMode | Promise<SyncMode>
+
+/** Seal the content columns of each create/patch op whose workspace is e2ee,
+ *  before they reach the wire (§9.2). Deletes and plaintext workspaces pass
+ *  through untouched. `workspace_id` is read off the payload (always present
+ *  per the upload trigger, D-3.1); an op missing it can't be e2ee-routed and
+ *  passes through — a genuine e2ee plaintext write would be rejected by the
+ *  server-side ciphertext trigger rather than silently stored. */
+const encryptUploadOps = async (
+  ops: readonly CompactedBlockOperation[],
+  getMode: GetWorkspaceMode,
+  getCek: GetCek,
+): Promise<CompactedBlockOperation[]> => {
+  // The mode is constant per workspace, but a bulk upload (import,
+  // reprojection, long-offline drain) carries up to ~10k ops — each
+  // `getMode` is a synchronous localStorage read, so resolving it per op
+  // means thousands of main-thread reads + awaits for one value per
+  // workspace. Memoize per workspaceId (mirrors `materializabilityByWs` in
+  // syncObserver/materialize.ts).
+  const modeByWs = new Map<string, SyncMode>()
+  const resolveMode = async (workspaceId: string): Promise<SyncMode> => {
+    const cached = modeByWs.get(workspaceId)
+    if (cached !== undefined) return cached
+    const resolved = await getMode(workspaceId)
+    modeByWs.set(workspaceId, resolved)
+    return resolved
+  }
+
+  const out: CompactedBlockOperation[] = []
+  for (const op of ops) {
+    if (op.kind === 'delete') {
+      out.push(op)
+      continue
+    }
+    const workspaceId = op.payload.workspace_id
+    if (typeof workspaceId !== 'string') {
+      out.push(op)
+      continue
+    }
+    const mode = await resolveMode(workspaceId)
+    if (mode === 'none') {
+      out.push(op)
+      continue
+    }
+    const payload = await encryptUploadColumns(op.id, workspaceId, op.payload, mode, getCek)
+    out.push(
+      op.kind === 'create'
+        ? { ...op, payload: payload as BlockUploadPayload }
+        : { ...op, payload },
+    )
+  }
+  return out
+}
+
+// Pre-rollout defaults: every workspace is plaintext and no keys exist, so the
+// default encryptOps is identity. The §8 flows replace these with a mode-pin
+// resolver + IndexedDB key-store lookup when e2ee ships.
+const defaultGetWorkspaceMode: GetWorkspaceMode = () => 'none'
+const defaultUploadGetCek: GetCek = async () => null
 
 /** Per-row apply primitives that `applyCompactedBlockOperations` dispatches
  *  to. Factored out so tests can substitute a controllable sink and assert
@@ -93,6 +176,23 @@ const assertSupabase = () => {
   }
 
   return supabase
+}
+
+/** Re-throw a Supabase/PostgREST error with the HTTP `status` attached.
+ *
+ *  PostgREST returns the HTTP status as a SIBLING of `{error}` in the
+ *  response tuple — it is never a field on the `PostgrestError` object
+ *  (which carries only `{message, details, hint, code}`). The upload-error
+ *  classifier keys its 4xx handling off `err.status`, so unless the status is
+ *  threaded onto the thrown error that handling is dead: a codeless 4xx (a
+ *  generic 400, a 413, or any non-JSON body postgrest-js surfaces as
+ *  `{message: body}` with no `code`) would fall through to `transient` and
+ *  PowerSync would retry the same batch forever — the original queue jam. With
+ *  the status attached, the classifier routes a non-retryable 4xx to
+ *  `ambiguous` (bounded retry, then quarantine) and keeps the retryable subset
+ *  (401/403/408/429) transient. See `uploadErrorClassifier.ts` and issue #190. */
+const throwWithHttpStatus = (error: object, status: number): never => {
+  throw Object.assign(error, {status})
 }
 
 const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
@@ -239,12 +339,16 @@ const applyBlockPatchesRpc = async (
   if (patches.length === 0) return
   const client = assertSupabase()
 
-  console.debug('[powersync] PATCH batch', patches.length)
-  const payload = patches.map(patch => ({id: patch.id, ...patch.payload}))
-  const {error} = await client.rpc('apply_block_patches', {patches: payload})
+  // Chunk so one RPC never runs more than MAX_PATCHES_PER_SUPABASE_RPC
+  // server-side UPDATEs in a single statement (see the constant for why).
+  for (const chunk of chunked(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
+    console.debug('[powersync] PATCH batch', chunk.length)
+    const payload = chunk.map(patch => ({id: patch.id, ...patch.payload}))
+    const {error, status} = await client.rpc('apply_block_patches', {patches: payload})
 
-  if (error) {
-    throw error
+    if (error) {
+      throwWithHttpStatus(error, status)
+    }
   }
 }
 
@@ -252,13 +356,13 @@ const applyBlockDelete = async (id: string) => {
   const client = assertSupabase()
 
   console.debug('[powersync] DELETE', id)
-  const {error} = await client
+  const {error, status} = await client
     .from('blocks')
     .delete()
     .eq('id', id)
 
   if (error) {
-    throw error
+    throwWithHttpStatus(error, status)
   }
 }
 
@@ -273,12 +377,12 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
 
   for (const chunk of chunked(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
     console.debug('[powersync] CREATE batch', chunk.length)
-    const {error} = await client
+    const {error, status} = await client
       .from('blocks')
       .upsert(chunk, {onConflict: 'id', ignoreDuplicates: true})
 
     if (error) {
-      throw error
+      throwWithHttpStatus(error, status)
     }
   }
 }
@@ -358,26 +462,36 @@ const recordRejectionToTable = async (
   const errorCode = errorCodeOf(error)
   const errorMessage = errorMessageOf(error)
   const rejectedAt = Date.now()
+  const txId = transaction.transactionId ?? transaction.crud[0]?.transactionId ?? 0
 
-  // Preserve every entry in the rejected tx — a single CrudTransaction
-  // can carry many CrudEntries (multi-row repo.tx). Inserting one
-  // ps_crud_rejected row per entry keeps the audit shape symmetric with
-  // ps_crud and lets a future UI count "N changes couldn't sync" directly.
-  for (const entry of transaction.crud) {
-    await database.execute(
-      `INSERT INTO ps_crud_rejected
-         (original_id, tx_id, data, error_code, error_message, rejected_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [
-        entry.clientId,
-        transaction.transactionId ?? entry.transactionId ?? 0,
-        JSON.stringify(crudEntryEnvelope(entry)),
-        errorCode,
-        errorMessage,
-        rejectedAt,
-      ],
-    )
-  }
+  // Preserve every entry in the rejected tx — a single CrudTransaction can
+  // carry many CrudEntries (multi-row repo.tx). We write one ps_crud_rejected
+  // row per entry so a future UI can count "N changes couldn't sync" directly.
+  //
+  // Atomic + idempotent: the whole set runs in one writeTransaction, so a
+  // mid-loop INSERT failure rolls back cleanly (never a partial record), and
+  // the leading DELETE-by-tx_id makes a re-run a no-op replace. Without that,
+  // a failure between recording and the caller's complete() — which is a
+  // separate step — would re-insert duplicate rows for this tx on the next
+  // upload pass (the tx isn't drained, so it's quarantined again).
+  await database.writeTransaction(async tx => {
+    await tx.execute(`DELETE FROM ps_crud_rejected WHERE tx_id = ?`, [txId])
+    for (const entry of transaction.crud) {
+      await tx.execute(
+        `INSERT INTO ps_crud_rejected
+           (original_id, tx_id, data, error_code, error_message, rejected_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          entry.clientId,
+          txId,
+          JSON.stringify(crudEntryEnvelope(entry)),
+          errorCode,
+          errorMessage,
+          rejectedAt,
+        ],
+      )
+    }
+  })
 }
 
 const errorCodeOf = (error: unknown): string | null => {
@@ -416,10 +530,47 @@ const crudEntryEnvelope = (entry: CrudEntry): Record<string, unknown> => {
     : {op: opName, type: entry.table, id: entry.id, data}
 }
 
-const defaultUploadDeps = (): UploadDeps => ({
+const makeUploadDeps = (
+  getWorkspaceMode: GetWorkspaceMode,
+  getCek: GetCek,
+): UploadDeps => ({
   applyOperations: applyCompactedBlockOperations,
   recordRejection: recordRejectionToTable,
+  encryptOps: ops => encryptUploadOps(ops, getWorkspaceMode, getCek),
 })
+
+/** How many upload passes an `ambiguous` tx (a suspected-permanent 4xx with no
+ *  confirming code) is retried before it's quarantined. The first
+ *  `AMBIGUOUS_RETRY_BUDGET - 1` passes re-throw (so PowerSync retries and a
+ *  transient blip can clear); the last records the rejection and completes,
+ *  draining the tx so the queue doesn't jam forever on a real permanent error.
+ *  Counts are kept per `transactionId` for the lifetime of the connector (in
+ *  memory — a restart resets the budget, which is itself a fresh "try again"). */
+export const AMBIGUOUS_RETRY_BUDGET = 5
+
+/** Records one more failed pass for an `ambiguous` tx and reports whether its
+ *  retry budget is now spent. A tx with no stable `transactionId` can't be
+ *  tracked across passes, so it's treated as already-exhausted (quarantine now)
+ *  rather than retried unbounded. */
+const ambiguousBudgetExhausted = (
+  attempts: Map<number, number>,
+  transaction: CrudTransaction,
+): boolean => {
+  const id = transaction.transactionId
+  if (id === undefined) return true
+  const next = (attempts.get(id) ?? 0) + 1
+  attempts.set(id, next)
+  return next >= AMBIGUOUS_RETRY_BUDGET
+}
+
+/** Clears a tx's ambiguous retry counter once it has drained (succeeded or been
+ *  quarantined), so the map stays bounded by the count of currently-stuck txs. */
+const forgetAmbiguousAttempts = (
+  attempts: Map<number, number>,
+  transaction: CrudTransaction,
+): void => {
+  if (transaction.transactionId !== undefined) attempts.delete(transaction.transactionId)
+}
 
 /** Optimistic-batch / pessimistic-per-tx upload orchestrator.
  *
@@ -427,33 +578,70 @@ const defaultUploadDeps = (): UploadDeps => ({
  *  the tail tx (which drains every preceding tx from ps_crud). Identical
  *  perf to the original handler.
  *
- *  On batch failure: classify the error. Transient (5xx / network /
- *  unknown) → re-throw so PowerSync retries the batch later. Permanent
- *  (FK violation, RLS denial, 4xx) → drop into per-tx fallback: apply
- *  each tx individually, completing on success, recording-then-completing
- *  on permanent failure, re-throwing on transient. This way one bad tx
- *  no longer jams the bucket — the rest of the queue drains and the
- *  bad one lands in ps_crud_rejected for inspection. */
+ *  On batch failure: classify the error (see uploadErrorClassifier).
+ *    - transient (5xx / network / auth-token / rate-limit / unknown) →
+ *      re-throw so PowerSync retries the whole batch later.
+ *    - permanent (FK violation, RLS denial, malformed-request code, …) or
+ *      ambiguous (a suspected-permanent 4xx we can't confirm from a code) →
+ *      drop into the per-tx fallback.
+ *  The per-tx fallback applies each tx individually: complete() on success;
+ *  re-throw (retry) on a transient error; record to ps_crud_rejected +
+ *  complete() (quarantine) on a permanent error; and on an ambiguous error
+ *  retry it across AMBIGUOUS_RETRY_BUDGET upload passes, then quarantine. This
+ *  way one bad tx no longer jams the bucket — the rest of the queue drains and
+ *  the bad one lands in ps_crud_rejected for inspection.
+ *
+ *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
+ *  workspace whose key is momentarily missing/unreadable makes `encryptOps`
+ *  throw. The BATCH encryption is guarded so that failure DOESN'T abort the
+ *  whole preflight — it falls through to the per-tx loop, which drains every
+ *  earlier (encryptable) tx and then stops at the un-encryptable one (its
+ *  per-tx `encryptOps` throws out of the loop). `complete()` is a checkpoint
+ *  that drains all PRECEDING txs, so we can't skip the bad tx and complete a
+ *  later one — instead PowerSync retries from it once the key is back. A
+ *  missing key is treated as transient (retry), never a rejection (which would
+ *  discard the edit). */
 const uploadTransactionsWithFallback = async (
   database: AbstractPowerSyncDatabase,
   transactions: readonly CrudTransaction[],
   deps: UploadDeps,
+  ambiguousAttempts: Map<number, number> = new Map(),
 ): Promise<void> => {
-  const batchOps = compactBlockCrudEntries(transactions.flatMap(t => t.crud))
+  const encryptOps = deps.encryptOps ?? (async ops => ops)
 
+  // Guard the batch encryption: if a tx in the batch can't be encrypted (e2ee
+  // key unavailable), fall through to the per-tx fallback rather than aborting
+  // the whole batch before any of it can drain.
+  let batchOps: readonly CompactedBlockOperation[] | null = null
   try {
-    await deps.applyOperations(database, batchOps)
-    await transactions[transactions.length - 1]?.complete()
-    return
+    batchOps = await encryptOps(compactBlockCrudEntries(transactions.flatMap(t => t.crud)))
   } catch (err) {
-    if (classifyUploadError(err) === 'transient') {
-      console.error('[powersync] upload failed (transient, will retry)', err)
-      throw err
+    console.warn('[powersync] batch encryption failed — isolating per tx', err)
+  }
+
+  if (batchOps) {
+    try {
+      await deps.applyOperations(database, batchOps)
+      await transactions[transactions.length - 1]?.complete()
+      // The whole batch drained — clear any ambiguous retry counters it carried
+      // (an earlier pass's transient blip cleared and the batch went through).
+      for (const transaction of transactions) {
+        forgetAmbiguousAttempts(ambiguousAttempts, transaction)
+      }
+      return
+    } catch (err) {
+      // Transient → retry the whole batch later. Permanent OR ambiguous → drop
+      // into the per-tx loop, where each tx is isolated and an ambiguous one
+      // gets its own retry budget before being quarantined.
+      if (classifyUploadError(err) === 'transient') {
+        console.error('[powersync] upload failed (transient, will retry)', err)
+        throw err
+      }
+      console.warn(
+        `[powersync] batch upload failed — isolating ${transactions.length} tx(s)`,
+        err,
+      )
     }
-    console.warn(
-      `[powersync] batch upload rejected permanently — isolating ${transactions.length} tx(s)`,
-      err,
-    )
   }
 
   // Per-tx fallback. Within-tx compaction still runs so the bootstrap
@@ -461,13 +649,27 @@ const uploadTransactionsWithFallback = async (
   // preserved — losing it would clobber properties_json on a server row
   // the deterministic-id bootstrap already created.
   for (const transaction of transactions) {
-    const txOps = compactBlockCrudEntries(transaction.crud)
+    const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
     try {
       await deps.applyOperations(database, txOps)
       await transaction.complete()
+      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     } catch (err) {
-      if (classifyUploadError(err) === 'transient') {
+      const classification = classifyUploadError(err)
+      if (classification === 'transient') {
         console.error('[powersync] per-tx upload failed (transient, will retry)', err)
+        throw err
+      }
+      // An ambiguous error (a suspected-permanent 4xx with no confirming code)
+      // is retried across a few upload passes before we give up: re-throw until
+      // the budget is spent, then fall through to quarantine. A genuinely
+      // transient blip clears within the budget; a real permanent error
+      // quarantines instead of jamming the queue forever.
+      if (classification === 'ambiguous' && !ambiguousBudgetExhausted(ambiguousAttempts, transaction)) {
+        console.warn(
+          `[powersync] tx ${transaction.transactionId} ambiguous upload error — retrying`,
+          err,
+        )
         throw err
       }
       console.warn(
@@ -476,46 +678,86 @@ const uploadTransactionsWithFallback = async (
       )
       await deps.recordRejection(database, transaction, err)
       await transaction.complete()
+      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     }
   }
 }
 
-const uploadData = async (database: AbstractPowerSyncDatabase) => {
-  const deps = defaultUploadDeps()
+const runUploadLoop = async (
+  database: AbstractPowerSyncDatabase,
+  deps: UploadDeps,
+  ambiguousAttempts: Map<number, number>,
+): Promise<void> => {
   while (true) {
     const transactions = await collectUploadBatch(database)
     if (transactions.length === 0) return
-    await uploadTransactionsWithFallback(database, transactions, deps)
+    await uploadTransactionsWithFallback(database, transactions, deps, ambiguousAttempts)
   }
 }
 
-export const createPowerSyncConnector = (): PowerSyncBackendConnector => ({
-  fetchCredentials: async () => {
-    const client = assertSupabase()
+const fetchCredentials = async () => {
+  const client = assertSupabase()
+
+  // getSession() refreshes an expired token before resolving; offline
+  // that fails (and can hang on retries). Fall back to the last
+  // persisted session so we still hand PowerSync a token to retry the
+  // connection with once the network returns — and return null instead
+  // of throwing when there's truly nothing, so an offline boot doesn't
+  // spam the console with refresh failures.
+  let session = readPersistedSession()
+  try {
     const {data, error} = await client.auth.getSession()
-
-    if (error) {
-      throw error
-    }
-
-    const accessToken = data.session?.access_token
-    if (!accessToken || !powerSyncUrl) {
+    if (error) throw error
+    if (data.session) session = data.session
+  } catch (error) {
+    if (!session) {
+      console.debug('[powersync] fetchCredentials: no session available (offline?)', error)
       return null
     }
+  }
 
-    return {
-      endpoint: powerSyncUrl,
-      token: accessToken,
-      expiresAt: data.session?.expires_at
-        ? new Date(data.session.expires_at * 1000)
-        : undefined,
-    }
-  },
-  uploadData,
-})
+  if (!session?.access_token || !powerSyncUrl) {
+    return null
+  }
 
+  return {
+    endpoint: powerSyncUrl,
+    token: session.access_token,
+    expiresAt: session.expires_at
+      ? new Date(session.expires_at * 1000)
+      : undefined,
+  }
+}
+
+/** §9.2 encrypt-on-upload wiring. The mode/key resolvers are injected so the
+ *  app binds them to the signed-in user's mode pins + workspace-key store;
+ *  omitted (e.g. in tests, or before e2ee is wired) they default to plaintext
+ *  pass-through. */
+export interface PowerSyncConnectorOptions {
+  readonly getWorkspaceMode?: GetWorkspaceMode
+  readonly getCek?: GetCek
+}
+
+export const createPowerSyncConnector = (
+  options: PowerSyncConnectorOptions = {},
+): PowerSyncBackendConnector => {
+  const deps = makeUploadDeps(
+    options.getWorkspaceMode ?? defaultGetWorkspaceMode,
+    options.getCek ?? defaultUploadGetCek,
+  )
+  // Per-connector so `ambiguous` retry counts persist across the repeated
+  // `uploadData` invocations PowerSync makes while a tx stays queued.
+  const ambiguousAttempts = new Map<number, number>()
+  return {
+    fetchCredentials,
+    uploadData: database => runUploadLoop(database, deps, ambiguousAttempts),
+  }
+}
+
+export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations
 export const __applyBlockPatchesRpcForTest = applyBlockPatchesRpc
+export const __recordRejectionToTableForTest = recordRejectionToTable

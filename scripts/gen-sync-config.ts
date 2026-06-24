@@ -23,6 +23,11 @@ interface StreamQuery {
   // Public-schema-qualified table the SELECT reads from. Also drives
   // the column prefix (e.g. `public.blocks` → `blocks.<col>`).
   readonly table: `public.${string}`
+  // Optional FROM-clause alias. PowerSync derives the client-side
+  // row_type from the FROM-clause name, so an alias re-emits the same
+  // physical table under a DIFFERENT row_type. Used only for the Layout B
+  // `blocks_synced` twin below; leave unset to surface `row_type = table`.
+  readonly as?: string
   readonly columns: readonly { readonly name: string }[]
   // WHERE clause that scopes the table to the workspaces the requesting
   // user belongs to. Already indented to match the YAML body.
@@ -41,9 +46,19 @@ const STREAM_QUERIES: readonly StreamQuery[] = [
     predicate: '        WHERE workspace_members.workspace_id IN user_workspaces',
   },
   {
+    // Layout B blocks stream (cutover complete). Re-emits `public.blocks`
+    // under row_type `blocks_synced` (PowerSync derives row_type from the
+    // FROM-clause alias), so the client hydrates its `blocks_synced` staging
+    // table and the JS observer materializes/decrypts into the app-visible
+    // `blocks` table. The plain `FROM public.blocks` stream (row_type
+    // `blocks`) that pre-Layout-B clients consumed has been dropped — those
+    // clients no longer sync. The alias is REQUIRED: a bare `FROM public.blocks`
+    // would surface row_type `blocks`, which the Layout B client has no raw
+    // table for, so nothing would hydrate.
     table: 'public.blocks',
+    as: 'blocks_synced',
     columns: BLOCK_STORAGE_COLUMNS,
-    predicate: '        WHERE blocks.workspace_id IN user_workspaces',
+    predicate: '        WHERE blocks_synced.workspace_id IN user_workspaces',
   },
 ] as const
 
@@ -58,10 +73,15 @@ const HEADER =
 # surface and bucket count smaller than three independent auto streams.
 # PowerSync re-evaluates the set whenever workspace_members changes.
 #
-# IMPORTANT: do not alias the primary table in the FROM clause. PowerSync uses
-# the FROM-clause name as the row_type that maps back to the client's raw
-# table name. \`FROM public.blocks b\` would surface row_type='b' and the
-# client would never hydrate its \`blocks\` table.
+# IMPORTANT: PowerSync derives the client-side row_type from the FROM-clause
+# name. So a table whose row_type must match its name must NOT be aliased —
+# \`FROM public.workspaces w\` would surface row_type='w' and a client would
+# never hydrate its \`workspaces\` table. The DELIBERATE exception is the Layout B
+# blocks stream: it aliases \`public.blocks AS blocks_synced\` precisely to
+# re-emit \`blocks\` rows under row_type='blocks_synced', which the client stages
+# and the JS observer materializes/decrypts into the app-visible \`blocks\` table.
+# The pre-Layout-B plain \`FROM public.blocks\` stream (row_type='blocks') has been
+# dropped at cutover — see the note on that query in gen-sync-config.ts.
 #
 # workspace_invitations is intentionally NOT synced. Invitations are queried
 # on demand via Supabase REST + the workspace_invitations RLS policy keyed
@@ -75,15 +95,19 @@ config:
 streams:
 `
 
-const renderQuery = ({ table, columns, predicate }: StreamQuery): string => {
-  const tableShortName = table.replace(/^public\./, '')
+const renderQuery = ({ table, as, columns, predicate }: StreamQuery): string => {
+  // The output name (alias if present, else the bare table name) drives BOTH
+  // the client-side row_type and the column prefix, so an aliased query reads
+  // `public.blocks AS blocks_synced` and projects `blocks_synced.<col>`.
+  const outputName = as ?? table.replace(/^public\./, '')
   const projection = columns
-    .map((c) => `          ${tableShortName}.${c.name}`)
+    .map((c) => `          ${outputName}.${c.name}`)
     .join(',\n')
+  const from = as ? `${table} ${as}` : table
   return `      - |
         SELECT
 ${projection}
-        FROM ${table}
+        FROM ${from}
 ${predicate}
 `
 }

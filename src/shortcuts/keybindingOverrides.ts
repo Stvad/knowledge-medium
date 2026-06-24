@@ -6,9 +6,10 @@
  * `keybindingOverridesFacet`. The keybindings-settings plugin
  * contributes one entry per user-remapped action at high precedence;
  * other plugins (or static config) can contribute entries at default
- * precedence to ship opinionated rebinds. A single wildcard
- * `ActionDecorator` (see `applyKeybindingOverrides`) consumes the
- * facet and rewrites each action's `defaultBinding` accordingly.
+ * precedence to ship opinionated rebinds. A dedicated cross-action pass
+ * (`applyKeybindingOverrides`, run by `getEffectiveActions` after the
+ * per-action transform pipeline) consumes the facet and rewrites each
+ * action's `defaultBinding` accordingly.
  *
  * Collision rule (matches "user override wins, default loses"):
  *
@@ -20,7 +21,7 @@
  *     That's the "shadow + warn" case the settings UI surfaces;
  *     hotkeys-js will dispatch both handlers.
  */
-import { defineFacet } from '@/extensions/facet.js'
+import { defineFacet } from '@/facets/facet.js'
 import type { ActionContextType, KeyCombination } from '@/shortcuts/types.js'
 
 export interface KeyOverrideBound {

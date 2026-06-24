@@ -10,9 +10,9 @@
  * loop works for non-kernel contributions.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   defineQuery,
@@ -21,7 +21,7 @@ import {
 } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
@@ -41,7 +41,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -53,14 +55,18 @@ const setup = async (): Promise<Harness> => {
     newId: () => `gen-${++idCursor}`,
     // Keep the processor registry empty; these query tests seed
     // `references` directly and should not depend on plugin processors.
-    registerKernelProcessors: false,
   })
   return {h, cache, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's default sync observer so its db.onChange
+// subscription doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
@@ -96,6 +102,22 @@ const create = async (args: {
 const asBlocks = (v: BlockData[] | undefined): BlockData[] => v ?? []
 const asIds = (v: string[] | undefined): string[] => v ?? []
 const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?? null
+
+/**
+ * Sound "did NOT invalidate" probe. `repo.tx` fans out to the handle store
+ * synchronously (repo.ts post-commit walk), and `loaderInvalidations` counts
+ * `LoaderHandle.invalidate()` calls BEFORE the loader's structural-diff dedup
+ * and mid-load coalescing. So a zero delta across a write proves it matched no
+ * handle. `fired.length` can't prove that: an erroneous invalidation that
+ * re-resolves to an equal value (or coalesces with a later control write) is
+ * deduped and never reaches a subscriber. The synchronous count is complete the
+ * moment `tx` resolves because these tests issue only local `repo.tx` writes to
+ * `blocks`: the post-commit processor registry is empty (`KERNEL_PROCESSORS` is
+ * `[]` and no plugin processors are registered here) AND the default sync
+ * observer only reacts to `blocks_synced` writes, so neither re-invalidates a
+ * tick later.
+ */
+const invalidations = () => env.repo.handleStore.metrics.loaderInvalidations
 
 // ════════════════════════════════════════════════════════════════════
 // Per-query SQL-behavior coverage
@@ -301,6 +323,58 @@ describe('repo.query.byType', () => {
     await create({id: 'b', type: 'note', workspaceId: OTHER_WS})
     expect(asBlocks(await env.repo.query.byType({workspaceId: WS, type: 'note'}).load()).map(r => r.id)).toEqual(['a'])
     expect(asBlocks(await env.repo.query.byType({workspaceId: OTHER_WS, type: 'note'}).load()).map(r => r.id)).toEqual(['b'])
+  })
+})
+
+describe('repo.query.typedBlockCount', () => {
+  // The count projection must aggregate the SAME candidate set as the id
+  // projection — proven here on the non-referencedBy (types) path; the
+  // backlinks path is covered in plugins/backlinks/inline-counts.
+  it('equals typedBlockIds length, excluding tombstoned rows', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'b', type: 'note'})
+    await create({id: 'c', type: 'task'})
+    await env.repo.tx(tx => tx.delete('b'), {scope: ChangeScope.BlockDefault})
+
+    const ids = await env.repo.query.typedBlockIds({workspaceId: WS, types: ['note']}).load()
+    const n = await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note']}).load()
+    expect(n).toBe(ids.length)
+    expect(n).toBe(1)
+  })
+
+  it('scopes to workspaceId', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'b', type: 'note', workspaceId: OTHER_WS})
+    expect(await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note']}).load()).toBe(1)
+    expect(await env.repo.query.typedBlockCount({workspaceId: OTHER_WS, types: ['note']}).load()).toBe(1)
+  })
+
+  it('returns 0 for an empty workspaceId', async () => {
+    expect(await env.repo.query.typedBlockCount({workspaceId: '', types: ['note']}).load()).toBe(0)
+  })
+
+  it('matches typedBlockIds length on the ancestor-scope path (COUNT must not multiply per ancestor_chain row)', async () => {
+    // `child` has TWO ancestors (`parent` and `gp`) that each reference `tag`,
+    // so the ancestor predicate matches the one candidate via two distinct
+    // ancestor_chain rows. A COUNT(*) over a multiplying ancestor JOIN would
+    // return 2; the correct EXISTS-in-WHERE count is 1. A single-ancestor
+    // fixture can't tell those apart — it returns 1 either way.
+    await create({id: 'target'})
+    await create({id: 'tag'})
+    await create({id: 'gp', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'parent', parentId: 'gp', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'child', parentId: 'parent', references: [{id: 'target', alias: 'T'}]})
+    await create({id: 'sibling', references: [{id: 'target', alias: 'T'}]})
+
+    const query = {
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+      match: [{scope: 'ancestor' as const, referencedBy: {id: 'tag'}}],
+    }
+    const ids = await env.repo.query.typedBlockIds(query).load()
+    const n = await env.repo.query.typedBlockCount(query).load()
+    expect(ids).toEqual(['child']) // one candidate, even with two matching ancestors
+    expect(n).toBe(ids.length) // 1, not 2 — no per-ancestor multiplication
   })
 })
 
@@ -593,6 +667,23 @@ describe('repo.query.aliasMatchesFuzzy', () => {
     expect(out).toHaveLength(2)
   })
 
+  it('keeps an exact alias in the candidate pool ahead of mere substring matches', async () => {
+    // The substring-only row is created first and sorts alphabetically
+    // ahead of the exact match, so an unordered pre-filter LIMIT would
+    // evict the exact alias before the JS ranker ever sees it.
+    await create({id: 'sub', aliases: ['Accommodating']})
+    await create({id: 'exact', aliases: ['Dating']})
+
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['dat'],
+      query: 'dating',
+      limit: 1,
+    }).load()
+
+    expect(out.map(row => row.alias)).toEqual(['Dating'])
+  })
+
   it('excludes tombstoned blocks', async () => {
     await create({id: 'live', aliases: ['Foo Live']})
     await create({id: 'dead', aliases: ['Foo Dead']})
@@ -713,15 +804,23 @@ describe('invalidation', () => {
     const handle = env.repo.query.childIds(args)
     await handle.load()
 
-    const fired: number[] = []
-    const unsub = handle.subscribe(() => { fired.push(1) })
+    const fired: string[][] = []
+    const unsub = handle.subscribe(v => { fired.push(asIds(v as string[])) })
     try {
       // Content-only edit on c1 — bumps rowIds in the tx fast path but
-      // the lean childIds dep set has no row entry, so `matches` is
-      // false and the listener never fires.
+      // the lean childIds dep set has no row entry, so the list must not
+      // re-project.
+      const inv0 = invalidations()
       await env.repo.tx(tx => tx.update('c1', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
-      await new Promise(r => setTimeout(r, 10))
-      expect(fired.length).toBe(0)
+      // Sound negative proof — the content edit invalidated no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
+      // Tracer-bullet: adding a real child DOES invalidate (parent-edge).
+      // Wait for that single emission; a content-edit re-projection would
+      // surface as an extra one. (Replaces a 10 ms sleep that raced the
+      // reader pool under full-suite parallelism.)
+      await create({id: 'c3', parentId: 'p', orderKey: 'a2'})
+      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['c1', 'c2', 'c3']))
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -792,17 +891,24 @@ describe('invalidation', () => {
     const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
     await handle.load()
 
-    const fired: number[] = []
-    const unsub = handle.subscribe(() => { fired.push(1) })
+    const fired: string[][] = []
+    const unsub = handle.subscribe(v => { fired.push(asBlocks(v as BlockData[]).map(b => b.id)) })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(async tx => {
         const block = env.repo.block('panel')
         await block.load()
         await tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'something', renderScopeId: 'scope:something'}}})
       }, {scope: ChangeScope.UiState})
-      // Give the handle plenty of opportunity to (incorrectly) re-resolve.
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      // Sound negative proof — the UiState write invalidated no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
+      // Tracer-bullet: a new matching note DOES invalidate the type channel.
+      // Wait for that single emission; a UiState-triggered re-resolve would
+      // surface as an extra one. (Replaces a 30 ms "give it a chance to
+      // misfire" sleep with a deterministic positive control.)
+      await create({id: 'b', type: 'note'})
+      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['a', 'b']))
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -814,15 +920,22 @@ describe('invalidation', () => {
     const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
     await handle.load()
 
-    const fired: number[] = []
-    const unsub = handle.subscribe(() => { fired.push(1) })
+    const fired: string[][] = []
+    const unsub = handle.subscribe(v => { fired.push(asBlocks(v as BlockData[]).map(b => b.id)) })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(
         tx => tx.update('plain', {content: 'edited'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      // Sound negative proof — the unrelated content edit invalidated no handle.
+      expect(invalidations()).toBe(inv0)
+      // Tracer-bullet: a new note DOES invalidate. Wait for that single
+      // emission; had the non-matching content edit leaked 'plain' into the
+      // result, it would surface as an earlier (wrong-valued) emission.
+      await create({id: 'b', type: 'note'})
+      await vi.waitFor(() => expect([...(fired.at(-1) ?? [])].sort()).toEqual(['a', 'b']))
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -846,6 +959,31 @@ describe('invalidation', () => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
       })
       expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('byType: soft-delete removes a matching row and restore re-adds it', async () => {
+    await create({id: 'a', type: 'note'})
+    const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
+    expect(asBlocks(await handle.load()).map(b => b.id)).toEqual(['a'])
+
+    const fired: string[][] = []
+    const unsub = handle.subscribe((value) => { fired.push(asBlocks(value).map(b => b.id)) })
+    try {
+      await env.repo.tx(tx => tx.delete('a'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual([])
+      })
+      expect(env.repo.block('a').peek()).toBeNull()
+
+      await env.repo.tx(tx => tx.restore('a'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
+      })
+      expect(fired).toContainEqual([])
+      expect(fired).toContainEqual(['a'])
     } finally {
       unsub()
     }
@@ -886,12 +1024,25 @@ describe('invalidation', () => {
     const fired: number[] = []
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(
         tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      // Sound negative proof — the UiState write matched no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
+
+      // Control-write fence (liveness): a property write that DOES enter the result
+      // proves the UiState write above fired nothing — the fence is the
+      // sole emission. (Replaces a 30 ms sleep that raced the reader pool.)
+      await env.repo.tx(
+        tx => tx.update('a', {properties: {renderer: 'markdown'}}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -942,13 +1093,22 @@ describe('invalidation', () => {
     const fired: string[][] = []
     const unsub = handle.subscribe((value) => { fired.push(value) })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(
         tx => tx.update('src', {content: 'edited but still references target'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired).toEqual([])
-      expect(asIds(handle.peek())).toEqual(['src'])
+      // Sound negative proof — the content edit matched no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
+
+      // Control-write fence (liveness): a new source referencing `target` DOES enter
+      // the result; the content edit above must not have fired, so the
+      // create is the sole emission. (Replaces a 30 ms sleep.)
+      await create({id: 'src2', references: [{id: 'target', alias: 'target'}]})
+      await vi.waitFor(() => {
+        expect([...asIds(handle.peek())].sort()).toEqual(['src', 'src2'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -997,6 +1157,7 @@ describe('invalidation', () => {
       id: 'parent',
       references: [{id: 'project', alias: 'Project'}],
     })
+    await create({id: 'plain-parent'})
     await create({
       id: 'src',
       parentId: 'parent',
@@ -1012,13 +1173,25 @@ describe('invalidation', () => {
     const fired: string[][] = []
     const unsub = handle.subscribe((value) => { fired.push(value) })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(
         tx => tx.update('parent', {content: 'renamed parent, refs unchanged'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired).toEqual([])
-      expect(asIds(handle.peek())).toEqual(['src'])
+      // Sound negative proof — the ancestor content edit matched no handle.
+      expect(invalidations()).toBe(inv0)
+
+      // Control-write fence (liveness): moving `src` out from under the matching
+      // ancestor DOES empty the result; the ancestor content edit above
+      // must not have fired. (Replaces a 30 ms sleep.)
+      await env.repo.tx(
+        tx => tx.move('src', {parentId: 'plain-parent', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asIds(handle.peek())).toEqual([])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1043,9 +1216,19 @@ describe('invalidation', () => {
     try {
       // Create an unrelated block (no `note` type). With the previous
       // unconditional live dep, this fired the handle for nothing.
+      const inv0 = invalidations()
       await create({id: 'unrelated'})
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      // Sound negative proof — the unrelated create matched no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
+
+      // Control-write fence (liveness): a new `note` block DOES enter the result;
+      // the unrelated non-note create above must not have fired.
+      // (Replaces a 30 ms sleep.)
+      await create({id: 'b', type: 'note'})
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1088,8 +1271,12 @@ describe('invalidation', () => {
         tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBeGreaterThanOrEqual(1)
+      // Materializing the property into a field/value child row is async
+      // (post-commit), so wait for the content-channel invalidation rather
+      // than a fixed sleep.
+      await vi.waitFor(() => {
+        expect(fired.length).toBeGreaterThanOrEqual(1)
+      })
     } finally {
       unsub()
     }
@@ -1110,17 +1297,23 @@ describe('invalidation', () => {
         tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBeGreaterThanOrEqual(1)
+      // The property write materializes a field/value child row (async,
+      // post-commit) — a live-set change, so the handle wakes.
+      await vi.waitFor(() => {
+        expect(fired.length).toBeGreaterThanOrEqual(1)
+      })
       fired.length = 0
 
-      // A new non-empty block must wake it (live-set membership).
+      // Control-write fence (liveness): a new non-empty block wakes it once
+      // more (live-set membership); after the reset above the create is the
+      // sole counted emission.
       await create({id: 'b', content: 'bb'})
       await vi.waitFor(() => {
         const ids = asBlocks(handle.peek()).map(b => b.id)
         expect(ids).toContain('a')
         expect(ids).toContain('b')
       })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1145,12 +1338,23 @@ describe('invalidation', () => {
     const u1 = searchHandle.subscribe(() => { fired.push('search') })
     const u2 = recentHandle.subscribe(() => { fired.push('recent') })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(
         tx => tx.move('a', {parentId: 'p2', orderKey: 'a0'}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired).toEqual([])
+      // Sound negative proof — the parent move invalidated no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
+
+      // Control-write fence (liveness): a new block matching both queries DOES fire
+      // each handle once; the parent move above must not have fired.
+      // (Replaces a 30 ms sleep.)
+      await create({id: 'c', content: 'hello again'})
+      await vi.waitFor(() => {
+        expect(fired).toContain('search')
+        expect(fired).toContain('recent')
+      })
+      expect(fired.length).toBe(2)
     } finally {
       u1(); u2()
     }
@@ -1174,8 +1378,12 @@ describe('invalidation', () => {
         tx => tx.update('a', {properties: {renderer: 'markdown'}}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.sort()).toEqual(['recent', 'search'])
+      // The property write materializes a field/value child row (async,
+      // post-commit), whose content lands in the live set → both the
+      // content-search and recent handles wake.
+      await vi.waitFor(() => {
+        expect(fired.sort()).toEqual(['recent', 'search'])
+      })
     } finally {
       u1(); u2()
     }
@@ -1216,12 +1424,25 @@ describe('invalidation', () => {
     const fired: number[] = []
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
+      const inv0 = invalidations()
       await env.repo.tx(
         tx => tx.update('panel', {properties: {focusedBlockLocation: {blockId: 'x', renderScopeId: 'scope:x'}}}),
         {scope: ChangeScope.UiState},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      // Sound negative proof — the UiState write matched no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
+
+      // Control-write fence (liveness): clearing `a`'s alias DOES change the lookup
+      // result; the UiState write above must not have fired. (Replaces a
+      // 30 ms sleep.)
+      await env.repo.tx(
+        tx => tx.update('a', {properties: {[aliasesProp.name]: aliasesProp.codec.encode([])}}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlockOrNull(handle.peek())).toBeNull()
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }
@@ -1284,12 +1505,22 @@ describe('invalidation', () => {
     try {
       // Non-alias property edit on a different block — block_aliases
       // index doesn't move, so the alias-keyed handle shouldn't either.
+      const inv0 = invalidations()
       await env.repo.tx(
         tx => tx.update('b', {properties: {renderer: 'markdown'}}),
         {scope: ChangeScope.BlockDefault},
       )
-      await new Promise(r => setTimeout(r, 30))
-      expect(fired.length).toBe(0)
+      // Sound negative proof — the non-alias edit matched no handle (pre-dedup).
+      expect(invalidations()).toBe(inv0)
+
+      // Control-write fence (liveness): a new aliased block DOES enter aliasMatches;
+      // the non-alias property edit above must not have fired. (Replaces a
+      // 30 ms sleep.)
+      await create({id: 'c', aliases: ['farewell']})
+      await vi.waitFor(() => {
+        expect(handle.peek()?.map(r => r.alias).sort()).toEqual(['farewell', 'greeting'])
+      })
+      expect(fired.length).toBe(1)
     } finally {
       unsub()
     }

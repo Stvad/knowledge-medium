@@ -59,6 +59,20 @@ const LOCALSTORAGE_SET_RE = /(?:window\.)?localStorage\s*\.\s*setItem\s*\(\s*([^
 // (Captures both single- and double-quoted.)
 const STRING_LITERAL_RE = /^\s*['"]([^'"]+)['"]\s*$/
 
+// Dispatch of a `window` CustomEvent — captures the event-name token
+// (string literal or identifier) so we can tell a dialog open/toggle
+// intent apart from a genuine broadcast.
+const DIALOG_EVENT_DISPATCH_RE =
+  /window\s*\.\s*dispatchEvent\s*\(\s*new\s+CustomEvent\s*(?:<[^>]*>)?\s*\(\s*([^,)]+)/
+// The event-name token reads like opening/toggling a dialog rather than
+// a genuine broadcast. Deliberately favors low false positives over total
+// recall: bare `show`/`close` are excluded (too common in non-dialog
+// names like `show-toast` / `close-connection`), and names with no verb
+// or surface noun (`...:settings`, `...:configure`, `...:data-synced`)
+// are intentionally not caught — the goal is to flag the obvious
+// `open-`/`toggle-`/`*-dialog` mistakes, not every possible opener.
+const DIALOG_INTENT_RE = /open|toggle|dialog|picker|prompt|modal/i
+
 const rules: LintRule[] = [
   {
     rule: 'config-in-localstorage',
@@ -107,17 +121,21 @@ const rules: LintRule[] = [
     },
   },
   {
-    rule: 'dialog-store-instead-of-event',
+    rule: 'dialog-via-window-event',
     catalogPattern: 'settings-dialog',
     message:
-      'Toggle dialogs by dispatching `window.dispatchEvent(new CustomEvent(\'<plugin>:toggle-<name>\'))` and listen via `window.addEventListener` inside the dialog component. The CustomEvent pattern matches the find-replace / quick-find conventions and avoids the module-scoped store + `useSyncExternalStore` boilerplate.',
+      'Opening or toggling a dialog by dispatching a `window` CustomEvent (and listening for it with `window.addEventListener` inside the component) reimplements the typed dialog channel over an untyped string bus. For a one-shot prompt, `openDialog(Component, props)` returns a promise that resolves with the user\'s choice. For a persistent toggle surface, drive visibility from a module store read via `useSyncExternalStore` (the same mechanism the app\'s own DialogHost uses) and flip it directly from your action\'s handler. Reserve `window` CustomEvents for genuine broadcast.',
     testLine(line) {
-      // Detect module-scoped open-dialog stores: a const named
-      // `*Store`, `dialogState`, `dialogOpen` with setOpen/getSnapshot
-      // shape. Heuristic — we look for a couple of common signatures.
-      if (/const\s+\w*[Dd]ialog\w*Store\s*=/.test(line)) return line.trim().slice(0, 80)
-      if (/useSyncExternalStore\s*\(/.test(line)) return line.trim().slice(0, 80)
-      return null
+      // Flag a CustomEvent dispatch whose event name (literal or
+      // identifier) reads like a dialog open/toggle intent. Genuine
+      // broadcasts don't match the intent regex, so they're left
+      // alone. We intentionally do NOT flag module stores or
+      // `useSyncExternalStore` — that's the blessed mechanism.
+      const match = line.match(DIALOG_EVENT_DISPATCH_RE)
+      if (!match) return null
+      const eventArg = (match[1] ?? '').trim()
+      if (!DIALOG_INTENT_RE.test(eventArg)) return null
+      return match[0]
     },
   },
 ]

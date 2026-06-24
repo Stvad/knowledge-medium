@@ -15,24 +15,30 @@
  *     block.test.ts; verified here against the Handle contract too)
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
 interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   const repo = new Repo({db: h.db, cache, user: {id: 'u1'}})
   return {h, cache, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const seed = async (id: string, content = 'x') => {
   await env.repo.tx(
@@ -147,7 +153,7 @@ describe('Block.subscribe() — Handle contract', () => {
     off()
   })
 
-  it('returns null after the row is deleted (cache evicts/tombstones)', async () => {
+  it('returns null after the row is deleted (public facade normalizes tombstones)', async () => {
     await seed('b1', 'x')
     const b = env.repo.block('b1')
     await b.load()
@@ -155,10 +161,9 @@ describe('Block.subscribe() — Handle contract', () => {
     b.subscribe((v) => fired.push(v?.content ?? null))
 
     await env.repo.mutate.delete({id: 'b1'})
-    // After delete, snapshot is a tombstone (deleted=true) — Block sees
-    // it as a non-null BlockData with deleted=true. The exact shape
-    // post-delete is governed by the cache; the contract for subscribe
-    // is just "fires when something changes."
-    await vi.waitFor(() => expect(fired.length).toBeGreaterThan(0))
+    // The raw cache keeps the tombstone, but Block is the live-row
+    // facade and therefore notifies subscribers with null.
+    expect(b.peekRaw()?.deleted).toBe(true)
+    await vi.waitFor(() => expect(fired).toEqual([null]))
   })
 })

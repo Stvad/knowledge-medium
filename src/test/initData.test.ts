@@ -12,11 +12,11 @@
  * `repo.tx` so both pages land atomically.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { aliasesProp } from '@/data/properties'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../data/repo'
 import { seedTutorial } from '@/initData'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
@@ -34,7 +34,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -44,18 +45,18 @@ const setup = async (): Promise<Harness> => {
     user: { id: 'user-1' },
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    // Don't run parseReferences — the seeded outlines contain wiki
-    // links (`[[Tutorial]]`, `[[Tutorial (no vim)]]`) which would
-    // otherwise create alias-target side effects we'd then have to
-    // count around. Tests focus on what seedTutorial writes.
-    registerKernelProcessors: false,
   })
   return { h, repo }
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const listAllBlockIds = async (h: TestDb): Promise<string[]> => {
   const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')

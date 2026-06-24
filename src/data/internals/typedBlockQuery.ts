@@ -13,7 +13,7 @@ export interface CompiledTypedBlockQuery {
   readonly params: readonly unknown[]
 }
 
-export type TypedBlockQueryProjection = 'rows' | 'ids'
+export type TypedBlockQueryProjection = 'rows' | 'ids' | 'count'
 
 export const jsonPathForProperty = (name: string): string =>
   `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
@@ -486,7 +486,16 @@ export const buildCandidatesCte = (
   for (const predicate of excludePredicates) {
     if (!isSelfScope(predicate)) continue
     const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
-    clauses.push(`NOT (${compiled.sql})`)
+    // `IS NOT TRUE` (not bare `NOT`): exclude a row only when the
+    // predicate is *definitely* true. A scalar `where` over an unset
+    // property compiles to `json_extract(...) = ?`, which is NULL when
+    // the property is missing; `NOT (NULL)` is NULL — not TRUE — so a
+    // bare `NOT` would drop every row that never set the property. The
+    // documented contract is NOR ("exclude iff a predicate matches"),
+    // and an unknown does not match, so unset rows must survive. See
+    // SRS due-cards: `exclude {archived: true}` was silently hiding
+    // every card that had never been archived.
+    clauses.push(`(${compiled.sql}) IS NOT TRUE`)
     params.push(...compiled.params)
   }
 
@@ -553,7 +562,12 @@ export const compileTypedBlockQuery = (
   for (const predicate of excludePredicates) {
     if (isSelfScope(predicate)) continue
     const compiled = compileScopedPredicate(predicate, propertySchemas)
-    filterClauses.push(`NOT (${compiled.sql})`)
+    // `IS NOT TRUE` for the same NULL-safety reason as the self-scope
+    // exclude above. The ancestor predicate compiles to `EXISTS(...)`
+    // (always 0/1, so `IS NOT TRUE` == `NOT` here), but keeping both
+    // exclude sites identical avoids a latent trap if the shape ever
+    // changes.
+    filterClauses.push(`(${compiled.sql}) IS NOT TRUE`)
     params.push(...compiled.params)
   }
 
@@ -561,12 +575,22 @@ export const compileTypedBlockQuery = (
     ? `WITH RECURSIVE ${candidatesCte.sql}, ${ANCESTOR_CHAIN_CTE_SQL}`
     : `WITH ${candidatesCte.sql}`
 
-  const orderClause = normalized.order === 'created-desc'
-    ? 'ORDER BY b.created_at DESC, b.id'
-    : 'ORDER BY b.created_at ASC, b.id ASC'
-  const selectClause = opts.projection === 'ids'
-    ? 'b.id AS id'
-    : buildQualifiedBlockColumnsSql('b')
+  // `count` aggregates the same candidate set as `ids` (candidates is
+  // `SELECT DISTINCT b.id`, joined 1:1 to blocks), so `COUNT(*)` is the
+  // distinct-source membership count — identical filtering to the id
+  // projection, just not materialised. ORDER BY is meaningless on the
+  // aggregate, so it's dropped.
+  const isCount = opts.projection === 'count'
+  const selectClause = isCount
+    ? 'COUNT(*) AS count'
+    : opts.projection === 'ids'
+      ? 'b.id AS id'
+      : buildQualifiedBlockColumnsSql('b')
+  const orderClause = isCount
+    ? ''
+    : normalized.order === 'created-desc'
+      ? 'ORDER BY b.created_at DESC, b.id'
+      : 'ORDER BY b.created_at ASC, b.id ASC'
 
   const sql = `
     ${ctes}

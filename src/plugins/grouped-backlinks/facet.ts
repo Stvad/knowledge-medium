@@ -1,4 +1,4 @@
-import { defineFacet } from '@/extensions/facet.js'
+import { defineFacet } from '@/facets/facet.js'
 import type { ActionIcon } from '@/shortcuts/types.js'
 
 /** A group-header action entry. Each contribution renders one button

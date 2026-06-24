@@ -1,16 +1,23 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { ChangeScope } from '@/data/api'
+import type { Block } from '@/data/block'
 import { BlockCache } from '@/data/blockCache'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { PLACE_TYPE } from '../blockTypes'
 import { geoDataExtension } from '../dataExtension'
-import { createOrFindPlace, placeMachineAlias } from '../createOrFindPlace'
+import {
+  addPlaceToExistingBlock,
+  createOrFindPlace,
+  placeMachineAlias,
+  type PlaceCandidate,
+} from '../createOrFindPlace'
 import { locationsPageBlockId } from '../locationsPage'
 import {
   placeAddressProp,
@@ -31,21 +38,41 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: {id: 'user-1'},
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, geoDataExtension]))
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
+
+/** Unwrap the ok-arm — most tests expect creation to succeed. */
+const create = async (candidate: PlaceCandidate): Promise<Block> => {
+  const result = await createOrFindPlace(env.repo, WS, candidate)
+  if (result.kind !== 'ok') throw new Error(`expected ok, got ${result.kind}`)
+  return result.block
+}
+
+/** Seed a plain (non-place) block claiming `alias`. */
+const seedAliasedPage = async (id: string, alias: string): Promise<void> => {
+  await env.repo.tx(async tx => {
+    await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content: alias})
+    await tx.setProperty(id, aliasesProp, [alias])
+  }, {scope: ChangeScope.BlockDefault})
+}
 
 const DANDELION = {
   name: 'Dandelion Chocolate',
@@ -77,7 +104,7 @@ describe('placeMachineAlias', () => {
 
 describe('createOrFindPlace', () => {
   it('creates a Place block under the Locations page on first call', async () => {
-    const place = await createOrFindPlace(env.repo, WS, DANDELION)
+    const place = await create(DANDELION)
 
     expect(place.peek()?.parentId).toBe(locationsPageBlockId(WS))
     expect(place.peek()?.content).toBe('Dandelion Chocolate')
@@ -97,8 +124,8 @@ describe('createOrFindPlace', () => {
   })
 
   it('returns the existing block when called twice with the same Google id', async () => {
-    const first = await createOrFindPlace(env.repo, WS, DANDELION)
-    const second = await createOrFindPlace(env.repo, WS, DANDELION)
+    const first = await create(DANDELION)
+    const second = await create(DANDELION)
     expect(second.id).toBe(first.id)
   })
 
@@ -106,8 +133,8 @@ describe('createOrFindPlace', () => {
     const adHocA = {name: '', lat: 37.7613128929, lng: -122.4216972888}
     const adHocB = {name: '', lat: 37.7613133333, lng: -122.4216975555}
 
-    const first = await createOrFindPlace(env.repo, WS, adHocA)
-    const second = await createOrFindPlace(env.repo, WS, adHocB)
+    const first = await create(adHocA)
+    const second = await create(adHocB)
 
     expect(second.id).toBe(first.id)
     expect(first.peekProperty(aliasesProp)).toEqual(['geo:37.76131,-122.42170'])
@@ -115,16 +142,98 @@ describe('createOrFindPlace', () => {
 
   it('falls back to the geo: alias as content when the name is empty', async () => {
     const adHoc = {name: '', lat: 40, lng: -74}
-    const place = await createOrFindPlace(env.repo, WS, adHoc)
+    const place = await create(adHoc)
     expect(place.peek()?.content).toBe('geo:40.00000,-74.00000')
   })
 
   it('omits absent optional fields without writing them', async () => {
     const minimal = {name: 'Skeleton', lat: 1, lng: 2, googlePlaceId: 'ChIJSkel'}
-    const place = await createOrFindPlace(env.repo, WS, minimal)
+    const place = await create(minimal)
     expect(place.peekProperty(placeAddressProp)).toBeUndefined()
     expect(place.peekProperty(placeWebsiteProp)).toBeUndefined()
     expect(place.peekProperty(placePhoneProp)).toBeUndefined()
     expect(place.peekProperty(placeCategoriesProp)).toBeUndefined()
+  })
+})
+
+describe('createOrFindPlace — friendly-name collision', () => {
+  it('returns name-collision (creating nothing) when the name is claimed by a non-place block', async () => {
+    await seedAliasedPage('page-1', 'Dandelion Chocolate')
+
+    const result = await createOrFindPlace(env.repo, WS, DANDELION)
+
+    expect(result.kind).toBe('name-collision')
+    if (result.kind !== 'name-collision') return
+    expect(result.name).toBe('Dandelion Chocolate')
+    expect(result.machineAlias).toBe('place:ChIJDandelion')
+    expect(result.existing).toEqual({
+      id: 'page-1',
+      content: 'Dandelion Chocolate',
+      isPlace: false,
+    })
+    // Nothing was created — the machine alias is still unclaimed.
+    const machineClaim = await env.repo.query
+      .aliasLookup({workspaceId: WS, alias: 'place:ChIJDandelion'}).load()
+    expect(machineClaim).toBeNull()
+  })
+
+  it('flags isPlace when the claimant is a different place with the same name', async () => {
+    const first = await create(DANDELION)
+    const sameNameElsewhere = {...DANDELION, googlePlaceId: 'ChIJOther', lat: 40, lng: -74}
+
+    const result = await createOrFindPlace(env.repo, WS, sameNameElsewhere)
+
+    expect(result.kind).toBe('name-collision')
+    if (result.kind !== 'name-collision') return
+    expect(result.existing.id).toBe(first.id)
+    expect(result.existing.isPlace).toBe(true)
+  })
+
+  it('machine-alias match wins over the name check (same POI is found, not a collision)', async () => {
+    const first = await create(DANDELION)
+    const second = await createOrFindPlace(env.repo, WS, DANDELION)
+    expect(second.kind).toBe('ok')
+    if (second.kind !== 'ok') return
+    expect(second.block.id).toBe(first.id)
+  })
+})
+
+describe('addPlaceToExistingBlock', () => {
+  it('turns the colliding page into a place: types, props, machine alias appended', async () => {
+    await seedAliasedPage('page-1', 'Dandelion Chocolate')
+
+    const block = await addPlaceToExistingBlock(env.repo, 'page-1', DANDELION)
+
+    expect(block.id).toBe('page-1')
+    expect(block.peek()?.content).toBe('Dandelion Chocolate')
+    expect(block.peekProperty(typesProp)).toEqual([PAGE_TYPE, PLACE_TYPE])
+    expect(block.peekProperty(aliasesProp)).toEqual([
+      'Dandelion Chocolate',
+      'place:ChIJDandelion',
+    ])
+    expect(block.peekProperty(placeLatProp)).toBe(DANDELION.lat)
+    expect(block.peekProperty(placeLngProp)).toBe(DANDELION.lng)
+    expect(block.peekProperty(placeAddressProp)).toBe(DANDELION.address)
+
+    // The enriched block now satisfies the machine-alias fast path.
+    const again = await createOrFindPlace(env.repo, WS, DANDELION)
+    expect(again.kind).toBe('ok')
+    if (again.kind !== 'ok') return
+    expect(again.block.id).toBe('page-1')
+  })
+
+  it('is idempotent on the machine alias and existing types', async () => {
+    await seedAliasedPage('page-1', 'Dandelion Chocolate')
+    await addPlaceToExistingBlock(env.repo, 'page-1', DANDELION)
+    const block = await addPlaceToExistingBlock(env.repo, 'page-1', DANDELION)
+    expect(block.peekProperty(aliasesProp)).toEqual([
+      'Dandelion Chocolate',
+      'place:ChIJDandelion',
+    ])
+    expect(block.peekProperty(typesProp)).toEqual([PAGE_TYPE, PLACE_TYPE])
+  })
+
+  it('rejects a missing block', async () => {
+    await expect(addPlaceToExistingBlock(env.repo, 'nope', DANDELION)).rejects.toThrow()
   })
 })

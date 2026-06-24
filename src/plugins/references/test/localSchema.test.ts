@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import {
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
 } from '@/data/blockSchema'
@@ -35,6 +36,7 @@ interface BlockInsert {
   references_json: string
   created_at: number
   updated_at: number
+  user_updated_at: number | null
   created_by: string
   updated_by: string
   deleted: 0 | 1
@@ -59,6 +61,7 @@ const defaultBlock: BlockInsert = {
   references_json: '[]',
   created_at: 1700000000000,
   updated_at: 1700000000000,
+  user_updated_at: 1700000000000,
   created_by: 'user-1',
   updated_by: 'user-1',
   deleted: 0,
@@ -79,6 +82,9 @@ const setupDb = (): TestDb => {
   `)
 
   db.exec(CREATE_BLOCKS_TABLE_SQL)
+  // Layout B staging table — the blocks_synced change-capture triggers in
+  // CLIENT_SCHEMA_STATEMENTS attach to it, so it must exist first.
+  db.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) db.exec(stmt)

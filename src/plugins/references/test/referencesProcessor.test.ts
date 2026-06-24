@@ -21,15 +21,15 @@
  *   - command_events.scope='block-default:references' on processor txs
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { propertySchemasFacet } from '@/data/facets.js'
-import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
 import {
@@ -49,24 +49,31 @@ interface Harness {
 const setup = async (
   extraExtensions: readonly AppExtension[] = [],
 ): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll), reset here per test. Called
+  // again from a nested beforeEach (with a different schema extension); the
+  // reset is idempotent and h.cleanup disposes the prior Repo's observer.
+  await resetTestDb(sharedDb.db)
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
+  // Reprojection is workspace-scoped: it only scans + marks the active
+  // workspace. All fixtures here live in WS, so make it active or every
+  // schema-swap reprojection would no-op (no active workspace ⇒ skip).
+  repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
     ...extraExtensions,
   ]))
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {
     h,
     cache,
@@ -79,12 +86,19 @@ const setup = async (
   }
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   env = await setup()
   vi.useFakeTimers({shouldAdvanceTime: true})
 })
 afterEach(async () => {
+  // Drain any in-flight reprojection before swapping back to real timers
+  // and resetting the shared DB — otherwise a fire-and-forget reprojection
+  // from this test can write into the next one (the DB is shared per file).
+  await env.repo.awaitReprojections()
   vi.useRealTimers()
   await env.h.cleanup()
 })
@@ -102,9 +116,16 @@ const dailyId = (date: string) => dailyNoteBlockId(WS, date)
  *  tests still see the pre-cleanup intermediate state. */
 const flush = async (delayMs = 0) => {
   await vi.advanceTimersByTimeAsync(1)
+  // Schema-swap reprojections are fire-and-forget (scheduled via
+  // setTimeout(0) off the cold-start path); advancing the timer starts
+  // them but does not await their write. Drain them — then processors —
+  // so callers see a fully-settled references_json without racing
+  // vi.waitFor (issue #85).
+  await env.repo.awaitReprojections()
   await env.repo.awaitProcessors()
   if (delayMs > 0) {
     await vi.advanceTimersByTimeAsync(delayMs)
+    await env.repo.awaitReprojections()
     await env.repo.awaitProcessors()
   }
 }
@@ -248,11 +269,26 @@ describe('parseReferences — schema-swap reprojection', () => {
     defaultValue: '',
     changeScope: ChangeScope.BlockDefault,
   })
+  // `reviewer` redefined with a NON-ref codec — the real "stopped being
+  // ref-typed" transition (e.g. a user changes the property's preset from a
+  // ref type to text). Distinct from `runtimeWithoutReviewer`, where the
+  // schema is *absent* (a load-transient that must NOT strip refs).
+  const reviewerStringProp = defineProperty<string>('reviewer', {
+    codec: codecs.string,
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+  ])
+  const runtimeWithReviewerAsString = () => resolveFacetRuntimeSync([
+    kernelDataExtension,
+    dailyNotesDataExtension,
+    referencesDataExtension,
+    propertySchemasFacet.of(reviewerStringProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -335,7 +371,12 @@ describe('parseReferences — schema-swap reprojection', () => {
     }
   })
 
-  it('removes stale field refs when a property stops being ref-typed', async () => {
+  it('retains the field ref on a ref→non-ref redefine, stripping it lazily on the next write', async () => {
+    // Reprojection is add-only — it never strips. A genuine ref→non-ref redefine
+    // therefore does NOT eagerly sweep the field's derived refs; they're retained
+    // until the block's next write, when the per-block references processor
+    // recomputes the field against its now-non-ref schema and drops it. Schema
+    // changes only ever ADD projections; removal is value-driven.
     env.repo.setFacetRuntime(runtimeWithReviewer())
     await env.repo.tx(
       tx => tx.create({
@@ -349,27 +390,166 @@ describe('parseReferences — schema-swap reprojection', () => {
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
 
+    // `reviewer` is redefined to a *present* non-ref schema. Reprojection,
+    // being add-only, RETAINS the stale field ref (does not strip it).
+    env.repo.setFacetRuntime(runtimeWithReviewerAsString())
+    await flush()
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+
+    // The next write to the block recomputes its refs against the now-non-ref
+    // `reviewer` schema, so the stale field ref is stripped lazily (the content
+    // ref survives the edit).
+    await env.repo.tx(
+      tx => tx.update('src', {content: 'see [[content-target]] (edited)'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+    ])
+  })
+
+  it('retains derived refs and the marker when a ref-typed property goes absent (toggle off / not yet loaded)', async () => {
+    // A property *absent* from the active workspace's schema set is "not
+    // ref-typed here right now" — but absence is "not loaded / toggled off",
+    // NOT a deletion. It occurs when async user/import schemas
+    // (UserSchemasService) republish their bucket as rows materialize, when a
+    // non-essential plugin is toggled off, and when ?safeMode forces every
+    // non-essential off at once. Stripping on absence is what silently deleted
+    // ~10k `next-review-date` backlinks fleet-wide when SRS was toggled off, so
+    // the derived refs (and the marker) MUST be retained. Only a *present
+    // non-ref* redefine strips (see the test above). Genuinely deleting a
+    // schema is tolerated until each block's next write — far cheaper than a
+    // mass silent delete.
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'see [[content-target]]',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    // Backfill happened: the marker is set and the reviewer ref is present.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+    expect(await env.h.db.getOptional(
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
+    )).not.toBeNull()
+
+    // reviewer's schema goes absent (its plugin toggled off / not yet loaded).
     env.repo.setFacetRuntime(runtimeWithoutReviewer())
     await flush()
 
-    await vi.waitFor(async () => {
-      expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
-        {id: aliasId('content-target'), alias: 'content-target'},
-      ])
-    })
+    // The reviewer ref is RETAINED (not stripped); the marker is left intact so
+    // re-enabling the plugin doesn't trigger a redundant re-scan.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+    expect(await env.h.db.getOptional(
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
+    )).not.toBeNull()
   })
 
-  it('does not let an older ref-typed reprojection re-add refs after schema removal', async () => {
+  it('only reprojects the active workspace, leaving unopened workspaces untouched', async () => {
+    // Reprojection scans + marks only repo.activeWorkspaceId. `propertySchemas`
+    // reflects just the active workspace's user-data schemas, so evaluating
+    // ref-ness against another workspace's blocks is meaningless — and
+    // rewriting/stripping their references_json is exactly the cross-workspace
+    // churn (every A↔B switch re-evaluating the whole graph) behind the flood.
+    const OTHER_WS = 'ws-2'
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src-active', workspaceId: WS, parentId: null, orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src-other', workspaceId: OTHER_WS, parentId: null, orderKey: 'a0',
+        properties: {reviewer: 'target-b'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await flush()
+
+    // Active workspace: the reviewer ref is backfilled.
+    expect(JSON.parse((await env.read('src-active'))!.references_json)).toEqual([
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+    // Unopened workspace: its block is never scanned — references_json stays
+    // as the create-time processor left it (reviewer was not ref-typed then).
+    expect(JSON.parse((await env.read('src-other'))!.references_json)).toEqual([])
+    // And the per-workspace marker is recorded for the active workspace only.
+    expect(await env.h.db.getOptional(
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
+    )).not.toBeNull()
+    expect(await env.h.db.getOptional(
+      `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${OTHER_WS}:reviewer'`,
+    )).toBeNull()
+  })
+
+  it('uses the scheduled schema, not the live registry, when the workspace switched after scheduling', async () => {
+    // A reprojection captures (names, scheduled schemas, workspaceId) atomically
+    // and runs deferred. If the user switches workspace before it fires,
+    // `this._propertySchemas` now reflects the OTHER workspace — reconciling the
+    // scan against it would let the other workspace's schema set strip refs from
+    // the captured workspace's blocks. The scan must fall back to its scheduled
+    // snapshot in that case.
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // Schedule the backfill for WS (reviewer is ref-typed here)...
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    // ...then, before the deferred scan fires, switch away and drop reviewer
+    // from the (now other-workspace) live registry.
+    env.repo.setActiveWorkspaceId('ws-2')
+    env.repo.setFacetRuntime(runtimeWithoutReviewer())
+    await flush()
+
+    // The WS-scheduled scan still projects reviewer from its own snapshot — it
+    // does NOT read ws-2's empty registry and strip the ref.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+  })
+
+  it('does not add a ref for a parked ref-typed backfill after the property is redefined non-ref', async () => {
+    // reproj-1 is scheduled when `reviewer` becomes ref-typed, then parks inside
+    // its SELECT. Before it resumes, `reviewer` is redefined to a NON-ref codec.
+    // Reprojection is add-only, so the parked backfill can only *add* — and it
+    // must NOT add the reviewer ref, because `latestRefProjectionSchema` projects
+    // against the live (non-ref) schema while the live registry still knows the
+    // name. (Without that reconciliation it would re-add from the scheduled ref
+    // snapshot.)
     const originalGetAll = env.h.db.getAll.bind(env.h.db)
-    const originalExecute = env.h.db.execute.bind(env.h.db)
     let releaseScan: (() => void) | null = null
     let intercepted = false
-    let released = false
-    let markerBeforeRelease = false
-    let markerAfterRelease = false
-    // Resolves only once the scan callback has captured its release fn (see
-    // the swap-mid-scan test for why gating on `intercepted` is racy).
     let scanParked!: () => void
     const scanParkedPromise = new Promise<void>(resolve => { scanParked = resolve })
     const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
@@ -379,29 +559,76 @@ describe('parseReferences — schema-swap reprojection', () => {
       if (!intercepted && sql.includes('json_each(b.properties_json) prop')) {
         intercepted = true
         const rows = await originalGetAll<T>(sql, params)
-        await new Promise<void>(resolve => {
-          releaseScan = resolve
-          scanParked()
-        })
+        await new Promise<void>(resolve => { releaseScan = resolve; scanParked() })
         return rows
       }
       return originalGetAll<T>(sql, params)
     })
-    const executeSpy = vi.spyOn(env.h.db, 'execute').mockImplementation(async (
+
+    try {
+      // Create with the reviewer VALUE but no reviewer schema yet ⇒ no reviewer ref.
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'src',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'see [[content-target]]',
+          properties: {reviewer: 'target-a'},
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.awaitProcessors()
+      expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+        {id: aliasId('content-target'), alias: 'content-target'},
+      ])
+
+      // `reviewer` becomes ref-typed ⇒ schedule reproj-1; park it in the SELECT.
+      env.repo.setFacetRuntime(runtimeWithReviewer())
+      await vi.advanceTimersByTimeAsync(1)
+      await scanParkedPromise
+
+      // Redefine `reviewer` to a non-ref codec while reproj-1 is parked.
+      env.repo.setFacetRuntime(runtimeWithReviewerAsString())
+      await vi.advanceTimersByTimeAsync(1)
+
+      // Resume reproj-1: add-only + live-non-ref reconciliation ⇒ no ref added.
+      releaseScan!()
+      await flush()
+      expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+        {id: aliasId('content-target'), alias: 'content-target'},
+      ])
+    } finally {
+      getAllSpy.mockRestore()
+    }
+  })
+
+  it('retains refs when a parked ref-typed scan runs after the property goes absent (toggle off)', async () => {
+    // Mirror of the redefine test above, but `reviewer` goes *absent* (its
+    // plugin toggled off / not yet loaded) rather than being redefined to a
+    // non-ref codec. A parked "became ref-typed" scan that fires after the
+    // schema left the live registry must RETAIN the field's refs — absence is
+    // not a deletion. This is the narrower-race sibling of the toggle-off strip
+    // that silently deleted ~10k next-review-date backlinks: the gate skips a
+    // reprojection scheduled with an already-absent snapshot, and
+    // `latestRefProjectionSchema` keeps the scheduled ref schema when the live
+    // registry no longer knows the name, so neither path strips here.
+    const originalGetAll = env.h.db.getAll.bind(env.h.db)
+    let releaseScan: (() => void) | null = null
+    let intercepted = false
+    let scanParked!: () => void
+    const scanParkedPromise = new Promise<void>(resolve => { scanParked = resolve })
+    const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
       sql: string,
       params?: unknown[],
-    ) => {
-      const result = await originalExecute(sql, params)
-      const isReviewerMarker = sql.includes('client_schema_state')
-        && params?.[0] === 'reproject_ref:reviewer'
-      if (isReviewerMarker) {
-        if (released) {
-          markerAfterRelease = true
-        } else {
-          markerBeforeRelease = true
-        }
+    ): Promise<T[]> => {
+      if (!intercepted && sql.includes('json_each(b.properties_json) prop')) {
+        intercepted = true
+        const rows = await originalGetAll<T>(sql, params)
+        await new Promise<void>(resolve => { releaseScan = resolve; scanParked() })
+        return rows
       }
-      return result
+      return originalGetAll<T>(sql, params)
     })
 
     try {
@@ -420,30 +647,98 @@ describe('parseReferences — schema-swap reprojection', () => {
       await env.repo.awaitProcessors()
 
       await vi.advanceTimersByTimeAsync(1)
-      // Wait for reprojection-1 to park inside its SELECT (release fn
-      // captured), not merely to have entered the spy.
+      // Wait for reprojection-1 to park inside its SELECT (release fn captured).
       await scanParkedPromise
 
+      // `reviewer`'s schema goes absent (its plugin toggled off) while
+      // reprojection-1 is parked. The toggle-off swap schedules reprojection-2
+      // with an already-absent snapshot, which the gate skips (no strip).
       env.repo.setFacetRuntime(runtimeWithoutReviewer())
       await vi.advanceTimersByTimeAsync(1)
-      await vi.waitFor(async () => {
-        expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
-          {id: aliasId('content-target'), alias: 'content-target'},
-        ])
-      })
-      await vi.waitFor(() => { expect(markerBeforeRelease).toBe(true) })
 
-      released = true
+      // Release the parked scan; it must NOT strip the reviewer ref even though
+      // the live registry no longer knows `reviewer`.
       releaseScan!()
-      await vi.waitFor(() => { expect(markerAfterRelease).toBe(true) })
+      await flush()
 
       expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
         {id: aliasId('content-target'), alias: 'content-target'},
+        {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
       ])
     } finally {
       getAllSpy.mockRestore()
-      executeSpy.mockRestore()
     }
+  })
+
+  it('per-block processor retains a derived ref when its schema is absent and the value is unchanged', async () => {
+    // The per-block "drip": with the owning plugin toggled off, editing a block
+    // re-runs the references processor against the absent schema. It must RETAIN
+    // the field's derived ref (the value still encodes the relationship) rather
+    // than dropping it — dropping is the same silent deletion as the reprojection
+    // mass-strip, one block at a time.
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'see [[content-target]]', properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+
+    // reviewer's schema goes absent (its plugin toggled off).
+    env.repo.setFacetRuntime(runtimeWithoutReviewer())
+    await flush()
+
+    // Edit the block's CONTENT (not the reviewer field) while the schema is absent.
+    await env.repo.tx(
+      tx => tx.update('src', {content: 'see [[content-target]] (edited)'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // The reviewer ref is RETAINED — the edit didn't touch its value, and
+    // absence is not a deletion.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+  })
+
+  it('per-block processor drops a derived ref when its schema is absent and the value is directly edited', async () => {
+    // The exception to retain-on-absence: if THIS write changed the field's own
+    // value, a retained ref would point at the OLD value's target — a ref that
+    // contradicts the new value. We can't re-derive without the schema, so drop.
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0',
+        content: 'see [[content-target]]', properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // reviewer's schema goes absent (its plugin toggled off).
+    env.repo.setFacetRuntime(runtimeWithoutReviewer())
+    await flush()
+
+    // Directly edit the reviewer field's VALUE while the schema is absent.
+    await env.repo.tx(
+      tx => tx.update('src', {properties: {reviewer: 'target-b'}}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // The stale reviewer ref (to target-a) is dropped — its value changed and we
+    // can't re-derive the new one without the schema. The content ref survives.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+    ])
   })
 
   it('records markers when a follow-up setFacetRuntime swaps the merged map mid-scan', async () => {
@@ -511,10 +806,10 @@ describe('parseReferences — schema-swap reprojection', () => {
       // would not have been markered before the fix.
       await vi.waitFor(async () => {
         const reviewerMarker = await env.h.db.getOptional(
-          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
         )
         const approverMarker = await env.h.db.getOptional(
-          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:approver'`,
+          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:approver'`,
         )
         expect(reviewerMarker).not.toBeNull()
         expect(approverMarker).not.toBeNull()
@@ -545,7 +840,7 @@ describe('parseReferences — schema-swap reprojection', () => {
     // on the marker is the strict-er gate.
     await vi.waitFor(async () => {
       const row = await env.h.db.getOptional<{1: number}>(
-        `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+        `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:${WS}:reviewer'`,
       )
       expect(row).not.toBeNull()
     })
@@ -559,8 +854,8 @@ describe('parseReferences — schema-swap reprojection', () => {
       db: env.h.db,
       cache: cache2,
       user: {id: 'user-1'},
-      registerKernelProcessors: false,
     })
+    repo2.setActiveWorkspaceId(WS)
     repo2.setFacetRuntime(runtimeWithReviewer())
     // The reprojection short-circuit is async (it awaits
     // loadReprojectionMarkers). Wait for the bookkeeping to land.
@@ -601,14 +896,15 @@ describe('parseReferences — idempotent comparison', () => {
     )
     await flush()
 
-    // Only the user's `create` row_event should exist for src — no
-    // processor-issued `update`. (Other rows in this tx involve the
+    // No second write fires for src — the processor's re-parse compared
+    // canonical-equal, so it issued no reprojection update (the
+    // 16k-uploads-on-cold-resync bug). Only the create PUT reaches the upload
+    // queue; no follow-up PATCH for src. (Other rows in this tx involve the
     // alias-target ensure path, which still runs.)
-    const evts = await env.h.db.getAll<{kind: string}>(
-      "SELECT kind FROM row_events WHERE block_id = ? ORDER BY id",
-      ['src'],
-    )
-    expect(evts.map(e => e.kind)).toEqual(['create'])
+    const srcOps = (await env.h.db.getAll<{data: string}>('SELECT data FROM ps_crud ORDER BY id'))
+      .map(r => JSON.parse(r.data) as {op: string; id: string})
+      .filter(e => e.id === 'src')
+    expect(srcOps.map(e => e.op)).toEqual(['PUT'])
 
     // Stored refs are canonical-sorted regardless of writer order. Sort
     // key is (sourceField, id, alias); both refs have empty sourceField
@@ -816,15 +1112,13 @@ describe('parseReferences — bookkeeping', () => {
       "SELECT scope, description FROM command_events ORDER BY created_at",
     )
     expect(cmds.some(c => c.scope === 'block-default:references' && c.description?.startsWith(`processor: ${PARSE_REFERENCES_PROCESSOR}`))).toBe(true)
-    // The references update used skipMetadata, so the source row's
-    // updated_by stays at the user but the row_events still record
-    // the change.
-    const evt = await env.h.db.getAll<{kind: string; source: string}>(
-      "SELECT kind, source FROM row_events WHERE block_id = ? ORDER BY id",
-      ['src'],
-    )
-    // create (user) + update (references; user with References scope).
-    expect(evt.map(e => e.kind)).toEqual(['create', 'update'])
+    // The references reprojection wrote src again (skipMetadata, so
+    // updated_by stays the user) — it surfaces as a follow-up PATCH upload
+    // after the create PUT.
+    const srcOps = (await env.h.db.getAll<{data: string}>('SELECT data FROM ps_crud ORDER BY id'))
+      .map(r => JSON.parse(r.data) as {op: string; id: string})
+      .filter(e => e.id === 'src')
+    expect(srcOps.map(e => e.op)).toEqual(['PUT', 'PATCH'])
   })
 
   it('an empty content insert still fires the processor but produces no references and no cleanup', async () => {

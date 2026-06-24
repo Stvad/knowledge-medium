@@ -25,7 +25,7 @@
  * `useHandle(handle, {selector})` option.
  */
 
-import { isEqual } from 'lodash'
+import { isEqual } from 'lodash-es'
 import {
   useCallback,
   useEffect,
@@ -56,7 +56,11 @@ export interface BlockContentRevision {
 }
 
 export interface BlockUpdateMetadata {
+  /** Row-version. Used only to detect the `0` pristine sentinel (a
+   *  never-user-edited deterministic-id default), NOT for display. */
   updatedAt: number
+  /** User-facing "last edited" stamp — what the indicator displays and sorts by. */
+  userUpdatedAt: number
   updatedBy: string
 }
 
@@ -251,6 +255,7 @@ export const useUpdateMetadata = (block: Block): BlockUpdateMetadata | undefined
     selector: doc => doc
       ? {
         updatedAt: doc.updatedAt,
+        userUpdatedAt: doc.userUpdatedAt,
         updatedBy: doc.updatedBy,
       }
       : undefined,

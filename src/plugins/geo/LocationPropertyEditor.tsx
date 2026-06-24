@@ -21,12 +21,11 @@ import {
 import { type PropertyEditorProps } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import { Button } from '@/components/ui/button.js'
-import { createOrFindPlace } from './createOrFindPlace'
+import { createOrFindPlaceInteractive } from './placeNameCollision'
 import { pickCurrentLocation } from './pickCurrentLocation'
 import { resolveApiKey } from './googlePlacesClient'
 import { usePlaceSearch, type PlaceSearchResult } from './usePlaceSearch'
-import { typesProp } from '@/data/properties'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'
 import { placeAddressProp } from './properties'
 
@@ -101,7 +100,7 @@ export const LocationPropertyEditor = ({
     try {
       const details = await search.client.getDetails(placeId, {sessionToken: search.sessionToken})
       search.rotateSession()
-      const placeBlock = await createOrFindPlace(repo, workspaceId, {
+      const resolved = await createOrFindPlaceInteractive(repo, workspaceId, {
         name: details.name,
         lat: details.lat,
         lng: details.lng,
@@ -112,7 +111,8 @@ export const LocationPropertyEditor = ({
         phone: details.phone,
         categories: details.categories,
       })
-      onChange(placeBlock.id)
+      if (!resolved) return
+      onChange(resolved.block.id)
       setQuery('')
     } catch (err) {
       console.warn('[geo] place resolve failed', err)
@@ -129,8 +129,9 @@ export const LocationPropertyEditor = ({
 
   const onDropPin = useCallback(async (lat: number, lng: number) => {
     if (!workspaceId) return
-    const place = await createOrFindPlace(repo, workspaceId, {name: '', lat, lng})
-    onChange(place.id)
+    const place = await createOrFindPlaceInteractive(repo, workspaceId, {name: '', lat, lng})
+    if (!place) return
+    onChange(place.block.id)
     setDropPinOpen(false)
   }, [workspaceId, repo, onChange])
 

@@ -73,7 +73,7 @@ export const showCustom = (
 ): string | number =>
   sonnerToast.custom(render, {
     duration: opts.duration ?? 4000,
-    id: opts.id,
+    ...(opts.id !== undefined ? {id: opts.id} : {}),
   })
 
 export interface ProgressToast {

@@ -1,21 +1,21 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createElement, type JSX } from 'react'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope, codecs, definePreset, defineProperty, type AnyValuePreset } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { propertySchemasFacet, valuePresetsFacet } from '@/data/facets'
-import { presetIdProp, propertyNameProp } from '@/data/properties'
-import { PAGE_TYPE, PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
+import { propertyNameProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { UserSchemasService } from './userSchemasService'
 import { Repo } from './repo'
 
 const WS = 'ws-user-schemas'
+const SUBSCRIPTION_TIMEOUT_MS = 3_000
 
 interface Harness {
   h: TestDb
@@ -25,18 +25,19 @@ interface Harness {
 }
 
 const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll); each test calls setup()
+  // inline, so reset here gives the per-test clean slate.
+  await resetTestDb(sharedDb.db)
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
@@ -48,14 +49,68 @@ const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harn
   await getOrCreatePropertiesPage(repo, WS)
   const service = repo.userSchemas
   const dispose = service.start()
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {h, repo, service, dispose}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 afterEach(async () => {
   env.dispose()
   await env.h.cleanup()
 })
+
+const waitForPropertySchemasChange = async <T,>(action: () => Promise<T>): Promise<T> => {
+  let dispose = (): void => {}
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let settled = false
+  const settle = (cb: () => void) => {
+    if (settled) return
+    settled = true
+    if (timer !== null) clearTimeout(timer)
+    dispose()
+    cb()
+  }
+  const changed = new Promise<void>((resolve, reject) => {
+    dispose = env.repo.onPropertySchemasChange(() => settle(resolve))
+    timer = setTimeout(
+      () => settle(() => reject(new Error('timed out waiting for property schema rebuild'))),
+      SUBSCRIPTION_TIMEOUT_MS,
+    )
+  })
+  try {
+    const result = await action()
+    await changed
+    return result
+  } catch (error) {
+    settle(() => {})
+    throw error
+  }
+}
+
+const createExternalSchemaBlock = async (
+  name: string,
+  presetId = 'string',
+  config: unknown = {},
+): Promise<string> => {
+  const propertiesPageId = env.repo.propertiesPageId!
+  const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
+  await waitForPropertySchemasChange(async () => {
+    await env.repo.tx(async tx => {
+      await tx.update(id, {
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': name,
+          'property-schema:preset': presetId,
+          'property-schema:config': config,
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault})
+  })
+  return id
+}
 
 describe('UserSchemasService.addSchema', () => {
   it('persists a property-schema block AND registers the schema synchronously', async () => {
@@ -99,39 +154,15 @@ describe('UserSchemasService subscription', () => {
   it('rebuilds the contribution list when a schema block is created externally', async () => {
     env = await setup()
     // Add the schema block directly through a tx (simulates a sync arrival).
-    const propertiesPageId = env.repo.propertiesPageId!
-    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.tx(async tx => {
-      await tx.update(id, {
-        properties: {
-          types: ['property-schema'],
-          'property-schema:name': 'tags',
-          'property-schema:preset': 'string',
-          'property-schema:config': {},
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    // Subscription is async — wait briefly for it to fire.
-    await new Promise(resolve => setTimeout(resolve, 50))
-    expect(env.repo.propertySchemas.get('tags')?.codec.type).toBe('string')
+    await createExternalSchemaBlock('tags')
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('tags')?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('skips schemas with unknown preset ids and re-resolves when the preset shows up later', async () => {
     env = await setup()
-    const propertiesPageId = env.repo.propertiesPageId!
-    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.tx(async tx => {
-      await tx.update(id, {
-        properties: {
-          types: ['property-schema'],
-          'property-schema:name': 'priority',
-          'property-schema:preset': 'priority-preset',
-          'property-schema:config': {},
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await createExternalSchemaBlock('priority', 'priority-preset')
     expect(env.repo.propertySchemas.get('priority')).toBeUndefined()
 
     // Plugin loads and contributes the missing preset → schema resolves on the
@@ -144,7 +175,15 @@ describe('UserSchemasService subscription', () => {
       Editor: (): JSX.Element => createElement('span', null, null),
     })
     env.repo.setRuntimeContributions(valuePresetsFacet, 'plugin', [priorityPreset])
-    expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
+    // The preset arrival re-resolves the previously-skipped schema on the
+    // valuePresets-change tick. Unlike the subscription-path assertions, this
+    // read isn't preceded by an awaited change event, and the
+    // valuePresets-change -> rebuild chain does NOT settle synchronously
+    // within setRuntimeContributions (it flakes under full-suite load), so
+    // poll for the resolved schema.
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('addSchema-followed-by-immediate-write does not race the subscription tick', async () => {
@@ -159,31 +198,6 @@ describe('UserSchemasService subscription', () => {
     // Encoding through the registered schema works (the preset's codec
     // is the URL codec — passes string through).
     expect(schema.codec.encode('https://example.com')).toBe('https://example.com')
-  })
-
-  it('registers schema blocks whose defining properties are authored as child fields', async () => {
-    env = await setup()
-    const propertiesPageId = env.repo.propertiesPageId!
-    const schemaBlockId = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.addType(schemaBlockId, PROPERTY_SCHEMA_TYPE)
-    await env.repo.addType(schemaBlockId, PAGE_TYPE)
-
-    const childRows = await env.repo.block(schemaBlockId).children.load()
-    const nameField = childRows.find(row => row.referenceTargetId === propertyNameProp.fieldId)!
-    const presetField = childRows.find(row => row.referenceTargetId === presetIdProp.fieldId)!
-    await env.repo.mutate.createChild({
-      parentId: nameField.id,
-      content: 'child-authored',
-    })
-    await env.repo.mutate.createChild({
-      parentId: presetField.id,
-      content: 'boolean',
-    })
-
-    await vi.waitFor(() => {
-      expect(env.repo.propertySchemas.get('child-authored')?.fieldId).toBe(schemaBlockId)
-      expect(env.service.getSchemaForBlockId(schemaBlockId)?.codec.type).toBe('boolean')
-    })
   })
 
   it('rejects ref config that breaks configCodec.decode contract (null targetTypes element)', async () => {
@@ -213,23 +227,17 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
 
   it('returns the registered schema after an external schema-block creation (subscription rebuild)', async () => {
     env = await setup()
-    const propertiesPageId = env.repo.propertiesPageId!
-    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.tx(async tx => {
-      await tx.update(id, {
-        properties: {
-          types: ['property-schema'],
-          'property-schema:name': 'tags',
-          'property-schema:preset': 'string',
-          'property-schema:config': {},
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
+    const id = await createExternalSchemaBlock('tags')
 
-    const resolved = env.service.getSchemaForBlockId(id)
-    expect(resolved?.name).toBe('tags')
-    expect(resolved?.codec.type).toBe('string')
+    // The block subscription settles over one or more rebuild ticks;
+    // waitForPropertySchemasChange resolves on the first change event, which
+    // under full-suite load can precede the rebuild that registers this
+    // schema. Poll the reverse-map rather than reading it synchronously.
+    await vi.waitFor(() => {
+      const resolved = env.service.getSchemaForBlockId(id)
+      expect(resolved?.name).toBe('tags')
+      expect(resolved?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('returns undefined for unknown block ids', async () => {
@@ -239,29 +247,52 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
 
   it('drops the reverse-map entry when a block stops resolving to a schema', async () => {
     env = await setup()
-    const propertiesPageId = env.repo.propertiesPageId!
-    const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
-    await env.repo.tx(async tx => {
-      await tx.update(id, {
-        properties: {
-          types: ['property-schema'],
-          'property-schema:name': 'tags',
-          'property-schema:preset': 'string',
-          'property-schema:config': {},
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
-    expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
+    const id = await createExternalSchemaBlock('tags')
+    await vi.waitFor(() => {
+      expect(env.service.getSchemaForBlockId(id)?.name).toBe('tags')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
     // Blank the name — tryBuildSchema will now drop the block on the
     // next rebuild tick.
-    await env.repo.tx(async tx => {
-      await tx.setProperty(id, propertyNameProp, '')
-    }, {scope: ChangeScope.BlockDefault})
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await waitForPropertySchemasChange(async () => {
+      await env.repo.tx(async tx => {
+        await tx.setProperty(id, propertyNameProp, '')
+      }, {scope: ChangeScope.BlockDefault})
+    })
 
-    expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
+    await vi.waitFor(() => {
+      expect(env.service.getSchemaForBlockId(id)).toBeUndefined()
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+  })
+})
+
+describe('UserSchemasService workspace switch', () => {
+  // Regression for the in-flight-write cross-workspace leak surfaced in the
+  // #90 adversarial review: addSchema pins the active workspace before its
+  // first await, so a schema whose create/tx is still in flight when the user
+  // switches workspaces (dispose → restart the projector on the new
+  // workspace) is NOT published into the new workspace's 'user-data' bucket.
+  // The projector's `disposed` flag alone can't catch this — the per-projector
+  // container is reused and re-armed across the switch.
+  it('does not leak an in-flight addSchema into a newly-switched workspace', async () => {
+    env = await setup()
+    // Kick off addSchema; its synchronous prologue pins the W1 workspace
+    // before the first await (createChild).
+    const pending = env.service.addSchema({name: 'leaky', presetId: 'url'})
+
+    // Mimic the production workspace switch that the React provider runs while
+    // the tx is in flight: dispose the projector (tears down the W1
+    // subscription + clears the bucket), activate W2, restart on W2.
+    env.service.dispose()
+    const W2 = 'ws-user-schemas-2'
+    env.repo.setActiveWorkspaceId(W2)
+    await getOrCreatePropertiesPage(env.repo, W2)
+    env.service.start()
+
+    await pending
+    // The W1 schema must not surface in W2's runtime view.
+    expect(env.repo.propertySchemas.get('leaky')).toBeUndefined()
+    expect(env.service.getSchemaBlockId('leaky')).toBeUndefined()
   })
 })
 
@@ -314,5 +345,30 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
     ]))
     const schema = await addPromise
     expect(env.repo.propertySchemas.get('siteUrl')).toBe(schema)
+  })
+})
+
+describe('UserSchemasService workspace switch', () => {
+  // Regression: the Repo is a per-user singleton reused across workspace
+  // switches, and setFacetRuntime carries the durable user-data bucket
+  // forward (adoptDurableContributionsFrom). Before the fix, dispose() left
+  // the bucket in place, so the previous workspace's user-defined property
+  // schemas leaked into the next workspace until its subscription's first
+  // rebuild. Mirrors the hardening UserTypesService already had.
+  it('clears the user-data bucket on dispose so schemas do not leak into the next workspace', async () => {
+    env = await setup()
+    await env.service.addSchema({name: 'homepage', presetId: 'url'})
+    expect(env.repo.propertySchemas.get('homepage')?.codec.type).toBe('url')
+
+    // Workspace switch: dispose W1's service, switch the active workspace,
+    // bootstrap its properties page, restart. W1's schema must be gone.
+    env.service.dispose()
+    expect(env.repo.propertySchemas.get('homepage')).toBeUndefined()
+
+    const W2 = 'ws-user-schemas-2'
+    env.repo.setActiveWorkspaceId(W2)
+    await getOrCreatePropertiesPage(env.repo, W2)
+    env.service.start()
+    expect(env.repo.propertySchemas.get('homepage')).toBeUndefined()
   })
 })

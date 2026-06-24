@@ -4,7 +4,7 @@ import { EditorSelection, EditorState, Prec } from '@codemirror/state'
 import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
-} from '@/extensions/editor.js'
+} from '@/editor/codeMirrorExtensions.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { relativeDateCandidates } from '@/utils/relativeDate.js'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.js'

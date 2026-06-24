@@ -42,47 +42,36 @@
  * are currently in the result; these channels close the gap for rows
  * that *could enter or leave* the result.
  *
- * The rule runs both in the fast tx path (`collectFromSnapshots`) and in
- * the row_events tail (`collectFromRowEvent`) so sync-applied writes
- * fire the same channels.
+ * The rule runs via `collectFromSnapshots` on both the fast tx path and the
+ * Layout B sync observer, so local and sync-applied writes fire the same
+ * channels from one code path.
  */
 
 import type { ChangeSnapshot, InvalidationRule } from '@/data/invalidation.js'
-
-export const TYPED_BLOCKS_LIVE_CHANNEL = 'typedBlocks.live'
-export const TYPED_BLOCKS_TYPE_CHANNEL = 'typedBlocks.type'
-export const TYPED_BLOCKS_PROPERTY_CHANNEL = 'typedBlocks.property'
-export const TYPED_BLOCKS_REFERENCE_CHANNEL = 'typedBlocks.reference'
-export const TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL = 'typedBlocks.referenceField'
-export const TYPED_BLOCKS_STRUCTURE_CHANNEL = 'typedBlocks.structure'
-export const TYPED_BLOCKS_REFS_OF_CHANNEL = 'typedBlocks.refsOf'
-export const TYPED_BLOCKS_LABEL_CHANNEL = 'typedBlocks.label'
-export const KERNEL_ALIASES_CHANNEL = 'kernel.aliases'
-export const KERNEL_CONTENT_CHANNEL = 'kernel.content'
+import {
+  KERNEL_ALIASES_CHANNEL,
+  KERNEL_CONTENT_CHANNEL,
+  TYPED_BLOCKS_LABEL_CHANNEL,
+  TYPED_BLOCKS_LIVE_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_CHANNEL,
+  TYPED_BLOCKS_REFERENCE_CHANNEL,
+  TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+  TYPED_BLOCKS_REFS_OF_CHANNEL,
+  TYPED_BLOCKS_STRUCTURE_CHANNEL,
+  TYPED_BLOCKS_TYPE_CHANNEL,
+  kernelAliasesKey,
+  kernelContentKey,
+  typedBlocksLabelKey,
+  typedBlocksLiveKey,
+  typedBlocksPropertyKey,
+  typedBlocksReferenceFieldKey,
+  typedBlocksReferenceKey,
+  typedBlocksRefsOfKey,
+  typedBlocksStructureKey,
+  typedBlocksTypeKey,
+} from '@/data/invalidation.js'
 
 const SEP = '\u0000'
-
-export const typedBlocksLiveKey = (workspaceId: string): string => workspaceId
-export const typedBlocksTypeKey = (workspaceId: string, type: string): string =>
-  `${workspaceId}${SEP}${type}`
-export const typedBlocksPropertyKey = (workspaceId: string, name: string): string =>
-  `${workspaceId}${SEP}${name}`
-export const typedBlocksReferenceKey = (workspaceId: string, targetId: string): string =>
-  `${workspaceId}${SEP}${targetId}`
-export const typedBlocksReferenceFieldKey = (
-  workspaceId: string,
-  targetId: string,
-  sourceField: string,
-): string => `${workspaceId}${SEP}${targetId}${SEP}${sourceField}`
-export const typedBlocksStructureKey = (workspaceId: string, blockId: string): string =>
-  `${workspaceId}${SEP}${blockId}`
-export const typedBlocksRefsOfKey = (workspaceId: string, blockId: string): string =>
-  `${workspaceId}${SEP}${blockId}`
-export const typedBlocksLabelKey = (workspaceId: string, blockId: string): string =>
-  `${workspaceId}${SEP}${blockId}`
-
-export const kernelAliasesKey = (workspaceId: string): string => workspaceId
-export const kernelContentKey = (workspaceId: string): string => workspaceId
 
 /** Property name that holds the type list. Mirrors `typesProp.name` from
  *  `data/properties.ts`; duplicated here so this module stays free of the
@@ -90,7 +79,7 @@ export const kernelContentKey = (workspaceId: string): string => workspaceId
 const TYPES_PROPERTY_NAME = 'types'
 
 /** Property name that holds the alias list. Mirrors `aliasesProp.name`
- *  from `data/internals/coreProperties.ts`; duplicated for the same
+ *  from `data/properties.ts`; duplicated for the same
  *  reason as `TYPES_PROPERTY_NAME`. The kernel `block_aliases` trigger
  *  derives the index from this exact property key — keeping the rule
  *  in sync with the schema. */
@@ -419,15 +408,5 @@ export const kernelInvalidationRule: InvalidationRule = {
     for (const [id, snapshot] of snapshots) {
       emitKernelInvalidations(snapshot, emit, id)
     }
-  },
-  collectFromRowEvent: ({ before, after }, emit) => {
-    // Row-event payloads expose the full BlockData; ChangeSnapshot is the
-    // slim view a rule needs. The slim shape is structurally compatible
-    // — `content` and `properties` ride along under their own names.
-    emitKernelInvalidations(
-      { before: before as ChangeSnapshot['before'], after: after as ChangeSnapshot['after'] },
-      emit,
-      before?.id ?? after?.id,
-    )
   },
 }

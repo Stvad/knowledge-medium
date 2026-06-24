@@ -18,14 +18,14 @@
  *     layer can surface it
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '@/plugins/references/dataExtension.js'
 import { computeAliasSeatId } from '@/data/targets'
@@ -40,7 +40,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -50,7 +51,6 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -58,6 +58,8 @@ const setup = async (): Promise<Harness> => {
     referencesDataExtension,
     aliasDataExtension,
   ]))
+  // Undo/redo are scoped to the active workspace (issue #186).
+  repo.setActiveWorkspaceId(WS)
   return {
     h,
     repo,
@@ -68,14 +70,17 @@ const setup = async (): Promise<Harness> => {
   }
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   env = await setup()
   vi.useFakeTimers({shouldAdvanceTime: true})
 })
 afterEach(async () => {
   vi.useRealTimers()
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 const readAliases = async (id: string): Promise<string[]> => {
@@ -139,6 +144,8 @@ describe('alias.collision — A1-style (content edit adds new claim)', () => {
     expect(caught).toBeInstanceOf(ProcessorRejection)
     expect((caught as ProcessorRejection).code).toBe('alias.collision')
     expect((caught as ProcessorRejection).meta?.alias).toBe('Existing')
+    expect((caught as ProcessorRejection).meta?.dropSourceAliases).toEqual(['mine'])
+    expect((caught as ProcessorRejection).meta?.collisionOrigin).toBe('content-rename')
 
     // Block b is unchanged — content stayed "mine", aliases stayed ["mine"].
     expect((await env.read('b'))!.content).toBe('mine')
@@ -197,6 +204,7 @@ describe('alias.collision — direct claim (no content change)', () => {
     } catch (err) { caught = err }
     expect(caught).toBeInstanceOf(ProcessorRejection)
     expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    expect((caught as ProcessorRejection).meta?.dropSourceAliases).toBeUndefined()
 
     expect(await readAliases('b')).toEqual(['distinct'])
   })
@@ -743,6 +751,50 @@ describe('alias.collision — RAISE payload tolerates control chars in alias tex
     expect((caught as ProcessorRejection).meta?.attemptedOn).toBe('attempter')
     expect((caught as ProcessorRejection).meta?.conflictingBlockId).toBe('claimant')
     expect((caught as ProcessorRejection).meta?.conflictingBlockTitle).toBe('Claimant title')
+  })
+})
+
+// ──── collisionOrigin: 'create' — rejected source never existed ────
+//
+// When the colliding claim comes from a block CREATED in the rejected
+// tx, the rollback erases the block entirely: there is no source for
+// the toast's "Merge into …" action to operate on (the merge mutator
+// would throw "source not found"). The trigger-translation path marks
+// these rejections `collisionOrigin: 'create'` so the UI can drop the
+// merge affordance instead of offering a dead-end button.
+
+describe("alias.collision — collisionOrigin 'create' for sources erased by rollback", () => {
+  it("marks a fresh-insert collision with collisionOrigin 'create'", async () => {
+    await seatAt('Taken', 'Taken')
+
+    let caught: unknown
+    try {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'fresh', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'fresh'})
+        await tx.setProperty('fresh', aliasesProp, ['Taken'])
+      }, {scope: ChangeScope.BlockDefault})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).meta?.collisionOrigin).toBe('create')
+  })
+
+  it('does NOT mark a collision whose source block survives the rollback', async () => {
+    await seatAt('Shared', 'Shared')
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'b', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'distinct'})
+      await tx.setProperty('b', aliasesProp, ['distinct'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    let caught: unknown
+    try {
+      await env.repo.tx(
+        tx => tx.setProperty('b', aliasesProp, ['distinct', 'Shared']),
+        {scope: ChangeScope.BlockDefault},
+      )
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).meta?.collisionOrigin).toBeUndefined()
   })
 })
 

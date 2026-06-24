@@ -1,10 +1,10 @@
 // @vitest-environment node
 
-import { afterEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -34,7 +34,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -44,7 +46,7 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
@@ -106,10 +108,14 @@ const createBlockWithRefs = async (
   return id
 }
 
+let sharedDb: TestDb
 let env: Harness
-afterEach(async () => {
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+afterEach(() => {
+  // Dispose the per-test services; the shared DB is closed once in afterAll.
+  // (Each test calls `env = await setup()`, which resets the DB first.)
   env.dispose()
-  await env.h.cleanup()
 })
 
 // ──── createTypeBlock ───────────────────────────────────────────────
@@ -179,12 +185,15 @@ describe('createTypeBlock', () => {
     env = await setup()
     const controller = new AbortController()
     controller.abort()
+    // throwIfAborted() rejects with signal.reason — an AbortError
+    // DOMException. Pin the abort contract so a swap to some unrelated
+    // error (or a rejection with undefined) is caught.
     await expect(createTypeBlock(env.repo, {
       workspaceId: WS,
       label: 'Task',
       propertySchemaIds: [],
       signal: controller.signal,
-    })).rejects.toBeDefined()
+    })).rejects.toMatchObject({name: 'AbortError'})
   })
 
   it('TypeRegistrationTimeout has the expected shape', () => {
@@ -278,7 +287,7 @@ describe('retagBlocks', () => {
       typeId,
       instanceIds: [id],
       signal: controller.signal,
-    })).rejects.toBeDefined()
+    })).rejects.toMatchObject({name: 'AbortError'})
     const row = await env.repo.load(id)
     expect(getBlockTypes(row!)).not.toContain(typeId)
   })

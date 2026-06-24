@@ -1,25 +1,22 @@
 import {
-  blockClickHandlersFacet,
-  blockContentSurfacePropsFacet,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
-import { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { actionsFacet, actionTransformsFacet } from '@/extensions/core.js'
+import { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { Repo } from '../../data/repo'
 import { vimNormalModeActionsExtension } from './actions.ts'
 import {
-  vimBlockClickBehavior,
-  vimContentSurfaceBehavior,
+  enterBlockEditModeOnGestureAction,
+  vimClickToFocusTransform,
   vimNormalModeActivation,
 } from './interactions.ts'
 
 export const vimNormalModeInteractionExtension: AppExtension = [
-  blockClickHandlersFacet.of(vimBlockClickBehavior, {
-    precedence: 100,
+  actionTransformsFacet.of(vimClickToFocusTransform, {
     source: 'vim-normal-mode',
   }),
-  blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior, {
-    precedence: 100,
+  actionsFacet.of(enterBlockEditModeOnGestureAction, {
     source: 'vim-normal-mode',
   }),
   shortcutSurfaceActivationsFacet.of(vimNormalModeActivation, {

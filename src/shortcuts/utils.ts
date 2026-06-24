@@ -114,7 +114,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   // dropping all but the last block's animation). The per-action
   // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
-    const {selectedBlocks, uiStateBlock} = multiSelectDeps
+    const {selectedBlocks, uiStateBlock, scopeRootId} = multiSelectDeps
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
@@ -129,6 +129,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
         const originalDeps = {
           block,
           uiStateBlock,
+          scopeRootId,
         } as ShortcutDependenciesMap[T]
 
         await actionConfig.handler(originalDeps, trigger)
@@ -187,8 +188,8 @@ export interface DefineBlocksActionConfig {
    *  real multi-select and labels the group-header button. */
   blocksDescription: string
   /** Per-block applicability predicate. When provided, the
-   *  NORMAL_MODE variant's `canRun` gates on `appliesTo(block)`,
-   *  and the MULTI_SELECT_MODE variant's `canRun` gates on at
+   *  NORMAL_MODE variant's `isVisible` gates on `appliesTo(block)`,
+   *  and the MULTI_SELECT_MODE variant's `isVisible` gates on at
    *  least one selected block matching. Omit to mean "always". */
   appliesTo?: (block: Block) => boolean
   /** The actual operation. Both variants forward to this with the
@@ -244,7 +245,7 @@ export const defineBlocksAction = ({
     context: ActionContextTypes.NORMAL_MODE,
     ...(icon ? {icon} : {}),
     ...(appliesTo
-      ? {canRun: ({block}: BlockShortcutDependencies) => appliesTo(block)}
+      ? {isVisible: ({block}: BlockShortcutDependencies) => appliesTo(block)}
       : {}),
     handler: ({block}: BlockShortcutDependencies) => flow([block]),
   },
@@ -253,7 +254,7 @@ export const defineBlocksAction = ({
     description: blocksDescription,
     context: ActionContextTypes.MULTI_SELECT_MODE,
     ...(icon ? {icon} : {}),
-    canRun: ({selectedBlocks}: MultiSelectModeDependencies) => {
+    isVisible: ({selectedBlocks}: MultiSelectModeDependencies) => {
       if (selectedBlocks.length === 0) return false
       if (!appliesTo) return true
       return selectedBlocks.some(block => appliesTo(block))

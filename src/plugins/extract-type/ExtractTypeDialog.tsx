@@ -10,9 +10,10 @@
  *  On submit:
  *   1. `createTypeBlock` materialises a fresh block-type block with
  *      the caller's label + picked schema refList.
- *   2. We dispatch `openFindTypeInstancesDialog` on the new type id.
- *      The user lands directly in the candidate-finding flow with
- *      the new type's properties pre-listed. */
+ *   2. The dialog resolves with the new type id; the `extractType`
+ *      action then opens the find-type-instances dialog on it, so the
+ *      user lands directly in the candidate-finding flow with the new
+ *      type's properties pre-listed. */
 
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -29,20 +30,27 @@ import { Label } from '@/components/ui/label'
 import { useRepo } from '@/context/repo.js'
 import type { BlockData } from '@/data/api'
 import { createTypeBlock } from '@/data/typeExtraction'
-import {
-  openExtractTypeDialogEvent,
-  openFindTypeInstancesDialog,
-  type OpenExtractTypeDialogEventDetail,
-} from './events'
+import type { DialogContextProps } from '@/utils/dialogs.js'
 import {
   PropertyShapePicker,
   buildPropertyShapeChoices,
   type PropertyShapeChoice,
 } from './PropertyShapePicker'
 
-export function ExtractTypeDialog() {
+export interface ExtractTypeDialogProps {
+  prototypeBlockId: string
+}
+
+export interface ExtractTypeDialogResult {
+  typeBlockId: string
+}
+
+export function ExtractTypeDialog({
+  prototypeBlockId,
+  resolve,
+  cancel,
+}: DialogContextProps<ExtractTypeDialogResult> & ExtractTypeDialogProps) {
   const repo = useRepo()
-  const [open, setOpen] = useState(false)
   const [prototype, setPrototype] = useState<BlockData | null>(null)
   const [typeName, setTypeName] = useState('')
   const [choices, setChoices] = useState<readonly PropertyShapeChoice[]>([])
@@ -50,32 +58,19 @@ export function ExtractTypeDialog() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    const handleOpen = async (event: Event) => {
-      const detail = (event as CustomEvent<OpenExtractTypeDialogEventDetail>).detail
-      const data = await repo.load(detail.prototypeBlockId)
+    let cancelled = false
+    void (async () => {
+      const data = await repo.load(prototypeBlockId)
+      if (cancelled) return
       if (!data) {
-        setError(`Block ${detail.prototypeBlockId} not found`)
+        setError(`Block ${prototypeBlockId} not found`)
         return
       }
       setPrototype(data)
-      setTypeName('')
       setChoices(buildPropertyShapeChoices(repo, data))
-      setError(null)
-      setBusy(false)
-      setOpen(true)
-    }
-    window.addEventListener(openExtractTypeDialogEvent, handleOpen)
-    return () => window.removeEventListener(openExtractTypeDialogEvent, handleOpen)
-  }, [repo])
-
-  const close = () => {
-    setOpen(false)
-    setPrototype(null)
-    setChoices([])
-    setError(null)
-    setBusy(false)
-    setTypeName('')
-  }
+    })()
+    return () => { cancelled = true }
+  }, [repo, prototypeBlockId])
 
   const pickedChoices = useMemo(
     () => choices.filter(c => c.picked),
@@ -102,8 +97,7 @@ export function ExtractTypeDialog() {
         label: typeName.trim(),
         propertySchemaIds: pickedSchemaBlockIds,
       })
-      close()
-      openFindTypeInstancesDialog({typeBlockId: typeId})
+      resolve({typeBlockId: typeId})
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create type')
       setBusy(false)
@@ -111,7 +105,7 @@ export function ExtractTypeDialog() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={next => { if (!next) close() }}>
+    <Dialog open onOpenChange={next => { if (!next) cancel() }}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>Extract type from this block</DialogTitle>
@@ -162,7 +156,7 @@ export function ExtractTypeDialog() {
             {error && <p className="text-sm text-destructive">{error}</p>}
 
             <DialogFooter>
-              <Button variant="ghost" onClick={close} disabled={busy}>Cancel</Button>
+              <Button variant="ghost" onClick={cancel} disabled={busy}>Cancel</Button>
               <Button onClick={handleCreate} disabled={!canCreate}>
                 {busy ? 'Creating…' : 'Create type'}
               </Button>

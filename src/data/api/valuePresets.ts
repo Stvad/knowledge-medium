@@ -47,6 +47,13 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
    *  renderer (the side panel users open by clicking the property
    *  glyph). Only meaningful when `TConfig` is non-void. */
   readonly ConfigEditor?: ComponentType<ValuePresetConfigEditorProps<TConfig>>
+  /** When true, this preset supplies an editor/glyph for its codec type
+   *  but is NOT offered as a user-creatable property type in the
+   *  AddPropertyForm picker. Used by presets whose config can't be set
+   *  through the generic picker (e.g. `enum`, whose options must come
+   *  from a plugin's settings schema), so the editor still resolves for
+   *  stored values without surfacing a useless "create" entry. */
+  readonly hideFromPicker?: boolean
 }
 
 /** Variance-erased preset type for storage in heterogeneous

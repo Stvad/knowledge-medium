@@ -1,10 +1,10 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.js'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import {
   labelForBlockData,
@@ -23,7 +23,8 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -33,14 +34,18 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernelProcessors: false,
   })
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
@@ -72,6 +77,7 @@ const blockData = (id: string, content: string, aliases?: string[]): BlockData =
   references: [],
   createdAt: 1,
   updatedAt: 1,
+  userUpdatedAt: 1,
   createdBy: 'u',
   updatedBy: 'u',
   deleted: false,
@@ -100,6 +106,7 @@ describe('link target autocomplete helpers', () => {
       references: [],
       createdAt: 1,
       updatedAt: 1,
+      userUpdatedAt: 1,
       createdBy: 'u',
       updatedBy: 'u',
       deleted: false,
@@ -116,6 +123,7 @@ describe('link target autocomplete helpers', () => {
       references: [],
       createdAt: 1,
       updatedAt: 1,
+      userUpdatedAt: 1,
       createdBy: 'u',
       updatedBy: 'u',
       deleted: false,
@@ -326,6 +334,28 @@ describe('link target autocomplete helpers', () => {
       {label: '["Dating"]', detail: '["Dating"]'},
       {label: 'My Dating notes', detail: 'My Dating notes'},
     ])
+  })
+
+  it('ranks an exact alias first even when prefix-sharing aliases crowd the pre-filter', async () => {
+    // "backup dancer" is a real partial match; the "dana NN" rows only
+    // share the 3-char filter prefix ("dan") and never match the full
+    // "dancer" token, so they exist purely to overflow the candidate pool
+    // the pre-filter LIMIT pulls before JS ranking. The exact alias is
+    // created last, so an unordered LIMIT evicts it from the pool.
+    await create({id: 'partial', aliases: ['backup dancer']})
+    for (let i = 0; i < 30; i++) {
+      await create({id: `decoy-${i}`, aliases: [`dana ${String(i).padStart(2, '0')}`]})
+    }
+    await create({id: 'exact', aliases: ['dancer']})
+
+    const out = await searchLinkTargetIdCandidates(env.repo, {
+      workspaceId: WS,
+      query: 'dancer',
+      limit: 5,
+    })
+
+    expect(out[0]).toMatchObject({id: 'exact', label: 'dancer'})
+    expect(out.map(candidate => candidate.id)).toContain('partial')
   })
 
   it('builds value candidates with excluded labels', async () => {

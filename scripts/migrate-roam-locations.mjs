@@ -226,7 +226,7 @@ const WS = ${JSON.stringify(workspaceId)}
 
 const props = await import('/src/plugins/geo/properties.ts')
 const types = await import('/src/plugins/geo/blockTypes.ts')
-const coreProps = await import('/src/data/internals/coreProperties.ts')
+const coreProps = await import('/src/data/properties.ts')
 const api = await import('/src/data/api/index.ts')
 const orderMod = await import('/src/data/orderKey.ts')
 const locMod = await import('/src/plugins/geo/locationsPage.ts')

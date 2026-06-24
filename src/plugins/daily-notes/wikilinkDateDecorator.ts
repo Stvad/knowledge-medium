@@ -21,11 +21,12 @@ import type {
   WikilinkDisplayDecorator,
   WikilinkDisplayParts,
 } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
+import { openDialog } from '@/utils/dialogs.js'
 import { hasAnyBlockDateAdapter } from './blockDateAdapter.ts'
 import {
-  openReschedulePicker,
+  ReschedulePicker,
   type ReschedulePickerAnchorRect,
-} from './rescheduleEvents.ts'
+} from './ReschedulePicker.tsx'
 
 const formatWeekday = (date: Date): string =>
   date.toLocaleDateString('en-US', {weekday: 'short'})
@@ -44,14 +45,12 @@ const rectFor = (element: HTMLElement): ReschedulePickerAnchorRect => {
 
 const rescheduleButton = ({
   sourceBlock,
-  workspaceId,
-}: Pick<WikilinkDisplayContext, 'sourceBlock' | 'workspaceId'>) => {
+}: Pick<WikilinkDisplayContext, 'sourceBlock'>) => {
   if (!sourceBlock) return null
 
   const open = (element: HTMLElement): void => {
-    openReschedulePicker({
+    void openDialog(ReschedulePicker, {
       blockId: sourceBlock.id,
-      workspaceId,
       anchorRect: rectFor(element),
     })
   }
@@ -60,7 +59,12 @@ const rescheduleButton = ({
     'button',
     {
       'aria-label': 'Reschedule date',
-      className: 'mr-1 inline-flex h-4 w-4 translate-y-[2px] items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+      // align-middle (vertical-align) centers the icon against the date
+      // text by the font's x-height, so it stays centered at any font
+      // size — including the 1.5rem top-level/title rendering. A fixed
+      // translate-y nudge only lined up at body size and floated high on
+      // larger titles.
+      className: 'mr-1 inline-flex h-4 w-4 align-middle items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
       'data-block-interaction': 'ignore',
       onClick: (event: MouseEvent<HTMLButtonElement>) => {
         event.preventDefault()
@@ -88,7 +92,6 @@ export const dailyDateWikilinkDecorator: WikilinkDisplayDecorator = {
     alias,
     runtime,
     sourceBlock,
-    workspaceId,
   }: WikilinkDisplayContext): string | WikilinkDisplayParts | null => {
     const parsed = parseLiteralDailyPageTitle(alias)
     if (!parsed) return null
@@ -97,7 +100,7 @@ export const dailyDateWikilinkDecorator: WikilinkDisplayDecorator = {
       return content
     }
     return {
-      before: rescheduleButton({sourceBlock, workspaceId}),
+      before: rescheduleButton({sourceBlock}),
       content,
     }
   },

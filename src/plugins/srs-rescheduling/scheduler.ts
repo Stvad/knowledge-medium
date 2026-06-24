@@ -97,6 +97,19 @@ export const getNewSrsParametersFromValues = (
   return enforceLimits(addJitter({interval: newInterval, factor: newFactor}, random))
 }
 
+/** Projected next interval (in days, un-rounded) for `signal` given the
+ *  card's current params, computed with the jitter neutralised
+ *  (`random() = 0.5` is the midpoint of the ±jitter range, so it cancels)
+ *  so the value is stable enough to show as a pre-grade estimate on the
+ *  review buttons. The committed reschedule re-applies real jitter, so the
+ *  card can land ±`JITTER_PERCENTAGE` off this — fine for an estimate.
+ *  Feed the result through the same `formatIntervalDays` the toast uses so
+ *  the button label and the post-grade toast agree. */
+export const estimateSrsIntervalDays = (
+  params: SrsParams,
+  signal: SrsSignal,
+): number => getNewSrsParametersFromValues(params, signal, () => 0.5).interval
+
 export const scheduleSrsProperties = (
   params: SrsParams,
   signal: SrsSignal,

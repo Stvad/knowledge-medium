@@ -19,7 +19,7 @@ import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
  *  Throws on invalid input. Callers must validate via `isValidDateAlias`
  *  upstream — the references-processor routing decision is the canonical
  *  gate, so reaching this with a bad iso is a caller bug. */
-const dailyNoteDateValue = (iso: string): Date => {
+export const dailyNoteDateValue = (iso: string): Date => {
   const ms = Date.parse(`${iso}T00:00:00Z`)
   if (Number.isNaN(ms)) {
     throw new Error(`Invalid ISO date for daily note: ${iso}`)
@@ -102,7 +102,7 @@ export const getOrCreateJournalBlock = async (
 ): Promise<Block> => {
   const id = journalBlockId(workspaceId)
   const live = await repo.load(id)
-  if (live && !live.deleted) {
+  if (live) {
     const aliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       !hasBlockType(live, PAGE_TYPE) ||
@@ -140,7 +140,7 @@ export const getOrCreateJournalBlock = async (
       parentId: null,
       orderKey: 'a0',
       content: JOURNAL_ALIAS,
-    })
+    }, {systemMint: true})
     await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
@@ -180,7 +180,7 @@ export const getOrCreateDailyNote = async (
   const dailyAliases = [longLabel, isoLabel]
   const dateValue = dailyNoteDateValue(iso)
   const live = await repo.load(id)
-  if (live && !live.deleted) {
+  if (live) {
     const aliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       live.parentId !== journalBlockId(workspaceId) ||
@@ -240,7 +240,7 @@ export const getOrCreateDailyNote = async (
       parentId: journal.id,
       orderKey,
       content: longLabel,
-    })
+    }, {systemMint: true})
     await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
     await repo.addTypeInTx(
       tx, id, DAILY_NOTE_TYPE,
@@ -314,6 +314,10 @@ export const ensureDailyNoteTarget = async (
     parentId: null,
     orderKey: keyAtEnd(),
     freshContent: date,
+    // A daily-note seat materialized from a reference is a speculative
+    // default — it must yield to a real daily-note row the server already
+    // has for this date.
+    systemMint: true,
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [date])
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)

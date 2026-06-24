@@ -1,25 +1,14 @@
 import {
   ChangeScope,
-  CodecError,
   codecs,
   defineProperty,
-  type Codec,
 } from '@/data/api'
 
 export type VideoPlayerView = 'default' | 'notes'
 export const DEFAULT_VIDEO_NOTES_PANE_RATIO = 0.8
 
-const videoPlayerViewCodec: Codec<VideoPlayerView> = {
-  type: 'string',
-  encode: value => value,
-  decode: value => {
-    if (value === 'default' || value === 'notes') return value
-    throw new CodecError('video player view', value)
-  },
-}
-
 export const videoPlayerViewProp = defineProperty<VideoPlayerView>('video:playerView', {
-  codec: videoPlayerViewCodec,
+  codec: codecs.enum(['default', 'notes']),
   defaultValue: 'default',
   changeScope: ChangeScope.UiState,
 })

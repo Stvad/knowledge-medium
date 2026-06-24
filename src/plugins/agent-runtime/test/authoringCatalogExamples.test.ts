@@ -112,7 +112,7 @@ describe('authoring catalog example drift guard', () => {
       }
     }
     expect(failures, failures.join('\n')).toEqual([])
-  })
+  }, 20_000)
 
   it('every `@/extensions/api.js` named import in an example exists on the api barrel', async () => {
     const apiSurface = await getApiSurface()

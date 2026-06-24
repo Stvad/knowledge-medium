@@ -16,6 +16,9 @@ export interface BlockRow {
   references_json: string
   created_at: number
   updated_at: number
+  // Nullable: old-client downloads / old sync-rules windows and pre-split
+  // rows arrive without it; `parseBlockRow` falls back to `updated_at`.
+  user_updated_at: number | null
   created_by: string
   updated_by: string
   // SQLite has no native boolean — stored as INTEGER 0/1 and the wa-sqlite
@@ -46,6 +49,11 @@ export const BLOCK_STORAGE_COLUMNS = [
   {name: 'references_json', definition: "references_json TEXT NOT NULL DEFAULT '[]'"},
   {name: 'created_at', definition: 'created_at INTEGER NOT NULL'},
   {name: 'updated_at', definition: 'updated_at INTEGER NOT NULL'},
+  // Nullable (no NOT NULL): an old sync-rules window or pre-split row binds
+  // NULL here rather than failing the raw-table put; `parseBlockRow` falls
+  // back to `updated_at`. Mirrors the server column added in
+  // 20260612000000_add_user_updated_at_monotonic_clamp.sql.
+  {name: 'user_updated_at', definition: 'user_updated_at INTEGER'},
   {name: 'created_by', definition: 'created_by TEXT NOT NULL'},
   {name: 'updated_by', definition: 'updated_by TEXT NOT NULL'},
   {name: 'deleted', definition: 'deleted INTEGER NOT NULL DEFAULT 0'},
@@ -53,25 +61,10 @@ export const BLOCK_STORAGE_COLUMNS = [
 
 const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
 
-const BLOCK_SYNC_COLUMN_NAMES = BLOCK_COLUMN_NAMES.filter(
-  (name): name is Exclude<BlockColumnName, 'id'> => name !== 'id',
-)
-
 const formatSqlList = (items: readonly string[], indentSize: number) => {
   const indent = ' '.repeat(indentSize)
   return items.map(item => `${indent}${item}`).join(',\n')
 }
-
-const formatSqlOrList = (items: readonly string[], indentSize: number) => {
-  const indent = ' '.repeat(indentSize)
-  return items.map((item, index) => `${indent}${index === 0 ? '' : 'OR '}${item}`).join('\n')
-}
-
-const BLOCK_SYNC_ASSIGNMENTS = BLOCK_SYNC_COLUMN_NAMES.map(columnName => `${columnName} = excluded.${columnName}`)
-
-const BLOCK_SYNC_DIFF_PREDICATES = BLOCK_SYNC_COLUMN_NAMES.map(
-  columnName => `blocks.${columnName} IS NOT excluded.${columnName}`,
-)
 
 export const SELECT_BLOCK_COLUMNS_SQL = BLOCK_COLUMN_NAMES.join(',\n  ')
 
@@ -82,6 +75,19 @@ export const buildQualifiedBlockColumnsSql = (tableName: string) =>
 
 export const CREATE_BLOCKS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS blocks (
+${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
+  )
+`
+
+/** Layout B staging table (design doc §9.2). PowerSync's blocks stream is
+ *  retargeted to row_type `blocks_synced`, so EVERY downloaded row —
+ *  plaintext or `enc:v1:` ciphertext — lands here first; a JS observer then
+ *  materializes it into the app-visible plaintext `blocks` table. It mirrors
+ *  the `blocks` column shape (same `BLOCK_STORAGE_COLUMNS`) so a server row
+ *  hydrates without dropping fields, but carries NONE of the `blocks`
+ *  triggers — it's a passive landing zone, never read by app queries. */
+export const CREATE_BLOCKS_SYNCED_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS blocks_synced (
 ${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
   )
 `
@@ -134,45 +140,26 @@ export const ensureBlockStorageColumns = async (db: BlockSchemaDb): Promise<void
   }
 }
 
-export const UPSERT_BLOCK_SQL = `
-  INSERT INTO blocks (
-${formatSqlList(BLOCK_COLUMN_NAMES, 4)}
-  ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
-  ON CONFLICT(id) DO UPDATE SET
-${formatSqlList(BLOCK_SYNC_ASSIGNMENTS, 4)}
-  WHERE
-${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 4)}
-`
-
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
 
-// PowerSync's CRUD-apply path runs this `put` for both inserts and updates of
-// a synced row. INSERT OR REPLACE would fire SQLite's DELETE+INSERT trigger
-// pair on an update, so the `row_events` audit trigger sees the change as
-// kind='insert' with before_json=NULL — and `rowEventsTail` then treats a
-// pure content/property edit as a child-membership change and clears the
-// parent's child-loaded marker. ON CONFLICT(id) DO UPDATE preserves the
-// UPDATE shape (OLD/NEW visible to triggers), keeping before_json populated
-// so the membership-vs-content classification in `rowEventsTail` is correct.
-// The WHERE guard keeps re-delivered identical sync rows from firing UPDATE
-// triggers at all; `row_events` is an invalidation queue, not a durable copy
-// of every sync operation PowerSync has replayed.
-export const BLOCKS_RAW_TABLE = {
+// Layout B staging raw table (design doc §9.2). PowerSync's sync-apply runs
+// this plain `INSERT OR REPLACE` / `DELETE` directly against `blocks_synced`,
+// which carries no triggers of its own beyond the change-capture queue. It
+// overwrites the staged row (plaintext or `enc:v1:` ciphertext) on every
+// re-delivery; the observer is what dedups no-ops, in JS, on its way into the
+// live `blocks` table.
+export const BLOCKS_SYNCED_RAW_TABLE = {
   put: {
     sql: `
-      INSERT INTO blocks (
+      INSERT OR REPLACE INTO blocks_synced (
 ${formatSqlList(BLOCK_COLUMN_NAMES, 8)}
       ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
-      ON CONFLICT(id) DO UPDATE SET
-${formatSqlList(BLOCK_SYNC_ASSIGNMENTS, 8)}
-      WHERE
-${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 8)}
     `,
     params: BLOCK_COLUMN_NAMES.map(powerSyncParamForColumn),
   },
   delete: {
-    sql: 'DELETE FROM blocks WHERE id = ?',
+    sql: 'DELETE FROM blocks_synced WHERE id = ?',
     params: ['Id'],
   },
 } satisfies RawTableType
@@ -193,6 +180,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'references', sqlExpression: rowRef => `json(${rowRef}.references_json)`},
   {key: 'createdAt', sqlExpression: rowRef => `${rowRef}.created_at`},
   {key: 'updatedAt', sqlExpression: rowRef => `${rowRef}.updated_at`},
+  {key: 'userUpdatedAt', sqlExpression: rowRef => `coalesce(${rowRef}.user_updated_at, ${rowRef}.updated_at)`},
   {key: 'createdBy', sqlExpression: rowRef => `${rowRef}.created_by`},
   {key: 'updatedBy', sqlExpression: rowRef => `${rowRef}.updated_by`},
   {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},
@@ -229,6 +217,9 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   references: safeJsonParse<BlockReference[]>(row.references_json, []),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+  // Fallback absorbs old-rules downloads and pre-migration row_events
+  // snapshots that carry no user_updated_at.
+  userUpdatedAt: row.user_updated_at ?? row.updated_at,
   createdBy: row.created_by,
   updatedBy: row.updated_by,
   deleted: Boolean(row.deleted),
@@ -245,6 +236,7 @@ type BlockRowParams = [
   referencesJson: string,
   createdAt: number,
   updatedAt: number,
+  userUpdatedAt: number,
   createdBy: string,
   updatedBy: string,
   deleted: 0 | 1,
@@ -261,6 +253,7 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   JSON.stringify(blockData.references ?? []),
   blockData.createdAt,
   blockData.updatedAt,
+  blockData.userUpdatedAt,
   blockData.createdBy,
   blockData.updatedBy,
   blockData.deleted ? 1 : 0,

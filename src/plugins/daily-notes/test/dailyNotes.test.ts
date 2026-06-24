@@ -13,19 +13,16 @@
  * tx.restore / tx.move) and `createTestDb` harness.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
-import {
-  backfillDailyNoteDatePropertyIfNeeded,
-} from '@/plugins/daily-notes/localSchema.js'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   DAILY_NOTE_NS,
   DAILY_NOTE_TYPE,
@@ -47,7 +44,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -65,9 +64,12 @@ const setup = async (): Promise<Harness> => {
   return {h, cache, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const contentChildIds = async (parentId: string): Promise<string[]> =>
   (await env.repo.block(parentId).children.load())
@@ -248,115 +250,6 @@ describe('getOrCreateDailyNote', () => {
     expect(restored.hasType(DAILY_NOTE_TYPE)).toBe(true)
     expect(restored.peekProperty(dailyNoteDateProp)?.toISOString())
       .toBe('2026-04-28T00:00:00.000Z')
-  })
-})
-
-describe('backfillDailyNoteDatePropertyIfNeeded', () => {
-  /** Test harness mirror of `LocalSchemaDb` over the PowerSync handle
-   *  in `env.h.db`. Production `repoProvider` builds the same shim. */
-  const localDb = (h: TestDb) => ({
-    execute: (sql: string) => h.db.execute(sql),
-    getOptional: async <T,>(sql: string): Promise<T | null> => {
-      const row = await h.db.getOptional<T>(sql)
-      return row ?? null
-    },
-  })
-
-  /** Bypass the codec write path to simulate a legacy row: daily-note
-   *  type with ISO aliases but no `dailyNoteDateProp` value. The
-   *  `tx.update` raw-properties path lets us drop the new property
-   *  without it being repopulated by `addTypeInTx`. */
-  const seedLegacyDailyNote = async (iso: string): Promise<string> => {
-    const note = await getOrCreateDailyNote(env.repo, WS, iso)
-    await env.repo.tx(async tx => {
-      const current = await tx.get(note.id)
-      if (!current) return
-      const props = {...current.properties}
-      delete props[dailyNoteDateProp.name]
-      await tx.update(note.id, {properties: props})
-    }, {scope: ChangeScope.BlockDefault})
-    return note.id
-  }
-
-  const readDateProperty = async (id: string): Promise<unknown> => {
-    const row = await env.h.db.get<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?', [id])
-    return JSON.parse(row?.properties_json ?? '{}')[dailyNoteDateProp.name]
-  }
-
-  it('populates the date property from the ISO alias for legacy rows', async () => {
-    const id = await seedLegacyDailyNote('2026-04-28')
-    expect(await readDateProperty(id)).toBeUndefined()
-
-    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
-
-    expect(await readDateProperty(id)).toBe('2026-04-28T00:00:00.000Z')
-  })
-
-  it('catches up rows that arrive after the first invocation', async () => {
-    // Partial-sync regression: PowerSync's local-schema phase runs
-    // the backfill before `db.connect()`, so a fresh device may scan
-    // an incomplete set of legacy rows. The probe-then-update
-    // approach re-checks every cold start, so later-arriving rows
-    // still get processed instead of staying permanently unhealed.
-    const earlyId = await seedLegacyDailyNote('2026-04-28')
-    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
-    expect(await readDateProperty(earlyId)).toBe('2026-04-28T00:00:00.000Z')
-
-    const lateId = await seedLegacyDailyNote('2026-05-12')
-    expect(await readDateProperty(lateId)).toBeUndefined()
-    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
-    expect(await readDateProperty(lateId)).toBe('2026-05-12T00:00:00.000Z')
-  })
-
-  it('is a no-op once every daily-note row has the property', async () => {
-    // Steady-state guarantee: with no pending work, the probe must
-    // exit before issuing the UPDATE. We test that by stamping a
-    // sentinel onto every daily-note row and verifying it survives
-    // the backfill call — if the UPDATE had fired, `json_set` would
-    // rebuild `properties_json` and drop the sentinel order.
-    const id = (await getOrCreateDailyNote(env.repo, WS, '2026-04-28')).id
-    const before = await env.h.db.get<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?', [id])
-    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
-    const after = await env.h.db.get<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?', [id])
-    expect(after?.properties_json).toBe(before?.properties_json)
-  })
-
-  it('skips calendar-invalid date-shaped aliases', async () => {
-    // Legacy rows from before `isValidDateAlias`-driven routing could
-    // carry calendar-invalid ISO aliases (`2026-13-01`, `2026-02-30`).
-    // The backfill must NOT write those into `daily-note:date`: the
-    // date codec can't decode `2026-13-01T00:00:00.000Z`, and a
-    // rollover-shifted day (`2026-02-30` → `2026-03-02`) would be a
-    // wrong-date silent corruption. Leaving the property unset is
-    // the correct degraded state.
-    const journal = await getOrCreateJournalBlock(env.repo, WS)
-    const seedBogusDailyNote = async (id: string, alias: string) => {
-      await env.repo.tx(async tx => {
-        await tx.create({
-          id,
-          workspaceId: WS,
-          parentId: journal.id,
-          orderKey: `seed-${id}`,
-          content: alias,
-        })
-      }, {scope: ChangeScope.BlockDefault})
-      await env.h.db.execute(
-        `UPDATE blocks SET properties_json = ? WHERE id = ?`,
-        [JSON.stringify({types: ['page', DAILY_NOTE_TYPE], alias: [alias]}), id],
-      )
-    }
-    await seedBogusDailyNote('bogus-month', '2026-13-01')
-    await seedBogusDailyNote('bogus-rollover', '2026-02-30')
-    await seedBogusDailyNote('valid', '2026-04-28')
-
-    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
-
-    expect(await readDateProperty('bogus-month')).toBeUndefined()
-    expect(await readDateProperty('bogus-rollover')).toBeUndefined()
-    expect(await readDateProperty('valid')).toBe('2026-04-28T00:00:00.000Z')
   })
 })
 

@@ -276,3 +276,58 @@ export const rewriteWikilinks = (
   }
   return cursor === 0 ? content : result + content.slice(cursor)
 }
+
+/** Replace block-ref marks targeting `blockId` with inline text — used
+ *  when the target block is deleted so its references degrade gracefully
+ *  to the text they displayed rather than dangling. Plain `((id))` and
+ *  embed `!((id))` marks (which display the target's content) become
+ *  `inlineContent`; aliased `[label](((id)))` marks (which display the
+ *  label) keep their `label`. Marks targeting other ids are untouched.
+ *  Mirrors `rewriteBlockRefs`'s parse-spans-and-slice approach so
+ *  `inlineContent` is inserted literally (no `String.replace` `$&`
+ *  pitfall) and overlapping/nested marks don't corrupt the slicing. */
+export const inlineBlockRefs = (
+  content: string,
+  blockId: string,
+  inlineContent: string,
+): string => {
+  const normalizedId = blockId.toLowerCase()
+  const marks = parseBlockRefs(content)
+  if (marks.length === 0) return content
+  let result = ''
+  let cursor = 0
+  for (const mark of marks) {
+    if (mark.startIndex < cursor) continue
+    if (mark.blockId !== normalizedId) continue
+    result += content.slice(cursor, mark.startIndex)
+    result += mark.label !== undefined ? mark.label : inlineContent
+    cursor = mark.endIndex
+  }
+  return cursor === 0 ? content : result + content.slice(cursor)
+}
+
+/** Replace block-ref ids in `((id))`, `!((id))`, and `[label](((id)))`
+ *  forms while preserving embed-ness and display labels. */
+export const rewriteBlockRefs = (
+  content: string,
+  fromId: string,
+  toId: string,
+): string => {
+  const normalizedFrom = fromId.toLowerCase()
+  const marks = parseBlockRefs(content)
+  if (marks.length === 0) return content
+  let result = ''
+  let cursor = 0
+  for (const mark of marks) {
+    if (mark.startIndex < cursor) continue
+    if (mark.blockId !== normalizedFrom) continue
+    result += content.slice(cursor, mark.startIndex)
+    if (mark.label !== undefined) {
+      result += renderAliasedBlockref(mark.label, toId)
+    } else {
+      result += mark.embed ? `!((${toId}))` : `((${toId}))`
+    }
+    cursor = mark.endIndex
+  }
+  return cursor === 0 ? content : result + content.slice(cursor)
+}

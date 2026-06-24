@@ -21,7 +21,7 @@
 
 import { useSyncExternalStore } from 'react'
 import type { Block } from '@/data/block'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type Tx } from '@/data/api'
 import {
   focusedBlockLocationProp,
   type FocusedBlockLocation,
@@ -207,10 +207,53 @@ export class PanelHistoryStore {
 
 export const panelHistory = new PanelHistoryStore()
 
-/** Navigate within a panel: capture the current visit's ephemeral state,
- *  push (block, state) onto back, clear forward, then mutate the panel's
- *  top-level block. No-op when `blockId` already equals the current
- *  top-level. */
+/** Write a panel's content: point `panelId` at `blockId` and set its focus +
+ *  scroll. With `state` (a back/forward or URL-reconcile restore) it replays the
+ *  captured focus/scroll; without it the view is fresh — focus the new
+ *  top-level, scroll to 0. The single choke for content *swaps on an existing
+ *  panel row* — in-panel navigate, back/forward, URL reconcile, merge retarget;
+ *  a *newly created* row's initial content is set by `createPanelRowInTx`
+ *  instead, so a complete "observe every view" seam would hook both. Takes the
+ *  caller's `tx`, so it composes inside a batch reconcile as well as a single
+ *  interactive swap. */
+export const writePanelContent = async (
+  tx: Tx,
+  panelId: string,
+  blockId: string,
+  state?: VisitState,
+): Promise<void> => {
+  await tx.setProperty(panelId, topLevelBlockIdProp, blockId)
+  await tx.setProperty(panelId, focusedBlockLocationProp, state?.focusedLocation ?? {
+    blockId,
+    renderScopeId: outlineRenderScopeId(blockId),
+  })
+  await tx.setProperty(panelId, scrollTopProp, state?.scrollTop ?? 0)
+}
+
+/** Swap a panel's content in its own UiState tx, wrapped in the crossfade —
+ *  the interactive path (navigate / back / forward). Focus restores
+ *  synchronously here so the first render of the new top-level already has the
+ *  right cursor; scroll restore needs the new content rendered first and is
+ *  handled by the renderer via `consumeRestore()` in a post-render effect. */
+const transactPanelContent = (
+  panelBlock: Block,
+  blockId: string,
+  state: VisitState | undefined,
+  description: string,
+): Promise<void> =>
+  withMoveTransition(async () => {
+    await panelBlock.repo.tx(async tx => {
+      await writePanelContent(tx, panelBlock.id, blockId, state)
+    }, {scope: ChangeScope.UiState, description})
+  })
+
+/** Navigate within a panel: capture the current visit's ephemeral state, push
+ *  (block, state) onto back, clear forward, then swap the panel's top-level
+ *  block. No-op when `blockId` already equals the current top-level.
+ *
+ *  The panel content fully swaps here — the highest-impact transition in the
+ *  app — centralised so every navigation path (zoom shortcuts, wikilink clicks,
+ *  breadcrumb, programmatic) gets the same crossfade without re-wrapping. */
 export const navigateInPanel = async (
   panelBlock: Block,
   blockId: string,
@@ -223,25 +266,11 @@ export const navigateInPanel = async (
       state: panelHistory.snapshot(panelBlock.id),
     })
   }
-  // Panel content fully swaps here — the highest-impact transition in
-  // the app. Centralised so every navigation path (zoom shortcuts,
-  // wikilink clicks, breadcrumb, programmatic) gets the same crossfade
-  // without each call site re-wrapping.
-  await withMoveTransition(async () => {
-    await panelBlock.repo.tx(async tx => {
-      await tx.setProperty(panelBlock.id, topLevelBlockIdProp, blockId)
-      await tx.setProperty(panelBlock.id, focusedBlockLocationProp, {
-        blockId,
-        renderScopeId: outlineRenderScopeId(blockId),
-      })
-      await tx.setProperty(panelBlock.id, scrollTopProp, 0)
-    }, {scope: ChangeScope.UiState, description: 'navigate in panel'})
-  })
+  await transactPanelContent(panelBlock, blockId, undefined, 'navigate in panel')
 }
 
-/** Step the panel one entry back. Captures the current visit's state
- *  onto forward, then queues the destination's snapshot for the renderer
- *  to restore (focused block, scroll position) on its next effect. */
+/** Step the panel one entry back. Captures the current visit's state onto
+ *  forward, then restores the destination's snapshot (focused block, scroll). */
 export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   const current = panelBlock.peekProperty(topLevelBlockIdProp)
   if (!current) return false
@@ -251,20 +280,7 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   })
   if (!dest) return false
   panelHistory.enqueueRestore(panelBlock.id, dest.state)
-  // Focused block restores synchronously in the same UiState tx so the
-  // first render of the new top-level already has the right cursor.
-  // Scroll restore needs the new content to render first; that's the
-  // renderer's responsibility via consumeRestore() in a post-render effect.
-  await withMoveTransition(async () => {
-    await panelBlock.repo.tx(async tx => {
-      await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
-      await tx.setProperty(panelBlock.id, focusedBlockLocationProp, dest.state?.focusedLocation ?? {
-        blockId: dest.blockId,
-        renderScopeId: outlineRenderScopeId(dest.blockId),
-      })
-      await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
-    }, {scope: ChangeScope.UiState, description: 'panel history back'})
-  })
+  await transactPanelContent(panelBlock, dest.blockId, dest.state, 'panel history back')
   return true
 }
 
@@ -277,16 +293,7 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   })
   if (!dest) return false
   panelHistory.enqueueRestore(panelBlock.id, dest.state)
-  await withMoveTransition(async () => {
-    await panelBlock.repo.tx(async tx => {
-      await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
-      await tx.setProperty(panelBlock.id, focusedBlockLocationProp, dest.state?.focusedLocation ?? {
-        blockId: dest.blockId,
-        renderScopeId: outlineRenderScopeId(dest.blockId),
-      })
-      await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
-    }, {scope: ChangeScope.UiState, description: 'panel history forward'})
-  })
+  await transactPanelContent(panelBlock, dest.blockId, dest.state, 'panel history forward')
   return true
 }
 

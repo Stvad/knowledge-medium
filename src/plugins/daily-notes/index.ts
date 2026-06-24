@@ -20,8 +20,8 @@
  *     reference-target materialiser called from the backlinks
  *     references-processor when a date-shaped alias resolves to a
  *     date that has no row yet.
- *   - `openDailyNotePicker(detail?)` / `openDailyNotePickerEvent` —
- *     reusable UI trigger for the global daily-note date picker.
+ *   - `DailyNotePicker` — the date-picker dialog component, opened on
+ *     demand with `openDialog(DailyNotePicker, {anchorRect?, initialIso?})`.
  *   - `isDateAlias(alias)` — shape-only predicate (`YYYY-MM-DD`).
  *   - `isValidDateAlias(alias)` — shape + calendar-validity predicate.
  *     The routing decision in `parseReferences` and SRS's daily-note
@@ -31,7 +31,7 @@
  *
  * The `dailyNotesPlugin` AppExtension contributes:
  *   - the three global `open_*_daily_note` actions, and
- *   - a header button + app mount for the daily-note picker, and
+ *   - a header button that opens the daily-note picker dialog, and
  *   - a `workspaceLandingFacet` resolver that lands the user on
  *     today's note when the panel layout is empty (plus a tutorial
  *     bullet on first-run workspaces).
@@ -42,8 +42,8 @@
  * mounts, alongside the kernel + other data-only plugins.
  */
 import type { Repo } from '@/data/repo'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import {
   actionContextsFacet,
   actionsFacet,
@@ -54,11 +54,7 @@ import {
   type HeaderItemContribution,
 } from '@/extensions/core.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
-import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
-import {
-  blockGestureConflictsFacet,
-  type BlockGestureConflictContribution,
-} from '@/extensions/blockGestureConflicts.js'
+import { continuousGestureRecognizersFacet } from '@/extensions/continuousGestures.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { parseAppHash } from '@/utils/routing.js'
 import { CalendarDays } from 'lucide-react'
@@ -67,29 +63,20 @@ import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
-import { openDailyNotePicker } from './events.ts'
+import { openDialog } from '@/utils/dialogs.js'
 import { todayDailyNoteLanding } from './landing.ts'
 import { blockDateAdapterFacet } from './blockDateAdapter.ts'
 import { referenceDateAdapter } from './referenceDateAdapter.ts'
 import { wikilinkDisplayDecoratorFacet } from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.js'
 import { dailyDateWikilinkDecorator } from './wikilinkDateDecorator.ts'
-import { ReschedulePicker } from './ReschedulePicker.tsx'
 import { DateScrubOverlay } from './DateScrubOverlay.tsx'
 import { DateKeyboardScrubController } from './DateKeyboardScrubController.tsx'
-import {
-  cancelDateScrubForBlock,
-  dateScrubContentSurface,
-  DATE_SCRUB_GESTURE_ID,
-} from './dateScrubGesture.ts'
+import { dateScrubRecognizer } from './dateScrubRecognizer.ts'
+import { dateScrubGestureActions } from './dateScrubGestureActions.ts'
 import {
   dateScrubActionContext,
   dateScrubActions,
 } from './dateScrubActions.ts'
-
-const dateScrubGestureConflictContribution: BlockGestureConflictContribution = {
-  id: DATE_SCRUB_GESTURE_ID,
-  onCancel: cancelDateScrubForBlock,
-}
 import {
   rescheduleBlockDateAction,
   rescheduleQuickActionItem,
@@ -109,23 +96,12 @@ export {
   resolveCurrentDailyNoteIso,
 } from './actions.ts'
 export {
-  openDailyNotePicker,
-  openDailyNotePickerEvent,
+  DailyNotePicker,
   type DailyNotePickerAnchorRect,
-  type OpenDailyNotePickerEventDetail,
-} from './events.ts'
+  type DailyNotePickerProps,
+} from './DailyNotePicker.tsx'
 
 export const OPEN_DAILY_NOTE_PICKER_ACTION_ID = 'open_daily_note_picker'
-
-export const dailyNotePickerMount: AppMountContribution = {
-  id: 'daily-notes.date-picker',
-  component: DailyNotePicker,
-}
-
-export const reschedulePickerMount: AppMountContribution = {
-  id: 'daily-notes.reschedule-picker',
-  component: ReschedulePicker,
-}
 
 export const dateScrubOverlayMount: AppMountContribution = {
   id: 'daily-notes.date-scrub-overlay',
@@ -161,7 +137,7 @@ export const openDailyNotePickerAction = (
     const initialIso = workspaceId
       ? (await resolveCurrentDailyNoteIso(repo, workspaceId)) ?? undefined
       : undefined
-    openDailyNotePicker({initialIso})
+    void openDialog(DailyNotePicker, {initialIso})
   },
 })
 
@@ -192,8 +168,6 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
   }).of([
     dailyNotesDataExtension,
     dialogAppMountExtension,
-    appMountsFacet.of(dailyNotePickerMount, {source: 'daily-notes'}),
-    appMountsFacet.of(reschedulePickerMount, {source: 'daily-notes'}),
     appMountsFacet.of(dateScrubOverlayMount, {source: 'daily-notes'}),
     appMountsFacet.of(dateKeyboardScrubControllerMount, {source: 'daily-notes'}),
     dailyNotesActions({repo}).map(action =>
@@ -209,10 +183,14 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension =>
     ),
     blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
     wikilinkDisplayDecoratorFacet.of(dailyDateWikilinkDecorator, {source: 'daily-notes'}),
-    blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
-    blockGestureConflictsFacet.of(dateScrubGestureConflictContribution, {
-      source: 'daily-notes',
-    }),
+    // Two-finger date scrub rides the core continuous-gesture loop now
+    // (arbitration + the touch-action / pointer-listener seam live there); the
+    // recognizer emits named gestures and the gesture-bound actions below drive
+    // the same ScrubHandler/overlay the keyboard path uses.
+    continuousGestureRecognizersFacet.of(dateScrubRecognizer, {source: 'daily-notes'}),
+    dateScrubGestureActions.map(action =>
+      actionsFacet.of(action, {source: 'daily-notes'}),
+    ),
     actionContextsFacet.of(dateScrubActionContext, {source: 'daily-notes'}),
     dateScrubActions.map(action =>
       actionsFacet.of(action, {source: 'daily-notes'}),
@@ -267,11 +245,11 @@ export {
   type SpreadBlockDatesResult,
 } from './spreadBlockDates.ts'
 export {
-  openReschedulePicker,
-  openReschedulePickerEvent,
-  type OpenReschedulePickerEventDetail,
+  ReschedulePicker,
   type ReschedulePickerAnchorRect,
-} from './rescheduleEvents.ts'
+  type ReschedulePickerProps,
+  type ReschedulePickerResult,
+} from './ReschedulePicker.tsx'
 export {
   DATE_SCRUB_CANCEL_ACTION_ID,
   DATE_SCRUB_COMMIT_ACTION_ID,

@@ -13,6 +13,15 @@ export const ChangeScope = {
   UiState: 'local-ui',
   /** User-owned preferences. Not undoable; uploads. */
   UserPrefs: 'user-prefs',
+  /** App/automation-authored records (diagnostics, telemetry, automation
+   *  output, e.g. startup-metrics) — written by the program, not the user.
+   *  Durable + synced like any write, NOT undoable — and unlike a
+   *  `system:`-prefixed property NAME (which is hidden), Automation-scoped
+   *  properties ARE surfaced in the property panel. For machine-generated data
+   *  the user may want to inspect but never hand-edits as a document. Same
+   *  engine policy as UserPrefs; the distinct identity is its own undo bucket +
+   *  semantic label. */
+  Automation: 'automation',
   /** parseReferences bookkeeping. Separate undo bucket; uploads. */
   References: 'block-default:references',
 } as const
@@ -49,6 +58,11 @@ export const CHANGE_SCOPE_POLICIES = {
     readOnly: 'allow',
   },
   [ChangeScope.UserPrefs]: {
+    undoable: false,
+    source: 'user',
+    readOnly: 'allow',
+  },
+  [ChangeScope.Automation]: {
     undoable: false,
     source: 'user',
     readOnly: 'allow',

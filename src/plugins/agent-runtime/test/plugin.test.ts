@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { actionsFacet, appEffectsFacet, appMountsFacet } from '@/extensions/core.js'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.js'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { agentRuntimePlugin } from '../index.ts'
 
 describe('agentRuntimePlugin', () => {
@@ -11,11 +11,13 @@ describe('agentRuntimePlugin', () => {
     expect(effects.map(effect => effect.id)).toContain('agent-runtime.bridge')
   })
 
-  it('contributes the token dialog as a root mount', () => {
+  it('contributes the shared dialog host so the tokens dialog can open', () => {
+    // The tokens dialog is opened via the `openDialog` queue now, so the
+    // plugin pulls in DialogHost rather than mounting its own listener.
     const runtime = resolveFacetRuntimeSync(agentRuntimePlugin)
     const mounts = runtime.read(appMountsFacet)
 
-    expect(mounts.map(mount => mount.id)).toContain('agent-runtime.tokens-dialog')
+    expect(mounts.map(mount => mount.id)).toContain('core.dialogs')
   })
 
   it('contributes agent runtime management actions', () => {

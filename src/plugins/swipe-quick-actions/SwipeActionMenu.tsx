@@ -6,6 +6,7 @@ import { useUIStateBlock } from '@/data/globalState'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { usePropertyValue } from '@/hooks/block.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
 import {
@@ -27,7 +28,7 @@ import {
   getSwipeActionAnchorRect,
   type AnchorRect,
 } from './anchor.ts'
-import { SWIPE_TRIGGER_PX } from './swipeGesture.ts'
+import { SWIPE_TRIGGER_PX } from './swipeRecognizer.ts'
 
 /** Track the swiped block content's bounding rect so the floating bar
  *  follows the visible text row, not the full block shell with open
@@ -343,20 +344,35 @@ export const SwipeActionMenu = () => {
     renderScopeId: string | undefined,
     trigger: CustomEvent,
   ): boolean => {
-    const action = allActions.find(a => a.id === actionId)
-    if (!action) return false
-
     const block = repo.block(blockId)
-    const deps = {block, uiStateBlock, ...(renderScopeId ? {renderScopeId} : {})}
-    if (action.canRun && !action.canRun(deps)) return false
-
-    void Promise.resolve(action.handler(deps, trigger)).catch(error => {
-      console.error(`[swipe-quick-actions] Action "${actionId}" failed`, error)
-    })
-    return true
-  }, [allActions, repo, uiStateBlock])
+    // Swipe runs actions imperatively (outside a block's React context), so
+    // scopeRootId isn't injected by useShortcutSurfaceActivations. The menu is
+    // panel-scoped and operates on the main outline, so the panel's top-level
+    // block is the scope root — the same value the structural handlers need
+    // (delete/indent/move) — and it's a focal surface, so scopeRootForcesOpen is
+    // true. renderScopeId comes from the swipe event (undefined for the normal
+    // outline, set for an embedded/backlink instance).
+    //
+    // These deps are the COMPLETE set for the swiped action: resolveDeps treats
+    // supplied deps as standalone (it does not merge the active context's deps
+    // underneath), so an omitted field resolves to undefined rather than
+    // inheriting a coincidentally-focused instance's value.
+    //
+    // The gesture supplies these deps through the unified dispatch path
+    // (resolveDeps validation + canDispatch gate + error logging) rather than
+    // invoking the handler directly. The returned boolean tells the gesture
+    // whether to preventDefault / fall back.
+    const deps = {
+      block,
+      uiStateBlock,
+      scopeRootId: topLevelBlockId,
+      scopeRootForcesOpen: true,
+      renderScopeId,
+    }
+    return dispatchActionWithDeps(actionId, deps, trigger)
+  }, [repo, uiStateBlock, topLevelBlockId])
   const actionItems = runtime.read(quickActionItemsFacet)
-  // Filter via the referenced action's `canRun` (the swipe surface is
+  // Filter via the referenced action's `isVisible` (the swipe surface is
   // presentational — semantic availability lives on the action). The
   // filter runs at menu-open time, not reactively. Items whose action
   // isn't registered fall through so the missing-action error is still
@@ -369,18 +385,18 @@ export const SwipeActionMenu = () => {
     if (!blockId) return actionItems
     const block = repo.block(blockId)
     if (!block.peek()) return actionItems
-    const deps = {block, uiStateBlock, ...(renderScopeId ? {renderScopeId} : {})}
+    const deps = {block, uiStateBlock, scopeRootId: topLevelBlockId, ...(renderScopeId ? {renderScopeId} : {})}
     return actionItems.filter(item => {
       const action = allActions.find(a => a.id === item.actionId)
       if (!action) return true
-      if (!action.canRun) return true
-      return action.canRun(deps)
+      if (!action.isVisible) return true
+      return action.isVisible(deps)
     })
   }, [
     actionItems, allActions,
     activeBlockId, activeRenderScopeId,
     previewBlockId, previewRenderScopeId,
-    repo, uiStateBlock,
+    repo, uiStateBlock, topLevelBlockId,
   ])
   const [primaryRows, overflowItems] = useMemo(() => {
     const rows = new Map<number, QuickActionItem[]>()
@@ -594,12 +610,12 @@ export const SwipeActionMenu = () => {
   const block = repo.block(renderedBlockId)
   if (!block.peek()) return inlineAnchor
 
-  /** Dispatch the resolved action's handler with our block-level deps.
-   *  We call the handler directly rather than going through
-   *  `useRunAction` because the dispatcher requires the action's context
-   *  to be active (e.g. NORMAL_MODE), and the swipe gesture is itself
-   *  the activation. The handler is the same one the keyboard binding
-   *  invokes, so semantics (focus restoration, etc.) stay in lockstep. */
+  /** Dispatch the resolved action with our block-level deps via
+   *  `runBlockAction` → `dispatchActionWithDeps`. That routes through the same
+   *  `resolve` + `canDispatch` + run-until-handled path the keyboard/pointer
+   *  coordinators use, with the deps SUPPLIED (the swipe gesture is itself the
+   *  activation, so the action's context needn't be keyboard-active). Semantics
+   *  stay in lockstep with the keyboard binding's handler. */
   const handleRun = (resolved: ResolvedQuickAction): void => {
     const {item, action} = resolved
     if (!action) {

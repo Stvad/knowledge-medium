@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
-import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
+import { actionContextsFacet, actionTransformsFacet, actionsFacet } from '@/extensions/core'
+import { resolveFacetRuntimeSync, type AppExtension, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
+import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler'
+import { defaultActionContextConfigs } from '@/shortcuts/defaultContexts'
 import { type ActionConfig, ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { topLevelBlockIdProp } from '@/data/properties'
 import { quickActionItemsFacet, SWIPE_RIGHT_BLOCK_ACTION_ID } from '../actions'
@@ -71,25 +74,39 @@ const runEvent = (
     detail: renderScopeId ? {blockId, renderScopeId, actionId} : {blockId, actionId},
   })
 
+// The swipe menu dispatches actions through the unified by-id path, which is a
+// no-op until <HotkeyReconciler/> installs its dispatcher — so every runtime
+// here registers the default action contexts (for deps validation) and the
+// render mounts the coordinator inside an ActiveContextsProvider.
+const buildRuntime = (contributions: AppExtension): FacetRuntime =>
+  resolveFacetRuntimeSync([
+    ...defaultActionContextConfigs.map(c => actionContextsFacet.of(c)),
+    contributions,
+  ])
+
 describe('SwipeActionMenu', () => {
+  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     vi.stubGlobal('ResizeObserver', TestResizeObserver)
 
-    h = await createTestDb()
+    await resetTestDb(sharedDb.db)
+    h = sharedDb
     let txSeq = 0
     repo = new Repo({
       db: h.db,
       cache: new BlockCache(),
       user: USER,
       newTxSeq: () => ++txSeq,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
     repo.setActiveWorkspaceId(WS)
-    runtime = resolveFacetRuntimeSync([
+    runtime = buildRuntime([
       actionsFacet.of({
         id: 'copy_block',
         description: 'Copy block',
@@ -133,16 +150,19 @@ describe('SwipeActionMenu', () => {
     cleanup()
     vi.unstubAllGlobals()
     uiStateBlockRef.current = undefined
-    await h.cleanup()
+    repo.stopSyncObserver()
   })
 
   const renderMenu = () =>
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <div className="panel">
-          <div data-block-id="block-1">Block</div>
-          <SwipeActionMenu/>
-        </div>
+        <ActiveContextsProvider>
+          <HotkeyReconciler/>
+          <div className="panel">
+            <div data-block-id="block-1">Block</div>
+            <SwipeActionMenu/>
+          </div>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -247,7 +267,7 @@ describe('SwipeActionMenu', () => {
     })
   })
 
-  it('hides items whose action.canRun returns false for the swiped block', async () => {
+  it('hides items whose action.isVisible returns false for the swiped block', async () => {
     const alwaysAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
       id: 'always',
       description: 'Always',
@@ -258,10 +278,10 @@ describe('SwipeActionMenu', () => {
       id: 'gated',
       description: 'Gated',
       context: ActionContextTypes.NORMAL_MODE,
-      canRun: ({block}) => block.id !== 'block-1',
+      isVisible: ({block}) => block.id !== 'block-1',
       handler: vi.fn(),
     }
-    runtime = resolveFacetRuntimeSync([
+    runtime = buildRuntime([
       actionsFacet.of(alwaysAction, {source: 'test'}),
       actionsFacet.of(gatedAction, {source: 'test'}),
       quickActionItemsFacet.of({actionId: 'always', label: 'Always'}, {source: 'test'}),
@@ -281,24 +301,27 @@ describe('SwipeActionMenu', () => {
     const handler = vi.fn((deps: BlockShortcutDependencies) => {
       expect(deps.block.id).toBe('block-1')
     })
-    const canRun = vi.fn((deps: BlockShortcutDependencies) => deps.block.id === 'block-1')
-    runtime = resolveFacetRuntimeSync([
+    const isVisible = vi.fn((deps: BlockShortcutDependencies) => deps.block.id === 'block-1')
+    runtime = buildRuntime([
       actionsFacet.of({
         id: 'scoped_action',
         description: 'Scoped action',
         context: ActionContextTypes.NORMAL_MODE,
-        canRun,
+        isVisible,
         handler,
       }, {source: 'test'}),
       quickActionItemsFacet.of({actionId: 'scoped_action', label: 'Scoped'}, {source: 'test'}),
     ])
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <div className="panel">
-          <div data-block-id="block-1" data-render-scope-id="scope-a">Outline</div>
-          <div data-block-id="block-1" data-render-scope-id="scope-b">Embed</div>
-          <SwipeActionMenu/>
-        </div>
+        <ActiveContextsProvider>
+          <HotkeyReconciler/>
+          <div className="panel">
+            <div data-block-id="block-1" data-render-scope-id="scope-a">Outline</div>
+            <div data-block-id="block-1" data-render-scope-id="scope-b">Embed</div>
+            <SwipeActionMenu/>
+          </div>
+        </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -309,7 +332,7 @@ describe('SwipeActionMenu', () => {
     })
     fireEvent.click(await screen.findByRole('button', {name: 'Scoped'}))
 
-    expect(canRun.mock.calls.some(([deps]) => deps.renderScopeId === 'scope-b')).toBe(true)
+    expect(isVisible.mock.calls.some(([deps]) => deps.renderScopeId === 'scope-b')).toBe(true)
     const deps = handler.mock.calls[0]?.[0] as BlockShortcutDependencies | undefined
     expect(deps?.block.id).toBe('block-1')
     expect(deps?.uiStateBlock.id).toBe('panel-1')
@@ -326,12 +349,12 @@ describe('SwipeActionMenu', () => {
         calls.push(`base:${block.id}:${renderScopeId ?? ''}`)
       },
     }
-    runtime = resolveFacetRuntimeSync([
+    runtime = buildRuntime([
       actionsFacet.of(baseAction, {source: 'test'}),
-      actionDecoratorsFacet.of({
+      actionTransformsFacet.of({
         actionId: SWIPE_RIGHT_BLOCK_ACTION_ID,
         context: ActionContextTypes.NORMAL_MODE,
-        decorate: current => ({
+        apply: current => ({
           ...current,
           handler: async (deps, trigger) => {
             const blockDeps = deps as BlockShortcutDependencies

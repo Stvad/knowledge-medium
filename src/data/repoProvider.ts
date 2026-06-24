@@ -31,10 +31,14 @@
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.js'
+import { createSyncResolver, type SyncResolver } from '@/sync/keys/resolver.js'
+import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
+import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
 import {
-  BLOCKS_RAW_TABLE,
+  BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
+  CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
@@ -47,24 +51,36 @@ import {
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
+  ensureWorkspaceE2eeColumns,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
-  runAnalyzeIfDue,
+  ensureBlockUserUpdatedAtColumn,
 } from '@/data/internals/clientSchema'
+import { runAnalyzeIfStale } from '@/data/maintenance'
+import { onFirstSync } from '@/data/internals/firstSync.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
+import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 
 const appSchema = new Schema({})
+// Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
+// `blocks_synced` row_type emitted by the sync rules — into the raw
+// `blocks_synced` staging table; the Repo's sync observer then decrypts/copies
+// each into the app-visible plaintext `blocks` table. So `blocks` is NOT a raw
+// table here — it's a plain local table the observer owns. During the dual-run
+// window the sync rules still also emit a plain `blocks` row_type for old
+// clients; this client has no raw mapping for it, so PowerSync stashes it in
+// `ps_untyped` and ignores it.
 appSchema.withRawTables({
-  blocks: BLOCKS_RAW_TABLE,
+  blocks_synced: BLOCKS_SYNCED_RAW_TABLE,
   workspaces: WORKSPACES_RAW_TABLE,
   workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
 })
@@ -94,6 +110,34 @@ const dbsByUser = new Map<string, PowerSyncDatabase>()
 const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
 let connectChain: Promise<void> = Promise.resolve()
+
+// One §6 sync resolver per user, shared by both halves of the Layout B
+// seam: the upload connector (encrypt-on-upload) and the Repo's download
+// observer (materializability + key lookup). Built here so the Repo
+// bootstrap (context/repo.tsx) doesn't re-derive a second resolver against
+// the same shared key store + mode pins.
+const syncResolversByUser = new Map<string, SyncResolver>()
+const resolverForUser = (userId: string): SyncResolver => {
+  let resolver = syncResolversByUser.get(userId)
+  if (!resolver) {
+    resolver = createSyncResolver(() => userId, getWorkspaceKeyStore())
+    syncResolversByUser.set(userId, resolver)
+  }
+  return resolver
+}
+
+/** Observer deps for the Repo's `syncObserverDeps` parameter, drawn from
+ *  the same per-user resolver the upload connector uses — so download
+ *  (decrypt/copy/defer) and upload (encrypt) share one §6 policy source. */
+export const syncObserverDepsFor = (
+  userId: string,
+): MaterializeDeps => {
+  const resolver = resolverForUser(userId)
+  return {
+    getMaterializability: resolver.getMaterializability,
+    getCek: resolver.getCek,
+  }
+}
 
 // Firefox and Safari block OPFS in private browsing — `getDirectory()`
 // throws SecurityError. Probe once and surface a useful message before
@@ -152,6 +196,7 @@ export const ensurePowerSyncReady = async (
   useRemoteSync: boolean = hasRemoteSyncConfig,
 ) => {
   await assertOpfsAvailable()
+
   const db = getPowerSyncDb(userId)
 
   let initPromise = initPromises.get(userId)
@@ -183,7 +228,15 @@ export const ensurePowerSyncReady = async (
           await previousDb.disconnect()
         }
       }
-      await db.connect(createPowerSyncConnector())
+      // Encrypt-on-upload (§9.2): bind the connector's mode/key lookups to this
+      // user's mode pins + shared workspace-key store. Plaintext workspaces
+      // resolve mode 'none' (no-op); e2ee workspaces seal content columns. Same
+      // per-user resolver the observer deps draw from (`syncObserverDepsFor`).
+      const resolver = resolverForUser(userId)
+      await db.connect(createPowerSyncConnector({
+        getWorkspaceMode: resolver.getMode,
+        getCek: resolver.getCek,
+      }))
     })
     .catch((error) => {
       console.error(`PowerSync background connect failed for ${userId}:`, error)
@@ -225,14 +278,29 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // ── blocks + its indexes ──
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
   await ensureBlockStorageColumns(powerSyncDb)
+  // Layout B staging table (§9.2). The raw-table mapping above tells
+  // PowerSync how to write it, but does NOT create the local SQLite table —
+  // we run the DDL ourselves, same as `blocks`. This is the live landing zone
+  // for the `blocks_synced` sync stream; the Repo's observer materializes it
+  // into `blocks`.
+  await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL)
+  // Idempotent local migration: add `user_updated_at` to an existing
+  // `blocks` / `blocks_synced` on upgrading devices (CREATE TABLE IF NOT
+  // EXISTS above is a no-op when the table already exists) + one-shot
+  // backfill. See hydration-staleness-fix-handoff.md step 3.
+  await ensureBlockUserUpdatedAtColumn(powerSyncDb)
 
   // ── workspaces + workspace_members ──
   await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
+  // Idempotent local migration: add the E2EE columns to an existing
+  // `workspaces` table on upgrading devices (CREATE TABLE IF NOT EXISTS
+  // above is a no-op when the table already exists). §7 / e2ee-design.
+  await ensureWorkspaceE2eeColumns(powerSyncDb)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
@@ -250,7 +318,13 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // pre-index schema. Steady-state startups noop on a single LIMIT 1
   // probe of `client_schema_state`.
   const backfillDb = {
-    execute: (sql: string, params?: unknown[]) => powerSyncDb.execute(sql, params as never[] | undefined),
+    // Guarded: a LocalSchema statement/backfill that raw-writes a synced table
+    // (blocks/workspaces/workspace_members) leaves tx_context.source = NULL, so
+    // the upload trigger never fires and the write is local-only — it silently
+    // never syncs. The guard turns that class into a loud throw. Synced-table
+    // backfills must go through repo.tx (workspaceBackfillsFacet).
+    execute: guardSyncedTableWrites((sql: string, params?: unknown[]) =>
+      powerSyncDb.execute(sql, params as never[] | undefined)),
     getOptional: async <T,>(sql: string) => {
       const row = await powerSyncDb.getOptional<T>(sql)
       return row ?? null
@@ -265,16 +339,34 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   )
 
   // ANALYZE off the cold-start path. wa-sqlite never auto-populates
-  // `sqlite_stat1`, so the planner makes pessimal join-order choices
-  // on `blocks` once a workspace is large (a 4-id `json_each` lookup
-  // can degenerate to a 4-second scan of the workspace partial index).
-  // First-install + 30-day refresh keeps stats meaningful without
-  // blocking first paint behind the multi-second scan. Fire-and-forget
-  // — runtime queries that race the analyze keep using prior plans
-  // until it finishes, which is fine for the bootstrap window.
-  scheduleIdle(() => {
-    void runAnalyzeIfDue(backfillDb, () => Date.now()).catch(error => {
-      console.warn('[Repo] ANALYZE refresh failed:', error)
+  // `sqlite_stat1`, so the planner makes pessimal join-order choices on
+  // `blocks` once a workspace is large (a 4-id `json_each` lookup can
+  // degenerate to a 4-second scan of the workspace partial index).
+  // `runAnalyzeIfStale` re-runs only when the live `blocks` count has
+  // drifted from the count the stats were built on (see clientSchema), so
+  // a stable workspace pays nothing and a grown one self-corrects. Both
+  // the count probe and ANALYZE run on the single SQLite worker, so every
+  // trigger below is idle-deferred — never on the first-paint path.
+  //
+  // (a) Boot: catches anything that changed since the last session — a
+  // prior-session import, organic growth, or the legacy "0 0" stats bug.
+  const scheduleAnalyzeCheck = (reason: string) => {
+    scheduleIdle(() => {
+      void runAnalyzeIfStale(backfillDb).catch(error => {
+        console.warn(`[Repo] ANALYZE check failed (${reason}):`, error)
+      })
     })
-  })
+  }
+  scheduleAnalyzeCheck('boot')
+
+  // (b) First sync of THIS session: a fresh device boots with an empty
+  // `blocks`, so (a) skips. Once PowerSync finishes the initial sync and
+  // the observer materializes the rows, the table is large and the boot
+  // baseline is stale — re-check then so the user gets good plans the same
+  // session instead of after a reload. One-shot; disposes after the first
+  // `hasSynced`. If the first sync already completed in a prior session,
+  // (a) above already covered it, so don't bother registering.
+  if (!powerSyncDb.currentStatus?.hasSynced) {
+    onFirstSync(powerSyncDb, () => scheduleAnalyzeCheck('first-sync'))
+  }
 }

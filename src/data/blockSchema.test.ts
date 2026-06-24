@@ -20,46 +20,40 @@ const fixture: BlockData = {
   references: [{id: 'ref-1', alias: 'Inbox'}],
   createdAt: 1700000000000,
   updatedAt: 1700000005000,
+  userUpdatedAt: 1700000005000,
   createdBy: 'user-1',
   updatedBy: 'user-2',
   deleted: false,
 }
 
-const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow => ({
-  id: params[0],
-  workspace_id: params[1],
-  parent_id: params[2],
-  reference_target_id: params[3],
-  order_key: params[4],
-  content: params[5],
-  properties_json: params[6],
-  references_json: params[7],
-  created_at: params[8],
-  updated_at: params[9],
-  created_by: params[10],
-  updated_by: params[11],
-  deleted: params[12],
-})
+// Build the row exactly as production binds it: column BLOCK_STORAGE_COLUMNS[i]
+// receives blockToRowParams()[i]. txEngine's INSERT and the blocks_synced
+// raw-table `put` both build their column list from BLOCK_STORAGE_COLUMNS order
+// and bind these params positionally, so zipping the two here (rather than
+// hard-coding tuple indexes) makes every round-trip below a guard on that
+// order ↔ params invariant — a reorder/added column lands values under the
+// wrong column name and fails the decode.
+const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow => {
+  const row: Record<string, unknown> = {}
+  BLOCK_STORAGE_COLUMNS.forEach((column, index) => {
+    row[column.name] = params[index]
+  })
+  return row as unknown as BlockRow
+}
 
 describe('BLOCK_STORAGE_COLUMNS', () => {
-  it('declares the v2 column set; childIds-shaped columns are gone', () => {
+  // The column set + ORDER is guarded against blockToRowParams by the
+  // BLOCK_STORAGE_COLUMNS-zipped round-trip below (a reorder mis-binds and
+  // fails the decode); the count guard here catches an added/removed column
+  // that the round-trip's named decode would otherwise skip. A literal copy of
+  // the name list would only restate the source, so it's gone — but the legacy
+  // *name* guards stay (the round-trip can't catch a renamed-back column).
+  it('binds exactly one positional param per storage column', () => {
+    expect(blockToRowParams(fixture)).toHaveLength(BLOCK_STORAGE_COLUMNS.length)
+  })
+
+  it('never reintroduces legacy / renamed columns', () => {
     const names = BLOCK_STORAGE_COLUMNS.map(c => c.name)
-    expect(names).toEqual([
-      'id',
-      'workspace_id',
-      'parent_id',
-      'reference_target_id',
-      'order_key',
-      'content',
-      'properties_json',
-      'references_json',
-      'created_at',
-      'updated_at',
-      'created_by',
-      'updated_by',
-      'deleted',
-    ])
-    // Hard guard against the legacy column ever sneaking back in.
     expect(names).not.toContain('child_ids_json')
     expect(names).not.toContain('create_time')
     expect(names).not.toContain('update_time')
@@ -118,5 +112,13 @@ describe('blockToRowParams / parseBlockRow round-trip', () => {
     const decoded = parseBlockRow(row)
     expect(decoded.properties).toEqual({})
     expect(decoded.references).toEqual([])
+  })
+
+  it('userUpdatedAt falls back to updated_at when the column is NULL (old-rules / pre-split row)', () => {
+    const row: BlockRow = {
+      ...rowFromParams(blockToRowParams(fixture)),
+      user_updated_at: null,
+    }
+    expect(parseBlockRow(row).userUpdatedAt).toBe(fixture.updatedAt)
   })
 })

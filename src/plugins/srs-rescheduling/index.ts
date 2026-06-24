@@ -1,7 +1,7 @@
 import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
-import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import { actionTransformsFacet, actionsFacet } from '@/extensions/core.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import type { Block } from '@/data/block'
 import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.js'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
@@ -328,8 +328,9 @@ export const rescheduleBlock = async (
 
 // Mirrors `scheduleSrsProperties` which uses `Math.ceil(interval)` to
 // pick the next-review date — display rounding has to match or the
-// toast says "7d" while the date lands 8 days out.
-const formatIntervalDays = (days: number): string => {
+// toast says "7d" while the date lands 8 days out. Exported so the review
+// buttons can label their next-interval estimate the same way.
+export const formatIntervalDays = (days: number): string => {
   const ceil = Math.max(1, Math.ceil(days))
   if (ceil < 30) return `${ceil}d`
   if (ceil < 365) return `${Math.round(ceil / 30)}mo`
@@ -398,18 +399,26 @@ const runRescheduleWithFeedback = async (
 ): Promise<void> => {
   const result = await rescheduleBlock(block, signal)
   if (!result) return
-  // JS is single-threaded; the entry recorded by the just-completed tx
-  // is guaranteed to be the BlockDefault top right now, so peekUndo
-  // gives us the txId to gate the toast's Undo button on. If a later
-  // tx pushes onto the stack, the toast subscribes via UndoManager and
-  // disables itself rather than reverting the wrong action.
-  const top = block.repo.undoManager.peekUndo(ChangeScope.BlockDefault)
+  // Capture the reschedule's OWN workspace + entry, NOT the active ones.
+  // `rescheduleBlock` awaited, so the user may have switched workspaces in
+  // the meantime — reading `activeWorkspaceId` / the active undo manager
+  // here would bind the toast to a different workspace's top entry, and
+  // clicking Undo could then revert an unrelated action (issue #186; PR
+  // review). The reschedule wrote `block`, whose workspace is immutable,
+  // and `rescheduleBlock` just resolved with no further await — so that
+  // workspace's manager top is reliably the reschedule entry. The toast
+  // subscribes via UndoManager and disables itself once a later tx lands
+  // or the user leaves this workspace.
+  const workspaceId = block.peek()?.workspaceId
+  if (!workspaceId) return
+  const top = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault)
   if (!top) return
   const message = formatRescheduleToastMessage(result)
   showCustom(id => createElement(RescheduleToast, {
     toastId: id,
     message,
     txId: top.txId,
+    workspaceId,
     repo: block.repo,
   }))
 }
@@ -455,7 +464,7 @@ const createScrubRescheduleAction = (
     description: `SRS: ${name} (Date Scrub)`,
     context: DATE_SCRUB_CONTEXT,
     icon: iconForSignal(signal),
-    canRun: (deps: BaseShortcutDependencies) => {
+    isVisible: (deps: BaseShortcutDependencies) => {
       const block = blockFromDependencies(deps)
       const data = block?.peek()
       return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
@@ -482,15 +491,35 @@ const createScrubRescheduleAction = (
   }
 }
 
+const isSrsBlockTarget = ({block}: BlockShortcutDependencies): boolean => {
+  const data = block.peek()
+  return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
+}
+
+const canPasteSrsState = ({block}: BlockShortcutDependencies): boolean => {
+  const entry = getSrsClipboard()
+  if (entry === null || entry.sourceBlockId === block.id) return false
+  // The clipboard is a module singleton that survives an in-place
+  // workspace switch (issue #186 class). SRS state can't move across
+  // workspaces anyway — moveSrsState's tx would hit the single-workspace
+  // invariant (WorkspaceMismatchError) and roll back — so only offer
+  // paste in the source's own workspace. Uses the workspaceId captured at
+  // cut; the affordance simply disappears in any other workspace and
+  // reappears on return, rather than arming a guaranteed-to-fail paste.
+  return entry.sourceWorkspaceId === block.peek()?.workspaceId
+}
+
 const srsCutAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: 'srs.cut',
   description: 'SRS: Cut state',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Scissors,
-  canRun: ({block}) => {
-    const data = block.peek()
-    return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
-  },
+  // isVisible filters the menu/palette; canDispatch is the dispatch gate. The
+  // handler stashes whatever block it's given (SRS-ness lives only in these
+  // predicates), so canDispatch must mirror isVisible — otherwise an imperative
+  // dispatch (a stale swipe menu, a run event) could cut a non-SRS block.
+  isVisible: isSrsBlockTarget,
+  canDispatch: isSrsBlockTarget,
   handler: async ({block}: BlockShortcutDependencies) => {
     const data = block.peek() ?? await block.load()
     if (!data) return
@@ -506,10 +535,8 @@ const srsPasteAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   description: 'SRS: Paste state',
   context: ActionContextTypes.NORMAL_MODE,
   icon: ClipboardPaste,
-  canRun: ({block}) => {
-    const entry = getSrsClipboard()
-    return entry !== null && entry.sourceBlockId !== block.id
-  },
+  isVisible: canPasteSrsState,
+  canDispatch: canPasteSrsState,
   handler: async ({block}: BlockShortcutDependencies) => {
     const entry = getSrsClipboard()
     if (!entry) return
@@ -546,7 +573,7 @@ const srsQuickActionItems = srsSignals
 // Overflow keeps them out of the primary strip — these are rarer than
 // reschedule. Visibility (cut only on SRS blocks; paste only when
 // something is stashed and the target isn't the same block) is gated by
-// the `canRun` predicate on the actions themselves, so the same gating
+// the `isVisible` predicate on the actions themselves, so the same gating
 // applies to the command palette.
 const srsCutQuickAction = {
   actionId: 'srs.cut',
@@ -590,10 +617,10 @@ export const srsReschedulingPlugin: AppExtension = systemToggle({
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
   ),
-  actionDecoratorsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
-  actionDecoratorsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
+  actionTransformsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
+  actionTransformsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
   srsTodoCycleDecorators.map(decorator =>
-    actionDecoratorsFacet.of(decorator, {source: 'srs-rescheduling'}),
+    actionTransformsFacet.of(decorator, {source: 'srs-rescheduling'}),
   ),
   // Negative precedence: SRS adapter sorts before the generic reference
   // adapter so a block that is BOTH an SRS card AND has an inline date

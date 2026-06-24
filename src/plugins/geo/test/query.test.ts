@@ -1,14 +1,14 @@
 // @vitest-environment node
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { geoDataExtension } from '../dataExtension'
-import { createOrFindPlace } from '../createOrFindPlace'
+import { createOrFindPlace, type PlaceCandidate } from '../createOrFindPlace'
 import { locationProp, placeLatProp } from '../properties'
 import { placesUnderBlockQuery, type MapPin } from '../query'
 
@@ -20,21 +20,26 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: {id: 'user-1'},
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, geoDataExtension]))
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+// Dispose the per-test Repo's sync observer so its db.onChange subscription
+// doesn't leak onto the shared DB (closed once in afterAll).
+afterEach(() => { env.repo.stopSyncObserver() })
 
 const createBlock = async (
   id: string,
@@ -49,6 +54,13 @@ const createBlock = async (
       content: args.content ?? '',
     })
   }, {scope: ChangeScope.BlockDefault})
+}
+
+/** Unwrap the ok-arm — these tests never exercise name collisions. */
+const createPlace = async (candidate: PlaceCandidate) => {
+  const result = await createOrFindPlace(env.repo, WS, candidate)
+  if (result.kind !== 'ok') throw new Error(`expected ok, got ${result.kind}`)
+  return result.block
 }
 
 const setLocation = async (sourceId: string, placeId: string): Promise<void> => {
@@ -69,10 +81,10 @@ const PIN_KEY = (p: MapPin): string => `${p.blockId}|${p.placeId}|${p.lat}|${p.l
 
 describe('placesUnderBlockQuery', () => {
   it('pins Place blocks at their own coords when scoped to the Locations page', async () => {
-    const dandelion = await createOrFindPlace(env.repo, WS, {
+    const dandelion = await createPlace({
       name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
     })
-    const blue = await createOrFindPlace(env.repo, WS, {
+    const blue = await createPlace({
       name: 'Blue Bottle', lat: 37.80, lng: -122.43, googlePlaceId: 'ChIJB',
     })
 
@@ -97,7 +109,7 @@ describe('placesUnderBlockQuery', () => {
   })
 
   it('surfaces the referenced Place address on the pin (for marker callouts)', async () => {
-    const dandelion = await createOrFindPlace(env.repo, WS, {
+    const dandelion = await createPlace({
       name: 'Dandelion',
       lat: 37.76,
       lng: -122.42,
@@ -116,7 +128,7 @@ describe('placesUnderBlockQuery', () => {
   })
 
   it('pins activity blocks at the coords of their referenced Place', async () => {
-    const dandelion = await createOrFindPlace(env.repo, WS, {
+    const dandelion = await createPlace({
       name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
     })
     await createBlock('trip', {parentId: null, content: 'SF trip'})
@@ -162,7 +174,7 @@ describe('placesUnderBlockQuery', () => {
   })
 
   it('pins via body wikilinks/blockrefs to Place blocks', async () => {
-    const dandelion = await createOrFindPlace(env.repo, WS, {
+    const dandelion = await createPlace({
       name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
     })
     await createBlock('parent', {parentId: null, content: 'SF plans'})
@@ -183,7 +195,7 @@ describe('placesUnderBlockQuery', () => {
   })
 
   it('dedups when a block both has a location prop and body-refs the same Place', async () => {
-    const dandelion = await createOrFindPlace(env.repo, WS, {
+    const dandelion = await createPlace({
       name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
     })
     await createBlock('note', {parentId: null, content: 'visited [[Dandelion]]'})
@@ -211,7 +223,7 @@ describe('placesUnderBlockQuery', () => {
   })
 
   it('re-resolves when a descendant body ref is added/removed', async () => {
-    const dandelion = await createOrFindPlace(env.repo, WS, {
+    const dandelion = await createPlace({
       name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
     })
     await createBlock('parent', {parentId: null, content: 'plans'})
@@ -225,7 +237,7 @@ describe('placesUnderBlockQuery', () => {
   })
 
   it('re-resolves when a referenced Place’s lat changes', async () => {
-    const dandelion = await createOrFindPlace(env.repo, WS, {
+    const dandelion = await createPlace({
       name: 'Dandelion', lat: 37.76, lng: -122.42, googlePlaceId: 'ChIJD',
     })
     await createBlock('meeting', {parentId: null, content: 'Coffee'})

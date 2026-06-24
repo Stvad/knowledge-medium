@@ -3,7 +3,7 @@ import {
   actionsFacet,
   actionContextsFacet,
 } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
+import type { AppExtension } from '@/facets/facet.js'
 import {
   shortcutSurfaceActivationsFacet,
   type ShortcutActivationContribution,
@@ -87,7 +87,7 @@ export const promoteClosestBreadcrumbAction: ActionConfig = {
     const deps = toBacklinkEntryShortcutDependencies(dependencies)
     deps.promoteClosestBreadcrumb?.()
   },
-  canRun: (dependencies) => {
+  isVisible: (dependencies) => {
     const deps = toBacklinkEntryShortcutDependencies(dependencies)
     return deps.hasBreadcrumb?.() === true
   },

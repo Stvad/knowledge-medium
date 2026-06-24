@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
@@ -8,7 +8,7 @@ import {
   defineProperty,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets'
@@ -17,14 +17,15 @@ import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { BlockContextProvider } from '@/context/block'
 import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
-import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
+import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import { blockRenderersFacet } from '@/extensions/core'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
-import { pasteMultilineText } from '@/utils/paste'
+import { pasteMultilineText } from '@/paste/operations'
 import { useChildIds } from '@/hooks/block'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 import { FieldBlockRenderer } from './FieldBlockRenderer'
@@ -72,7 +73,7 @@ vi.mock('@/data/globalState.ts', async () => {
   }
 })
 
-vi.mock('@/utils/paste.ts', () => ({
+vi.mock('@/paste/operations.ts', () => ({
   pasteMultilineText: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
 }))
@@ -137,10 +138,13 @@ const dispatchPaste = (target: Element, text: string): Event => {
 }
 
 describe('DefaultBlockRenderer paste handling', () => {
+  let sharedDb: TestDb
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
 
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     vi.mocked(pasteMultilineText).mockClear()
     Object.defineProperty(window, 'matchMedia', {
@@ -158,7 +162,8 @@ describe('DefaultBlockRenderer paste handling', () => {
     })
     Element.prototype.scrollIntoView = vi.fn()
 
-    h = await createTestDb()
+    await resetTestDb(sharedDb.db)
+    h = sharedDb
     let now = 1700_000_000_000
     let txSeq = 0
     repo = new Repo({
@@ -168,7 +173,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       now: () => ++now,
       newId: () => crypto.randomUUID(),
       newTxSeq: () => ++txSeq,
-      startRowEventsTail: false,
+      startSyncObserver: false,
     })
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
@@ -226,18 +231,23 @@ describe('DefaultBlockRenderer paste handling', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
-    await h.cleanup()
+    repo.stopSyncObserver()
   })
 
   const renderBlock = () =>
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <ActiveContextsProvider>
-          <DefaultBlockRenderer
-            block={repo.block('block-1')}
-            ContentRenderer={TestContentRenderer}
-          />
-        </ActiveContextsProvider>
+        {/* The scope root is normally set by the panel/top-level surface
+            that mounts the block; provide it here so the paste path
+            resolves the same scopeRootId production would. */}
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer
+              block={repo.block('block-1')}
+              ContentRenderer={TestContentRenderer}
+            />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
       </AppRuntimeContextProvider>,
     )
 
@@ -254,7 +264,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     expect(pasteMultilineText).not.toHaveBeenCalled()
   })
 
-  it('still handles paste on the focused block shell', () => {
+  it('still handles paste on the focused block shell', async () => {
     renderBlock()
 
     const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
@@ -265,13 +275,15 @@ describe('DefaultBlockRenderer paste handling', () => {
       event = dispatchPaste(shell!, 'first\nsecond')
     })
 
+    // preventDefault is synchronous; the apply now runs after the async
+    // paste-verb decision, so wait for the call.
     expect(event?.defaultPrevented).toBe(true)
-    expect(pasteMultilineText).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(pasteMultilineText).toHaveBeenCalledTimes(1))
     expect(pasteMultilineText).toHaveBeenCalledWith(
       'first\nsecond',
       repo.block('block-1'),
       repo,
-      {topLevelBlockId: 'root'},
+      {scopeRootId: 'root', asSingleBlock: false},
     )
   })
 

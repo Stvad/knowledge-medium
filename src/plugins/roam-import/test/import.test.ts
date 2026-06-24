@@ -20,12 +20,12 @@
  * production.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../../../data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import {
@@ -34,7 +34,7 @@ import {
   journalBlockId,
   todayIso,
 } from '@/plugins/daily-notes'
-import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
@@ -64,12 +64,15 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file (beforeAll), reset here per test; the
+  // returned h.cleanup disposes this Repo's observer rather than closing the
+  // shared DB, so the existing afterEach stays correct.
+  await resetTestDb(sharedDb.db)
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
   const repo = new Repo({
-    db: h.db,
+    db: sharedDb.db,
     cache,
     user: {id: USER_ID},
     now: () => ++timeCursor,
@@ -77,7 +80,6 @@ const setup = async (): Promise<Harness> => {
     // The importer pre-populates references[] explicitly; running
     // parseReferences on top would re-parse content + clobber. The
     // importer also calls processors itself for alias resolution.
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WORKSPACE)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
@@ -88,12 +90,28 @@ const setup = async (): Promise<Harness> => {
     srsReschedulingDataExtension,
   ]))
   await getOrCreatePropertiesPage(repo, WORKSPACE)
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {h, repo}
 }
 
+let sharedDb: TestDb
 let env: Harness
-beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+beforeEach(async () => {
+  // Freeze the wall clock (Date only — timers/async stay real) so the
+  // import-log tests that place output on "today's" daily note can't race
+  // the UTC midnight rollover between writeImportLog()'s todayIso() and
+  // the assertion's todayIso(). Block timestamps use the repo's timeCursor,
+  // not Date, so this only pins the daily-note lookup.
+  vi.useFakeTimers({toFake: ['Date']})
+  vi.setSystemTime(new Date('2026-04-28T12:00:00Z'))
+  env = await setup()
+})
+afterEach(async () => {
+  await env.h.cleanup()
+  vi.useRealTimers()
+})
 
 const minimalExport: RoamExport = [
   {
@@ -175,6 +193,43 @@ describe('importRoam', () => {
     const leaf = await readBlock(roamBlockId(WORKSPACE, 'leafA'))
     expect(leaf?.parent_id).toBe(roamBlockId(WORKSPACE, 'parentA'))
     expect(leaf?.content).toBe('leaf with [[wcs/plan]]')
+  })
+
+  it('carries Roam create-time → created_at and edit-time → user_updated_at, leaving updated_at engine-owned', async () => {
+    // Roam stamps deliberately far older than the harness `now` (timeCursor
+    // ≥ 1.7e12) so a sourced value is unmistakable vs an engine-stamped one.
+    const tsExport: RoamExport = [{
+      title: 'timestamped page',
+      uid: 'tsPage',
+      'create-time': 1_000_000_000_000, // 2001
+      'edit-time': 1_100_000_000_000, // 2004
+      children: [{
+        string: 'a child',
+        uid: 'tsChild',
+        'create-time': 1_200_000_000_000, // 2008
+        'edit-time': 1_300_000_000_000, // 2011
+      }],
+    }]
+
+    await importRoam(tsExport, env.repo, {workspaceId: WORKSPACE, currentUserId: USER_ID})
+
+    const readStamps = (id: string) => env.h.db.getOptional<{
+      created_at: number
+      updated_at: number
+      user_updated_at: number
+    }>('SELECT created_at, updated_at, user_updated_at FROM blocks WHERE id = ?', [id])
+
+    const child = await readStamps(roamBlockId(WORKSPACE, 'tsChild'))
+    expect(child?.created_at).toBe(1_200_000_000_000)
+    expect(child?.user_updated_at).toBe(1_300_000_000_000)
+    // Row-version is the engine's monotonic `now`, NEVER the sourced edit-time:
+    // a 2011 row-version would regress the server-monotonic sync gate.
+    expect(child?.updated_at).toBeGreaterThan(1_600_000_000_000)
+
+    const page = await readStamps(roamBlockId(WORKSPACE, 'tsPage'))
+    expect(page?.created_at).toBe(1_000_000_000_000)
+    expect(page?.user_updated_at).toBe(1_100_000_000_000)
+    expect(page?.updated_at).toBeGreaterThan(1_600_000_000_000)
   })
 
   it('preserves Roam source-only fields as namespaced properties', async () => {
@@ -518,8 +573,11 @@ describe('importRoam', () => {
       currentUserId: USER_ID,
     })
 
+    const idsBefore = new Set(
+      (await env.h.db.getAll<{id: string}>('SELECT id FROM blocks')).map(r => r.id),
+    )
     const before = await env.h.db.getOptional<{maxId: number | null}>(
-      'SELECT MAX(id) AS maxId FROM row_events',
+      'SELECT MAX(id) AS maxId FROM ps_crud',
     )
 
     await importRoam(minimalExport, env.repo, {
@@ -527,15 +585,16 @@ describe('importRoam', () => {
       currentUserId: USER_ID,
     })
 
-    const churn = await env.h.db.getOptional<{count: number}>(
-      `SELECT COUNT(*) AS count
-       FROM row_events re
-       JOIN command_events ce ON ce.tx_id = re.tx_id
-       WHERE re.id > ?
-         AND ce.description IN ('roam import: pages', 'roam import: descendants')`,
-      [before?.maxId ?? 0],
-    )
-    expect(churn?.count).toBe(0)
+    // A no-op re-import must not REWRITE a block that already existed — the
+    // imported pages and descendants stay untouched (the 16k-uploads-on-cold-
+    // resync bug). It may still create new auxiliary blocks, so scope the
+    // check to uploads that target a pre-existing id.
+    const rewritesOfExisting = (await env.h.db.getAll<{data: string}>(
+      'SELECT data FROM ps_crud WHERE id > ?', [before?.maxId ?? 0],
+    ))
+      .map(r => JSON.parse(r.data) as {op: string; id: string})
+      .filter(op => idsBefore.has(op.id))
+    expect(rewritesOfExisting).toEqual([])
   })
 
   it('points imports at a pre-existing seat instead of creating a parallel block', async () => {
@@ -760,6 +819,324 @@ describe('importRoam', () => {
     const restored = await readBlock(placeholderId)
     expect(restored?.deleted).toBe(0)
     expect(restored?.content).toBe('')
+  })
+
+  it('does not blank-restore a tombstoned data-bearing block to an empty stub (#195)', async () => {
+    // 1. Import a real block under uid U, holding real content.
+    const realExport: RoamExport = [
+      {
+        title: 'page-with-real-block',
+        uid: 'pageReal195',
+        children: [
+          {
+            string: 'precious real content',
+            uid: 'realLeaf195',
+          },
+        ],
+      },
+    ]
+    await importRoam(realExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const blockId = roamBlockId(WORKSPACE, 'realLeaf195')
+    // Give the real block a property too, mirroring user-authored data
+    // that a blank-restore would silently destroy alongside content.
+    await env.repo.tx(async tx => {
+      const row = await tx.get(blockId)
+      if (!row) throw new Error('expected imported real block')
+      await tx.update(blockId, {
+        properties: {...row.properties, 'local:note': 'keep me'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // 2. User deletes the real block — tombstoned, still holding data.
+    await env.repo.mutate.delete({id: blockId})
+    const tombstoned = await readBlock(blockId)
+    expect(tombstoned?.deleted).toBe(1)
+    expect(tombstoned?.content).toBe('precious real content')
+
+    // 3. A later export references ((U)) but does NOT include the real
+    //    block, so the planner registers U as a placeholder. Without the
+    //    #195 guard, ensurePlaceholderRow would resurrect the
+    //    data-bearing tombstone as an empty root stub.
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-with-ref-195',
+        uid: 'pageRef195',
+        children: [
+          {
+            string: 'see ((realLeaf195))',
+            uid: 'refBlock195',
+            ':block/refs': [{':block/uid': 'realLeaf195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // 4. The data-bearing tombstone is NOT resurrected as an empty stub:
+    //    its content + properties survive and it stays tombstoned (the
+    //    lossless state — a later import that includes the real block can
+    //    still upsert it back).
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(after?.content).toBe('precious real content')
+    expect(JSON.parse(after!.properties_json)['local:note']).toBe('keep me')
+
+    // ...and the import still completed: the referencing block landed and
+    // rewrote ((U)) to the deterministic id, so the ref resolves (at a
+    // tombstone for now) rather than the guard breaking import/ref output.
+    const refBlock = await readBlock(roamBlockId(WORKSPACE, 'refBlock195'))
+    expect(refBlock?.content).toBe(`see ((${blockId}))`)
+  })
+
+  it('preserves a tombstone whose only payload is a real property (#195 properties arm)', async () => {
+    // A data-bearing block can carry meaningful state with empty content
+    // (e.g. a typed/annotated block). Create one directly, tombstone it,
+    // then reference its uid from a placeholder-only import.
+    const blockId = roamBlockId(WORKSPACE, 'propOnly195')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: blockId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+        properties: {'local:note': 'precious'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.delete({id: blockId})
+    expect((await readBlock(blockId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-prop-only',
+        uid: 'pagePropOnly195',
+        children: [
+          {
+            string: 'see ((propOnly195))',
+            uid: 'refPropOnly195',
+            ':block/refs': [{':block/uid': 'propOnly195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Empty content + no references, but a real property → still
+    // data-bearing → must NOT be blank-restored.
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.properties_json)['local:note']).toBe('precious')
+  })
+
+  it('preserves a tombstone whose only payload is references (#195 references arm)', async () => {
+    // A data-bearing block can carry only outgoing references (empty
+    // content, no properties) — e.g. a block that was just a link. Create
+    // one directly, tombstone it, then reference its uid from a
+    // placeholder-only import.
+    const blockId = roamBlockId(WORKSPACE, 'refsOnly195')
+    const refTargetId = roamBlockId(WORKSPACE, 'refsOnlyTarget195')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: blockId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+        references: [{id: refTargetId, alias: refTargetId}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.delete({id: blockId})
+    expect((await readBlock(blockId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-refs-only',
+        uid: 'pageRefsOnly195',
+        children: [
+          {
+            string: 'see ((refsOnly195))',
+            uid: 'refRefsOnly195',
+            ':block/refs': [{':block/uid': 'refsOnly195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Empty content + no properties, but an outgoing reference → still
+    // data-bearing → must NOT be blank-restored.
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.references_json)).toEqual([{id: refTargetId, alias: refTargetId}])
+  })
+
+  it('leaves a tombstoned placeholder the user touched (any property → non-pristine) untouched (#195)', async () => {
+    // First import emits a blank placeholder for the unresolved ((leafUi)).
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-with-ui-ref',
+        uid: 'pageUiRef',
+        children: [
+          {
+            string: 'see ((leafUi))',
+            uid: 'parentUiRef',
+            ':block/refs': [{':block/uid': 'leafUi'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const placeholderId = roamBlockId(WORKSPACE, 'leafUi')
+    // The user touches the stub (collapses it → writes a property) before
+    // deleting it. We deliberately do NOT keep a cosmetic-property
+    // allowlist: ANY property makes the stub non-pristine, matching the
+    // alias-seat "restorable transient tombstone" convention where a
+    // user's explicit deletion is never undone.
+    await env.repo.mutate.setProperty({
+      id: placeholderId, schema: isCollapsedProp, value: true,
+    })
+    await env.repo.mutate.delete({id: placeholderId})
+    const tombstoned = await readBlock(placeholderId)
+    expect(tombstoned?.deleted).toBe(1)
+    // Non-vacuous: the property must really be on the tombstone.
+    expect(JSON.parse(tombstoned!.properties_json)[isCollapsedProp.name]).toBe(true)
+
+    // Re-importing the same export must leave the touched stub tombstoned
+    // (not blank-restored), preserving the row + its property.
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const after = await readBlock(placeholderId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.properties_json)[isCollapsedProp.name]).toBe(true)
+  })
+
+  it('leaves a tombstoned container with live children untouched instead of re-rooting its subtree (#195)', async () => {
+    // Build a page → container → child tree where the container's own
+    // content is empty but it has a LIVE child, then tombstone ONLY the
+    // container (raw tx.delete, no cascade) — a deleted container that
+    // still has a live subtree under a live page.
+    const pageId = roamBlockId(WORKSPACE, 'containerPageUid')
+    const containerId = roamBlockId(WORKSPACE, 'containerUid')
+    const childId = roamBlockId(WORKSPACE, 'childUid')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: pageId, workspaceId: WORKSPACE,
+        parentId: null, orderKey: 'a0', content: 'container page',
+      })
+      await tx.create({
+        id: containerId, workspaceId: WORKSPACE,
+        parentId: pageId, orderKey: 'a0', content: '',
+      })
+      await tx.create({
+        id: childId, workspaceId: WORKSPACE,
+        parentId: containerId, orderKey: 'a0', content: 'child content',
+      })
+      await tx.delete(containerId)
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await readBlock(containerId))?.deleted).toBe(1)
+    expect((await readBlock(childId))?.deleted).toBe(0)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-ref-container',
+        uid: 'pageRefContainer',
+        children: [
+          {
+            string: 'see ((containerUid))',
+            uid: 'refContainer',
+            ':block/refs': [{':block/uid': 'containerUid'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // The container's own fields are empty, but its live child makes it
+    // non-pristine: it stays tombstoned under its page (NOT resurrected
+    // and re-rooted to the workspace root by a restore + move), and the
+    // child stays under the container.
+    const containerAfter = await readBlock(containerId)
+    expect(containerAfter?.deleted).toBe(1)
+    expect(containerAfter?.parent_id).toBe(pageId)
+    const childAfter = await readBlock(childId)
+    expect(childAfter?.deleted).toBe(0)
+    expect(childAfter?.parent_id).toBe(containerId)
+  })
+
+  it('does not resurrect a tombstoned container whose whole subtree was deleted (#195)', async () => {
+    // Build page → container(empty content) → child, then delete the
+    // container via the cascading kernel mutator so the WHOLE subtree is
+    // tombstoned. The container's own fields are empty and it has NO live
+    // children — but its tombstoned child means it was a real user-deleted
+    // container, not a never-populated stub. (This is the case tx.childrenOf
+    // alone misses; isPristineRestorableStub passes {includeDeleted: true}.)
+    const pageId = roamBlockId(WORKSPACE, 'delContainerPageUid')
+    const containerId = roamBlockId(WORKSPACE, 'delContainerUid')
+    const childId = roamBlockId(WORKSPACE, 'delChildUid')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: pageId, workspaceId: WORKSPACE,
+        parentId: null, orderKey: 'a0', content: 'del container page',
+      })
+      await tx.create({
+        id: containerId, workspaceId: WORKSPACE,
+        parentId: pageId, orderKey: 'a0', content: '',
+      })
+      await tx.create({
+        id: childId, workspaceId: WORKSPACE,
+        parentId: containerId, orderKey: 'a0', content: 'child content',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    // core.delete cascades — tombstones the container AND its subtree.
+    await env.repo.mutate.delete({id: containerId})
+    expect((await readBlock(containerId))?.deleted).toBe(1)
+    expect((await readBlock(childId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-ref-del-container',
+        uid: 'pageRefDelContainer',
+        children: [
+          {
+            string: 'see ((delContainerUid))',
+            uid: 'refDelContainer',
+            ':block/refs': [{':block/uid': 'delContainerUid'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Must stay tombstoned under its page — NOT resurrected (deleted→0)
+    // and re-rooted as a blank stub, which would undo the user's deletion.
+    const containerAfter = await readBlock(containerId)
+    expect(containerAfter?.deleted).toBe(1)
+    expect(containerAfter?.parent_id).toBe(pageId)
+    expect((await readBlock(childId))?.deleted).toBe(1)
+
+    // ...and the import still completed: the referencing block rewrote
+    // ((delContainerUid)) to the deterministic id (resolving at the
+    // tombstone) rather than the guard breaking import/ref output.
+    const refBlock = await readBlock(roamBlockId(WORKSPACE, 'refDelContainer'))
+    expect(refBlock?.content).toBe(`see ((${containerId}))`)
   })
 
   it('does not create placeholders for unconfirmed double-paren prose', async () => {

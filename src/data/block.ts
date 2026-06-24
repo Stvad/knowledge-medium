@@ -35,15 +35,23 @@ import type { Repo } from './repo'
 import type { LoaderHandle } from './internals/handleStore'
 import { getBlockTypes } from './properties'
 
+const liveSnapshot = (snapshot: BlockData | undefined): BlockData | undefined | null => {
+  if (snapshot === undefined) return undefined
+  return snapshot.deleted ? null : snapshot
+}
+
 export class Block implements Handle<BlockData | null> {
   readonly id: string
   readonly repo: Repo
 
   /** Inflight `load()` promise — dedup'd at the Block level so Suspense
    *  paths can throw a stable promise across renders. Cleared once it
-   *  settles. The cache also has its own `dedupLoad` helper, but
-   *  `repo.load` deliberately doesn't use it (different `opts` would
-   *  silently merge); doing the dedup here keeps `read()` honest. */
+   *  settles. This is the single load-dedup mechanism: `repo.load` is a
+   *  raw option-shaped loader that deliberately does NOT dedup (an
+   *  id-only cache would silently merge a plain `repo.load(id)` with a
+   *  concurrent `repo.load(id, {children})`), so the dedup lives here at
+   *  the facade — one Block per id — where `read()`/`status()` also need
+   *  the inflight/error state anyway. */
   private inflight: Promise<BlockData | null> | null = null
 
   /** Counts overlapping `load()` calls in flight. Drives `status()`'s
@@ -67,23 +75,33 @@ export class Block implements Handle<BlockData | null> {
 
   // ──── Reads ────
 
-  /** Sync read; throws BlockNotLoadedError if the row isn't loaded,
-   *  BlockNotFoundError if `repo.load` previously confirmed the row
-   *  doesn't exist (§5.2). A soft-deleted row counts as loaded — the
-   *  facade exposes it with `deleted: true` so undo flows / devtools
-   *  can inspect it; consumers that want only-live filter themselves. */
+  /** Sync live read; throws BlockNotLoadedError if the row isn't
+   *  loaded, BlockNotFoundError if `repo.load` previously confirmed the
+   *  row doesn't exist (§5.2) OR the cache currently holds a soft-
+   *  deleted tombstone. The Block facade is the live-row surface; use
+   *  `peekRaw()` for tombstone-aware inspection. */
   get data(): BlockData {
-    const snap = this.repo.cache.getSnapshot(this.id)
-    if (snap !== undefined) return snap
-    if (this.repo.cache.isMissing(this.id)) throw new BlockNotFoundError(this.id)
+    const snap = this.peek()
+    if (snap !== undefined && snap !== null) return snap
+    if (snap === null) throw new BlockNotFoundError(this.id)
     throw new BlockNotLoadedError(this.id)
   }
 
-  /** Soft access (§5.2):
+  /** Live soft access (§5.2):
    *    undefined → not loaded yet
-   *    null      → confirmed missing (load returned null)
-   *    BlockData → loaded (possibly soft-deleted) */
+   *    null      → confirmed missing OR loaded tombstone
+   *    BlockData → loaded live row */
   peek(): BlockData | undefined | null {
+    const snap = liveSnapshot(this.repo.cache.getSnapshot(this.id))
+    if (snap !== undefined) return snap
+    if (this.repo.cache.isMissing(this.id)) return null
+    return undefined
+  }
+
+  /** Tombstone-aware cache access. Most UI and query code should use
+   *  `peek()`; this exists for lifecycle/debug paths that need to
+   *  inspect the raw cached row shape without forcing a SQL read. */
+  peekRaw(): BlockData | undefined | null {
     const snap = this.repo.cache.getSnapshot(this.id)
     if (snap !== undefined) return snap
     if (this.repo.cache.isMissing(this.id)) return null
@@ -94,12 +112,13 @@ export class Block implements Handle<BlockData | null> {
    *  paths can throw a stable promise across renders. Returns null when
    *  the row doesn't exist.
    *
-   *  Cache fast-path: if the row is already in `BlockCache` we return
-   *  synchronously without going to SQL. The cache is the source of
-   *  truth post-tx (`repo.tx`'s commit pipeline writes it) and post-
-   *  sync (`rowEventsTail`'s `applyIfNewer` keeps it current), so
-   *  a redundant SQL read just costs a connection round-trip that
-   *  contends with PowerSync's upload/download work. The hot path
+   *  Cache fast-path: if a live row is already in `BlockCache` we
+   *  return synchronously without going to SQL. The cache is the
+   *  source of truth post-tx (`repo.tx`'s commit pipeline writes it)
+   *  and post-sync (`rowEventsTail`'s `applyIfNewer` keeps it
+   *  current), so a redundant SQL read just costs a connection round-
+   *  trip that contends with PowerSync's upload/download work. The
+   *  hot path
    *  (keyboard navigation through `nextVisibleBlock` /
    *  `previousVisibleBlock`) does 2-3 of these per arrow press —
    *  occasionally blocked behind a slow sync drain (p99 ~600 ms in a
@@ -151,10 +170,11 @@ export class Block implements Handle<BlockData | null> {
   }
 
   /** Subscribe to cache mutations for this id. Listener fires with the
-   *  current `BlockData | null` (null = confirmed missing or evicted). */
+   *  current live `BlockData | null` (null = confirmed missing, cached
+   *  tombstone, or hard-deleted/missing). */
   subscribe(listener: (data: BlockData | null) => void): Unsubscribe {
     return this.repo.cache.subscribe(this.id, () => {
-      const next = this.repo.cache.getSnapshot(this.id) ?? null
+      const next = this.peek() ?? null
       listener(next)
     })
   }
@@ -165,10 +185,7 @@ export class Block implements Handle<BlockData | null> {
   read(): BlockData | null {
     const status = this.status()
     if (status === 'ready') {
-      const snap = this.repo.cache.getSnapshot(this.id)
-      if (snap !== undefined) return snap
-      // Missing-confirmed branch: status='ready' with no snapshot.
-      return null
+      return this.peek() ?? null
     }
     if (status === 'error') throw this.lastError
     // 'loading' or 'idle': trigger / reuse a load and throw it.
@@ -258,9 +275,39 @@ export class Block implements Handle<BlockData | null> {
   // ──── Single-block write sugar (each is a 1-mutator tx) ────
 
   /** Set a typed property. Each call is its own tx, equivalent to
-   *  `repo.mutate.setProperty({id, schema, value})`. */
-  async set<T>(schema: PropertySchema<T>, value: T): Promise<void> {
-    await this.repo.mutate.setProperty({id: this.id, schema, value})
+   *  `repo.mutate.setProperty({id, schema, value})`.
+   *
+   *  Updater overload — `set(schema, current => next)` — reads the CURRENT
+   *  committed value INSIDE the (serialized) write-transaction and writes
+   *  the result, so concurrent single-key edits of a map/collection
+   *  property compose instead of clobbering a stale snapshot. The function
+   *  is never stored (it runs inside the tx; only its resolved value is
+   *  written), so this stays replay-safe — and works because property
+   *  values are serializable, so a value is never itself a function.
+   *
+   *  NOTE: unlike `get`, the updater receives `undefined` (NOT
+   *  `schema.defaultValue`) when the property is absent, so handle the
+   *  empty case yourself (e.g. `current => fn(current ?? new Map())`). */
+  async set<T>(schema: PropertySchema<T>, value: T): Promise<void>
+  async set<T>(
+    schema: PropertySchema<T>,
+    updater: (current: T | undefined) => T,
+  ): Promise<void>
+  async set<T>(
+    schema: PropertySchema<T>,
+    valueOrUpdater: T | ((current: T | undefined) => T),
+  ): Promise<void> {
+    if (typeof valueOrUpdater !== 'function') {
+      await this.repo.mutate.setProperty({id: this.id, schema, value: valueOrUpdater})
+      return
+    }
+    const updater = valueOrUpdater as (current: T | undefined) => T
+    await this.repo.tx(async tx => {
+      const data = await tx.get(this.id)
+      const raw = data?.properties[schema.name]
+      const current = raw === undefined ? undefined : schema.codec.decode(raw)
+      await tx.setProperty(this.id, schema, updater(current))
+    }, {scope: schema.changeScope, description: `update property ${schema.name} on ${this.id}`})
   }
 
   async addType(typeId: string): Promise<void> {

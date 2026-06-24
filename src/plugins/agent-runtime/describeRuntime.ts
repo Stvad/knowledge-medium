@@ -1,10 +1,17 @@
-import { FacetRuntime } from '@/extensions/facet.js'
+import { FacetRuntime } from '@/facets/facet.js'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { Repo } from '@/data/repo'
 import {
   describeAuthoringCatalog,
   type AuthoringCatalog,
 } from './authoringCatalog.ts'
+import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
+
+/** Guide id that surfaces the data-model orientation through
+ *  `describe-runtime --guide data-model`. Kept separate from the
+ *  extension-authoring guides in the authoring catalog — different
+ *  audience (reading/querying user data vs authoring extensions). */
+export const DATA_MODEL_GUIDE_ID = 'data-model'
 import {
   getCommandMeta,
   type KnownCommandType,
@@ -119,6 +126,10 @@ export interface RuntimeDescription {
   facets: FacetSummary[]
   apiSurface: ApiSurfaceSummary
   authoring: AuthoringCatalog
+  /** The data-model guide markdown, present only when the caller asked
+   *  for it via `--guide data-model`. (Its own home is `yarn agent
+   *  data-model`; this is the discoverable describe-runtime touch-point.) */
+  dataModel?: string
 }
 
 export interface RuntimeDescriptionFilters {
@@ -223,12 +234,18 @@ const runtimeCommandHints = {
   baseline: [
     wireUsage('ping'),
     wireUsage('runtime-summary'),
+    `${wireUsage('data-model')}  # orient on blocks/refs/pages/backlinks before querying`,
     'yarn agent profiles',
   ],
   dataAccess: [
     wireUsage('sql'),
     wireUsage('get-block'),
     wireUsage('get-subtree'),
+    wireUsage('page'),
+    wireUsage('daily-note'),
+    wireUsage('search'),
+    wireUsage('backlinks'),
+    wireUsage('grouped-backlinks'),
     wireUsage('run-action'),
     `${wireUsage('eval')}  # use \`return ...\` to print a value`,
   ],
@@ -385,6 +402,10 @@ export const describeRuntime = async (
 ): Promise<RuntimeDescription> => {
   const apiSurface = await getApiSurface()
 
+  const includeDataModel = (filters.guides ?? []).some(
+    guide => guide.trim().toLowerCase() === DATA_MODEL_GUIDE_ID,
+  )
+
   // `brief` callers want authoring-only output. Empty the bulky
   // runtime-introspection arrays — actions/facets/renderers are
   // ~150KB combined and irrelevant if you're reading a guide.
@@ -429,6 +450,7 @@ export const describeRuntime = async (
       // names what matters.
       omitDiscoverableModules: briefMode,
     }, context.document),
+    ...(includeDataModel ? {dataModel: DATA_MODEL_GUIDE} : {}),
   }
 }
 
@@ -487,6 +509,10 @@ export const describeRuntimeSummary = async (
     },
     more: [
       {
+        need: "Understand the data model (blocks, references, pages vs daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links) before reading or writing a user's data",
+        command: 'yarn agent data-model',
+      },
+      {
         need: 'Full runtime diagnostic dump with action, facet, renderer, and API export details',
         command: 'yarn agent describe-runtime [--actions <text>] [--facets <text>]',
       },
@@ -507,7 +533,7 @@ export const describeRuntimeSummary = async (
         command: 'yarn agent status',
       },
       {
-        need: 'Targeted in-app inspection using the runtime context — but NOT for "what is registered". For actions/facets/renderers/contributions, prefer `describe-runtime`; reaching into `facetRuntime.staticContributionsByFacet` or `repo.runtimeContributionBuckets` from eval is reading internal caches with different shapes and will mislead you. Inside the code, `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` are already bound — do not dig into `window.__omniliner`. For structured input, pass `--data <path>` (or `--data-json <inline>`) and read it as `data`.',
+        need: 'Targeted in-app inspection using the runtime context — but NOT for "what is registered". For actions/facets/renderers/contributions, prefer `describe-runtime`; reaching into `facetRuntime.staticContributionsByFacet` from eval is reading an internal cache with a different shape and will mislead you. Inside the code, `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` are already bound — do not dig into `window.__omniliner`. For structured input, pass `--data <path>` (or `--data-json <inline>`) and read it as `data`.',
         command: 'yarn agent eval <code>  # use `return ...` to print a value; --data <path> binds JSON as `data`',
       },
       {

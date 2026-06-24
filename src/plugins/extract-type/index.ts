@@ -2,22 +2,21 @@
  *
  *  Contributes:
  *   - `extractTypeAction` (NORMAL_MODE) — "Extract type from this
- *     block" via the command palette / shortcut binding. Dispatches
- *     a window event the dialog listens for. On submit, creates the
- *     type and delegates to find-type-instances.
+ *     block" via the command palette / shortcut binding. Opens
+ *     `ExtractTypeDialog` through the `openDialog` queue; on submit it
+ *     creates the type and chains to find-type-instances.
  *   - `findTypeInstancesAction` (NORMAL_MODE) — "Find instances of
  *     this type." Only surfaces on block-type blocks. Picker for the
  *     type's properties with optional value filters → retag candidate
  *     confirmation.
- *   - `ExtractTypeDialog` + `FindTypeInstancesDialog` (global app
- *     mounts) — the two dialogs that listen for their respective
- *     events. */
+ *
+ *  The dialogs are opened imperatively via `openDialog` (rendered by
+ *  the central DialogHost), so the plugin no longer mounts them. */
 
-import { actionsFacet, appMountsFacet, type AppMountContribution } from '@/extensions/core.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
-import { ExtractTypeDialog } from './ExtractTypeDialog.tsx'
-import { FindTypeInstancesDialog } from './FindTypeInstancesDialog.tsx'
+import { actionsFacet } from '@/extensions/core.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
+import { systemToggle } from '@/facets/togglable.js'
 import {
   extractTypeAction,
   findTypeInstancesAction,
@@ -29,36 +28,17 @@ export {
   EXTRACT_TYPE_ACTION_ID,
   FIND_TYPE_INSTANCES_ACTION_ID,
 } from './action.ts'
-export {
-  openExtractTypeDialog,
-  openExtractTypeDialogEvent,
-  openFindTypeInstancesDialog,
-  openFindTypeInstancesDialogEvent,
-} from './events.ts'
-export type {
-  OpenExtractTypeDialogEventDetail,
-  OpenFindTypeInstancesDialogEventDetail,
-} from './events.ts'
 export { ExtractTypeDialog } from './ExtractTypeDialog.tsx'
 export { FindTypeInstancesDialog } from './FindTypeInstancesDialog.tsx'
-
-const extractTypeDialogMount: AppMountContribution = {
-  id: 'extract-type.dialog',
-  component: ExtractTypeDialog,
-}
-
-const findTypeInstancesDialogMount: AppMountContribution = {
-  id: 'extract-type.find-type-instances-dialog',
-  component: FindTypeInstancesDialog,
-}
 
 export const extractTypePlugin: AppExtension = systemToggle({
   id: 'system:extract-type',
   name: 'Extract type from block',
   description: 'Action + dialog that creates a user-defined type from a prototype block: name the type, pick the property subset, confirm matching candidates, retag.',
 }).of([
+  // The actions open their dialogs via `openDialog`, which is inert
+  // without DialogHost mounted; pull it in (deduped by reference).
+  dialogAppMountExtension,
   actionsFacet.of(extractTypeAction, {source: 'extract-type'}),
   actionsFacet.of(findTypeInstancesAction, {source: 'extract-type'}),
-  appMountsFacet.of(extractTypeDialogMount, {source: 'extract-type'}),
-  appMountsFacet.of(findTypeInstancesDialogMount, {source: 'extract-type'}),
 ])

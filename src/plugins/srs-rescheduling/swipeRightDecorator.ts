@@ -8,7 +8,7 @@ import {
 import type {
   ActionConfig,
   ActionContextType,
-  ActionDecorator,
+  ActionTransform,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
@@ -27,10 +27,10 @@ export const archiveSrsBlock = async (block: Block): Promise<boolean> => {
 const decorateActionToArchiveSrsBlock = (
   actionId: string,
   context?: ActionContextType,
-): ActionDecorator => ({
+): ActionTransform => ({
   actionId,
   ...(context ? {context} : {}),
-  decorate: (action: ActionConfig): ActionConfig => ({
+  apply: (action: ActionConfig): ActionConfig => ({
     ...action,
     handler: async (deps, trigger) => {
       const block = (deps as BlockShortcutDependencies).block
@@ -40,10 +40,10 @@ const decorateActionToArchiveSrsBlock = (
   }),
 })
 
-export const srsSwipeRightDecorator: ActionDecorator =
+export const srsSwipeRightDecorator: ActionTransform =
   decorateActionToArchiveSrsBlock(SWIPE_RIGHT_BLOCK_ACTION_ID)
 
-export const srsTodoCycleDecorators: readonly ActionDecorator[] = [
+export const srsTodoCycleDecorators: readonly ActionTransform[] = [
   decorateActionToArchiveSrsBlock(
     TODO_CYCLE_ACTION_ID,
     ActionContextTypes.NORMAL_MODE,

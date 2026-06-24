@@ -13,18 +13,18 @@ import type {BlockData} from '@/data/api'
 import type {Repo} from '@/data/repo'
 import {EXTENSION_TYPE} from '@/data/blockTypes'
 import type {BlockProperties} from '@/types.js'
-import {extensionAliasValues} from '@/extensions/togglable.js'
+import {extensionName} from '@/extensions/extensionToggles.js'
 
 export interface ExtensionHandle {
   /** Extension block id. Either `id` or `label` is required. */
   id?: string
-  /** Extension alias / extension:name (the label passed at install time). */
+  /** Extension `extension:name` (the label passed at install time). */
   label?: string
 }
 
 export interface ExtensionLookupResult {
   block: BlockData
-  /** Best human-readable label (first alias that isn't the block id). */
+  /** Human-readable label (the block's `extension:name`). */
   label: string | null
 }
 
@@ -39,8 +39,11 @@ export const findExtensionBlock = async (
     throw new Error('findExtensionBlock requires `id` or `label`')
   }
 
-  const rows = await repo.db.getAll<{id: string, properties_json: string}>(
-    `SELECT b.id, b.properties_json
+  // Select `content` too: callers such as the agent `enable-extension`
+  // approve the block's CURRENT source (#67), and a content-less BlockData
+  // would pin the empty string instead of the real extension.
+  const rows = await repo.db.getAll<{id: string, content: string | null, properties_json: string}>(
+    `SELECT b.id, b.content, b.properties_json
        FROM blocks b
        JOIN block_types bt ON bt.block_id = b.id AND bt.workspace_id = b.workspace_id
       WHERE b.workspace_id = ? AND b.deleted = 0 AND bt.type = ?`,
@@ -50,12 +53,12 @@ export const findExtensionBlock = async (
     const properties = (() => {
       try { return JSON.parse(row.properties_json) as BlockProperties } catch { return {} }
     })()
-    return {id: row.id, workspaceId, properties} as BlockData
+    return {id: row.id, workspaceId, content: row.content ?? '', properties} as BlockData
   })
   const match = idHint
     ? candidates.find(block => block.id === idHint) ?? null
-    : candidates.find(block => extensionAliasValues(block).includes(labelHint!)) ?? null
+    : candidates.find(block => extensionName(block) === labelHint) ?? null
   if (!match) return null
-  const label = extensionAliasValues(match).find(value => value !== match.id) ?? null
+  const label = extensionName(match) ?? null
   return {block: match, label}
 }

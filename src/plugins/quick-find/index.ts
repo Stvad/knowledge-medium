@@ -7,18 +7,17 @@ import {
 } from '@/extensions/core.js'
 import { propertySchemasFacet } from '@/data/facets.js'
 import { pluginUIStateExtension } from '@/data/pluginStateExtensions.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { Search } from 'lucide-react'
 import { QuickFindHeaderItem } from './HeaderItem.tsx'
 import { QuickFind } from './QuickFind.tsx'
-import { toggleQuickFindEvent } from './events.ts'
+import { quickFindToggle } from './toggleStore.ts'
 import { quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
 
 export { QuickFindHeaderItem } from './HeaderItem.tsx'
 export { QuickFind } from './QuickFind.tsx'
-export { toggleQuickFindEvent } from './events.ts'
 export { RECENT_BLOCKS_LIMIT, pushRecentBlockId, recentBlockIdsProp } from './recents.ts'
 
 export const quickFindMount: AppMountContribution = {
@@ -34,7 +33,7 @@ export const quickFindAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   context: ActionContextTypes.GLOBAL,
   icon: Search,
   handler: () => {
-    window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
+    quickFindToggle.toggle()
   },
   defaultBinding: {
     keys: '$mod+p',

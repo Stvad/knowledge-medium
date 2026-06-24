@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cleanup, render, waitFor } from '@testing-library/react'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, render, waitFor } from '@testing-library/react'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   focusedBlockLocationProp,
   peekFocusedBlockLocation,
@@ -17,18 +17,23 @@ const WS = 'ws-1'
 const USER: User = {id: 'user-1'}
 const PANEL_ID = 'panel'
 
+// Comfortably past the component's RECOVERY_DEBOUNCE_MS (250) so that a
+// pending recovery would have fired if one were armed. Used with fake
+// timers in the no-fire tests below.
+const DEBOUNCE_SETTLE_MS = 350
+
 interface Harness {
   h: TestDb
   repo: Repo
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: USER,
-    registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
@@ -49,11 +54,25 @@ const buildPanelDom = (
   return panel
 }
 
+const visibleRect = () =>
+  ({
+    top: 50,
+    bottom: 1050,
+    left: 0,
+    right: 100,
+    width: 100,
+    height: 1000,
+    x: 0,
+    y: 50,
+    toJSON: () => ({}),
+  }) as DOMRect
+
 const setNavAttrs = (el: HTMLElement, blockId: string, renderScopeId = `i-${blockId}`): void => {
   el.setAttribute('data-block-nav-item', 'true')
   el.setAttribute('data-block-id', blockId)
   el.setAttribute('data-render-scope-id', renderScopeId)
   el.setAttribute('data-block-surface', 'outline')
+  el.getBoundingClientRect = visibleRect
 }
 
 const focusedLocation = (blockId: string, renderScopeId = `i-${blockId}`) => ({
@@ -65,7 +84,10 @@ const setFocused = async (blockId: string, renderScopeId = `i-${blockId}`): Prom
   await env.repo.block(PANEL_ID).set(focusedBlockLocationProp, focusedLocation(blockId, renderScopeId))
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   __resetSpatialNavigationForTesting()
@@ -91,7 +113,7 @@ afterEach(async () => {
   cleanup()
   __resetSpatialNavigationForTesting()
   document.body.innerHTML = ''
-  await env.h.cleanup()
+  env.repo.stopSyncObserver()
 })
 
 describe('PanelFocusRecovery', () => {
@@ -186,11 +208,18 @@ describe('PanelFocusRecovery', () => {
     ])
 
     const panelBlock = env.repo.block(PANEL_ID)
-    render(<PanelFocusRecovery block={panelBlock}/>)
 
-    // Give the layout effect + microtask + observer + debounce a tick
-    // to settle.
-    await new Promise(resolve => setTimeout(resolve, 350))
+    // The recovery path early-exits (no stored hint for an id that was
+    // never mounted) without scheduling a timer or writing to the DB, so
+    // we can drive the full debounce window on fake timers instead of
+    // sleeping for real.
+    vi.useFakeTimers()
+    try {
+      render(<PanelFocusRecovery block={panelBlock}/>)
+      await act(async () => { await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS) })
+    } finally {
+      vi.useRealTimers()
+    }
 
     expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('never-mounted')
   })
@@ -300,22 +329,36 @@ describe('PanelFocusRecovery', () => {
     ])
 
     const panelBlock = env.repo.block(PANEL_ID)
-    render(<PanelFocusRecovery block={panelBlock}/>)
-    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
 
-    // Simulate a tab move: the block briefly unmounts and remounts
-    // under the same render scope well inside the debounce window.
-    panel.querySelector('[data-block-id="middle"]')!.remove()
-    await new Promise(resolve => setTimeout(resolve, 20))
+    // Fake timers drive the debounce deterministically. The block leaves
+    // and returns inside the window, so the recovery cancels itself and
+    // never writes — no DB I/O on this path, so faking time is safe.
+    vi.useFakeTimers()
+    try {
+      render(<PanelFocusRecovery block={panelBlock}/>)
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
 
-    const replacement = document.createElement('div')
-    setNavAttrs(replacement, 'middle')
-    panel.appendChild(replacement)
+      // Simulate a tab move: the block briefly unmounts and remounts
+      // under the same render scope well inside the debounce window. The
+      // remove fire arms the debounce; advancing 20ms stays inside it.
+      await act(async () => {
+        panel.querySelector('[data-block-id="middle"]')!.remove()
+        await vi.advanceTimersByTimeAsync(20)
+      })
 
-    // Wait past the debounce window and verify no recovery write fired.
-    await new Promise(resolve => setTimeout(resolve, 350))
+      // The remount's observer fire cancels the pending recovery; then
+      // run past the full window to prove nothing fires.
+      const replacement = document.createElement('div')
+      setNavAttrs(replacement, 'middle')
+      await act(async () => {
+        panel.appendChild(replacement)
+        await vi.advanceTimersByTimeAsync(DEBOUNCE_SETTLE_MS)
+      })
 
-    expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
+      expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe('middle')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('refreshes the positional hint as the user navigates between blocks', async () => {

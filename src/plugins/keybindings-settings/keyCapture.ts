@@ -16,8 +16,6 @@
 const isMacPlatform = (): boolean =>
   typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
-const MODIFIER_ORDER = ['$mod', 'Control', 'Meta', 'Alt', 'Shift'] as const
-
 /** Map raw `KeyboardEvent.key` values to tinykeys' canonical names. */
 const KEY_ALIASES: Record<string, string> = {
   ' ': 'Space',
@@ -198,41 +196,7 @@ export const formatChord = (chord: string): string => {
   ).join(' ')
 }
 
-/** Canonicalise a chord — stable modifier ordering, aliases (`cmd` →
- *  `$mod`, `Option` → `Alt`, etc.). Used to detect equivalence when
- *  checking for duplicates ('Meta+K' and '$mod+k' should match on a
- *  Mac-style binding, where Meta is the primary). */
-export const normalizeChord = (chord: string): string => {
-  const tokens = chord.split('+').map(t => t.trim()).filter(Boolean)
-  const lowered = tokens.map(t => t.toLowerCase())
-  // Letter-case retained on the final key (the trailing non-modifier
-  // token). Modifier tokens always get their canonical name.
-  const aliasMap: Record<string, string> = {
-    cmd: '$mod',
-    meta: '$mod',
-    os: '$mod',
-    ctrl: 'Control',
-    control: 'Control',
-    option: 'Alt',
-    alt: 'Alt',
-    shift: 'Shift',
-    '$mod': '$mod',
-  }
-  const modifiers: string[] = []
-  let key = ''
-  for (let i = 0; i < tokens.length; i++) {
-    const alias = aliasMap[lowered[i]!]
-    if (alias && i < tokens.length - 1) {
-      modifiers.push(alias)
-    } else if (alias && i === tokens.length - 1) {
-      // Modifier in the last slot (e.g. user typed `cmd`); preserve it
-      // so we don't drop the chord. Unusual but possible during
-      // partial-capture states.
-      modifiers.push(alias)
-    } else {
-      key = tokens[i]!
-    }
-  }
-  const orderedModifiers = MODIFIER_ORDER.filter(m => modifiers.includes(m))
-  return [...orderedModifiers, key].filter(Boolean).join('+')
-}
+// `normalizeChord` now lives in the shared canonicaliser so dedup,
+// conflict detection, and the resolver all compare chords identically.
+// Re-exported here so the settings UI keeps a single import surface.
+export { normalizeChord } from '@/shortcuts/canonicalizeChord.js'

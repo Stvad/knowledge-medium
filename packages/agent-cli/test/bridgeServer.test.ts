@@ -1,7 +1,7 @@
 /** End-to-end test of the bridge HTTP server. We spawn the built script
  *  as a child process on a random port and exercise it over the wire:
  *  token auth, per-client queues, and client-gone failure modes. */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { spawn, ChildProcess } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,7 +45,11 @@ const unknownTokenMessage =
   'Open or focus the app tab for the same workspace, then retry; if needed, run `yarn agent connect` to pair a fresh token. ' +
   'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.'
 
-beforeEach(async () => {
+// One server for the whole file. Each test wipes state via the
+// secret-gated reset route (enabled by AGENT_RUNTIME_TEST_RESET) instead
+// of paying a fresh spawn + port-bind per case — which also removes the
+// pick-port/spawn TOCTOU race from every-test down to a single occurrence.
+beforeAll(async () => {
   const port = await pickPort()
   baseUrl = `http://127.0.0.1:${port}`
   server = spawn('node', [serverScript], {
@@ -54,17 +58,26 @@ beforeEach(async () => {
       AGENT_RUNTIME_PORT: String(port),
       AGENT_RUNTIME_HOST: '127.0.0.1',
       AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
+      AGENT_RUNTIME_TEST_RESET: 'true',
     },
     stdio: ['ignore', 'ignore', 'pipe'],
   })
   await waitForReady(port)
 })
 
-afterEach(async () => {
+afterAll(async () => {
   if (server && !server.killed) {
     server.kill('SIGKILL')
     await new Promise(resolve => server.once('exit', resolve))
   }
+})
+
+beforeEach(async () => {
+  const response = await fetch(`${baseUrl}/runtime/test/reset`, {
+    method: 'POST',
+    headers: bridgeHeaders,
+  })
+  expect(response.ok).toBe(true)
 })
 
 const registerClient = async (clientId: string, body: object) => {

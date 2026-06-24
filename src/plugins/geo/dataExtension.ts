@@ -8,8 +8,8 @@ import {
   queriesFacet,
   typesFacet,
 } from '@/data/facets'
-import { codeMirrorExtensionsFacet } from '@/extensions/editor'
-import type { AppExtension } from '@/extensions/facet'
+import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions'
+import type { AppExtension } from '@/facets/facet'
 import { GEO_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { GEO_PROPERTY_SCHEMAS } from './properties'
 import { geoCodeMirrorExtensions } from './codeMirrorExtensions'

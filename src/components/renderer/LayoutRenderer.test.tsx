@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import type { User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
@@ -42,20 +42,25 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   let txSeq = 0
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: USER,
     newTxSeq: () => ++txSeq,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
   const uiState = await getUIStateBlock(repo, WS, USER, {})
   const layoutSessionBlock = await getLayoutSessionBlock(uiState, 'layout-session-a')
   return {h, repo, layoutSessionBlockId: layoutSessionBlock.id}
 }
+
+let sharedDb: TestDb
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 
 describe('LayoutRenderer', () => {
   let env: Harness
@@ -67,7 +72,7 @@ describe('LayoutRenderer', () => {
 
   afterEach(async () => {
     cleanup()
-    await env.h.cleanup()
+    env.repo.stopSyncObserver()
   })
 
   const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)

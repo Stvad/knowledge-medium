@@ -18,8 +18,8 @@ import {
   topLevelBlockIdProp,
   typesProp,
 } from '@/data/properties.js'
-import type { AppExtension } from '@/extensions/facet.js'
-import { systemToggle } from '@/extensions/togglable.js'
+import type { AppExtension } from '@/facets/facet.js'
+import { systemToggle } from '@/facets/togglable.js'
 import { TypesPropertyEditor } from './TypesPropertyEditor'
 
 export const typesPropertyUi = definePropertyEditorOverride<readonly string[]>({

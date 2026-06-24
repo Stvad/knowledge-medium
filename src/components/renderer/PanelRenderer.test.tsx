@@ -1,18 +1,18 @@
 // @vitest-environment jsdom
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import type { Block } from '@/data/block'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import {
   activePanelIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { PanelRenderer } from './PanelRenderer'
 import { BlockComponent } from '@/components/BlockComponent.js'
@@ -88,14 +88,15 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   let txSeq = 0
   const repo = new Repo({
     db: h.db,
     cache: new BlockCache(),
     user: USER,
     newTxSeq: () => ++txSeq,
-    startRowEventsTail: false,
+    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
   const runtime = resolveFacetRuntimeSync([])
@@ -134,6 +135,10 @@ const setup = async (): Promise<Harness> => {
   return {h, repo, runtime, panel: repo.block('panel-a')}
 }
 
+let sharedDb: TestDb
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
+
 describe('PanelRenderer', () => {
   let env: Harness
 
@@ -147,7 +152,7 @@ describe('PanelRenderer', () => {
   afterEach(async () => {
     cleanup()
     repoRef.current = undefined
-    await env.h.cleanup()
+    env.repo.stopSyncObserver()
   })
 
   const renderPanel = (wideScrollSurface: boolean) =>

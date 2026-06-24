@@ -59,7 +59,7 @@ export const getOrCreateKernelPage = async (
   const orderKey = spec.orderKey ?? 'a0'
 
   const live = await repo.load(id)
-  if (live && !live.deleted) {
+  if (live) {
     const currentAliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
       !hasBlockType(live, PAGE_TYPE) ||
@@ -98,7 +98,7 @@ export const getOrCreateKernelPage = async (
       parentId: null,
       orderKey,
       content: spec.alias,
-    })
+    }, {systemMint: true})
     await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
     await repo.addTypeInTx(tx, id, spec.markerType, {[aliasesProp.name]: aliases}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})

@@ -20,10 +20,10 @@
  *     by checking ps_crud row count grew after the undo replay
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, ReadOnlyError } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
@@ -34,7 +34,9 @@ interface Harness {
 }
 
 const setup = async (): Promise<Harness> => {
-  const h = await createTestDb()
+  // Shared DB opened once per file, reset between tests; fresh Repo per test.
+  await resetTestDb(sharedDb.db)
+  const h = sharedDb
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
@@ -47,8 +49,10 @@ const setup = async (): Promise<Harness> => {
     // Disable kernel processors so parseReferences doesn't fire and
     // add its own tx entries during these tests — keeps the audited
     // stack predictable.
-    registerKernelProcessors: false,
   })
+  // Undo / redo are scoped to the active workspace (issue #186); pin it
+  // to WS so the default-workspace edits below are the cmd-Z target.
+  repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
 
@@ -89,9 +93,12 @@ const rowCount = async (repo: Repo, table: string): Promise<number> => {
   return row.n
 }
 
+let sharedDb: TestDb
 let env: Harness
+beforeAll(async () => { sharedDb = await createTestDb() })
+afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(async () => { await env.h.cleanup() })
+afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('repo.undo / redo on tx.update (setContent)', () => {
   it('reverts content on undo and re-applies on redo', async () => {
@@ -242,6 +249,55 @@ describe('repo.undo in read-only mode', () => {
     await expect(env.repo.undo()).rejects.toBeInstanceOf(ReadOnlyError)
 
     // Entry was pushed back so user can retry once read-only flips
+    env.repo.setReadOnly(false)
+    expect(await env.repo.undo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('live')
+  })
+})
+
+describe('cross-workspace undo isolation (#186)', () => {
+  it('does not revert / upload a block in a workspace other than the active one', async () => {
+    // Edit a block in workspace A (= WS, the active workspace).
+    await seedRoot(env.repo, 'a', 'live')
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+    expect(await readContent(env.repo, 'a')).toBe('edited')
+
+    // Switch to a different workspace in-place (no reload, no stack clear).
+    env.repo.setActiveWorkspaceId('ws-B')
+
+    // cmd-Z while viewing ws-B must NOT touch the ws-A edit: nothing to
+    // undo here, so it no-ops rather than reverting an unopened workspace.
+    expect(await env.repo.undo()).toBe(false)
+    expect(await readContent(env.repo, 'a')).toBe('edited')
+
+    // The ws-A history survives the switch — back in ws-A, undo works.
+    env.repo.setActiveWorkspaceId(WS)
+    expect(await env.repo.undo()).toBe(true)
+    expect(await readContent(env.repo, 'a')).toBe('live')
+  })
+
+  it('does not block an editable-workspace entry while viewing a read-only workspace (A5b)', async () => {
+    // Edit a block in editable workspace A (= WS, active).
+    await seedRoot(env.repo, 'a', 'live')
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {content: 'edited'})
+    }, {scope: ChangeScope.BlockDefault, description: 'edit a'})
+
+    // View a read-only (viewer-role) workspace B.
+    env.repo.setActiveWorkspaceId('ws-B')
+    env.repo.setReadOnly(true)
+
+    // Pre-fix, this cmd-Z popped the ws-A entry and replayed it under the
+    // active (ws-B) read-only flag → spurious ReadOnlyError. Now undo is
+    // scoped to ws-B, so the editable ws-A entry is neither reverted nor
+    // blocked: undo no-ops without throwing.
+    await expect(env.repo.undo()).resolves.toBe(false)
+    expect(await readContent(env.repo, 'a')).toBe('edited')
+
+    // Returning to editable A, the entry is still undoable.
+    env.repo.setActiveWorkspaceId(WS)
     env.repo.setReadOnly(false)
     expect(await env.repo.undo()).toBe(true)
     expect(await readContent(env.repo, 'a')).toBe('live')

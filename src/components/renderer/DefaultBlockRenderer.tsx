@@ -24,7 +24,8 @@ import {
 import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
-import { pasteMultilineText } from '@/utils/paste.js'
+import { pasteMultilineText } from '@/paste/operations.js'
+import { pasteDecisionVerb } from '@/paste/decision.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -60,6 +61,7 @@ import {
   type BlockShellProps,
 } from '@/extensions/blockInteraction.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
+import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 import { isFocusedBlock } from '@/data/properties.js'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
@@ -107,7 +109,7 @@ export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicat
   return (
     <span
       className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-        (withChildrenIndicator ? 'bullet-with-children border-4 border-solid border-border box-content' : '')}/>
+        (withChildrenIndicator ? ' bullet-with-children border-4 border-solid border-border box-content' : '')}/>
   )
 }
 
@@ -380,12 +382,14 @@ export function DefaultBlockRenderer(
   // selection toggles, so facet resolvers and the components they
   // produce keep stable identity. This is what stops UpdateIndicator
   // (and any other content decorator) from remounting on every click.
+  const scopeRootId = blockContext.scopeRootId
   const resolveContext = useMemo<BlockResolveContext>(() => ({
     block,
     repo,
     uiStateBlock,
     types,
     topLevelBlockId,
+    scopeRootId,
     isTopLevel,
     blockContext,
     contentRenderers: [
@@ -404,11 +408,18 @@ export function DefaultBlockRenderer(
     uiStateBlock,
     types,
     topLevelBlockId,
+    scopeRootId,
     isTopLevel,
     blockContext,
     DefaultContentRenderer,
     EditContentRenderer,
   ])
+
+  // Continuous-gesture recognizers (swipe, date-scrub, …) attach native
+  // Pointer Event listeners + touch-action to the content surface and dispatch
+  // recognized gestures through the action system. A no-op until a recognizer
+  // is contributed, so blocks with none pay nothing.
+  const contentGestureRef = useContinuousGestures(resolveContext, contentContainerRef)
 
   // Memoize on resolveContext so contributions that synthesize a fresh
   // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
@@ -478,15 +489,36 @@ export function DefaultBlockRenderer(
 
       e.preventDefault()
       const pastedText = e.clipboardData.getData('text/plain')
+      if (!pastedText) return
+      const html = e.clipboardData.getData('text/html') || undefined
 
-      const pasted = await pasteMultilineText(pastedText, block, repo, {
-        topLevelBlockId,
+      // Block-shell paste (block focused, NOT in edit mode) has no text
+      // caret, so the chord intent is always 'split'. Routing through the
+      // verb keeps plugin overrides (text rewrites, observers, a forced
+      // single-block) consistent with the in-editor paste path. With no
+      // contributions the decision is the historical outline paste. The
+      // decision is a pure, synchronous policy (`runSync`) — the clipboard text
+      // is already in hand, so nothing to await before deciding.
+      const decision = pasteDecisionVerb.runSync(runtime, {
+        text: pastedText,
+        html,
+        intent: 'split',
+        surface: 'shell',
+      })
+      // The default decision is surface-aware: a plain single-line shell
+      // paste resolves to `split` (parse as outline, the historical
+      // behavior), so `single-block` here only ever comes from an explicit
+      // override and is honored literally — the applied behavior matches
+      // the decision.
+      const pasted = await pasteMultilineText(decision.text ?? pastedText, block, repo, {
+        scopeRootId,
+        asSingleBlock: decision.kind === 'single-block',
       })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       }
     },
-    [block, blockContext.renderScopeId, repo, topLevelBlockId, uiStateBlock],
+    [block, blockContext.renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
   )
 
   // Content slot: the content surface div + its surface props + the
@@ -504,8 +536,9 @@ export function DefaultBlockRenderer(
       return (
         <div
           {...contentSurfaceProps}
+          data-block-visibility-target="true"
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
-          ref={contentContainerRef}
+          ref={contentGestureRef}
         >
           <ErrorBoundary FallbackComponent={FallbackComponent}>
             {/* ContentRenderer comes from the registry-driven
@@ -517,7 +550,7 @@ export function DefaultBlockRenderer(
         </div>
       )
     }
-  }, [block, ContentRenderer, contentSurfaceProps, isTopLevel])
+  }, [block, ContentRenderer, contentSurfaceProps, isTopLevel, contentGestureRef])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null
@@ -574,7 +607,7 @@ export function DefaultBlockRenderer(
             />
           </div>
           {isMobile && hasChildren && (
-            <div className="absolute right-0 top-0 z-10">
+            <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
               <ExpandButton block={block}/>
             </div>
           )}

@@ -30,6 +30,7 @@ const fakeBlock = (id: string, properties: BlockData['properties'] = {}): Block 
     references: [],
     createdAt: 0,
     updatedAt: 0,
+    userUpdatedAt: 0,
     createdBy: 'user-1',
     updatedBy: 'user-1',
     deleted: false,

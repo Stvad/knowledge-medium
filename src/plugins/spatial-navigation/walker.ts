@@ -1,5 +1,8 @@
 import { isElementProperlyVisible } from '@/utils/dom.js'
-import type { FocusedBlockLocation } from '@/data/properties.js'
+import {
+  type FocusedBlockLocation,
+  sameFocusedBlockLocation,
+} from '@/data/properties.js'
 
 /**
  * Spatial-navigation walker — pure DOM queries, no in-memory registry.
@@ -16,6 +19,7 @@ import type { FocusedBlockLocation } from '@/data/properties.js'
  *                          `data-block-id="<block.id>"`
  *                          `data-render-scope-id="<render scope>"`
  *                          `data-block-surface="outline|backlink|breadcrumb|embedded"`
+ *   Block visibility target: `data-block-visibility-target="true"`
  *
  * Direction model:
  *
@@ -33,15 +37,16 @@ import type { FocusedBlockLocation } from '@/data/properties.js'
  *   else "block previously above"), then the ancestor chain (so a
  *   collapsed parent becomes the natural recovery target when every
  *   child of the focused block's parent unmounts together), then
- *   positional clamp as a final fallback. Both gate the positional
- *   tier on a focus-location match against the stored hint — a stale hint
- *   for some unrelated previous focus is ignored, so panels the user
- *   has never sat in won't get a misfired recovery jump.
+ *   positional clamp as a final fallback. Recovery is surface-local
+ *   and only returns candidates whose visibility target is on screen; a
+ *   stale hint for some unrelated previous focus is ignored, so panels
+ *   the user has never sat in won't get a misfired recovery jump.
  */
 
 const NAV_ITEM_SELECTOR = '[data-block-nav-item="true"]'
 const PANEL_SELECTOR = '[data-panel-id]'
 const COLUMN_SELECTOR = '[data-layout-column-id]'
+const VISIBILITY_TARGET_SELECTOR = '[data-block-visibility-target="true"]'
 
 const NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])
 
@@ -49,8 +54,8 @@ const NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])
  * Session-only per-panel hint about the focused block's neighborhood.
  * Stored on every confirmed sighting (`rememberInstancePosition`):
  *
- *   - focused location + `index` for the positional fallback + the
- *     stale-hint location-match guard
+ *   - focused location + whole-panel and same-surface indexes for the
+ *     positional fallback + the stale-hint location-match guard
  *   - `prevLocation` / `nextLocation` for the sibling-walk recovery
  *     ("block previously below/above")
  *   - `ancestorLocations` (closest first) for the collapse-detection
@@ -65,18 +70,35 @@ const NON_NAVIGABLE_SURFACES = new Set(['breadcrumb'])
 interface PanelPositionHint {
   location: FocusedBlockLocation
   index: number
+  surfaceIndex: number
+  surface: string | undefined
   prevLocation: FocusedBlockLocation | undefined
   nextLocation: FocusedBlockLocation | undefined
   ancestorLocations: readonly FocusedBlockLocation[]
 }
 
+const surfaceOf = (el: HTMLElement): string | undefined =>
+  el.dataset.blockSurface
+
+const visibilityTargetFor = (el: HTMLElement): HTMLElement =>
+  el.querySelector<HTMLElement>(VISIBILITY_TARGET_SELECTOR) ?? el
+
+const isRecoveryTargetVisible = (el: HTMLElement): boolean =>
+  isElementProperlyVisible(visibilityTargetFor(el))
+
 const pickViewportFallback = (
   instances: readonly HTMLElement[],
   positionalChoice: HTMLElement | null,
 ): HTMLElement | null => {
-  if (positionalChoice && isElementProperlyVisible(positionalChoice)) return positionalChoice
-  const firstVisible = instances.find(el => isElementProperlyVisible(el))
-  return firstVisible ?? positionalChoice
+  if (positionalChoice && isRecoveryTargetVisible(positionalChoice)) return positionalChoice
+  return instances.find(isRecoveryTargetVisible) ?? null
+}
+
+const sameSurfaceInstances = (
+  instances: readonly HTMLElement[],
+  surface: string | undefined,
+): HTMLElement[] => {
+  return instances.filter(el => surfaceOf(el) === surface)
 }
 
 const lastPositionByPanel = new Map<string, PanelPositionHint>()
@@ -86,14 +108,8 @@ export const locationOf = (el: HTMLElement): FocusedBlockLocation | null => {
   return blockId && renderScopeId ? {blockId, renderScopeId} : null
 }
 
-const sameLocation = (
-  a: FocusedBlockLocation | undefined,
-  b: FocusedBlockLocation | undefined,
-): boolean =>
-  Boolean(a && b && a.blockId === b.blockId && a.renderScopeId === b.renderScopeId)
-
 const isNavigable = (el: HTMLElement): boolean => {
-  const surface = el.dataset.blockSurface
+  const surface = surfaceOf(el)
   if (surface && NON_NAVIGABLE_SURFACES.has(surface)) return false
   return true
 }
@@ -230,9 +246,13 @@ export const rememberInstancePosition = (
   if (idx < 0) return
   const location = locationOf(instanceEl)
   if (!location) return
+  const surface = surfaceOf(instanceEl)
+  const surfacePeers = sameSurfaceInstances(instances, surface)
   lastPositionByPanel.set(panelId, {
     location,
     index: idx,
+    surfaceIndex: surfacePeers.indexOf(instanceEl),
+    surface,
     prevLocation: findSameDepthSibling(instanceEl, instances, panel, 'prev'),
     nextLocation: findSameDepthSibling(instanceEl, instances, panel, 'next'),
     ancestorLocations: collectAncestorLocations(instanceEl, panel),
@@ -254,20 +274,18 @@ export const rememberInstancePosition = (
  *      when a parent collapses, every descendant unmounts together
  *      so neither sibling survives — but the parent itself does, and
  *      it's the natural place to land. Walks closest-first so the
- *      lowest surviving container wins.
- *   4. Positional clamp, viewport-aware (last resort) — safety net for
- *      hints with no recoverable neighbors and no surviving ancestor.
- *      We start with `instances[clamp(hint.index)]` (same shape as the
- *      original positional fallback) and KEEP it iff that block is
- *      currently in the viewport; otherwise we switch to the topmost
- *      in-viewport instance. The reason is the `BlockFocusShellDecorator`
- *      reaction to a recovery write: an off-screen target triggers
- *      `scrollIntoView`, yanking the viewport away from where the user
- *      was looking. Especially painful in long backlinks panels where
- *      the user is mid-scroll: the positional clamp can collapse to an
- *      outline block above the backlinks section and pull the scroll
- *      all the way up. Picking any visible block instead keeps the
- *      pointer alive without disturbing the viewport.
+ *      lowest surviving container wins. This tier is surface-local:
+ *      backlink DOM ancestry is layout containment, not data-tree
+ *      ancestry, so backlink recovery never climbs to the enclosing
+ *      outline block.
+ *   4. Same-surface positional clamp (last resort) — safety net for
+ *      hints with no recoverable neighbors and no surviving same-surface
+ *      ancestor.
+ *
+ * Every tier is viewport-aware. The `BlockFocusShellDecorator` reacts
+ * to a recovery write by calling `scrollIntoView` on the block content
+ * target when it is off-screen; recovery must therefore only return
+ * candidates whose visibility target is already on screen.
  *
  * Returns null when there's no stored hint about this rendered location, or when
  * the panel has no instances at all. The caller (proactive recovery)
@@ -286,26 +304,34 @@ export const findRecoveryAnchor = (
   if (instances.length === 0) return null
 
   const hint = lastPositionByPanel.get(panelId)
-  if (!hint || !sameLocation(hint.location, forLocation)) return null
+  if (!hint || !sameFocusedBlockLocation(hint.location, forLocation)) return null
+  const candidates = sameSurfaceInstances(instances, hint.surface)
+  if (candidates.length === 0) return null
 
   const findByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined =>
     location
-      ? instances.find(el => sameLocation(locationOf(el) ?? undefined, location))
+      ? candidates.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, location))
       : undefined
 
-  const next = findByLocation(hint.nextLocation)
+  const visibleByLocation = (location: FocusedBlockLocation | undefined): HTMLElement | undefined => {
+    const candidate = findByLocation(location)
+    return candidate && isRecoveryTargetVisible(candidate) ? candidate : undefined
+  }
+
+  const next = visibleByLocation(hint.nextLocation)
   if (next) return next
 
-  const prev = findByLocation(hint.prevLocation)
+  const prev = visibleByLocation(hint.prevLocation)
   if (prev) return prev
 
   for (const ancestorLocation of hint.ancestorLocations) {
-    const ancestor = findByLocation(ancestorLocation)
+    const ancestor = visibleByLocation(ancestorLocation)
     if (ancestor) return ancestor
   }
 
-  const positionalChoice = instances[clamp(hint.index, 0, instances.length - 1)] ?? null
-  return pickViewportFallback(instances, positionalChoice)
+  const positionalIndex = hint.surfaceIndex >= 0 ? hint.surfaceIndex : hint.index
+  const positionalChoice = candidates[clamp(positionalIndex, 0, candidates.length - 1)] ?? null
+  return pickViewportFallback(candidates, positionalChoice)
 }
 
 /**
@@ -327,7 +353,7 @@ export const resolveCurrentAnchor = (
   if (!panel) return null
   const instances = panelInstances(panel)
   if (instances.length === 0) return null
-  const live = instances.find(el => sameLocation(locationOf(el) ?? undefined, focusedLocation))
+  const live = instances.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, focusedLocation))
   if (live) return live
   return findRecoveryAnchor(panelId, focusedLocation)
 }
@@ -363,12 +389,12 @@ export const locateInstance = (
   if (instances.length === 0) return null
 
   if (hints.focusedLocation) {
-    const exact = instances.find(el => sameLocation(locationOf(el) ?? undefined, hints.focusedLocation))
+    const exact = instances.find(el => sameFocusedBlockLocation(locationOf(el) ?? undefined, hints.focusedLocation))
     if (exact) return exact
   }
 
   const stored = lastPositionByPanel.get(panelId)
-  if (stored && (!hints.focusedLocation || sameLocation(stored.location, hints.focusedLocation))) {
+  if (stored && (!hints.focusedLocation || sameFocusedBlockLocation(stored.location, hints.focusedLocation))) {
     return instances[clamp(stored.index, 0, instances.length - 1)] ?? null
   }
 

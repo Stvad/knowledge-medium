@@ -11,7 +11,7 @@ import {
   readOverridesCache,
   writeOverridesCache,
 } from '@/extensions/overridesCache.js'
-import type {Overrides} from '@/extensions/togglable.js'
+import type {Overrides} from '@/facets/togglable.js'
 
 class MemoryStorage implements Storage {
   private store = new Map<string, string>()
