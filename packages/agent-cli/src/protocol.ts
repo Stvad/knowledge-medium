@@ -122,7 +122,6 @@ export const getBlockCommandSchema = z.looseObject({
 export const getSubtreeCommandSchema = z.looseObject({
   type: z.literal('get-subtree'),
   rootId: z.string(),
-  includeRoot: z.boolean().optional(),
   ...commandIdField,
 })
 
@@ -386,8 +385,8 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Fetch a block by id.',
   },
   'get-subtree': {
-    usage: 'kmagent subtree <rootId> [--include-root]',
-    description: 'Fetch the subtree rooted at <rootId>.',
+    usage: 'kmagent subtree <rootId> [--json]',
+    description: 'Fetch the subtree rooted at <rootId> (root included). Prints a depth-indented `- content  [id]` outline by default; --json returns the raw flat BlockData[]. Both are a pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
   },
   'create-block': {
     usage: 'kmagent create-block <json>',

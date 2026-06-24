@@ -28,6 +28,7 @@ import {
   kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
+import {renderSubtreeOutline} from './subtreeOutline.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverScript = path.join(here, 'server.js')
@@ -946,13 +947,18 @@ cli
 
 cli
   .command('subtree <rootId>', wireDescription('get-subtree'))
-  .option('--include-root', 'Include the root block itself in the response')
-  .action(async (rootId: string, options: {includeRoot?: boolean}) => {
-    await runAndPrint({
-      type: 'get-subtree',
-      rootId,
-      includeRoot: Boolean(options.includeRoot),
-    })
+  .option('--json', 'Print the raw flat BlockData[] instead of the indented outline')
+  .action(async (rootId: string, options: {json?: boolean}) => {
+    if (options.json) {
+      await runAndPrint({type: 'get-subtree', rootId})
+      return
+    }
+    // Default: a depth-indented `- content  [id]` outline. The subtree
+    // comes back already in pre-order / (order_key, id) order — we render
+    // it verbatim and never re-sort (see renderSubtreeOutline).
+    await ensureBridgeRunning()
+    const value = await runCommand({type: 'get-subtree', rootId})
+    process.stdout.write(`${renderSubtreeOutline(value)}\n`)
   })
 
 cli

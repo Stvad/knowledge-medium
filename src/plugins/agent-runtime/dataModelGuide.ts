@@ -24,7 +24,7 @@ There is one node type. \`blocks\` is the universal table:
 | \`id\`              | UUID, primary key                                                       |
 | \`workspace_id\`    | which workspace (graph) the block lives in                              |
 | \`parent_id\`       | parent block id; \`NULL\` for a top-level block (e.g. a page)            |
-| \`order_key\`       | fractional-index sort key among siblings (lexicographic order)          |
+| \`order_key\`       | fractional-index sort key among siblings — compare with plain \`<\` (codepoint), never \`localeCompare\`/numeric (see "Sibling order") |
 | \`content\`         | the block's text. **A page's title is its \`content\`.**                 |
 | \`properties_json\` | JSON map of typed properties (see "Types & properties")                 |
 | \`references_json\` | JSON of outgoing references (the projected source of \`block_references\`)|
@@ -42,6 +42,14 @@ them, you don't write them):
 
 A real graph is large (hundreds of thousands of blocks). Prefer the named
 queries and commands below over hand-rolled \`SELECT … LIKE\` scans.
+
+**Sibling order (\`order_key\`).** \`order_key\` is a *fractional-index* string
+ordered by **plain codepoint comparison** (JS \`<\`, SQLite default collation) —
+uppercase sorts before lowercase, so e.g. \`"Zy6AX" < "a00zE"\`. Do **NOT**
+re-order siblings with \`localeCompare\` (case-folds → inverts the order) or by
+numeric coercion (it is not a number). And you rarely need to: \`subtree\`,
+\`children\`, and the children-ordered queries already return rows in correct
+\`(order_key, id)\` order — **preserve the order you're given; don't re-sort.**
 
 ## Pages, aliases, and finding them by name
 
@@ -167,8 +175,12 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 
 ## Lower-level access
 
-- \`yarn agent get-block <id>\` / \`yarn agent subtree <rootId>\` — fetch a block
-  or its subtree.
+- \`yarn agent get-block <id>\` — fetch one block.
+- \`yarn agent subtree <rootId>\` — fetch a subtree (root included). Prints a
+  depth-indented \`- content  [id]\` outline; add \`--json\` for the raw flat
+  \`BlockData[]\`. Either way it's a **pre-order** traversal with siblings in
+  \`(order_key, id)\` order — already sorted; read it top-to-bottom, don't
+  re-sort (see "Sibling order").
 - \`yarn agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.
 - \`yarn agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
