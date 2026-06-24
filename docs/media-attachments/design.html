@@ -839,22 +839,31 @@ pending attachment.
   records; the bytes exist <em>once</em>, not a second copy.</p>
 
 <div class="warn">
-<strong>Undo / delete must compensate the byte lane.</strong> §11 puts the asset-block create + the
-<code>!((id))</code> insert in one <code>repo.tx</code> so they share an undo bucket — but that only
-makes the <em>DB</em> half atomic. The bytes (queue entry + any already-PUT object) are not
-transactional. So: (1) the drain step <strong>re-checks the block still exists (and is not deleted)
-before PUT</strong>, and drops the entry otherwise; (2) undo <strong>tombstones the queue entry</strong>
-(<code>undone</code>, keyed by <code>(user_id, asset_block_id)</code>) rather than hard-cancelling.
-A snapshot-then-act compensator has a TOCTOU hole — the in-flight PUT can <em>confirm between</em> the
-undo's status read and the cancel, so it sees <code>uploading</code>, skips the delete, and orphans the
-just-uploaded object. With a tombstone, both sides consult it and whichever of {upload-confirm, undo}
-lands second owns cleanup: a confirm that finds the entry <code>undone</code> enqueues the object delete
-itself. <strong>Redo</strong> re-stages from the retained byte-store bytes (the byte-store entry is <em>not</em>
-dropped on undo), re-uploading if the object was already deleted. Without this, undo leaves an orphaned
-Storage object and a queue entry that resurrects bytes for a deleted block. (The §16 orphan-object sweep
-covers it only as a slow backstop — and is the <em>intended</em> terminal owner when the device is cleared
-or lost after undo tombstones the entry but before the object-delete drains: the local tombstone goes with
-the wiped store, so it is not the sole cleanup authority.)</div>
+<strong>Undo / delete need no byte-lane compensation — the lane self-heals.</strong> §11 puts the
+asset-block create + the <code>!((id))</code> insert in one <code>repo.tx</code> (the <em>DB</em> half is
+atomic). The bytes aren't in that tx and don't need to be: block delete is a restorable
+<strong>soft-delete</strong> (§9/§16) and the Storage object is <strong>immutable + content-addressed</strong>
+(§10), so undo is a pure DB soft-delete and the byte lane reconciles around it.
+<ul>
+  <li><strong>Undo</strong> soft-deletes the block (shared <code>repo.tx</code>) and best-effort cancels
+    the queue entry; it does <em>not</em> touch the Storage object.</li>
+  <li><strong>The drain</strong> already re-checks &quot;block exists and is not soft-deleted&quot; before
+    PUT (needed for any post-commit delete, not just undo): so an undo <em>before</em> upload never PUTs,
+    and a PUT racing the undo just confirms idempotently to its immutable path (§10) — a harmless retained
+    object.</li>
+  <li><strong>Redo</strong> un-soft-deletes the block (pure DB). If the upload already happened the
+    immutable object is <em>still there</em> — nothing to re-upload; if not, the retained byte-store bytes
+    (never dropped on undo) resume draining.</li>
+  <li><strong>The object</strong> from an undone-then-not-redone paste is <em>not</em> an orphan — a
+    soft-deleted block still references its hash, so §16's reference-counted sweep retains it like any
+    other soft-deleted block's object (reference-permanent in v1), reclaiming it only when <em>no</em>
+    live-or-soft-deleted block carries the hash.</li>
+</ul>
+This is also what keeps it correct under <strong>dedup</strong>: one content object can back several blocks
+(§11), so deleting the object on undo of <em>one</em> of them would break the others' live images — the byte
+lane must <em>never</em> delete an object on undo; the refcounted §16 sweep is the sole deleter. (An earlier
+draft added an <code>undone</code> tombstone and a &quot;whichever of {upload-confirm, undo} lands second owns
+cleanup&quot; protocol purely to coordinate that object delete — removing the delete removes the race.)</div>
 
 <div class="warn">
 <strong>A synced asset block can outlive its only bytes — the server-side backstop.</strong> The byte
@@ -959,7 +968,7 @@ using (
 -- DELETE is allowed directly for workspace writers — delete removes an object,
 -- there is no body to inspect, so the §10.1 byte guard doesn't apply and a
 -- writer-only RLS policy is sufficient (and is REQUIRED: without it BlobStore.delete()
--- is default-denied, so §9 undo / §16 GC can't reap already-uploaded objects).
+-- is default-denied, so §16 GC and the §10.1 poison-correction can't reap objects).
 create policy "attachments delete by workspace writer"
 on storage.objects for delete to authenticated
 using (
@@ -971,9 +980,9 @@ using (
 
 <p>So the mutation split is: <strong>writes</strong> go through the body-inspecting Edge Function
   (§10.1); <strong>deletes</strong> are a direct, writer-only RLS delete (no byte to inspect);
-  <strong>reads</strong> are direct, member-gated RLS. <code>BlobStore.delete()</code> (used by §9
-  undo and §16 GC) uses that delete policy — without it, already-uploaded objects would survive
-  undo/delete as orphans.</p>
+  <strong>reads</strong> are direct, member-gated RLS. <code>BlobStore.delete()</code> (used by §16 GC
+  and the §10.1 poison-correction delete — <em>not</em> by undo, §9) uses that delete policy — without it,
+  objects could never be reclaimed.</p>
 
 <div class="warn">
 <strong>The <code>private.*</code> grant is not free — verify it, don't assume parity with
@@ -1105,8 +1114,8 @@ idempotent uploads + invariant dedup.
 external side effect that neither joins that tx nor rolls back with it. Two failure windows have to
 close at once. <strong>(a)</strong> If the byte write happened <em>after</em> the commit and then failed
 (quota, private-mode, a store error), the metadata is already committed and syncs to peers with
-<em>no</em> durable source bytes, no per-device pending status, and nothing for the §9 compensator to
-cancel — a permanently un-uploadable asset on every peer. <strong>(b)</strong> If the enqueue instead
+<em>no</em> durable source bytes, no per-device pending status, and no queue entry to drain
+— a permanently un-uploadable asset on every peer. <strong>(b)</strong> If the enqueue instead
 kicked off a drain <em>before</em> the commit is visible, the §9 "block still exists?" pre-PUT re-check
 would drop the bytes as a missing block. The resolution closes both: <strong>write the durable byte
 record first in a non-drainable <code>staged</code> state (§9), <em>then</em> run <code>repo.tx</code>,
@@ -1116,8 +1125,10 @@ staged before the commit, a committed asset block <em>always</em> has its source
 because <code>staged</code> is not drainable, the drain can't race ahead of the commit — window (b) is
 gone. The post-commit flip can itself fail, but that is recoverable, not lossy: the durable
 <code>staged</code> record survives, and a boot-time reconciler (§9) promotes any <code>staged</code>
-record whose asset block did commit. Undo still works via the §9 compensator — undo of the (committed)
-asset block cancels the queue entry and deletes any already-uploaded object.</div>
+record whose asset block did commit. Undo needs no special byte-lane step (§9): the shared
+<code>repo.tx</code> soft-deletes the block and best-effort cancels the queue entry; any already-uploaded
+object is left in place (immutable, content-addressed) and owned by §16's refcounted sweep — never deleted
+on undo.</div>
 
 <div class="warn">
 <strong>Dedup is workspace-wide.</strong> Reuse <em>any</em> same-hash asset block in the workspace —
@@ -1318,7 +1329,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     live image is not). The accepted cost is monotonic Storage growth: an object stays referenced (so
     un-reclaimed) as long as <em>any</em> soft-deleted block or <code>blocks_history</code> row carries its
     hash — which today is forever — so per-workspace object Storage only grows over v1's life. Dangling embeds render the existing
-    &quot;unresolved embed&quot; state. Beyond the <em>undo</em> case (handled by the §9 byte-lane compensator), a
+    &quot;unresolved embed&quot; state. Beyond the <em>undo</em> case (which needs no byte-lane action — it's a
+    soft-delete; the object is retained, §9), a
     vNext orphan sweep covers <strong>both</strong> directions, but they are <em>not</em> symmetric: orphan
     <em>objects</em> (a Storage object with no block — e.g. an interrupted delete) are auto-deletable;
     orphan <em>blocks</em> (an asset block whose object never materialized — e.g. an upload that never
@@ -1358,8 +1370,8 @@ escape hatches are vNext; neither ships without these stated as accepted, explic
     <td><strong>Decided: ship it</strong> (§10.1), so the byte ciphertext guarantee matches the block
       trigger rather than resting on client correctness.</td></tr>
 <tr><td>Bytes off the sync path</td>
-    <td>A second durable upload queue; eventual consistency between metadata and bytes; undo needs a
-      byte-lane compensator (§9).</td>
+    <td>A second durable upload queue; eventual consistency between metadata and bytes; undo is a pure
+      soft-delete — the byte lane self-heals, no compensator (§9).</td>
     <td>Keeps large blobs out of SQLite/PowerSync entirely; the queue is small and self-draining.</td></tr>
 <tr><td>Content-addressed storage path (keyed-hash)</td>
     <td>Path is <code>HMAC(K_id, sha256)</code> (E2EE) / <code>sha256</code> (plaintext), not the block
