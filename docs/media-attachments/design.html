@@ -101,9 +101,9 @@ never the key, so bytes are sealed client-side with the workspace key and access
 byte transform parameterized by mode, where plaintext is the identity case, exactly as
 <code>src/sync/transform.ts</code> already does for text. Decryption happens <strong>in-thread</strong>
 (in the app / its data worker), keeping the keys, session, mode pin, and the already-decrypted block
-all in one context; the renderer is mode-aware (plaintext → a direct <code>&lt;img src&gt;</code>; E2EE
-→ an object URL from the local decrypted byte store, decrypting on a download miss, §8). A service-worker
-variant that would make
+all in one context; the renderer resolves <em>both</em> modes through one fetch-with-session → object-URL
+path — the bucket is private/RLS-gated (§10), so a bare <code>&lt;img src&gt;</code> can't authenticate —
+with E2EE adding the decrypt step and plaintext not (§7.3 / §8). A service-worker variant that would make
 <code>&lt;img src="${BASE_URL}asset/…"&gt;</code> uniform across modes was evaluated and
 <strong>rejected</strong> — its one benefit doesn't earn the app↔SW coordination tax (§7 / §7.3 / §18).
 </div>
@@ -573,8 +573,9 @@ amount of wiping addresses.
   <li><strong>No token handshake / no per-<code>clientId</code> session</strong> — the app already has
     the Supabase session.</li>
 </ul>
-<p>What it <em>costs</em>: a mode-aware renderer (plaintext sets <code>&lt;img src&gt;</code> directly;
-  E2EE reads the local decrypted byte store and sets an object URL, fetching + decrypting on a miss) and
+<p>What it <em>costs</em>: a renderer that resolves <em>both</em> modes to an object URL — the private
+  bucket (§10) rules out a bare authenticated <code>&lt;img src&gt;</code>, so both fetch with the app
+  session; E2EE additionally decrypts, plaintext serves as-is (fetching on a local miss) — plus
   manual object-URL lifecycle
   (<code>createObjectURL</code>/<code>revokeObjectURL</code>) — two local, well-understood concerns. Note
   OPFS is <em>not</em> URL-addressable, so <code>&lt;img&gt;</code> needs an object URL either way; a
@@ -703,9 +704,15 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     (a security parameter — pin a concrete default, e.g. ~5&nbsp;min; a longer TTL silently widens this
     window) after which the resolver re-validates via the RLS-gated Storage <code>GET</code> (§7.3,
     403 for a removed member). The TTL revalidation, not the purge, is what <strong>bounds</strong> the
-    window in which a removed member's bytes can still be served — shrunk to the TTL, not eliminated. (Lock
-    alone does <em>not</em> scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code>
-    table — that's the coarse wipe's job; membership revoke, not WK-absence, is the access gate.)</li>
+    window in which a removed member's bytes can still be served — shrunk to the TTL, not eliminated.
+    <em>Offline</em>, the revalidation GET can't run; rather than break full-offline media (§1/§8) or serve
+    indefinitely, a stale-past-TTL entry is served from cache under an <strong>offline grace</strong> and
+    revalidated the instant connectivity returns — so the revocation gate is an <em>online</em> serving
+    control that degrades offline to grace (bounded by reconnect). For E2EE a removed-but-offline ex-member
+    retains the decrypted bytes locally anyway (lock ≠ scrub), so this is access-control politeness, not a
+    crypto boundary. (Lock alone does <em>not</em> scrub the store, exactly as it doesn't scrub the decrypted
+    <code>blocks</code> table — that's the coarse wipe's job; membership revoke, not WK-absence, is the
+    access gate.)</li>
   <li><strong>Optimistic local-first write:</strong> on paste, the plaintext bytes are written straight to
     the byte store (durable; the §9 up-lane drains from there). The image renders immediately from local
     bytes; the upload drains in the background. Whether the bytes have uploaded yet is a
@@ -1023,7 +1030,11 @@ inspects the body bytes itself</em> and then writes them with service-role. Per 
     &quot;older version&quot; to strand the asset. A PUT to a <em>new</em> path writes; a PUT to an
     <em>existing</em> path is <strong>first-write-wins success</strong> (<code>200</code>), never an
     overwrite — which doubles as the idempotency key (a lost-response retry finds the object present and
-    succeeds, so no random token is needed). The function must persist <strong>atomically</strong> (reject an
+    succeeds, so no random token is needed). But the uploading client must <strong>not</strong> clear its §9
+    queue entry on a bare existing-path <code>200</code>: it first fetches + hash-verifies the stored object
+    against its own <code>hash</code> — on a match it clears (genuine idempotent dedup), on a mismatch (a
+    poisoned or buggy prior write) it keeps its bytes and runs the writer-delete + re-upload (below) rather
+    than dropping the only good copy. The function must persist <strong>atomically</strong> (reject an
     incomplete body, so a partial upload can't win the path). The guard can't verify the body <em>matches</em>
     the content key (no key, sees only ciphertext); a garbage or truncated PUT is caught fail-closed by the
     read-side hash check (§5.1). First-write-wins does make a bad first write <em>terminal</em> — an
@@ -1088,8 +1099,12 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
     dedup to <strong>one block id + one object</strong>, no lookup (and the keyed id avoids leaking a raw-hash content oracle in the clear
     <code>blocks.id</code> column — it does hand the server a free object↔block equality join, the same
     content-key labelling both, but that correlation is timing-available anyway and stays workspace-local
-    since <code>K_id</code> differs per workspace). Placement isn't load-bearing (a child of the containing block is the simple
-    default); the type is stamped via <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant
+    since <code>K_id</code> differs per workspace). Placement is <strong>not</strong> under the containing
+    block: because dedup makes the asset block shared workspace-wide (it may be embedded from many notes),
+    parenting it in one note's subtree would let that note's soft-delete — which cascades to the subtree (§9)
+    — tombstone the shared asset and break <em>every other</em> embed. So media blocks are anchored in a
+    dedicated workspace-level <em>assets</em> container (flat — not a disposable subtree) and embedded
+    everywhere via <code>!((id))</code>. The type is stamped via <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant
     — the standalone <code>block.addType</code> wouldn't compose into the single tx; and the
     <code>media</code> <code>TypeContribution</code> must be registered via <code>typesFacet</code> first,
     §3, or this throws). The asset-block create + the <code>!((id))</code> insert go in one
@@ -1133,10 +1148,13 @@ two pastes (e.g. <code>filename</code>) LWW-resolves — cosmetic, and the rende
 (<code>hash</code>, <code>size</code>) are identical by construction; the user-authored caption / alt-text
 are <em>child</em> blocks, untouched by the parent upsert. The system still <em>tolerates</em> multiple
 blocks per object from <em>other</em> paths (a block copy, an import) — harmless: they share the one verified
-object and both render. So object GC stays content-reference-counted: GC the
-object only when <em>no</em> live-or-soft-deleted block carries the hash, behind §16's grace-windowed
-deferred sweep — <strong>never on a live zero-crossing</strong> (moving an embed, or a not-yet-synced
-cross-device add, transiently hits zero), preserving child content. Dedup is workspace-wide, deliberately
+object and both render. Crucially, <em>every</em> capture — including a dedup hit on an already-existing
+block — stages its own in-hand bytes and uploads idempotently (§11 staging box): so reusing an asset whose
+object hasn't uploaded yet (e.g. the originating device is still offline) does <em>not</em> drop this
+capture's bytes — whoever is online first materializes the content path. So object GC stays
+content-reference-counted: GC the object only when <em>no</em> live-or-soft-deleted block carries the hash,
+behind §16's grace-windowed deferred sweep — <strong>never on a live zero-crossing</strong> (moving an
+embed, or a not-yet-synced cross-device add, transiently hits zero), preserving child content. Dedup is workspace-wide, deliberately
 <em>not</em> subtree-scoped (the model isn't tree-shaped and subtree sharing is unshipped — §12).</div>
 
 <h2 id="sharing">12. Subtree sharing (deferred — not a design driver)</h2>
@@ -1320,9 +1338,9 @@ vNext; the v1 commitment is only the reserved property + audience flag.
 <table>
 <tr><th>Choice</th><th>Cost</th><th>Why / exit</th></tr>
 <tr><td>In-thread decryption → a mode-aware renderer</td>
-    <td>The renderer branches on mode (plaintext → direct <code>&lt;img src&gt;</code>; E2EE → object URL
-      from the local decrypted byte store, decrypting on a download miss) and manages the object-URL
-      lifecycle; decrypted bytes are the one byte store on OPFS (§8).</td>
+    <td>The renderer resolves both modes to an object URL (private bucket → no bare authenticated
+      <code>&lt;img src&gt;</code>; both fetch with the app session); E2EE adds the decrypt step, and manages
+      the object-URL lifecycle; decrypted bytes are the one byte store on OPFS (§8).</td>
     <td><strong>Chosen (§7.3)</strong> over SW decryption: it avoids the whole app→SW coordination tax
       (token handshake, mode/hash mirror, per-client sessions, controller gating) for two small local
       concerns. Bytes are stored <strong>decrypted-at-rest</strong> in one store (no ciphertext replica) —
