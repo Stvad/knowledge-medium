@@ -57,6 +57,7 @@ import {
   ensureBlockUserUpdatedAtColumn,
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
+import { onFirstSync } from '@/data/internals/firstSync.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   applyLocalSchemaContributions,
@@ -358,13 +359,6 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `hasSynced`. If the first sync already completed in a prior session,
   // (a) above already covered it, so don't bother registering.
   if (!powerSyncDb.currentStatus?.hasSynced) {
-    let disposeSyncListener = () => {}
-    disposeSyncListener = powerSyncDb.registerListener({
-      statusChanged: status => {
-        if (!status.hasSynced) return
-        disposeSyncListener()
-        scheduleAnalyzeCheck('first-sync')
-      },
-    })
+    onFirstSync(powerSyncDb, () => scheduleAnalyzeCheck('first-sync'))
   }
 }

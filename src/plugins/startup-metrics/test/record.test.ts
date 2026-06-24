@@ -13,7 +13,6 @@ import type { FacetRuntime } from '@/facets/facet'
 import {
   buildStartupRecord,
   collectStartupMetricsEffect,
-  onFirstSync,
   resetStartupMetricsRecorded,
   startupMetricsUIStateType,
   startupRecordProp,
@@ -204,36 +203,5 @@ describe('collectStartupMetricsEffect', () => {
       vi.useRealTimers()
       vi.unstubAllGlobals()
     }
-  })
-})
-
-describe('onFirstSync', () => {
-  it('fires immediately when the workspace is already synced', () => {
-    const cb = vi.fn()
-    onFirstSync({ currentStatus: { hasSynced: true } }, cb)
-    expect(cb).toHaveBeenCalledTimes(1)
-  })
-
-  it('fires immediately when there is no sync layer (local-only)', () => {
-    const cb = vi.fn()
-    onFirstSync({}, cb)
-    expect(cb).toHaveBeenCalledTimes(1)
-  })
-
-  it('waits for the synced status change, then disposes its listener', () => {
-    let listener: { statusChanged?: (s: { hasSynced?: boolean | null }) => void } | undefined
-    let disposed = false
-    const db = {
-      currentStatus: { hasSynced: false },
-      registerListener: (l: typeof listener) => { listener = l; return () => { disposed = true } },
-    }
-    const cb = vi.fn()
-    onFirstSync(db, cb)
-    expect(cb).not.toHaveBeenCalled()
-    listener?.statusChanged?.({ hasSynced: false }) // intermediate tick — still nothing
-    expect(cb).not.toHaveBeenCalled()
-    listener?.statusChanged?.({ hasSynced: true })
-    expect(cb).toHaveBeenCalledTimes(1)
-    expect(disposed).toBe(true)
   })
 })

@@ -13,6 +13,7 @@
 import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
+import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
 import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
 import { keyAtStart } from '@/data/orderKey.js'
 import { appVersion } from '@/appVersion.js'
@@ -143,31 +144,6 @@ export const writeStartupRecord = async (repo: Repo, workspaceId: string): Promi
 }
 
 // ──── collection effect ────
-
-/** Minimal PowerSync status surface the collector reads (kept structural so the
- *  module doesn't import PowerSync types). */
-export interface SyncStatusDb {
-  currentStatus?: { hasSynced?: boolean | null }
-  registerListener?: (l: { statusChanged?: (s: { hasSynced?: boolean | null }) => void }) => () => void
-}
-
-/** Resolve once the initial sync has completed (or immediately if there's no
- *  sync layer, e.g. local-only / tests). Returns a disposer for the listener. */
-export const onFirstSync = (db: SyncStatusDb, cb: () => void): (() => void) => {
-  if (db.currentStatus?.hasSynced || typeof db.registerListener !== 'function') {
-    cb()
-    return () => {}
-  }
-  const dispose = db.registerListener({
-    statusChanged: (s) => {
-      if (s.hasSynced) {
-        dispose()
-        cb()
-      }
-    },
-  })
-  return dispose
-}
 
 /** A main thread quiet for this long (no long task) after first paint is treated
  *  as "boot contention stopped" — the `interactive` mark lands at the end of the
