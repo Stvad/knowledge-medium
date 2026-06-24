@@ -139,3 +139,25 @@ export const parseAppHash = (hash: string | undefined | null): AppRoute => {
 
 export const buildAppHash = (workspaceId: string, blockId?: string): string =>
   buildLayout(workspaceId, blockId ? [blockId] : [])
+
+/**
+ * Promote an app hash (from `buildAppHash` / `buildLayout` /
+ * `buildLayoutFromSlots`) to an absolute, shareable URL:
+ * `<origin><pathname><hash>`.
+ *
+ * In-app `<a href>` links can use the bare hash directly — the browser
+ * resolves it against the current document. A URL meant to leave the app
+ * (copied to the clipboard, shared) has to be absolute, which is what this
+ * adds.
+ *
+ * Uses origin+pathname only, deliberately dropping the current query
+ * string and existing hash. The live hash can carry the agent-runtime
+ * pairing secret (`#…?agent-runtime-secret=…`, consumed by the agent
+ * bridge); replacing the whole hash guarantees it never rides along in a
+ * link the user shares. In a non-browser context (SSR/tests) there is no
+ * location to resolve against, so the bare hash is returned unchanged.
+ */
+export const absoluteAppUrl = (hash: string): string =>
+  typeof window === 'undefined'
+    ? hash
+    : `${window.location.origin}${window.location.pathname}${hash}`

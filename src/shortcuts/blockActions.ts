@@ -3,7 +3,7 @@ import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { copyBlockToClipboard } from '@/utils/copy.js'
-import { buildLayout } from '@/utils/routing.js'
+import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   editorSelection,
@@ -374,16 +374,15 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'copy_block_link',
     description: 'Copy link to block',
     icon: Link,
-    // `y l` ("yank link") — an in-app URL that opens this block. Built from
-    // the live hash-routing scheme (`#<workspaceId>/<blockId>`, see
-    // utils/routing). origin+pathname only: drops the current query string
-    // and old hash so the copied link never carries the agent-runtime
-    // pairing secret that can ride along in the hash.
+    // `y l` ("yank link") — an absolute, shareable URL that opens this
+    // block. Reuses the same routing facilities the in-app `<a href>`
+    // links use: `buildAppHash` for the `#<workspaceId>/<blockId>` hash,
+    // `absoluteAppUrl` to promote it to an absolute URL (and drop any
+    // agent-runtime pairing secret riding in the current hash).
     handler: ({block}: BlockShortcutDependencies) => {
       const workspaceId = repo.activeWorkspaceId
-      if (!workspaceId || typeof window === 'undefined') return
-      const base = `${window.location.origin}${window.location.pathname}`
-      writeToClipboard(`${base}${buildLayout(workspaceId, [block.id])}`)
+      if (!workspaceId) return
+      writeToClipboard(absoluteAppUrl(buildAppHash(workspaceId, block.id)))
     },
     defaultBinding: {
       keys: 'y l',
