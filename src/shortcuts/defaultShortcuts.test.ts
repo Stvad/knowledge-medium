@@ -611,6 +611,169 @@ describe('default CodeMirror shortcuts', () => {
     expect(await childIds('current')).toEqual(['child'])
   })
 
+  it('merges the next block into the current block when pressing delete at block end', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    const editorView = codeMirrorEditorView('current', 'current'.length)
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('current').peek()?.content).toBe('currentnext')
+    expect(env.repo.block('next').peek()).toBeNull()
+    expect(env.repo.block('next').peekRaw()?.deleted).toBe(true)
+    // Focus stays in this block, caret parked at the join; the editor is
+    // re-armed synchronously with the merged text so a debounced flush
+    // can't roll it back.
+    expect(editorView.state.doc.toString()).toBe('currentnext')
+    expect(editorView.state.selection.main.from).toBe('current'.length)
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('current')
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
+      blockId: 'current',
+      start: 'current'.length,
+    })
+  })
+
+  it('deletes an empty next block when pressing delete at block end', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'empty', content: ''})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 'current'.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    expect(env.repo.block('empty').peek()).toBeNull()
+    expect(env.repo.block('empty').peekRaw()?.deleted).toBe(true)
+  })
+
+  it("merges an only child into its parent when pressing delete at the parent's end", async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'parent', content: 'parent '})
+    await env.repo.mutate.createChild({parentId: 'parent', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'current', id: 'child', content: 'child'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'parent')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('parent'),
+      editorView: codeMirrorEditorView('parent ', 'parent '.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(env.repo.block('parent').peek()?.content).toBe('parent current')
+    expect(env.repo.block('current').peek()).toBeNull()
+    expect(env.repo.block('current').peekRaw()?.deleted).toBe(true)
+    expect(await childIds('parent')).toEqual(['child'])
+    expect(env.repo.block('child').peek()?.deleted).toBe(false)
+    expect(peekFocusedBlockLocation(uiStateBlock)?.blockId).toBe('parent')
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
+      blockId: 'parent',
+      start: 'parent '.length,
+    })
+  })
+
+  it('does not merge the next block when both blocks have independent children', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'a', content: 'a'})
+    await env.repo.mutate.createChild({parentId: 'a', id: 'ac', content: 'ac'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'b', content: 'b'})
+    await env.repo.mutate.createChild({parentId: 'b', id: 'bc', content: 'bc'})
+    // Collapse `a` so its next visible block is sibling `b` (not child `ac`),
+    // putting two independent child lists on either side of the boundary.
+    await env.repo.block('a').set(isCollapsedProp, true)
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'a')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('a'),
+      editorView: codeMirrorEditorView('a', 'a'.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(env.repo.block('a').peek()?.content).toBe('a')
+    expect(env.repo.block('b').peek()?.deleted).toBe(false)
+    expect(await childIds('a')).toEqual(['ac'])
+    expect(await childIds('b')).toEqual(['bc'])
+  })
+
+  it('stands aside (no merge) when pressing delete at the end of the last visible block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const action = findEditModeAction(env.repo, 'merge_next_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 'current'.length),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(env.repo.block('current').peek()?.content).toBe('current')
+    expect(env.repo.block('current').peek()?.deleted).toBe(false)
+  })
+
   it('splits a middle block into a prefix sibling above and keeps focus on the suffix block', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
