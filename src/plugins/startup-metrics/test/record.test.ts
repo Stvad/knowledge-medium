@@ -128,6 +128,38 @@ describe('writeStartupRecord', () => {
     expect(groupRow?.content).toContain(getClientId().slice(0, 8))
   })
 
+  it('two distinct clients land under two distinct group blocks', async () => {
+    // First client.
+    resetClientIdCache()
+    const clientA = getClientId()
+    const recA = await writeStartupRecord(repo, WS)
+    // Second client: a fresh id (no localStorage in node ⇒ a new uuid is minted)
+    // stands in for a different browser/device.
+    resetClientIdCache()
+    const clientB = getClientId()
+    expect(clientB).not.toBe(clientA)
+    const recB = await writeStartupRecord(repo, WS)
+
+    const root = await getPluginUIStateBlock(repo, WS, USER, startupMetricsUIStateType)
+    // Exactly two group blocks hang off the per-user root — one per client.
+    const groups = await sharedDb.db.getAll<{ id: string }>(
+      'SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0',
+      [root.id],
+    )
+    expect(groups).toHaveLength(2)
+
+    // Each client's record nests under its OWN group (distinct ids).
+    const groupA = await getPluginUIStateChild(root, clientA)
+    const groupB = await getPluginUIStateChild(root, clientB)
+    expect(groupA.id).not.toBe(groupB.id)
+    const parentOf = async (id: string): Promise<string | undefined> =>
+      (await sharedDb.db.getOptional<{ parent_id: string }>(
+        'SELECT parent_id FROM blocks WHERE id = ?', [id],
+      ))?.parent_id
+    expect(await parentOf(recA)).toBe(groupA.id)
+    expect(await parentOf(recB)).toBe(groupB.id)
+  })
+
   it('block-per-session: two writes create two distinct records (no clobber)', async () => {
     const first = await writeStartupRecord(repo, WS)
     const second = await writeStartupRecord(repo, WS)
