@@ -82,10 +82,14 @@
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
-<strong>Status:</strong> design — not yet implemented (no <code>src/</code> code yet); last verified
-against code 2026-06-24 (a grounding pass found zero wrong code claims). Treat as current intent. The
-least-settled part is the byte-lane lifecycle / failure-recovery machinery (§8–§9, §16): the happy path
-and the crypto / threat model are solid; the recovery edges are where the spec is still hardening.
+<strong>Status:</strong> partially implemented — phase 1 (the byte-crypto seam, §5/§5.1:
+the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, and the
+read-side content-hash verify) has landed in <code>src/sync/</code> on branch
+<code>feat/media-attachments</code>; phases 2–6 (storage/RLS + the §10.1 upload guard, the in-thread
+resolver, the block model + renderer, capture + up-lane, the down-lane) are <strong>not yet built</strong>.
+Last verified against code 2026-06-25. Treat as current intent. The least-settled part is the byte-lane
+lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
+solid; the recovery edges are where the spec is still hardening.
 </aside>
 
 <div class="info">
@@ -333,8 +337,10 @@ encodeForWire(row, 'e2ee', getCek)  // → seal content/properties_json/referenc
 
 <p>We mirror it for bytes — a new module in the same <code>src/sync/</code> seam:</p>
 
-<pre><code>encodeBytes(bytes: Uint8Array, mode: SyncMode, getCek: GetCek): Promise&lt;Uint8Array&gt;
-decodeBytes(blob:  Uint8Array, mode: SyncMode, getCek: GetCek): Promise&lt;Uint8Array&gt;
+<pre><code>encodeBytes(bytes: Uint8Array, mode: SyncMode, getCek: GetCek, ref: AssetByteRef): Promise&lt;Uint8Array&gt;
+decodeBytes(blob:  Uint8Array, mode: SyncMode, getCek: GetCek, ref: AssetByteRef): Promise&lt;Uint8Array&gt;
+//   ref = { contentHash, workspaceId } — binds the bytes' AAD (§5.1); decode
+//         authenticates the envelope only, the resolver verifies the hash separately
 //   mode === 'none'  → identity (return input)
 //   mode === 'e2ee'  → AES-256-GCM seal/open with the WK</code></pre>
 
@@ -997,7 +1003,8 @@ correlation). A <strong>plaintext</strong> workspace has no secret to protect, s
     after import</strong> (<code>createEncryptedWorkspace.ts</code>), so <code>K_id</code> can't be
     re-derived on a later reload. (The <em>unlock</em> path <code>unlockWorkspaceWithKey.ts</code> has
     <em>no</em> such derive window today — it doesn't even zero the parsed bytes, which drop to GC — so adding
-    derive-then-zero on unlock is a <strong>phase-1 prerequisite</strong>, and incidentally fixes that
+    derive-then-zero on unlock is a <strong>prerequisite of the storage-path phase (§15 phase 2, where
+    <code>K_id</code> is first needed)</strong>, and incidentally fixes that
     standalone GC-leak.) It must therefore be <strong>persisted</strong> as its own non-extractable HMAC
     <code>CryptoKey</code> in the keyStore, derived once at import/unlock. That adds a second stored handle but
     no WK-exposure widening — it can't recover the WK, and lives in the same IndexedDB the model already

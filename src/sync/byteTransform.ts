@@ -23,21 +23,13 @@
 
 import { assetBytesAad } from './crypto/aad.js'
 import { openBytes, sealBytes } from './crypto/byteAead.js'
-import type { GetCek, SyncMode } from './transform.js'
+import { requireCek, type GetCek, type SyncMode } from './transform.js'
 
 /** What the byte AAD binds an object to (§5.1): the content hash
  *  (`sha256:<hex>` — the `block.properties.hash` value) and the workspace. */
 export interface AssetByteRef {
   readonly contentHash: string
   readonly workspaceId: string
-}
-
-const requireCek = async (getCek: GetCek, workspaceId: string): Promise<CryptoKey> => {
-  const key = await getCek(workspaceId)
-  if (!key) {
-    throw new Error(`byte transform: no workspace key available for ${workspaceId}`)
-  }
-  return key
 }
 
 /** App → object store. Identity for plaintext; AES-GCM seal for E2EE. */
@@ -48,7 +40,7 @@ export const encodeBytes = async (
   ref: AssetByteRef,
 ): Promise<Uint8Array<ArrayBuffer>> => {
   if (mode === 'none') return bytes
-  const key = await requireCek(getCek, ref.workspaceId)
+  const key = await requireCek(getCek, ref.workspaceId, 'byte transform')
   return sealBytes(key, bytes, assetBytesAad(ref.contentHash, ref.workspaceId))
 }
 
@@ -62,6 +54,6 @@ export const decodeBytes = async (
   ref: AssetByteRef,
 ): Promise<Uint8Array<ArrayBuffer>> => {
   if (mode === 'none') return blob
-  const key = await requireCek(getCek, ref.workspaceId)
+  const key = await requireCek(getCek, ref.workspaceId, 'byte transform')
   return openBytes(key, blob, assetBytesAad(ref.contentHash, ref.workspaceId))
 }

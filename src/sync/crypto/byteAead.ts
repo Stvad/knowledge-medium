@@ -29,6 +29,9 @@ export const sealBytes = async (
   aad: Uint8Array<ArrayBuffer>,
 ): Promise<Uint8Array<ArrayBuffer>> => {
   const nonce = crypto.getRandomValues(new Uint8Array(NONCE_BYTES))
+  // No defensive copy of `plaintext`: WebCrypto copies the input internally
+  // before encrypting, so there's no TOCTOU window. (The text `seal` copies
+  // only incidentally, via TextEncoder — not as a security measure.)
   const ciphertext = new Uint8Array(
     await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad }, key, plaintext),
   )

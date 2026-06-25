@@ -71,13 +71,18 @@ export interface WireBlockColumns {
 /** The three columns sealed independently in E2EE mode (§9.1). */
 const CONTENT_COLUMNS = ['content', 'properties_json', 'references_json'] as const
 
-const requireKey = async (
+/** Resolve the workspace CryptoKey or throw — the shared fail-closed guard for
+ *  every seam that seals/opens under the WK (the text content columns here, the
+ *  asset bytes in byteTransform.ts). `label` names the seam in the error so a
+ *  thrown "no workspace key" still says which lane raised it. */
+export const requireCek = async (
   getCek: GetCek,
   workspaceId: string,
+  label = 'sync transform',
 ): Promise<CryptoKey> => {
   const key = await getCek(workspaceId)
   if (!key) {
-    throw new Error(`sync transform: no workspace key available for ${workspaceId}`)
+    throw new Error(`${label}: no workspace key available for ${workspaceId}`)
   }
   return key
 }
@@ -93,7 +98,7 @@ const transformContentColumns = async <T extends WireBlockColumns>(
   xform: (key: CryptoKey, value: string, aad: Uint8Array<ArrayBuffer>) => Promise<string>,
 ): Promise<T> => {
   if (mode === 'none') return row
-  const key = await requireKey(getCek, row.workspace_id)
+  const key = await requireCek(getCek, row.workspace_id)
   const transformed: Partial<Record<(typeof CONTENT_COLUMNS)[number], string>> = {}
   for (const column of CONTENT_COLUMNS) {
     transformed[column] = await xform(key, row[column], contentAad(row.id, row.workspace_id, column))
@@ -136,7 +141,7 @@ export const encryptUploadColumns = async (
   getCek: GetCek,
 ): Promise<Record<string, unknown>> => {
   if (mode === 'none') return payload
-  const key = await requireKey(getCek, workspaceId)
+  const key = await requireCek(getCek, workspaceId)
   const out: Record<string, unknown> = { ...payload }
   for (const column of CONTENT_COLUMNS) {
     const value = out[column]

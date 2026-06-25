@@ -43,6 +43,20 @@ describe('byte transform (encodeBytes / decodeBytes)', () => {
       expect(await verifyContentHash(opened, ref.contentHash)).toBe(true)
     })
 
+    it('round-trips a 1 MiB buffer (multi-block GCM at realistic media size)', async () => {
+      // Every other test here is <=64 bytes; the feature's real payloads are
+      // multi-MB images/PDFs. Exercise seal/open/envelope over a realistic,
+      // non-uniform buffer to catch any chunking/offset assumption.
+      const getCek = cekFrom(0x01)
+      const bytes = new Uint8Array(1 << 20)
+      for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 2654435761) & 0xff
+      const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
+      const sealed = await encodeBytes(bytes, 'e2ee', getCek, ref)
+      const opened = await decodeBytes(sealed, 'e2ee', getCek, ref)
+      expect(Uint8Array.from(opened)).toEqual(bytes)
+      expect(await verifyContentHash(opened, ref.contentHash)).toBe(true)
+    })
+
     it('throws when the workspace key is unavailable (fail-closed, never plaintext)', async () => {
       const bytes = sampleBytes()
       const ref = { contentHash: await computeContentHash(bytes), workspaceId: 'ws-A' }
