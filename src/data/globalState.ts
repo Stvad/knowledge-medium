@@ -16,6 +16,7 @@ import { use, useCallback } from 'react'
 import { useBlockContext } from '@/context/block.js'
 import { useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
+import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import {
   ChangeScope,
   isSystemAuthor,
@@ -74,7 +75,16 @@ export function usePanelsForLayoutSession(layoutSessionId = getLayoutSessionId()
 export function useUserBlock(): Block {
   const repo = useRepo()
   const user = useUser()
-  const workspaceId = requireWorkspaceId(repo, 'useUserBlock')
+  // Resolve the workspace reactively (through the URL hash) rather than reading
+  // the imperative `repo.activeWorkspaceId` pin, so persistent surfaces that
+  // hold the user block — the left sidebar's shortcuts — re-resolve it on a
+  // workspace switch instead of staying pinned to the previous workspace's user
+  // page. The pin mutates without notifying React, so reading it alone left
+  // those surfaces stale after a switch.
+  const workspaceId = useActiveWorkspaceId()
+  if (!workspaceId) {
+    throw new Error('useUserBlock requires an active workspace; call repo.setActiveWorkspaceId() first')
+  }
 
   return use(getUserBlock(repo, workspaceId, user))
 }
