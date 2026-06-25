@@ -13,9 +13,10 @@
  * `reconcileDerived` is the chokepoint the backlink-deriving sites route their
  * write through, so "recompute never reduces the derived set for a
  * present/unchanged source key" is enforced in one audited place rather than
- * re-hand-rolled per site. Routed today: reprojection (`repo.ts`) and the
- * references processor. The roam importer's reference rebuild is a derive site
- * NOT yet routed through this — see docs/contracts/derived-data-add-only.md.
+ * re-hand-rolled per site. Routed today: reprojection (`repo.ts`), the
+ * references processor, and the roam importer's reference rebuild
+ * (`referencesWithProjectedProperties`, `src/plugins/roam-import/import.ts`) —
+ * see docs/contracts/derived-data-add-only.md.
  */
 
 import type { BlockReference } from './blockData'
