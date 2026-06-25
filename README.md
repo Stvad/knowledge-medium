@@ -1,18 +1,13 @@
 # Knowledge Medium
 
-**A malleable, offline-first medium for knowledge work.**
+**A malleable, offline-first medium for knowledge work.** &nbsp;·&nbsp; [**Try the live version →**](https://stvad.github.io/knowledge-medium/)
 
-Knowledge Medium is an outliner — broadly Roam/Workflowy-like — built on a single
-idea taken further than usual: *everything is a block, and everything is an
-extension*. Your notes are blocks. The pages, daily notes, and backlinks you'd
-expect from an outliner are blocks. Your preferences, keyboard shortcuts, UI
-state, and even the renderers that draw the screen are blocks too. The app is a
-thin host that assembles itself out of those blocks at runtime — which means you
-can reshape it from inside, without forking it.
-
-It runs entirely in the browser as an installable PWA, stores everything in a
-local SQLite database for instant, offline-capable reads, and syncs across your
-devices through PowerSync + Supabase when you're online.
+A Roam/Workflowy-like outliner where *everything is a block and everything is an
+extension* — notes, daily notes, settings, even the renderers that draw the
+screen. The app is a thin host that assembles itself from those blocks at
+runtime, so you can reshape it from inside. It runs in the browser as an
+installable PWA, is local-first (instant, offline-capable), and syncs across
+devices via PowerSync + Supabase.
 
 ---
 
