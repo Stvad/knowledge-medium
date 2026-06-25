@@ -89,14 +89,20 @@ deletes. Consumers today:
   recompute is authoritative for content + present-schema refs, but
   `isRetainableAbsentRef` retains a prior ref whose schema is absent and whose
   value is unchanged.
-- **roam importer** (`referencesWithProjectedProperties`,
-  `src/plugins/roam-import/import.ts`) — keeps content refs and treats
-  `projectPropertyReferences` as authoritative for present-schema property refs,
-  but routes the rebuild through `reconcileDerived` with the *shared*
+- **roam importer** (`src/plugins/roam-import/import.ts`) — treats
+  `projectPropertyReferences` as authoritative for present-schema property refs
+  (and content refs for the content-authoritative paths), but routes every
+  references write through `reconcileDerived` with the *shared*
   `isRetainableAbsentRef` (now exported from
   `src/plugins/references/referenceProjection.ts`) so a prior property-derived
-  ref under an absent schema is retained rather than replace-written away. Both
-  the planner pass and the daily/merge `applyPromotedAttributes` path use it.
+  ref under an absent schema is retained rather than replace-written away. All
+  three write sites are covered: the planner pass and the daily/merge
+  `applyPromotedAttributes` path (both via `referencesWithProjectedProperties`,
+  which also keeps prior content refs since it doesn't re-parse content), and
+  the descendant `upsertImportedBlock` existing-row branch (which reconciles the
+  dump-derived set against the live row — content there *is* re-derived, so only
+  absent-schema prior refs are retained). The tombstone-restore branch
+  deliberately resurrects with the planned data, not pre-deletion state.
 
 ### Enforcement (tests)
 

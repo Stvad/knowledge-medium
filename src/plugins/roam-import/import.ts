@@ -512,6 +512,7 @@ export const importRoam = async (
       await upsertImportedBlock(
         tx,
         withPageAliases(recon.page.data, recon.aliasesToApply),
+        repo.propertySchemas,
         pageImportMergeOptions(),
       )
     }
@@ -551,7 +552,7 @@ export const importRoam = async (
         const desc = plan.descendants[i]
         const data = applyReparent(desc.data, reparentMap)
         appendRoamMemoExistingConflicts(plan.diagnostics, desc, await tx.get(data.id))
-        await upsertImportedBlock(tx, data, mergeOptionsForDescendant(desc))
+        await upsertImportedBlock(tx, data, repo.propertySchemas, mergeOptionsForDescendant(desc))
         await applyMappedTypesInTx(tx, desc, repo, typeSnapshot)
       }
     }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
@@ -1380,6 +1381,7 @@ const applyMappedTypesInTx = async (
 const upsertImportedBlock = async (
   tx: Tx,
   data: NewBlockData & {id: string; content: string; createdAt?: number; userUpdatedAt?: number},
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   propertyMergeOptions: ImportPropertyMergeOptions = {},
 ) => {
   const references = normalizeReferences(data.references ?? [])
@@ -1413,8 +1415,28 @@ const upsertImportedBlock = async (
     const patch: BlockDataPatch = {}
     if (existing.content !== data.content) patch.content = data.content
     if (!storedValuesEqual(existing.properties, properties)) patch.properties = properties
-    if (!storedValuesEqual(normalizeReferences(existing.references), references)) {
-      patch.references = references
+    // On a live-row hit the dump is authoritative for content refs and
+    // present-schema property refs, but a prior property-derived backlink whose
+    // schema is ABSENT can't be re-derived — so reconcile against the live row
+    // rather than replace-writing the dump set, retaining it per the add-only
+    // contract (docs/contracts/derived-data-add-only.md). Without this, a
+    // re-import with a ref schema toggled off (?safeMode / plugin off /
+    // workspace-switch race) silently deletes the existing backlink — the
+    // descendant-row twin of the SRS next-review-date wipe, on the route those
+    // cards actually travel. `references` already carries content +
+    // present-schema property refs; only absent-schema prior refs need
+    // retaining, and a genuinely changed/cleared field still drops (the
+    // value-unchanged guard in isRetainableAbsentRef).
+    const reconciledReferences = normalizeReferences(
+      reconcileDerived<BlockReference>({
+        prior: existing.references,
+        recomputed: references,
+        keyOf: derivedRefKey,
+        retain: ref => isRetainableAbsentRef(ref, {properties}, existing, propertySchemas),
+      }),
+    )
+    if (!storedValuesEqual(normalizeReferences(existing.references), reconciledReferences)) {
+      patch.references = reconciledReferences
     }
     if (
       patch.content !== undefined

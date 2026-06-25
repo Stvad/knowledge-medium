@@ -588,6 +588,74 @@ describe('importRoam', () => {
     expect(props['roam:note']).toBe('a promoted value')
   })
 
+  it('retains an existing property-derived backlink on re-import of a descendant block when its ref schema is absent', async () => {
+    // The descendant twin of the page-merge case above, on the route the
+    // canonical victims (SRS next-review-date cards) actually travel:
+    // upsertImportedBlock's existing-row branch. The page path re-reads
+    // existing.references in applyPromotedAttributes; the descendant path used
+    // to replace-write the dump-derived references and silently drop a backlink
+    // whose schema is absent. It must reconcile against the live row instead.
+    const targetId = 'desc-retain-target'
+    const absentRefField = 'plugin:relatesTo'
+    const descId = roamBlockId(WORKSPACE, 'descRetainUid')
+
+    await env.repo.tx(async tx => {
+      // The block the property-derived backlink points at.
+      await tx.create({
+        id: targetId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Backlink target',
+      })
+      // The existing descendant row carrying the absent-schema backlink. Its
+      // deterministic id (roamBlockId of the re-imported uid) is what makes the
+      // re-import upsert onto THIS row rather than insert a fresh one.
+      await tx.create({
+        id: descId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'card content',
+        properties: {[absentRefField]: targetId},
+        references: [{id: targetId, alias: targetId, sourceField: absentRefField}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import a graph whose child block reuses descRetainUid → upserts onto
+    // the existing descendant row via upsertImportedBlock.
+    await importRoam([
+      {
+        title: 'Desc Retain Page',
+        uid: 'descRetainPage',
+        children: [
+          {string: 'card content', uid: 'descRetainUid'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const desc = await readBlock(descId)
+    const refs = JSON.parse(desc!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // The absent-schema property-derived backlink survives the re-import.
+    expect(refs).toContainEqual({
+      id: targetId,
+      alias: targetId,
+      sourceField: absentRefField,
+    })
+    // The row really went through the upsert existing-row branch: it was
+    // reparented from null under the freshly-imported page.
+    expect(desc!.parent_id).toBe(roamBlockId(WORKSPACE, 'descRetainPage'))
+  })
+
   it('creates permanent alias blocks for unmatched [[alias]] references', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

@@ -223,7 +223,7 @@ Every gap here is one of the four missing algebras (veto, policy-override, order
 - **Algebra:** `validate?: (value) => true | string` on `PropertySchema`, run on the setProperty path.
 
 ### D7 — Reference retention policy *(MED)*
-- **Where:** `src/data/api/derivedData.ts:41` (`reconcileDerived`, `retain` predicate per call-site, governed by `docs/contracts/derived-data-add-only.md` rather than a registry). The Roam importer's ref rebuild now routes through this chokepoint too (`referencesWithProjectedProperties`, `src/plugins/roam-import/import.ts`); the remaining gap is that the policy is a hand-rolled `retain` predicate per site rather than a registered facet.
+- **Where:** `src/data/api/derivedData.ts:51` (`reconcileDerived`, `retain` predicate per call-site, governed by `docs/contracts/derived-data-add-only.md` rather than a registry). The Roam importer's ref rebuild now routes through this chokepoint at all three write sites (`referencesWithProjectedProperties` for the planner + page-merge paths and the `upsertImportedBlock` existing-row branch, `src/plugins/roam-import/import.ts`); the remaining gap is that the policy is a hand-rolled `retain` predicate per site rather than a registered facet.
 - **Context:** exactly the class that caused the SRS incident; codifying it as a seam beats relying on each caller reading the contract doc.
 - **Algebra:** `refRetentionPolicyFacet` keyed by property name; default add-only.
 
