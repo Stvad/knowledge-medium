@@ -28,6 +28,14 @@ const pairingHash = (params: Record<string, string>) =>
  *  declining. */
 const latestDialog = () => getDialogQueue().at(-1)
 
+/** Drain pending microtasks (e.g. an awaited `openDialog` continuation)
+ *  deterministically — AGENTS.md forbids `setTimeout`-sleeping on async
+ *  round trips, and a macrotask sleep is unnecessary here since the work
+ *  we wait on is microtask-only. */
+const flushMicrotasks = async () => {
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+}
+
 beforeEach(() => {
   window.localStorage.clear()
   __resetDialogsForTests()
@@ -82,11 +90,18 @@ describe('processBridgePairingFromHash — non-loopback URL', () => {
     // the address bar / history / referrer.
     expect(window.location.hash).toBe('')
 
-    // Flush the deferred dialog scheduler: still nothing, even after a tick.
-    await new Promise(r => window.setTimeout(r, 0))
+    // FIFO fence (not a wall-clock sleep) to prove the refused URL
+    // scheduled NO dialog, even against a future deferral regression:
+    // fire a loopback pairing that DOES schedule a confirm dialog. Both
+    // would schedule via the same setTimeout(0), so once the control's
+    // dialog lands, in-order delivery proves the attacker URL queued none
+    // — the queue holds only the control, and still nothing was persisted.
+    setHash(pairingHash({'agent-runtime-url': 'http://127.0.0.1:8787'}))
+    processBridgePairingFromHash()
+    await vi.waitFor(() => expect(latestDialog()?.Component).toBe(BridgePairingDialog))
+    expect(getDialogQueue()).toHaveLength(1)
     expect(window.localStorage.getItem(bridgeUrlStorageKey)).toBeNull()
     expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBeNull()
-    expect(getDialogQueue()).toHaveLength(0)
   })
 })
 
@@ -127,7 +142,9 @@ describe('processBridgePairingFromHash — loopback URL', () => {
     // Cancel: the queue resolves declined dialogs with null.
     latestDialog()!.finalize(null)
 
-    await new Promise(r => window.setTimeout(r, 0))
+    // Let confirmAndStorePairing's post-await continuation run: on decline
+    // it must early-return without ever calling persistPairing.
+    await flushMicrotasks()
     expect(window.localStorage.getItem(bridgeUrlStorageKey)).toBeNull()
     expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBeNull()
   })
@@ -146,7 +163,7 @@ describe('processBridgePairingFromHash — loopback URL', () => {
 })
 
 describe('processBridgePairingFromHash — secret without a URL', () => {
-  it('drops a lone secret: never stored, never prompted', async () => {
+  it('drops a lone secret: never stored, never prompted', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     // Pre-existing legit secret the attacker should not be able to clobber.
     window.localStorage.setItem(bridgeSecretStorageKey, 'legit-secret')
@@ -154,13 +171,12 @@ describe('processBridgePairingFromHash — secret without a URL', () => {
     setHash(pairingHash({'agent-runtime-secret': 'attacker-secret'}))
     processBridgePairingFromHash()
 
-    // No confirmation dialog is offered, and the stored secret is untouched.
+    // The lone-secret branch is fully synchronous — it warns and schedules
+    // nothing (no open-tokens here) — so this state is final: no dialog
+    // offered, the hash stripped, and the existing secret left untouched.
     expect(getDialogQueue()).toHaveLength(0)
     expect(warn).toHaveBeenCalled()
     expect(window.location.hash).toBe('')
-
-    await new Promise(r => window.setTimeout(r, 0))
-    expect(getDialogQueue()).toHaveLength(0)
     expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBe('legit-secret')
   })
 
