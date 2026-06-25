@@ -181,7 +181,12 @@ class PresenceClient {
     })
 
     const onPointerMove = (e: PointerEvent) => this.cursorThrottled(e)
-    const onPointerGone = () => this.broadcastCursor(null)
+    const onPointerGone = () => {
+      // Drop any trailing throttled move first, or it would re-broadcast the
+      // stale block-anchored cursor ~50ms after we send the hide packet.
+      this.cursorThrottled.cancel()
+      this.broadcastCursor(null)
+    }
     window.addEventListener('pointermove', onPointerMove, { passive: true })
     window.addEventListener('pointerleave', onPointerGone)
     window.addEventListener('blur', onPointerGone)
