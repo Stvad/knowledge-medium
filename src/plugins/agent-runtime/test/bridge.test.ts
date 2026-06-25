@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  bridgeUrl,
   isLoopbackBridgeUrl,
   processBridgePairingFromHash,
 } from '../bridge.ts'
@@ -175,6 +176,34 @@ describe('processBridgePairingFromHash — secret without a URL', () => {
     await vi.waitFor(() => expect(latestDialog()?.Component).toBe(AgentTokensDialog))
     expect(latestDialog()?.Component).not.toBe(BridgePairingDialog)
     expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBeNull()
+  })
+})
+
+describe('bridgeUrl — self-heals a poisoned persisted URL', () => {
+  it('never returns a stored non-loopback URL and purges it + its secret', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Simulate a browser poisoned by the OLD pre-fix code: a non-loopback
+    // attacker URL/secret already sitting in localStorage.
+    window.localStorage.setItem(bridgeUrlStorageKey, 'https://evil.example')
+    window.localStorage.setItem(bridgeSecretStorageKey, 'attacker-secret')
+
+    const url = bridgeUrl()
+
+    expect(url).not.toContain('evil.example')
+    expect(isLoopbackBridgeUrl(url)).toBe(true)
+    // Poisoned pairing is purged, so it can't be re-read on the next load.
+    expect(window.localStorage.getItem(bridgeUrlStorageKey)).toBeNull()
+    expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBeNull()
+    expect(warn).toHaveBeenCalled()
+  })
+
+  it('keeps a legitimate loopback stored URL', () => {
+    window.localStorage.setItem(bridgeUrlStorageKey, 'http://127.0.0.1:9999')
+    window.localStorage.setItem(bridgeSecretStorageKey, 'legit-secret')
+
+    expect(bridgeUrl()).toBe('http://127.0.0.1:9999')
+    expect(window.localStorage.getItem(bridgeUrlStorageKey)).toBe('http://127.0.0.1:9999')
+    expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBe('legit-secret')
   })
 })
 

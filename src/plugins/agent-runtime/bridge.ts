@@ -160,18 +160,33 @@ export const processBridgePairingFromHash = () => {
   }
 }
 
-// Pure reads — no hash side effects. Hash-supplied pairings are handled
-// exclusively by `processBridgePairingFromHash` (gated by confirmation),
-// so these only ever return a value the user already approved, a
-// build-time env override, or the loopback default.
+// No hash side effects — hash-supplied pairings are handled exclusively
+// by `processBridgePairingFromHash` (gated by confirmation). The stored
+// URL is still validated/self-healed on read, because a browser poisoned
+// by the OLD pre-fix code can already hold a non-loopback attacker URL in
+// localStorage; trusting it on upgrade would keep POSTing the user's
+// tokens to the attacker. Returns the stored URL only if it's loopback;
+// otherwise purges the poisoned URL (and the secret paired with it) and
+// falls back to the build-time env override or the loopback default.
+// Build-time env overrides are trusted and left untouched.
+const readTrustedStoredBridgeUrl = (): string | null => {
+  const stored = window.localStorage.getItem(bridgeUrlStorageKey)?.trim()
+  if (!stored) return null
+  if (isLoopbackBridgeUrl(stored)) return stored
+  window.localStorage.removeItem(bridgeUrlStorageKey)
+  window.localStorage.removeItem(bridgeSecretStorageKey)
+  console.warn('Agent runtime: purged a stored non-loopback bridge URL.')
+  return null
+}
+
 const getStoredBridgeSecret = () =>
   window.localStorage.getItem(bridgeSecretStorageKey)?.trim()
   || import.meta.env.VITE_AGENT_RUNTIME_BRIDGE_SECRET?.trim()
   || ''
 
-const bridgeUrl = () =>
+export const bridgeUrl = () =>
   (
-    window.localStorage.getItem(bridgeUrlStorageKey)?.trim()
+    readTrustedStoredBridgeUrl()
     || import.meta.env.VITE_AGENT_RUNTIME_URL?.trim()
     || defaultBridgeUrl
   ).replace(/\/+$/, '')
