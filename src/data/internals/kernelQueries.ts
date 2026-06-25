@@ -248,6 +248,16 @@ export const compileBlocksContentSearchQuery = (
   return {matchQuery, rankQuery}
 }
 
+/** Escape SQLite LIKE metacharacters (`%`, `_`) and the escape char
+ *  itself in a value that must be matched literally inside a LIKE
+ *  pattern. Pairs with an explicit `ESCAPE '\'` clause on the SQL side
+ *  (we use backslash as the escape char). Without this a user-typed
+ *  `_` or `%` acts as a wildcard — `a_b` would match `axb`, and a bare
+ *  `%` filter would match every row. Bound `?` params already block SQL
+ *  injection; this only fixes LIKE-pattern semantics. */
+const escapeLikePattern = (value: string): string =>
+  value.replace(/[\\%_]/g, c => `\\${c}`)
+
 /** Content search — case-insensitive trigram FTS substring match. */
 export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   SELECT ${buildQualifiedBlockColumnsSql('b')}
@@ -262,7 +272,7 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
-      WHEN LOWER(b.content) LIKE LOWER(?) || '%' THEN 1
+      WHEN LOWER(b.content) LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END,
     coalesce(b.user_updated_at, b.updated_at) DESC
@@ -294,12 +304,12 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
-    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
+    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%' ESCAPE '\\')
   GROUP BY ba.alias
   ORDER BY
     MIN(CASE
       WHEN ba.alias_lower = LOWER(?) THEN 0
-      WHEN ba.alias_lower LIKE LOWER(?) || '%' THEN 1
+      WHEN ba.alias_lower LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END),
     MIN(b.created_at),
@@ -366,7 +376,7 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
  *  aliases" path. */
 export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
   const filters = tokenCount > 0
-    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%'`).join(' AND ')
+    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%' ESCAPE '\\'`).join(' AND ')
     : '1=1'
   return `
     SELECT
@@ -382,7 +392,7 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
     ORDER BY
       CASE
         WHEN ba.alias_lower = ? THEN 0
-        WHEN ba.alias_lower LIKE ? || '%' THEN 1
+        WHEN ba.alias_lower LIKE ? || '%' ESCAPE '\\' THEN 1
         ELSE 2
       END,
       b.created_at,
@@ -403,11 +413,11 @@ export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
-    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
+    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%' ESCAPE '\\')
   ORDER BY
     CASE
       WHEN ba.alias_lower = LOWER(?) THEN 0
-      WHEN ba.alias_lower LIKE LOWER(?) || '%' THEN 1
+      WHEN ba.alias_lower LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END,
     b.created_at,
@@ -1022,9 +1032,19 @@ export const searchByContentQuery = defineQuery<
       channel: KERNEL_CONTENT_CHANNEL,
       key: kernelContentKey(workspaceId),
     })
+    // The prefix-rank LIKE takes the escaped rankQuery (so `_`/`%` in
+    // the query rank as literals); the exact `= LOWER(?)` rank takes the
+    // raw rankQuery. The FTS MATCH itself is unaffected — LIKE is only a
+    // tiebreaker over the already-matched rows.
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_CONTENT_SQL,
-      [workspaceId, compiledQuery.matchQuery, compiledQuery.rankQuery, compiledQuery.rankQuery, limit],
+      [
+        workspaceId,
+        compiledQuery.matchQuery,
+        compiledQuery.rankQuery,
+        escapeLikePattern(compiledQuery.rankQuery),
+        limit,
+      ],
     )
     // Skip per-row deps. The kernel.content channel above covers
     // every axis that can flip a content-substring match: content
@@ -1117,8 +1137,12 @@ export const aliasesInWorkspaceQuery = defineQuery<
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
+    // Escaped value backs the substring + prefix LIKEs (so `_`/`%` in
+    // the filter match literally); raw value backs the `? = ''` guard
+    // and the exact `= LOWER(?)` rank comparison.
+    const escaped = escapeLikePattern(filter)
     const rows = await ctx.db.getAll<{alias: string}>(
-      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter],
+      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, escaped, filter, escaped],
     )
     return rows.map(r => r.alias)
   },
@@ -1147,8 +1171,11 @@ export const aliasMatchesQuery = defineQuery<
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
+    // See `aliasesInWorkspace`: escaped value for the LIKEs, raw for the
+    // `? = ''` guard and the exact `= LOWER(?)` rank comparison.
+    const escaped = escapeLikePattern(filter)
     const rows = await ctx.db.getAll<AliasMatch>(
-      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter, limit],
+      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, escaped, filter, escaped, limit],
     )
     // Per-row deps so content edits on a currently-returned alias block
     // refresh the autocomplete preview. Sister kernel queries that
@@ -1193,10 +1220,18 @@ export const aliasMatchesFuzzyQuery = defineQuery<
       key: kernelAliasesKey(workspaceId),
     })
     const sql = buildFuzzyAliasMatchesSql(prefixes.length)
+    // The prefixes are literal token substrings (first-3 of each query
+    // token, see `buildFilterPrefixes`), not wildcard patterns — escape
+    // their LIKE metacharacters so a typed `_`/`%` matches literally.
     // The two extra params back the exact/prefix ORDER BY so the LIMIT
     // retains the verbatim match; `alias_lower` is already lowercased.
+    // The exact `= ?` comparison takes the raw query; the prefix LIKE
+    // takes the escaped one.
     const queryLower = query.toLowerCase()
-    const params: (string | number)[] = [workspaceId, ...prefixes, queryLower, queryLower, limit]
+    const escapedPrefixes = prefixes.map(escapeLikePattern)
+    const params: (string | number)[] = [
+      workspaceId, ...escapedPrefixes, queryLower, escapeLikePattern(queryLower), limit,
+    ]
     const rows = await ctx.db.getAll<AliasMatchWithRecency>(sql, params)
     // Same reasoning as `aliasMatches`: this query returns a custom row
     // shape (no BlockData hydration), so per-row deps have to be
