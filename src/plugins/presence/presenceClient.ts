@@ -28,6 +28,7 @@
  *    key, or gate the feature off for e2ee, before shipping on-by-default.
  */
 import { throttle } from 'lodash-es'
+import { v4 as uuidv4 } from 'uuid'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase, readPersistedSession } from '@/services/supabase.js'
 import { getClientId } from '@/utils/clientId.js'
@@ -51,6 +52,68 @@ const EMPTY_LOCAL: LocalPresence = {
   editor: null,
 }
 
+// Per-TAB identity. `getClientId()` is per browser installation, so two
+// tabs/windows in the same profile would share a Realtime presence key —
+// collapsing into one peer and dropping each other's cursors. Append a
+// per-load nonce so each tab is a distinct presence (the install id stays as
+// a readable prefix).
+const sessionClientId = `${getClientId()}:${uuidv4()}`
+
+// ── untrusted-input normalisation ──────────────────────────────────────────
+// Presence metas and broadcast payloads are arbitrary JSON from other clients
+// (and the channel is public while opt-in). Coerce every field to its expected
+// shape so a malformed peer payload can't throw and break presence for the
+// whole channel. Never throws.
+
+const asString = (v: unknown): string => (typeof v === 'string' ? v : '')
+const asStringOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+const asStringArray = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+const asFiniteOrNull = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null
+const asFinite = (v: unknown): number =>
+  typeof v === 'number' && Number.isFinite(v) ? v : 0
+
+const normalizeEditor = (v: unknown): LocalPresence['editor'] => {
+  if (!v || typeof v !== 'object') return null
+  const e = v as Record<string, unknown>
+  if (typeof e.blockId !== 'string') return null
+  return { blockId: e.blockId, start: asFiniteOrNull(e.start), end: asFiniteOrNull(e.end) }
+}
+
+const normalizePresence = (clientId: string, raw: unknown): RemotePresence | null => {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const userId = asString(r.userId)
+  return {
+    clientId, // the Realtime presence key is authoritative, not the wire value
+    userId,
+    name: typeof r.name === 'string' && r.name ? r.name : (userId || clientId),
+    color: colorForUser(userId), // derive locally — never trust wire colour
+    selectedBlockIds: asStringArray(r.selectedBlockIds),
+    anchorBlockId: asStringOrNull(r.anchorBlockId),
+    focusedBlockId: asStringOrNull(r.focusedBlockId),
+    editor: normalizeEditor(r.editor),
+  }
+}
+
+const normalizeCursor = (raw: unknown): RemoteCursor | null => {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.clientId !== 'string') return null
+  const userId = asString(r.userId)
+  return {
+    clientId: r.clientId,
+    userId,
+    name: typeof r.name === 'string' ? r.name : userId,
+    color: colorForUser(userId),
+    blockId: asStringOrNull(r.blockId),
+    renderScopeId: typeof r.renderScopeId === 'string' ? r.renderScopeId : undefined,
+    nx: asFinite(r.nx),
+    ny: asFinite(r.ny),
+  }
+}
+
 interface Connection {
   channel: RealtimeChannel
   workspaceId: string
@@ -60,7 +123,7 @@ interface Connection {
 class PresenceClient {
   private conn: Connection | null = null
   private identity: PresenceIdentity = {
-    clientId: getClientId(),
+    clientId: sessionClientId,
     userId: '',
     name: '',
     color: '#888888',
@@ -88,7 +151,7 @@ class PresenceClient {
     const client = supabase
     const { workspaceId, user } = opts
     this.identity = {
-      clientId: getClientId(),
+      clientId: sessionClientId,
       userId: user.id,
       name: user.name?.trim() || `User ${user.id.slice(0, 8)}`,
       color: colorForUser(user.id),
@@ -110,7 +173,7 @@ class PresenceClient {
     channel.on('presence', { event: 'join' }, resync)
     channel.on('presence', { event: 'leave' }, resync)
     channel.on('broadcast', { event: 'cursor' }, ({ payload }) =>
-      this.onRemoteCursor(payload as RemoteCursor),
+      this.onRemoteCursor(payload),
     )
 
     void channel.subscribe(status => {
@@ -205,12 +268,11 @@ class PresenceClient {
     void this.conn.channel.send({ type: 'broadcast', event: 'cursor', payload })
   }
 
-  private onRemoteCursor(payload: RemoteCursor | undefined): void {
+  private onRemoteCursor(raw: unknown): void {
+    const payload = normalizeCursor(raw)
     if (!payload || payload.clientId === this.identity.clientId) return
     if (payload.blockId == null) this.cursors.delete(payload.clientId)
-    // Re-derive colour locally (see syncFromChannel) — the wire value is
-    // untrusted and reaches inline styles.
-    else this.cursors.set(payload.clientId, { ...payload, color: colorForUser(payload.userId) })
+    else this.cursors.set(payload.clientId, payload)
     this.rebuildCursors()
     this.cursorSubs.notify()
   }
@@ -223,11 +285,8 @@ class PresenceClient {
     const next = new Map<string, RemotePresence>()
     for (const [key, entries] of Object.entries(state)) {
       if (key === this.identity.clientId) continue
-      const entry = entries[0]
-      // Never trust the wire `color`: it flows into `cssText` (caret) and
-      // inline styles, so a crafted value could inject CSS. Re-derive it
-      // locally from `userId` (only ever a hash seed → always a valid hsl()).
-      if (entry) next.set(key, { ...entry, color: colorForUser(entry.userId) })
+      const normalized = normalizePresence(key, entries[0])
+      if (normalized) next.set(key, normalized)
     }
     this.remote = next
     // A peer that left can never send a "cursor off" broadcast, so prune
