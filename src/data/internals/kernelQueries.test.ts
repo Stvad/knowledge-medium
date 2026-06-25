@@ -570,6 +570,26 @@ describe('repo.query.aliasesInWorkspace', () => {
     expect(out).toEqual(['Inbox'])
   })
 
+  it('matches LIKE metacharacters in the filter literally, not as wildcards', async () => {
+    await create({id: 'underscore', aliases: ['a_b']})
+    await create({id: 'single-char', aliases: ['axb']}) // `_`-as-wildcard would match this
+    await create({id: 'percent', aliases: ['50%done']})
+    await create({id: 'plain', aliases: ['anything']}) // a bare `%` would match this if unescaped
+    await create({id: 'backslash', aliases: ['a\\b']}) // contains a literal backslash
+
+    // `_` must match a literal underscore, not any single char.
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a_b'}).load())
+      .toEqual(['a_b'])
+    // A bare `%` must match only aliases containing a literal percent, not every row.
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: '%'}).load())
+      .toEqual(['50%done'])
+    // The escape char itself (`\`) must be escaped, so a backslash in the
+    // filter matches literally instead of corrupting the LIKE pattern
+    // (an unescaped `\b` would be read as escaped-`b` → pattern `%ab%`).
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a\\b'}).load())
+      .toEqual(['a\\b'])
+  })
+
   it('orders exact aliases before prefix and substring matches', async () => {
     await create({id: 'exact', aliases: ['i']})
     await create({id: 'prefix', aliases: ['Inbox']})
@@ -615,6 +635,13 @@ describe('repo.query.aliasMatches', () => {
 
     expect(out.map(row => row.alias)).toEqual(['Dating', 'Dating pool', 'Online Dating'])
   })
+
+  it('matches LIKE metacharacters in the filter literally, not as wildcards', async () => {
+    await create({id: 'lit', content: 'c', aliases: ['a_b']})
+    await create({id: 'wild', content: 'c', aliases: ['axb']}) // `_`-as-wildcard would match this
+    const out = await env.repo.query.aliasMatches({workspaceId: WS, filter: 'a_b'}).load()
+    expect(out.map(row => row.alias)).toEqual(['a_b'])
+  })
 })
 
 describe('repo.query.aliasMatchesFuzzy', () => {
@@ -641,6 +668,18 @@ describe('repo.query.aliasMatchesFuzzy', () => {
       prefixes: ['pr', 'rev'],
     }).load()
     expect(out.map(row => row.blockId).sort()).toEqual(['match'])
+  })
+
+  it('matches LIKE metacharacters in a prefix literally, not as wildcards', async () => {
+    // Prefixes are literal token substrings, not patterns — a typed `_`
+    // must not act as a single-char wildcard in the pre-filter.
+    await create({id: 'lit', aliases: ['a_b']})
+    await create({id: 'wild', aliases: ['axb']}) // `_`-as-wildcard would match this
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['a_b'],
+    }).load()
+    expect(out.map(row => row.blockId)).toEqual(['lit'])
   })
 
   it('returns workspace-wide rows when prefixes is empty', async () => {
