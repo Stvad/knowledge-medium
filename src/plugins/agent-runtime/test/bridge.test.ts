@@ -7,6 +7,8 @@ import {
   __resetDialogsForTests,
   getDialogQueue,
 } from '@/utils/dialogs.js'
+import { AgentTokensDialog } from '../AgentTokensDialog.tsx'
+import { BridgePairingDialog } from '../BridgePairingDialog.tsx'
 
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
 const bridgeSecretStorageKey = 'agent-runtime:bridge-secret'
@@ -125,6 +127,63 @@ describe('processBridgePairingFromHash — loopback URL', () => {
     latestDialog()!.finalize(null)
 
     await new Promise(r => window.setTimeout(r, 0))
+    expect(window.localStorage.getItem(bridgeUrlStorageKey)).toBeNull()
+    expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBeNull()
+  })
+
+  it('confirming a loopback pairing with a non-default port stores that port', async () => {
+    setHash(pairingHash({'agent-runtime-url': 'http://127.0.0.1:9999'}))
+
+    processBridgePairingFromHash()
+    await vi.waitFor(() => expect(latestDialog()).toBeTruthy())
+    latestDialog()!.finalize(true)
+
+    await vi.waitFor(() =>
+      expect(window.localStorage.getItem(bridgeUrlStorageKey)).toBe('http://127.0.0.1:9999'),
+    )
+  })
+})
+
+describe('processBridgePairingFromHash — secret without a URL', () => {
+  it('drops a lone secret: never stored, never prompted', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Pre-existing legit secret the attacker should not be able to clobber.
+    window.localStorage.setItem(bridgeSecretStorageKey, 'legit-secret')
+
+    setHash(pairingHash({'agent-runtime-secret': 'attacker-secret'}))
+    processBridgePairingFromHash()
+
+    // No confirmation dialog is offered, and the stored secret is untouched.
+    expect(getDialogQueue()).toHaveLength(0)
+    expect(warn).toHaveBeenCalled()
+    expect(window.location.hash).toBe('')
+
+    await new Promise(r => window.setTimeout(r, 0))
+    expect(getDialogQueue()).toHaveLength(0)
+    expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBe('legit-secret')
+  })
+
+  it('still honors a co-supplied open-tokens request, without storing the secret', async () => {
+    setHash(pairingHash({
+      'agent-runtime-secret': 'attacker-secret',
+      'agent-runtime-open-tokens': '1',
+    }))
+    processBridgePairingFromHash()
+
+    // The benign token-minting dialog opens (it persists nothing on its
+    // own); the smuggled secret is dropped, not the pairing-confirm dialog.
+    await vi.waitFor(() => expect(latestDialog()?.Component).toBe(AgentTokensDialog))
+    expect(latestDialog()?.Component).not.toBe(BridgePairingDialog)
+    expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBeNull()
+  })
+})
+
+describe('processBridgePairingFromHash — open-tokens only', () => {
+  it('opens the token dialog and stores nothing', async () => {
+    setHash(pairingHash({'agent-runtime-open-tokens': '1'}))
+    processBridgePairingFromHash()
+
+    await vi.waitFor(() => expect(latestDialog()?.Component).toBe(AgentTokensDialog))
     expect(window.localStorage.getItem(bridgeUrlStorageKey)).toBeNull()
     expect(window.localStorage.getItem(bridgeSecretStorageKey)).toBeNull()
   })

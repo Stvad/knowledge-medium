@@ -51,9 +51,9 @@ export const isLoopbackBridgeUrl = (value: string): boolean => {
   }
 }
 
-const persistPairing = (url: string | null, secret: string | null) => {
+const persistPairing = (url: string, secret: string | null) => {
+  window.localStorage.setItem(bridgeUrlStorageKey, url)
   if (secret) window.localStorage.setItem(bridgeSecretStorageKey, secret)
-  if (url) window.localStorage.setItem(bridgeUrlStorageKey, url)
   // Wake the (already running) bridge effect so it re-registers against
   // the freshly approved endpoint/secret. The loop reads the URL/secret
   // live, so the next iteration picks them up.
@@ -62,7 +62,7 @@ const persistPairing = (url: string | null, secret: string | null) => {
 }
 
 const confirmAndStorePairing = async (
-  url: string | null,
+  url: string,
   secret: string | null,
   openTokensDialog: boolean,
 ) => {
@@ -71,7 +71,7 @@ const confirmAndStorePairing = async (
   // explicitly approves it here.
   const confirmed = await openDialog<boolean, BridgePairingDialogProps>(
     BridgePairingDialog,
-    {url: url ?? bridgeUrl(), hasSecret: Boolean(secret)},
+    {url, hasSecret: Boolean(secret)},
   )
   if (!confirmed) return
 
@@ -132,13 +132,25 @@ export const processBridgePairingFromHash = () => {
     return
   }
 
-  if (secret || candidateUrl) {
-    // Defer so we never open a dialog synchronously during effect setup
-    // or a hashchange handler.
+  if (candidateUrl) {
+    // A loopback pairing. Gate it behind explicit confirmation; the
+    // secret (if any) travels with the URL. Defer so we never open a
+    // dialog synchronously during effect setup or a hashchange handler.
     window.setTimeout(() => {
       void confirmAndStorePairing(candidateUrl, secret, openTokensDialog)
     }, 0)
     return
+  }
+
+  if (secret) {
+    // A secret with no bridge URL has no legitimate source — the CLI
+    // always emits the URL alongside it (config.ts `pairingUrl`).
+    // Honoring a lone secret would only let a link overwrite the user's
+    // existing bridge secret (a reversible local DoS), so drop it. Fall
+    // through so a co-supplied open-tokens request still works.
+    console.warn(
+      'Agent runtime: ignoring pairing secret supplied without a bridge URL.',
+    )
   }
 
   if (openTokensDialog) {
