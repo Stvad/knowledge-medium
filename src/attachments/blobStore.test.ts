@@ -79,6 +79,22 @@ describe('SupabaseBlobStore.put', () => {
     }
   })
 
+  it('treats a server 401 (expired token) as transient', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(401, { code: 'invalid_token' }))
+    const err = await putError(makeStore(fetchFn).put('ws', 'k', new Uint8Array()))
+    expect(err.permanent).toBe(false)
+    expect(err.status).toBe(401)
+  })
+
+  it('classifies on status even when the error body is not JSON (code stays undefined)', async () => {
+    const fetchFn = vi.fn<typeof fetch>(
+      async () => new Response('<html>502 Bad Gateway</html>', { status: 502 }),
+    )
+    const err = await putError(makeStore(fetchFn).put('ws', 'k', new Uint8Array()))
+    expect(err.permanent).toBe(false) // 502 → transient, classified by status not body
+    expect(err.code).toBeUndefined()
+  })
+
   it('treats a missing session token as transient and never attempts the upload', async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(200, {}))
     const err = await putError(makeStore(fetchFn, null).put('ws', 'k', new Uint8Array()))

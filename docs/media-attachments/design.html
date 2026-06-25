@@ -82,11 +82,13 @@
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
-<strong>Status:</strong> partially implemented — phase 1 (the byte-crypto seam, §5/§5.1:
-the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, and the
-read-side content-hash verify) has landed in <code>src/sync/</code> on branch
-<code>feat/media-attachments</code>; phases 2–6 (storage/RLS + the §10.1 upload guard, the in-thread
-resolver, the block model + renderer, capture + up-lane, the down-lane) are <strong>not yet built</strong>.
+<strong>Status:</strong> partially implemented — phases 1–2 have landed on branch
+<code>feat/media-attachments</code>. Phase 1 = the byte-crypto seam (§5/§5.1:
+the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, the
+read-side content-hash verify) in <code>src/sync/</code>. Phase 2 = the <code>attachments</code> bucket
++ RLS migration, the §10.1 upload-guard Edge Function, and the <code>BlobStore</code> seam
+(§10/§10.1/§14), unit-tested (end-to-end stack validation pending). Phases 3–6 (in-thread resolver,
+block model + renderer, capture + up-lane, the down-lane) are <strong>not yet built</strong>.
 Last verified against code 2026-06-25. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
 solid; the recovery edges are where the spec is still hardening.
@@ -1336,8 +1338,10 @@ vNext; the v1 commitment is only the reserved property + audience flag.
   // the content path IS the idempotency key: a re-PUT to an existing path is
   // first-write-wins success (§10.1). The plaintext sha256 never reaches the origin
   // as such: for E2EE the wire path is the HMAC, unguessable without K_id (no oracle, §10).
-  put(workspaceId, contentKey, bytes): Promise&lt;void&gt;
-  url(workspaceId, contentKey): string
+  put(workspaceId, contentKey, bytes): Promise&lt;void&gt;     // via the §10.1 guard fn
+  get(workspaceId, contentKey): Promise&lt;Uint8Array&gt;       // bytes, not a url: the private
+  //   bucket (§10) rules out a bare &lt;img src&gt;; the resolver fetches → decrypts →
+  //   hash-verifies (§5.1/§7.3), so the seam returns BYTES the resolver turns into an object URL.
   delete(workspaceId, contentKey): Promise&lt;void&gt;
 }</code></pre>
 

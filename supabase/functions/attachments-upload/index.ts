@@ -40,6 +40,11 @@ const ENCB_MIN_LEN = ENCB_MAGIC.length + NONCE_BYTES + GCM_TAG_BYTES
 
 const BUCKET = 'attachments'
 const WRITER_ROLES = ['owner', 'editor']
+// Server-side DoS backstop on body size — stops an abusive caller forcing a
+// huge in-memory buffer in the isolate. The user-facing inline cap is the
+// client capture guard (§11 / §16, "a v1 cap e.g. 10 MB"); this is just a
+// ceiling well above any legitimate attachment.
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 const CORS = {
   'access-control-allow-origin': '*',
@@ -63,9 +68,14 @@ const hasEncbEnvelope = (bytes: Uint8Array): boolean => {
   return true
 }
 
-/** Storage "object already exists" — Supabase returns 409 / "Duplicate". */
-const isAlreadyExists = (err: { message?: string; statusCode?: string | number }): boolean =>
-  String(err.statusCode) === '409' || /exists|duplicate/i.test(err.message ?? '')
+/** Storage "object already exists" — Supabase returns HTTP 409. supabase-js
+ *  surfaces it as a StorageApiError carrying `.status` (numeric) and
+ *  `.statusCode` ("409"). Key on the STATUS, not the message text, so an
+ *  unrelated error whose message happens to contain "exists" can't be mis-read
+ *  as an idempotent success (which would clear the client's §9 queue against an
+ *  object that was never written). */
+const isAlreadyExists = (err: { status?: number; statusCode?: string | number }): boolean =>
+  err.status === 409 || String(err.statusCode) === '409'
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
@@ -127,8 +137,24 @@ Deno.serve(async (req) => {
   if (wsErr) return json(500, { error: 'workspace lookup failed' })
   if (!ws) return json(404, { error: 'workspace not found', code: 'no_workspace' })
 
-  const body = new Uint8Array(await req.arrayBuffer())
+  // Reject an obviously-oversize upload before buffering it; the authoritative
+  // check is on the buffered length (a lying / absent content-length).
+  const declaredLength = Number(req.headers.get('content-length') ?? 'NaN')
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+    return json(422, { error: 'attachment exceeds the maximum size', code: 'too_large' })
+  }
+  let body: Uint8Array
+  try {
+    body = new Uint8Array(await req.arrayBuffer())
+  } catch {
+    // Aborted / truncated request — transient; the client retries (§9). The
+    // buffer-then-PUT below means a partial body never reaches Storage.
+    return json(500, { error: 'failed to read request body' })
+  }
   if (body.length === 0) return json(422, { error: 'empty body', code: 'empty_body' })
+  if (body.length > MAX_UPLOAD_BYTES) {
+    return json(422, { error: 'attachment exceeds the maximum size', code: 'too_large' })
+  }
 
   if (ws.encryption_mode === 'e2ee' && !hasEncbEnvelope(body)) {
     // PERMANENT failure — a shape rejection only clears when the client is

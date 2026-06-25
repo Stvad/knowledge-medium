@@ -22,13 +22,15 @@
 -- storage.objects already has RLS enabled (owned by supabase_storage_admin);
 -- we only add policies.
 
--- ── private-schema access for the storage role context (§10 warn box) ───────
+-- ── private-schema access for the policy's querying role (§10 warn box) ──────
 -- The policies below call private.is_workspace_member / is_workspace_writer
--- (SECURITY DEFINER, search_path=''). A storage.objects policy is evaluated in
--- a different ownership/role context than the public `blocks` policies, which
--- work via public-schema defaults. So the schema-USAGE + function-EXECUTE
--- grants are explicit and first-class here — without them the policy errors at
--- query time or silently denies. (Idempotent: grant is a no-op if already held.)
+-- (SECURITY DEFINER, search_path=''). An RLS USING expression runs as the
+-- QUERYING role (authenticated), which therefore needs USAGE on `private` +
+-- EXECUTE on the functions. The public `blocks` policies call the same
+-- functions and work today, so `authenticated` already holds some grant — but
+-- it is NOT in any migration (likely a bootstrap / PUBLIC grant), so granting
+-- explicitly here keeps a from-migrations rebuild self-contained rather than
+-- depending on that out-of-band grant. Idempotent: a no-op if already held.
 grant usage on schema private to authenticated;
 grant execute on function private.is_workspace_member(text, text) to authenticated;
 grant execute on function private.is_workspace_writer(text, text) to authenticated;
