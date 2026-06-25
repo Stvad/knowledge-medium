@@ -1,7 +1,25 @@
 import { useQuery } from '@powersync/react'
 import { useMemo } from 'react'
+import { useHash } from 'react-use'
 import { useRepo } from '@/context/repo'
+import { parseAppHash } from '@/utils/routing'
 import type { Workspace, WorkspaceMembership, WorkspaceRole } from '@/types'
+
+/** The active workspace id, tracked reactively through the URL hash so a
+ *  workspace switch (which only assigns the hash — no reload) re-renders
+ *  subscribers. `repo.activeWorkspaceId` is an imperative UI pin that mutates
+ *  WITHOUT notifying React, so a component reading it alone keeps showing the
+ *  previous workspace until something else happens to re-render it. The hash is
+ *  the reactive source of truth; the pin is only the fallback for an empty hash
+ *  (remembered/default workspace still resolving). */
+export const useActiveWorkspaceId = (): string | null => {
+  const repo = useRepo()
+  const [hash] = useHash()
+  return useMemo(() => {
+    const {workspaceId} = parseAppHash(hash)
+    return workspaceId ?? repo.activeWorkspaceId ?? null
+  }, [hash, repo.activeWorkspaceId])
+}
 
 interface WorkspaceRowResult {
   id: string
