@@ -12,6 +12,7 @@ import { useIsActivePanel } from '@/data/globalState.js'
 import {
   editorSelection,
   focusedBlockLocationFromProperties,
+  isEditingProp,
   selectionStateProp,
 } from '@/data/properties.js'
 import { presenceClient } from './presenceClient.js'
@@ -25,12 +26,18 @@ const buildLocal = (properties: Record<string, unknown> | undefined): LocalPrese
 
   const focusedBlockId = focusedBlockLocationFromProperties(properties)?.blockId ?? null
 
+  const editingRaw = properties?.[isEditingProp.name]
+  const editing = editingRaw === undefined
+    ? isEditingProp.defaultValue
+    : isEditingProp.codec.decode(editingRaw)
+
   const edRaw = properties?.[editorSelection.name]
   const ed = edRaw === undefined ? undefined : editorSelection.codec.decode(edRaw)
-  // Only surface the caret for the block the user is actually on — a stale
-  // `editorSelection` left over from a different block would otherwise paint
-  // a ghost caret for peers.
-  const editor = ed && ed.blockId === focusedBlockId
+  // Only surface the caret while the user is actually editing the focused
+  // block. Gating on edit mode (not just focus) clears the caret on
+  // Escape/blur — otherwise `editorSelection` lingers and peers see a ghost
+  // caret until focus moves to another block.
+  const editor = editing && ed && ed.blockId === focusedBlockId
     ? { blockId: ed.blockId, start: ed.start ?? null, end: ed.end ?? ed.start ?? null }
     : null
 
