@@ -157,7 +157,9 @@ async function runDbChecks(client) {
     count: slots.length,
     logical_count: logicalSlots.length,
     slots: slots.map((s) => ({
-      name: s.slot_name,
+      // Redacted: slot names embed the PowerSync instance id, which is not in
+      // the public repo. Keep type/active/lag (the actionable health fields).
+      name: redactId(s.slot_name),
       type: s.slot_type,
       plugin: s.plugin,
       active: s.active,
@@ -169,12 +171,12 @@ async function runDbChecks(client) {
     fail('replication_slots', `expected >=${EXPECTED_LOGICAL_SLOTS_MIN} logical slot, found ${logicalSlots.length}`)
   } else if (logicalSlots.length > EXPECTED_LOGICAL_SLOTS_MAX) {
     result.checks.replication_slots.status = 'fail'
-    fail('replication_slots', `expected <=${EXPECTED_LOGICAL_SLOTS_MAX} logical slot, found ${logicalSlots.length}: ${logicalSlots.map((s) => s.slot_name).join(', ')}`)
+    fail('replication_slots', `expected <=${EXPECTED_LOGICAL_SLOTS_MAX} logical slot, found ${logicalSlots.length}: ${logicalSlots.map((s) => redactId(s.slot_name)).join(', ')}`)
   }
   for (const s of logicalSlots) {
     if (!s.active) {
       result.checks.replication_slots.status = 'fail'
-      fail('replication_slots', `slot ${s.slot_name} is inactive`)
+      fail('replication_slots', `slot ${redactId(s.slot_name)} is inactive`)
     }
   }
 
@@ -300,9 +302,18 @@ async function runDbChecks(client) {
     hours_since: r.last_run ? (now - new Date(r.last_run).getTime()) / 3600000 : null,
   }))
   const stale = tableAges.find((t) => t.dead_tup > 1000 && (t.hours_since == null || t.hours_since > VACUUM_WARN_HOURS))
-  result.checks.autovacuum = { status: stale ? 'warn' : 'pass', tables: tableAges }
+  // Redact table names in the public log: this query enumerates ALL public
+  // tables (it's what surfaced an ad-hoc backup table's existence). App-table
+  // names are already public via the repo's migrations, so the win is hiding
+  // any non-standard/ad-hoc table; hashing uniformly avoids one table standing
+  // out. Tuple counts stay (needed to judge vacuum health). Map a hash back to
+  // a name by re-running pg_stat_user_tables with privileged access.
+  result.checks.autovacuum = {
+    status: stale ? 'warn' : 'pass',
+    tables: tableAges.map((t) => ({ ...t, table: redactId(t.table) })),
+  }
   if (stale) {
-    warn('autovacuum', `${stale.table} has ${stale.dead_tup} dead tuples and last vacuum was ${stale.hours_since == null ? 'never' : Math.round(stale.hours_since) + 'h ago'}`)
+    warn('autovacuum', `${redactId(stale.table)} has ${stale.dead_tup} dead tuples and last vacuum was ${stale.hours_since == null ? 'never' : Math.round(stale.hours_since) + 'h ago'}`)
   }
 
   // RLS schema-drift regression check
