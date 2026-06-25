@@ -699,12 +699,16 @@ GRANT USAGE ON SCHEMA "public" TO "service_role";
 
 -- Core RLS support. NOT emitted by pg_dump for this squash: on the incrementally-built
 -- remote these were granted out-of-band and the squash never captured them. Declared here
--- so a from-migrations DB is self-contained. The blocks / workspaces / workspace_members /
+-- so a from-migrations rebuild (supabase db start / db reset, on the supabase/postgres
+-- image -- this baseline assumes Supabase-provisioned roles/extensions, not bare upstream
+-- postgres) is self-contained. The blocks / workspaces / workspace_members /
 -- workspace_invitations RLS policies call private.is_workspace_member / is_workspace_owner /
 -- is_workspace_writer inside their USING / WITH CHECK expressions, which are evaluated as the
--- querying role (authenticated). That role therefore needs USAGE on the private schema (the
--- privilege actually missing on a fresh apply) plus EXECUTE on the helpers; without the USAGE
--- grant, blocks RLS is broken on any rebuilt environment.
+-- querying role (authenticated). The privilege ACTUALLY missing on a fresh apply is USAGE on
+-- the private schema -- without it, blocks RLS is broken on any rebuilt environment. The three
+-- EXECUTE grants below are belt-and-suspenders: the helpers already carry PUBLIC's default
+-- EXECUTE, so they are redundant today, but they keep authenticated able to call the helpers
+-- if a future hardening pass ever does REVOKE EXECUTE ... FROM PUBLIC.
 GRANT USAGE ON SCHEMA "private" TO "authenticated";
 GRANT EXECUTE ON FUNCTION "private"."is_workspace_member"("p_workspace_id" "text", "p_user_id" "text") TO "authenticated";
 GRANT EXECUTE ON FUNCTION "private"."is_workspace_owner"("p_workspace_id" "text", "p_user_id" "text") TO "authenticated";
