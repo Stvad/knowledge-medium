@@ -7,8 +7,6 @@ import { buildAppHash } from '@/utils/routing.ts'
 const mocks = vi.hoisted(() => ({
   handleUserLinkClick: vi.fn(),
   signOut: vi.fn(),
-  // Pin lags the hash on purpose: the link must follow the hash (the reactive
-  // source of truth), not this imperative pin.
   repo: {activeWorkspaceId: 'workspace-1'},
   user: {id: 'user-1', name: 'Alice'} as {id: string; name?: string} | null,
 }))
@@ -26,8 +24,12 @@ vi.mock('@/utils/navigation.ts', () => ({
   useOpenBlock: () => mocks.handleUserLinkClick,
 }))
 
+// Mirror a real switch: the switcher flips `repo.activeWorkspaceId` (the pin —
+// the committed workspace the link resolves) AND assigns the hash. The
+// `hashchange` is what re-renders the item (the pin is non-reactive).
 const switchWorkspace = (workspaceId: string) => {
   act(() => {
+    mocks.repo.activeWorkspaceId = workspaceId
     window.location.hash = buildAppHash(workspaceId)
     window.dispatchEvent(new Event('hashchange'))
   })
@@ -35,6 +37,7 @@ const switchWorkspace = (workspaceId: string) => {
 
 describe('AccountHeaderItem', () => {
   beforeEach(() => {
+    mocks.repo.activeWorkspaceId = 'workspace-1'
     window.location.hash = buildAppHash('workspace-1')
     mocks.handleUserLinkClick.mockClear()
     mocks.user = {id: 'user-1', name: 'Alice'}

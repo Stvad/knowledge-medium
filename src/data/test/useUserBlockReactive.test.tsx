@@ -10,7 +10,6 @@ import { buildAppHash } from '@/utils/routing.ts'
 // hash) instead of staying pinned to the previous workspace.
 
 const mocks = vi.hoisted(() => ({
-  // Pin deliberately lags the hash — the link/sidebar must follow the hash.
   repo: {activeWorkspaceId: 'ws-1', instanceId: 'inst'},
   user: {id: 'user-1', name: 'Alice'},
 }))
@@ -39,10 +38,14 @@ function Probe() {
   return <span data-testid="user-block">{block.id}</span>
 }
 
-// `useUserBlock` suspends on the user-block promise, so each render/update is
-// wrapped in `await act` to flush the suspense resolution before asserting.
+// Mirror a real switch: the switcher flips `repo.activeWorkspaceId` (the pin —
+// the committed workspace `useUserBlock` resolves) AND assigns the hash. The
+// `hashchange` is what re-renders the hook (the pin is non-reactive); reading
+// the freshly-set pin is what makes it resolve the new workspace. `useUserBlock`
+// suspends on the user-block promise, so the update is wrapped in `await act`.
 const switchWorkspace = async (workspaceId: string) => {
   await act(async () => {
+    mocks.repo.activeWorkspaceId = workspaceId
     window.location.hash = buildAppHash(workspaceId)
     window.dispatchEvent(new Event('hashchange'))
   })
@@ -50,6 +53,7 @@ const switchWorkspace = async (workspaceId: string) => {
 
 describe('useUserBlock', () => {
   beforeEach(() => {
+    mocks.repo.activeWorkspaceId = 'ws-1'
     window.location.hash = buildAppHash('ws-1')
   })
   afterEach(() => {

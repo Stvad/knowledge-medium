@@ -5,20 +5,29 @@ import { useRepo } from '@/context/repo'
 import { parseAppHash } from '@/utils/routing'
 import type { Workspace, WorkspaceMembership, WorkspaceRole } from '@/types'
 
-/** The active workspace id, tracked reactively through the URL hash so a
- *  workspace switch (which only assigns the hash — no reload) re-renders
- *  subscribers. `repo.activeWorkspaceId` is an imperative UI pin that mutates
- *  WITHOUT notifying React, so a component reading it alone keeps showing the
- *  previous workspace until something else happens to re-render it. The hash is
- *  the reactive source of truth; the pin is only the fallback for an empty hash
- *  (remembered/default workspace still resolving). */
+/** The active workspace id, re-rendered reactively on a workspace switch.
+ *
+ *  Subscribes to the URL hash via `useHash` (a switch only assigns the hash —
+ *  no reload — and `repo.activeWorkspaceId` is an imperative pin that mutates
+ *  WITHOUT notifying React), so reading this re-renders subscribers when the
+ *  workspace changes.
+ *
+ *  The *value* prefers the pin: it's the workspace `App` actually resolved and
+ *  committed (always the accessible one). The hash is navigation intent that
+ *  can momentarily point at a workspace App fell back away from — a denied /
+ *  redirected deep link, whose URL App normalizes via `history.replaceState`
+ *  (which fires no `hashchange`, so a live `useHash` can lag). Following the
+ *  raw hash there would have the write-backed user-page hooks (`useUserBlock`)
+ *  touch a workspace the user can't access. On a switcher switch the pin is set
+ *  synchronously before the hash changes, so pin-first is identical there; the
+ *  hash is only the fallback before the pin is first set. */
 export const useActiveWorkspaceId = (): string | null => {
   const repo = useRepo()
   const [hash] = useHash()
-  return useMemo(() => {
-    const {workspaceId} = parseAppHash(hash)
-    return workspaceId ?? repo.activeWorkspaceId ?? null
-  }, [hash, repo.activeWorkspaceId])
+  return useMemo(
+    () => repo.activeWorkspaceId ?? parseAppHash(hash).workspaceId ?? null,
+    [hash, repo.activeWorkspaceId],
+  )
 }
 
 interface WorkspaceRowResult {

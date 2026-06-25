@@ -75,15 +75,17 @@ export function usePanelsForLayoutSession(layoutSessionId = getLayoutSessionId()
 export function useUserBlock(): Block {
   const repo = useRepo()
   const user = useUser()
-  // Resolve the workspace reactively (through the URL hash) rather than reading
-  // the imperative `repo.activeWorkspaceId` pin, so persistent surfaces that
-  // hold the user block — the left sidebar's shortcuts — re-resolve it on a
-  // workspace switch instead of staying pinned to the previous workspace's user
-  // page. The pin mutates without notifying React, so reading it alone left
-  // those surfaces stale after a switch.
+  // `useActiveWorkspaceId` re-renders this hook on a workspace switch (via its
+  // hash subscription) while resolving the *committed* active workspace (the
+  // pin) — so persistent surfaces that hold the user block (the left sidebar's
+  // shortcuts) follow a switch instead of staying pinned to the previous
+  // workspace, without ever resolving a not-yet-validated URL workspace (which
+  // would have getUserBlock write a user-page row into it). The pin alone is
+  // non-reactive, so reading it without the subscription left those surfaces
+  // stale after a switch.
   const workspaceId = useActiveWorkspaceId()
   if (!workspaceId) {
-    throw new Error('useUserBlock requires an active workspace; call repo.setActiveWorkspaceId() first')
+    throw new Error('useUserBlock requires an active workspace')
   }
 
   return use(getUserBlock(repo, workspaceId, user))
