@@ -12,8 +12,11 @@
  *  - appMountsFacet            → the mouse-cursor overlay
  *  - codeMirrorExtensionsFacet → remote editor carets
  *
- * SPIKE NOTE: defaults ON when a hosted Supabase is configured (it no-ops in
- * local-only mode). Before shipping on-by-default, see the security/privacy
+ * SPIKE NOTE: defaults OFF — opt in per workspace via Extensions settings.
+ * The channel is still PUBLIC, so enabling it globally must wait on Realtime
+ * Authorization (private channel + RLS on `realtime.messages`); until then an
+ * on-by-default public channel would let anyone with a workspace URL (ids
+ * appear in URL hashes) observe or forge presence. See the security/privacy
  * caveats in `presenceClient.ts` (public channel → private + RLS; e2ee
  * metadata leak).
  */
@@ -35,6 +38,9 @@ export const presencePlugin: AppExtension = systemToggle({
   name: 'Live presence',
   description:
     "Shows other people in the workspace — their selected blocks, mouse cursors, and editor carets — over Supabase Realtime.",
+  // Off by default: the channel is public for now, so this stays opt-in until
+  // it's private + RLS-gated (see the module header).
+  defaultEnabled: false,
 }).of([
   appEffectsFacet.of(presenceAppEffect, { source: SOURCE }),
   panelMountsFacet.of(

@@ -83,6 +83,9 @@ class PresenceClient {
     if (this.conn?.workspaceId === opts.workspaceId) return
     this.disconnect()
 
+    // Narrowed once here so the teardown closure doesn't need a non-null
+    // assertion on the module-level `supabase`.
+    const client = supabase
     const { workspaceId, user } = opts
     this.identity = {
       clientId: getClientId(),
@@ -95,10 +98,10 @@ class PresenceClient {
     // channel works without code change. Harmless on a public channel.
     const token = readPersistedSession()?.access_token
     if (token) {
-      try { void supabase.realtime.setAuth(token) } catch { /* best-effort */ }
+      try { void client.realtime.setAuth(token) } catch { /* best-effort */ }
     }
 
-    const channel = supabase.channel(`presence:${workspaceId}`, {
+    const channel = client.channel(`presence:${workspaceId}`, {
       config: { presence: { key: this.identity.clientId }, broadcast: { self: false } },
     })
 
@@ -130,7 +133,7 @@ class PresenceClient {
         this.cursorThrottled.cancel()
         this.trackThrottled.cancel()
         try { void channel.untrack() } catch { /* ignore */ }
-        try { void supabase!.removeChannel(channel) } catch { /* ignore */ }
+        try { void client.removeChannel(channel) } catch { /* ignore */ }
       },
     }
   }
@@ -179,7 +182,11 @@ class PresenceClient {
 
   private handlePointerMove(e: PointerEvent): void {
     const target = e.target as Element | null
-    const el = target?.closest?.('[data-block-id]') as HTMLElement | null
+    // Scope to the block SHELL (`.tm-block`) — `data-block-id` alone also
+    // appears on inline block-refs and property rows, which would anchor the
+    // cursor to the wrong rectangle (and the resolver, picking the first
+    // `data-block-id` match, could land on a different element entirely).
+    const el = target?.closest?.('.tm-block[data-block-id]') as HTMLElement | null
     if (!el) { this.broadcastCursor(null); return }
     const rect = el.getBoundingClientRect()
     if (rect.width === 0 || rect.height === 0) return

@@ -16,8 +16,10 @@ import type { RemoteCursor } from './types.js'
 
 const resolveAnchor = (cursor: RemoteCursor): HTMLElement | null => {
   if (!cursor.blockId) return null
+  // Match the publish side: only block shells (`.tm-block`), not the
+  // block-refs / property rows that also carry `data-block-id`.
   const matches = document.querySelectorAll<HTMLElement>(
-    `[data-block-id="${CSS.escape(cursor.blockId)}"]`,
+    `.tm-block[data-block-id="${CSS.escape(cursor.blockId)}"]`,
   )
   if (matches.length === 0) return null
   if (cursor.renderScopeId) {
