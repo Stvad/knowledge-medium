@@ -26,14 +26,10 @@
 -- The policies below call private.is_workspace_member / is_workspace_writer
 -- (SECURITY DEFINER, search_path=''). An RLS USING expression runs as the
 -- QUERYING role (authenticated), which therefore needs USAGE on `private` +
--- EXECUTE on the functions. The public `blocks` policies call the same
--- functions and work today, so `authenticated` already holds some grant — but
--- it is NOT in any migration (likely a bootstrap / PUBLIC grant), so granting
--- explicitly here keeps a from-migrations rebuild self-contained rather than
--- depending on that out-of-band grant. Idempotent: a no-op if already held.
-grant usage on schema private to authenticated;
-grant execute on function private.is_workspace_member(text, text) to authenticated;
-grant execute on function private.is_workspace_writer(text, text) to authenticated;
+-- EXECUTE on those helpers. The consolidated baseline migration now owns those
+-- grants (added in "fix(supabase): make consolidated baseline replayable on
+-- fresh PG17"), and this migration always runs after it — so they are
+-- intentionally NOT repeated here, keeping a single owner for the grant.
 
 -- ── the bucket (PRIVATE; never public — E2EE bytes must not be world-readable) ─
 insert into storage.buckets (id, name, public)
