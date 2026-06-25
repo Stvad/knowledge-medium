@@ -22,7 +22,8 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
+import { addBlockTypeToProperties, aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -504,6 +505,87 @@ describe('importRoam', () => {
       alias: personId,
       sourceField: ROAM_ISA_PROP,
     })
+  })
+
+  it('retains an existing property-derived backlink on re-import when its ref schema is absent', async () => {
+    // Regression for the schema-absence deletion class
+    // (docs/contracts/derived-data-add-only.md) — the same shape that wiped
+    // ~10k SRS `next-review-date` backlinks. A page already carries a
+    // property-derived backlink under a ref field whose schema is NOT loaded
+    // at import time (plugin toggled off / ?safeMode / a UserSchemasService
+    // bucket that hasn't republished). Re-importing that page through the
+    // merge path — which runs applyPromotedAttributes and rebuilds
+    // references — must NOT silently drop the backlink the projection can't
+    // re-derive. Before the fix, the property-derived ref was filtered out
+    // and replace-written away; reconcileDerived now retains it.
+    const targetId = 'retain-backlink-target'
+    // A ref field with no registered schema. It only lives on the
+    // pre-existing row, never in the imported dump, so schema reconciliation
+    // never registers it — it stays absent at applyPromotedAttributes time.
+    const absentRefField = 'plugin:relatesTo'
+    const pageId = 'retain-existing-page'
+
+    await env.repo.tx(async tx => {
+      // The block the property-derived backlink points at.
+      await tx.create({
+        id: targetId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Backlink target',
+      })
+      // The page that already owns the property-derived backlink under the
+      // absent-schema field.
+      await tx.create({
+        id: pageId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'Retain Target',
+        properties: addBlockTypeToProperties({
+          [aliasesProp.name]: aliasesProp.codec.encode(['Retain Target']),
+          [absentRefField]: targetId,
+        }, PAGE_TYPE),
+        references: [{id: targetId, alias: targetId, sourceField: absentRefField}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Precondition: the field's schema really is absent from the registry,
+    // so the projection contributes nothing for it.
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import a page that merges into the existing one (matching alias) and
+    // carries a promoted inline attribute, so applyPromotedAttributes runs
+    // and rebuilds the page's references.
+    await importRoam([
+      {
+        title: 'Retain Target',
+        uid: 'retainReimport',
+        children: [
+          {string: 'note:: a promoted value', uid: 'retainNote'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const page = await readBlock(pageId)
+    const refs = JSON.parse(page!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // The absent-schema property-derived backlink survives the re-import.
+    expect(refs).toContainEqual({
+      id: targetId,
+      alias: targetId,
+      sourceField: absentRefField,
+    })
+    // And the promotion actually ran (so the merge path was exercised, not
+    // skipped) — proving the retain happened on the rebuild, not by accident.
+    const props = JSON.parse(page!.properties_json) as Record<string, unknown>
+    expect(props['roam:note']).toBe('a promoted value')
   })
 
   it('creates permanent alias blocks for unmatched [[alias]] references', async () => {

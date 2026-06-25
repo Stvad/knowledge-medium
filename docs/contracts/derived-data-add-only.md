@@ -89,16 +89,14 @@ deletes. Consumers today:
   recompute is authoritative for content + present-schema refs, but
   `isRetainableAbsentRef` retains a prior ref whose schema is absent and whose
   value is unchanged.
-
-**Not yet routed — the importer.** `referencesWithProjectedProperties`
-(`src/plugins/roam-import/import.ts`) replace-writes property-derived refs: it
-keeps content refs but rebuilds the property set wholesale from
-`projectPropertyReferences`. It therefore inherits the *element-wise decode*
-facet (§1) but **not** retain-on-absence — an absent property schema at import
-time drops the prior property refs. Today that's masked because an absent SRS
-schema makes the import crash loudly rather than silently strip (audit `roam-1`,
-`docs/correctness-audit-2026-06-18.md`); routing it through `reconcileDerived`
-is a tracked follow-up.
+- **roam importer** (`referencesWithProjectedProperties`,
+  `src/plugins/roam-import/import.ts`) — keeps content refs and treats
+  `projectPropertyReferences` as authoritative for present-schema property refs,
+  but routes the rebuild through `reconcileDerived` with the *shared*
+  `isRetainableAbsentRef` (now exported from
+  `src/plugins/references/referenceProjection.ts`) so a prior property-derived
+  ref under an absent schema is retained rather than replace-written away. Both
+  the planner pass and the daily/merge `applyPromotedAttributes` path use it.
 
 ### Enforcement (tests)
 
@@ -107,11 +105,13 @@ is a tracked follow-up.
   well-formed siblings; a wrong-shape value yields `[]` and never throws —
   asserted against the three derive functions: codec `decodeRefListIds`,
   `projectPropertyReferences`, and `projectedRefsForField`. (The importer reuses
-  `projectPropertyReferences`, so it inherits this decode facet; its reconcile
-  is *not* pinned — see the not-yet-routed note above.)
+  `projectPropertyReferences`, so it inherits this decode facet.)
 - The **retain-on-absence** facet (§2) is pinned by `reconcileDerived`'s unit
-  tests (`src/data/api/derivedData.test.ts`) and the reprojection absence branch
-  (`latestRefProjectionSchema`, `src/data/internals/refProjection.test.ts`).
+  tests (`src/data/api/derivedData.test.ts`), the reprojection absence branch
+  (`latestRefProjectionSchema`, `src/data/internals/refProjection.test.ts`), and
+  — for the importer's reference rebuild — a re-import regression in
+  `src/plugins/roam-import/test/import.test.ts` ("retains an existing
+  property-derived backlink on re-import when its ref schema is absent").
 
 ### Not enforced here — undo/redo replay (#187)
 

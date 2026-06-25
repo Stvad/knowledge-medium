@@ -15,7 +15,9 @@
 import {
   ChangeScope,
   DeletedConflictError,
+  derivedRefKey,
   normalizeReferences,
+  reconcileDerived,
   type AnyPropertySchema,
   type BlockData,
   type BlockDataPatch,
@@ -58,7 +60,10 @@ import {
   type PreparedPage,
   type RoamImportPlan,
 } from './plan'
-import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
+import {
+  isRetainableAbsentRef,
+  projectPropertyReferences,
+} from '@/plugins/references/referenceProjection.js'
 import type { RoamExport } from './types'
 import { writeImportLog } from './report'
 import { collectTypeCandidates, type RoamTypeCandidate } from './typeCandidates'
@@ -333,9 +338,13 @@ export const importRoam = async (
     )
   }
   for (const block of allPlannedBlocks) {
+    // Planner site: no separate prior row, so after === before === block.
     block.references = referencesWithProjectedProperties(
       block.references,
       projectPropertyReferences(block, repo.propertySchemas),
+      block,
+      block,
+      repo.propertySchemas,
     )
   }
   for (const page of plan.pages) {
@@ -1212,13 +1221,41 @@ const ROAM_MEMO_SRS_CONFLICT_FIELDS = [
 const storedValuesEqual = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left) === JSON.stringify(right)
 
+/**
+ * Rebuild a block's `references` from freshly projected property refs while
+ * honouring the add-only / retain-on-source contract
+ * (docs/contracts/derived-data-add-only.md). Content refs (empty
+ * `sourceField`) are kept verbatim — the importer doesn't re-parse content
+ * here — and `propertyRefs` is authoritative for every property whose schema
+ * is PRESENT. A prior property-derived ref whose schema is ABSENT can't be
+ * re-derived, so `reconcileDerived` RETAINS it (via `isRetainableAbsentRef`)
+ * rather than dropping it: an absent ref-typed schema at import time
+ * (`?safeMode`, a toggled-off plugin, a not-yet-republished UserSchemasService
+ * bucket) must not silently delete a property-derived backlink — the per-block
+ * drip of the same class that wiped ~10k SRS `next-review-date` backlinks.
+ *
+ * `after` is the block's post-write properties (the basis `propertyRefs` was
+ * projected from); `before` is the pre-write state used to confirm an absent
+ * field's value didn't change in this write (the one case where a stale
+ * absent-schema ref is allowed to drop). At the planner site there is no
+ * separate prior row, so `after === before`.
+ */
 const referencesWithProjectedProperties = (
-  references: readonly BlockReference[] | undefined,
+  prior: readonly BlockReference[] | undefined,
   propertyRefs: readonly BlockReference[],
-): BlockReference[] => normalizeReferences([
-  ...(references ?? []).filter(ref => (ref.sourceField ?? '') === ''),
-  ...propertyRefs,
-])
+  after: Pick<BlockData, 'properties'>,
+  before: Pick<BlockData, 'properties'> | null,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): BlockReference[] => normalizeReferences(
+  reconcileDerived<BlockReference>({
+    prior: prior ?? [],
+    recomputed: [...propertyRefs],
+    keyOf: derivedRefKey,
+    retain: ref =>
+      (ref.sourceField ?? '') === ''
+      || isRetainableAbsentRef(ref, after, before, propertySchemas),
+  }),
+)
 
 const formatStoredForDiagnostic = (value: unknown): string =>
   Array.isArray(value) ? `[${value.length} items]` : JSON.stringify(value)
@@ -1432,6 +1469,9 @@ const applyPromotedAttributes = async (
   const references = referencesWithProjectedProperties(
     existing.references,
     projectPropertyReferences({...existing, properties: next}, propertySchemas),
+    {properties: next},
+    existing,
+    propertySchemas,
   )
   const referencesChanged = !storedValuesEqual(
     normalizeReferences(existing.references),
