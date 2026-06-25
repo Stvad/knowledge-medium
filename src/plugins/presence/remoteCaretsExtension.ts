@@ -96,9 +96,10 @@ const remoteCaretsField = StateField.define<DecorationSet>({
 
 const remoteCaretPlugin = (blockId: string) =>
   ViewPlugin.define(view => {
+    let destroyed = false
     let lastKey = ''
     const push = () => {
-      if (view.destroyed) return
+      if (destroyed) return
       const carets = presenceClient.caretsForBlock(blockId)
       const key = carets.map(c => `${c.clientId}:${c.start}:${c.end}:${c.color}`).join('|')
       if (key === lastKey) return
@@ -109,6 +110,7 @@ const remoteCaretPlugin = (blockId: string) =>
     const raf = requestAnimationFrame(push)
     return {
       destroy() {
+        destroyed = true
         unsubscribe()
         cancelAnimationFrame(raf)
       },
