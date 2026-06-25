@@ -9,84 +9,19 @@ runtime, so you can reshape it from inside. It runs in the browser as an
 installable PWA, is local-first (instant, offline-capable), and syncs across
 devices via PowerSync + Supabase.
 
----
+**What's different:** one universal `blocks` table for everything (pages, todos,
+flashcards, places, settings, renderer source — set apart only by multi-valued
+types + typed properties); the whole app is facet-based extensions you can author
+live in-browser (no build step); config, prefs, and UI state live *in the
+document* as blocks (so they sync and version with your notes); and a runtime
+bridge lets agents/scripts drive the live app from your terminal.
 
-## What makes it different
-
-- **One universal data model.** There is exactly one node type. A single
-  `blocks` table holds pages, daily notes, todos, flashcards, places, settings,
-  and renderer source — distinguished only by their (multi-valued) `types` and
-  typed properties. Nesting, ordering (via fractional indices), references, and
-  backlinks all work the same way for every kind of block.
-
-- **The whole app is extensions.** The default block renderer, the vim plugin,
-  daily notes, find-and-replace, maps — all of it ships as facet-based
-  extensions. You can author your own: write a TS/JSX module in a block typed
-  `extension`, enable it from Extensions settings, and it's compiled and loaded
-  live (Babel-in-the-browser) with error boundaries around it. No build step, no
-  redeploy.
-
-- **State lives in the document.** Rather than hiding configuration in
-  app-specific stores, Knowledge Medium stores UI state, user preferences,
-  keyboard bindings, and block behavior *as blocks* — so your setup syncs,
-  versions, and is inspectable like any other content. Credentials and secrets
-  are the deliberate exception and stay out of the document.
-
-- **Local-first, genuinely offline.** Reads and writes hit a local SQLite
-  mirror (`wa-sqlite` in IndexedDB) first, so the app stays fast and usable with
-  no network. PowerSync streams changes to and from hosted Postgres (Supabase)
-  in the background, converging your devices when connectivity returns.
-
-- **Typed properties and user-defined types.** Properties are typed key/value
-  pairs with codecs and change-scopes; types are multi-valued and can be
-  user-defined (a type is itself just a block). This is what lets a plain
-  outline grow domain structure — tasks, spaced-repetition cards, places — without
-  schema migrations.
-
-- **Scriptable from your terminal.** A first-class runtime bridge lets coding
-  agents and scripts run commands *inside the live app* — same `Repo`, same
-  workspace, same SQLite, same resolved extensions — to query, mutate, or drive
-  the workspace programmatically.
-
----
-
-## A tour of what's inside
-
-The fastest way to learn the app is the built-in **`[[Tutorial]]`** page, seeded
-into every fresh workspace (it links to a `[[Tutorial (no vim)]]` variant for
-mouse/arrow-key users). The highlights:
-
-- **Outlining.** Bullets are blocks; blocks nest. Fold, indent/outdent, drag,
-  zoom into any block (treat it as the root of the view), and move around with
-  vim keys or arrow keys.
-- **Pages, links & embeds.** `[[Wiki links]]` link to (or create) pages; a
-  block ref `((id))` points at one specific block anywhere; an embed `!((id))`
-  renders that block — and its children — inline.
-- **Backlinks.** Every reference is indexed, so each page shows who links to it,
-  with a grouped-references view that organizes backlinks by their surrounding
-  context.
-- **Side panels & multi-select.** Open blocks side by side, each with its own
-  focus and zoom; modifier-clicks route links into new panels or a sidebar
-  stack. Select multiple blocks and apply any block-level action at once.
-- **Search.** QuickFind matches page names first, then block content, with
-  full-text search (required words, `"exact phrases"`, `OR`, `-exclusions`) and a
-  workspace-wide find-and-replace.
-- **Daily notes.** A journal of date-titled pages is the default landing page,
-  with quick capture into today's note from anywhere.
-- **Properties & types.** Attach typed properties to any block; tag blocks with
-  built-in or user-defined types to give them behavior.
-- **Places & maps.** Real-world locations are first-class Place blocks (backed
-  by Google Places). Type `@` to drop a location, share one Place across many
-  notes, and tag any block `map` to render an inline map of every place in its
-  subtree.
-- **Tasks & spaced repetition.** Todos and SM-2.5 flashcards are just typed
-  blocks with scheduling in their properties — review cards land on the daily
-  note that's due.
-- **Roam import, themes, mobile.** Import an existing Roam graph, switch themes,
-  and use it as a touch-first PWA with a mobile keyboard toolbar and bottom nav.
-
-Everything above is an extension you can toggle, study, or replace — see the
-seeded **`[[extensions]]`** page for working examples and a renderer demo.
+**Features** (learn them in the built-in `[[Tutorial]]`): outlining with fold /
+zoom / drag and vim or arrow-key motion · `[[wiki links]]`, block refs `((id))`,
+inline embeds `!((id))`, and indexed backlinks · side panels + multi-select ·
+QuickFind and workspace-wide find-and-replace · daily notes with quick capture ·
+typed properties & user-defined types · first-class places & maps · todos and
+SM-2.5 spaced repetition · Roam import, themes, and a touch-first mobile UI.
 
 ---
 
