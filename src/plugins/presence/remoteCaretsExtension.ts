@@ -80,19 +80,27 @@ const buildDecorations = (carets: readonly RemoteCaret[], docLength: number): De
   return Decoration.set(ranges, true)
 }
 
-const remoteCaretsField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(decorations, tr) {
-    decorations = decorations.map(tr.changes)
+// Hold the RAW carets, not the built decorations. Decorations are recomputed
+// from them against the CURRENT doc on every doc change (below). Storing the
+// DecorationSet and only mapping it through changes would drift: a presence
+// update that lands before the block-content sync gets clamped to the stale
+// doc length, and the later sync transaction only maps that already-clamped
+// set — stranding the caret at the wrong offset until the next presence event.
+const remoteCaretsField = StateField.define<readonly RemoteCaret[]>({
+  create: () => [],
+  update(carets, tr) {
     for (const effect of tr.effects) {
-      if (effect.is(setRemoteCarets)) {
-        decorations = buildDecorations(effect.value, tr.state.doc.length)
-      }
+      if (effect.is(setRemoteCarets)) return effect.value
     }
-    return decorations
+    return carets
   },
-  provide: field => EditorView.decorations.from(field),
 })
+
+// Recompute on doc change OR carets change, always clamping to the live doc.
+const remoteCaretsDecorations = EditorView.decorations.compute(
+  ['doc', remoteCaretsField],
+  state => buildDecorations(state.field(remoteCaretsField), state.doc.length),
+)
 
 const remoteCaretPlugin = (blockId: string) =>
   ViewPlugin.define(view => {
@@ -119,5 +127,6 @@ const remoteCaretPlugin = (blockId: string) =>
 
 export const remoteCaretsCodeMirrorExtensions: CodeMirrorExtensionContribution = ({ block }) => [
   remoteCaretsField,
+  remoteCaretsDecorations,
   remoteCaretPlugin(block.id),
 ]
