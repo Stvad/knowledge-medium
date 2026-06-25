@@ -101,8 +101,12 @@ deletes. Consumers today:
   which also keeps prior content refs since it doesn't re-parse content), and
   the descendant `upsertImportedBlock` existing-row branch (which reconciles the
   dump-derived set against the live row — content there *is* re-derived, so only
-  absent-schema prior refs are retained). The tombstone-restore branch
-  deliberately resurrects with the planned data, not pre-deletion state.
+  absent-schema prior refs are retained). The tombstone-restore branch still
+  resurrects content/properties with the planned data (not pre-deletion state),
+  but reconciles `references` against the tombstone too — soft-delete preserves
+  `references_json`, so a bare restore would otherwise replace away an
+  absent-schema backlink; a field the planned data drops still takes its backlink
+  with it (no orphan).
 
 ### Enforcement (tests)
 

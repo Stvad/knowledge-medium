@@ -1450,10 +1450,30 @@ const upsertImportedBlock = async (
     }
   } catch (err) {
     if (!(err instanceof DeletedConflictError)) throw err
+    // Resurrect with the planned data (not the user's pre-deletion state) — but
+    // soft-delete leaves `references_json` intact on the tombstone, and a bare
+    // restore would replace it with the dump set, dropping an absent-schema
+    // property-derived backlink the planner can't re-derive. Reconcile against
+    // the tombstone so that backlink is retained (same add-only contract as the
+    // live-row branch), using the *planned* properties as the "after" basis: a
+    // field the planned data drops takes its backlink with it (no orphan), and
+    // an absent-schema field the planned data keeps unchanged keeps its backlink.
+    const tombstone = await tx.get(data.id)
+    const restoredReferences = tombstone
+      ? normalizeReferences(
+          reconcileDerived<BlockReference>({
+            prior: tombstone.references,
+            recomputed: references,
+            keyOf: derivedRefKey,
+            retain: ref =>
+              isRetainableAbsentRef(ref, {properties: data.properties ?? {}}, tombstone, propertySchemas),
+          }),
+        )
+      : references
     await tx.restore(data.id, {
       content: data.content,
       properties: data.properties ?? {},
-      references,
+      references: restoredReferences,
     })
     await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
   }

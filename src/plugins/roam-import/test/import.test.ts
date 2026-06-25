@@ -656,6 +656,68 @@ describe('importRoam', () => {
     expect(desc!.parent_id).toBe(roamBlockId(WORKSPACE, 'descRetainPage'))
   })
 
+  it('drops a removed content ref while retaining the absent-schema backlink on descendant re-import (no over-retain)', async () => {
+    // The negative half of the contract on the upsert path: the reconcile must
+    // RETAIN the absent-schema property-derived backlink but still DROP a
+    // content ref the re-imported content no longer contains. Proves the fix is
+    // a content-authoritative reconcile, not a blanket "keep everything".
+    const contentTargetId = 'over-retain-content-target'
+    const propTargetId = 'over-retain-prop-target'
+    const absentRefField = 'plugin:relatesTo'
+    const descId = roamBlockId(WORKSPACE, 'overRetainUid')
+
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: contentTargetId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a0', content: 'content target',
+      })
+      await tx.create({
+        id: propTargetId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a1', content: 'prop target',
+      })
+      // Existing descendant: one content ref (sourceField empty) + one
+      // absent-schema property-derived backlink.
+      await tx.create({
+        id: descId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a2',
+        content: 'see [[KeepAlias]]',
+        properties: {[absentRefField]: propTargetId},
+        references: [
+          {id: contentTargetId, alias: 'KeepAlias'},
+          {id: propTargetId, alias: propTargetId, sourceField: absentRefField},
+        ],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import the same block (same uid) but with content that no longer
+    // mentions the ref → the content ref must drop.
+    await importRoam([
+      {
+        title: 'Over Retain Page',
+        uid: 'overRetainPage',
+        children: [
+          {string: 'plain text now, no refs', uid: 'overRetainUid'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const desc = await readBlock(descId)
+    const refs = JSON.parse(desc!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // Absent-schema property backlink retained…
+    expect(refs).toContainEqual({id: propTargetId, alias: propTargetId, sourceField: absentRefField})
+    // …but the removed content ref is gone (content stays import-authoritative).
+    expect(refs.some(r => r.id === contentTargetId)).toBe(false)
+  })
+
   it('creates permanent alias blocks for unmatched [[alias]] references', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,
