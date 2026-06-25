@@ -1220,13 +1220,13 @@ export const aliasMatchesFuzzyQuery = defineQuery<
       key: kernelAliasesKey(workspaceId),
     })
     const sql = buildFuzzyAliasMatchesSql(prefixes.length)
-    // The prefixes are literal token substrings (first-3 of each query
-    // token, see `buildFilterPrefixes`), not wildcard patterns — escape
-    // their LIKE metacharacters so a typed `_`/`%` matches literally.
     // The two extra params back the exact/prefix ORDER BY so the LIMIT
     // retains the verbatim match; `alias_lower` is already lowercased.
-    // The exact `= ?` comparison takes the raw query; the prefix LIKE
-    // takes the escaped one.
+    // Prefixes are literal token substrings (first-3 of each query token,
+    // see `buildFilterPrefixes`), not wildcard patterns, so their LIKE
+    // metacharacters are escaped — as is the prefix-rank query — so a
+    // typed `_`/`%` matches literally. The exact `= ?` rank takes the
+    // raw query.
     const queryLower = query.toLowerCase()
     const escapedPrefixes = prefixes.map(escapeLikePattern)
     const params: (string | number)[] = [

@@ -575,6 +575,7 @@ describe('repo.query.aliasesInWorkspace', () => {
     await create({id: 'single-char', aliases: ['axb']}) // `_`-as-wildcard would match this
     await create({id: 'percent', aliases: ['50%done']})
     await create({id: 'plain', aliases: ['anything']}) // a bare `%` would match this if unescaped
+    await create({id: 'backslash', aliases: ['a\\b']}) // contains a literal backslash
 
     // `_` must match a literal underscore, not any single char.
     expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a_b'}).load())
@@ -582,6 +583,11 @@ describe('repo.query.aliasesInWorkspace', () => {
     // A bare `%` must match only aliases containing a literal percent, not every row.
     expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: '%'}).load())
       .toEqual(['50%done'])
+    // The escape char itself (`\`) must be escaped, so a backslash in the
+    // filter matches literally instead of corrupting the LIKE pattern
+    // (an unescaped `\b` would be read as escaped-`b` → pattern `%ab%`).
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a\\b'}).load())
+      .toEqual(['a\\b'])
   })
 
   it('orders exact aliases before prefix and substring matches', async () => {
