@@ -7,6 +7,7 @@ import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
 // in the agent-cli/server package imports bridge.ts, so React never
 // reaches the node bundle.
 import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDialog.tsx'
+import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePairingDialog.tsx'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
@@ -30,7 +31,63 @@ const getBridgeClientId = () => {
   return bridgeClientId
 }
 
-const storeBridgePairingFromHash = () => {
+// Mirror the bridge server's own loopback guard (server.ts
+// `loopbackOriginPattern`; agent-cli `isLocalBridgeUrl`). A
+// hash-supplied bridge URL is only ever honored when it targets the
+// local loopback interface — anything else is a page trying to redirect
+// the bridge at attacker-controlled infrastructure to steal the user's
+// agent tokens and run commands as them. We can't import the agent-cli
+// helper here (its module pulls in node:fs/os), so the check is inlined.
+const loopbackHostnames = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+export const isLoopbackBridgeUrl = (value: string): boolean => {
+  try {
+    const {protocol, hostname} = new URL(value)
+    return (
+      (protocol === 'http:' || protocol === 'https:')
+      && loopbackHostnames.has(hostname)
+    )
+  } catch {
+    return false
+  }
+}
+
+const persistPairing = (url: string | null, secret: string | null) => {
+  if (secret) window.localStorage.setItem(bridgeSecretStorageKey, secret)
+  if (url) window.localStorage.setItem(bridgeUrlStorageKey, url)
+  // Wake the (already running) bridge effect so it re-registers against
+  // the freshly approved endpoint/secret. The loop reads the URL/secret
+  // live, so the next iteration picks them up.
+  // eslint-disable-next-line no-restricted-syntax -- genuine broadcast: wakes the running bridge poll loop after the user approves a pairing
+  window.dispatchEvent(new CustomEvent(agentRuntimeBridgeRestartEvent))
+}
+
+const confirmAndStorePairing = async (
+  url: string | null,
+  secret: string | null,
+  openTokensDialog: boolean,
+) => {
+  // HARD gate: a pairing that arrived over a link is never written to
+  // localStorage (and so never used to POST tokens) until the user
+  // explicitly approves it here.
+  const confirmed = await openDialog<boolean, BridgePairingDialogProps>(
+    BridgePairingDialog,
+    {url: url ?? bridgeUrl(), hasSecret: Boolean(secret)},
+  )
+  if (!confirmed) return
+
+  persistPairing(url, secret)
+
+  if (openTokensDialog) {
+    void openDialog<void, AgentTokensDialogProps>(AgentTokensDialog, {mode: 'pair-cli'})
+  }
+}
+
+// Reads (and clears) any pairing params smuggled in the page hash.
+// Loopback-validates and then gates them behind an explicit user
+// confirmation before anything is persisted; non-loopback URLs are
+// refused outright. Runs only from inside the bridge effect (startup +
+// hashchange), never from the read paths below. Exported for tests.
+export const processBridgePairingFromHash = () => {
   const rawHash = window.location.hash.startsWith('#')
     ? window.location.hash.slice(1)
     : window.location.hash
@@ -39,14 +96,15 @@ const storeBridgePairingFromHash = () => {
   const queryIndex = rawHash.indexOf('?')
   const paramSource = queryIndex >= 0 ? rawHash.slice(queryIndex + 1) : rawHash
   const params = new URLSearchParams(paramSource)
-  const secret = params.get('agent-runtime-secret')?.trim()
-  const url = params.get('agent-runtime-url')?.trim()
+  const secret = params.get('agent-runtime-secret')?.trim() || null
+  const rawUrl = params.get('agent-runtime-url')?.trim() || null
   const openTokensDialog = params.get('agent-runtime-open-tokens') === '1'
-  if (!secret && !url && !openTokensDialog) return
+  if (!secret && !rawUrl && !openTokensDialog) return
 
-  if (secret) window.localStorage.setItem(bridgeSecretStorageKey, secret)
-  if (url) window.localStorage.setItem(bridgeUrlStorageKey, url.replace(/\/+$/, ''))
-
+  // Strip the credential-bearing params from the URL immediately —
+  // before any async confirmation — so the secret can't linger in the
+  // address bar, history, or referrer even if the pairing is declined
+  // or refused.
   params.delete('agent-runtime-secret')
   params.delete('agent-runtime-url')
   params.delete('agent-runtime-open-tokens')
@@ -63,6 +121,26 @@ const storeBridgePairingFromHash = () => {
     `${window.location.pathname}${window.location.search}${nextHash}`,
   )
 
+  const candidateUrl = rawUrl ? rawUrl.replace(/\/+$/, '') : null
+  if (candidateUrl && !isLoopbackBridgeUrl(candidateUrl)) {
+    // Attempted redirection to a non-loopback endpoint. Refuse the whole
+    // pairing — never store it, never prompt the user to approve an
+    // attacker-controlled URL, and drop any secret that rode along.
+    console.warn(
+      'Agent runtime: ignoring pairing link with a non-loopback bridge URL.',
+    )
+    return
+  }
+
+  if (secret || candidateUrl) {
+    // Defer so we never open a dialog synchronously during effect setup
+    // or a hashchange handler.
+    window.setTimeout(() => {
+      void confirmAndStorePairing(candidateUrl, secret, openTokensDialog)
+    }, 0)
+    return
+  }
+
   if (openTokensDialog) {
     window.setTimeout(() => {
       void openDialog<void, AgentTokensDialogProps>(AgentTokensDialog, {mode: 'pair-cli'})
@@ -70,21 +148,21 @@ const storeBridgePairingFromHash = () => {
   }
 }
 
-const getStoredBridgeSecret = () => {
-  storeBridgePairingFromHash()
-  return window.localStorage.getItem(bridgeSecretStorageKey)?.trim()
-    || import.meta.env.VITE_AGENT_RUNTIME_BRIDGE_SECRET?.trim()
-    || ''
-}
+// Pure reads — no hash side effects. Hash-supplied pairings are handled
+// exclusively by `processBridgePairingFromHash` (gated by confirmation),
+// so these only ever return a value the user already approved, a
+// build-time env override, or the loopback default.
+const getStoredBridgeSecret = () =>
+  window.localStorage.getItem(bridgeSecretStorageKey)?.trim()
+  || import.meta.env.VITE_AGENT_RUNTIME_BRIDGE_SECRET?.trim()
+  || ''
 
-const bridgeUrl = () => {
-  storeBridgePairingFromHash()
-  return (
+const bridgeUrl = () =>
+  (
     window.localStorage.getItem(bridgeUrlStorageKey)?.trim()
     || import.meta.env.VITE_AGENT_RUNTIME_URL?.trim()
     || defaultBridgeUrl
   ).replace(/\/+$/, '')
-}
 
 const bridgeHeaders = () => {
   const secret = getStoredBridgeSecret()
@@ -122,8 +200,17 @@ export const startAgentRuntimeBridge = (
   options: AgentRuntimeBridgeOptions,
 ): AppEffectCleanup => {
   const abortController = new AbortController()
-  const baseUrl = bridgeUrl()
   const clientId = getBridgeClientId()
+  // NB: the bridge URL is read live each iteration (see the `poll` loop)
+  // rather than captured once. A link-supplied pairing only takes effect
+  // after the user confirms it, which can land after the loop has already
+  // started — so the loop must re-read the approved endpoint, not a stale
+  // snapshot.
+
+  // Process any pairing params already present in the hash at startup.
+  // Gated by user confirmation + a loopback check; nothing is persisted
+  // or used here directly.
+  processBridgePairingFromHash()
   let retryMs = retryBaseMs
   let attempts = 0
   let wakeResolve: (() => void) | null = null
@@ -155,7 +242,7 @@ export const startAgentRuntimeBridge = (
     }
   }
 
-  const register = () => {
+  const register = (baseUrl = bridgeUrl()) => {
     const {repo, safeMode} = options
     const userId = repo.user.id
     const workspaceId = repo.activeWorkspaceId
@@ -182,7 +269,11 @@ export const startAgentRuntimeBridge = (
     }, abortController.signal)
   }
 
-  const reportResult = async (commandId: string, payload: unknown) => {
+  const reportResult = async (
+    commandId: string,
+    payload: unknown,
+    baseUrl = bridgeUrl(),
+  ) => {
     await postJson(
       `${baseUrl}/runtime/commands/${commandId}/result`,
       payload,
@@ -210,7 +301,7 @@ export const startAgentRuntimeBridge = (
   }
 
   const handleHashChanged = () => {
-    storeBridgePairingFromHash()
+    processBridgePairingFromHash()
     wakeBridgeLoop(true)
   }
 
@@ -223,9 +314,12 @@ export const startAgentRuntimeBridge = (
 
   const poll = async () => {
     while (!abortController.signal.aborted) {
+      // Read the endpoint live each iteration so a pairing the user
+      // approves mid-flight (which wakes this loop) is picked up.
+      const baseUrl = bridgeUrl()
       try {
         if (tokensDirty) tokensDirty = false
-        await register()
+        await register(baseUrl)
 
         if (bridgeUnavailableLogged) {
           console.info(`Agent runtime bridge reconnected at ${baseUrl}.`)
@@ -265,7 +359,7 @@ export const startAgentRuntimeBridge = (
               error: serializeError(
                 new Error(`Invalid command body: ${parsed.error.issues.map(i => i.message).join('; ')}`),
               ),
-            })
+            }, baseUrl)
           }
           continue
         }
@@ -276,12 +370,12 @@ export const startAgentRuntimeBridge = (
           await reportResult(command.commandId!, {
             ok: true,
             value: serializeValue(value),
-          })
+          }, baseUrl)
         } catch (error) {
           await reportResult(command.commandId!, {
             ok: false,
             error: serializeError(error),
-          })
+          }, baseUrl)
         }
       } catch {
         if (abortController.signal.aborted) return
