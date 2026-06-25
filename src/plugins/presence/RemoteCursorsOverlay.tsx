@@ -26,6 +26,10 @@ const resolveAnchor = (cursor: RemoteCursor): HTMLElement | null => {
     for (const el of matches) {
       if (el.dataset.renderScopeId === cursor.renderScopeId) return el
     }
+    // Scoped cursor but this client has no copy in that render scope (the
+    // peer is in an embed / backlink / other pane we don't show). Don't fall
+    // back to an unrelated copy of the same block — hide it.
+    return null
   }
   return matches[0]
 }

@@ -208,7 +208,9 @@ class PresenceClient {
   private onRemoteCursor(payload: RemoteCursor | undefined): void {
     if (!payload || payload.clientId === this.identity.clientId) return
     if (payload.blockId == null) this.cursors.delete(payload.clientId)
-    else this.cursors.set(payload.clientId, payload)
+    // Re-derive colour locally (see syncFromChannel) — the wire value is
+    // untrusted and reaches inline styles.
+    else this.cursors.set(payload.clientId, { ...payload, color: colorForUser(payload.userId) })
     this.rebuildCursors()
     this.cursorSubs.notify()
   }
@@ -222,7 +224,10 @@ class PresenceClient {
     for (const [key, entries] of Object.entries(state)) {
       if (key === this.identity.clientId) continue
       const entry = entries[0]
-      if (entry) next.set(key, entry)
+      // Never trust the wire `color`: it flows into `cssText` (caret) and
+      // inline styles, so a crafted value could inject CSS. Re-derive it
+      // locally from `userId` (only ever a hash seed → always a valid hsl()).
+      if (entry) next.set(key, { ...entry, color: colorForUser(entry.userId) })
     }
     this.remote = next
     // A peer that left can never send a "cursor off" broadcast, so prune
