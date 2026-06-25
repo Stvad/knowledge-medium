@@ -31,27 +31,53 @@
 -- fresh PG17"), and this migration always runs after it — so they are
 -- intentionally NOT repeated here, keeping a single owner for the grant.
 
--- ── the bucket (PRIVATE; never public — E2EE bytes must not be world-readable) ─
-insert into storage.buckets (id, name, public)
-values ('attachments', 'attachments', false)
-on conflict (id) do nothing;
+-- ── why this migration is guarded ───────────────────────────────────────────
+-- storage.buckets / storage.objects are created by the Storage SERVICE, not by
+-- the database image. On the hosted project (and any `db push`) they already
+-- exist, so this provisions the bucket + policies. On a local `supabase start`
+-- the Storage container boots AFTER user migrations run, so at apply time the
+-- `storage` SCHEMA exists but its TABLES do not — referencing them unguarded
+-- fails with `relation "storage.buckets" does not exist` and aborts the whole
+-- bring-up. We guard on the table's presence and no-op when it is absent, so
+-- `supabase start` succeeds on every stack while the bucket + policies still
+-- apply on `db push`. (For a local bucket declare it in config.toml; local RLS
+-- testing applies these same policies once Storage is up.)
+--
+-- CREATE POLICY runs through EXECUTE (dynamic SQL) so it is parsed only at run
+-- time, inside the guard. The bucket insert + policy bodies are otherwise
+-- unchanged from the unguarded version (which `db push` already proved `postgres`
+-- may create on storage.objects); no DROP POLICY is added — a migration applies
+-- once in a transaction, and adding a DROP would need ownership `postgres` lacks.
+do $$
+begin
+  if to_regclass('storage.buckets') is null then
+    raise notice
+      'attachments: storage schema not initialised yet — skipping bucket + policies (applies on db push / once Storage is up)';
+    return;
+  end if;
 
--- ── RLS: read by workspace member ───────────────────────────────────────────
-create policy "attachments read by workspace member"
-on storage.objects for select to authenticated
-using (
-  bucket_id = 'attachments'
-  and private.is_workspace_member(
-        (storage.foldername(name))[1],   -- <workspace_id> (path's first segment)
-        (auth.uid())::text)
-);
+  -- the bucket (PRIVATE; never public — E2EE bytes must not be world-readable)
+  insert into storage.buckets (id, name, public)
+  values ('attachments', 'attachments', false)
+  on conflict (id) do nothing;
 
--- ── RLS: delete by workspace writer (no insert/update — Edge Function only) ──
-create policy "attachments delete by workspace writer"
-on storage.objects for delete to authenticated
-using (
-  bucket_id = 'attachments'
-  and private.is_workspace_writer(
-        (storage.foldername(name))[1],   -- <workspace_id>
-        (auth.uid())::text)
-);
+  -- RLS: read by workspace member. Path's first segment = <workspace_id>.
+  execute $pol$
+    create policy "attachments read by workspace member"
+    on storage.objects for select to authenticated
+    using (
+      bucket_id = 'attachments'
+      and private.is_workspace_member((storage.foldername(name))[1], (auth.uid())::text)
+    )
+  $pol$;
+
+  -- RLS: delete by workspace writer (no insert/update — Edge Function only).
+  execute $pol$
+    create policy "attachments delete by workspace writer"
+    on storage.objects for delete to authenticated
+    using (
+      bucket_id = 'attachments'
+      and private.is_workspace_writer((storage.foldername(name))[1], (auth.uid())::text)
+    )
+  $pol$;
+end $$;
