@@ -98,6 +98,34 @@ export const armUploadDrain = (userId: string): void => {
   }).catch((err) => console.warn('[assetUpload] drain failed', err))
 }
 
+/**
+ * "Did this asset block commit and sync?" — the reconciler's reap-vs-promote
+ * pivot, and the load-bearing guard against reaping a real block's only bytes.
+ *
+ * A block absent from the materialized `blocks` table is NOT proof it never
+ * committed. The reconciler runs after PowerSync's `hasSynced` (initial DOWNLOAD
+ * settled), but the Layout-B observer materializes `blocks_synced → blocks`
+ * asynchronously (throttled, off `hasSynced`), and several committed-and-synced
+ * states sit in `blocks_synced` UNmaterialized at that moment: a locked-e2ee
+ * workspace (no WK), undecryptable/quarantined ciphertext, a skip-stale row, or
+ * just the observer lagging the download. `repo.load` (which reads only `blocks`)
+ * reads all of these as absent — so reaping on that signal alone would delete the
+ * only un-uploaded byte copy of a block the server already has. Treat presence in
+ * EITHER table as committed.
+ *
+ * (`repo.load` filters soft-deletes; the `blocks_synced` fallback does not — an
+ * undone-but-synced block still "committed", and it's the drain's soft-delete
+ * handling, not the reaper, that decides whether to upload it.)
+ */
+export const isBlockCommitted = async (repo: Repo, id: string): Promise<boolean> => {
+  if ((await repo.load(id)) != null) return true
+  const synced = await repo.db.getOptional<{ id: string }>(
+    `SELECT id FROM blocks_synced WHERE id = ? LIMIT 1`,
+    [id],
+  )
+  return synced != null
+}
+
 /** Boot recovery: promote `staged` records whose block committed, reap orphans
  *  (under the MINT lock so it can't reap an in-flight capture), then drain. MUST
  *  be called only AFTER PowerSync reports initial sync settled (so an absent block
@@ -108,12 +136,14 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
     reconcileUploads(userId, {
       store: getByteUploadStore(),
       byteStore: getByteStore(),
-      isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
+      // Present == committed in `blocks` OR still-unmaterialized in `blocks_synced`
+      // (locked e2ee / quarantined / skip-stale / observer-lag) — never reap those.
+      isBlockPresent: (_ws, id) => isBlockCommitted(repo, id),
       // Locked e2ee withholds committed blocks from `blocks`, so an absent block
       // there is only conclusively-orphan when the workspace IS materializable.
       isWorkspaceMaterializable: async (ws) => (await getMaterializability(ws)) !== 'defer',
-      // Any live-or-soft-deleted block in the workspace still carrying the hash
-      // (dedup sibling / undone-not-redone paste) keeps the shared bytes alive.
+      // A still-existing (live or soft-deleted) carrier of the hash — typically
+      // the asset block itself after an undone-not-redone paste — keeps the bytes.
       hashHasCarrier: async (ws, contentHash) => {
         const row = await repo.db.getOptional<{ x: number }>(
           `SELECT 1 AS x FROM blocks WHERE workspace_id = ? AND json_extract(properties_json, ?) = ? LIMIT 1`,

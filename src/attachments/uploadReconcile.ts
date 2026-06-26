@@ -18,12 +18,14 @@
  *     record can't drain while locked anyway, so we leave it `staged` for a later
  *     boot/unlock to promote.
  *   - block ABSENT (workspace materializable), record from an OLDER boot → REAP:
- *     delete the record, and its OPFS bytes too UNLESS another block still carries
- *     the same content hash. The block tx never committed (or was undone before
- *     sync), so its queue record is an orphan — but under dedup a sibling embed
- *     may be the live (or soft-deleted) carrier of the shared content, so the byte
- *     delete is content-refcount-gated exactly like §16 GC / §8 eviction: drop the
- *     record always, keep the bytes whenever any block still references the hash.
+ *     delete the record, and its OPFS bytes too UNLESS a block still carries the
+ *     same content hash. The block tx never committed (or was undone before sync),
+ *     so its queue record is an orphan — but the asset block may still exist
+ *     SOFT-DELETED (an undone-but-not-redone paste, absent from the `deleted = 0`
+ *     view yet still carrying the hash), whose bytes a redo must resolve. So the
+ *     byte delete is content-refcount-gated exactly like §16 GC / §8 eviction:
+ *     drop the record always, keep the bytes whenever any block still references
+ *     the hash.
  *   - block ABSENT (workspace materializable), record from the CURRENT boot → KEEP.
  *     This is an in-flight capture in some tab of this same boot whose tx hasn't
  *     committed yet; the `generation` stamp (set at boot, monotonic per page load)
@@ -52,9 +54,9 @@ export interface UploadReconcileDeps {
    *  NOT reap (that would destroy the only copy of its un-uploaded bytes). */
   readonly isWorkspaceMaterializable: (workspaceId: string) => Promise<boolean>
   /** Does any live-or-soft-deleted block in the workspace still carry this content
-   *  hash? Gates the byte delete exactly like §16 GC / §8 eviction: under dedup a
-   *  sibling embed may be the carrier, so we drop the orphan record but KEEP the
-   *  bytes whenever a carrier remains (so undo→redo / the sibling still resolves). */
+   *  hash? Gates the byte delete exactly like §16 GC / §8 eviction: the asset block
+   *  may survive soft-deleted (an undone paste), so we drop the orphan record but
+   *  KEEP the bytes whenever a carrier remains (so a redo still resolves them). */
   readonly hashHasCarrier: (workspaceId: string, contentHash: string) => Promise<boolean>
   /** This boot's generation stamp. A `staged` record with a strictly smaller
    *  generation is from a dead session (reapable); an equal one is in-flight. */
