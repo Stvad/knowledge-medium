@@ -122,6 +122,17 @@ const resolverForUser = (userId: string): SyncResolver => {
   return resolver
 }
 
+/** The active user id (whose per-user PowerSync DB is mounted), or null when
+ *  signed out. The asset byte path (§7.3) scopes its OPFS store + resolver to
+ *  this — re-read at call time so an account switch is reflected. */
+export const getActiveUserId = (): string | null => activeUserId
+
+/** The active user's §6 sync resolver (materializability / WK / K_id), or null
+ *  when signed out. The in-thread asset resolver delegates its decode + content-
+ *  key decisions to it, so they share the one §6 policy source. */
+export const getActiveSyncResolver = (): SyncResolver | null =>
+  activeUserId ? resolverForUser(activeUserId) : null
+
 /** Observer deps for the Repo's `syncObserverDeps` parameter, drawn from
  *  the same per-user resolver the upload connector uses — so download
  *  (decrypt/copy/defer) and upload (encrypt) share one §6 policy source. */
