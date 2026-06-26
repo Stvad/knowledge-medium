@@ -15,6 +15,7 @@ import { v4 as uuidv4 } from 'uuid'
 import {
   extensionDescriptionProp,
   extensionNameProp,
+  isCollapsedProp,
 } from '@/data/properties'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { exampleExtensions } from '@/extensions/exampleExtensions.js'
@@ -141,6 +142,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'This is a malleable thought medium. Every line below is a **block** you can fold, link, drag around, and extend — including this tutorial itself.',
       'Bullets are blocks. Bullets nest. Everything else builds on that.',
       "Don't just read — try the keys/clicks on each bullet as you go. Edit anything; this tutorial is just blocks in your workspace.",
+      'The first few sections cover the essentials; the deeper ones below start **folded** to keep this scannable — expand any that interest you (that fold/unfold is itself a core gesture you\'ll use everywhere).',
     ]),
 
     sect('Try the basics', [
@@ -175,7 +177,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       `Quick capture into a side panel: ${sharedKeys.appendToday} appends a new block to today's daily note in a side panel without taking you away from where you are.`,
     ]),
 
-    sect('Multi-select', [
+    advancedSect('Multi-select', [
       `${cap(km.startSelect)}.`,
       'Then `Tab`, fold, `Delete`, copy, paste, move — every block-level action applies to the whole selection.',
       'Press `Esc` to clear the selection.',
@@ -216,7 +218,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'See it live: open [[extensions]] and scroll to its **Backlinks** — this tutorial links there from several bullets, so they all show up listed under that page.',
     ]),
 
-    sect('Search', [
+    advancedSect('Search', [
       `QuickFind (${sharedKeys.quickFind}) searches page aliases first, then block content. Press Enter to open the selected result; if the name is missing, QuickFind can create a new page for it.`,
       'Plain words are all required but can appear anywhere: `project notes` finds blocks containing both `project` and `notes`, even if the order is different.',
       'Wrap text in quotes for an exact phrase: `"project notes"` only matches that contiguous text.',
@@ -226,14 +228,15 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       `For a dedicated workspace-wide text sweep, open Find and replace: ${sharedKeys.findReplace}.`,
     ]),
 
-    sect('Properties & types', [
+    advancedSect('Properties & types', [
       `Properties are typed key/value pairs attached to any block. To open the properties panel on a focused block: ${km.properties}.`,
       'Try giving me a property — e.g. `priority: high`. It will appear under my content.',
       "Types attach behavior to a block via the special `types` property. `types = ['page']` makes a block a page (parent-less, alias-resolvable). `types = ['extension']` makes it an extension — see below.",
       'Aliases (a list property on a page) let you reach the page from multiple names — including ones with spaces or different casing. Wiki links resolve through aliases.',
+      'Every property you define is catalogued on the [[Properties]] page, and every type on [[Types]] — open either to see (and edit) what exists in this workspace.',
     ]),
 
-    sect('Typed blocks — behaviour from a tag', [
+    advancedSect('Typed blocks — behaviour from a tag', [
       'Beyond identity, a type can attach *behaviour* to a block. Add the type via the `types` property (see above) or a block\'s quick-actions menu. A few that ship by default:',
       "**Todo** — type `todo` adds a checkbox to the block; click it to toggle done (done items strike through). Great for inline task lists anywhere in your outline.",
       "**Video** — paste a video URL (YouTube, Vimeo, and more) as a block's content and it renders an inline player — no type needed. Switch the player to its notes view to jot notes beside the video; `1:23`-style timestamps you type become clickable seeks.",
@@ -247,36 +250,38 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       },
     ]),
 
-    sect('Places & maps', [
+    advancedSect('Places & maps', [
       'Real-world locations are first-class. Every place — a Google POI, a friend\'s neighborhood, a coordinate pin on a hike — becomes a typed **Place** block carrying `place:lat`, `place:lng`, `place:address`, and `place:googlePlaceId`.',
       'Type `@` at the start of a block or after whitespace to open the **place picker**. It searches your existing Places first, then offers Google Places matches; picking either inserts `[[Place Name]]` as a wikilink and creates the Place page if it didn\'t exist yet.',
       '`@` with no query (or `@here`) surfaces a **Use current location** option — pulls nearby POIs from browser geolocation, plus "Drop pin here" and "Create named location…" fallbacks for ad-hoc spots.',
       `Give any block a **location property**: open properties (${km.properties}) and add a \`location\` field — its value is a ref to a Place page. Many notes can share one Place (the coords live in exactly one block, so editing the Place updates every reference).`,
-      'After your first place is created, a `Locations` page appears at the workspace root holding every Place. Open it to see a **map of every Place** in your workspace; click a marker for an info card with name/address and a jump-to link.',
+      'After your first place is created, a [[Locations]] page appears at the workspace root holding every Place. Open it to see a **map of every Place** in your workspace; click a marker for an info card with name/address and a jump-to link.',
       'Make any block its own map: add `map` to its `types`. The block then renders an inline map above its children showing every Place reachable in its subtree — both descendants with a `location` prop AND descendants that body-wikilink to a `[[Place]]`. A trip page tagged `map` becomes a map of the trip; a project page tagged `map` becomes a map of the project.',
       'Each Place page itself renders with a mini-map of just that one pin, so a Place behaves like a "location card" with the coordinates always visible.',
     ]),
 
-    sect('Daily notes', [
+    advancedSect('Daily notes', [
       `Open today's daily note: ${sharedKeys.today}. This is also the default landing page on a fresh open.`,
       `Step through daily notes: ${sharedKeys.prevNextDay} (previous / next).`,
+      'Every daily note is filed under the [[Journal]] page — open it for a reverse-chronological list of them all.',
       ...(variant === 'vim'
         ? ['Scrub a date in place: focus a dated block and **hold `s`**. While held, `k` / `↑` move the date +1 day and `j` / `↓` −1 day; `l` / `→` +7 days and `h` / `←` −7 days. Release `s` to commit, `Esc` to cancel.']
         : []),
     ]),
 
-    sect('Undo, redo, copy, paste', [
+    advancedSect('Undo, redo, copy, paste', [
       `Undo: ${km.undo}. Redo: ${km.redo}.`,
       `Copy a block ref / embed: ${km.copyRef}. (See "Pages & links" above for what those are.)`,
       `Paste blocks: ${km.paste}.`,
     ]),
 
-    sect('Preferences & toggles', [
+    advancedSect('Preferences, themes & extensions', [
       `Open preferences: run **Open preferences** from the command palette (${sharedKeys.commandPalette}) — it has no default shortcut.`,
+      'Change the look: run **Cycle through themes** from the command palette to step through eight built-in colour schemes — light and dark variants of Sunset, Neutral, Indigo, and Solarized. Extensions can register their own themes too.',
       "Run **Manage extensions** from the command palette to open the extensions tree — every extension can be toggled on or off there, and the toggle syncs to your other devices. Vim mode itself is an extension (`system:vim-normal-mode`); it's off by default. Tick it to get vim normal-mode keys (and switch this tutorial to the vim variant); untick it for the default click-to-edit experience.",
     ]),
 
-    sect('On mobile', [
+    advancedSect('On mobile', [
       'On a phone-sized screen the app swaps in touch affordances:',
       'A **bottom navigation bar** gives one-tap access to the sidebar, a new block, append-to-today, today\'s daily note, search, the command palette, and undo.',
       'While editing, a **keyboard toolbar** floats above the on-screen keyboard with indent / outdent, move up / down, `[[` page-reference and `((` block-reference inserts, undo / redo, and a Done button to dismiss the keyboard.',
@@ -284,19 +289,19 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Swipe a block to the right to cycle its todo / done state.',
     ]),
 
-    sect('Workspaces & encryption', [
+    advancedSect('Workspaces & encryption', [
       'A workspace is an independent block tree. Create or switch workspaces from the workspace switcher; you start as the owner and can invite others from workspace **Settings**.',
       'New workspaces can be **end-to-end encrypted** — tick "End-to-end encrypted" when creating one. Block content and properties are then encrypted on your device before syncing; the server only ever stores ciphertext.',
       'You hold the only key. On creation the app shows the **workspace key once** and makes you save it (a password manager is ideal) and retype its last characters to confirm. There is **no recovery** — lose the key and the data becomes permanently unreadable. On a new device, paste the key to unlock.',
       'To collaborate on an encrypted workspace, invite the person via Settings, then send them the key yourself over a channel you trust — the app never transmits it.',
     ]),
 
-    sect('Extensions', [
+    advancedSect('Extensions', [
       "**Everything** in this app — the renderer, the vim plugin, daily notes — is an extension. You can author your own; the host loads them out of `types = ['extension']` blocks.",
       'See [[extensions]] for explanatory bullets, a set of working example extensions, and a renderer demo to enable and play with.',
     ]),
 
-    sect('Agent runtime — drive this workspace from your terminal', [
+    advancedSect('Agent runtime — drive this workspace from your terminal', [
       'The app exposes a runtime bridge for coding agents and scripts. The browser tab runs a local relay; a CLI in your terminal submits commands that execute **inside the live app runtime** — same `Repo`, same workspace, same PowerSync SQLite, same resolved facets.',
       'Pairing (one-time per browser profile + app origin):',
       {
@@ -336,10 +341,21 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 const sect = (
   title: string,
   children: ReadonlyArray<string | TutorialNode>,
+  opts: { collapsed?: boolean } = {},
 ): TutorialNode => ({
   content: title,
+  // Advanced/optional sections seed collapsed so the page opens as a
+  // scannable outline of essentials — expanding them IS folding in action.
+  ...(opts.collapsed ? { properties: { [isCollapsedProp.name]: true } } : {}),
   children: children.map(c => (typeof c === 'string' ? { content: c } : c)),
 })
+
+// A section that seeds collapsed — used for the deeper / optional topics so a
+// first-run reader sees a short list of essentials and expands the rest.
+const advancedSect = (
+  title: string,
+  children: ReadonlyArray<string | TutorialNode>,
+): TutorialNode => sect(title, children, { collapsed: true })
 
 const cap = (s: string) => (s.length === 0 ? s : s[0].toUpperCase() + s.slice(1))
 

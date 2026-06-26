@@ -13,7 +13,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, isCollapsedProp } from '@/data/properties'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -98,6 +98,22 @@ describe('seedTutorial', () => {
     expect(data?.content).toBe(TUTORIAL_VIM_TITLE)
     expect(page.peekProperty(aliasesProp)).toEqual([TUTORIAL_VIM_TITLE])
     expect(page.hasType(PAGE_TYPE)).toBe(true)
+  })
+
+  it('seeds advanced sections collapsed and keeps essentials expanded', async () => {
+    const tutorialId = await seedTutorial(env.repo, WS)
+    await env.repo.load(tutorialId, { descendants: true })
+
+    const childIds = await env.repo.block(tutorialId).childIds.load()
+    const sectionByContent = new Map(
+      childIds.map(id => [env.repo.block(id).peek()?.content ?? '', env.repo.block(id)]),
+    )
+
+    // Essentials open by default…
+    expect(sectionByContent.get('Welcome')?.peekProperty(isCollapsedProp)).toBeFalsy()
+    // …deeper sections seed collapsed (the codec-backed boolean round-trips
+    // through the seeder's raw properties map).
+    expect(sectionByContent.get('On mobile')?.peekProperty(isCollapsedProp)).toBe(true)
   })
 
   it('seeds the outline as a tree of children under each Tutorial page', async () => {
