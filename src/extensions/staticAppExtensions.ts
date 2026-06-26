@@ -51,7 +51,6 @@ import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
-import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
@@ -68,7 +67,6 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // below "Extensions" in the Preferences tree; functionally
   // independent (no shared facet contributions).
   keybindingsSettingsPlugin,
-  colemakKeybindingsPlugin,
   kernelDataExtension,
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
