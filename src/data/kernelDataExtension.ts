@@ -30,8 +30,12 @@ import {
   propertySchemasFacet,
   queriesFacet,
   sameTxProcessorsFacet,
+  systemPagesFacet,
   typesFacet,
 } from './facets'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
+import { getOrCreateTypesPage } from '@/data/typesPage'
+import { getOrCreateRecentsPage } from '@/data/recentsPage'
 import { KERNEL_MUTATORS } from './mutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
@@ -57,6 +61,13 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_PROPERTY_SCHEMAS.map(s => propertySchemasFacet.of(s, {source: 'kernel'})),
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'kernel'})),
   invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
+  // Kernel singleton pages, materialised eagerly at workspace bootstrap via
+  // `Repo.ensureSystemPages` (before the landing/seed) so wiki-links to their
+  // reserved aliases resolve to the canonical page instead of auto-creating a
+  // rival (alias.collision). Each get-or-create is idempotent + deterministic-id.
+  systemPagesFacet.of({id: 'kernel:properties', ensure: getOrCreatePropertiesPage}, {source: 'kernel'}),
+  systemPagesFacet.of({id: 'kernel:types', ensure: getOrCreateTypesPage}, {source: 'kernel'}),
+  systemPagesFacet.of({id: 'kernel:recents', ensure: getOrCreateRecentsPage}, {source: 'kernel'}),
   // Definition-block projectors (issue #90): user-defined property
   // schemas and block types mirror into their facets' user-data buckets
   // through the shared `ProjectorRuntime`. Registered schemas-before-

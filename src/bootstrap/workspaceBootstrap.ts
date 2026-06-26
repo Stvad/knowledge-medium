@@ -2,9 +2,6 @@ import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
 import { buildLayout, preserveHashQueryParams } from '@/utils/routing.js'
 import { rememberWorkspace } from '@/utils/lastWorkspace.js'
-import { getOrCreatePropertiesPage } from '@/data/propertiesPage.js'
-import { getOrCreateTypesPage } from '@/data/typesPage.js'
-import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { workspaceLandingFacet } from '@/extensions/core.js'
 import { resolveAppRuntimeSync } from '@/facets/resolveAppRuntime.js'
@@ -202,23 +199,16 @@ export const bootstrapWorkspace = async ({
     return layoutSessionBlock
   }
 
-  // The Properties/Types/Recents kernel pages (idempotent, deterministic ids —
-  // hosting user property-schema blocks, block-type blocks, and the recents
-  // list respectively) are independent of each other AND of the layout chain:
-  // distinct ids, no row-level overlap, and the single SQLite write lock
-  // serializes the rare cold-start create txs safely. None is needed to *paint*
-  // the layout, so all four resolve concurrently instead of in a strict
-  // sequence. On a warm start each get-or-create is one cached read, so the
-  // pages finish inside the longer (serial) layout chain and add no latency to
-  // `bootstrapDone`; on a cold start their create txs overlap the layout writes
-  // rather than queueing ahead of them. Promise.all (not a floating page
-  // promise) keeps every rejection handled.
-  const [, , , layoutSessionBlock] = await Promise.all([
-    getOrCreatePropertiesPage(repo, workspaceId),
-    getOrCreateTypesPage(repo, workspaceId),
-    getOrCreateRecentsPage(repo, workspaceId),
-    resolveLayoutSession(),
-  ])
+  // Materialise the workspace's singleton system pages (Properties/Types/
+  // Recents/Journal/Locations + any other `systemPagesFacet` contribution)
+  // BEFORE resolving the layout. The landing resolver may seed content with
+  // `[[reserved alias]]` wiki-links, and those must resolve to the canonical
+  // page rather than auto-create a rival (alias.collision) — so the pages have
+  // to exist first. That's why this is serialized ahead of the layout chain
+  // rather than racing it the way these kernel pages used to (each is
+  // idempotent + deterministic-id, so on a warm start it's just a cached read).
+  await repo.ensureSystemPages(workspaceId)
 
+  const layoutSessionBlock = await resolveLayoutSession()
   return layoutSessionBlock
 }

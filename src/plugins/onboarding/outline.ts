@@ -245,7 +245,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Try giving me a property — e.g. `priority: high`. It will appear under my content.',
       "Types attach behavior to a block via the special `types` property. `types = ['page']` makes a block a page — addressable by name (through its aliases) and resolvable from wiki links, wherever it lives in the tree. `types = ['extension']` makes it an extension — see below.",
       'Aliases (a list property on a page) let you reach the page from multiple names — including ones with spaces or different casing. Wiki links resolve through aliases.',
-      'Every property you define is catalogued on the **Properties** page, and every type on the **Types** page — open either (via QuickFind) to see what exists in this workspace.',
+      'Every property you define is catalogued on the [[Properties]] page, and every type on the [[Types]] page — open either to see what exists in this workspace.',
     ]),
 
     // Kept expanded (not advanced/folded): these sections carry the live,
@@ -303,7 +303,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Type `@` at the start of a block or after whitespace to open the **place picker**. It searches your existing Places first, then offers Google Places matches; picking either inserts `[[Place Name]]` as a wikilink and creates the Place page if it didn\'t exist yet.',
       '`@` with no query (or `@here`) surfaces a **Use current location** option — pulls nearby POIs from browser geolocation, plus "Drop pin here" and "Create named location…" fallbacks for ad-hoc spots.',
       `Give any block a **location property**: open properties (${km.properties}) and add a \`location\` field — its value is a ref to a Place page. Many notes can share one Place (the coords live in exactly one block, so editing the Place updates every reference).`,
-      'After your first place is created, a **Locations** page appears at the workspace root holding every Place. Open it to see a **map of every Place** in your workspace; click a marker for an info card with name/address and a jump-to link.',
+      'The [[Locations]] page at the workspace root holds every Place. Open it to see a **map of every Place** in your workspace; click a marker for an info card with name/address and a jump-to link.',
       {
         content: 'Make any block its own map: add `map` to its `types`. The block then renders an inline map above its children showing every Place reachable in its subtree — both descendants with a `location` prop AND descendants that body-wikilink to a `[[Place]]`. A trip page tagged `map` becomes a map of the trip; a project page tagged `map` becomes a map of the project. Live demo (a `map`-tagged block over two Places):',
         type: MAP_TYPE,
@@ -322,7 +322,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     advancedSect('Daily notes', [
       `Open today's daily note: ${sharedKeys.today}. This is also the default landing page on a fresh open.`,
       `Step through daily notes: ${sharedKeys.prevNextDay} (previous / next).`,
-      'Every daily note is filed under the **Journal** page — open it (via QuickFind) for a reverse-chronological list of them all.',
+      'Every daily note is filed under the [[Journal]] page — open it for a reverse-chronological list of them all.',
       ...(variant === 'vim'
         ? ['Scrub a date in place: focus a dated block and **hold `s`**. While held, `k` / `↑` move the date +1 day and `j` / `↓` −1 day; `l` / `→` +7 days and `h` / `←` −7 days. Release `s` to commit, `Esc` to cancel.']
         : []),
