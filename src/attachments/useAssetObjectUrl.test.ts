@@ -36,10 +36,10 @@ describe('useAssetObjectUrl', () => {
   it('starts loading, then resolves to a blob object URL of the block MIME', async () => {
     const resolver = okResolver()
     const { result } = renderHook(() => useAssetObjectUrl(args, resolver))
-    expect(result.current.status).toBe('loading')
+    expect(result.current[0].status).toBe('loading')
 
     await flush()
-    expect(result.current).toEqual({ status: 'ready', url: expect.stringMatching(/^blob:/) })
+    expect(result.current[0]).toEqual({ status: 'ready', url: expect.stringMatching(/^blob:/) })
     expect(createObjectURL).toHaveBeenCalledOnce()
     const blob = createObjectURL.mock.calls[0][0]
     expect(blob.type).toBe('image/png')
@@ -50,7 +50,7 @@ describe('useAssetObjectUrl', () => {
     const resolver = failResolver('hash-mismatch')
     const { result } = renderHook(() => useAssetObjectUrl(args, resolver))
     await flush()
-    expect(result.current).toEqual({ status: 'error', reason: 'hash-mismatch' })
+    expect(result.current[0]).toEqual({ status: 'error', reason: 'hash-mismatch' })
     expect(createObjectURL).not.toHaveBeenCalled()
   })
 
@@ -58,7 +58,7 @@ describe('useAssetObjectUrl', () => {
     const resolver = okResolver()
     const { result, unmount } = renderHook(() => useAssetObjectUrl(args, resolver))
     await flush()
-    const url = result.current.status === 'ready' ? result.current.url : ''
+    const url = result.current[0].status === 'ready' ? result.current[0].url : ''
     expect(url).toMatch(/^blob:/)
 
     unmount()
@@ -71,7 +71,7 @@ describe('useAssetObjectUrl', () => {
       useAssetObjectUrl({ ...args, contentHash: p.hash }, resolver), { initialProps: { hash: 'sha256:aa' } },
     )
     await flush()
-    const firstUrl = result.current.status === 'ready' ? result.current.url : ''
+    const firstUrl = result.current[0].status === 'ready' ? result.current[0].url : ''
 
     rerender({ hash: 'sha256:bb' })
     await flush()
@@ -102,14 +102,46 @@ describe('useAssetObjectUrl', () => {
     }
     const { result } = renderHook(() => useAssetObjectUrl(args, resolver))
     await flush()
-    expect(result.current).toEqual({ status: 'error', reason: 'fetch-failed' })
+    expect(result.current[0]).toEqual({ status: 'error', reason: 'fetch-failed' })
 
     await act(async () => {
       window.dispatchEvent(new Event('online'))
     })
     await flush()
-    expect(result.current).toEqual({ status: 'ready', url: expect.stringMatching(/^blob:/) })
+    expect(result.current[0]).toEqual({ status: 'ready', url: expect.stringMatching(/^blob:/) })
     expect(resolver.resolve).toHaveBeenCalledTimes(2)
+  })
+
+  it('on a DECODE failure, revokes the URL NOW (frees the Blob) and settles to a terminal image-undecodable error', async () => {
+    const resolver = okResolver()
+    const { result } = renderHook(() => useAssetObjectUrl(args, resolver))
+    await flush()
+    const url = result.current[0].status === 'ready' ? result.current[0].url : ''
+    expect(url).toMatch(/^blob:/)
+    expect(revokeObjectURL).not.toHaveBeenCalled() // still alive while ready/rendered
+
+    // The renderer's <img> couldn't decode the verified bytes → report it.
+    act(() => result.current[1](url))
+    // The load-bearing fix: the Blob is freed immediately, NOT held until unmount.
+    expect(revokeObjectURL).toHaveBeenCalledWith(url)
+    expect(result.current[0]).toEqual({ status: 'error', reason: 'image-undecodable' })
+
+    // Terminal: a reconnect must NOT re-resolve (the bytes won't become decodable).
+    await act(async () => {
+      window.dispatchEvent(new Event('online'))
+    })
+    await flush()
+    expect(result.current[0]).toEqual({ status: 'error', reason: 'image-undecodable' })
+    expect(resolver.resolve).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a STALE decode-failure report (a URL that is no longer the ready one)', async () => {
+    const resolver = okResolver()
+    const { result } = renderHook(() => useAssetObjectUrl(args, resolver))
+    await flush()
+    // A report for some other/old URL must not knock out the live ready state.
+    act(() => result.current[1]('blob:fake/stale'))
+    expect(result.current[0].status).toBe('ready')
   })
 
   it('does NOT retry a TERMINAL failure (hash-mismatch) on reconnect', async () => {
@@ -121,7 +153,7 @@ describe('useAssetObjectUrl', () => {
       window.dispatchEvent(new Event('online'))
     })
     await flush()
-    expect(result.current).toEqual({ status: 'error', reason: 'hash-mismatch' })
+    expect(result.current[0]).toEqual({ status: 'error', reason: 'hash-mismatch' })
     expect(resolver.resolve).toHaveBeenCalledTimes(1) // terminal — no re-resolve
   })
 })

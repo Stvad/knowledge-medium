@@ -16,7 +16,6 @@
  */
 
 import { FileText, ImageOff, Loader2 } from 'lucide-react'
-import { useState } from 'react'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { usePropertyValue, useWorkspaceId } from '@/hooks/block.js'
 import { MarkdownImage } from '@/markdown/MarkdownImage.js'
@@ -61,18 +60,18 @@ const MediaImage = ({ block, hash, mime, filename }: {
   // so a foreign-workspace embed must resolve against the block's workspace, not
   // the UI's active one. '' (while loading / missing) fails closed (deferred).
   const workspaceId = useWorkspaceId(block, '')
-  const state = useAssetObjectUrl({ workspaceId, contentHash: hash, mime }, getAssetResolver())
-  // The verified bytes that the <img> failed to DECODE (keyed by URL so a later
-  // re-resolve to a fresh, decodable object URL clears the error on its own).
-  const [decodeErrorUrl, setDecodeErrorUrl] = useState<string | null>(null)
+  const [state, reportDecodeFailure] = useAssetObjectUrl({ workspaceId, contentHash: hash, mime }, getAssetResolver())
 
-  if (state.status === 'ready' && state.url !== decodeErrorUrl) {
+  if (state.status === 'ready') {
     return (
       <MarkdownImage
         src={state.url}
         alt={filename || 'Attachment image'}
         className="max-w-full rounded"
-        onError={() => setDecodeErrorUrl(state.url)}
+        // Verified bytes the browser can't decode as an image: tell the hook, which
+        // REVOKES the object URL (frees the Blob — see useAssetObjectUrl) and settles
+        // to a terminal error, so we drop to the placeholder below — never the glyph.
+        onError={() => reportDecodeFailure(state.url)}
       />
     )
   }

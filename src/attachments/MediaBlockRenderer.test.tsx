@@ -8,12 +8,14 @@ import type { BlockRendererProps } from '@/types.js'
 const h = vi.hoisted(() => ({
   props: {} as Record<string, unknown>,
   urlState: { status: 'loading' } as { status: string; url?: string; reason?: string },
+  reportDecodeFailure: vi.fn(),
 }))
 vi.mock('@/hooks/block.js', () => ({
   usePropertyValue: (_b: unknown, s: { name: string }) => [h.props[s.name], () => {}],
   useWorkspaceId: () => 'ws-A',
 }))
-vi.mock('./useAssetObjectUrl.js', () => ({ useAssetObjectUrl: () => h.urlState }))
+// The hook returns [state, reportDecodeFailure]; the renderer wires onError → the latter.
+vi.mock('./useAssetObjectUrl.js', () => ({ useAssetObjectUrl: () => [h.urlState, h.reportDecodeFailure] }))
 vi.mock('./assetResolver.js', () => ({
   getAssetResolver: () => ({ resolve: async () => ({ ok: false, reason: 'error' }) }),
 }))
@@ -27,6 +29,7 @@ afterEach(cleanup)
 beforeEach(() => {
   h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'image/png', 'media:filename': 'cat.png' }
   h.urlState = { status: 'loading' }
+  h.reportDecodeFailure.mockClear()
 })
 
 describe('MediaContentRenderer — image branch', () => {
@@ -51,15 +54,16 @@ describe('MediaContentRenderer — image branch', () => {
     expect(container.querySelector('img')).toBeNull()
   })
 
-  it('falls to the broken placeholder (not the browser glyph) when verified bytes fail to DECODE', () => {
+  it('reports a decode failure to the hook when verified bytes fail to DECODE', () => {
     // The bytes hash-verified, but the <img> can't decode them — e.g. an untrusted
-    // media:mime claiming image/* over non-image bytes. onError must swap to the
-    // styled placeholder, upholding the "never a broken render" invariant.
+    // media:mime claiming image/* over non-image bytes. The renderer must report it
+    // so the hook REVOKES the object URL (frees the Blob) and goes terminal — the
+    // resulting error→placeholder is covered by the fail-closed test above and the
+    // hook's own test; here we pin the renderer's onError → reportDecodeFailure wire.
     h.urlState = { status: 'ready', url: 'blob:fake/undecodable' }
-    const { container } = renderContent()
+    renderContent()
     fireEvent.error(screen.getByRole('img', { name: 'cat.png' }))
-    expect(screen.getByTestId('media-broken')).toBeInTheDocument()
-    expect(container.querySelector('img')).toBeNull()
+    expect(h.reportDecodeFailure).toHaveBeenCalledWith('blob:fake/undecodable')
   })
 })
 
