@@ -32,10 +32,13 @@
  *
  * `contentKeyHmac` is `null` for a LEGACY record written before this feature
  * (the WK was stored as a bare `CryptoKey`; the raw bytes K_id needs are long
- * since zeroed). Such a device must re-paste / re-unlock the WK once to populate
- * `K_id`; until then media fails closed (broken-image, never plaintext) while
- * text keeps working (§10 migration). `normalizeKeyRecord` maps the legacy shape
- * to `{ wk, contentKeyHmac: null }` on read.
+ * since zeroed, and K_id can't be re-derived from the non-extractable WK). The
+ * §6 gate ({@link resolveWorkspaceEntry}) treats a K_id-less record as LOCKED, so
+ * an upgrading device is prompted to re-paste / re-unlock the WK once — which
+ * co-derives K_id — rather than opening `ready` into permanently-broken media. (A
+ * one-time re-unlock briefly gates text too; accepted as the simplest migration at
+ * our scale.) `normalizeKeyRecord` maps the legacy shape to `{ wk, contentKeyHmac:
+ * null }` on read.
  */
 export interface WorkspaceKeyRecord {
   readonly wk: CryptoKey

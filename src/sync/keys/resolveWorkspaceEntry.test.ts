@@ -9,7 +9,10 @@ import type { GateWorkspace } from './resolveWorkspaceEntry.js'
 // the name/canary enrichment for the lock prompt).
 const getModePin = vi.fn<(userId: string, workspaceId: string) => ModePin | null>()
 const keyGet = vi.fn<(userId: string, workspaceId: string) => Promise<WorkspaceKeyRecord | null>>()
-const aRecord = (): WorkspaceKeyRecord => ({ wk: {} as CryptoKey, contentKeyHmac: null })
+// A full (post-K_id) record — WK + content-key HMAC co-located.
+const aRecord = (): WorkspaceKeyRecord => ({ wk: {} as CryptoKey, contentKeyHmac: {} as CryptoKey })
+// A LEGACY record — bare WK, no K_id (pre-content-key feature).
+const legacyRecord = (): WorkspaceKeyRecord => ({ wk: {} as CryptoKey, contentKeyHmac: null })
 
 vi.mock('./modePin.js', () => ({getModePin: (u: string, w: string) => getModePin(u, w)}))
 vi.mock('./keyStore.js', () => ({getWorkspaceKeyStore: () => ({get: keyGet})}))
@@ -42,6 +45,16 @@ describe('resolveWorkspaceEntry (read-inputs half of the §6 gate)', () => {
     keyGet.mockResolvedValue(aRecord())
     expect(await resolveWorkspaceEntry('u', 'w', async () => null)).toEqual({kind: 'ready'})
     expect(keyGet).toHaveBeenCalledWith('u', 'w')
+  })
+
+  it('a LEGACY record (no K_id) → locked, so the gate prompts a re-paste', async () => {
+    // Pre-content-key WK can decrypt text but not media; K_id can't be re-derived
+    // from the stored WK, so the workspace must re-unlock rather than open `ready`
+    // into permanently-broken media.
+    getModePin.mockReturnValue('e2ee')
+    keyGet.mockResolvedValue(legacyRecord())
+    const entry = await resolveWorkspaceEntry('u', 'w', async () => workspace({encryptionMode: 'e2ee'}))
+    expect(entry).toMatchObject({kind: 'locked', reason: 'key-required'})
   })
 
   it('a thrown key-store read is treated as locked, not fatal', async () => {

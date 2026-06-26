@@ -54,7 +54,14 @@ export const resolveWorkspaceEntry = async (
   let hasKey = false
   if (pin === 'e2ee') {
     try {
-      hasKey = (await getWorkspaceKeyStore().get(userId, workspaceId)) !== null
+      const record = await getWorkspaceKeyStore().get(userId, workspaceId)
+      // Require K_id, not just the WK: a LEGACY record (bare WK from before the
+      // content-key feature, `contentKeyHmac: null`) can decrypt text but not media,
+      // and K_id can't be re-derived from the stored non-extractable WK — only a
+      // re-paste repopulates it. Treat it as locked so the key gate prompts the
+      // re-paste (which co-derives K_id), rather than opening `ready` into
+      // permanently-broken media with no recovery path.
+      hasKey = record !== null && record.contentKeyHmac !== null
     } catch (err) {
       console.warn(`[App] workspace key read failed for ${workspaceId}; treating as locked`, err)
     }
