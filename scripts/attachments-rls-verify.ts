@@ -25,6 +25,11 @@ if (!url || !anon || !service) {
 }
 
 const BUCKET = 'attachments'
+// Storage signals "object already exists" as EITHER HTTP 409 or a symbolic code,
+// depending on the storage-api version (mirrors blobStore's ALREADY_EXISTS_CODES).
+// Match both so this pre-deploy gate can't FALSE-FAIL on a stack that returns the
+// word form while the policy is in fact behaving (first-write-wins).
+const ALREADY_EXISTS = new Set(['409', 'ResourceAlreadyExists', 'KeyAlreadyExists', 'Duplicate'])
 const noPersist = { auth: { autoRefreshToken: false, persistSession: false } }
 const admin = createClient(url, service, noPersist) // service role — bypasses RLS for setup
 const rid = Math.random().toString(36).slice(2, 8)
@@ -134,8 +139,8 @@ async function run() {
   console.log('\n— UPDATE: none → immutability / first-write-wins —')
   const dup = await tryUpload(owner.client, path, false)
   check(
-    're-upload to an existing path → 409 (first-write-wins, not overwrite)',
-    !dup.allowed && dup.status === '409',
+    're-upload to an existing path → already-exists (first-write-wins, not overwrite)',
+    !dup.allowed && ALREADY_EXISTS.has(dup.status),
     `status ${dup.allowed ? 'allowed' : dup.status}`,
   )
   check('overwrite via upsert:true DENIED (no UPDATE policy)', !(await tryUpload(owner.client, path, true)).allowed)

@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { BINARY_MAGIC_BYTES, hasBinaryEnvelopeMagic } from '../../sync/crypto/binaryEnvelope.js'
+import { BINARY_ENVELOPE_MIN_BYTES, hasBinaryEnvelopeMagic } from '../../sync/crypto/binaryEnvelope.js'
 import { collectPaged } from './paginate.js'
 import type { AuditIO, ObjectEntry, ObjectVerdict } from './types.js'
 
@@ -68,13 +68,18 @@ export function createSupabaseAuditIO(deps: SupabaseAuditIODeps): AuditIO {
       // failure must degrade to 'unreadable', never abort the scan.
       try {
         const encoded = path.split('/').map(encodeURIComponent).join('/')
+        // Read the whole envelope MINIMUM (magic + nonce + tag), not just the
+        // magic: an object that is `encb:v1:` followed by too few bytes to hold a
+        // nonce + auth tag cannot be a real envelope, so the magic alone would let
+        // a truncated/forged runt pass as 'ok'. A partial-content response clamps
+        // to the object size, so `head.length` is the true min(MIN, objectSize).
         const res = await fetchFn(`${base}/storage/v1/object/authenticated/${BUCKET}/${encoded}`, {
-          headers: { ...authHeaders, range: `bytes=0-${BINARY_MAGIC_BYTES - 1}` },
+          headers: { ...authHeaders, range: `bytes=0-${BINARY_ENVELOPE_MIN_BYTES - 1}` },
         })
         if (res.status === 404) return 'gone'
         if (!res.ok) return 'unreadable'
         const head = new Uint8Array(await res.arrayBuffer())
-        return hasBinaryEnvelopeMagic(head) ? 'ok' : 'plaintext'
+        return hasBinaryEnvelopeMagic(head) && head.length >= BINARY_ENVELOPE_MIN_BYTES ? 'ok' : 'plaintext'
       } catch {
         return 'unreadable'
       }

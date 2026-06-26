@@ -26,6 +26,7 @@ export {
 export {
   BINARY_ENVELOPE_MAGIC,
   BINARY_MAGIC_BYTES,
+  BINARY_ENVELOPE_MIN_BYTES,
   hasBinaryEnvelopeMagic,
   encodeBinaryEnvelope,
   decodeBinaryEnvelope,

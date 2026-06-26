@@ -1150,8 +1150,9 @@ function on every upload, because the byte-confidentiality <em>outcome</em> is a
     regression accidentally uploading bare plaintext into an E2EE prefix — harmless to readers (fail-closed)
     but visible to the untrusted server at rest until GC. We cover that with an <strong>off-path periodic
     audit</strong> (<code>scripts/attachments-ciphertext-audit.ts</code>) that scans E2EE prefixes and
-    <em>alerts</em> on a non-<code>encb:v1:</code> object — turning a client bug loud without putting a
-    function on the write path. It alerts, it does not delete (deleting can't un-see what the server already
+    <em>alerts</em> on any object that is not a plausible <code>encb:v1:</code> envelope — missing the magic,
+    or carrying the magic but shorter than the envelope minimum (magic + nonce + tag), so a truncated runt
+    can't pass on the prefix alone — turning a client bug loud without putting a function on the write path. It alerts, it does not delete (deleting can't un-see what the server already
     holds, and a one-test client invariant catches the bug class more cheaply).</li>
 </ul>
 So the write path is a <strong>direct, RLS-gated insert</strong> (§10): the <code>WITH CHECK</code> keys on

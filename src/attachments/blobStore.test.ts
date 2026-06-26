@@ -141,3 +141,66 @@ describe('SupabaseBlobStore.put', () => {
     expect(upload).not.toHaveBeenCalled()
   })
 })
+
+type DownloadResult = { data: { arrayBuffer(): Promise<ArrayBuffer> } | null; error: unknown }
+type RemoveResult = { data: unknown; error: unknown }
+
+/** A client exposing `storage.from(bucket).{download,remove}` — get()/delete()
+ *  ride the client session directly (no token probe), so getAccessToken is moot. */
+const makeRwStore = (impl: {
+  download?: (path: string) => Promise<DownloadResult>
+  remove?: (paths: string[]) => Promise<RemoveResult>
+}) => {
+  const download = vi.fn(impl.download ?? (async () => ({ data: null, error: null })))
+  const remove = vi.fn(impl.remove ?? (async () => ({ data: [], error: null })))
+  const from = vi.fn(() => ({ download, remove }))
+  const client = { storage: { from } } as unknown as SupabaseClient
+  const store = createSupabaseBlobStore({ client, getAccessToken: async () => 'tok' })
+  return { store, from, download, remove }
+}
+
+describe('SupabaseBlobStore.get', () => {
+  it('downloads <ws>/<key> from the attachments bucket and returns the bytes', async () => {
+    const bytes = new Uint8Array([9, 8, 7])
+    const { store, from, download } = makeRwStore({
+      download: async () => ({ data: new Blob([bytes]), error: null }),
+    })
+    expect(await store.get('ws-A', 'deadbeef')).toEqual(bytes)
+    expect(from).toHaveBeenCalledWith(ATTACHMENTS_BUCKET)
+    expect(download).toHaveBeenCalledWith('ws-A/deadbeef')
+  })
+
+  it('throws the storage error when the download is denied/absent', async () => {
+    const boom = new Error('denied')
+    const { store } = makeRwStore({ download: async () => ({ data: null, error: boom }) })
+    await expect(store.get('ws', 'k')).rejects.toBe(boom)
+  })
+
+  it('throws on an empty body (no error, no data)', async () => {
+    const { store } = makeRwStore({ download: async () => ({ data: null, error: null }) })
+    await expect(store.get('ws', 'k')).rejects.toThrow(/empty body/)
+  })
+})
+
+describe('SupabaseBlobStore.delete', () => {
+  it('removes <ws>/<key> from the attachments bucket', async () => {
+    const { store, from, remove } = makeRwStore({ remove: async () => ({ data: [{}], error: null }) })
+    await expect(store.delete('ws-A', 'deadbeef')).resolves.toBeUndefined()
+    expect(from).toHaveBeenCalledWith(ATTACHMENTS_BUCKET)
+    expect(remove).toHaveBeenCalledWith(['ws-A/deadbeef'])
+  })
+
+  it('resolves on a no-op (remove returns an empty list, no error — RLS-denied or absent)', async () => {
+    // The documented contract: supabase-js `remove` 200s with an EMPTY list (no
+    // error) when the object is absent or RLS-denied. delete() must NOT throw —
+    // §16 GC is best-effort; the §10.1 poison-correction GET-verifies separately.
+    const { store } = makeRwStore({ remove: async () => ({ data: [], error: null }) })
+    await expect(store.delete('ws', 'k')).resolves.toBeUndefined()
+  })
+
+  it('throws when remove returns an error', async () => {
+    const boom = new Error('storage down')
+    const { store } = makeRwStore({ remove: async () => ({ data: null, error: boom }) })
+    await expect(store.delete('ws', 'k')).rejects.toBe(boom)
+  })
+})

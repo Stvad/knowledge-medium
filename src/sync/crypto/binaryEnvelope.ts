@@ -24,6 +24,14 @@ const utf8Encode = new TextEncoder()
 export const BINARY_ENVELOPE_MAGIC = utf8Encode.encode('encb:v1:')
 export const BINARY_MAGIC_BYTES = BINARY_ENVELOPE_MAGIC.length
 
+/** Smallest possible valid envelope: magic ‖ nonce ‖ (empty ciphertext) ‖ tag.
+ *  A blob carrying the magic but shorter than this CANNOT be a real envelope
+ *  (it can't hold a nonce + auth tag) — it's a truncated/forged object. The
+ *  off-path audit uses this as a length floor so an `encb:v1:`-prefixed runt
+ *  can't pass the cheap magic check. Mirrors `decodeBinaryEnvelope`'s payload
+ *  guard (`payload.length >= NONCE_BYTES + GCM_TAG_BYTES`). */
+export const BINARY_ENVELOPE_MIN_BYTES = BINARY_MAGIC_BYTES + NONCE_BYTES + GCM_TAG_BYTES
+
 export interface DecodedBinaryEnvelope {
   // ArrayBuffer-backed (via .slice()) so they flow into WebCrypto's
   // BufferSource params without a cast.

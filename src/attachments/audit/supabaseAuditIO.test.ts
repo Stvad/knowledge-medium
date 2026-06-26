@@ -1,10 +1,18 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it, vi } from 'vitest'
-import { BINARY_ENVELOPE_MAGIC } from '../../sync/crypto/binaryEnvelope.js'
+import { BINARY_ENVELOPE_MAGIC, BINARY_ENVELOPE_MIN_BYTES } from '../../sync/crypto/binaryEnvelope.js'
 import { createSupabaseAuditIO } from './supabaseAuditIO.js'
 
 const URL = 'https://proj.supabase.co'
 const KEY = 'svc-key'
+
+/** A head of the smallest valid envelope length, magic-prefixed (the rest zero).
+ *  This is what passes the audit's magic+length-floor check as 'ok'. */
+const fullEnvelopeHead = () => {
+  const head = new Uint8Array(BINARY_ENVELOPE_MIN_BYTES)
+  head.set(BINARY_ENVELOPE_MAGIC, 0)
+  return head
+}
 
 /** A chainable supabase query-builder mock. `range()` is the awaited terminal and
  *  returns successive pages keyed by call order. Records `order`/`range` args. */
@@ -80,10 +88,14 @@ describe('createSupabaseAuditIO.listObjects', () => {
       { name: 'deadbeef', isFolder: false },
       { name: 'sub', isFolder: true },
     ])
-    expect(listSpy).toHaveBeenCalledWith(
+    expect(listSpy).toHaveBeenNthCalledWith(
+      1,
       'ws1',
       expect.objectContaining({ limit: 1000, offset: 0, sortBy: { column: 'name', order: 'asc' } }),
     )
+    // Regression guard: the 2nd page MUST advance by the actual page length (2),
+    // not re-request offset 0 — a hardcoded offset:0 would loop forever in prod.
+    expect(listSpy).toHaveBeenNthCalledWith(2, 'ws1', expect.objectContaining({ offset: 2 }))
   })
 })
 
@@ -91,17 +103,27 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
   const ioWith = (fetchFn: typeof fetch) =>
     createSupabaseAuditIO({ url: URL, serviceKey: KEY, client: {} as SupabaseClient, fetchFn })
 
-  it("returns 'ok' for an encb:v1: magic head, with a Range request and encoded path", async () => {
-    const fetchFn = vi.fn<typeof fetch>(async () => bytesResponse(BINARY_ENVELOPE_MAGIC))
+  it("returns 'ok' for a full-length encb:v1: head, with a Range request and encoded path", async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => bytesResponse(fullEnvelopeHead()))
     expect(await ioWith(fetchFn).readObjectVerdict('ws1/deadbeef')).toBe('ok')
     const [url, init] = fetchFn.mock.calls[0]
     expect(url).toBe(`${URL}/storage/v1/object/authenticated/attachments/ws1/deadbeef`)
-    expect((init?.headers as Record<string, string>).range).toBe(`bytes=0-${BINARY_ENVELOPE_MAGIC.length - 1}`)
+    // Reads the whole envelope MINIMUM, not just the magic, so a runt can't pass.
+    expect((init?.headers as Record<string, string>).range).toBe(`bytes=0-${BINARY_ENVELOPE_MIN_BYTES - 1}`)
   })
 
   it("returns 'plaintext' for a non-magic head", async () => {
     const io = ioWith(vi.fn<typeof fetch>(async () => bytesResponse(new Uint8Array([1, 2, 3]))))
     expect(await io.readObjectVerdict('ws1/k')).toBe('plaintext')
+  })
+
+  it("returns 'plaintext' for a magic-prefixed runt shorter than a real envelope", async () => {
+    // `encb:v1:` + a few bytes — has the magic but can't hold a nonce + auth tag,
+    // so it is NOT a valid envelope. The magic-only check would wrongly pass it.
+    const runt = new Uint8Array(BINARY_ENVELOPE_MAGIC.length + 4)
+    runt.set(BINARY_ENVELOPE_MAGIC, 0)
+    const io = ioWith(vi.fn<typeof fetch>(async () => bytesResponse(runt)))
+    expect(await io.readObjectVerdict('ws1/runt')).toBe('plaintext')
   })
 
   it("returns 'plaintext' for a 0-byte body (can't be an encb:v1: envelope)", async () => {
