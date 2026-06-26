@@ -1,19 +1,30 @@
 name: Attachments Ciphertext Audit
 
 # Off-path tripwire (design §10.1 / §17): there is no body-inspecting upload
-# service, so this scheduled job verifies that every object under an E2EE
-# workspace prefix is encb:v1: ciphertext — catching an honest-client regression
-# that uploads plaintext. It never gates uploads. Needs a service-role key; until
-# SUPABASE_SERVICE_ROLE_KEY is configured the script does not run and emits a
-# NOT-ARMED ::warning:: (yellow, visibly distinct from a clean pass), not a
-# silent green.
+# service, so this job verifies that every object under an E2EE workspace prefix
+# is encb:v1: ciphertext — catching an honest-client regression that uploads
+# plaintext. It never gates uploads. Needs a service-role key; media capture has
+# shipped, so this is the SOLE server-side ciphertext check — if
+# SUPABASE_SERVICE_ROLE_KEY is unset the audit FAILS RED (a ::error:: + non-zero
+# exit), never a silent/yellow pass.
+#
+# Cadence: a plaintext regression can only enter via a client deploy, so the
+# fast path is a run right after "Deploy Pages" succeeds (workflow_run) — a bad
+# release is caught in minutes. The 6-hourly schedule is the backstop (a skipped
+# post-deploy run, manual Storage tampering, drift); manual dispatch on demand.
 on:
   schedule:
-    - cron: '37 6 * * *' # daily — uploads are rare, this is a tripwire not a gate
+    - cron: '37 */6 * * *' # every 6h — the periodic backstop behind the post-deploy run
+  workflow_run:
+    workflows: ['Deploy Pages']
+    types: [completed]
   workflow_dispatch:
 
 jobs:
   audit:
+    # On a Deploy Pages completion only audit after a SUCCESSFUL deploy (a failed
+    # deploy shipped nothing to re-check). Scheduled / manual runs always run.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

@@ -7,11 +7,11 @@ import type { AuditResult } from './types.js'
 const makeRedact = () => vi.fn((s: string) => `OPAQUE_${s.length}`)
 
 describe('buildReport', () => {
-  it('NOT ARMED → exit 0, a warning (not a silent pass), no errors', () => {
+  it('NOT ARMED → exit 1, an ::error:: (fails loud — media capture shipped, so a missing key is a misconfig)', () => {
     const r = buildReport({ armed: false }, makeRedact())
-    expect(r.exitCode).toBe(0)
-    expect(r.warnings.join(' ')).toMatch(/NOT ARMED/)
-    expect(r.errors).toEqual([])
+    expect(r.exitCode).toBe(1)
+    expect(r.errors.join(' ')).toMatch(/NOT ARMED/)
+    expect(r.warnings).toEqual([])
     expect(r.summary).toMatch(/NOT ARMED/)
   })
 

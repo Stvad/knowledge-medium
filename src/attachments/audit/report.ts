@@ -30,19 +30,22 @@ export type AuditOutcome = { armed: false } | { armed: true; result: AuditResult
  */
 export function buildReport(outcome: AuditOutcome, redact: (s: string) => string): AuditReport {
   if (!outcome.armed) {
-    // A green ::notice:: would make a never-configured (never-running) tripwire
-    // look like a healthy pass — a yellow ::warning:: keeps it distinct. Exit 0:
-    // the key is legitimately unset until media capture ships.
+    // Media capture has SHIPPED, so this audit is the sole server-side ciphertext
+    // tripwire (the §10.1 reversal dropped the write-path guard). A missing
+    // credential is therefore a MISCONFIGURATION that disarms confidentiality
+    // monitoring, not a benign pre-launch state — fail LOUD (red ::error:: +
+    // non-zero exit) so it can't pass unnoticed as a yellow warning. (Pre-launch
+    // this was exit 0 + a warning; that caveat is now resolved.)
     return {
-      exitCode: 0,
+      exitCode: 1,
       notices: [],
+      warnings: [],
       // Generic wording on purpose: this file is under src/ (bundle-scanned), so
       // it must not contain the literal privileged-key env var name. The exact
       // var names live in the entrypoint + the workflow (neither bundled).
-      warnings: ['attachments ciphertext audit NOT ARMED — required credentials unset; the tripwire did not run'],
-      errors: [],
+      errors: ['attachments ciphertext audit NOT ARMED — required credentials unset; the tripwire did not run (configure the privileged key)'],
       summary:
-        '### ⚠️ Attachments ciphertext audit — NOT ARMED\nSecrets not configured; the audit did not run. Set the key before media capture (Phase 5) ships.',
+        '### ❌ Attachments ciphertext audit — NOT ARMED\nRequired credentials unset, so the audit did not run. This is the sole server-side ciphertext check — configure the key.',
     }
   }
 
