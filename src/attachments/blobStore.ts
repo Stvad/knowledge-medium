@@ -62,8 +62,9 @@ export interface BlobStore {
    *  path, §10.1); throws {@link BlobPutError}. The bytes come from `encodeBytes`
    *  (§5), which is ArrayBuffer-backed. */
   put(workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
-  /** Direct RLS-gated GET of the stored object bytes. Throws if absent/denied. */
-  get(workspaceId: string, contentKey: string): Promise<Uint8Array>
+  /** Direct RLS-gated GET of the stored object bytes (ArrayBuffer-backed, so it
+   *  feeds `decodeBytes` directly). Throws if absent/denied. */
+  get(workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer>>
   /** Direct RLS-gated delete (writer). Idempotent: supabase-js `remove` returns
    *  200 with an EMPTY list (no error) when the object is absent or RLS-denied,
    *  so this resolves on a no-op. Fine for §16 GC; the §10.1 poison-correction
