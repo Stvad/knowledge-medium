@@ -248,7 +248,9 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Every property you define is catalogued on the **Properties** page, and every type on the **Types** page — open either (via QuickFind) to see what exists in this workspace.',
     ]),
 
-    advancedSect('Typed blocks — behaviour from a tag', [
+    // Kept expanded (not advanced/folded): these sections carry the live,
+    // playable demos, so hiding them behind a fold would defeat the point.
+    sect('Typed blocks — behaviour from a tag', [
       'Beyond identity, a type can attach *behaviour* to a block. Add the type via the `types` property (see above) or a block\'s quick-actions menu. A few that ship by default:',
       {
         content: "**Todo** — type `todo` adds a checkbox to the block; click it to toggle done (done items strike through). Great for inline task lists anywhere in your outline.",
@@ -257,13 +259,12 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
         ],
       },
       {
-        content: "**Video** — paste a video URL (YouTube, Vimeo, and more) as a block's content and it renders an inline player — no type needed. Switch the player to its **notes view** to jot notes beside the video; `1:23`-style timestamps you type there become clickable seeks. The block below is a live demo (already in notes view):",
+        content: "**Video** — paste a video URL (YouTube, Vimeo, and more) as a block's content and it renders an inline player — no type needed. Switch the player to its **notes view** (the notes icon on the player) to jot notes beside the video; `1:23`-style timestamps you type there become clickable seeks. The block below is a live demo — open its notes view and try the timestamps in the note beside it:",
         children: [
           {
             content: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
-            properties: { 'video:playerView': 'notes' },
             children: [
-              { content: 'Notes sit beside the player. Click `0:10` to jump there, or `1:00` for later — each timestamp is a seek link.' },
+              { content: 'Notes sit beside the player. Click 0:10 to jump there, or 1:00 for later — each timestamp is a seek link.' },
             ],
           },
         ],
@@ -296,7 +297,8 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       },
     ]),
 
-    advancedSect('Places & maps', [
+    // Kept expanded (carries the live map demo) — see note on Typed blocks.
+    sect('Places & maps', [
       'Real-world locations are first-class. Every place — a Google POI, a friend\'s neighborhood, a coordinate pin on a hike — becomes a typed **Place** block carrying `place:lat`, `place:lng`, `place:address`, and `place:googlePlaceId`.',
       'Type `@` at the start of a block or after whitespace to open the **place picker**. It searches your existing Places first, then offers Google Places matches; picking either inserts `[[Place Name]]` as a wikilink and creates the Place page if it didn\'t exist yet.',
       '`@` with no query (or `@here`) surfaces a **Use current location** option — pulls nearby POIs from browser geolocation, plus "Drop pin here" and "Create named location…" fallbacks for ad-hoc spots.',
@@ -308,8 +310,10 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
         children: [
           // Place blocks pin at their own lat/lng. `place:*` are type-lifted
           // fields on PLACE_TYPE, so coordinates go via addType (typeProperties).
+          // Two landmarks close together (both central Paris) so the map's
+          // auto-fit lands on the city, not on water between distant pins.
           { content: 'Eiffel Tower', type: PLACE_TYPE, typeProperties: { 'place:lat': 48.8584, 'place:lng': 2.2945 } },
-          { content: 'Statue of Liberty', type: PLACE_TYPE, typeProperties: { 'place:lat': 40.6892, 'place:lng': -74.0445 } },
+          { content: 'Louvre Museum', type: PLACE_TYPE, typeProperties: { 'place:lat': 48.8606, 'place:lng': 2.3376 } },
         ],
       },
       'Each Place page itself renders with a mini-map of just that one pin, so a Place behaves like a "location card" with the coordinates always visible.',

@@ -11,6 +11,11 @@ import { workspaceLandingFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { onboardingLanding } from './landing.ts'
 
+// The seeded tutorial tags demo blocks with the todo / char-counter / srs /
+// place / map types. The seed runs at bootstrap (before the app runtime is
+// applied), so it reads those types from `repo.snapshotTypeRegistries()` —
+// which is populated from `staticDataExtensions`, where those plugins' data
+// extensions are registered. That's the dependency; it isn't re-declared here.
 export const onboardingPlugin: AppExtension = systemToggle({
   id: 'system:onboarding',
   name: 'Onboarding',

@@ -147,7 +147,9 @@ export const bootstrapWorkspace = async ({
   // onboarding plugin, which contributes a `workspaceLandingFacet` resolver
   // that seeds on `freshlyCreated` and then defers the landing target to
   // daily-notes (see src/plugins/onboarding). That keeps first-run content
-  // out of the kernel and lets disabling the plugin remove it cleanly.
+  // out of the kernel and lets disabling the plugin remove it cleanly. The
+  // tutorial's typed demos seed against `repo.snapshotTypeRegistries()`,
+  // which is populated from `staticDataExtensions` at repo construction.
 
   // Resolve the layout-session block the app paints — the warm-start critical
   // path. This chain is genuinely serial: each ui-state child's deterministic id

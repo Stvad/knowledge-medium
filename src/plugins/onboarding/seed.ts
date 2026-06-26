@@ -1,24 +1,10 @@
 import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import type { Tx } from '@/data/api'
-import type { TypeRegistrySnapshot } from '@/data/api/blockType'
 import type { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keysBetween } from '@/data/orderKey'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { propertySchemasFacet, typesFacet } from '@/data/facets'
-import { mergeLiftedSchemas } from '@/data/internals/refProjection'
-// Onboarding's plugin dependencies: the demo blocks tag themselves with these
-// plugins' block types, so we fold their type/schema contributions into the
-// seed snapshot below. This makes seeding self-sufficient — it doesn't matter
-// how much of the app runtime has been applied to the repo when seedTutorial
-// runs (at bootstrap it's only the kernel types), because addTypeInTx resolves
-// against the snapshot we pass, not the repo's live registry.
-import { todoDataExtension } from '@/plugins/todo/dataExtension'
-import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
-import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
-import { geoDataExtension } from '@/plugins/geo/dataExtension'
 import {
   EXTENSIONS_PAGE_TITLE,
   extensionsPageOutline,
@@ -27,34 +13,6 @@ import {
   TUTORIAL_VIM_TITLE,
   type TutorialNode,
 } from './outline'
-
-const DEMO_TYPE_EXTENSIONS = [
-  todoDataExtension,
-  characterCounterDataExtension,
-  srsReschedulingDataExtension,
-  geoDataExtension,
-]
-
-/** Type/schema snapshot for seeding: the repo's current registries (kernel
- *  PAGE/EXTENSION types) overlaid with the demo plugins' types + lifted
- *  schemas. Resolved from the dependency data-extensions so the typed demos
- *  (todo / char-counter / srs / place / map) seed correctly even before the
- *  full app runtime is applied to the repo. */
-const seedTypeSnapshot = (repo: Repo): TypeRegistrySnapshot => {
-  const base = repo.snapshotTypeRegistries()
-  const rt = resolveFacetRuntimeSync(DEMO_TYPE_EXTENSIONS)
-  // typesFacet / propertySchemasFacet are keyed-map facets, so `read` returns
-  // Maps (id → type, name → schema). mergeLiftedSchemas folds type-lifted
-  // fields (char:limit, place:lat, …) into the schema map.
-  const depTypes = rt.read(typesFacet)
-  const depSchemas = mergeLiftedSchemas(rt.read(propertySchemasFacet), depTypes)
-
-  const types = new Map(base.types)
-  for (const [id, t] of depTypes) types.set(id, t)
-  const propertySchemas = new Map(base.propertySchemas)
-  for (const [name, s] of depSchemas) propertySchemas.set(name, s)
-  return { types, propertySchemas }
-}
 
 /**
  * Seeds the starter Tutorial subtree on a freshly-created personal
@@ -79,6 +37,12 @@ const seedTypeSnapshot = (repo: Repo): TypeRegistrySnapshot => {
  * runs against the bullets that reference the other pages. Returns the
  * id of the default Tutorial so callers can use it as a tutorial-first
  * landing target.
+ *
+ * The typed demos (todo / char-counter / srs / place / map) tag themselves
+ * against `repo.snapshotTypeRegistries()` — the Repo's live registry. Those
+ * plugin types are installed onto the Repo at construction via
+ * `staticDataExtensions`, so they're present here even though this runs at
+ * bootstrap, before the React app runtime is applied.
  */
 export const seedTutorial = async (
   repo: Repo,
@@ -87,7 +51,6 @@ export const seedTutorial = async (
   const vimTutorialId = uuidv4()
   const defaultTutorialId = uuidv4()
   const extensionsPageId = uuidv4()
-  const typeSnapshot = seedTypeSnapshot(repo)
 
   // Three parent-less pages; their root order keys don't really matter
   // (parent=null means no canonical sibling list) but `tx.create`
@@ -96,7 +59,7 @@ export const seedTutorial = async (
 
   await repo.tx(
     async tx => {
-      await seedPage(repo, tx, typeSnapshot, {
+      await seedPage(repo, tx, {
         id: vimTutorialId,
         workspaceId,
         orderKey: vimKey,
@@ -104,7 +67,7 @@ export const seedTutorial = async (
         aliases: [TUTORIAL_VIM_TITLE],
         children: tutorialOutline('vim'),
       })
-      await seedPage(repo, tx, typeSnapshot, {
+      await seedPage(repo, tx, {
         id: defaultTutorialId,
         workspaceId,
         orderKey: defaultKey,
@@ -112,7 +75,7 @@ export const seedTutorial = async (
         aliases: [TUTORIAL_DEFAULT_TITLE],
         children: tutorialOutline('default'),
       })
-      await seedPage(repo, tx, typeSnapshot, {
+      await seedPage(repo, tx, {
         id: extensionsPageId,
         workspaceId,
         orderKey: extensionsKey,
@@ -139,7 +102,6 @@ interface SeedPageArgs {
 const seedPage = async (
   repo: Repo,
   tx: Tx,
-  typeSnapshot: ReturnType<Repo['snapshotTypeRegistries']>,
   args: SeedPageArgs,
 ): Promise<void> => {
   await tx.create({
@@ -149,20 +111,13 @@ const seedPage = async (
     orderKey: args.orderKey,
     content: args.title,
   })
-  await repo.addTypeInTx(
-    tx,
-    args.id,
-    PAGE_TYPE,
-    { [aliasesProp.name]: args.aliases },
-    typeSnapshot,
-  )
-  await seedChildren(repo, tx, typeSnapshot, args.workspaceId, args.id, args.children)
+  await repo.addTypeInTx(tx, args.id, PAGE_TYPE, { [aliasesProp.name]: args.aliases })
+  await seedChildren(repo, tx, args.workspaceId, args.id, args.children)
 }
 
 const seedChildren = async (
   repo: Repo,
   tx: Tx,
-  typeSnapshot: ReturnType<Repo['snapshotTypeRegistries']>,
   workspaceId: string,
   parentId: string,
   nodes: ReadonlyArray<TutorialNode>,
@@ -181,10 +136,10 @@ const seedChildren = async (
       properties: node.properties,
     })
     if (node.type) {
-      await repo.addTypeInTx(tx, id, node.type, node.typeProperties ?? {}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, node.type, node.typeProperties ?? {})
     }
     if (node.children && node.children.length > 0) {
-      await seedChildren(repo, tx, typeSnapshot, workspaceId, id, node.children)
+      await seedChildren(repo, tx, workspaceId, id, node.children)
     }
   }
 }

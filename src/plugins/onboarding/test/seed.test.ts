@@ -18,6 +18,14 @@ import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { typesFacet } from '@/data/facets'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions'
+import { todoDataExtension } from '@/plugins/todo/dataExtension'
+import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
+import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
+import { geoDataExtension } from '@/plugins/geo/dataExtension'
 import { TODO_TYPE } from '@/plugins/todo/schema'
 import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType'
 import { charLimitProp } from '@/plugins/character-counter/properties'
@@ -34,6 +42,20 @@ import {
 
 const WS = 'ws-1'
 
+// The block-type data extensions the tutorial's demos depend on. A focused
+// list — NOT the full `staticDataExtensions` — so the seed tx doesn't register
+// the references/alias post-commit processors, which fire async and would make
+// the "single command_events row" assertion racy. The separate completeness
+// test below guards that production's `staticDataExtensions` actually contains
+// these (the original bug was char-counter + geo missing from it).
+const TUTORIAL_TYPE_EXTENSIONS = [
+  kernelDataExtension,
+  todoDataExtension,
+  characterCounterDataExtension,
+  srsReschedulingDataExtension,
+  geoDataExtension,
+]
+
 interface Harness {
   h: TestDb
   repo: Repo
@@ -45,11 +67,6 @@ const setup = async (): Promise<Harness> => {
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
-  // Plain repo — only the kernel PAGE/EXTENSION types Repo installs by default,
-  // exactly like the bootstrap phase where seedTutorial runs. This proves the
-  // seed is self-sufficient: it folds the demo plugins' types into its own
-  // snapshot (see seedTypeSnapshot), so the typed demos seed without the app
-  // runtime having registered those plugins on the repo.
   const repo = new Repo({
     db: h.db,
     cache,
@@ -57,6 +74,11 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
   })
+  // Mirror production: at construction the Repo gets its data-layer types from
+  // `setFacetRuntime` (see src/context/repo.tsx). Here we install just the
+  // tutorial's demo types so `repo.snapshotTypeRegistries()` resolves them at
+  // seed time.
+  repo.setFacetRuntime(resolveFacetRuntimeSync(TUTORIAL_TYPE_EXTENSIONS))
   return { h, repo }
 }
 
@@ -131,7 +153,7 @@ describe('seedTutorial', () => {
     const places = blocks.filter(b => b.hasType(PLACE_TYPE))
     expect(places).toHaveLength(4)
     expect([...new Set(places.map(b => b.peekProperty(placeLatProp)))].sort())
-      .toEqual([40.6892, 48.8584])
+      .toEqual([48.8584, 48.8606])
   })
 
   it('seeds advanced sections collapsed and keeps essentials expanded', async () => {
@@ -209,5 +231,17 @@ describe('seedTutorial', () => {
       'SELECT COUNT(*) AS count FROM command_events',
     )
     expect(rows[0]?.count).toBe(1)
+  })
+
+  // The seed runs at bootstrap against the Repo's construction-time registry,
+  // which is built from `staticDataExtensions` (see src/context/repo.tsx). So
+  // every block type the tutorial tags a demo with MUST be registered there,
+  // or `addType` throws and no tutorial seeds (the original char-counter / geo
+  // regression). Guard the production list directly — no DB, no processors.
+  it('staticDataExtensions registers every block type the tutorial seeds', () => {
+    const types = resolveFacetRuntimeSync(staticDataExtensions).read(typesFacet)
+    for (const typeId of [TODO_TYPE, CHAR_COUNTER_TYPE, SRS_SM25_TYPE, MAP_TYPE, PLACE_TYPE]) {
+      expect(types.has(typeId)).toBe(true)
+    }
   })
 })
