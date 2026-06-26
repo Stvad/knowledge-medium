@@ -63,13 +63,13 @@ const vimKeys = {
   newBelow: 'press `o` (or `Shift+O` to create above)',
   enterCreates: '— or, while editing any block, press `Enter` to split / create a new one',
   move: '`j` / `k` (or arrow keys)',
-  panelHop: '`h` / `l` (or arrow keys)',
+  panelHop: '`h` to the panel on the left, `l` to the right (or arrow keys)',
   firstLast: '`gg` jumps to the top of the panel, `Shift+G` to the last block in it',
   jumpMany: '`Ctrl+d` / `Ctrl+u` jump down / up by ~8 bullets',
   startSelect: 'press `Space` (or `v`) to select the focused bullet; `Shift+J` / `Shift+K` then grow the selection down / up — the first press selects the current block, each next press adds the neighbour',
   delete: 'press `d d` or `Delete`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
   properties: 'press `t`',
-  copyRef: 'focus the block and press `Y R` (yank reference); `Y E` yanks an embed, `Y Y` the whole subtree, `Y C` just this block\'s text, `Y L` a shareable link',
+  copyRef: 'focus the block and press `y r` (yank reference); `y e` yanks an embed, `y y` the whole subtree, `y c` just this block\'s text, `y l` a shareable link',
   paste: '`p` pastes after the focused block, `Shift+P` before',
   undo: '`u` (or `Cmd+Z` anywhere)',
   redo: '`Ctrl+R` (or `Cmd+Shift+Z` anywhere)',
@@ -97,7 +97,7 @@ const defaultKeys: typeof vimKeys = {
   startSelect: 'while editing, `Shift+↓` / `Shift+↑` at a block edge first select the current block, then extend the selection down / up with each further press',
   delete: 'select it (or several — see the **Multi-select** section) and press `Delete`; for a single empty block, `Backspace` at its start removes it and merges into the block above',
   properties: 'open the command palette with `Cmd+K` and run "Toggle block properties"',
-  copyRef: 'open the on-block quick-actions menu ("Copy Ref" / "Copy Embed"); keyboard yanks (`Y R` / `Y E`) need vim mode',
+  copyRef: 'open the on-block quick-actions menu ("Copy Ref" / "Copy Embed"); keyboard yanks (`y r` / `y e`) need vim mode',
   paste: '`Cmd+V` — pastes after the focused block',
   undo: '`Cmd+Z`',
   redo: '`Cmd+Shift+Z`',
@@ -149,7 +149,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       ...(variant === 'default'
         ? {
             children: [{
-              content: 'New to "vim keybindings"? **It lets you move and restructure your outline straight from the keyboard.** With it on, a block gains a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and from there the keys do the work — `j`/`k` between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `Y R` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
+              content: 'New to "vim keybindings"? **It lets you move and restructure your outline straight from the keyboard.** With it on, a block gains a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and from there the keys do the work — `j`/`k` between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `y r` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
             }],
           }
         : {}),
@@ -210,7 +210,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
         children: [
           {
             id: refDemoTargetId,
-            content: `👋 I am the demo target. Copy a ref or embed to me (${variant === 'vim' ? 'focus me and press `Y R` / `Y E`' : 'open my quick-actions menu → "Copy Ref" / "Copy Embed"'}), then paste in a new bullet to see the result.`,
+            content: `👋 I am the demo target. Copy a ref or embed to me (${variant === 'vim' ? 'focus me and press `y r` / `y e`' : 'open my quick-actions menu → "Copy Ref" / "Copy Embed"'}), then paste in a new bullet to see the result.`,
             children: [
               { content: "I'm a child of the demo target. Embeds bring children along — so the bare-embed bullet further down will render me too." },
             ],
@@ -349,7 +349,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'On a phone-sized screen the app swaps in touch affordances:',
       'A **bottom navigation bar** gives one-tap access to the sidebar, a new block, append-to-today, today\'s daily note, search, the command palette, and undo.',
       'While editing, a **keyboard toolbar** floats above the on-screen keyboard with indent / outdent, move up / down, `[[` page-reference and `((` block-reference inserts, undo / redo, and a Done button to dismiss the keyboard.',
-      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete. This is how you reach the per-block actions on touch — the same ones vim binds to keys (`z`, `t`, `Y R`, …) — without a keyboard.',
+      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete. This is how you reach the per-block actions on touch — the same ones vim binds to keys (`z`, `t`, `y r`, …) — without a keyboard.',
       'Swipe a block to the right to cycle its todo / done state.',
     ]),
 
