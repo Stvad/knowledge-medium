@@ -133,7 +133,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
   const vimNudge = (s: string) => (variant === 'default' ? ` ${s}` : '')
   const altLabel =
     variant === 'vim'
-      ? '**This is the vim-keybindings tutorial.** Vim mode is currently on. To turn it off, run **Manage extensions** from the command palette (`Cmd+K`) and untick **Vim normal mode**, then read [[Tutorial]] for the default keys.'
+      ? '**This is the vim-keybindings tutorial.** To follow it, vim mode needs to be on — if it isn\'t, run **Manage extensions** from the command palette (`Cmd+K`) and tick **Vim normal mode**. Prefer the default keys? See [[Tutorial]].'
       : '**This is the default tutorial.** Vim keybindings are off by default. Want them? Run **Manage extensions** from the command palette (`Cmd+K`), tick **Vim normal mode**, then read [[Tutorial (vim)]].'
 
   // Stable per-variant id for the block-ref / embed demo target. The
