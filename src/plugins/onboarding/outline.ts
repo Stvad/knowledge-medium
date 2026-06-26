@@ -318,35 +318,36 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     advancedSect('Agent runtime — drive this workspace from your terminal', [
       'The app exposes a runtime bridge for coding agents and scripts. The browser tab runs a local relay; a CLI in your terminal submits commands that execute **inside the live app runtime** — same `Repo`, same workspace, same PowerSync SQLite, same resolved facets.',
+      'Get the CLI: install the published package with `npm i -g @knowledge-medium/agent-cli` — that puts a `kmagent` command on your PATH. (Prefer not to install? Prefix any command with `npx @knowledge-medium/agent-cli` instead of `kmagent`.)',
       'Pairing (one-time per browser profile + app origin):',
       {
-        content: '`yarn agent connect` — prints an app URL, opens the token dialog when you load it, then waits for you to paste the token back into the terminal. The secret persists in `~/.config/knowledge-medium/agent-bridge.json`.',
+        content: '`kmagent connect` — prints an app URL, opens the token dialog when you load it, then waits for you to paste the token back into the terminal. The secret persists in `~/.config/knowledge-medium/agent-bridge.json`.',
       },
       'Common operations once paired:',
       {
         content: 'Status & health',
         children: [
-          { content: '`yarn agent ping` — health-check the bridge.' },
-          { content: '`yarn agent status` — detailed `/health` info (uses the persisted secret).' },
+          { content: '`kmagent ping` — health-check the bridge.' },
+          { content: '`kmagent status` — detailed `/health` info (uses the persisted secret).' },
         ],
       },
       {
         content: 'Querying the workspace',
         children: [
-          { content: '`yarn agent sql all "SELECT id, content FROM blocks LIMIT 5"` — runs against the local SQLite mirror.' },
-          { content: "`yarn agent eval 'return repo.activeWorkspaceId'` — runs arbitrary JS in the app runtime; the return value is serialized back." },
+          { content: '`kmagent sql all "SELECT id, content FROM blocks LIMIT 5"` — runs against the local SQLite mirror.' },
+          { content: "`kmagent eval 'return repo.activeWorkspaceId'` — runs arbitrary JS in the app runtime; the return value is serialized back." },
         ],
       },
       {
         content: 'Mutating the workspace',
         children: [
-          { content: '`yarn agent create-block \'{"parentId":"<id>","content":"Created by agent"}\'` — typed helper for the common case.' },
-          { content: "`yarn agent eval 'await createBlock({parentId: ..., content: ...})'` — same operation via the eval surface; useful for batching or conditional logic." },
+          { content: '`kmagent create-block \'{"parentId":"<id>","content":"Created by agent"}\'` — typed helper for the common case.' },
+          { content: "`kmagent eval 'await createBlock({parentId: ..., content: ...})'` — same operation via the eval surface; useful for batching or conditional logic." },
         ],
       },
       'Runtime bindings available inside `eval`: `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document`. Use these to script edits, drive extensions, dump subtrees, or wire an agent into your workflow.',
       'Defaults & security: the bridge binds to `http://127.0.0.1:8787` (loopback only); only configured app origins can talk to it. Override the pairing target with `AGENT_RUNTIME_APP_URL`, browser endpoint with `VITE_AGENT_RUNTIME_URL`, CLI endpoint with `AGENT_RUNTIME_URL`. Allow extra origins via `AGENT_RUNTIME_ALLOWED_ORIGINS` (comma-separated, no paths).',
-      'See the **Agent Runtime Access** section of `README.md` for full setup, plus `yarn agent pair-url` if you want a bridge-only pairing URL.',
+      'See the **Agent Runtime Access** section of `README.md` for full setup, plus `kmagent pair-url` if you want a bridge-only pairing URL.',
     ]),
   ]
 }
