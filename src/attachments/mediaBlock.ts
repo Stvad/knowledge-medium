@@ -68,3 +68,25 @@ export const MEDIA_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
  *  — MIME types are case-insensitive (RFC 2045) even though `File.type` is lowercase. */
 export const isImageMime = (mime: string | undefined): boolean =>
   typeof mime === 'string' && mime.toLowerCase().startsWith('image/')
+
+// ──── The workspace-level ASSETS container (§11) ────
+//
+// Captured media blocks are dedup'd by content (one block per content-key), so an
+// asset is SHARED across every note that embeds it. Parenting it under the pasting
+// note would let that note's subtree soft-delete cascade-tombstone the shared
+// asset and break other embeds (§11). Instead every asset block is anchored under
+// one flat per-workspace ASSETS container (a kernel page), and notes carry only
+// the `!((id))` embed. The container is a normal navigable page tagged `assets`,
+// so an asset browser can list it via `subscribeBlocks({ types: [ASSETS_TYPE] })`.
+
+export const ASSETS_TYPE = 'assets'
+/** uuid-v5 namespace for the per-workspace assets container; its id is
+ *  `uuidv5(workspaceId, ASSETS_NS)` (see {@link kernelPageBlockId}). */
+export const ASSETS_NS = 'b6e4d9a1-2f47-4c3e-9a0d-7c1e8f5b2a36'
+export const ASSETS_ALIAS = 'Assets'
+
+export const ASSETS_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
+  id: ASSETS_TYPE,
+  label: 'Assets',
+  description: 'The workspace-level container that holds content-addressed media attachment blocks.',
+})
