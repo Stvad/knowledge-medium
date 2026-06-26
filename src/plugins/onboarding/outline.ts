@@ -339,8 +339,9 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       `Paste blocks: ${km.paste}.`,
     ]),
 
-    advancedSect('Preferences, themes & extensions', [
+    advancedSect('Settings — preferences, shortcuts, themes & extensions', [
       `Open preferences: run **Open preferences** from the command palette (${sharedKeys.commandPalette}) — it has no default shortcut.`,
+      'Remap any shortcut: run **Customize keyboard shortcuts** from the command palette. It lists every action grouped by context — click a binding and press the new keys to rebind it, or reset / disable it; conflicts are flagged, and your overrides sync to your other devices.',
       'Change the look: each theme has its own command — run **Theme: <name>** from the command palette to apply it directly (e.g. `Theme: Solarized Dark`). Eight ship built-in — light and dark variants of Sunset Warm, Indigo, and Solarized, plus a plain Light and Dark — and extensions can register their own.',
       "Run **Manage extensions** from the command palette to open the extensions tree — every extension can be toggled on or off there, and the toggle syncs to your other devices. Vim mode itself is an extension (`system:vim-normal-mode`); it's off by default. Tick it to get vim normal-mode keys (and switch this tutorial to the vim variant); untick it for the default click-to-edit experience.",
     ]),
@@ -351,6 +352,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'While editing, a **keyboard toolbar** floats above the on-screen keyboard with indent / outdent, move up / down, `[[` page-reference and `((` block-reference inserts, undo / redo, and a Done button to dismiss the keyboard.',
       '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete. This is how you reach the per-block actions on touch — the same ones vim binds to keys (`z`, `t`, `y r`, …) — without a keyboard.',
       'Swipe a block to the right to cycle its todo / done state.',
+      'Scrub a date: drag a **dated** block sideways with **two fingers** — right moves the date forward, left back, with an overlay previewing the new date as you drag. Two fingers so it never clashes with one-finger scroll or the swipe menu. For a bigger jump, the swipe menu has a **Reschedule** sheet.',
     ]),
 
     advancedSect('Workspaces & encryption', [
