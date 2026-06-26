@@ -55,7 +55,9 @@ describe('byte transform (encodeBytes / decodeBytes)', () => {
       const opened = await decodeBytes(sealed, 'e2ee', getCek, ref)
       expect(Uint8Array.from(opened)).toEqual(bytes)
       expect(await verifyContentHash(opened, ref.contentHash)).toBe(true)
-    })
+      // Heavy by design (1 MiB fill + seal/open + a 1 MiB deep-equal); give it
+      // headroom so a contended CI runner doesn't trip the 5s default timeout.
+    }, 30_000)
 
     it('throws when the workspace key is unavailable (fail-closed, never plaintext)', async () => {
       const bytes = sampleBytes()
