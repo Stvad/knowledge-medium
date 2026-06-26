@@ -9,6 +9,17 @@ runtime, so you can reshape it from inside. It runs in the browser as an
 installable PWA, is local-first (instant, offline-capable), and syncs across
 devices via PowerSync + Supabase.
 
+**The idea:** log in and you get an opinionated knowledge-management tool (think
+Notion / Roam / Obsidian) you can be productive in immediately — but those
+defaults are an *example, not a prescription*. They're assembled from a small set
+of primitives, so you (or a coding agent on your behalf) can remix them into the
+tool that fits how your mind works; "Notion" and "Roam" are just different views
+over the same blocks. The hard, generic parts — sync, collaboration, offline,
+storage, querying — are solved once and exposed as building blocks, so shaping
+the app to you means composing components instead of rebuilding infrastructure.
+(In the spirit of [malleable
+software](https://www.inkandswitch.com/essay/malleable-software/).)
+
 **What's different:** one universal `blocks` table for everything (pages, todos,
 flashcards, places, settings, renderer source — set apart only by multi-valued
 types + typed properties); the whole app is facet-based extensions you can author
