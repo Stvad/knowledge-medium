@@ -18,6 +18,18 @@ import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { todoDataExtension } from '@/plugins/todo/dataExtension'
+import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
+import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
+import { geoDataExtension } from '@/plugins/geo/dataExtension'
+import { TODO_TYPE } from '@/plugins/todo/schema'
+import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType'
+import { charLimitProp } from '@/plugins/character-counter/properties'
+import { SRS_SM25_TYPE } from '@/plugins/srs-rescheduling/schema'
+import { MAP_TYPE, PLACE_TYPE } from '@/plugins/geo/blockTypes'
+import { placeLatProp } from '@/plugins/geo/properties'
 import { seedTutorial } from '../seed'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
 import {
@@ -46,6 +58,19 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
   })
+  // Load the REAL plugin data-extensions whose types the tutorial's demo
+  // blocks tag themselves with (todo / char-counter / srs / geo) — mirroring
+  // the loaded-plugin runtime instead of re-declaring types here. seedTutorial
+  // then resolves those types exactly as it does in the app. (kernelDataExtension
+  // carries the PAGE/EXTENSION types Repo installs by default; re-include it
+  // since setFacetRuntime replaces the kernel install.)
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    todoDataExtension,
+    characterCounterDataExtension,
+    srsReschedulingDataExtension,
+    geoDataExtension,
+  ]))
   return { h, repo }
 }
 
@@ -98,6 +123,29 @@ describe('seedTutorial', () => {
     expect(data?.content).toBe(TUTORIAL_VIM_TITLE)
     expect(page.peekProperty(aliasesProp)).toEqual([TUTORIAL_VIM_TITLE])
     expect(page.hasType(PAGE_TYPE)).toBe(true)
+  })
+
+  it('seeds the typed feature demos with their real plugin types', async () => {
+    await seedTutorial(env.repo, WS)
+    const ids = await listAllBlockIds(env.h)
+    for (const id of ids) await env.repo.load(id)
+    const blocks = ids.map(id => env.repo.block(id))
+    const hasTyped = (typeId: string) => blocks.some(b => b.hasType(typeId))
+
+    expect(hasTyped(TODO_TYPE)).toBe(true)
+    expect(hasTyped(SRS_SM25_TYPE)).toBe(true)
+    expect(hasTyped(MAP_TYPE)).toBe(true)
+
+    // Char-counter demo carries its type-lifted `char:limit` (set via addType).
+    const charBlock = blocks.find(b => b.hasType(CHAR_COUNTER_TYPE))
+    expect(charBlock?.peekProperty(charLimitProp)).toBe(280)
+
+    // Two Place demos under the map — one pair per Tutorial variant (vim +
+    // default), so four in total, pinned at their own coordinates.
+    const places = blocks.filter(b => b.hasType(PLACE_TYPE))
+    expect(places).toHaveLength(4)
+    expect([...new Set(places.map(b => b.peekProperty(placeLatProp)))].sort())
+      .toEqual([40.6892, 48.8584])
   })
 
   it('seeds advanced sections collapsed and keeps essentials expanded', async () => {

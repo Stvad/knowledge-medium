@@ -19,6 +19,14 @@ import {
 } from '@/data/properties'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { exampleExtensions } from '@/extensions/exampleExtensions.js'
+// Demo blocks tag themselves with these plugin types so the tutorial shows
+// each feature live. Importing plugin constants is fine now that onboarding
+// is itself a plugin (plugin → plugin); the seed test loads the same
+// plugins' data-extensions so the types resolve there too.
+import { TODO_TYPE } from '@/plugins/todo/schema'
+import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType'
+import { SRS_SM25_TYPE } from '@/plugins/srs-rescheduling/schema'
+import { MAP_TYPE, PLACE_TYPE } from '@/plugins/geo/blockTypes'
 
 export type TutorialNode = {
   /** Pre-allocated block id. When omitted the seeder generates a UUID.
@@ -242,7 +250,12 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     advancedSect('Typed blocks — behaviour from a tag', [
       'Beyond identity, a type can attach *behaviour* to a block. Add the type via the `types` property (see above) or a block\'s quick-actions menu. A few that ship by default:',
-      "**Todo** — type `todo` adds a checkbox to the block; click it to toggle done (done items strike through). Great for inline task lists anywhere in your outline.",
+      {
+        content: "**Todo** — type `todo` adds a checkbox to the block; click it to toggle done (done items strike through). Great for inline task lists anywhere in your outline.",
+        children: [
+          { content: 'Buy milk — tick the checkbox to mark me done.', type: TODO_TYPE },
+        ],
+      },
       {
         content: "**Video** — paste a video URL (YouTube, Vimeo, and more) as a block's content and it renders an inline player — no type needed. Switch the player to its **notes view** to jot notes beside the video; `1:23`-style timestamps you type there become clickable seeks. The block below is a live demo (already in notes view):",
         children: [
@@ -255,12 +268,30 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
           },
         ],
       },
-      "**Character counter** — type `char-counter` shows a live character count under the block, with an optional per-block limit. The limit is visual only — it never blocks typing.",
+      {
+        content: "**Character counter** — type `char-counter` shows a live character count under the block, with an optional per-block limit. The limit is visual only — it never blocks typing.",
+        children: [
+          {
+            content: 'Draft a tweet here — edit me and watch the count below track length against the 280 limit (it warns past it, never blocks).',
+            type: CHAR_COUNTER_TYPE,
+            // `char:limit` is a type-lifted field on char-counter, so it's set
+            // via addType (typeProperties), not a raw property.
+            typeProperties: { 'char:limit': 280 },
+          },
+        ],
+      },
       {
         content: '**Spaced repetition** — turn any block into a flashcard and let the app schedule reviews for you (SM-2.5 algorithm).',
         children: [
           { content: 'Grade a focused block to make it a card and set its next review: open its quick-actions menu and pick a grade' + (variant === 'vim' ? ', or press `Ctrl+Shift+1`–`4` (Again / Hard / Good / Easy)' : '') + '.' },
           { content: 'Run **Open SRS review** from the command palette (or `Ctrl+Shift+R`) to open a deck of every card due today or earlier. In the deck, reveal the answer (`Space` / `Enter`) then grade it `1`–`4` (or click) — the card reschedules and the deck moves on.' },
+          {
+            content: 'Demo card — What\'s the capital of France? Grade me (or open SRS review) to schedule my first review; the answer is the child below.',
+            type: SRS_SM25_TYPE,
+            children: [
+              { content: 'Paris' },
+            ],
+          },
         ],
       },
     ]),
@@ -271,7 +302,16 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       '`@` with no query (or `@here`) surfaces a **Use current location** option — pulls nearby POIs from browser geolocation, plus "Drop pin here" and "Create named location…" fallbacks for ad-hoc spots.',
       `Give any block a **location property**: open properties (${km.properties}) and add a \`location\` field — its value is a ref to a Place page. Many notes can share one Place (the coords live in exactly one block, so editing the Place updates every reference).`,
       'After your first place is created, a **Locations** page appears at the workspace root holding every Place. Open it to see a **map of every Place** in your workspace; click a marker for an info card with name/address and a jump-to link.',
-      'Make any block its own map: add `map` to its `types`. The block then renders an inline map above its children showing every Place reachable in its subtree — both descendants with a `location` prop AND descendants that body-wikilink to a `[[Place]]`. A trip page tagged `map` becomes a map of the trip; a project page tagged `map` becomes a map of the project.',
+      {
+        content: 'Make any block its own map: add `map` to its `types`. The block then renders an inline map above its children showing every Place reachable in its subtree — both descendants with a `location` prop AND descendants that body-wikilink to a `[[Place]]`. A trip page tagged `map` becomes a map of the trip; a project page tagged `map` becomes a map of the project. Live demo (a `map`-tagged block over two Places):',
+        type: MAP_TYPE,
+        children: [
+          // Place blocks pin at their own lat/lng. `place:*` are type-lifted
+          // fields on PLACE_TYPE, so coordinates go via addType (typeProperties).
+          { content: 'Eiffel Tower', type: PLACE_TYPE, typeProperties: { 'place:lat': 48.8584, 'place:lng': 2.2945 } },
+          { content: 'Statue of Liberty', type: PLACE_TYPE, typeProperties: { 'place:lat': 40.6892, 'place:lng': -74.0445 } },
+        ],
+      },
       'Each Place page itself renders with a mini-map of just that one pin, so a Place behaves like a "location card" with the coordinates always visible.',
     ]),
 
