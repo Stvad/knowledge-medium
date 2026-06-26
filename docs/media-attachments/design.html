@@ -1030,9 +1030,14 @@ correlation). A <strong>plaintext</strong> workspace has no secret to protect, s
     unlocked before this feature ships holds a non-extractable WK handle but never derived
     <code>K_id</code> (the raw bytes are long since zeroed, and a non-extractable AES-GCM key can't be
     HKDF'd or exported). Such a device must <strong>re-paste the WK once</strong> (or re-unlock) to
-    populate <code>K_id</code>; until it does, media on that device is <em>fail-closed</em>
-    (broken-image placeholder, never plaintext) while text keeps working. Cheap for the small coordinated
-    fleet, but a named step — not a silent break.</li>
+    populate <code>K_id</code>. <strong>Implemented choice (the simpler one): a <code>K_id</code>-less
+    record is treated as LOCKED</strong> — the workspace gate prompts a re-paste and the whole workspace
+    (text included) is read-only until it's supplied, rather than a media-only fail-closed path that keeps
+    text live. We took the uniform gate (one "no usable key ⇒ locked" rule) over the narrower media-only
+    carve-out; the stored WK handle is <em>preserved</em> (never discarded), so the re-paste fully restores
+    access and the only cost is a one-time re-paste — acceptable for the small coordinated fleet. A named
+    step, not a silent break. (<code>src/sync/keys/resolveWorkspaceEntry.ts</code> gates on
+    <code>contentKeyHmac !== null</code>.)</li>
   <li><strong>What this removes</strong> (vs a block-id path): the idempotency token (§9/§10.1), the
     write-once monotonicity rule (§5.1), and duplicate-object GC (§11) — the path <em>is</em> the
     idempotency key and the immutability guarantee. Fewer moving parts, not just better scaling.</li>

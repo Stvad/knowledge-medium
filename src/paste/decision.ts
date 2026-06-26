@@ -101,9 +101,24 @@ interface PasteRequestBase {
  * verbatim" plugin works on single-line shell pastes too.
  */
 export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
-  // File(s) present → capture as media, ahead of any text branch (an image paste
-  // often also carries an incidental text/html representation we ignore).
+  // File(s) present → capture as media. Files and text are INDEPENDENT aspects of a
+  // paste, not an either/or: a renderer that gets `media` for a paste also carrying
+  // text captures the file(s) AND pastes the text via `textPasteDecision` — so e.g.
+  // a spreadsheet copy (TSV text + a PNG rendering) attaches the image and keeps the
+  // data. The `media` kind here decides only the FILE half.
   if (request.files && request.files.length > 0) return {kind: 'media'}
+  return textPasteDecision(request)
+}
+
+/** A text-only paste outcome — {@link PasteDecision} minus `media`. */
+export type TextPasteDecision = Exclude<PasteDecision, {kind: 'media'}>
+
+/** The text half of the default decision (files ignored). Split out so a paste that
+ *  carries files AND text can apply BOTH — capture media, then paste the text using
+ *  this. Never returns `media`. Single-line text lands verbatim in the `editor`
+ *  (native-like caret insert) but parses as an outline in the `shell` (no caret);
+ *  multiline always splits. */
+export const textPasteDecision = (request: PasteRequest): TextPasteDecision => {
   if (request.intent === 'single-block') return {kind: 'single-block'}
   if (request.text.includes('\n')) return {kind: 'split'}
   return request.surface === 'editor' ? {kind: 'single-block'} : {kind: 'split'}

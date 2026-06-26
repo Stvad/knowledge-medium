@@ -25,7 +25,7 @@ import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/paste/operations.js'
-import { pasteDecisionVerb } from '@/paste/decision.js'
+import { pasteDecisionVerb, textPasteDecision, type PasteRequest } from '@/paste/decision.js'
 import { captureMediaFromFiles, reportCaptureFailures } from '@/attachments/assetUpload.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
@@ -487,14 +487,9 @@ export function DefaultBlockRenderer(
       // contributions the decision is the historical outline paste. The
       // decision is a pure, synchronous policy (`runSync`) — the clipboard text
       // is already in hand, so nothing to await before deciding.
-      const decision = pasteDecisionVerb.runSync(runtime, {
-        text: pastedText,
-        html,
-        files: fileList,
-        intent: 'split',
-        surface: 'shell',
-      })
-      if (decision.kind === 'media') {
+      const request: PasteRequest = {text: pastedText, html, files: fileList, intent: 'split', surface: 'shell'}
+      const decided = pasteDecisionVerb.runSync(runtime, request)
+      if (decided.kind === 'media') {
         // Capture file(s) as media blocks embedded under the focused block (§11).
         const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
         if (workspaceId && fileList.length > 0) {
@@ -504,13 +499,15 @@ export function DefaultBlockRenderer(
         } else if (fileList.length > 0) {
           console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
         }
-        return
+        // Files and text are independent: a media paste that also carries text
+        // attaches the file(s) AND pastes the text. No text → done here.
+        if (!pastedText.trim()) return
       }
-      // The default decision is surface-aware: a plain single-line shell
-      // paste resolves to `split` (parse as outline, the historical
-      // behavior), so `single-block` here only ever comes from an explicit
-      // override and is honored literally — the applied behavior matches
-      // the decision.
+      // The TEXT half: when the paste was media, also paste any accompanying text via
+      // the file-less decision; otherwise the decision is already a text outcome. The
+      // shell hardcodes intent 'split', so `single-block` only comes from an explicit
+      // override and is honored literally — the applied behavior matches the decision.
+      const decision = decided.kind === 'media' ? textPasteDecision(request) : decided
       const pasted = await pasteMultilineText(decision.text ?? pastedText, block, repo, {
         scopeRootId,
         asSingleBlock: decision.kind === 'single-block',

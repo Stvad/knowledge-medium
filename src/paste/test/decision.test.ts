@@ -4,6 +4,7 @@ import type { PasteChordIntent } from '../operations.ts'
 import {
   defaultPasteDecision,
   pasteDecisionVerb,
+  textPasteDecision,
   type PasteCaret,
   type PasteDecision,
   type PasteRequest,
@@ -55,13 +56,31 @@ describe('defaultPasteDecision', () => {
       .toEqual({kind: 'split'})
   })
 
-  it('captures as media when file(s) are present, ahead of any text/intent branch', () => {
+  it('decides media for the FILE half when file(s) are present (text handled separately)', () => {
+    // The decision covers only the file half; the renderer also pastes any
+    // accompanying text via textPasteDecision (the "do both" behavior).
     expect(defaultPasteDecision(request({files: [pngFile()], text: 'incidental', intent: 'single-block'})))
       .toEqual({kind: 'media'})
   })
 
   it('ignores an empty files array (falls through to the text branch)', () => {
     expect(defaultPasteDecision(request({files: [], text: 'a\nb'}))).toEqual({kind: 'split'})
+  })
+})
+
+describe('textPasteDecision (the text half — applied alongside media when a paste carries both)', () => {
+  it('single-block chord → single-block', () => {
+    expect(textPasteDecision(request({intent: 'single-block', text: 'a\nb'}))).toEqual({kind: 'single-block'})
+  })
+  it('multiline plain text → split', () => {
+    expect(textPasteDecision(request({text: 'a\nb'}))).toEqual({kind: 'split'})
+  })
+  it('single-line is surface-aware: editor → single-block, shell → split', () => {
+    expect(textPasteDecision(request({text: 'x', surface: 'editor'}))).toEqual({kind: 'single-block'})
+    expect(textPasteDecision(request({text: 'x', surface: 'shell'}))).toEqual({kind: 'split'})
+  })
+  it('ignores files entirely — the media half is captured separately', () => {
+    expect(textPasteDecision(request({files: [pngFile()], text: 'a\nb'}))).toEqual({kind: 'split'})
   })
 })
 

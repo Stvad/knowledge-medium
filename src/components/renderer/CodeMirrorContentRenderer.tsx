@@ -12,7 +12,7 @@ import {
   planEditModeMultilinePaste,
   planSingleBlockPaste,
 } from '@/paste/operations.js'
-import { pasteDecisionVerb } from '@/paste/decision.js'
+import { pasteDecisionVerb, textPasteDecision, type PasteRequest } from '@/paste/decision.js'
 import { captureMediaFromFiles, reportCaptureFailures } from '@/attachments/assetUpload.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -90,9 +90,10 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // on the paste-time position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
-    const decision = pasteDecisionVerb.runSync(runtime, {text, html, files: fileList, intent, surface: 'editor', caret})
+    const request: PasteRequest = {text, html, files: fileList, intent, surface: 'editor', caret}
+    const decided = pasteDecisionVerb.runSync(runtime, request)
 
-    if (decision.kind === 'media') {
+    if (decided.kind === 'media') {
       // Capture the file(s) as content-addressed media blocks embedded under the
       // current block (§11). Async + fire-and-forget — the up-lane handles the
       // upload; a failure degrades to a broken-asset placeholder, never a throw.
@@ -104,8 +105,14 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       } else if (fileList.length > 0) {
         console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
       }
-      return
+      // Files and text are independent: an image-with-text paste attaches the image
+      // AND pastes the text. Image-only (no meaningful text) is done here.
+      if (!text.trim()) return
     }
+
+    // The TEXT half: when the paste was media, also paste any accompanying text via
+    // the file-less decision; otherwise the decision is already a text outcome.
+    const decision = decided.kind === 'media' ? textPasteDecision(request) : decided
 
     if (decision.kind === 'single-block') {
       const plan = planSingleBlockPaste(decision.text ?? text, {
