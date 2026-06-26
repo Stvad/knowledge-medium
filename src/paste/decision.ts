@@ -144,11 +144,13 @@ export const pasteDecisionVerb = defineVerbFacet<PasteRequest, PasteDecision>({
   onError: 'fallback',
   // Guard the renderers (which read `decision.kind`/`.text` right after
   // `preventDefault`) against an untyped plugin returning `undefined`/`{}`:
-  // an invalid shape falls back to `defaultPasteDecision`.
+  // an invalid shape falls back to `defaultPasteDecision`. `text` is validated
+  // UNIFORMLY across kinds (string-or-absent) — including `media`, which carries
+  // no text — so a malformed `{kind:'media', text: 123}` is rejected too, rather
+  // than slipping through a kind-specific short-circuit.
   validateResult: decision =>
     decision != null &&
     (decision.kind === 'single-block' || decision.kind === 'split' || decision.kind === 'media') &&
-    ((decision.kind === 'media') ||
-      ((decision as {text?: unknown}).text === undefined ||
-        typeof (decision as {text?: unknown}).text === 'string')),
+    ((decision as {text?: unknown}).text === undefined ||
+      typeof (decision as {text?: unknown}).text === 'string'),
 })

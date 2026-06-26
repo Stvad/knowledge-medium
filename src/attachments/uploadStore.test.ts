@@ -121,6 +121,22 @@ for (const backend of backends) {
       expect(await store.get('u1', 'media:ck-abc')).toBeNull()
     })
 
+    it('re-arming in the SAME clock ms still advances stagedAt (strictly monotonic, so the CAS can’t be defeated)', async () => {
+      // The clock stays at 1000 across both stages (a same-millisecond re-paste).
+      // If stagedAt were a bare Date.now(), the re-arm would reuse 1000 and a stale
+      // drain holding stagedAt=1000 would MATCH the live record and bury it. The
+      // per-store monotonic clock bumps the second stamp so the stale CAS misses.
+      await store.stage(stageInput()) // stagedAt 1000
+      const first = (await store.get('u1', 'media:ck-abc'))?.stagedAt
+      await store.stage(stageInput()) // re-arm, clock still 1000
+      const second = (await store.get('u1', 'media:ck-abc'))?.stagedAt
+      expect(first).toBe(1000)
+      expect(second).toBeGreaterThan(first!)
+      // A drain decision computed from the FIRST stamp must not touch the re-arm.
+      await store.markFailed('u1', 'media:ck-abc', first)
+      expect((await store.get('u1', 'media:ck-abc'))?.status).toBe('staged')
+    })
+
     it('markFailed / recordAttempt with a STALE expectedStagedAt no-op — a re-paste re-armed the record', async () => {
       await store.stage(stageInput()) // stagedAt 1000
       await store.promote('u1', 'media:ck-abc')

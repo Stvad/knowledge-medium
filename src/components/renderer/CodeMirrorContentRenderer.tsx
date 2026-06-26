@@ -13,7 +13,7 @@ import {
   planSingleBlockPaste,
 } from '@/paste/operations.js'
 import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
-import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
+import { fireCaptureMedia } from '@/paste/captureMediaVerb.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -100,9 +100,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       // handles the upload; a failure degrades to a broken-asset placeholder.
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
       if (workspaceId && fileList.length > 0) {
-        void Promise.resolve(
-          captureMediaVerb.runSync(runtime, {repo, workspaceId, parentBlockId: block.id, files: fileList}),
-        ).catch((err) => console.warn('[media] paste capture failed', err))
+        fireCaptureMedia(runtime, {repo, workspaceId, parentBlockId: block.id, files: fileList})
       } else if (fileList.length > 0) {
         console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
       }

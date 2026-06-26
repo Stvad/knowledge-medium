@@ -21,7 +21,7 @@
  * an effectful verb must never re-run its default after a partial effect.
  */
 import type { Repo } from '@/data/repo.js'
-import { defineVerbFacet } from '@/facets/verbFacet.js'
+import { defineVerbFacet, type VerbRuntime } from '@/facets/verbFacet.js'
 
 export interface CaptureMediaInput {
   readonly repo: Repo
@@ -40,3 +40,29 @@ export const captureMediaVerb = defineVerbFacet<CaptureMediaInput, void | Promis
   syncResultMayBePromise: true,
   onError: 'rethrow',
 })
+
+/**
+ * Fire the capture verb from a paste/drop handler, fire-and-forget. The single
+ * call site both renderers use, and TOTAL by construction: a buggy capture
+ * plugin must never break the host paste handler (the text half still pastes).
+ *
+ * Two throw paths are swallowed here, not one:
+ *   - an ASYNC rejection (the impl's `Promise<void>` rejects) → the trailing
+ *     `.catch`;
+ *   - a SYNCHRONOUS throw — a `decorator`/`impl` that throws before returning a
+ *     promise, which under `onError: 'rethrow'` propagates straight out of
+ *     `runSync` and would otherwise escape the `.catch` (it's evaluated before
+ *     `Promise.resolve` exists) → the surrounding `try`.
+ * The shipped impl is `async` so it can only reject (the async path), but the
+ * verb is an extension point — a third-party confirm-before-capture guard can
+ * throw synchronously, so the host must be defended against both.
+ */
+export const fireCaptureMedia = (runtime: VerbRuntime, input: CaptureMediaInput): void => {
+  try {
+    void Promise.resolve(captureMediaVerb.runSync(runtime, input)).catch((err: unknown) =>
+      console.warn('[media] paste capture failed', err),
+    )
+  } catch (err) {
+    console.warn('[media] paste capture failed', err)
+  }
+}

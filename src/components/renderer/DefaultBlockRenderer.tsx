@@ -26,7 +26,7 @@ import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/paste/operations.js'
 import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
-import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
+import { fireCaptureMedia } from '@/paste/captureMediaVerb.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -494,9 +494,7 @@ export function DefaultBlockRenderer(
         // the capture verb — the attachments plugin owns the effect (no import here).
         const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
         if (workspaceId && fileList.length > 0) {
-          void Promise.resolve(
-            captureMediaVerb.runSync(runtime, {repo, workspaceId, parentBlockId: block.id, files: fileList}),
-          ).catch((err) => console.warn('[media] paste capture failed', err))
+          fireCaptureMedia(runtime, {repo, workspaceId, parentBlockId: block.id, files: fileList})
         } else if (fileList.length > 0) {
           console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
         }

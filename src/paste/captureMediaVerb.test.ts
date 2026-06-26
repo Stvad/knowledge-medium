@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { captureMediaVerb, type CaptureMediaInput } from './captureMediaVerb.js'
+import { captureMediaVerb, fireCaptureMedia, type CaptureMediaInput } from './captureMediaVerb.js'
 
 const input = (over: Partial<CaptureMediaInput> = {}): CaptureMediaInput => ({
   repo: {} as Repo,
@@ -34,5 +34,37 @@ describe('captureMediaVerb (the media-capture effect seam)', () => {
     ])
     captureMediaVerb.runSync(runtime, input())
     expect(captured).toBe(false)
+  })
+})
+
+describe('fireCaptureMedia (the host-handler-safe fire-and-forget wrapper)', () => {
+  it('swallows a SYNCHRONOUS throw from a capture plugin (onError:rethrow would otherwise escape the paste handler)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // A confirm-before-capture decorator that throws synchronously — under
+    // onError:'rethrow' this propagates out of runSync, before the `.catch` exists.
+    const runtime = resolveFacetRuntimeSync([
+      captureMediaVerb.impl(() => {
+        throw new Error('sync capture plugin blew up')
+      }),
+    ])
+    // The host paste handler must not see the throw (the text half still pastes).
+    expect(() => fireCaptureMedia(runtime, input())).not.toThrow()
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('swallows an ASYNC rejection (no unhandled rejection escapes)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const runtime = resolveFacetRuntimeSync([
+      captureMediaVerb.impl(async () => {
+        throw new Error('async capture failed')
+      }),
+    ])
+    expect(() => fireCaptureMedia(runtime, input())).not.toThrow()
+    // Let the rejected microtask settle into the wrapper's `.catch`.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
   })
 })

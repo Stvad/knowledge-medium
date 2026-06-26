@@ -43,10 +43,14 @@ export interface ByteUploadRecord {
   readonly status: ByteUploadStatus
   /** Drain retry counter — bumped on a transient failure, bounds the retries. */
   readonly attempts: number
-  /** ms epoch when (re-)staged — `stage` re-stamps it on every re-arm. Doubles as
-   *  the age-based retry bound AND the optimistic-concurrency stamp a drain passes to
+  /** ms epoch when (re-)staged — `stage` re-stamps it on every re-arm. STRICTLY
+   *  increasing per store (see {@link monotonicClock}), so no two stamps from one
+   *  store ever collide. Doubles as the age-based retry bound AND the
+   *  optimistic-concurrency stamp a drain passes to
    *  {@link ByteUploadStore.markFailed}/{@link ByteUploadStore.recordAttempt} so a
-   *  stale terminal decision can't bury a concurrent re-paste (see those methods). */
+   *  stale terminal decision can't bury a concurrent re-paste (see those methods) —
+   *  the strict-increase is what makes that CAS, which keys on stamp inequality,
+   *  collision-free by construction rather than by clock luck. */
   readonly stagedAt: number
 }
 
@@ -108,16 +112,36 @@ const stagedRecord = (input: StageInput, stagedAt: number): ByteUploadRecord => 
 const supersededByReArm = (r: ByteUploadRecord, expectedStagedAt: number | undefined): boolean =>
   expectedStagedAt !== undefined && r.stagedAt !== expectedStagedAt
 
+/** Wrap a wall clock so successive reads STRICTLY increase, even within one
+ *  millisecond. The `stagedAt` CAS ({@link supersededByReArm}) keys on stamp
+ *  inequality, so two re-arms of the same record that land in the same `Date.now()`
+ *  ms must still get distinct stamps — otherwise a stale drain's `markFailed` would
+ *  match (`expectedStagedAt === r.stagedAt`) the live re-paste and bury it in
+ *  `failed`, which nothing re-drains. Each store instance owns one counter (one per
+ *  page in production), so same-page re-arms are collision-free by construction, not
+ *  by clock luck. `stagedAt` stays a usable epoch ms (the age-based retry bound): it
+ *  drifts above wall-clock by at most the same-ms collision count, i.e. negligibly. */
+const monotonicClock = (now: () => number): (() => number) => {
+  let last = 0
+  return () => {
+    last = Math.max(now(), last + 1)
+    return last
+  }
+}
+
 /** In-memory store. Tests + the fallback when IndexedDB is unavailable (the queue
  *  then lives only for the page's lifetime — a reload loses un-uploaded intents,
  *  the same failure class IndexedDB eviction already allows, recovered by re-paste). */
 export class InMemoryByteUploadStore implements ByteUploadStore {
   private readonly records = new Map<string, ByteUploadRecord>()
+  private readonly clock: () => number
 
-  constructor(private readonly now: () => number = () => Date.now()) {}
+  constructor(now: () => number = () => Date.now()) {
+    this.clock = monotonicClock(now)
+  }
 
   async stage(input: StageInput): Promise<void> {
-    this.records.set(uploadRecordId(input.userId, input.assetBlockId), stagedRecord(input, this.now()))
+    this.records.set(uploadRecordId(input.userId, input.assetBlockId), stagedRecord(input, this.clock()))
   }
 
   async get(userId: string, assetBlockId: string): Promise<ByteUploadRecord | null> {
@@ -184,8 +208,11 @@ const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
  *  before we proceed to the block tx (the whole point of staging-before-commit). */
 export class IndexedDbByteUploadStore implements ByteUploadStore {
   private dbPromise: Promise<IDBDatabase> | null = null
+  private readonly clock: () => number
 
-  constructor(private readonly now: () => number = () => Date.now()) {}
+  constructor(now: () => number = () => Date.now()) {
+    this.clock = monotonicClock(now)
+  }
 
   private openDb(): Promise<IDBDatabase> {
     if (!this.dbPromise) {
@@ -225,7 +252,7 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
   }
 
   async stage(input: StageInput): Promise<void> {
-    const record = stagedRecord(input, this.now())
+    const record = stagedRecord(input, this.clock())
     await this.tx('readwrite', store =>
       store.put(record, uploadRecordId(input.userId, input.assetBlockId)),
     )

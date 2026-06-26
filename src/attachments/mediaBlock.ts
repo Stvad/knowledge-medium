@@ -53,7 +53,7 @@ export const MEDIA_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   mediaMimeProp,
   mediaSizeProp,
   mediaFilenameProp,
-] as ReadonlyArray<PropertySchema<unknown>>
+]
 
 export const MEDIA_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
   id: MEDIA_TYPE,
