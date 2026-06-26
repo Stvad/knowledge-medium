@@ -9,6 +9,7 @@ import { kernelPageBlockId } from '@/data/kernelPage'
 import { hasBlockType } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { isBlockRefId, parseBlockRefs } from '@/plugins/references/referenceParser'
 import { computeContentHash } from '../sync/crypto/contentHash.js'
 import { deriveContentKey } from '../sync/crypto/contentKey.js'
 import { deriveContentKeyHmac } from '../sync/crypto/contentKey.js'
@@ -152,6 +153,23 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     // the ASSETS container exists + is tagged
     const container = await env.repo.load(kernelPageBlockId(WS, ASSETS_NS))
     expect(hasBlockType(container!, ASSETS_TYPE)).toBe(true)
+  })
+
+  it('emits a block-ref-parseable (UUID-shaped) embed — not literal !((media:…)) text', async () => {
+    // The block-ref grammar only matches UUID-shaped targets, so the asset id MUST
+    // be a UUID or the `!((id))` embed renders as literal text, not the media block.
+    const bytes = bytesOf(20)
+    const { assetBlockId } = await expectedIds(bytes, 'none', null)
+    expect(isBlockRefId(assetBlockId)).toBe(true)
+
+    const result = await captureMedia(
+      { workspaceId: WS, source: { bytes, mime: 'image/png' }, embedParentId: env.parentId },
+      deps(),
+    )
+    const embed = await env.repo.load(result.ok ? result.embedBlockId : '')
+    const refs = parseBlockRefs(embed!.content)
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).toMatchObject({ blockId: assetBlockId, embed: true })
   })
 
   it('STAGE happens before the block tx and PROMOTE only after commit (crash recovery)', async () => {
