@@ -1,11 +1,5 @@
 import { mapSettled } from './scan.js'
-import type { AuditIO, Finding } from './types.js'
-
-export interface AuditResult {
-  workspaces: number
-  scanned: number
-  findings: Finding[]
-}
+import type { AuditIO, AuditResult, Finding } from './types.js'
 
 /**
  * Pure orchestrator (design §10.1 / §17): scan every E2EE workspace's objects,

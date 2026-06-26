@@ -42,3 +42,9 @@ export interface AuditIO {
   listObjects(workspaceId: string): Promise<ObjectEntry[]>
   readObjectVerdict(path: string): Promise<ObjectVerdict>
 }
+
+export interface AuditResult {
+  workspaces: number
+  scanned: number
+  findings: Finding[]
+}

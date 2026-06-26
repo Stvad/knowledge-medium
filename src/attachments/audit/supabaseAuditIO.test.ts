@@ -99,9 +99,22 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
     expect((init?.headers as Record<string, string>).range).toBe(`bytes=0-${BINARY_ENVELOPE_MAGIC.length - 1}`)
   })
 
-  it("returns 'plaintext' for a non-magic head (incl. a short/empty body)", async () => {
+  it("returns 'plaintext' for a non-magic head", async () => {
     const io = ioWith(vi.fn<typeof fetch>(async () => bytesResponse(new Uint8Array([1, 2, 3]))))
     expect(await io.readObjectVerdict('ws1/k')).toBe('plaintext')
+  })
+
+  it("returns 'plaintext' for a 0-byte body (can't be an encb:v1: envelope)", async () => {
+    const io = ioWith(vi.fn<typeof fetch>(async () => bytesResponse(new Uint8Array([]))))
+    expect(await io.readObjectVerdict('ws1/empty')).toBe('plaintext')
+  })
+
+  it('percent-encodes each path segment in the Range-GET URL', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => bytesResponse(BINARY_ENVELOPE_MAGIC))
+    await ioWith(fetchFn).readObjectVerdict('ws 1/a b#c')
+    expect(fetchFn.mock.calls[0][0]).toBe(
+      `${URL}/storage/v1/object/authenticated/attachments/ws%201/a%20b%23c`,
+    )
   })
 
   it("returns 'gone' on 404 (deleted mid-scan)", async () => {
