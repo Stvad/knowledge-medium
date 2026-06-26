@@ -52,13 +52,16 @@ export const unlockWorkspaceWithKey = async (
   let contentKeyHmac: CryptoKey
   try {
     const wkBytes = parseWorkspaceKey(pastedKey)
-    key = await importWorkspaceKey(wkBytes)
-    // Derive K_id (§10) from the raw bytes in their ONLY in-scope window — the
-    // stored WK handle is non-extractable, so this is the one chance — then zero
-    // them. (Unlock previously let the parsed bytes drop to GC un-zeroed; this
-    // also closes that standalone leak.)
-    contentKeyHmac = await deriveContentKeyHmac(wkBytes)
-    wkBytes.fill(0)
+    try {
+      key = await importWorkspaceKey(wkBytes)
+      // Derive K_id (§10) from the raw bytes in their ONLY in-scope window — the
+      // stored WK handle is non-extractable, so this is the one chance.
+      contentKeyHmac = await deriveContentKeyHmac(wkBytes)
+    } finally {
+      // Zero on EVERY exit (success or a throw mid-import/derive) — unlock
+      // previously let the parsed bytes drop to GC un-zeroed; this closes that leak.
+      wkBytes.fill(0)
+    }
   } catch {
     return { ok: false, reason: 'format' }
   }

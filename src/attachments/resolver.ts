@@ -106,10 +106,27 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
         const userId = getUserId()
         if (!userId) return fail('deferred') // signed out — can't scope the store
 
-        // (1) Three-valued decode decision — defer fails CLOSED before any fetch.
+        // (1) Three-valued decode decision (§7.3) — defer fails CLOSED before any
+        // fetch. An UNEXPECTED value (a buggy / hostile policy provider) also fails
+        // closed: it must NOT fall through to plaintext passthrough — that default
+        // is exactly the two-valued downgrade this resolver exists to avoid.
         const materializability = await getMaterializability(workspaceId)
-        if (materializability === 'defer') return fail('deferred')
-        const mode: SyncMode = materializability === 'decrypt' ? 'e2ee' : 'none'
+        let mode: SyncMode
+        switch (materializability) {
+          case 'decrypt':
+            mode = 'e2ee'
+            break
+          case 'copy':
+            mode = 'none'
+            break
+          case 'defer':
+            return fail('deferred')
+          default:
+            console.warn(
+              `[assetResolver] unexpected materializability "${materializability}" for ${workspaceId}; failing closed`,
+            )
+            return fail('error')
+        }
 
         // (2) The content-key (§10) addresses both the local store and the remote
         // object. E2EE needs K_id; its absence (legacy device) fails closed — and

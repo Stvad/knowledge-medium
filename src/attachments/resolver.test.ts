@@ -240,4 +240,17 @@ describe('createAssetResolver — never throws out of resolve (the §7.3 fail-cl
     })
     expect(blobGet).not.toHaveBeenCalled()
   })
+
+  it('fails closed on an UNEXPECTED materializability value — never defaults to plaintext passthrough', async () => {
+    // A buggy/hostile policy provider returning a non-union value must not be
+    // treated as 'copy' (plaintext) — that is the two-valued downgrade hazard.
+    const { resolver, blobGet } = build({
+      getMaterializability: (async () => 'bogus') as unknown as AssetResolverDeps['getMaterializability'],
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'error',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
 })
