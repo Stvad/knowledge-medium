@@ -9,7 +9,8 @@
  * `src/attachments/audit/`; this is the thin I/O shell (env → run → print).
  *
  * Privilege/posture: uses a privileged key (reads every workspace's objects,
- * bypassing RLS) but only range-reads the 8-byte magic, never a full body; the
+ * bypassing RLS) but range-reads only the envelope head (the ≤36-byte magic +
+ * nonce + tag minimum), never a full body; the
  * workflow has no pull_request trigger so the secret is not exposed to forks.
  */
 import { createHash } from 'node:crypto'
