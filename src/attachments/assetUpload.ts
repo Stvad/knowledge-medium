@@ -3,7 +3,8 @@
  * pure capture / drain / reconcile pieces with the real app deps and runs the
  * background lane SINGLE-OWNER across tabs.
  *
- *   - capture  — {@link captureMediaFromFiles}: the renderer's paste/drop entry.
+ *   - capture  — {@link captureMediaFromFiles}: the renderer's paste entry (the
+ *     File-list plumbing is drop-ready, but only paste is wired today).
  *   - drain    — {@link armUploadDrain}: fire-and-forget after a capture.
  *   - reconcile — {@link runUploadReconcile}: at app start, AFTER PowerSync settles.
  *
@@ -19,7 +20,9 @@
 
 import { getActiveSyncResolver, getActiveUserId } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
+import { jsonPathForProperty } from '@/data/internals/typedBlockQuery.js'
 import { supabase } from '@/services/supabase.js'
+import { mediaHashProp } from './mediaBlock.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
 import {
@@ -106,6 +109,18 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
       store: getByteUploadStore(),
       byteStore: getByteStore(),
       isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
+      // Locked e2ee withholds committed blocks from `blocks`, so an absent block
+      // there is only conclusively-orphan when the workspace IS materializable.
+      isWorkspaceMaterializable: async (ws) => (await getMaterializability(ws)) !== 'defer',
+      // Any live-or-soft-deleted block in the workspace still carrying the hash
+      // (dedup sibling / undone-not-redone paste) keeps the shared bytes alive.
+      hashHasCarrier: async (ws, contentHash) => {
+        const row = await repo.db.getOptional<{ x: number }>(
+          `SELECT 1 AS x FROM blocks WHERE workspace_id = ? AND json_extract(properties_json, ?) = ? LIMIT 1`,
+          [ws, jsonPathForProperty(mediaHashProp.name), contentHash],
+        )
+        return row != null
+      },
       currentGeneration: uploadGeneration,
     }),
   )
