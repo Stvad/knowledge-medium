@@ -82,10 +82,10 @@
 -- the migration is RE-APPLIABLE: a bare CREATE POLICY aborts if the policy
 -- already exists (the same "preexisting from ad-hoc/manual testing" case the
 -- bucket converge above guards against), which would wedge the whole migration.
--- `postgres` CAN drop these — the baseline grants it ALL on storage.objects WITH
--- GRANT OPTION (via the supabase_storage_admin membership), and DROP/CREATE
--- POLICY require identical rights — so drop-then-create is the same convergence
--- discipline the bucket's `on conflict do update` uses.
+-- `postgres` CAN drop+recreate these: it is a MEMBER of supabase_storage_admin,
+-- which OWNS storage.objects, and policy DDL requires table OWNERSHIP (not just
+-- DML grants). Drop-then-create is the same convergence discipline the bucket's
+-- `on conflict do update` uses.
 do $$
 begin
   if to_regclass('storage.buckets') is null then

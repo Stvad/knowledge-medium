@@ -124,18 +124,21 @@ const listObjects = async (workspaceId) => {
  *  redacted path to locate it. */
 const classifyObject = async (objectPath) => {
   const encoded = objectPath.split('/').map(encodeURIComponent).join('/')
-  let res
+  // The WHOLE per-object op is under one catch: the fetch promise resolves on
+  // headers, so the body (await arrayBuffer) streams lazily and can drop
+  // mid-stream AFTER a 200/206 — that must also degrade to 'unreadable', never
+  // propagate and abort the whole audit.
   try {
-    res = await fetch(`${base}/storage/v1/object/authenticated/${BUCKET}/${encoded}`, {
+    const res = await fetch(`${base}/storage/v1/object/authenticated/${BUCKET}/${encoded}`, {
       headers: { ...authHeaders, range: `bytes=0-${PREFIX_BYTES - 1}` },
     })
+    if (res.status === 404) return 'gone' // vanished mid-scan — nothing to verify
+    if (!res.ok) return 'unreadable' // 416 empty / 5xx — flag, don't abort
+    const head = Buffer.from(await res.arrayBuffer()).subarray(0, PREFIX_BYTES)
+    return head.equals(ENCB_MAGIC) ? 'ok' : 'plaintext'
   } catch {
     return 'unreadable'
   }
-  if (res.status === 404) return 'gone' // vanished mid-scan — nothing to verify
-  if (!res.ok) return 'unreadable' // 416 empty / 5xx — flag, don't abort
-  const head = Buffer.from(await res.arrayBuffer()).subarray(0, PREFIX_BYTES)
-  return head.equals(ENCB_MAGIC) ? 'ok' : 'plaintext'
 }
 
 const main = async () => {
