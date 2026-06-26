@@ -92,9 +92,16 @@ begin
   -- file_size_limit is the server-side hard ceiling (50 MiB), well above the
   -- client's ~10 MB capture cap (§11/§16); it replaces the old Edge Function's
   -- in-isolate MAX_UPLOAD_BYTES backstop now that uploads are direct.
+  -- CONVERGE on conflict (don't just skip): if the bucket already exists from
+  -- ad-hoc/manual testing, a leftover `public = true` would make every object
+  -- world-readable via Storage's public URL path — bypassing the member-gated
+  -- read policy entirely — and a looser/absent limit would drop the upload
+  -- backstop. Re-assert both so the migration GUARANTEES private + capped.
   insert into storage.buckets (id, name, public, file_size_limit)
   values ('attachments', 'attachments', false, 52428800)
-  on conflict (id) do nothing;
+  on conflict (id) do update
+    set public = excluded.public,
+        file_size_limit = excluded.file_size_limit;
 
   -- RLS: read by workspace member. Path's first segment = <workspace_id>.
   execute $pol$
