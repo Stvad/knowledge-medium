@@ -869,31 +869,24 @@ so it can't strip a co-referencing block's bytes or strand its route to the serv
   and arms the drain. The drain acts only on <code>pending</code>+ records, so the "block still
   exists?" pre-PUT drop applies only <em>after</em> the commit (a post-commit deletion / undo) and
   never to the legitimate pre-commit window. A flip that never lands (crash or throw between commit and
-  flip) is recovered by a <strong>boot-time reconciler</strong> — but its commit-vs-rollback test must
-  not misread a not-yet-hydrated DB: it runs <em>after</em> PowerSync reports initial sync settled, so an
-  absent block means truly-absent (not merely not-yet-loaded — otherwise it would reap the only durable
-  copy of a committed-and-synced block's un-uploaded bytes). It then promotes any <code>staged</code>
-  record whose asset block is present, and reaps one whose block is absent <em>past that checkpoint</em>.
-  Reaping a record also deletes its un-uploaded byte-store bytes — but that byte delete is gated on the
-  <strong>content-refcount</strong>, exactly as object GC (§16) and local eviction (§8) are: the bytes are
-  dropped only if <em>no</em> live-or-soft-deleted block in the workspace carries their hash. They are orphan
-  bytes (a block that never committed) only when nothing else references the content; under dedup a
-  <em>different</em> committed embed may be the live carrier of the same content key, so the record is dropped
-  but its bytes are kept whenever any block still references the hash — the same single rule that keeps GC and
-  eviction from evicting a shared object out from under a live block.
-  <strong>That presence test is scoped to the record's own <code>user_id</code></strong>: the up-lane store is
-  shared across the profile's accounts (above), and the hydrated DB belongs to the <em>active</em> account — so a
-  record is reap-eligible only against the DB hydrated for <em>its own</em> account, and only once <em>that</em>
-  account's PowerSync has settled. Without this per-<code>user_id</code> gate (not just a global one), switching
-  from account B to account A would find B's not-yet-synced block &quot;absent&quot; in A's DB and reap the only
-  durable copy of B's un-uploaded bytes — manufacturing the very &quot;synced block outlives its bytes&quot; loss
-  this lane exists to prevent. A profile account that is never re-opened simply leaves its records inert —
-  they keep their bytes and neither drain nor reap, costing bounded storage, never loss.
-  A <em>caught</em> tx rollback shrinks the inferred set to the genuine crash window by
-  <strong>deleting the orphan record (and its un-uploaded bytes) inline</strong> — it ran in-process and
-  knows the block didn't commit, so it needs no deferred reap state; the boot reconciler then only has to
-  cover the residue where a crash lands between the throw and that cleanup. Records carry a session/generation
-  stamp so a reaper never races an in-flight capture. Entries drain (direct to Storage, §10.1) when connectivity returns, retrying with
+  flip) is recovered by a <strong>boot-time reconciler</strong> that <strong>promotes</strong> any
+  <code>staged</code> record whose asset block has <em>materialized</em> in <code>blocks</code> (recovering the
+  post-commit flip that never landed) and <strong>leaves every other staged record untouched</strong>. It
+  deliberately does <em>not</em> reap absent ones. A <code>staged</code> record is non-drainable, so an orphan
+  never uploads on its own; leaving it costs only its bytes, which the <strong>§16 content-refcount GC</strong>
+  reclaims (no live-or-soft-deleted block carries their hash) — the same single rule that keeps §8 eviction /
+  §16 GC from dropping a shared object out from under a live block. Reaping <em>here</em> would instead demand
+  <em>proving</em> a block never committed — distinguishing a true orphan from a committed-but-unmaterialized
+  block (a locked e2ee workspace withholding it from <code>blocks</code>, the throttled observer still lagging
+  the download, an undecryptable/quarantined row, or another profile account's un-hydrated DB) — and any wrong
+  guess deletes the only un-uploaded copy of a <em>live</em> block's bytes. Trading a near-zero,
+  GC-reclaimable byte leak for &quot;can never reap a live block's bytes&quot; is the right call; the promote
+  reads plain <code>blocks</code> because a miss is non-committal (a later boot retries once it materializes —
+  and it couldn't drain while the workspace is locked anyway), never destructive. A <em>caught</em> tx rollback
+  still deletes its orphan record + bytes inline (it ran in-process and knows the block didn't commit); the
+  reconciler only leaves the residue where a crash lands between the throw and that cleanup, which §16 GC
+  sweeps. A profile account that is never re-opened simply leaves its records inert, costing bounded storage,
+  never loss. Entries drain (direct to Storage, §10.1) when connectivity returns, retrying with
   backoff; on a confirmed upload the <em>queue entry</em> is deleted, but the <strong>bytes remain in
   the byte store</strong> (§8, budget-bounded) — full replication keeps them on disk for offline; they
   simply lose the un-uploaded eviction-exemption.
