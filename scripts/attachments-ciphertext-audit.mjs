@@ -89,9 +89,14 @@ const e2eeWorkspaceIds = async () => {
   }
 }
 
-/** All object names under a workspace prefix (flat <ws>/<key> layout), paginated. */
+/** Top-level entries under a workspace prefix, paginated. The layout is flat
+ *  (<ws>/<key>): a file has an id, a nested SUBFOLDER comes back with a null id.
+ *  Nesting is supposed to be impossible (RLS enforces array_length(foldername)=1),
+ *  so we surface any folder entry as a finding rather than silently skipping it —
+ *  a nested object could otherwise hide plaintext from this top-level scan. */
 const listObjects = async (workspaceId) => {
-  const names = []
+  const files = []
+  const nested = []
   for (let offset = 0; ; offset += LIST_PAGE) {
     const res = await fetch(`${base}/storage/v1/object/list/${BUCKET}`, {
       method: 'POST',
@@ -100,9 +105,11 @@ const listObjects = async (workspaceId) => {
     })
     if (!res.ok) throw new Error(`list failed (${res.status}): ${await res.text()}`)
     const page = await res.json()
-    // Folder entries (nested) have a null id; our layout is flat, so keep files.
-    for (const item of page) if (item.id) names.push(`${workspaceId}/${item.name}`)
-    if (page.length < LIST_PAGE) return names
+    for (const item of page) {
+      if (item.id) files.push(`${workspaceId}/${item.name}`)
+      else nested.push(`${workspaceId}/${item.name}/`)
+    }
+    if (page.length < LIST_PAGE) return { files, nested }
   }
 }
 
@@ -120,20 +127,28 @@ const isCiphertext = async (objectPath) => {
 const main = async () => {
   const workspaces = await e2eeWorkspaceIds()
   let scanned = 0
-  const violations = []
+  const violations = [] // { kind: 'plaintext' | 'nested', path }
   for (const ws of workspaces) {
-    for (const objectPath of await listObjects(ws)) {
+    const { files, nested } = await listObjects(ws)
+    for (const path of nested) violations.push({ kind: 'nested', path })
+    for (const path of files) {
       scanned += 1
-      if (!(await isCiphertext(objectPath))) violations.push(objectPath)
+      if (!(await isCiphertext(path))) violations.push({ kind: 'plaintext', path })
     }
   }
 
-  const tally = `${workspaces.length} E2EE workspace(s), ${scanned} object(s) scanned, ${violations.length} violation(s)`
+  const tally = `${workspaces.length} E2EE workspace(s), ${scanned} object(s) scanned, ${violations.length} finding(s)`
   note(`attachments ciphertext audit: ${tally}`)
   if (violations.length > 0) {
-    for (const v of violations) fail(`non-ciphertext object in an E2EE workspace: obj:${redact(v)}`)
-    fail(`${violations.length} attachment object(s) under an E2EE prefix are NOT encb:v1: ciphertext — a client is uploading plaintext (§10.1/§17)`)
-    summary(`### ❌ Attachments ciphertext audit — ${violations.length} violation(s)\n${tally}. A client is uploading plaintext into an E2EE workspace (§10.1/§17).`)
+    for (const v of violations) {
+      const reason =
+        v.kind === 'nested'
+          ? 'unexpected NESTED entry under an E2EE prefix (layout must be flat — could hide plaintext)'
+          : 'non-ciphertext object in an E2EE workspace'
+      fail(`${reason}: obj:${redact(v.path)}`)
+    }
+    fail(`${violations.length} finding(s) under an E2EE prefix — a client is uploading plaintext or nesting objects (§10.1/§17)`)
+    summary(`### ❌ Attachments ciphertext audit — ${violations.length} finding(s)\n${tally}. Plaintext or a non-flat object under an E2EE workspace (§10.1/§17).`)
     process.exit(1)
   }
   summary(`### ✅ Attachments ciphertext audit — armed and clean\n${tally}.`)

@@ -1050,12 +1050,17 @@ using (
 
 -- INSERT is a DIRECT writer-gated upload. The WITH CHECK keys on the path's
 -- first segment, so a writer can only write into a workspace they write — there
--- is no separate workspace param to spoof. There is intentionally NO body
--- inspection: a storage.objects policy can't see the body bytes (§10.1).
+-- is no separate workspace param to spoof. The array_length check enforces the
+-- FLAT layout (exactly &lt;ws&gt;/&lt;content-key&gt;, one folder level): without it a
+-- writer could upload &lt;ws&gt;/sub/plaintext — RLS-allowed (first segment is their
+-- workspace) but hidden from the audit's top-level scan, so plaintext could
+-- evade the §10.1 tripwire under an E2EE subfolder. There is intentionally NO
+-- body inspection: a storage.objects policy can't see the body bytes (§10.1).
 create policy "attachments insert by workspace writer"
 on storage.objects for insert to authenticated
 with check (
   bucket_id = 'attachments'
+  and array_length(storage.foldername(name), 1) = 1   -- flat: &lt;ws&gt;/&lt;key&gt; only
   and private.is_workspace_writer(
         (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
         (auth.uid())::text)

@@ -109,11 +109,19 @@ begin
   -- RLS: insert by workspace writer (direct upload). First-write-wins is the
   -- absence of an UPDATE policy (above): a re-upload to an existing content path
   -- is a Storage 409 the client reads as idempotent dedup, never an overwrite.
+  -- The layout is FLAT: an object is exactly <workspace_id>/<content-key>, one
+  -- folder level. `array_length(storage.foldername(name), 1) = 1` enforces that
+  -- (foldername drops the filename; a flat name yields a 1-element array, a
+  -- nested name 2+, a folderless name an empty array → NULL). Without it a writer
+  -- could upload <ws>/sub/plaintext: RLS would still pass (first segment is their
+  -- workspace), but the ciphertext audit's top-level listing skips nested
+  -- entries, so plaintext could hide under an E2EE subfolder AND evade the audit.
   execute $pol$
     create policy "attachments insert by workspace writer"
     on storage.objects for insert to authenticated
     with check (
       bucket_id = 'attachments'
+      and array_length(storage.foldername(name), 1) = 1
       and private.is_workspace_writer((storage.foldername(name))[1], (auth.uid())::text)
     )
   $pol$;
