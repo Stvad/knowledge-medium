@@ -77,9 +77,9 @@ const vimKeys = {
 
 const defaultKeys: typeof vimKeys = {
   fold: 'while editing, `Cmd+Up` (`Ctrl+Up`) collapses the block and `Cmd+Down` (`Ctrl+Down`) expands it — or click the `▸` / `▾` chevron next to my bullet on hover (on touch it stays visible, and the block\'s swipe menu has a **Collapse** item)',
-  // Single-click edits in the default config; double-click-to-edit is a
+  // A plain click edits in the default config; double-click-to-edit is a
   // vim-only gesture (it exists because vim makes single-click just focus).
-  edit: 'single-click anywhere in my text to start typing',
+  edit: 'click anywhere in my text to start typing',
   // No keyboard "normal mode" without vim, so leaving the editor by
   // keyboard buys nothing here — just click elsewhere. (`Esc` still blurs.)
   exitEdit: '',
@@ -126,6 +126,11 @@ const sharedKeys = {
  */
 export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
   const km = variant === 'vim' ? vimKeys : defaultKeys
+  // A light, default-only nudge toward vim mode for the few gestures that
+  // are genuinely smoother there. Deliberately occasional — vim users don't
+  // need their own bindings explained, and over-mentioning it would nag.
+  // Returns '' (no leading space) in the vim variant.
+  const vimNudge = (s: string) => (variant === 'default' ? ` ${s}` : '')
   const altLabel =
     variant === 'vim'
       ? '**This is the vim-keybindings tutorial.** Vim mode is currently on. To turn it off, run **Manage extensions** from the command palette (`Cmd+K`) and untick **Vim normal mode**, then read [[Tutorial]] for the default keys.'
@@ -144,14 +149,14 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       ...(variant === 'default'
         ? {
             children: [{
-              content: 'New to "vim keybindings"? It\'s an optional **navigation** layer, not a different way of typing — editing text is identical either way. With it on, a block has a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and then keys move you around and restructure without reaching for the mouse — `j`/`k` move between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `Y R` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
+              content: 'New to "vim keybindings"? **It lets you move and restructure your outline straight from the keyboard.** With it on, a block gains a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and from there the keys do the work — `j`/`k` between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `Y R` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
             }],
           }
         : {}),
     },
 
     sect('Welcome', [
-      'This is a malleable thought medium. Every line below is a **block** you can fold, link, drag around, and extend — including this tutorial itself.',
+      'This is a malleable thought medium. Every line below is a **block** you can link, drag around, fold, and extend — including this tutorial itself.',
       'Bullets are blocks. Bullets nest. Everything else builds on that.',
       "Don't just read — try the keys/clicks on each bullet as you go. Edit anything; this tutorial is just blocks in your workspace.",
       'The first few sections cover the essentials; the deeper ones below start **folded** to keep this scannable — expand any that interest you (that fold/unfold is itself a core gesture you\'ll use everywhere).',
@@ -173,7 +178,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     sect('Move around', [
-      `Between blocks: ${km.move}.`,
+      `Between blocks: ${km.move}.${vimNudge('Vim mode lets you move between blocks with `j` / `k` without entering the editor.')}`,
       ...(km.firstLast ? [km.firstLast] : []),
       ...(km.jumpMany ? [km.jumpMany] : []),
       `Zoom into a block (treat it as the new root of the view): ${sharedKeys.zoomIn}. Zoom back out: ${sharedKeys.zoomOut}.`,
@@ -232,7 +237,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     advancedSect('Search', [
       `QuickFind (${sharedKeys.quickFind}) searches page aliases first, then block content. Press Enter to open the selected result; if the name is missing, QuickFind can create a new page for it.`,
-      'Multiple words must all appear, in any order: `project notes` matches blocks that contain both `project` and `notes`.',
+      'When you search for several words, all of them must appear, in any order: `project notes` matches blocks that contain both `project` and `notes`.',
       'Wrap text in quotes for an exact phrase: `"project notes"` only matches that contiguous text.',
       'Use uppercase `OR` for alternatives: `project OR meeting` finds either term.',
       'Use a leading minus to exclude a term when the query also has something positive to search for: `project -archived` and `-archived project` both mean "project, but not archived". By itself, `-archived` searches for the literal text `-archived`.',
@@ -241,7 +246,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     advancedSect('Properties & types', [
-      `Properties are typed key/value pairs attached to any block. To open the properties panel on a focused block: ${km.properties}.`,
+      `Properties are typed key/value pairs attached to any block. To open the properties panel on a focused block: ${km.properties}.${vimNudge('With vim mode on, this is just `t`.')}`,
       'Try giving me a property — e.g. `priority: high`. It will appear under my content.',
       "Types attach behavior to a block via the special `types` property. `types = ['page']` makes a block a page — addressable by name (through its aliases) and resolvable from wiki links, wherever it lives in the tree. `types = ['extension']` makes it an extension — see below.",
       'Aliases (a list property on a page) let you reach the page from multiple names — including ones with spaces or different casing. Wiki links resolve through aliases.',
