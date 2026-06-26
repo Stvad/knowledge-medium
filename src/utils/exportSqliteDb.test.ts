@@ -118,10 +118,19 @@ describe('exportRawSqliteDb', () => {
     })
     const readLock = vi.fn(async <T,>(fn: () => Promise<T>) => fn())
 
-    await expect(exportRawSqliteDb({
+    const error: Error = await exportRawSqliteDb({
       user: {id: 'user-1'},
       db: {readLock},
-    } as unknown as Repo)).rejects.toThrow(/Not enough browser storage/)
+    } as unknown as Repo).then(
+      () => { throw new Error('expected export to reject') },
+      (e: unknown) => e as Error,
+    )
+
+    expect(error.message).toMatch(/Not enough browser storage/)
+    // The post-write estimate reports more free space than the failed write
+    // needed (the browser's quota figure doesn't reflect the real OPFS limit).
+    // Don't quote a contradictory "but only N MiB is available" clause.
+    expect(error.message).not.toMatch(/is available/)
 
     expect(removeEntry).toHaveBeenCalledWith(
       expect.stringMatching(/^\.kmp-v6-user-1\.db\.export-snapshot-/),

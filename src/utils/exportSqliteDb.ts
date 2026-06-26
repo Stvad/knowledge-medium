@@ -142,7 +142,15 @@ const insufficientOpfsSpaceMessage = (
   freeBytes: number | undefined,
 ): string => {
   const toMiB = (bytes: number) => (bytes / BYTES_PER_MIB).toFixed(1)
-  const haveClause = freeBytes === undefined ? '' : ` but only ${toMiB(freeBytes)} MiB is available`
+  // Only quote the free-space estimate when it actually explains the failure
+  // (free < required). The QuotaExceededError fallback re-estimates *after* the
+  // write already failed, and some browsers (Firefox) report a disk/group quota
+  // far larger than the real per-origin OPFS limit the write hit — quoting it
+  // would contradict the "not enough storage" framing, e.g. "needs 4124.2 MiB
+  // but only 452126.3 MiB is available".
+  const haveClause = freeBytes !== undefined && freeBytes < requiredBytes
+    ? ` but only ${toMiB(freeBytes)} MiB is available`
+    : ''
   // Only mention a different browser when the direct-to-file picker is the
   // thing this environment is missing; on Chromium it would have been used.
   // Each browser keeps its own separate OPFS database, so exporting from
