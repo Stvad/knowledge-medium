@@ -133,6 +133,13 @@ export const getActiveUserId = (): string | null => activeUserId
 export const getActiveSyncResolver = (): SyncResolver | null =>
   activeUserId ? resolverForUser(activeUserId) : null
 
+/** The §6 sync resolver for a SPECIFIC user (materializability / WK / K_id),
+ *  regardless of who is active. The byte up-lane binds this at its entry boundary
+ *  (capture / drain) so an operation initiated for one user can't read another
+ *  user's keys if the active account switches mid-flight. (The read-path asset
+ *  resolver legitimately follows the ACTIVE user instead — see assetResolver.ts.) */
+export const syncResolverForUser = (userId: string): SyncResolver => resolverForUser(userId)
+
 /** Observer deps for the Repo's `syncObserverDeps` parameter, drawn from
  *  the same per-user resolver the upload connector uses — so download
  *  (decrypt/copy/defer) and upload (encrypt) share one §6 policy source. */

@@ -18,8 +18,9 @@
  * idempotent anyway, but this avoids N× egress). Capture stays per-tab.
  */
 
-import { getActiveSyncResolver, getActiveUserId } from '@/data/repoProvider.js'
+import { getActiveUserId, syncResolverForUser } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
+import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase } from '@/services/supabase.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
@@ -34,9 +35,9 @@ import { drainUploads } from './uploadDrain.js'
 import { reconcileUploads } from './uploadReconcile.js'
 import { getByteUploadStore } from './uploadStore.js'
 
-/** Boot-time generation stamp — set once per page load. The reconciler reaps
- *  `staged` records only from strictly older boots, so this distinguishes this
- *  session's in-flight captures from a dead session's orphans. */
+/** Boot-time stamp recorded on each staged record (set once per page load). The
+ *  promote-only reconciler no longer uses it (it never reaps), so it is currently
+ *  vestigial — kept as a cheap per-record provenance marker for §16 GC / debugging. */
 export const uploadGeneration = Date.now()
 
 let blobStoreSingleton: BlobStore | null = null
@@ -53,19 +54,30 @@ const getBlobStore = (): BlobStore | null => {
   return blobStoreSingleton
 }
 
-// Mode/key deps from the active user's §6 resolver; signed out → fail closed.
-const getMaterializability = (ws: string) =>
-  getActiveSyncResolver()?.getMaterializability(ws) ?? 'defer'
-const getCek = (ws: string) => getActiveSyncResolver()?.getCek(ws) ?? Promise.resolve(null)
-const getContentKeyHmac = (ws: string) =>
-  getActiveSyncResolver()?.getContentKeyHmac(ws) ?? Promise.resolve(null)
+/** The §6 encode/key accessors bound to ONE user's resolver. The up-lane snapshots
+ *  this at its entry boundary (capture / drain), so an account switch mid-operation
+ *  can't make it read a DIFFERENT user's keys — "bind the lane to the user it was
+ *  armed for" in one place, instead of scattered `getActiveSyncResolver()` reads. A
+ *  null resolver (signed out) fails closed (defer / no key). */
+const laneKeyDeps = (resolver: SyncResolver | null) => ({
+  getMaterializability: (ws: string) => resolver?.getMaterializability(ws) ?? 'defer',
+  getCek: (ws: string) => resolver?.getCek(ws) ?? Promise.resolve(null),
+  getContentKeyHmac: (ws: string) => resolver?.getContentKeyHmac(ws) ?? Promise.resolve(null),
+})
 
-const drainDepsFor = (blobStore: BlobStore) => ({
+/** The bound identity an up-lane operation carries end-to-end: the user whose repo
+ *  / byte store / queue it touches, plus THAT user's §6 resolver (not the active
+ *  one). Snapshotted once at the boundary; never re-read from ambient mid-flight. */
+interface LaneContext {
+  readonly userId: string
+  readonly resolver: SyncResolver | null
+}
+
+const drainDepsFor = (blobStore: BlobStore, resolver: SyncResolver | null) => ({
   store: getByteUploadStore(),
   byteStore: getByteStore(),
   blobStore,
-  getMaterializability,
-  getCek,
+  ...laneKeyDeps(resolver),
 })
 
 /** Run `work` holding a named lock — falls back to running directly where
@@ -92,12 +104,16 @@ const laneLockName = (userId: string) => `km-asset-upload-lane:${userId}`
 export const armUploadDrain = (userId: string): void => {
   const blobStore = getBlobStore()
   if (!blobStore) return
+  // Bind the encode/key deps to `userId` (the user the drain was armed for), not
+  // the active account. The upload SESSION still rides the one active Supabase
+  // client, so the PUT must run only while `userId` is active (else a 403 under
+  // another account) — hence the per-record `isActiveUser` gate as well.
+  const resolver = syncResolverForUser(userId)
   void withLock(laneLockName(userId), async () => {
-    // Bind the drain to the user it was armed for: the deps (mode/key) + the
-    // BlobStore session follow the ACTIVE account, so if a switch lands before this
-    // lock body runs, draining userId's records under the new account could 403 and
-    // wrongly quarantine them. Skip until userId is active again.
-    await drainUploads(userId, { ...drainDepsFor(blobStore), isActiveUser: () => getActiveUserId() === userId })
+    await drainUploads(userId, {
+      ...drainDepsFor(blobStore, resolver),
+      isActiveUser: () => getActiveUserId() === userId,
+    })
   }).catch((err) => console.warn('[assetUpload] drain failed', err))
 }
 
@@ -118,17 +134,15 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
   armUploadDrain(userId)
 }
 
-const captureDepsFor = (repo: Repo, userId: string): MediaCaptureDeps => ({
+const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({
   repo,
   byteStore: getByteStore(),
   uploadStore: getByteUploadStore(),
-  // Bind to the user that owns `repo` (the paste user), NOT the lazily-active
-  // account: the asset block lands in `repo`, so its OPFS bytes + upload-queue
-  // record must key off the SAME user or an account switch mid-capture would split
-  // the block (under the paste user) from its bytes/record (under the new user).
-  getUserId: () => userId,
-  getMaterializability,
-  getContentKeyHmac,
+  // Everything is bound to the SAME user (`ctx.userId`) that owns `repo`: the
+  // block lands in `repo`, and its OPFS bytes + queue record + key/mode all key off
+  // ctx — so an account switch mid-capture can't split them across accounts.
+  getUserId: () => ctx.userId,
+  ...laneKeyDeps(ctx.resolver),
   generation: uploadGeneration,
   drain: armUploadDrain,
 })
@@ -149,15 +163,14 @@ export const captureMediaFromFiles = async (
   embedParentId: string,
   files: readonly File[],
 ): Promise<MediaCaptureResult[]> => {
-  // Bind the user at call time (before the mint lock), so the block (in `repo`),
-  // its bytes, and its queue record all key off ONE account.
+  // Snapshot the lane context at the paste boundary: the user, and that user's §6
+  // resolver. Capture touches no remote session (it only stages + writes the block
+  // via `repo`), so once bound it is fully self-consistent — a mid-capture account
+  // switch can't split it across accounts, and there is nothing to abort for.
   const userId = getActiveUserId()
   if (!userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
-  const deps = captureDepsFor(repo, userId)
+  const deps = captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) })
   const run = async (): Promise<MediaCaptureResult[]> => {
-    // If the account switched while we waited for the mint lock, abort rather than
-    // mint a block under `repo`'s user with bytes/queue under whoever is active now.
-    if (getActiveUserId() !== userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
     const results: MediaCaptureResult[] = []
     for (const file of files) {
       if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {
