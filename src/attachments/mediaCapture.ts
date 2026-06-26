@@ -22,10 +22,15 @@
  * `staged` record the reconciler promotes, because its block IS present). So a
  * crash at any single point is recoverable, never a broken-image-forever.
  *
- * The block id IS the content-key (`media:<content-key>`), so re-pasting identical
- * content dedups to the same block (createOrRestoreTargetBlock, systemMint pristine
- * so two devices' first pastes reconcile; DeletedConflictError → restore so a
- * re-paste-after-undo resurrects). The asset lives under a SHARED workspace ASSETS
+ * The block id is `media:<workspaceId>:<content-key>` — workspace-scoped, so
+ * re-pasting identical content into the SAME workspace dedups to one block
+ * (createOrRestoreTargetBlock, systemMint pristine so two devices' first pastes
+ * reconcile; DeletedConflictError → restore so a re-paste-after-undo resurrects),
+ * while the SAME plaintext bytes in a DIFFERENT workspace get a distinct block
+ * (their content-key is raw sha256, identical across workspaces — without the
+ * workspace in the id the deterministic ids would collide cross-workspace, which
+ * `createOrGet` rejects, and the upload-queue records would clobber). The asset
+ * lives under a SHARED workspace ASSETS
  * container, never under the pasting note (a note delete must not tombstone a
  * shared asset, §11). Each paste adds only the `!((id))` embed at the paste site.
  */
@@ -56,8 +61,12 @@ import type { ByteUploadStore } from './uploadStore.js'
  *  would only quarantine. */
 export const DEFAULT_MAX_CAPTURE_BYTES = 50 * 1024 * 1024
 
-/** The deterministic asset block id for a content-key. */
-export const mediaBlockId = (contentKey: string): string => `media:${contentKey}`
+/** The deterministic asset block id — workspace-scoped so the same plaintext
+ *  content (whose content-key is the raw sha256, identical across workspaces)
+ *  gets a distinct block per workspace, while two devices in the SAME workspace
+ *  still converge on one id. */
+export const mediaBlockId = (workspaceId: string, contentKey: string): string =>
+  `media:${workspaceId}:${contentKey}`
 
 export interface MediaSource {
   readonly bytes: Uint8Array<ArrayBuffer>
@@ -135,7 +144,7 @@ export const captureMedia = async (
 
   const contentHash = await computeContentHash(bytes)
   const contentKey = await deriveContentKey({ contentHash, mode, contentKeyHmac })
-  const assetBlockId = mediaBlockId(contentKey)
+  const assetBlockId = mediaBlockId(workspaceId, contentKey)
 
   // (2) + (3) Durable, BEFORE the block tx: the bytes (render source + upload
   // source) then a NON-drainable `staged` record. If we crash here the reconciler

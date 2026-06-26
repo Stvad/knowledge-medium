@@ -91,10 +91,15 @@ const deps = (over: Partial<Parameters<typeof captureMedia>[1]> = {}) => ({
   ...over,
 })
 
-const expectedIds = async (bytes: Uint8Array<ArrayBuffer>, mode: 'none' | 'e2ee', hmac: CryptoKey | null) => {
+const expectedIds = async (
+  bytes: Uint8Array<ArrayBuffer>,
+  mode: 'none' | 'e2ee',
+  hmac: CryptoKey | null,
+  ws: string = WS,
+) => {
   const contentHash = await computeContentHash(bytes)
   const contentKey = await deriveContentKey({ contentHash, mode, contentKeyHmac: hmac })
-  return { contentHash, contentKey, assetBlockId: mediaBlockId(contentKey) }
+  return { contentHash, contentKey, assetBlockId: mediaBlockId(ws, contentKey) }
 }
 
 beforeAll(async () => {
@@ -186,6 +191,36 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     expect(second.ok && second.deduped).toBe(true)
     // two distinct embed blocks, both under the pasting block
     expect(first.ok && second.ok && first.embedBlockId).not.toBe(second.ok ? second.embedBlockId : '')
+  })
+
+  it('captures the same plaintext content in TWO workspaces as distinct blocks (no cross-workspace collision)', async () => {
+    const bytes = bytesOf(24, 3)
+    const WS2 = 'ws-2'
+    let parent2 = ''
+    await env.repo.tx(
+      async (tx) => {
+        parent2 = await tx.create({ workspaceId: WS2, parentId: null, orderKey: 'm0', content: 'note2' })
+      },
+      { scope: ChangeScope.BlockDefault },
+    )
+
+    const a = await captureMedia(
+      { workspaceId: WS, source: { bytes, mime: 'image/png' }, embedParentId: env.parentId },
+      deps(),
+    )
+    const b = await captureMedia(
+      { workspaceId: WS2, source: { bytes, mime: 'image/png' }, embedParentId: parent2 },
+      deps(),
+    )
+
+    expect(a.ok && b.ok).toBe(true)
+    // distinct ids (workspace-scoped) — neither the block create nor the upload
+    // queue collides, even though the raw-sha256 content-key is identical.
+    expect(a.ok ? a.assetBlockId : '').not.toBe(b.ok ? b.assetBlockId : '')
+    expect((await env.uploadStore.get(USER, a.ok ? a.assetBlockId : ''))?.status).toBe('pending')
+    expect((await env.uploadStore.get(USER, b.ok ? b.assetBlockId : ''))?.status).toBe('pending')
+    expect((await env.repo.load(a.ok ? a.assetBlockId : ''))?.workspaceId).toBe(WS)
+    expect((await env.repo.load(b.ok ? b.assetBlockId : ''))?.workspaceId).toBe(WS2)
   })
 })
 

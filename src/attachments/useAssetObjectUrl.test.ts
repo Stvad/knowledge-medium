@@ -91,4 +91,37 @@ describe('useAssetObjectUrl', () => {
     })
     expect(createObjectURL).not.toHaveBeenCalled() // cancelled before the late resolve
   })
+
+  it('retries a TRANSIENT failure (fetch-failed) on reconnect and recovers', async () => {
+    // First resolve misses (object not replicated yet), the next succeeds.
+    let calls = 0
+    const resolver: AssetResolver = {
+      resolve: vi.fn(async (): Promise<AssetResolveResult> =>
+        ++calls === 1 ? { ok: false, reason: 'fetch-failed' } : { ok: true, bytes },
+      ),
+    }
+    const { result } = renderHook(() => useAssetObjectUrl(args, resolver))
+    await flush()
+    expect(result.current).toEqual({ status: 'error', reason: 'fetch-failed' })
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'))
+    })
+    await flush()
+    expect(result.current).toEqual({ status: 'ready', url: expect.stringMatching(/^blob:/) })
+    expect(resolver.resolve).toHaveBeenCalledTimes(2)
+  })
+
+  it('does NOT retry a TERMINAL failure (hash-mismatch) on reconnect', async () => {
+    const resolver = failResolver('hash-mismatch')
+    const { result } = renderHook(() => useAssetObjectUrl(args, resolver))
+    await flush()
+
+    await act(async () => {
+      window.dispatchEvent(new Event('online'))
+    })
+    await flush()
+    expect(result.current).toEqual({ status: 'error', reason: 'hash-mismatch' })
+    expect(resolver.resolve).toHaveBeenCalledTimes(1) // terminal — no re-resolve
+  })
 })

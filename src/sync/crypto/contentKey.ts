@@ -42,7 +42,8 @@ const CONTENT_KEY_HMAC_BITS = 256
  * imported NON-EXTRACTABLE as an HMAC/SHA-256 signing key. The empty salt is
  * safe — the WK is already 32 uniform random bytes. The caller must hold the
  * raw WK bytes (available only at import/unlock) and is responsible for zeroing
- * them after; this function copies nothing it retains.
+ * them after; this function zeroes the intermediate K_id `bits` it materializes
+ * (the content-key oracle secret) once the non-extractable key is imported.
  */
 export const deriveContentKeyHmac = async (
   wkBytes: Uint8Array<ArrayBuffer>,
@@ -58,7 +59,15 @@ export const deriveContentKeyHmac = async (
     ikm,
     CONTENT_KEY_HMAC_BITS,
   )
-  return crypto.subtle.importKey('raw', bits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  try {
+    // importKey copies the bytes into the (non-extractable) key material, so the
+    // raw K_id buffer can be wiped right after — same zeroing invariant the WK
+    // bytes get; leaving it resident keeps the content-key oracle secret on the
+    // JS heap until GC/heap reuse.
+    return await crypto.subtle.importKey('raw', bits, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  } finally {
+    new Uint8Array(bits).fill(0)
+  }
 }
 
 export interface ContentKeyRef {
