@@ -163,11 +163,15 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
   armUploadDrain(userId)
 }
 
-const captureDepsFor = (repo: Repo): MediaCaptureDeps => ({
+const captureDepsFor = (repo: Repo, userId: string): MediaCaptureDeps => ({
   repo,
   byteStore: getByteStore(),
   uploadStore: getByteUploadStore(),
-  getUserId: getActiveUserId,
+  // Bind to the user that owns `repo` (the paste user), NOT the lazily-active
+  // account: the asset block lands in `repo`, so its OPFS bytes + upload-queue
+  // record must key off the SAME user or an account switch mid-capture would split
+  // the block (under the paste user) from its bytes/record (under the new user).
+  getUserId: () => userId,
   getMaterializability,
   getContentKeyHmac,
   generation: uploadGeneration,
@@ -190,8 +194,15 @@ export const captureMediaFromFiles = async (
   embedParentId: string,
   files: readonly File[],
 ): Promise<MediaCaptureResult[]> => {
-  const deps = captureDepsFor(repo)
+  // Bind the user at call time (before the mint lock), so the block (in `repo`),
+  // its bytes, and its queue record all key off ONE account.
+  const userId = getActiveUserId()
+  if (!userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
+  const deps = captureDepsFor(repo, userId)
   const run = async (): Promise<MediaCaptureResult[]> => {
+    // If the account switched while we waited for the mint lock, abort rather than
+    // mint a block under `repo`'s user with bytes/queue under whoever is active now.
+    if (getActiveUserId() !== userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
     const results: MediaCaptureResult[] = []
     for (const file of files) {
       if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {
@@ -207,6 +218,5 @@ export const captureMediaFromFiles = async (
     }
     return results
   }
-  const userId = getActiveUserId()
-  return userId ? withLock(mintLockName(userId), run) : run()
+  return withLock(mintLockName(userId), run)
 }

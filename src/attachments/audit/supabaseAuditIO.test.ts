@@ -107,7 +107,9 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
     const fetchFn = vi.fn<typeof fetch>(async () => bytesResponse(fullEnvelopeHead()))
     expect(await ioWith(fetchFn).readObjectVerdict('ws1/deadbeef')).toBe('ok')
     const [url, init] = fetchFn.mock.calls[0]
-    expect(url).toBe(`${URL}/storage/v1/object/authenticated/attachments/ws1/deadbeef`)
+    // Same shape as storage-js download (`/object/<bucket>/<path>`) — NO extra
+    // `/authenticated/` segment, which would 404 every object as a missing bucket.
+    expect(url).toBe(`${URL}/storage/v1/object/attachments/ws1/deadbeef`)
     // Reads the whole envelope MINIMUM, not just the magic, so a runt can't pass.
     expect((init?.headers as Record<string, string>).range).toBe(`bytes=0-${BINARY_ENVELOPE_MIN_BYTES - 1}`)
   })
@@ -135,7 +137,7 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
     const fetchFn = vi.fn<typeof fetch>(async () => bytesResponse(BINARY_ENVELOPE_MAGIC))
     await ioWith(fetchFn).readObjectVerdict('ws 1/a b#c')
     expect(fetchFn.mock.calls[0][0]).toBe(
-      `${URL}/storage/v1/object/authenticated/attachments/ws%201/a%20b%23c`,
+      `${URL}/storage/v1/object/attachments/ws%201/a%20b%23c`,
     )
   })
 

@@ -73,7 +73,12 @@ export function createSupabaseAuditIO(deps: SupabaseAuditIODeps): AuditIO {
         // nonce + auth tag cannot be a real envelope, so the magic alone would let
         // a truncated/forged runt pass as 'ok'. A partial-content response clamps
         // to the object size, so `head.length` is the true min(MIN, objectSize).
-        const res = await fetchFn(`${base}/storage/v1/object/authenticated/${BUCKET}/${encoded}`, {
+        // Match the authenticated-download path shape storage-js itself uses —
+        // `/object/<bucket>/<path>` (StorageFileApi.download → `/object/${bucketId}/${path}`).
+        // An extra `/authenticated/` segment would address a bucket literally named
+        // "authenticated" → 404 → classified `gone`, so a real object would be
+        // silently skipped and the tripwire would report a clean run.
+        const res = await fetchFn(`${base}/storage/v1/object/${BUCKET}/${encoded}`, {
           headers: { ...authHeaders, range: `bytes=0-${BINARY_ENVELOPE_MIN_BYTES - 1}` },
         })
         if (res.status === 404) return 'gone'

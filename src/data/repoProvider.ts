@@ -213,16 +213,22 @@ export const ensurePowerSyncReady = async (
   }
   await initPromise
 
+  // The local DB is now mounted for this user — record it as the active account in
+  // BOTH modes. The asset byte path (§7.3) + media capture key off getActiveUserId,
+  // so a local-only session must still set it or every image/file paste reaches
+  // captureMedia as `no-user` and is silently dropped. Only the REMOTE connect
+  // below is gated on useRemoteSync.
+  const previousUserId = activeUserId
+  const alreadyActive = activeUserId === userId
+  activeUserId = userId
+
   if (!useRemoteSync) {
     return
   }
 
-  if (activeUserId === userId) {
+  if (alreadyActive) {
     return
   }
-
-  const previousUserId = activeUserId
-  activeUserId = userId
 
   // Run disconnect+connect serially so we don't race two connect
   // attempts. Don't await the chain — connect can take a while and
