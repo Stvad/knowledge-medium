@@ -423,6 +423,9 @@ export async function pasteFromClipboard(
   // The decision is a pure, synchronous policy (`runSync`); the clipboard text
   // is already in hand, so there's nothing to await before deciding.
   const decision = pasteDecisionVerb.runSync(runtime, {text, intent: 'split', surface: 'shell'})
+  // This path is text-only (navigator.clipboard.readText carries no files), so a
+  // `media` decision can't arise — fall back to the text paste if one does.
+  if (decision.kind === 'media') return pasteMultilineText(text, pasteTarget, repo, options)
   return pasteMultilineText(decision.text ?? text, pasteTarget, repo, {
     ...options,
     asSingleBlock: decision.kind === 'single-block',

@@ -26,6 +26,7 @@ import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/paste/operations.js'
 import { pasteDecisionVerb } from '@/paste/decision.js'
+import { captureMediaFromFiles } from '@/attachments/assetUpload.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -471,8 +472,12 @@ export function DefaultBlockRenderer(
       if (!isFocusedBlock(uiStateBlock, block.id, renderScopeId)) return
 
       e.preventDefault()
+      // File(s) on the clipboard (a pasted image) carry no text/plain — read
+      // them before the no-text early return so an image paste isn't dropped.
+      const files = e.clipboardData.files
+      const fileList = files && files.length > 0 ? Array.from(files) : []
       const pastedText = e.clipboardData.getData('text/plain')
-      if (!pastedText) return
+      if (!pastedText && fileList.length === 0) return
       const html = e.clipboardData.getData('text/html') || undefined
 
       // Block-shell paste (block focused, NOT in edit mode) has no text
@@ -485,9 +490,20 @@ export function DefaultBlockRenderer(
       const decision = pasteDecisionVerb.runSync(runtime, {
         text: pastedText,
         html,
+        files: fileList,
         intent: 'split',
         surface: 'shell',
       })
+      if (decision.kind === 'media') {
+        // Capture file(s) as media blocks embedded under the focused block (§11).
+        const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+        if (workspaceId && fileList.length > 0) {
+          void captureMediaFromFiles(repo, workspaceId, block.id, fileList).catch((err) =>
+            console.warn('[media] paste capture failed', err),
+          )
+        }
+        return
+      }
       // The default decision is surface-aware: a plain single-line shell
       // paste resolves to `split` (parse as outline, the historical
       // behavior), so `single-block` here only ever comes from an explicit

@@ -17,7 +17,7 @@
 import { getActiveSyncResolver, getActiveUserId } from '@/data/repoProvider.js'
 import { supabase } from '@/services/supabase.js'
 import { createSupabaseBlobStore } from './blobStore.js'
-import { createByteStore } from './byteStore.js'
+import { getByteStore } from './byteStore.js'
 import { createAssetResolver, type AssetResolver } from './resolver.js'
 
 let singleton: AssetResolver | null = null
@@ -34,7 +34,7 @@ export const getAssetResolver = (): AssetResolver => {
 
   singleton = createAssetResolver({
     getUserId: getActiveUserId,
-    byteStore: createByteStore(),
+    byteStore: getByteStore(),
     blobStore: createSupabaseBlobStore({
       client,
       // Presence probe only — the upload/download ride the client's own session.

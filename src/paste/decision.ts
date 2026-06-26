@@ -21,6 +21,11 @@ export type PasteDecision =
   /** Parse the (optionally rewritten) text as markdown and split it into a
    *  block tree at the cursor. */
   | {kind: 'split'; text?: string}
+  /** The paste/drop carried file(s) (image, etc.) — capture them as media
+   *  attachments (§11) rather than inserting text. The renderer reads the files
+   *  off the original event and hands them to the async capture; the decision
+   *  itself stays synchronous (it can't hash here). */
+  | {kind: 'media'}
 
 /** Where the paste is happening. `editor` has a text caret (in-block
  *  editing), so a plain single-line paste lands verbatim at the caret;
@@ -71,6 +76,10 @@ interface PasteRequestBase {
   /** Clipboard `text/html`, if any — lets format-aware overrides inspect
    *  richer content (tables, CSV pasted from a spreadsheet). */
   html?: string
+  /** File(s) carried by the paste/drop (`clipboardData.files` /
+   *  `dataTransfer.files`), e.g. a pasted/dropped image. Present (non-empty) →
+   *  the default decision is `media`; absent → text branching as before. */
+  files?: readonly File[]
   /** Latched paste chord: plain Cmd/Ctrl+V (`split`) vs Cmd/Ctrl+Shift+V
    *  (`single-block`). The paste `ClipboardEvent` carries no modifier
    *  state, so the renderer captures this on keydown. */
@@ -92,6 +101,9 @@ interface PasteRequestBase {
  * verbatim" plugin works on single-line shell pastes too.
  */
 export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
+  // File(s) present → capture as media, ahead of any text branch (an image paste
+  // often also carries an incidental text/html representation we ignore).
+  if (request.files && request.files.length > 0) return {kind: 'media'}
   if (request.intent === 'single-block') return {kind: 'single-block'}
   if (request.text.includes('\n')) return {kind: 'split'}
   return request.surface === 'editor' ? {kind: 'single-block'} : {kind: 'split'}
@@ -125,6 +137,8 @@ export const pasteDecisionVerb = defineVerbFacet<PasteRequest, PasteDecision>({
   // an invalid shape falls back to `defaultPasteDecision`.
   validateResult: decision =>
     decision != null &&
-    (decision.kind === 'single-block' || decision.kind === 'split') &&
-    (decision.text === undefined || typeof decision.text === 'string'),
+    (decision.kind === 'single-block' || decision.kind === 'split' || decision.kind === 'media') &&
+    ((decision.kind === 'media') ||
+      ((decision as {text?: unknown}).text === undefined ||
+        typeof (decision as {text?: unknown}).text === 'string')),
 })

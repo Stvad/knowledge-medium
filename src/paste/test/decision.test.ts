@@ -13,13 +13,15 @@ import {
 // `editor` requests carry a caret (union invariant); tests that don't care
 // about position get a default first-line caret so cases stay terse.
 const request = (
-  over: {text?: string; intent?: PasteChordIntent; surface?: PasteSurface; caret?: PasteCaret} = {},
+  over: {text?: string; intent?: PasteChordIntent; surface?: PasteSurface; caret?: PasteCaret; files?: readonly File[]} = {},
 ): PasteRequest => {
-  const {text = '', intent = 'split', surface = 'editor', caret} = over
+  const {text = '', intent = 'split', surface = 'editor', caret, files} = over
   return surface === 'shell'
-    ? {text, intent, surface}
-    : {text, intent, surface, caret: caret ?? {line: 1, lineCount: 1, from: 0, to: 0}}
+    ? {text, intent, surface, files}
+    : {text, intent, surface, files, caret: caret ?? {line: 1, lineCount: 1, from: 0, to: 0}}
 }
+
+const pngFile = () => new File([new Uint8Array([1, 2, 3])], 'cat.png', {type: 'image/png'})
 
 describe('defaultPasteDecision', () => {
   it('drops a single-block chord into the current block verbatim', () => {
@@ -51,6 +53,15 @@ describe('defaultPasteDecision', () => {
     // (historical behavior) instead of a verbatim single-block insert.
     expect(defaultPasteDecision(request({text: '- task', surface: 'shell'})))
       .toEqual({kind: 'split'})
+  })
+
+  it('captures as media when file(s) are present, ahead of any text/intent branch', () => {
+    expect(defaultPasteDecision(request({files: [pngFile()], text: 'incidental', intent: 'single-block'})))
+      .toEqual({kind: 'media'})
+  })
+
+  it('ignores an empty files array (falls through to the text branch)', () => {
+    expect(defaultPasteDecision(request({files: [], text: 'a\nb'}))).toEqual({kind: 'split'})
   })
 })
 
@@ -145,5 +156,12 @@ describe('pasteDecisionVerb', () => {
     const runtime = resolveFacetRuntimeSync([])
     expect(pasteDecisionVerb.runSync(runtime, request({intent: 'single-block', text: 'x'})))
       .toEqual({kind: 'single-block'})
+  })
+
+  it('decides media for a file paste (and the media kind passes validateResult)', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    // A valid `media` decision must NOT be coerced to the text fallback.
+    expect(pasteDecisionVerb.runSync(runtime, request({files: [pngFile()]})))
+      .toEqual({kind: 'media'})
   })
 })

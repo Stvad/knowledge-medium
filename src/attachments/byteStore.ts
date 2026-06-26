@@ -195,3 +195,11 @@ export const createByteStore = (): ByteStore => {
   }
   return new InMemoryByteStore()
 }
+
+// Process-wide singleton. The read resolver (§7.3), the capture path, the up-lane
+// drain, and the reconciler must share ONE store: OPFS is shared backing, but a
+// single instance also keeps the in-memory fallback coherent within a session
+// (otherwise a write through one instance is invisible to a read through another).
+// Tests construct their own store and never touch this.
+let sharedByteStore: ByteStore | null = null
+export const getByteStore = (): ByteStore => (sharedByteStore ??= createByteStore())

@@ -13,6 +13,7 @@ import {
   planSingleBlockPaste,
 } from '@/paste/operations.js'
 import { pasteDecisionVerb } from '@/paste/decision.js'
+import { captureMediaFromFiles } from '@/attachments/assetUpload.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -48,11 +49,16 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     e.stopPropagation()
-    const text = e.clipboardData?.getData('text/plain')
-    if (!text) return
     // Read-only editors leave paste to the browser (a no-op on a
     // non-editable surface) — matches the historical single-block guard.
     if (repo.isReadOnly) return
+    // File(s) on the clipboard (a pasted image) carry no text/plain, so read
+    // them BEFORE the no-text early return below — otherwise an image paste
+    // would fall through to the browser.
+    const files = e.clipboardData?.files
+    const fileList = files && files.length > 0 ? Array.from(files) : []
+    const text = e.clipboardData?.getData('text/plain') ?? ''
+    if (!text && fileList.length === 0) return
 
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. `preventDefault` MUST run
@@ -84,7 +90,20 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // on the paste-time position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
-    const decision = pasteDecisionVerb.runSync(runtime, {text, html, intent, surface: 'editor', caret})
+    const decision = pasteDecisionVerb.runSync(runtime, {text, html, files: fileList, intent, surface: 'editor', caret})
+
+    if (decision.kind === 'media') {
+      // Capture the file(s) as content-addressed media blocks embedded under the
+      // current block (§11). Async + fire-and-forget — the up-lane handles the
+      // upload; a failure degrades to a broken-asset placeholder, never a throw.
+      const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+      if (workspaceId && fileList.length > 0) {
+        void captureMediaFromFiles(repo, workspaceId, block.id, fileList).catch((err) =>
+          console.warn('[media] paste capture failed', err),
+        )
+      }
+      return
+    }
 
     if (decision.kind === 'single-block') {
       const plan = planSingleBlockPaste(decision.text ?? text, {
