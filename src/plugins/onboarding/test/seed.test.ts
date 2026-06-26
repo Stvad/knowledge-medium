@@ -18,12 +18,6 @@ import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { todoDataExtension } from '@/plugins/todo/dataExtension'
-import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
-import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
-import { geoDataExtension } from '@/plugins/geo/dataExtension'
 import { TODO_TYPE } from '@/plugins/todo/schema'
 import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType'
 import { charLimitProp } from '@/plugins/character-counter/properties'
@@ -51,6 +45,11 @@ const setup = async (): Promise<Harness> => {
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   let idCursor = 0
+  // Plain repo — only the kernel PAGE/EXTENSION types Repo installs by default,
+  // exactly like the bootstrap phase where seedTutorial runs. This proves the
+  // seed is self-sufficient: it folds the demo plugins' types into its own
+  // snapshot (see seedTypeSnapshot), so the typed demos seed without the app
+  // runtime having registered those plugins on the repo.
   const repo = new Repo({
     db: h.db,
     cache,
@@ -58,19 +57,6 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
   })
-  // Load the REAL plugin data-extensions whose types the tutorial's demo
-  // blocks tag themselves with (todo / char-counter / srs / geo) — mirroring
-  // the loaded-plugin runtime instead of re-declaring types here. seedTutorial
-  // then resolves those types exactly as it does in the app. (kernelDataExtension
-  // carries the PAGE/EXTENSION types Repo installs by default; re-include it
-  // since setFacetRuntime replaces the kernel install.)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    todoDataExtension,
-    characterCounterDataExtension,
-    srsReschedulingDataExtension,
-    geoDataExtension,
-  ]))
   return { h, repo }
 }
 

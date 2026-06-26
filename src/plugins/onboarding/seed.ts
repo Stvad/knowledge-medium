@@ -1,10 +1,24 @@
 import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import type { Tx } from '@/data/api'
+import type { TypeRegistrySnapshot } from '@/data/api/blockType'
 import type { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keysBetween } from '@/data/orderKey'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { propertySchemasFacet, typesFacet } from '@/data/facets'
+import { mergeLiftedSchemas } from '@/data/internals/refProjection'
+// Onboarding's plugin dependencies: the demo blocks tag themselves with these
+// plugins' block types, so we fold their type/schema contributions into the
+// seed snapshot below. This makes seeding self-sufficient — it doesn't matter
+// how much of the app runtime has been applied to the repo when seedTutorial
+// runs (at bootstrap it's only the kernel types), because addTypeInTx resolves
+// against the snapshot we pass, not the repo's live registry.
+import { todoDataExtension } from '@/plugins/todo/dataExtension'
+import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
+import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
+import { geoDataExtension } from '@/plugins/geo/dataExtension'
 import {
   EXTENSIONS_PAGE_TITLE,
   extensionsPageOutline,
@@ -13,6 +27,34 @@ import {
   TUTORIAL_VIM_TITLE,
   type TutorialNode,
 } from './outline'
+
+const DEMO_TYPE_EXTENSIONS = [
+  todoDataExtension,
+  characterCounterDataExtension,
+  srsReschedulingDataExtension,
+  geoDataExtension,
+]
+
+/** Type/schema snapshot for seeding: the repo's current registries (kernel
+ *  PAGE/EXTENSION types) overlaid with the demo plugins' types + lifted
+ *  schemas. Resolved from the dependency data-extensions so the typed demos
+ *  (todo / char-counter / srs / place / map) seed correctly even before the
+ *  full app runtime is applied to the repo. */
+const seedTypeSnapshot = (repo: Repo): TypeRegistrySnapshot => {
+  const base = repo.snapshotTypeRegistries()
+  const rt = resolveFacetRuntimeSync(DEMO_TYPE_EXTENSIONS)
+  // typesFacet / propertySchemasFacet are keyed-map facets, so `read` returns
+  // Maps (id → type, name → schema). mergeLiftedSchemas folds type-lifted
+  // fields (char:limit, place:lat, …) into the schema map.
+  const depTypes = rt.read(typesFacet)
+  const depSchemas = mergeLiftedSchemas(rt.read(propertySchemasFacet), depTypes)
+
+  const types = new Map(base.types)
+  for (const [id, t] of depTypes) types.set(id, t)
+  const propertySchemas = new Map(base.propertySchemas)
+  for (const [name, s] of depSchemas) propertySchemas.set(name, s)
+  return { types, propertySchemas }
+}
 
 /**
  * Seeds the starter Tutorial subtree on a freshly-created personal
@@ -45,7 +87,7 @@ export const seedTutorial = async (
   const vimTutorialId = uuidv4()
   const defaultTutorialId = uuidv4()
   const extensionsPageId = uuidv4()
-  const typeSnapshot = repo.snapshotTypeRegistries()
+  const typeSnapshot = seedTypeSnapshot(repo)
 
   // Three parent-less pages; their root order keys don't really matter
   // (parent=null means no canonical sibling list) but `tx.create`
