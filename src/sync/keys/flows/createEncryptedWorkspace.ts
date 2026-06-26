@@ -89,7 +89,13 @@ export const createEncryptedWorkspace = async <T extends object>(
   // Re-deriving from `workspaceKey` (not reusing `cryptoKey`) is what makes this
   // a real proof of recoverability, not just "this key opens it". Fail before
   // creating a server row whose canary no device could ever open.
-  const verifyKey = await importWorkspaceKey(parseWorkspaceKey(workspaceKey))
+  const verifyBytes = parseWorkspaceKey(workspaceKey)
+  let verifyKey: CryptoKey
+  try {
+    verifyKey = await importWorkspaceKey(verifyBytes)
+  } finally {
+    verifyBytes.fill(0) // same best-effort zero as keyBytes — no raw WK bytes left on the heap
+  }
   if (!(await validateCanary(verifyKey, wkCanary, workspaceId))) {
     throw new Error('createEncryptedWorkspace: minted canary failed round-trip self-validation')
   }
