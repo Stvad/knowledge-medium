@@ -17,8 +17,11 @@
 --     GUARANTEE: the path is content-addressed (§10), so an object is write-once.
 --     A second upload to an existing path is rejected by Storage (HTTP 409),
 --     which the client treats as first-write-wins idempotent dedup (§10.1).
---     Denying UPDATE also blocks upsert/overwrite (Storage needs INSERT+SELECT+
---     UPDATE to overwrite) and an in-place rename onto an existing object.
+--     Storage requires UPDATE for EVERY overwrite verb — upsert (INSERT+SELECT+
+--     UPDATE), move/rename (SELECT+UPDATE), and copy-onto-existing (the extra
+--     UPDATE) — so with no UPDATE policy none of them can mutate an existing
+--     object. A writer's only mutation is delete-then-insert (the accepted §17
+--     poison), never a silent overwrite.
 --   DELETES (delete): writer-gated — a delete removes an object, there is no
 --     body to inspect; required so §16 GC and the §10.1 poison-correction can
 --     reclaim objects (without it BlobStore.delete() is default-denied).
@@ -31,9 +34,11 @@
 -- write at all; the only place it could run is a service that receives the
 -- bytes and is the SOLE writer. We deliberately do NOT pay that (a per-upload
 -- Edge Function on the write path) because the byte-confidentiality OUTCOME is
--- already closed downstream: the read side hash-verifies + AEAD-opens every
--- object (§5.1/§7.3) and fail-closes (broken-image placeholder, never plaintext
--- served). The only thing a write-time shape-guard adds is catching an HONEST
+-- closed downstream: the read side (the Phase-3 resolver, §7.3 — not yet built;
+-- now the sole byte-confidentiality control, so a hard acceptance gate)
+-- hash-verifies + AEAD-opens every object (§5.1) and fail-closes (broken-image
+-- placeholder, never plaintext served). The only thing a write-time shape-guard
+-- adds is catching an HONEST
 -- client that accidentally uploads plaintext — which an off-path periodic audit
 -- (scripts/attachments-ciphertext-audit.mjs) turns into a loud alert without
 -- sitting on the write path. The client encodes `encb:v1:` before upload (§9);

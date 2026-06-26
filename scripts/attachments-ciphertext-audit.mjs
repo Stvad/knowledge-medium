@@ -11,16 +11,25 @@
 // holds it. It catches our own bugs, and it ALERTS — it does not delete.
 //
 // Scope: only E2EE workspaces (a plaintext workspace's objects are raw bytes by
-// design). For each E2EE workspace prefix it lists objects and Range-GETs the
-// first bytes, checking the `encb:v1:` magic. Needs a service-role key (to read
-// every workspace's objects, bypassing RLS); if absent it SKIPS cleanly (exit 0)
-// so the scheduled job is green-but-noop until the secret is configured.
+// design). For each E2EE workspace prefix it lists objects and Range-GETs only
+// the first 8 bytes, checking the `encb:v1:` magic — it never pulls a full body.
+//
+// Privilege: it uses a service-role key because it must read EVERY workspace's
+// objects, bypassing RLS — a per-user member session would only cover the
+// workspaces that user joined. The key only ever range-reads the 8-byte magic
+// (no plaintext/ciphertext body), and the workflow has no `pull_request` trigger
+// so the secret is not exposed to forks. (A lower-privilege scoped role would
+// shrink blast radius if this posture is later judged too broad — a deliberate
+// open question, not a silent default.) If the key is absent the audit is NOT
+// ARMED: it emits a ::warning:: (visibly distinct from a green pass) and exits 0,
+// so a never-configured tripwire can't masquerade as a healthy one.
 //
 // Public-repo hygiene: never logs raw workspace ids / object paths — only a
-// short salted-free sha256 prefix, enough for an operator holding the mapping to
-// locate the object without leaking identifiers into CI logs.
+// short sha256 prefix, enough for an operator holding the mapping to locate the
+// object without leaking identifiers into CI logs.
 
 import { createHash } from 'node:crypto'
+import { appendFileSync } from 'node:fs'
 
 const ENCB_MAGIC = Buffer.from('encb:v1:') // must match src/sync/crypto/binaryEnvelope.ts
 const PREFIX_BYTES = ENCB_MAGIC.length // we only need the first 8 bytes per object
@@ -32,10 +41,21 @@ const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
 const redact = (s) => createHash('sha256').update(s).digest('hex').slice(0, 12)
 const note = (msg) => console.log(`::notice::${msg}`)
+const warn = (msg) => console.log(`::warning::${msg}`)
 const fail = (msg) => console.log(`::error::${msg}`)
+const summary = (md) => {
+  const f = process.env.GITHUB_STEP_SUMMARY
+  if (f) appendFileSync(f, `${md}\n`)
+}
 
 if (!url || !serviceKey) {
-  note('attachments ciphertext audit skipped — SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set')
+  // A green ::notice:: would make a never-configured (never-running) tripwire
+  // indistinguishable from a healthy pass — so emit a ::warning:: (yellow run
+  // annotation) and a step summary instead. Still exit 0: the secret is
+  // legitimately unset until media capture (Phase 5) ships, so we don't want
+  // daily red — just a visibly NOT-ARMED state.
+  warn('attachments ciphertext audit NOT ARMED — SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY unset; the tripwire did not run')
+  summary('### ⚠️ Attachments ciphertext audit — NOT ARMED\nSecrets not configured; the audit did not run. Set `SUPABASE_SERVICE_ROLE_KEY` before media capture (Phase 5) ships.')
   process.exit(0)
 }
 
@@ -90,12 +110,15 @@ const main = async () => {
     }
   }
 
-  note(`attachments ciphertext audit: ${workspaces.length} E2EE workspace(s), ${scanned} object(s) scanned, ${violations.length} violation(s)`)
+  const tally = `${workspaces.length} E2EE workspace(s), ${scanned} object(s) scanned, ${violations.length} violation(s)`
+  note(`attachments ciphertext audit: ${tally}`)
   if (violations.length > 0) {
     for (const v of violations) fail(`non-ciphertext object in an E2EE workspace: obj:${redact(v)}`)
     fail(`${violations.length} attachment object(s) under an E2EE prefix are NOT encb:v1: ciphertext — a client is uploading plaintext (§10.1/§17)`)
+    summary(`### ❌ Attachments ciphertext audit — ${violations.length} violation(s)\n${tally}. A client is uploading plaintext into an E2EE workspace (§10.1/§17).`)
     process.exit(1)
   }
+  summary(`### ✅ Attachments ciphertext audit — armed and clean\n${tally}.`)
 }
 
 main().catch((err) => {

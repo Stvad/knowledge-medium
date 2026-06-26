@@ -1063,8 +1063,11 @@ with check (
 
 -- NO update policy → an object is write-once (immutability). The path IS the
 -- content key (§10), so a second upload to an existing path is a Storage 409 the
--- client reads as first-write-wins idempotent dedup, never an overwrite; denying
--- UPDATE also blocks upsert and rename-onto-existing.
+-- client reads as first-write-wins idempotent dedup, never an overwrite. Storage
+-- needs UPDATE for every other mutation verb too — upsert, move (rename), and
+-- copy-onto-existing all require UPDATE — so with no UPDATE policy NONE of them
+-- can overwrite an existing object. A writer's only mutation is delete (then a
+-- fresh insert) — the accepted §17 poison, not a silent overwrite.
 
 -- DELETE is a direct writer-gated delete — delete removes an object, there is no
 -- body to inspect, and it is REQUIRED: without it BlobStore.delete() is
@@ -1125,12 +1128,16 @@ function on every upload, because the byte-confidentiality <em>outcome</em> is a
     <code>encb:v1:</code>‖zeros‖plaintext‖zeros and passes it — or just exfiltrates with the workspace key
     they already hold. Against the threat that matters (a malicious writer / the untrusted server) it buys
     nothing.</li>
-  <li><strong>The read side already fail-closes.</strong> Every object is hash-verified against the block's
-    synced <code>hash</code> and AEAD-opened on read (§5.1/§7.3); anything that isn't the genuine plaintext
-    renders a broken-image placeholder and is <em>never served as content</em>. That is the load-bearing
-    byte-confidentiality control, and it holds regardless of what was written. (This is the principled
-    asymmetry with blocks: bytes are content-addressed and self-verifying on read; block text is not — so
-    byte-confidentiality <em>can</em> rest on a read-side check where block-confidentiality can't.)</li>
+  <li><strong>The read side fail-closes — and that is now the sole byte-confidentiality control, so it is a
+    hard Phase-3 acceptance gate, not an already-shipped guarantee.</strong> The resolver (§7.3,
+    <strong>Phase 3, not yet built</strong>) MUST hash-verify every fetched object against the block's synced
+    <code>hash</code> and AEAD-open it (§5.1/§7.3); anything that isn't the genuine plaintext renders a
+    broken-image placeholder and is <em>never served as content</em>. Phase 1 shipped the primitives
+    (<code>decodeBytes</code>, <code>verifyContentHash</code>); wiring them into the resolver — with the
+    tamper/swap and stale-replay tests §15 already lists — is what makes this reversal safe, and nothing reads
+    these objects until it lands. (This is the principled asymmetry with blocks: bytes are content-addressed
+    and self-verifying on read; block text is not — so byte-confidentiality <em>can</em> rest on a read-side
+    check where block-confidentiality can't.)</li>
   <li><strong>It is a no-op for plaintext workspaces</strong> — no body to protect; the server holds those
     bytes by design.</li>
   <li><strong>The one residual</strong> it uniquely caught is an <em>honest</em> client with an encryption
@@ -1153,7 +1160,8 @@ invariant (§9), backstopped read-side and by the audit. (Storage finalizes an o
 upload, so a truncated request can't win a path with a partial object — the atomicity the function had to
 hand-roll is now the platform's.)</div>
 
-<p><strong>Existing-path dedup still hash-verifies.</strong> On a <code>409</code> the uploading client must
+<p><strong>Existing-path dedup still hash-verifies</strong> (in the §9 up-lane drain — Phase 5, not yet
+  wired). On a <code>409</code> the uploading client must
   <strong>not</strong> blindly clear its §9 queue entry: it fetches + hash-verifies the stored object against
   its own <code>hash</code> — on a match it clears (genuine idempotent dedup); on a mismatch (a poisoned or
   buggy prior write) it keeps its bytes and runs writer-delete + re-upload rather than dropping the only good
@@ -1486,10 +1494,11 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       server check — a <code>storage.objects</code> policy can't see body bytes (§10.1), so the only
       enforcement point would be a sole-writer Edge Function on every upload.</td>
     <td><strong>Decided: dropped</strong> (§10.1, 2026-06-25). The guard was shape-only (a malicious writer
-      forges the 8-byte magic), a no-op for plaintext, and the served-plaintext outcome is already
-      fail-closed read-side (§5.1/§7.3); its only residual — an honest client accidentally uploading
-      plaintext — is caught by an off-path audit (<code>scripts/attachments-ciphertext-audit.mjs</code>),
-      not worth a function on the write path.</td></tr>
+      forges the 8-byte magic), a no-op for plaintext, and the served-plaintext outcome is fail-closed
+      read-side (§5.1/§7.3 — a Phase-3 resolver gate, since the reversal makes that read-check the sole
+      byte-confidentiality control); its only residual — an honest client accidentally uploading plaintext —
+      is caught by an off-path audit (<code>scripts/attachments-ciphertext-audit.mjs</code>), not worth a
+      function on the write path.</td></tr>
 <tr><td>Bytes off the sync path</td>
     <td>A second durable upload queue; eventual consistency between metadata and bytes; undo is a pure
       soft-delete — the byte lane self-heals, no compensator (§9).</td>

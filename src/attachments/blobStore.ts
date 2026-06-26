@@ -18,11 +18,12 @@
  *              the §10.1 poison-correction, NOT by undo (§9).
  *
  * The E2EE `encb:v1:` byte shape is the CLIENT's invariant — it encodes before
- * upload (§9), the read side hash-verifies + AEAD-opens + fail-closes
- * (§5.1/§7.3), and an off-path audit (scripts/attachments-ciphertext-audit.mjs)
- * alerts on a stray plaintext object. No server inspects the body on write
- * (§10.1 reversal, §17): a storage.objects policy can't see body bytes, and a
- * malicious writer holds the key and forges the magic anyway.
+ * upload (§9); the read side (the Phase-3 resolver, §7.3 — not yet built)
+ * hash-verifies + AEAD-opens + fail-closes (§5.1), and an off-path audit
+ * (scripts/attachments-ciphertext-audit.mjs) alerts on a stray plaintext object.
+ * No server inspects the body on write (§10.1 reversal, §17): a storage.objects
+ * policy can't see body bytes, and a malicious writer holds the key and forges
+ * the magic anyway.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -68,23 +69,34 @@ export interface SupabaseBlobStoreDeps {
   /** Probes for an active session. A momentarily-absent session is TRANSIENT
    *  (the §9 up-lane refreshes + retries rather than burning the record to
    *  `failed`); a present session that isn't a workspace writer is the permanent
-   *  403 the upload itself returns. The upload rides the client's own session. */
+   *  403 the upload itself returns. It is ONLY a presence-probe — the upload
+   *  rides `client`'s own session, so this MUST read the same `SupabaseClient`'s
+   *  auth store or it gives false confidence. (A present-but-expired token sails
+   *  past the probe and is handled as a transient '400' by the classifier.) */
   getAccessToken: () => Promise<string | null>
 }
 
-/** Storage statuses that won't clear on retry → the §9 record goes to `failed`.
- *  400 bad request/path, 403 RLS-denied (not a writer / removed member),
- *  404 bucket missing (misconfig), 413 over the bucket's file_size_limit. */
-const PERMANENT_STATUSES = new Set([400, 403, 404, 413])
+/** Supabase Storage flattens every non-500 HTTP status to 400; the real
+ *  semantic code is the STRING body `statusCode` (e.g. '403' RLS-denied,
+ *  '413' over file_size_limit), which supabase-js surfaces as
+ *  `StorageApiError.statusCode`. So classify on `statusCode`, NOT on the
+ *  flattened numeric `.status`. These codes won't clear on retry → the §9
+ *  record goes to `failed`: '403' not-a-writer / removed member, '404' bucket
+ *  missing (misconfig), '413' over the bucket's file_size_limit. Everything
+ *  else is transient — notably '400' (which also carries an *expired JWT*, which
+ *  MUST retry after a refresh; a genuinely-malformed path can't occur with the
+ *  machine-generated <ws>/<content-key>), '401', 5xx, and network. */
+const PERMANENT_STATUS_CODES = new Set(['403', '404', '413'])
 
-/** Storage "object already exists" — HTTP 409. supabase-js surfaces it on a
- *  StorageApiError as `.status` (number) and `.statusCode` ("409"). A duplicate
- *  upload to a content-addressed path is first-write-wins SUCCESS, not an error
- *  (§10.1) — key on the STATUS so an unrelated error whose message happens to
- *  mention "exists" can't be mis-read as an idempotent success (which would
- *  clear the client's §9 queue against an object that was never written). */
+/** Storage "object already exists" → body `statusCode` '409'. The HTTP line is
+ *  flattened to 400, so the numeric `.status` is NOT 409 — the string body code
+ *  is the signal (the `.status === 409` arm is a defensive fallback, effectively
+ *  dead against current Storage). A duplicate upload to a content-addressed path
+ *  is first-write-wins SUCCESS, not an error (§10.1) — detect it so an unrelated
+ *  error can't be mis-read as an idempotent success (which would clear the §9
+ *  queue against an object that was never written). */
 const isAlreadyExists = (err: { status?: number; statusCode?: string | number }): boolean =>
-  err.status === 409 || String(err.statusCode) === '409'
+  String(err.statusCode) === '409' || err.status === 409
 
 export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore => {
   const { client, getAccessToken } = deps
@@ -117,11 +129,15 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       // hash-verifies the stored object before clearing the §9 queue.
       if (isAlreadyExists(error)) return
 
-      const status = error.status ?? (error.statusCode != null ? Number(error.statusCode) : undefined)
+      // Classify on the string body `statusCode` (the semantic code); the
+      // numeric `.status` is flattened to 400 for every non-500 error, so it
+      // can't distinguish a permanent 403/413 from a transient expired-JWT 400.
+      const code = error.statusCode != null ? String(error.statusCode) : undefined
+      const numeric = code != null && /^\d+$/.test(code) ? Number(code) : error.status
       throw new BlobPutError(
-        `upload failed${status != null ? ` (${status})` : ''}: ${error.message ?? 'unknown error'}`,
-        status != null && PERMANENT_STATUSES.has(status),
-        status,
+        `upload failed${code != null ? ` (${code})` : ''}: ${error.message ?? 'unknown error'}`,
+        code != null && PERMANENT_STATUS_CODES.has(code),
+        numeric,
       )
     },
 

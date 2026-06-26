@@ -16,8 +16,15 @@ const makeStore = (upload: UploadFn, token: string | null = 'tok-123') => {
 }
 
 const ok = async (): Promise<UploadResult> => ({ error: null })
-const fail = (status?: number, statusCode?: string): UploadFn => async () => ({
-  error: { status, statusCode, message: `status ${status ?? statusCode}` },
+// Mirror the REAL supabase-js shape: Storage flattens every non-500 HTTP status
+// to 400, and the semantic code lives in the STRING body `statusCode` (500 stays
+// 500). A statusless error models an offline StorageUnknownError.
+const fail = (statusCode?: string): UploadFn => async () => ({
+  error: {
+    status: statusCode == null ? undefined : statusCode === '500' ? 500 : 400,
+    statusCode,
+    message: `code ${statusCode ?? 'network'}`,
+  },
 })
 
 /** Await a put expected to reject, returning the typed BlobPutError. */
@@ -51,23 +58,30 @@ describe('SupabaseBlobStore.put', () => {
   })
 
   it('resolves on a 409 (existing path) as idempotent first-write-wins dedup', async () => {
-    // supabase-js carries the duplicate as numeric .status AND string .statusCode.
-    await expect(makeStore(fail(409, '409')).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
-    await expect(makeStore(fail(undefined, '409')).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
+    // The duplicate's HTTP line is the flattened 400; the '409' is in the body
+    // statusCode — so detection must key on statusCode, not the numeric status.
+    await expect(makeStore(fail('409')).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
   })
 
-  it('treats 403 (not a writer), 404 (no bucket), 413 (too large), 400 (bad path) as PERMANENT', async () => {
-    for (const status of [403, 404, 413, 400]) {
-      const err = await putError(makeStore(fail(status)).store.put('ws', 'k', new Uint8Array()))
-      expect(err.permanent, `status ${status} should be permanent`).toBe(true)
-      expect(err.status).toBe(status)
+  it('treats 403 (not a writer), 404 (no bucket), 413 (too large) as PERMANENT', async () => {
+    for (const code of ['403', '404', '413']) {
+      const err = await putError(makeStore(fail(code)).store.put('ws', 'k', new Uint8Array()))
+      expect(err.permanent, `code ${code} should be permanent`).toBe(true)
+      expect(err.status).toBe(Number(code)) // the semantic code, not the flattened 400
     }
   })
 
-  it('treats 401 (expired token), 5xx, and an unknown/network error as TRANSIENT (retryable)', async () => {
-    for (const status of [401, 500, 503]) {
-      const err = await putError(makeStore(fail(status)).store.put('ws', 'k', new Uint8Array()))
-      expect(err.permanent, `status ${status} should be transient`).toBe(false)
+  it('treats an expired/invalid JWT (body code 400) as TRANSIENT, not quarantined', async () => {
+    // Storage surfaces an expired token as statusCode '400'; it must retry after
+    // a session refresh, NOT burn the §9 record to `failed`.
+    const err = await putError(makeStore(fail('400')).store.put('ws', 'k', new Uint8Array()))
+    expect(err.permanent).toBe(false)
+  })
+
+  it('treats 401, 5xx, and an unknown/network error as TRANSIENT (retryable)', async () => {
+    for (const code of ['401', '500', '503']) {
+      const err = await putError(makeStore(fail(code)).store.put('ws', 'k', new Uint8Array()))
+      expect(err.permanent, `code ${code} should be transient`).toBe(false)
     }
     // A statusless error (e.g. an offline StorageUnknownError) is transient.
     const networkErr = await putError(makeStore(fail()).store.put('ws', 'k', new Uint8Array()))
