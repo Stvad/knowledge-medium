@@ -26,7 +26,8 @@ import { mediaHashProp } from './mediaBlock.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
 import {
-  captureMediaFiles,
+  captureMedia,
+  DEFAULT_MAX_CAPTURE_BYTES,
   type MediaCaptureDeps,
   type MediaCaptureResult,
   type MediaSource,
@@ -94,7 +95,11 @@ export const armUploadDrain = (userId: string): void => {
   const blobStore = getBlobStore()
   if (!blobStore) return
   void withLock(laneLockName(userId), async () => {
-    await drainUploads(userId, drainDepsFor(blobStore))
+    // Bind the drain to the user it was armed for: the deps (mode/key) + the
+    // BlobStore session follow the ACTIVE account, so if a switch lands before this
+    // lock body runs, draining userId's records under the new account could 403 and
+    // wrongly quarantine them. Skip until userId is active again.
+    await drainUploads(userId, { ...drainDepsFor(blobStore), isActiveUser: () => getActiveUserId() === userId })
   }).catch((err) => console.warn('[assetUpload] drain failed', err))
 }
 
@@ -170,23 +175,38 @@ const captureDepsFor = (repo: Repo): MediaCaptureDeps => ({
 })
 
 /** Read each File's bytes and capture them as media blocks under `embedParentId`.
- *  The renderer's paste/drop entry point. The whole capture (stage → tx → promote)
- *  runs under the per-user MINT lock so a reconciler in another tab can't reap an
- *  in-flight capture (see {@link mintLockName}). */
+ *  The renderer's paste entry point. The whole capture (stage → tx → promote) runs
+ *  under the per-user MINT lock so a reconciler in another tab can't reap an
+ *  in-flight capture (see {@link mintLockName}).
+ *
+ *  Files are read + captured ONE AT A TIME (bounded memory), and a grossly-oversize
+ *  file is rejected by its declared `size` BEFORE `arrayBuffer()` — a multi-GB paste
+ *  must not allocate its full size (× every file, the old `Promise.all`) just to be
+ *  rejected by the post-read byteLength guard. `captureMedia` still applies the
+ *  precise, mode-aware limit (the e2ee envelope overhead) on the bytes it reads. */
 export const captureMediaFromFiles = async (
   repo: Repo,
   workspaceId: string,
   embedParentId: string,
   files: readonly File[],
 ): Promise<MediaCaptureResult[]> => {
-  const sources: MediaSource[] = await Promise.all(
-    [...files].map(async (file) => ({
-      bytes: new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>,
-      mime: file.type || 'application/octet-stream',
-      filename: file.name || undefined,
-    })),
-  )
-  const run = () => captureMediaFiles(workspaceId, embedParentId, sources, captureDepsFor(repo))
+  const deps = captureDepsFor(repo)
+  const run = async (): Promise<MediaCaptureResult[]> => {
+    const results: MediaCaptureResult[] = []
+    for (const file of files) {
+      if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {
+        results.push({ ok: false, reason: 'too-large' }) // reject without reading
+        continue
+      }
+      const source: MediaSource = {
+        bytes: new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>,
+        mime: file.type || 'application/octet-stream',
+        filename: file.name || undefined,
+      }
+      results.push(await captureMedia({ workspaceId, source, embedParentId }, deps))
+    }
+    return results
+  }
   const userId = getActiveUserId()
   return userId ? withLock(mintLockName(userId), run) : run()
 }

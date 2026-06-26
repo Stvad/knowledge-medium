@@ -255,6 +255,26 @@ describe('captureMedia — e2ee + guards', () => {
     expect(env.drained).toEqual([])
   })
 
+  it('rejects an e2ee file whose ENCODED size exceeds the cap, but allows it as plaintext', async () => {
+    const kId = await deriveContentKeyHmac(new Uint8Array(32) as Uint8Array<ArrayBuffer>)
+    // Exactly at the cap as plaintext: passthrough fits, but the e2ee envelope
+    // (magic+nonce+GCM tag) pushes the uploaded object over the bucket file_size_limit.
+    const atCap = bytesOf(1024)
+
+    const e2ee = await captureMedia(
+      { workspaceId: WS, source: { bytes: atCap, mime: 'image/png' }, embedParentId: env.parentId },
+      deps({ maxBytes: 1024, getMaterializability: mat('decrypt'), getContentKeyHmac: async () => kId }),
+    )
+    expect(e2ee).toEqual({ ok: false, reason: 'too-large' }) // would 413 at upload otherwise
+    expect(await env.uploadStore.listByStatus(USER, 'staged')).toHaveLength(0)
+
+    const plain = await captureMedia(
+      { workspaceId: WS, source: { bytes: atCap, mime: 'image/png' }, embedParentId: env.parentId },
+      deps({ maxBytes: 1024 }), // copy mode (default) — passthrough, no envelope overhead
+    )
+    expect(plain).toMatchObject({ ok: true })
+  })
+
   it('rejects an unsupported MIME when an allow-list is supplied', async () => {
     const result = await captureMedia(
       { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'application/x-evil' }, embedParentId: env.parentId },

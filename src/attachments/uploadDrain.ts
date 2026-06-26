@@ -65,6 +65,15 @@ export interface UploadDrainDeps {
   readonly getMaterializability: GetMaterializability
   /** The workspace key for the e2ee seal. */
   readonly getCek: GetCek
+  /** Is `userId` (the QUEUED user whose records we're draining) still the active
+   *  account? The mode/key deps and the BlobStore session resolve against the
+   *  ACTIVE user, so if an account switch lands between the drain being armed and
+   *  this body running, draining userA's records under userB's session can hit a
+   *  permanent 403 (B isn't a writer for A's workspace) and wrongly mark A's record
+   *  `failed`. So a record is processed only while its user is active; otherwise it
+   *  defers (no attempt burn) and re-drains when that user is active again.
+   *  Defaults to always-active for the source-based unit path. */
+  readonly isActiveUser?: () => boolean
   readonly now?: () => number
   readonly maxAttempts?: number
   readonly maxAgeMs?: number
@@ -99,6 +108,7 @@ interface DrainOneCtx {
   readonly blobStore: BlobStore
   readonly getMaterializability: GetMaterializability
   readonly getCek: GetCek
+  readonly isActiveUser: () => boolean
   readonly now: () => number
   readonly maxAttempts: number
   readonly maxAgeMs: number
@@ -125,6 +135,12 @@ const drainOne = async (
   rec: ByteUploadRecord,
   ctx: DrainOneCtx,
 ): Promise<DrainOutcome> => {
+  // (0) Bind to the queued user. The mode/key deps + BlobStore session resolve
+  //     against the ACTIVE account; if it changed since this drain was armed,
+  //     skip (no attempt burn) rather than touch userId's record under the wrong
+  //     identity — re-drains when userId is active again.
+  if (!ctx.isActiveUser()) return 'deferred'
+
   // (1) Can we encode for this workspace right now? defer/unexpected → leave pending.
   const mode = encodeModeFor(await ctx.getMaterializability(rec.workspaceId))
   if (mode === null) return 'deferred'
@@ -212,6 +228,7 @@ export const drainUploads = async (userId: string, deps: UploadDrainDeps): Promi
     blobStore: deps.blobStore,
     getMaterializability: deps.getMaterializability,
     getCek: deps.getCek,
+    isActiveUser: deps.isActiveUser ?? (() => true),
     now: deps.now ?? (() => Date.now()),
     maxAttempts: deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
     maxAgeMs: deps.maxAgeMs ?? DEFAULT_MAX_AGE_MS,

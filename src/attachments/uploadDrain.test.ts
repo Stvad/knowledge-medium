@@ -164,6 +164,21 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect(await store.get(USER, BLOCK)).toBeNull()
   })
 
+  it('skips (defers, no attempt burn) a record whose queued user is no longer the active account', async () => {
+    // An account switch landed after the drain was armed: the deps + session now
+    // belong to a different user, so draining this record could 403 and wrongly
+    // quarantine it. It must defer (stay pending) and re-drain when its user returns.
+    await store.stage(stageInput())
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, bytes(8))
+
+    const summary = await drainUploads(USER, deps({ isActiveUser: () => false }))
+
+    expect(summary).toMatchObject({ deferred: 1, uploaded: 0, failed: 0, retried: 0 })
+    expect(blobStore.puts).toHaveLength(0) // never touched Storage under the wrong account
+    expect((await store.get(USER, BLOCK))?.status).toBe('pending')
+  })
+
   it('defers (leaves pending, no upload) when the workspace is not materializable', async () => {
     const matDefer = mat('defer')
     await store.stage(stageInput())
