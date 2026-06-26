@@ -7,12 +7,16 @@
  * Image branch: resolve the bytes in-thread (§7.3), wrap them as an object URL
  * (useAssetObjectUrl), and feed the existing {@link MarkdownImage} lightbox. A
  * fail-closed resolve (the resolver discarded unverified bytes, §5.1) renders the
- * broken-asset placeholder — NEVER a raw/unverified source. Non-image MIMEs get a
- * file chip for now (full file/PDF/AV rendering is vNext, §15) and do NOT resolve
- * bytes — only the image branch fetches/decrypts.
+ * broken-asset placeholder — NEVER a raw/unverified source. Bytes that verify but
+ * the browser can't DECODE as an image (an untrusted `media:mime` on non-image
+ * bytes, or a corrupt-but-hash-matching image) fall to the SAME placeholder via the
+ * <img> onError, not the browser's broken-image glyph. Non-image MIMEs get a file
+ * chip for now (full file/PDF/AV rendering is vNext, §15) and do NOT resolve bytes —
+ * only the image branch fetches/decrypts.
  */
 
 import { FileText, ImageOff, Loader2 } from 'lucide-react'
+import { useState } from 'react'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { usePropertyValue, useWorkspaceId } from '@/hooks/block.js'
 import { MarkdownImage } from '@/markdown/MarkdownImage.js'
@@ -58,15 +62,26 @@ const MediaImage = ({ block, hash, mime, filename }: {
   // the UI's active one. '' (while loading / missing) fails closed (deferred).
   const workspaceId = useWorkspaceId(block, '')
   const state = useAssetObjectUrl({ workspaceId, contentHash: hash, mime }, getAssetResolver())
+  // The verified bytes that the <img> failed to DECODE (keyed by URL so a later
+  // re-resolve to a fresh, decodable object URL clears the error on its own).
+  const [decodeErrorUrl, setDecodeErrorUrl] = useState<string | null>(null)
 
-  if (state.status === 'ready') {
-    return <MarkdownImage src={state.url} alt={filename || 'Attachment image'} className="max-w-full rounded" />
+  if (state.status === 'ready' && state.url !== decodeErrorUrl) {
+    return (
+      <MarkdownImage
+        src={state.url}
+        alt={filename || 'Attachment image'}
+        className="max-w-full rounded"
+        onError={() => setDecodeErrorUrl(state.url)}
+      />
+    )
   }
   if (state.status === 'loading') {
     return <Placeholder testid="media-loading" label="Loading image…" icon={<Loader2 className="h-4 w-4" />} spin />
   }
-  // Fail-closed (deferred / hash-mismatch / decode / fetch / no-key / error):
-  // the broken-asset placeholder — unverified bytes are never rendered (§5.1).
+  // Fail-closed (deferred / hash-mismatch / decode / fetch / no-key / error) OR
+  // verified bytes the <img> couldn't decode (onError above): the broken-asset
+  // placeholder — never unverified bytes (§5.1) and never the browser's glyph.
   return <Placeholder testid="media-broken" label="Image unavailable" icon={<ImageOff className="h-4 w-4" />} />
 }
 

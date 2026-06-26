@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block.js'
 import { typesProp } from '@/data/properties.js'
@@ -48,6 +48,17 @@ describe('MediaContentRenderer — image branch', () => {
     const { container } = renderContent()
     expect(screen.getByTestId('media-broken')).toBeInTheDocument()
     // The load-bearing assertion: nothing is ever served for an unverified asset.
+    expect(container.querySelector('img')).toBeNull()
+  })
+
+  it('falls to the broken placeholder (not the browser glyph) when verified bytes fail to DECODE', () => {
+    // The bytes hash-verified, but the <img> can't decode them — e.g. an untrusted
+    // media:mime claiming image/* over non-image bytes. onError must swap to the
+    // styled placeholder, upholding the "never a broken render" invariant.
+    h.urlState = { status: 'ready', url: 'blob:fake/undecodable' }
+    const { container } = renderContent()
+    fireEvent.error(screen.getByRole('img', { name: 'cat.png' }))
+    expect(screen.getByTestId('media-broken')).toBeInTheDocument()
     expect(container.querySelector('img')).toBeNull()
   })
 })
