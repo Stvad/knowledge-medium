@@ -45,7 +45,14 @@ const warn = (msg) => console.log(`::warning::${msg}`)
 const fail = (msg) => console.log(`::error::${msg}`)
 const summary = (md) => {
   const f = process.env.GITHUB_STEP_SUMMARY
-  if (f) appendFileSync(f, `${md}\n`)
+  if (!f) return
+  // Best-effort: the step summary is cosmetic — never let a summary-write
+  // failure (e.g. the runner's summary size cap) flip the audit's pass/fail.
+  try {
+    appendFileSync(f, `${md}\n`)
+  } catch {
+    /* ignore — the audit's signal comes from the ciphertext check, not the log */
+  }
 }
 
 if (!url || !serviceKey) {

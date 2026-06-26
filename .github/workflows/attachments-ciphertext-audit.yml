@@ -3,8 +3,10 @@ name: Attachments Ciphertext Audit
 # Off-path tripwire (design §10.1 / §17): there is no body-inspecting upload
 # service, so this scheduled job verifies that every object under an E2EE
 # workspace prefix is encb:v1: ciphertext — catching an honest-client regression
-# that uploads plaintext. It never gates uploads. Needs a service-role key; the
-# script skips cleanly (green) until SUPABASE_SERVICE_ROLE_KEY is configured.
+# that uploads plaintext. It never gates uploads. Needs a service-role key; until
+# SUPABASE_SERVICE_ROLE_KEY is configured the script does not run and emits a
+# NOT-ARMED ::warning:: (yellow, visibly distinct from a clean pass), not a
+# silent green.
 on:
   schedule:
     - cron: '37 6 * * *' # daily — uploads are rare, this is a tripwire not a gate

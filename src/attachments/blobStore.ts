@@ -35,6 +35,13 @@ export const ATTACHMENTS_BUCKET = 'attachments'
  * record as `failed` (an auth/path/size rejection that won't clear on retry) or
  * keep it `pending` and retry with backoff (network / 5xx / a momentarily-absent
  * or expired session).
+ *
+ * `permanent` is an ADVISORY fast-path quarantine hint, NOT the sole exit from
+ * the retry loop: only the enumerated permanent codes (403/404/413) set it, so a
+ * permanent failure outside that set (e.g. a stray 400-family `InvalidKey`) would
+ * otherwise retry forever. The §9 up-lane MUST therefore bound retries by attempt
+ * count / age regardless of `permanent` (the §9/§17 bounded-correction→`failed`
+ * rule) — `permanent` only lets it quarantine sooner.
  */
 export class BlobPutError extends Error {
   constructor(
