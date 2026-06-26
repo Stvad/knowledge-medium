@@ -4,7 +4,7 @@
  *
  * Phase 4 scope: the `media` block TYPE + its property schemas (typesFacet /
  * propertySchemasFacet) and the {@link MediaBlockRenderer} (blockRenderersFacet,
- * `canRender = block.hasType('media')`). Capture (paste/drop, §9) and the
+ * rendering blocks that carry the `media` type). Capture (paste/drop, §9) and the
  * background up/down lanes arrive in later phases; the bytes seam (§5), storage
  * (§10), and the resolver (§7.3) already exist underneath.
  */

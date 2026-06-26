@@ -78,4 +78,14 @@ describe('MediaBlockRenderer.canRender', () => {
     expect(MediaBlockRenderer.canRender?.({ block: peeking(undefined) } as BlockRendererProps)).toBe(false)
     expect(MediaBlockRenderer.canRender?.({ block: peeking(null) } as BlockRendererProps)).toBe(false)
   })
+
+  it('never throws on a malformed types value (raw read, not the throwing codec)', () => {
+    // The cache boundary validates JSON syntax, not shape — a corrupt/legacy row
+    // could carry types: "media" (string) or [1] (non-string). canRender must
+    // read it total (Array.isArray), never route through the throwing codec.
+    const malformed = (types: unknown) => peeking({ properties: { types } })
+    expect(MediaBlockRenderer.canRender?.({ block: malformed('media') } as BlockRendererProps)).toBe(false)
+    expect(MediaBlockRenderer.canRender?.({ block: malformed([1, 2]) } as BlockRendererProps)).toBe(false)
+    expect(MediaBlockRenderer.canRender?.({ block: malformed(undefined) } as BlockRendererProps)).toBe(false)
+  })
 })

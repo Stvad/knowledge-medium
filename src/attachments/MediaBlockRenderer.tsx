@@ -1,7 +1,8 @@
 /**
  * The `media`-block renderer (design §11). Mirrors the video-player plugin's
- * wiring: a {@link BlockRenderer} with `canRender = block.hasType('media')` and a
- * priority above the default, branching on the block's `media:mime`.
+ * wiring: a {@link BlockRenderer} that renders blocks carrying the `media` type
+ * (gated on a loaded snapshot, see canRender) at a priority above the default,
+ * branching on the block's `media:mime`.
  *
  * Image branch: resolve the bytes in-thread (§7.3), wrap them as an object URL
  * (useAssetObjectUrl), and feed the existing {@link MarkdownImage} lightbox. A
@@ -13,7 +14,6 @@
 
 import { FileText, ImageOff, Loader2 } from 'lucide-react'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
-import { getBlockTypes } from '@/data/properties.js'
 import { usePropertyValue, useWorkspaceId } from '@/hooks/block.js'
 import { MarkdownImage } from '@/markdown/MarkdownImage.js'
 import type { Block } from '@/data/block.js'
@@ -95,13 +95,16 @@ export const MediaBlockRenderer: BlockRenderer = (props: BlockRendererProps) => 
   <DefaultBlockRenderer {...props} ContentRenderer={MediaContentRenderer} />
 )
 
-// peek()-based, null-guarded: `useRenderer` runs every renderer's canRender for
-// every block during its loading window, and `block.hasType()` throws
-// (BlockNotLoadedError / BlockNotFoundError) on a not-yet-loaded or missing row —
-// which would escape above the BlockComponent ErrorBoundary. So gate on a loaded
-// snapshot, exactly as the other data-touching renderers do.
+// Gate on a LOADED snapshot, read THROW-FREE — exactly as the other peek()-based
+// renderers do (PropertySchema / BlockType / TypesPage). `useRenderer` runs every
+// renderer's canRender for every block during its loading window, ABOVE the
+// BlockComponent ErrorBoundary, so canRender must never throw: `block.hasType()`
+// throws on a not-yet-loaded / missing row, and even `getBlockTypes` throws a
+// CodecError on a malformed `types` value (a non-array, or a non-string element)
+// that the cache boundary doesn't validate. Reading `properties.types` raw +
+// `Array.isArray` is total: undefined / wrong-shape → false, never a throw.
 MediaBlockRenderer.canRender = ({ block }: BlockRendererProps) => {
-  const data = block.peek()
-  return data ? getBlockTypes(data).includes(MEDIA_TYPE) : false
+  const types = block.peek()?.properties.types
+  return Array.isArray(types) && types.includes(MEDIA_TYPE)
 }
 MediaBlockRenderer.priority = () => 5
