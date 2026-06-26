@@ -93,15 +93,22 @@ begin
   -- client's ~10 MB capture cap (§11/§16); it replaces the old Edge Function's
   -- in-isolate MAX_UPLOAD_BYTES backstop now that uploads are direct.
   -- CONVERGE on conflict (don't just skip): if the bucket already exists from
-  -- ad-hoc/manual testing, a leftover `public = true` would make every object
-  -- world-readable via Storage's public URL path — bypassing the member-gated
-  -- read policy entirely — and a looser/absent limit would drop the upload
-  -- backstop. Re-assert both so the migration GUARANTEES private + capped.
-  insert into storage.buckets (id, name, public, file_size_limit)
-  values ('attachments', 'attachments', false, 52428800)
+  -- ad-hoc/manual testing, re-assert its security + functional config so the
+  -- migration GUARANTEES the intended state, not whatever was left lying around.
+  --   * public = false       — a leftover `true` would make every object
+  --       world-readable via Storage's public URL path, bypassing the
+  --       member-gated read policy entirely;
+  --   * file_size_limit      — a looser/absent limit drops the upload backstop;
+  --   * allowed_mime_types = NULL (accept any) — BlobStore.put always uploads
+  --       application/octet-stream, so a stale allow-list omitting it would
+  --       reject valid uploads; the real type is tracked on the media block
+  --       (§11), not the bucket.
+  insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  values ('attachments', 'attachments', false, 52428800, null)
   on conflict (id) do update
     set public = excluded.public,
-        file_size_limit = excluded.file_size_limit;
+        file_size_limit = excluded.file_size_limit,
+        allowed_mime_types = excluded.allowed_mime_types;
 
   -- RLS: read by workspace member. Path's first segment = <workspace_id>.
   execute $pol$
