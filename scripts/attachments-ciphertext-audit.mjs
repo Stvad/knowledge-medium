@@ -81,7 +81,9 @@ const e2eeWorkspaceIds = async () => {
       `${base}/rest/v1/workspaces?select=id&encryption_mode=eq.e2ee&limit=${LIST_PAGE}&offset=${offset}`,
       { headers: authHeaders },
     )
-    if (!res.ok) throw new Error(`workspaces query failed (${res.status}): ${await res.text()}`)
+    // Status only — never interpolate the response body: this runs in public CI
+    // and a body could echo the request prefix (a workspace id).
+    if (!res.ok) throw new Error(`workspaces query failed (${res.status})`)
     const page = await res.json()
     if (page.length === 0) return ids
     for (const w of page) ids.push(w.id)
@@ -103,7 +105,7 @@ const listObjects = async (workspaceId) => {
       headers: { ...authHeaders, 'content-type': 'application/json' },
       body: JSON.stringify({ prefix: `${workspaceId}/`, limit: LIST_PAGE, offset }),
     })
-    if (!res.ok) throw new Error(`list failed (${res.status}): ${await res.text()}`)
+    if (!res.ok) throw new Error(`list failed (${res.status})`) // status only — no body (public CI)
     const page = await res.json()
     for (const item of page) {
       if (item.id) files.push(`${workspaceId}/${item.name}`)
@@ -113,42 +115,56 @@ const listObjects = async (workspaceId) => {
   }
 }
 
-/** True iff the object's first bytes are the encb:v1: magic. */
-const isCiphertext = async (objectPath) => {
+/** Classify an object by its first bytes: 'ok' (encb:v1: magic), 'plaintext'
+ *  (readable but wrong magic), 'unreadable' (a per-object read failure — a 416 on
+ *  a 0-byte/truncated object, the exact buggy-client case this tripwire targets;
+ *  or a 5xx/network), or 'gone' (404 — deleted between list and read; benign).
+ *  A per-object failure is a per-object verdict, NEVER a fatal throw: one odd
+ *  object must not red/abort the whole audit, and the operator still gets a
+ *  redacted path to locate it. */
+const classifyObject = async (objectPath) => {
   const encoded = objectPath.split('/').map(encodeURIComponent).join('/')
-  const res = await fetch(`${base}/storage/v1/object/authenticated/${BUCKET}/${encoded}`, {
-    headers: { ...authHeaders, range: `bytes=0-${PREFIX_BYTES - 1}` },
-  })
-  if (!res.ok) throw new Error(`object read failed (${res.status})`)
+  let res
+  try {
+    res = await fetch(`${base}/storage/v1/object/authenticated/${BUCKET}/${encoded}`, {
+      headers: { ...authHeaders, range: `bytes=0-${PREFIX_BYTES - 1}` },
+    })
+  } catch {
+    return 'unreadable'
+  }
+  if (res.status === 404) return 'gone' // vanished mid-scan — nothing to verify
+  if (!res.ok) return 'unreadable' // 416 empty / 5xx — flag, don't abort
   const head = Buffer.from(await res.arrayBuffer()).subarray(0, PREFIX_BYTES)
-  return head.equals(ENCB_MAGIC)
+  return head.equals(ENCB_MAGIC) ? 'ok' : 'plaintext'
 }
 
 const main = async () => {
   const workspaces = await e2eeWorkspaceIds()
   let scanned = 0
-  const violations = [] // { kind: 'plaintext' | 'nested', path }
+  const violations = [] // { kind: 'plaintext' | 'nested' | 'unreadable', path }
   for (const ws of workspaces) {
     const { files, nested } = await listObjects(ws)
     for (const path of nested) violations.push({ kind: 'nested', path })
     for (const path of files) {
+      const verdict = await classifyObject(path)
+      if (verdict === 'gone') continue // vanished mid-scan; nothing to verify
       scanned += 1
-      if (!(await isCiphertext(path))) violations.push({ kind: 'plaintext', path })
+      if (verdict === 'plaintext') violations.push({ kind: 'plaintext', path })
+      else if (verdict === 'unreadable') violations.push({ kind: 'unreadable', path })
     }
   }
 
   const tally = `${workspaces.length} E2EE workspace(s), ${scanned} object(s) scanned, ${violations.length} finding(s)`
   note(`attachments ciphertext audit: ${tally}`)
   if (violations.length > 0) {
-    for (const v of violations) {
-      const reason =
-        v.kind === 'nested'
-          ? 'unexpected NESTED entry under an E2EE prefix (layout must be flat — could hide plaintext)'
-          : 'non-ciphertext object in an E2EE workspace'
-      fail(`${reason}: obj:${redact(v.path)}`)
+    const reasons = {
+      nested: 'unexpected NESTED entry under an E2EE prefix (layout must be flat — could hide plaintext)',
+      unreadable: 'UNREADABLE object under an E2EE prefix (empty/truncated/errored — not verifiable as ciphertext)',
+      plaintext: 'non-ciphertext object in an E2EE workspace',
     }
-    fail(`${violations.length} finding(s) under an E2EE prefix — a client is uploading plaintext or nesting objects (§10.1/§17)`)
-    summary(`### ❌ Attachments ciphertext audit — ${violations.length} finding(s)\n${tally}. Plaintext or a non-flat object under an E2EE workspace (§10.1/§17).`)
+    for (const v of violations) fail(`${reasons[v.kind]}: obj:${redact(v.path)}`)
+    fail(`${violations.length} finding(s) under an E2EE prefix — a client is uploading plaintext, nesting, or writing unverifiable objects (§10.1/§17)`)
+    summary(`### ❌ Attachments ciphertext audit — ${violations.length} finding(s)\n${tally}. Plaintext, non-flat, or unreadable object under an E2EE workspace (§10.1/§17).`)
     process.exit(1)
   }
   summary(`### ✅ Attachments ciphertext audit — armed and clean\n${tally}.`)

@@ -78,8 +78,14 @@
 -- Storage is up when exercising RLS locally).
 --
 -- CREATE POLICY runs through EXECUTE (dynamic SQL) so it is parsed only at run
--- time, inside the guard. No DROP POLICY is added — a migration applies once in
--- a transaction, and adding a DROP would need ownership `postgres` lacks.
+-- time, inside the guard. Each create is preceded by `drop policy if exists` so
+-- the migration is RE-APPLIABLE: a bare CREATE POLICY aborts if the policy
+-- already exists (the same "preexisting from ad-hoc/manual testing" case the
+-- bucket converge above guards against), which would wedge the whole migration.
+-- `postgres` CAN drop these — the baseline grants it ALL on storage.objects WITH
+-- GRANT OPTION (via the supabase_storage_admin membership), and DROP/CREATE
+-- POLICY require identical rights — so drop-then-create is the same convergence
+-- discipline the bucket's `on conflict do update` uses.
 do $$
 begin
   if to_regclass('storage.buckets') is null then
@@ -111,6 +117,7 @@ begin
         allowed_mime_types = excluded.allowed_mime_types;
 
   -- RLS: read by workspace member. Path's first segment = <workspace_id>.
+  execute 'drop policy if exists "attachments read by workspace member" on storage.objects';
   execute $pol$
     create policy "attachments read by workspace member"
     on storage.objects for select to authenticated
@@ -130,17 +137,24 @@ begin
   -- could upload <ws>/sub/plaintext: RLS would still pass (first segment is their
   -- workspace), but the ciphertext audit's top-level listing skips nested
   -- entries, so plaintext could hide under an E2EE subfolder AND evade the audit.
+  -- `right(name, 1) <> '/'` additionally rejects an EMPTY content-key (`<ws>/`,
+  -- whose foldername is also a 1-element array so it would otherwise pass) —
+  -- restoring the old upload guard's non-empty-key check (a junk plantable
+  -- object, not content; the resolver keys on real content-key paths).
+  execute 'drop policy if exists "attachments insert by workspace writer" on storage.objects';
   execute $pol$
     create policy "attachments insert by workspace writer"
     on storage.objects for insert to authenticated
     with check (
       bucket_id = 'attachments'
       and array_length(storage.foldername(name), 1) = 1
+      and right(name, 1) <> '/'
       and private.is_workspace_writer((storage.foldername(name))[1], (auth.uid())::text)
     )
   $pol$;
 
   -- RLS: delete by workspace writer (§16 GC + §10.1 poison-correction).
+  execute 'drop policy if exists "attachments delete by workspace writer" on storage.objects';
   execute $pol$
     create policy "attachments delete by workspace writer"
     on storage.objects for delete to authenticated

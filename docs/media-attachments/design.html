@@ -1061,6 +1061,7 @@ on storage.objects for insert to authenticated
 with check (
   bucket_id = 'attachments'
   and array_length(storage.foldername(name), 1) = 1   -- flat: &lt;ws&gt;/&lt;key&gt; only
+  and right(name, 1) &lt;&gt; '/'                          -- non-empty content-key
   and private.is_workspace_writer(
         (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
         (auth.uid())::text)
