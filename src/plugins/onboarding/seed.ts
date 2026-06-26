@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import type { Tx } from '@/data/api'
-import type { Repo } from './data/repo'
+import type { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { keysBetween } from '@/data/orderKey'
@@ -12,7 +12,7 @@ import {
   TUTORIAL_DEFAULT_TITLE,
   TUTORIAL_VIM_TITLE,
   type TutorialNode,
-} from '@/tutorial/outline'
+} from './outline'
 
 /**
  * Seeds the starter Tutorial subtree on a freshly-created personal

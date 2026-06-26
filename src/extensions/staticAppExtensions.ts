@@ -27,6 +27,7 @@ import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
 import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
+import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
@@ -93,6 +94,10 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // facet's "last wins" arrangement does the right thing without an
   // explicit precedence number.
   dailyNotesPlugin({repo}),
+  // Onboarding seeds first-run content via its own higher-precedence
+  // landing resolver, then defers the landing target to daily-notes
+  // above. Depends on daily-notes (get-or-create of today's note).
+  onboardingPlugin,
   leftSidebarPlugin,
   workspaceHeaderPlugin,
   commandPalettePlugin,

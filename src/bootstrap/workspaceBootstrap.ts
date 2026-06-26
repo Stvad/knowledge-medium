@@ -2,7 +2,6 @@ import type { Block } from '@/data/block.js'
 import type { Repo } from '@/data/repo.js'
 import { buildLayout, preserveHashQueryParams } from '@/utils/routing.js'
 import { rememberWorkspace } from '@/utils/lastWorkspace.js'
-import { seedTutorial } from '@/initData.js'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.js'
 import { getOrCreateTypesPage } from '@/data/typesPage.js'
 import { getOrCreateRecentsPage } from '@/data/recentsPage.js'
@@ -143,17 +142,12 @@ export const bootstrapWorkspace = async ({
   // data-integrity plugin's AppEffect (cadenced, read-only, deferred to idle),
   // which runs on workspace open and surfaces health via the diagnostics seam.
 
-  // Freshly inserted personal workspace: install the starter tutorial
-  // as its own parent-less page. The [[Tutorial]] bullet on today's
-  // daily note (added below) makes it discoverable from the landing
-  // page without hijacking it. AWAIT the seed tx so the Tutorial
-  // alias row exists before parseReferences (post-commit processor)
-  // runs against the wiki-link bullet — otherwise parseReferences
-  // creates a fresh empty alias target for "Tutorial" and the
-  // bullet points at that orphan instead of the real seeded page.
-  if (freshlyCreated) {
-    await seedTutorial(repo, workspaceId)
-  }
+  // First-run starter content (the Tutorial pages + the [[Tutorial]]
+  // discoverability bullet) is no longer seeded here: it's owned by the
+  // onboarding plugin, which contributes a `workspaceLandingFacet` resolver
+  // that seeds on `freshlyCreated` and then defers the landing target to
+  // daily-notes (see src/plugins/onboarding). That keeps first-run content
+  // out of the kernel and lets disabling the plugin remove it cleanly.
 
   // Resolve the layout-session block the app paints — the warm-start critical
   // path. This chain is genuinely serial: each ui-state child's deterministic id

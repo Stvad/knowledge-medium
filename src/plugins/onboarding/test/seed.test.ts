@@ -17,14 +17,14 @@ import { aliasesProp, isCollapsedProp } from '@/data/properties'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '../data/repo'
-import { seedTutorial } from '@/initData'
+import { Repo } from '@/data/repo'
+import { seedTutorial } from '../seed'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
 import {
   EXTENSIONS_PAGE_TITLE,
   TUTORIAL_DEFAULT_TITLE,
   TUTORIAL_VIM_TITLE,
-} from '@/tutorial/outline'
+} from '../outline'
 
 const WS = 'ws-1'
 
