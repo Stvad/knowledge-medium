@@ -62,7 +62,7 @@ describe('createSupabaseAuditIO.listE2eeWorkspaceIds', () => {
       workspacePages: [[{ id: 'ws1' }, { id: 'ws2' }], []],
       objectPages: [],
     })
-    const io = createSupabaseAuditIO({ url: URL, serviceKey: KEY, client })
+    const io = createSupabaseAuditIO({ url: URL, secretKey: KEY, client })
     expect(await io.listE2eeWorkspaceIds()).toEqual(['ws1', 'ws2'])
     // The regression guard: offset pagination MUST carry a deterministic order.
     expect(orderSpy).toHaveBeenCalledWith('id', { ascending: true })
@@ -83,7 +83,7 @@ describe('createSupabaseAuditIO.listObjects', () => {
         [],
       ],
     })
-    const io = createSupabaseAuditIO({ url: URL, serviceKey: KEY, client })
+    const io = createSupabaseAuditIO({ url: URL, secretKey: KEY, client })
     expect(await io.listObjects('ws1')).toEqual([
       { name: 'deadbeef', isFolder: false },
       { name: 'sub', isFolder: true },
@@ -101,7 +101,7 @@ describe('createSupabaseAuditIO.listObjects', () => {
 
 describe('createSupabaseAuditIO.readObjectVerdict', () => {
   const ioWith = (fetchFn: typeof fetch) =>
-    createSupabaseAuditIO({ url: URL, serviceKey: KEY, client: {} as SupabaseClient, fetchFn })
+    createSupabaseAuditIO({ url: URL, secretKey: KEY, client: {} as SupabaseClient, fetchFn })
 
   it("returns 'ok' for a full-length encb:v1: head, with a Range request and encoded path", async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => bytesResponse(fullEnvelopeHead()))

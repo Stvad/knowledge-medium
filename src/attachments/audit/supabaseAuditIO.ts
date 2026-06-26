@@ -9,10 +9,11 @@ const PAGE = 1000
 
 export interface SupabaseAuditIODeps {
   url: string
-  /** A privileged key that bypasses RLS (read every workspace's objects). Read
-   *  from the environment by the entrypoint and passed in — never embedded in
-   *  `src`. */
-  serviceKey: string
+  /** A privileged, RLS-bypassing key (reads every workspace's objects) — the
+   *  project's secret-tier credential. Read from the environment by the entrypoint
+   *  and passed in — never embedded in `src` (see the no-privileged-key guard;
+   *  the literal key spellings live only in the entrypoint + workflow, not here). */
+  secretKey: string
   /** Injectable for tests. */
   client?: SupabaseClient
   /** Injectable for tests; defaults to the global `fetch`. */
@@ -29,10 +30,10 @@ export interface SupabaseAuditIODeps {
  * unordered result can silently skip rows.
  */
 export function createSupabaseAuditIO(deps: SupabaseAuditIODeps): AuditIO {
-  const client = deps.client ?? createClient(deps.url, deps.serviceKey)
+  const client = deps.client ?? createClient(deps.url, deps.secretKey)
   const fetchFn = deps.fetchFn ?? fetch
   const base = deps.url.replace(/\/$/, '')
-  const authHeaders = { apikey: deps.serviceKey, authorization: `Bearer ${deps.serviceKey}` }
+  const authHeaders = { apikey: deps.secretKey, authorization: `Bearer ${deps.secretKey}` }
 
   return {
     async listE2eeWorkspaceIds() {

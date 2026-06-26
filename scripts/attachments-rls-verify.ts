@@ -8,19 +8,22 @@
  * are already applied (hosted post-push; or local after applying the migration
  * once Storage is up):
  *
- *   SUPABASE_URL=... ANON_KEY=... SERVICE_ROLE_KEY=... yarn rls:verify-attachments
+ *   SUPABASE_URL=... ANON_KEY=... SUPABASE_SECRET_KEY=... yarn rls:verify-attachments
  *
- * Exercises the post-§10.1-reversal contract: direct writer-gated INSERT (flat,
- * non-empty path), member SELECT, NO UPDATE (immutability / first-write-wins),
- * writer DELETE. NOT part of `yarn run check` — it needs a live stack.
+ * SUPABASE_SECRET_KEY is the privileged key (a modern `sb_secret_…` secret key, or
+ * a legacy service_role JWT — the local stack still issues the latter); it bypasses
+ * RLS to set up the test users/workspaces. Exercises the post-§10.1-reversal
+ * contract: direct writer-gated INSERT (flat, non-empty path), member SELECT, NO
+ * UPDATE (immutability / first-write-wins), writer DELETE. NOT part of
+ * `yarn run check` — it needs a live stack.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
 const url = process.env.SUPABASE_URL
 const anon = process.env.ANON_KEY
-const service = process.env.SERVICE_ROLE_KEY
-if (!url || !anon || !service) {
-  console.error('need SUPABASE_URL + ANON_KEY + SERVICE_ROLE_KEY in the environment')
+const secret = process.env.SUPABASE_SECRET_KEY
+if (!url || !anon || !secret) {
+  console.error('need SUPABASE_URL + ANON_KEY + SUPABASE_SECRET_KEY in the environment')
   process.exit(2)
 }
 
@@ -31,7 +34,7 @@ const BUCKET = 'attachments'
 // word form while the policy is in fact behaving (first-write-wins).
 const ALREADY_EXISTS = new Set(['409', 'ResourceAlreadyExists', 'KeyAlreadyExists', 'Duplicate'])
 const noPersist = { auth: { autoRefreshToken: false, persistSession: false } }
-const admin = createClient(url, service, noPersist) // service role — bypasses RLS for setup
+const admin = createClient(url, secret, noPersist) // secret key — bypasses RLS for setup
 const rid = Math.random().toString(36).slice(2, 8)
 const bytes = () => new Uint8Array([1, 2, 3, 4])
 

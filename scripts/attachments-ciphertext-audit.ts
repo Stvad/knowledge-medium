@@ -20,7 +20,10 @@ import { buildReport, type AuditOutcome } from '@/attachments/audit/report'
 import { createSupabaseAuditIO } from '@/attachments/audit/supabaseAuditIO'
 
 const url = process.env.SUPABASE_URL
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+// The privileged key: a modern `sb_secret_…` secret key (preferred — independently
+// revocable) or a legacy service_role JWT. Both bypass RLS; supabase-js takes either
+// opaquely, so this entrypoint doesn't care which.
+const secretKey = process.env.SUPABASE_SECRET_KEY
 
 const redact = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 12)
 const note = (m: string) => console.log(`::notice::${m}`)
@@ -38,9 +41,9 @@ const writeSummary = (md: string) => {
 
 async function main() {
   const outcome: AuditOutcome =
-    !url || !serviceKey
+    !url || !secretKey
       ? { armed: false }
-      : { armed: true, result: await runCiphertextAudit(createSupabaseAuditIO({ url, serviceKey })) }
+      : { armed: true, result: await runCiphertextAudit(createSupabaseAuditIO({ url, secretKey })) }
 
   const report = buildReport(outcome, redact)
   report.notices.forEach(note)

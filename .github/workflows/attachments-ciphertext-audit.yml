@@ -3,10 +3,11 @@ name: Attachments Ciphertext Audit
 # Off-path tripwire (design §10.1 / §17): there is no body-inspecting upload
 # service, so this job verifies that every object under an E2EE workspace prefix
 # is encb:v1: ciphertext — catching an honest-client regression that uploads
-# plaintext. It never gates uploads. Needs a service-role key; media capture has
+# plaintext. It never gates uploads. Needs a privileged key (a modern sb_secret_…
+# secret key, or a legacy service_role JWT — both bypass RLS); media capture has
 # shipped, so this is the SOLE server-side ciphertext check — if
-# SUPABASE_SERVICE_ROLE_KEY is unset the audit FAILS RED (a ::error:: + non-zero
-# exit), never a silent/yellow pass.
+# SUPABASE_SECRET_KEY is unset the audit FAILS RED (a ::error:: + non-zero exit),
+# never a silent/yellow pass.
 #
 # Cadence: a plaintext regression can only enter via a client deploy, so the
 # fast path is a run right after "Deploy Pages" succeeds (workflow_run) — a bad
@@ -41,5 +42,5 @@ jobs:
       - name: Run ciphertext audit
         env:
           SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
         run: yarn audit:attachments-ciphertext
