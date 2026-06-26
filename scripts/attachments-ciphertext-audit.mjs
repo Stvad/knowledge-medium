@@ -123,12 +123,12 @@ const listObjects = async (workspaceId) => {
  *  object must not red/abort the whole audit, and the operator still gets a
  *  redacted path to locate it. */
 const classifyObject = async (objectPath) => {
-  const encoded = objectPath.split('/').map(encodeURIComponent).join('/')
-  // The WHOLE per-object op is under one catch: the fetch promise resolves on
-  // headers, so the body (await arrayBuffer) streams lazily and can drop
-  // mid-stream AFTER a 200/206 — that must also degrade to 'unreadable', never
-  // propagate and abort the whole audit.
+  // The WHOLE per-object op is under one catch (incl. the path encode): the fetch
+  // promise resolves on headers, so the body (await arrayBuffer) streams lazily
+  // and can drop mid-stream AFTER a 200/206 — that, and any other per-object
+  // throw, must degrade to 'unreadable', never propagate and abort the audit.
   try {
+    const encoded = objectPath.split('/').map(encodeURIComponent).join('/')
     const res = await fetch(`${base}/storage/v1/object/authenticated/${BUCKET}/${encoded}`, {
       headers: { ...authHeaders, range: `bytes=0-${PREFIX_BYTES - 1}` },
     })
