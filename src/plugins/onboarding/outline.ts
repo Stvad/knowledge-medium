@@ -67,7 +67,7 @@ const vimKeys = {
   firstLast: '`gg` jumps to the first visible bullet, `Shift+G` to the last',
   jumpMany: '`Ctrl+d` / `Ctrl+u` jump down / up by ~8 bullets',
   startSelect: 'press `Space` (or `v`) to select the focused bullet; `Shift+J` / `Shift+K` then grow the selection down / up — the first press selects the current block, each next press adds the neighbour',
-  delete: 'press `d d` (the vim `dd`) or `Delete`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
+  delete: 'press `d d` or `Delete`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
   properties: 'press `t`',
   copyRef: 'focus the block and press `Y R` (yank reference); `Y E` yanks an embed, `Y Y` the whole subtree, `Y C` just this block\'s text, `Y L` a shareable link',
   paste: '`p` pastes after the focused block, `Shift+P` before',
