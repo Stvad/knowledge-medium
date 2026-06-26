@@ -23,6 +23,7 @@
     "check:sync-config": "vite-node scripts/gen-sync-config.ts -- --check",
     "check:rpc-projections": "vite-node scripts/check-rpc-projections.ts",
     "check:no-service-role": "bash scripts/check-no-service-role.sh",
+    "audit:attachments-ciphertext": "vite-node scripts/attachments-ciphertext-audit.ts",
     "db:runtime": "node scripts/container-runtime.mjs",
     "db:runtime:apple": "node scripts/container-runtime.mjs apple",
     "check:db": "node scripts/check-db.mjs",

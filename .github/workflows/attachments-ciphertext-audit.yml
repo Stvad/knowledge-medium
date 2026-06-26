@@ -24,8 +24,11 @@ jobs:
         with:
           node-version: '24.x'
 
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
       - name: Run ciphertext audit
         env:
           SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node scripts/attachments-ciphertext-audit.mjs
+        run: yarn audit:attachments-ciphertext
