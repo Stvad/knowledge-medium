@@ -14,6 +14,7 @@ import {
   isCollapsedProp,
   isEditingProp,
   peekFocusedBlockLocation,
+  selectionStateProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/data/stateBlocks'
@@ -202,12 +203,146 @@ describe('default CodeMirror shortcuts', () => {
     expect(moveBlockDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
   })
 
-  it('prevents native CodeMirror text selection for block selection expansion shortcuts', () => {
-    const extendSelectionUpAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_up')
-    const extendSelectionDownAction = findEditModeAction(env.repo, 'edit.cm.extend_selection_down')
+  // The tests below pin the edit-mode HANDLER contract (when it takes over vs.
+  // stands aside). They call the handler directly, so they observe only the
+  // handler's own trigger.preventDefault() — NOT the dispatcher's event-option
+  // application. The dispatcher-level guarantee (a binding's preventDefault:
+  // false leaves the native default intact, which is what makes Shift+Arrow
+  // text-selection survive) is covered end-to-end in HotkeyReconciler.test.tsx
+  // ('event options (preventDefault)').
+  it('does not take over (no manual preventDefault, stays in edit mode) when the caret is mid-text', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'prev', content: 'previous'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current text'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
 
-    expect(extendSelectionUpAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
-    expect(extendSelectionDownAction.defaultBinding?.eventOptions?.preventDefault).toBe(true)
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const deps = {
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current text', 4), // caret mid-text
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies
+
+    const upTrigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    const downTrigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(deps, upTrigger)
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_down').handler(deps, downTrigger)
+
+    expect(upTrigger.preventDefault).not.toHaveBeenCalled()
+    expect(downTrigger.preventDefault).not.toHaveBeenCalled()
+    // Still editing — block selection was not triggered. Safe to peek
+    // synchronously: the mid-text path returns before any setIsEditing write,
+    // so nothing races the value set above (the edge test, which does write,
+    // uses waitFor).
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('escalates to block selection (preventDefault, exits edit mode) when the caret is at the block edge — Roam-style: first press selects just the current block, next extends', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'prev', content: 'previous'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const editDeps = {
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 0), // caret at block start
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(editDeps, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
+    // First press selects ONLY the focused block (Roam-style) — and clearEditing
+    // folded the edit-mode exit into the same transaction.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['current'])
+
+    // Second press now extends to the previous visible block.
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(
+      editDeps,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+    await waitFor(() =>
+      expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['prev', 'current']),
+    )
+  })
+
+  it('stays in edit mode when Shift+ArrowUp at block start has no previous block to escalate into', async () => {
+    // Editing the surface root itself (e.g. a zoomed-in single block): there
+    // is no previous visible block, so escalation must NOT drop the user out
+    // of edit mode into a dead state with nothing selected.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'only', content: 'only'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'only')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler({
+      block: env.repo.block('only'),
+      editorView: codeMirrorEditorView('only', 0), // caret at start
+      uiStateBlock,
+      scopeRootId: 'only', // focused block IS the surface root → no previous visible block
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    // No neighbour to escalate into → no takeover: the key is left for native
+    // (a no-op at head 0) and we stay in edit mode. preventDefault is the
+    // deterministic signal; isEditing is reliable here too because the
+    // no-target path issues no setIsEditing write to race the value set above.
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+  })
+
+  it('selects just the current block when Shift+ArrowDown at block end has no next block (Roam-style first press)', async () => {
+    // Editing the last block in a panel: there's no next visible block, but the
+    // Roam-style first press still selects the current block (so you can act on
+    // it) rather than no-opping.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'last', content: 'last'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'last')
+    await uiStateBlock.set(isEditingProp, true)
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_down').handler({
+      block: env.repo.block('last'),
+      editorView: codeMirrorEditorView('last', 'last'.length), // caret at end
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['last'])
   })
 
   it('opens the root preferences block from the global action', async () => {

@@ -51,6 +51,7 @@ import {
   DuplicateIdError,
   MutatorNotRegisteredError,
   NotDeletedError,
+  ParentDeletedError,
   ParentNotFoundError,
   ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
@@ -67,6 +68,7 @@ import {
 import { recordWrite, type SnapshotsMap, peekSnapshot } from './txSnapshots'
 import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
+import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
@@ -78,22 +80,6 @@ export interface TxDb {
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
 }
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  Object.prototype.toString.call(value) === '[object Object]'
-
-const stableJsonValue = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(stableJsonValue)
-  if (!isPlainObject(value)) return value
-  const out: Record<string, unknown> = {}
-  for (const key of Object.keys(value).sort()) {
-    out[key] = stableJsonValue(value[key])
-  }
-  return out
-}
-
-const jsonValuesEqual = (a: unknown, b: unknown): boolean =>
-  JSON.stringify(stableJsonValue(a)) === JSON.stringify(stableJsonValue(b))
 
 const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): boolean => {
   if (patch.content !== undefined && patch.content !== before.content) return true
@@ -170,6 +156,15 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+/** Existence probes for `tx.hasChildren`. The live-only form keeps the
+ *  `deleted = 0` clause so it stays served by the partial
+ *  `idx_blocks_parent_order`; the `includeDeleted` form drops it (and so
+ *  cannot use that partial index — table scan), used only off hot paths
+ *  to detect a row that ever had children vs a never-populated stub. */
+const SELECT_HAS_CHILD_SQL =
+  `SELECT 1 AS one FROM blocks WHERE parent_id = ? AND deleted = 0 LIMIT 1`
+const SELECT_HAS_CHILD_INCLUDING_DELETED_SQL =
+  `SELECT 1 AS one FROM blocks WHERE parent_id = ? LIMIT 1`
 /** Root-level siblings (parent_id IS NULL). When a tx has pinned a
  *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
  *  spill across workspaces — important for single-workspace-per-tx
@@ -204,7 +199,7 @@ const SELECT_PREVIOUS_ROOT_SIBLING_SQL =
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const SELECT_PARENT_WORKSPACE_SQL =
-  `SELECT workspace_id FROM blocks WHERE id = ?`
+  `SELECT workspace_id, deleted FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
 export class TxImpl implements Tx {
@@ -397,8 +392,26 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    await this.requireParentInWorkspace(target.parentId, before.workspaceId)
+    const parent = await this.requireParentInWorkspace(target.parentId, before.workspaceId)
     if (target.parentId === before.parentId && target.orderKey === before.orderKey) return
+
+    // Parent-deleted check must precede the cycle walk. The walk now
+    // traverses `parent_id` regardless of `deleted` (#183), so when the
+    // target parent is both soft-deleted AND a descendant of `id`, the walk
+    // would report a cycle first — masking the typed `ParentDeletedError`
+    // contract that callers rely on for "moving under a tombstone". The
+    // BEFORE UPDATE trigger also enforces this, but only at write time
+    // (after the walk), so the explicit preflight is what keeps the error
+    // ordering stable.
+    //
+    // Gated on `!before.deleted` to match the trigger exactly: it fires only
+    // for `NEW.deleted = 0`, deliberately allowing a tombstone to be
+    // reparented under another tombstone (`move` never changes `deleted`, so
+    // a soft-deleted row stays soft-deleted). The cycle walk below still runs
+    // for deleted rows.
+    if (!before.deleted && target.parentId !== null && parent?.deleted) {
+      throw new ParentDeletedError(target.parentId)
+    }
 
     // §4.7 Layer 1: FK and triggers can't structurally catch cycles, so
     // this engine check is load-bearing. Skipped when the target parent is
@@ -408,11 +421,9 @@ export class TxImpl implements Tx {
       target.parentId !== before.parentId &&
       target.parentId !== id
     ) {
-      const hit = await this.ctx.txDb.getOptional<{hit: number}>(
-        IS_DESCENDANT_OF_SQL,
-        [target.parentId, id],
-      )
-      if (hit !== null) throw new CycleError(id, target.parentId)
+      if (await this.isDescendantOf(target.parentId, id)) {
+        throw new CycleError(id, target.parentId)
+      }
     } else if (target.parentId === id) {
       throw new CycleError(id, id)
     }
@@ -517,6 +528,12 @@ export class TxImpl implements Tx {
     return rows.map(parseBlockRow)
   }
 
+  async hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean> {
+    const sql = opts?.includeDeleted ? SELECT_HAS_CHILD_INCLUDING_DELETED_SQL : SELECT_HAS_CHILD_SQL
+    const row = await this.ctx.txDb.getOptional<{one: number}>(sql, [parentId])
+    return row !== null
+  }
+
   async adjacentSibling(
     anchor: SiblingAnchor,
     direction: SiblingDirection,
@@ -538,6 +555,14 @@ export class TxImpl implements Tx {
   async parentOf(childId: string): Promise<BlockData | null> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_PARENT_SQL, [childId])
     return row === null ? null : parseBlockRow(row)
+  }
+
+  async isDescendantOf(id: string, potentialAncestorId: string): Promise<boolean> {
+    const hit = await this.ctx.txDb.getOptional<{hit: number}>(
+      IS_DESCENDANT_OF_SQL,
+      [id, potentialAncestorId],
+    )
+    return hit !== null
   }
 
   async aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null> {
@@ -619,7 +644,14 @@ export class TxImpl implements Tx {
    *
    *  Captures `(currentRow, applied)` into the snapshots map so the
    *  pipeline's commit-walk updates the cache and fires handles for the
-   *  rolled-back row. */
+   *  rolled-back row.
+   *
+   *  Exactness depends on the commit pipeline SKIPPING its same-tx
+   *  processor pass for replay txs (`runTx`'s `isReplay`, threaded from
+   *  `Repo._replay`). `applyRaw`'s write is still a field change in the
+   *  replay tx, so without that gate a value-deriving same-tx processor
+   *  would re-derive and override the restore — leaving the row at a
+   *  derived value, not `target` (#187). */
   async applyRaw(id: string, target: BlockData | null): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)
@@ -828,9 +860,9 @@ export class TxImpl implements Tx {
   private async requireParentInWorkspace(
     parentId: string | null,
     childWorkspaceId: string,
-  ): Promise<void> {
-    if (parentId === null) return
-    const parent = await this.ctx.txDb.getOptional<{workspace_id: string}>(
+  ): Promise<{deleted: boolean} | null> {
+    if (parentId === null) return null
+    const parent = await this.ctx.txDb.getOptional<{workspace_id: string; deleted: number}>(
       SELECT_PARENT_WORKSPACE_SQL,
       [parentId],
     )
@@ -838,6 +870,7 @@ export class TxImpl implements Tx {
     if (parent.workspace_id !== childWorkspaceId) {
       throw new ParentWorkspaceMismatchError(parentId, parent.workspace_id, childWorkspaceId)
     }
+    return {deleted: parent.deleted === 1}
   }
 }
 

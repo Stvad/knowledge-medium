@@ -1,8 +1,9 @@
-import { ChevronsDownUp, ClipboardCopy, Copy, Link2, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { ChevronsDownUp, ClipboardCopy, Copy, Link, Link2, SlidersHorizontal, Text, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { copyBlockToClipboard } from '@/utils/copy.js'
+import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   editorSelection,
@@ -11,6 +12,7 @@ import {
   isEditingProp,
   peekFocusedBlockLocation,
   requestEditorFocus,
+  selectionStateProp,
   setIsEditing,
   showPropertiesProp,
   type EditorSelectionState,
@@ -55,6 +57,8 @@ export interface SharedBlockActions {
   copyBlock: BlockAction
   copyBlockRef: BlockAction
   copyBlockEmbed: BlockAction
+  copyBlockContent: BlockAction
+  copyBlockLink: BlockAction
 }
 
 export const bindBlockActionContext = <T extends ActionContextType>(
@@ -109,38 +113,69 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   requestEditorFocus(uiStateBlock)
 }
 
+/** Extend the block selection to the next visible block. Returns whether a
+ *  selection was actually extended — false at the last visible block in the
+ *  surface (no next block) or if the range resolved empty. Edit-mode callers
+ *  use this to avoid leaving edit mode for nothing, and pass `clearEditing` so
+ *  the exit folds into the selection's transaction (see extendSelectionDownEdit). */
+/** True when a block selection is already active. The Roam-style first
+ *  Shift+Direction selects just the focused block; only once something is
+ *  selected do further presses extend to neighbours. */
+const hasActiveSelection = (uiStateBlock: Block): boolean =>
+  (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
+
 export const extendSelectionDown = async (
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
-) => {
-  if (!scopeRootId) return
+  clearEditing = false,
+): Promise<boolean> => {
+  if (!scopeRootId) return false
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  if (!focusedId) return
+  if (!focusedId) return false
+
+  // Roam-style: the first press selects just the focused block (so a single
+  // block can be selected/deleted); subsequent presses extend downward. Don't
+  // select the surface's own root — acting on the view root within its view is
+  // meaningless, so leave the keystroke native (matches the old no-op there).
+  if (!hasActiveSelection(uiStateBlock)) {
+    if (focusedId === scopeRootId) return false
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+  }
 
   const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
-  if (!nextBlock) return
+  if (!nextBlock) return false
 
-  await extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen)
+  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
 }
 
+/** Mirror of {@link extendSelectionDown} for the previous visible block.
+ *  Returns false at the first visible block in the surface (the focused block
+ *  is the scope root) or if the range resolved empty. */
 export const extendSelectionUp = async (
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
-) => {
-  if (!scopeRootId) return
+  clearEditing = false,
+): Promise<boolean> => {
+  if (!scopeRootId) return false
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
-  if (!focusedId) return
+  if (!focusedId) return false
+
+  // Roam-style first press — see extendSelectionDown.
+  if (!hasActiveSelection(uiStateBlock)) {
+    if (focusedId === scopeRootId) return false
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+  }
 
   const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
-  if (!prevBlock) return
+  if (!prevBlock) return false
 
-  await extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen)
+  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
@@ -309,7 +344,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: Copy,
     handler: ({block}: BlockShortcutDependencies) => copyBlockToClipboard(block),
     defaultBinding: {
-      keys: ['$mod+c', 'y'],
+      // Vim "yank" family — all copy variants share a `y` prefix:
+      // `y y` block, `y r` reference, `y e` embed (see copyBlockRef /
+      // copyBlockEmbed below). `y y` mirrors vim's `yy` (yank line).
+      // `$mod+c` stays as the platform-native copy.
+      keys: ['$mod+c', 'y y'],
       eventOptions: {preventDefault: true},
     },
   }
@@ -322,11 +361,14 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       writeToClipboard(`((${block.id}))`)
     },
     defaultBinding: {
-      // Plain logical-letter form — `withRecoveredLetterKey` in the
-      // reconciler restores event.key from event.keyCode for alt+letter
-      // chords, so this matches on every platform AND every layout
-      // (Mac/Linux/Windows × QWERTY/Colemak/Dvorak).
-      keys: 'Alt+y',
+      // `y r` ("yank reference") is the `y`-prefixed copy-family form;
+      // `Alt+y` is kept as the original alternate. Plain-letter sequences
+      // match on event.key directly (the logical letter the layout
+      // produces), so `y r` is correct on every platform AND layout. The
+      // `Alt+y` form relies on `withRecoveredLetterKey` in the reconciler
+      // restoring event.key from event.keyCode for alt+letter chords, so it
+      // too holds across Mac/Linux/Windows × QWERTY/Colemak/Dvorak.
+      keys: ['y r', 'Alt+y'],
     },
   }
 
@@ -338,15 +380,53 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       writeToClipboard(`!((${block.id}))`)
     },
     defaultBinding: {
-      keys: 'Shift+y',
+      // `y e` ("yank embed") is the `y`-prefixed copy-family form;
+      // `Shift+y` is kept as the original alternate.
+      keys: ['y e', 'Shift+y'],
+    },
+  }
+
+  const copyBlockContent: BlockAction = {
+    id: 'copy_block_content',
+    description: 'Copy block text only',
+    icon: Text,
+    // `y c` ("yank content") — just this block's own text, WITHOUT its
+    // subtree. `y y` (copy_block) serializes the whole subtree as
+    // indented markdown; this is the single-line counterpart.
+    handler: async ({block}: BlockShortcutDependencies) => {
+      const data = block.peek() ?? await block.load()
+      writeToClipboard(data?.content ?? '')
+    },
+    defaultBinding: {
+      keys: 'y c',
+    },
+  }
+
+  const copyBlockLink: BlockAction = {
+    id: 'copy_block_link',
+    description: 'Copy link to block',
+    icon: Link,
+    // `y l` ("yank link") — an absolute, shareable URL that opens this
+    // block. Reuses the same routing facilities the in-app `<a href>`
+    // links use: `buildAppHash` for the `#<workspaceId>/<blockId>` hash,
+    // `absoluteAppUrl` to promote it to an absolute URL (and drop any
+    // agent-runtime pairing secret riding in the current hash).
+    handler: ({block}: BlockShortcutDependencies) => {
+      const workspaceId = repo.activeWorkspaceId
+      if (!workspaceId) return
+      writeToClipboard(absoluteAppUrl(buildAppHash(workspaceId, block.id)))
+    },
+    defaultBinding: {
+      keys: 'y l',
     },
   }
 
   const extendSelectionUpAction: BlockAction = {
     id: 'extend_selection_up',
     description: 'Extend selection up',
-    handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen),
+    handler: async (deps: BlockShortcutDependencies) => {
+      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+    },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
       eventOptions: {
@@ -358,8 +438,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const extendSelectionDownAction: BlockAction = {
     id: 'extend_selection_down',
     description: 'Extend selection down',
-    handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen),
+    handler: async (deps: BlockShortcutDependencies) => {
+      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
+    },
     defaultBinding: {
       keys: 'Shift+ArrowDown',
       eventOptions: {
@@ -381,5 +462,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     copyBlock,
     copyBlockRef,
     copyBlockEmbed,
+    copyBlockContent,
+    copyBlockLink,
   }
 }

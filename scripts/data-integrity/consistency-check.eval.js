@@ -1,32 +1,34 @@
 // Read-only data-integrity consistency check (L3 + L4 of docs/data-integrity-defense.html).
 //
-// Runs the exact ad-hoc audits used during the 2026-06 incident investigation as a
-// maintained, repeatable suite. It WRITES NOTHING — pure detection. Run it on a cadence
-// (or whenever "the backlinks look wrong") to catch the failure classes that previously
-// sat undetected for ~a week:
-//   - R2  references_json <-> block_references index mirror drift (incl. duplicate tuples)
-//   - R7  dangling refs (target missing/deleted) — trend, not absolute
-//   - R4  property-ref projection: PRECISE diff for loaded ref schemas (active workspace
-//         only — repo.propertySchemas reflects the active workspace) PLUS a
-//         schema-independent at-rest heuristic that also catches strips of toggled-off
-//         ref props (the exact 06-09 next-review-date / SRS-off condition)
-//   - R1/R3 content-link coarse strip heuristic
-//   - L4  blocks <-> blocks_synced divergence (ps_crud-aware): stranded local-only,
-//         equal-stamp standoff, local-richer-no-pending, server-ahead-undrained
+// THIN WRAPPER — it reimplements NO checks. It invokes the shared engine
+// (@/plugins/data-integrity/audit.js) in `full` mode, which runs the lean
+// cadence checks PLUS the deep on-demand inspections:
+//   - references_index_mirror     references_json <-> block_references mirror
+//   - property_ref_at_rest        schema-aware value-present/ref-absent heuristic
+//   - property_ref_projection     PRECISE projection diff (active workspace only)
+//   - content_link_recompute      parser-precise content-ref strip / stale recompute
+//   - dangling_refs               target missing/deleted (info)
+//   - local_server_divergence     blocks <-> blocks_synced (+ bounded e2ee spot-check)
+//   - materialized_still_ciphertext  local row still holding enc:v1: (decrypt-verified)
+//   - e2ee_content_divergence     EXHAUSTIVE decrypt-compare of equal-stamp e2ee rows
+// The always-on data-integrity plugin runs the SAME engine in lean mode — no
+// check logic is duplicated between this bridge script and the engine.
 //
 // Run via the agent bridge (target tab must be focused/connected):
 //   yarn agent --profile <name> eval --file scripts/data-integrity/consistency-check.eval.js
-//   # scope to one workspace (defaults to the active one):
-//   ... --data-json '{"workspaceId":"ef43b424-..."}'
-//   # audit every workspace on the client:
-//   ... --data-json '{"allWorkspaces":true}'
-//   # tune sample size / candidate cap:
-//   ... --data-json '{"sampleLimit":20,"candidateCap":80000}'
+//   ... --data-json '{"workspaceId":"…"}'                # one workspace (default: active)
+//   ... --data-json '{"allWorkspaces":true}'             # every workspace on the client
+//   ... --data-json '{"sampleLimit":20,"candidateCap":80000,"contentCap":2000000}'
+//
+// Output: `report.workspaces[<id>]` holds each workspace's full ConsistencyAuditResult;
+// for a single workspace, `report.checks` also mirrors it at the top level (back-compat).
 
 const allWorkspaces = data?.allWorkspaces === true
 const workspaceId = data?.workspaceId ?? (allWorkspaces ? null : repo.activeWorkspaceId)
 const sampleLimit = Number.isInteger(data?.sampleLimit) ? data.sampleLimit : 10
 const candidateCap = Number.isInteger(data?.candidateCap) ? data.candidateCap : 60000
+const contentCap = Number.isInteger(data?.contentCap) ? data.contentCap : 1_000_000
+const decryptCap = Number.isInteger(data?.decryptCap) ? data.decryptCap : 200_000
 
 if (!allWorkspaces && !workspaceId) {
   throw new Error(
@@ -34,409 +36,63 @@ if (!allWorkspaces && !workspaceId) {
   )
 }
 
-// Workspace predicate fragments. `wsParams()` returns the bound params in order.
-const wsClause = (col) => (allWorkspaces ? '1=1' : `${col} = ?`)
-const wsParams = () => (allWorkspaces ? [] : [workspaceId])
+const { runConsistencyAudit } = await import('@/plugins/data-integrity/audit.js')
+const { syncObserverDepsFor } = await import('@/data/repoProvider.js')
 
-const rows = (text, params = []) => sql(text, params, 'all')
-const one = async (text, params = []) => (await rows(text, params))[0]
-const countOf = async (text, params = []) => Number((await one(text, params))?.n ?? 0)
+// The engine's AuditDb is just `{ getAll }`; back it with the bridge's `sql`.
+const auditDb = { getAll: (text, params = []) => sql(text, params, 'all') }
+// The §6 mode/key resolver (real in the live tab) — powers the e2ee decrypt checks.
+const decrypt = syncObserverDepsFor(repo.user.id)
+
+const workspaceIds = allWorkspaces
+  ? (
+      // Union across all three tables: a workspace can have surviving
+      // block_references / blocks_synced rows with no live `blocks` (all hard-
+      // deleted) — enumerating from `blocks` alone would skip its orphan/mirror
+      // checks entirely.
+      await auditDb.getAll(
+        `SELECT workspace_id AS id FROM blocks WHERE workspace_id IS NOT NULL
+         UNION SELECT workspace_id FROM block_references WHERE workspace_id IS NOT NULL
+         UNION SELECT workspace_id FROM blocks_synced WHERE workspace_id IS NOT NULL
+         ORDER BY id`,
+      )
+    ).map((r) => r.id)
+  : [workspaceId]
 
 const report = {
   mode: 'read-only',
   generatedAt: new Date().toISOString(),
   scope: allWorkspaces ? 'all-workspaces' : workspaceId,
   sampleLimit,
-  checks: {},
+  workspaces: {},
   anomalies: 0,
 }
 
-const record = (name, anomalous, payload) => {
-  report.checks[name] = { status: anomalous ? 'anomaly' : 'ok', ...payload }
-  if (anomalous) report.anomalies += 1
-}
-const skip = (name, reason, payload = {}) => {
-  report.checks[name] = { status: 'skipped', reason, ...payload }
-}
-
-// ── R2: references_json <-> block_references mirror ───────────────────────────
-// Faithful 1:1 expansion is the audit-confirmed invariant. Drift in either direction
-// means the trigger missed a write or a raw write bypassed it.
-try {
-  const expandedRefFilter = `
-        typeof(json_extract(je.value,'$.id'))='text'
-    AND typeof(json_extract(je.value,'$.alias'))='text'
-    AND (json_type(je.value,'$.sourceField') IS NULL
-         OR typeof(json_extract(je.value,'$.sourceField'))='text')`
-
-  // (a) entries in references_json with no matching block_references row
-  const missingRows = await countOf(
-    `SELECT count(*) AS n FROM (
-       SELECT b.id AS source_id,
-              json_extract(je.value,'$.id') AS target_id,
-              json_extract(je.value,'$.alias') AS alias,
-              COALESCE(json_extract(je.value,'$.sourceField'),'') AS source_field
-       FROM blocks b, json_each(b.references_json) je
-       WHERE b.deleted=0 AND ${wsClause('b.workspace_id')} AND ${expandedRefFilter}
-     ) exp
-     LEFT JOIN block_references br
-       ON br.source_id=exp.source_id AND br.target_id=exp.target_id
-      AND br.alias=exp.alias AND br.source_field=exp.source_field
-     WHERE br.source_id IS NULL`,
-    wsParams(),
-  )
-
-  // (b) block_references rows with no matching references_json entry on a live block
-  const extraRows = await countOf(
-    `SELECT count(*) AS n FROM block_references br
-     JOIN blocks b ON b.id=br.source_id AND b.deleted=0
-     WHERE ${wsClause('br.workspace_id')}
-       AND NOT EXISTS (
-         SELECT 1 FROM json_each(b.references_json) je
-         WHERE json_extract(je.value,'$.id')=br.target_id
-           AND json_extract(je.value,'$.alias')=br.alias
-           AND COALESCE(json_extract(je.value,'$.sourceField'),'')=br.source_field)`,
-    wsParams(),
-  )
-
-  // (c) block_references rows whose source block is gone/deleted (trigger should prune)
-  const orphanSourceRows = await countOf(
-    `SELECT count(*) AS n FROM block_references br
-     LEFT JOIN blocks b ON b.id=br.source_id
-     WHERE ${wsClause('br.workspace_id')} AND (b.id IS NULL OR b.deleted=1)`,
-    wsParams(),
-  )
-
-  // (d) duplicate (target,alias,sourceField) tuples within one block's references_json.
-  // The index PK + INSERT OR IGNORE collapse these to one row, so the count-based mirror
-  // above can't see them — this is the one drift R2's "1:1" claim explicitly carves out
-  // (un-normalized / raw writes), so surface it directly. Normal tx.* writes normalize,
-  // so a nonzero count means a write bypassed normalizeReferences.
-  const duplicateTuples = await countOf(
-    `SELECT count(*) AS n FROM (
-       SELECT b.id,
-              json_extract(je.value,'$.id') AS tid,
-              json_extract(je.value,'$.alias') AS al,
-              COALESCE(json_extract(je.value,'$.sourceField'),'') AS sf
-       FROM blocks b, json_each(b.references_json) je
-       WHERE b.deleted=0 AND ${wsClause('b.workspace_id')} AND ${expandedRefFilter}
-       GROUP BY b.id, tid, al, sf
-       HAVING count(*) > 1
-     )`,
-    wsParams(),
-  )
-
-  record(
-    'references_index_mirror',
-    missingRows + extraRows + orphanSourceRows + duplicateTuples > 0,
-    {
-      missingIndexRows: missingRows,
-      extraIndexRows: extraRows,
-      orphanSourceRows,
-      duplicateTuples,
+for (const ws of workspaceIds) {
+  const result = await runConsistencyAudit(auditDb, ws, Date.now(), {
+    // Debounce a transient mid-sync divergence pass (report the settled counts).
+    divergenceRecheckMs: 4000,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    decrypt,
+    full: {
+      // Precise projection is sound only for the ACTIVE workspace (repo.propertySchemas
+      // is active-only); the engine skips it for any other ws.
+      schemas: repo.propertySchemas,
+      activeWorkspaceId: repo.activeWorkspaceId,
+      candidateCap,
+      contentCap,
+      decryptCap,
+      sampleLimit,
     },
-  )
-} catch (e) {
-  skip('references_index_mirror', String(e))
+  })
+  report.workspaces[ws] = result
+  report.anomalies += result.anomalies
 }
 
-// ── R7: dangling refs (target missing/deleted) ───────────────────────────────
-// Expected to be small and stable (faithful index of user content — links to deleted/
-// merged pages, stale ((block-refs)) in text). Watch the TREND, not the absolute count.
-try {
-  const danglingByKind = await rows(
-    `SELECT CASE WHEN br.source_field='' THEN 'content' ELSE 'property' END AS kind,
-            count(*) AS n
-     FROM block_references br
-     LEFT JOIN blocks t ON t.id=br.target_id
-     WHERE ${wsClause('br.workspace_id')} AND (t.id IS NULL OR t.deleted=1)
-     GROUP BY kind`,
-    wsParams(),
-  )
-  const sample = await rows(
-    `SELECT br.source_id, br.target_id, br.source_field
-     FROM block_references br
-     LEFT JOIN blocks t ON t.id=br.target_id
-     WHERE ${wsClause('br.workspace_id')} AND (t.id IS NULL OR t.deleted=1)
-     LIMIT ${sampleLimit}`,
-    wsParams(),
-  )
-  const total = danglingByKind.reduce((a, r) => a + Number(r.n), 0)
-  // Dangling refs are benign at baseline; report as info (never an anomaly on its own).
-  report.checks.dangling_refs = {
-    status: 'info',
-    total,
-    byKind: Object.fromEntries(danglingByKind.map((r) => [r.kind, Number(r.n)])),
-    sample,
-  }
-} catch (e) {
-  skip('dangling_refs', String(e))
-}
-
-// ── R4 (1): property-ref projection — PRECISE diff (active workspace, loaded schemas) ──
-// The next-review-date detector. For every loaded ref-typed property, recompute the
-// expected refs via the app's OWN projection and diff against what is stored. `missing` =
-// a strip (value present, ref gone). `extra` = a value-desync, but ONLY for a present
-// schema: a stored ref whose sourceField schema is ABSENT is retained by design
-// (c2df661e/21494fdb — derived refs are value-tied), so it must NOT be flagged.
-// Two hard limits force the at-rest heuristic below to complement this: (a) it is sound
-// only for the ACTIVE workspace — repo.propertySchemas is active-only, so evaluating
-// another workspace's blocks against it manufactures phantom findings; (b) it sees only
-// CURRENTLY-LOADED ref props — a toggled-off plugin (SRS off ⇒ next-review-date absent:
-// the 06-09 condition) would make it silently skip that prop.
-const CURATED_REF_PROPS = ['next-review-date']
-try {
-  const { isRefCodec, isRefListCodec } = await import('@/data/api')
-  const { projectPropertyReferences } = await import(
-    '@/plugins/references/referenceProjection.js'
-  )
-  const schemas = repo.propertySchemas
-  const refNames = [...schemas]
-    .filter(([, s]) => isRefCodec(s.codec) || isRefListCodec(s.codec))
-    .map(([name]) => name)
-  const refNameSet = new Set(refNames)
-  // repo.propertySchemas is active-workspace-only, so the precise diff is sound only when
-  // auditing the active workspace; for any other scope skip it (the at-rest heuristic
-  // below still runs and covers strips schema-independently).
-  const notActive = allWorkspaces || workspaceId !== repo.activeWorkspaceId
-
-  if (notActive) {
-    skip(
-      'property_ref_projection',
-      `precise diff needs the active workspace (repo.propertySchemas is active-only): scope=${report.scope}, active=${repo.activeWorkspaceId}. The at-rest heuristic still runs.`,
-    )
-  } else if (refNames.length === 0) {
-    skip('property_ref_projection', 'no ref-typed property schemas loaded in the runtime')
-  } else {
-    // Candidate filter: blocks that mention any ref-typed prop name. Over-broad is fine
-    // (the JS diff below is exact); this just bounds the rows we pull into memory.
-    const likeClause = refNames.map(() => 'properties_json LIKE ?').join(' OR ')
-    const likeParams = refNames.map((n) => `%"${n}"%`)
-    const candidates = await rows(
-      `SELECT id, properties_json, references_json
-       FROM blocks
-       WHERE deleted=0 AND workspace_id=? AND (${likeClause})
-       LIMIT ${candidateCap + 1}`,
-      [workspaceId, ...likeParams],
-    )
-    const truncated = candidates.length > candidateCap
-    const scanned = truncated ? candidates.slice(0, candidateCap) : candidates
-
-    // Key on \u0000 (NUL): property names can contain spaces but never a NUL, so the
-    // key can't collide or garble samples. Mirrors referenceProjection.ts's separator.
-    const refKey = (r) => `${r.sourceField ?? ''}\u0000${r.id}`
-    let blocksMissing = 0
-    let blocksExtra = 0
-    let refsMissing = 0
-    let refsExtra = 0
-    const missingSample = []
-    const extraSample = []
-
-    for (const row of scanned) {
-      let properties, stored
-      try {
-        properties = JSON.parse(row.properties_json)
-        stored = JSON.parse(row.references_json)
-      } catch {
-        continue // malformed JSON is caught by the index-mirror check
-      }
-      const expected = projectPropertyReferences({ properties }, schemas)
-      const expectedKeys = new Set(expected.map(refKey))
-      const storedPropKeys = new Set(
-        stored.filter((r) => r && r.sourceField).map(refKey),
-      )
-      const missing = [...expectedKeys].filter((k) => !storedPropKeys.has(k))
-      // Only flag an `extra` when the sourceField's schema is PRESENT (the present-schema
-      // projection would have re-derived it) — then a stored ref absent from `expected`
-      // is a genuine value-desync. A stored ref whose schema is ABSENT is retained by
-      // design (value-tied), not an error, so it is excluded here.
-      const extra = [
-        ...new Set(
-          stored
-            .filter((r) => r && r.sourceField && refNameSet.has(r.sourceField))
-            .map(refKey),
-        ),
-      ].filter((k) => !expectedKeys.has(k))
-      if (missing.length) {
-        blocksMissing += 1
-        refsMissing += missing.length
-        if (missingSample.length < sampleLimit)
-          missingSample.push({ id: row.id, missing: missing.map((k) => k.split('\u0000')) })
-      }
-      if (extra.length) {
-        blocksExtra += 1
-        refsExtra += extra.length
-        if (extraSample.length < sampleLimit)
-          extraSample.push({ id: row.id, extra: extra.map((k) => k.split('\u0000')) })
-      }
-    }
-
-    record('property_ref_projection', blocksMissing + blocksExtra > 0, {
-      refTypedProps: refNames.length,
-      scanned: scanned.length,
-      truncated,
-      blocksMissingRefs: blocksMissing,
-      refsMissing,
-      blocksExtraRefs: blocksExtra,
-      refsExtra,
-      missingSample,
-      extraSample,
-    })
-  }
-} catch (e) {
-  skip('property_ref_projection', String(e))
-}
-
-// ── R4 (2): property-ref at-rest heuristic — schema-INDEPENDENT ────────────────
-// Covers ref props whose owning plugin is toggled off, which the precise check above
-// CANNOT see (the exact 06-09 condition: SRS off ⇒ next-review-date absent from the
-// loaded schemas ⇒ a strip of its refs would go unnoticed). A prop is "believed
-// ref-typed" if it currently projects at least one ref (its name appears as a
-// block_references.source_field) or it's on the curated list. For such props NOT covered
-// by a loaded schema, flag blocks holding the value but missing the projected ref
-// (`properties_json` has the key, `references_json` lacks `"sourceField":"<name>"`) — the
-// proven 06-09 detection query. Heuristic: a small benign baseline is expected (empty /
-// non-uuid values that correctly don't project) — watch the trend, and re-run the precise
-// check with the owning plugin enabled to confirm a real strip.
-try {
-  const { isRefCodec, isRefListCodec } = await import('@/data/api')
-  const loaded = new Set(
-    [...repo.propertySchemas]
-      .filter(([, s]) => isRefCodec(s.codec) || isRefListCodec(s.codec))
-      .map(([name]) => name),
-  )
-  if (allWorkspaces) {
-    skip('property_ref_at_rest', 'runs per-workspace (the source_field set is per-workspace); pass a workspaceId')
-  } else {
-    const fromIndex = (
-      await rows(
-        `SELECT DISTINCT source_field AS name FROM block_references
-         WHERE workspace_id=? AND source_field!=''`,
-        [workspaceId],
-      )
-    ).map((r) => r.name)
-    const absentNames = [...new Set([...fromIndex, ...CURATED_REF_PROPS])].filter(
-      (n) => !loaded.has(n),
-    )
-    if (absentNames.length === 0) {
-      skip(
-        'property_ref_at_rest',
-        'every believed-ref prop has a loaded schema (covered precisely above)',
-      )
-    } else {
-      const perProp = []
-      for (const name of absentNames) {
-        const n = await countOf(
-          `SELECT count(*) AS n FROM blocks
-           WHERE deleted=0 AND workspace_id=?
-             AND properties_json LIKE '%"' || ? || '"%'
-             AND references_json NOT LIKE '%"sourceField":"' || ? || '"%'`,
-          [workspaceId, name, name],
-        )
-        if (n > 0) perProp.push({ prop: name, valuePresentRefAbsent: n })
-      }
-      record('property_ref_at_rest', perProp.length > 0, {
-        note: 'heuristic (owning plugin not loaded; a small benign baseline from empty/non-uuid values is expected) — re-run the precise check with the plugin enabled to confirm',
-        uncoveredRefProps: absentNames,
-        findings: perProp,
-      })
-    }
-  }
-} catch (e) {
-  skip('property_ref_at_rest', String(e))
-}
-
-// ── R1/R3: content-link coarse strip heuristic ───────────────────────────────
-// Cheap, noisy-by-design: blocks whose content has link syntax but zero refs at all.
-// False positives from code blocks / escaped brackets are expected — treat as a lead to
-// investigate, not a hard finding. (Full alias-resolving content recompute is roadmap.)
-try {
-  const n = await countOf(
-    `SELECT count(*) AS n FROM blocks
-     WHERE deleted=0 AND ${wsClause('workspace_id')}
-       AND references_json='[]'
-       AND (content LIKE '%[[%' OR content LIKE '%((%')`,
-    wsParams(),
-  )
-  const sample = await rows(
-    `SELECT id, substr(content,1,120) AS content_preview FROM blocks
-     WHERE deleted=0 AND ${wsClause('workspace_id')}
-       AND references_json='[]'
-       AND (content LIKE '%[[%' OR content LIKE '%((%')
-     LIMIT ${sampleLimit}`,
-    wsParams(),
-  )
-  report.checks.content_link_heuristic = { status: 'info', flagged: n, sample }
-} catch (e) {
-  skip('content_link_heuristic', String(e))
-}
-
-// ── L4: blocks <-> blocks_synced divergence (ps_crud-aware) ───────────────────
-// Per-client scans miss divergence (incidents #3, #5) — this is the cross-view detector.
-const pendingClause = `NOT EXISTS (
-  SELECT 1 FROM ps_crud p
-  WHERE json_extract(p.data,'$.type')='blocks' AND json_extract(p.data,'$.id')=b.id)`
-try {
-  // (a) stranded local-only: in blocks, not in blocks_synced, nothing queued → can't sync
-  const strandedLocalOnly = await countOf(
-    `SELECT count(*) AS n FROM blocks b
-     WHERE ${wsClause('b.workspace_id')} AND b.deleted=0
-       AND NOT EXISTS (SELECT 1 FROM blocks_synced bs WHERE bs.id=b.id)
-       AND ${pendingClause}`,
-    wsParams(),
-  )
-  // (b) equal-stamp standoff (violates gate invariant R8): same nonzero stamp, differ
-  const equalStampStandoff = await countOf(
-    `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-     WHERE ${wsClause('b.workspace_id')} AND b.updated_at=bs.updated_at AND b.updated_at!=0
-       AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-            OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`,
-    wsParams(),
-  )
-  // (c) local-richer-no-pending: local newer than server, nothing queued → at-risk (#5)
-  const localRicherNoPending = await countOf(
-    `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-     WHERE ${wsClause('b.workspace_id')} AND b.updated_at>bs.updated_at AND ${pendingClause}`,
-    wsParams(),
-  )
-  // (d) server-ahead-undrained: server newer & content differs, nothing queued. Normally
-  //     transient (observer drains it); a persistent count is a Layout-B drain problem.
-  const serverAheadUndrained = await countOf(
-    `SELECT count(*) AS n FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-     WHERE ${wsClause('b.workspace_id')} AND bs.updated_at>b.updated_at AND ${pendingClause}
-       AND (b.content!=bs.content OR b.properties_json!=bs.properties_json
-            OR b.references_json!=bs.references_json OR b.deleted!=bs.deleted)`,
-    wsParams(),
-  )
-
-  const sampleDivergence = async (where) =>
-    rows(
-      `SELECT b.id, b.updated_at AS local_updated_at, bs.updated_at AS synced_updated_at
-       FROM blocks b JOIN blocks_synced bs ON bs.id=b.id
-       WHERE ${wsClause('b.workspace_id')} AND ${where} AND ${pendingClause}
-       LIMIT ${sampleLimit}`,
-      wsParams(),
-    )
-
-  // Stranded + standoff + local-richer are real anomalies; server-ahead is informational.
-  record(
-    'local_server_divergence',
-    strandedLocalOnly + equalStampStandoff + localRicherNoPending > 0,
-    {
-      strandedLocalOnly,
-      equalStampStandoff,
-      localRicherNoPending,
-      serverAheadUndrained,
-      samples: {
-        equalStampStandoff: await sampleDivergence(
-          'b.updated_at=bs.updated_at AND b.updated_at!=0 AND b.content!=bs.content',
-        ),
-        localRicherNoPending: await sampleDivergence('b.updated_at>bs.updated_at'),
-      },
-    },
-  )
-} catch (e) {
-  skip('local_server_divergence', String(e))
+// Single-workspace convenience: also surface the one result's checks at the top
+// level, preserving the historical flat `report.checks` shape.
+if (!allWorkspaces && workspaceIds.length === 1) {
+  report.checks = report.workspaces[workspaceIds[0]]?.checks ?? {}
 }
 
 return report

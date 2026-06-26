@@ -775,28 +775,19 @@
   resolved "https://registry.yarnpkg.com/@oxc-project/types/-/types-0.127.0.tgz#8374fcdfb4a641861218daa5700c447c00b66663"
   integrity sha512-aIYXQBo4lCbO4z0R3FHeucQHpF46l2LbMdxRvqvuRuW2OxdnSkcng5B8+K12spgLDj93rtN3+J2Vac/TIO+ciQ==
 
-"@powersync/common@1.52.0":
-  version "1.52.0"
-  resolved "https://registry.yarnpkg.com/@powersync/common/-/common-1.52.0.tgz#d7abe43e3cc3cda36fe7cab21b9fe62409d15b60"
-  integrity sha512-rs50iEPcUSjLdKjnQZ4VbtK3U5+MTaY/YVCruN0hGmDMIn6wlT+EDsNFosAUAh6waLDEDfuKbvtHRhPKdBQ/Qg==
+"@powersync/common@1.55.0", "@powersync/common@^1.55.0":
+  version "1.55.0"
+  resolved "https://registry.yarnpkg.com/@powersync/common/-/common-1.55.0.tgz#84b6962c049dc2ce8277f7d4b4e336f70d662c21"
+  integrity sha512-c9K2Gac9wOB4ijVnQT388g7Yeuh6VrfJZFXaL6Rag9Fp7F8JzAYcrWaULLTdMnzm7VW6b6XT5M2ip5yLS8oSBg==
   dependencies:
-    event-iterator "^2.0.0"
-
-"@powersync/common@1.53.1", "@powersync/common@^1.53.1":
-  version "1.53.1"
-  resolved "https://registry.yarnpkg.com/@powersync/common/-/common-1.53.1.tgz#fd740827199bd5b18809d8e749f243fa123c68d3"
-  integrity sha512-WAW/XQKpYPCBC66WIf9VjgLzA0YLpQg1TEMwzpCqKm6BuuLoHh6rLMb3PKJ84foFzUHcyF6thw7fB5VvwyguQw==
-  dependencies:
-    event-iterator "^2.0.0"
     js-logger "^1.6.1"
 
-"@powersync/node@^0.18.4":
-  version "0.18.4"
-  resolved "https://registry.yarnpkg.com/@powersync/node/-/node-0.18.4.tgz#5d5aad7b762dbb1102b08e81134ed370a397b51d"
-  integrity sha512-0VlsPAwszYzcC4cJt+qHVCxyFPHHzw5qTaXzI7cErBA0yRBfetQz0iLAeY05SsVmI1KZBXI2cYSSwSG6GNcrtA==
+"@powersync/node@^0.19.0":
+  version "0.19.0"
+  resolved "https://registry.yarnpkg.com/@powersync/node/-/node-0.19.0.tgz#b78f1552e0607567f8b27eb506b1ef20d7201795"
+  integrity sha512-gqwVBKqUlI4aV6WPhf3XaJkcpvj6ywGOwytgtGfFxZr7MiLpJQpO1MCDyyzkjvDK4VY1ffrYNSz75+2WHP5Jwg==
   dependencies:
-    "@powersync/common" "1.52.0"
-    bson "^6.10.4"
+    "@powersync/common" "1.55.0"
     comlink "^4.4.2"
     undici "^7.11.0"
 
@@ -805,12 +796,12 @@
   resolved "https://registry.yarnpkg.com/@powersync/react/-/react-1.10.0.tgz#20a17805be0d2295cf634212101bbfd2ee886983"
   integrity sha512-orM29qocbF8zYTBM27j9nPNztyplpbNVaw8djpqxl8N2wESqHTbHOKpatg+Fa5aofgjzmrkiGwevJvCbiWYYWQ==
 
-"@powersync/web@^1.38.1":
-  version "1.38.1"
-  resolved "https://registry.yarnpkg.com/@powersync/web/-/web-1.38.1.tgz#68a8151da0b6e1638eacbc50f3050a7bb1149eab"
-  integrity sha512-mr5cd8CLgMJJ3QV5TvZyTSvr+ibc9ib6eU/5p9XQypxYG5fA/YrktSk2yTFzve4R0Y5xBLwRhPd61HeKYTjMjA==
+"@powersync/web@^1.38.4":
+  version "1.38.4"
+  resolved "https://registry.yarnpkg.com/@powersync/web/-/web-1.38.4.tgz#e5f6c8501fba757ea20bd5266f6c3c7c3a68251c"
+  integrity sha512-ok03ylEeq0VeTj0Ko2QkFjX/bacZMIuybtGQaRaDqHyWi4D60x5fO1amqRKiZw9NY6Je9fWGgXcr6Ti32TGUMQ==
   dependencies:
-    "@powersync/common" "1.53.1"
+    "@powersync/common" "1.55.0"
     comlink "^4.4.2"
     commander "^12.1.0"
 
@@ -2349,11 +2340,6 @@ browserslist@^4.28.2:
     node-releases "^2.0.36"
     update-browserslist-db "^1.2.3"
 
-bson@^6.10.4:
-  version "6.10.4"
-  resolved "https://registry.yarnpkg.com/bson/-/bson-6.10.4.tgz#d530733bb5bb16fb25c162e01a3344fab332fd2b"
-  integrity sha512-WIsKqkSC0ABoBJuT1LEX+2HEvNmNKKgnTAyd0fL8qzK4SH2i9NXg+t08YtdZp/V9IZ33cxe3iV4yM0qg8lMQng==
-
 buffer@^5.5.0:
   version "5.7.1"
   resolved "https://registry.yarnpkg.com/buffer/-/buffer-5.7.1.tgz#ba62e7c13133053582197160851a8f648e99eed0"
@@ -2881,11 +2867,6 @@ esutils@^2.0.2:
   resolved "https://registry.npmjs.org/esutils/-/esutils-2.0.3.tgz"
   integrity sha512-kVscqXk4OCp68SZ0dkgEKVi6/8ij300KBWTJq32P/dYeWTSwK41WyTxalN1eRmA5Z9UU/LX9D7FWSmV9SAYx6g==
 
-event-iterator@^2.0.0:
-  version "2.0.0"
-  resolved "https://registry.yarnpkg.com/event-iterator/-/event-iterator-2.0.0.tgz#10f06740cc1e9fd6bc575f334c2bc1ae9d2dbf62"
-  integrity sha512-KGft0ldl31BZVV//jj+IAIGCxkvvUkkON+ScH6zfoX+l+omX6001ggyRSpI0Io2Hlro0ThXotswCtfzS8UkIiQ==
-
 expand-template@^2.0.3:
   version "2.0.3"
   resolved "https://registry.yarnpkg.com/expand-template/-/expand-template-2.0.3.tgz#6e14b3fcee0f3a6340ecb57d2e8918692052a47c"
@@ -2905,6 +2886,11 @@ extend@^3.0.0:
   version "3.0.2"
   resolved "https://registry.npmjs.org/extend/-/extend-3.0.2.tgz"
   integrity sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==
+
+fake-indexeddb@^6.2.5:
+  version "6.2.5"
+  resolved "https://registry.yarnpkg.com/fake-indexeddb/-/fake-indexeddb-6.2.5.tgz#74285b6821467d6c102af092f0a4517ad5521613"
+  integrity sha512-CGnyrvbhPlWYMngksqrSSUT1BAVP49dZocrHuK0SvtR0D5TMs5wP0o3j7jexDJW01KSadjBp1M/71o/KR3nD1w==
 
 fast-deep-equal@3.1.3, fast-deep-equal@^3.1.1, fast-deep-equal@^3.1.3:
   version "3.1.3"

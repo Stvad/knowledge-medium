@@ -2,8 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   __setCompileImplForTest,
   createCompileCache,
+  hashExtensionSource,
   type CompileCache,
 } from '@/extensions/compileExtensionModule'
+import {
+  InMemoryCompiledModuleCache,
+  type CompiledModuleCache,
+} from '@/extensions/compiledModuleCache'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions'
 import {
   defineFacet,
@@ -46,14 +51,30 @@ const enableBlocks = (blocks: readonly BlockData[]): Overrides =>
   new Map(blocks.map(block => [block.id, true]))
 
 let cache: CompileCache
+let persistent: CompiledModuleCache
 
 beforeEach(() => {
   cache = createCompileCache()
+  persistent = new InMemoryCompiledModuleCache()
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
+
+// Grant device-local approval for each block, pinned to its current
+// content (the gate-2 prerequisite for it to run).
+const approveBlocks = async (blocks: readonly BlockData[]): Promise<void> => {
+  for (const block of blocks) {
+    await persistent.write(block.id, {
+      sourceHash: await hashExtensionSource(block.content),
+      approvedSource: block.content,
+      compiled: block.content,
+      compilerVersion: '1',
+      approvedAt: 0,
+    })
+  }
+}
 
 describe('dynamicExtensionsExtension — full integration', () => {
   it('extension contributions show up in a fully-resolved runtime alongside base extensions', async () => {
@@ -67,10 +88,12 @@ describe('dynamicExtensionsExtension — full integration', () => {
     }))
 
     try {
+      await approveBlocks(blocks)
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
         cache,
+        persistent,
         safeMode: false,
         overrides: enableBlocks(blocks),
       })
@@ -98,10 +121,12 @@ describe('dynamicExtensionsExtension — full integration', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
     try {
+      await approveBlocks(blocks)
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
         cache,
+        persistent,
         safeMode: false,
         overrides: enableBlocks(blocks),
         errorReporter,
@@ -130,10 +155,14 @@ describe('dynamicExtensionsExtension — full integration', () => {
     ])
 
     try {
+      // Only the enabled block is approved; the disabled one is gate-1
+      // skipped before its approval is ever consulted.
+      await approveBlocks([blocks[0]])
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
         cache,
+        persistent,
         safeMode: false,
         overrides,
       })
@@ -164,10 +193,12 @@ describe('dynamicExtensionsExtension — full integration', () => {
     }))
 
     try {
+      await approveBlocks(blocks)
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
         cache,
+        persistent,
         safeMode: false,
         overrides: enableBlocks(blocks),
       })

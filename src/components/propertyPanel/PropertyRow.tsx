@@ -19,12 +19,19 @@ const formatRawJsonValue = (value: unknown): string => {
   }
 }
 
-function RawJsonValue({value}: {value: unknown}) {
+// Read-only text rendering of a property value with no specialized editor —
+// either a decode failure or a codec type no preset/override handles (e.g. an
+// identity-codec object blob like a startup-metrics record). Better to show the
+// raw value than a "nothing here" placeholder.
+function RawJsonValue({value, reason}: {value: unknown; reason: string}) {
+  if (value === undefined || value === null) {
+    return <div className="h-7 truncate py-1 text-sm text-muted-foreground/55">Empty</div>
+  }
   const rawJson = formatRawJsonValue(value)
   return (
     <div
       className="h-7 truncate py-1 font-mono text-sm text-muted-foreground"
-      title={`Decode failed; raw JSON value: ${rawJson}`}
+      title={`${reason}; raw JSON value: ${rawJson}`}
     >
       {rawJson}
     </div>
@@ -143,11 +150,9 @@ export function PropertyRow({
         {Editor !== undefined && !row.decodeFailed ? (
           <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
         ) : row.decodeFailed ? (
-          <RawJsonValue value={row.encodedValue} />
+          <RawJsonValue value={row.encodedValue} reason="Decode failed" />
         ) : (
-          <div className="h-7 truncate py-1 text-sm text-muted-foreground/55">
-            No editor registered
-          </div>
+          <RawJsonValue value={row.value} reason="No editor registered" />
         )}
       </div>
       <div className="flex h-7 items-center justify-center" data-property-row-control="true">

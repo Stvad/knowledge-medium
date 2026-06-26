@@ -1,4 +1,4 @@
-import { codeMirrorExtensionsFacet } from '@/extensions/editor.js'
+import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'

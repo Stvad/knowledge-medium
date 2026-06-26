@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { navigate } from '@/utils/navigation.js'
 import { dismissToast, showError } from '@/utils/toast.js'
+import { MergeIntoDescendantError } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from './collisionMerge.ts'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
@@ -55,6 +56,11 @@ export const AliasCollisionToast = ({
   repo,
 }: AliasCollisionToastProps) => {
   const [pending, setPending] = useState(false)
+  // Set once a merge fails a precondition that no retry can satisfy (the
+  // target is nested inside the page being renamed). Hides the doomed
+  // "Merge into…" button so the toast stops looping on the same failure
+  // and steers the user to "Open" for manual resolution (#188).
+  const [mergeBlocked, setMergeBlocked] = useState(false)
 
   const openExisting = () => {
     navigate(repo, {target: 'main', blockId: conflictingBlockId, workspaceId})
@@ -81,6 +87,22 @@ export const AliasCollisionToast = ({
       }
       dismissToast(toastId)
     } catch (error) {
+      if (error instanceof MergeIntoDescendantError) {
+        // The existing block is nested inside the page being renamed, so
+        // this merge direction can never succeed. Don't re-offer the
+        // doomed retry — explain the situation and leave "Open" so the
+        // user can move the content manually.
+        setMergeBlocked(true)
+        setPending(false)
+        const targetLabel = conflictingBlockTitle.trim() === ''
+          ? alias
+          : conflictingBlockTitle.trim()
+        showError(
+          `Can't merge into "${truncate(targetLabel, 30)}" — it's nested inside ` +
+          `the page you're renaming. Open it to move the content manually.`,
+        )
+        return
+      }
       // Surface the failure rather than disappearing silently. Leave
       // the collision toast open so the user can retry or pick Open.
       showError(error instanceof Error ? error.message : 'Merge failed')
@@ -99,7 +121,7 @@ export const AliasCollisionToast = ({
         <Button variant="ghost" size="sm" disabled={pending} onClick={openExisting}>
           Open
         </Button>
-        {offerMerge && (
+        {offerMerge && !mergeBlocked && (
           <Button variant="default" size="sm" disabled={pending} onClick={() => { void mergeIntoExisting() }}>
             {pending ? 'Merging…' : mergeLabel}
           </Button>

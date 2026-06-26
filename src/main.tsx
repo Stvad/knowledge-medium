@@ -9,12 +9,30 @@ import { Login } from '@/components/Login.js'
 import { SuspenseFallback } from '@/components/util/suspense.js'
 import { BootstrapErrorFallback } from '@/components/util/error.js'
 import { registerServiceWorker } from '@/registerServiceWorker.js'
+import { requestPersistentStorage } from '@/requestPersistentStorage.js'
+import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
+import { startStartupObservers } from '@/utils/startupTimeline.js'
+
+// Begin tracking main-thread long tasks immediately, so the startup-metrics
+// plugin can later find when boot contention stopped (time to interactivity).
+startStartupObservers()
+
+// L2 data-integrity invariant assertions: on in dev builds, compiled-away to a
+// constant false in prod (import.meta.env.DEV is statically replaced by Vite).
+setDevAssertionsEnabled(import.meta.env.DEV)
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React
 window.ReactDOM = ReactDOM
 
 registerServiceWorker()
+
+// Ask the browser to keep our local-first state (SQLite DB, workspace keys)
+// exempt from automatic eviction under storage pressure. Checks persisted()
+// first, never re-prompts a user who explicitly declined, and otherwise asks
+// at most once per session (so a silent Chromium denial still retries next
+// session). See src/requestPersistentStorage.ts.
+void requestPersistentStorage()
 
 // The ErrorBoundary lives INSIDE Login so its fallback can call useSignOut,
 // and OUTSIDE RepoProvider so a repo-bootstrap throw still gets caught and

@@ -2,9 +2,24 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
-import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp, extensionDescriptionProp, extensionNameProp, topLevelBlockIdProp } from '@/data/properties.js'
+import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
+import { aliasesProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.js'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { BACKLINKS_FOR_BLOCK_QUERY, type BacklinksFilter } from '@/plugins/backlinks/query.js'
+import { resolveBacklinksFilter, type BacklinksFilterSpec } from '@/plugins/backlinks/resolveFilter.js'
+import {
+  GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
+  type GroupedBacklinksResult,
+} from '@/plugins/grouped-backlinks/query.js'
+import {
+  resolveGroupedBacklinksConfig,
+  type GroupedBacklinksGroupingSpec,
+} from '@/plugins/grouped-backlinks/resolveConfig.js'
+import type { GroupedBacklinksConfig } from '@/plugins/grouped-backlinks/config.js'
+import { parseRelativeDate } from '@/utils/relativeDate.js'
+import { formatRoamDate } from '@/utils/dailyPage.js'
+import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
+import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
 import {
   actionsFacet,
@@ -18,6 +33,11 @@ import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
 import { applyToggle } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
+import {
+  approveExtension,
+  createCompileCache,
+  revokeExtensionApproval,
+} from '@/extensions/compileExtensionModule.js'
 import { findExtensionBlock } from '@/extensions/extensionLookup.js'
 import { lintExtensionSource } from './extensionLint.ts'
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
@@ -175,6 +195,14 @@ const verifyExtensionBlock = async (
       workspaceId: block.workspaceId,
       safeMode: false,
       overrides: new Map([[block.id, true]]),
+      // Verification compiles the brand-new LIVE source in isolation to
+      // inspect its contributions before any device-local approval exists,
+      // so it bypasses the approval gate (#67). This does NOT run the
+      // block in the app — it's a throwaway resolution for the bridge.
+      verifyLiveSource: true,
+      // Throwaway in-memory cache so verifying live (un-approved) source
+      // never shares the process-wide cache with the user-facing loader.
+      cache: createCompileCache(),
       errorReporter: (reportedBlockId, error) => {
         errors.push(serializeVerificationError(reportedBlockId, error))
       },
@@ -301,21 +329,16 @@ const updateRuntimeBlock = async (
   return repo.load(input.id)
 }
 
-const aliasValuesFromProperties = (properties: BlockProperties | undefined): string[] => {
-  const value = properties?.[aliasesProp.name]
-  return Array.isArray(value) && value.every(isString) ? value : []
-}
-
 const extensionBlockProperties = (
   existing: BlockProperties | undefined,
   label: string | null,
   description: string | null,
 ): BlockProperties => {
-  const aliases = new Set<string>(Array.isArray(existing?.[aliasesProp.name])
-    ? (existing?.[aliasesProp.name] as unknown[]).filter(isString)
-    : [])
-  if (label) aliases.add(label)
-
+  // Extensions are identified by `extension:name` only — install no
+  // longer writes an alias or tags PAGE_TYPE. An aliased block whose
+  // content is its own source would have that source mirrored into an
+  // alias by the content↔alias parity processor
+  // (`@/plugins/alias/syncProcessor.ts`).
   return {
     ...(existing ?? {}),
     ...(label ? {[extensionNameProp.name]: extensionNameProp.codec.encode(label)} : {}),
@@ -324,7 +347,6 @@ const extensionBlockProperties = (
     ...(description !== null
       ? {[extensionDescriptionProp.name]: extensionDescriptionProp.codec.encode(description ?? '')}
       : {}),
-    ...(aliases.size > 0 ? {[aliasesProp.name]: aliasesProp.codec.encode([...aliases])} : {}),
   }
 }
 
@@ -371,10 +393,6 @@ const installRuntimeExtension = async (
         properties,
       })
       await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
-      const aliases = aliasValuesFromProperties(properties)
-      if (aliases.length > 0) {
-        await repo.addTypeInTx(tx, existing.id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
-      }
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
     // Run verify *before* refreshAppRuntime so the verify's isolated
     // facet resolution doesn't contend with the app-wide runtime
@@ -426,9 +444,9 @@ const installRuntimeExtension = async (
     // root. This leaves room for the user to keep notes / configuration
     // pages / etc. as siblings of the extension code block, instead of
     // every install being a flat sibling of every other install. The
-    // container has no alias of its own (the extension block still owns
-    // the `extension:name`/alias projection used by enable-extension
-    // lookups), so there's no alias collision between the two.
+    // extension block itself is identified by `extension:name`, not an
+    // alias (see extensionBlockProperties), so it carries no PAGE_TYPE /
+    // alias to keep its source out of the alias index.
     let parentId = rootId
     if (label && !parentIdFromInput) {
       const rootChildren = await tx.childrenOf(rootId, workspaceId)
@@ -459,10 +477,6 @@ const installRuntimeExtension = async (
       properties,
     })
     await repo.addTypeInTx(tx, installedId, EXTENSION_TYPE, {}, typeSnapshot)
-    const aliases = aliasValuesFromProperties(properties)
-    if (aliases.length > 0) {
-      await repo.addTypeInTx(tx, installedId, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
-    }
   }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? 'unnamed'}`})
 
   const verification = input.verify
@@ -493,6 +507,17 @@ const setExtensionEnabled = async (
     throw new Error(`No installed extension matches "${input.id ?? input.label}"`)
   }
 
+  // Enable grants device-local trust (issue #67): the bridge is an
+  // authorized local actor, so enabling (re-)approves the CURRENT source on
+  // this device, pinned to its hash. This is also how the agent ships an
+  // update — install the new source, then enable to re-pin — which is why
+  // it always re-approves rather than only-if-absent (unlike the cautious
+  // settings-UI checkbox). Disable leaves the trust grant intact and only
+  // flips intent, so it propagates across devices through the intent gate.
+  if (input.enabled) {
+    await approveExtension(found.block.id, found.block.content ?? '')
+  }
+
   const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, extensionsPrefsType)
   const current = prefsBlock.peekProperty(extensionsOverridesProp) ?? new Map<string, boolean>()
   // User-installed extensions have `defaultEnabled: false`, so the
@@ -506,6 +531,12 @@ const setExtensionEnabled = async (
 
   if (changed) {
     await prefsBlock.set(extensionsOverridesProp, next)
+  }
+  // Re-pinning an already-enabled extension (changed === false) writes no
+  // intent, so the prefs-block subscription won't fire a refresh — do it
+  // explicitly so the freshly approved source takes effect.
+  if (input.enabled && !changed) {
+    refreshAppRuntime()
   }
 
   return {id: found.block.id, label: found.label, enabled: input.enabled, changed}
@@ -535,6 +566,11 @@ const uninstallRuntimeExtension = async (
     scope: ChangeScope.BlockDefault,
     description: `agent runtime uninstall extension ${found.label ?? found.block.id}`,
   })
+
+  // Drop this device's trust grant + cached compiled output for the block
+  // (issue #67): the block is gone, so its approval row would otherwise be
+  // a true orphan. Best-effort — uninstall must not fail on a flaky delete.
+  await revokeExtensionApproval(found.block.id)
 
   refreshAppRuntime()
   return {id: found.block.id, label: found.label, removed: true}
@@ -620,6 +656,341 @@ const runRuntimeAction = async (
   }
 }
 
+// ----- backlinks / grouped-backlinks --------------------------------
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+interface HydratedBlockRef {
+  id: string
+  content: string
+  types: string[]
+  deepLink: string
+}
+
+const deepLinkFor = (workspaceId: string, blockId: string): string =>
+  `#${workspaceId}/${blockId}`
+
+const HYDRATE_BLOCK_REFS_SQL = `
+  SELECT b.id AS id, b.content AS content,
+         b.properties_json AS properties_json, b.workspace_id AS workspace_id
+  FROM json_each(?) j
+  JOIN blocks b ON b.id = j.value
+  WHERE b.deleted = 0
+`
+
+interface HydrateRow {
+  id: string
+  content: string | null
+  properties_json: string | null
+  workspace_id: string | null
+}
+
+/** Hydrate a list of block ids into {id, content, types, deepLink},
+ *  preserving the input order. One JSON-array bind regardless of count
+ *  (avoids the SQLite parameter ceiling on heavily-linked targets). */
+const hydrateBlockRefs = async (
+  repo: Repo,
+  fallbackWorkspaceId: string,
+  ids: readonly string[],
+): Promise<HydratedBlockRef[]> => {
+  if (ids.length === 0) return []
+  const rows = await repo.db.getAll<HydrateRow>(HYDRATE_BLOCK_REFS_SQL, [JSON.stringify(ids)])
+  const byId = new Map(rows.map(row => [row.id, row]))
+  return ids.map(id => {
+    const row = byId.get(id)
+    let types: string[] = []
+    if (row?.properties_json) {
+      try {
+        const properties = JSON.parse(row.properties_json) as Record<string, unknown>
+        types = [...getBlockTypes({properties: properties as BlockProperties})]
+      } catch {
+        types = []
+      }
+    }
+    return {
+      id,
+      content: row?.content ?? '',
+      types,
+      deepLink: deepLinkFor(row?.workspace_id ?? fallbackWorkspaceId, id),
+    }
+  })
+}
+
+const SOURCE_FIELDS_SQL = `
+  SELECT DISTINCT source_id, source_field
+  FROM block_references
+  WHERE workspace_id = ? AND target_id = ?
+`
+
+/** Map each backlink source to the set of source_fields it referenced the
+ *  target through. `''` means a plain text wikilink; other values are
+ *  projected property refs (groupWith, next-review-date, …). */
+const sourceFieldsByBacklink = async (
+  repo: Repo,
+  workspaceId: string,
+  targetId: string,
+): Promise<Map<string, string[]>> => {
+  const rows = await repo.db.getAll<{source_id: string, source_field: string}>(
+    SOURCE_FIELDS_SQL,
+    [workspaceId, targetId],
+  )
+  const out = new Map<string, Set<string>>()
+  for (const row of rows) {
+    let set = out.get(row.source_id)
+    if (!set) {
+      set = new Set()
+      out.set(row.source_id, set)
+    }
+    set.add(row.source_field)
+  }
+  return new Map([...out].map(([id, set]) => [id, [...set].sort()]))
+}
+
+const resolveBlockWorkspaceId = async (
+  repo: Repo,
+  blockId: string,
+  override: unknown,
+): Promise<string> => {
+  if (isString(override) && override) return override
+  const data = await repo.load(blockId)
+  if (data?.workspaceId) return data.workspaceId
+  if (repo.activeWorkspaceId) return repo.activeWorkspaceId
+  throw new Error(`Cannot resolve a workspace for block ${blockId}; pass workspaceId`)
+}
+
+const parseFilterSpec = (value: unknown): BacklinksFilterSpec | undefined => {
+  if (value === undefined) return undefined
+  if (value === 'none' || value === 'stored' || value === 'effective') return value
+  if (isRecord(value)) return value as BacklinksFilter
+  throw new Error("filter must be 'none' | 'stored' | 'effective' or a BacklinksFilter object")
+}
+
+const parseGroupingSpec = (value: unknown): GroupedBacklinksGroupingSpec | undefined => {
+  if (value === undefined) return undefined
+  if (value === 'user' || value === 'none') return value
+  if (isRecord(value)) return value as Partial<GroupedBacklinksConfig>
+  throw new Error("grouping must be 'user' | 'none' or a grouping-config object")
+}
+
+interface BacklinksCommandResult {
+  target: HydratedBlockRef
+  workspaceId: string
+  total: number
+  filter: BacklinksFilter | null
+  backlinks: Array<HydratedBlockRef & {sourceFields: string[]}>
+}
+
+const runBacklinksCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<BacklinksCommandResult> => {
+  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
+  const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
+
+  const ids = await repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    workspaceId,
+    id,
+    ...(filter ? {filter} : {}),
+  }).load()
+
+  const [hydrated, fieldsBySource, [target]] = await Promise.all([
+    hydrateBlockRefs(repo, workspaceId, ids),
+    sourceFieldsByBacklink(repo, workspaceId, id),
+    hydrateBlockRefs(repo, workspaceId, [id]),
+  ])
+
+  return {
+    target,
+    workspaceId,
+    total: ids.length,
+    filter: filter ?? null,
+    backlinks: hydrated.map(ref => ({
+      ...ref,
+      sourceFields: fieldsBySource.get(ref.id) ?? [],
+    })),
+  }
+}
+
+interface GroupedBacklinksCommandGroup {
+  groupId: string
+  label: string
+  fallback: boolean
+  deepLink: string | null
+  members: HydratedBlockRef[]
+}
+
+interface GroupedBacklinksCommandResult {
+  target: HydratedBlockRef
+  workspaceId: string
+  total: number
+  filter: BacklinksFilter | null
+  grouping: GroupedBacklinksConfig
+  groups: GroupedBacklinksCommandGroup[]
+}
+
+const runGroupedBacklinksCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<GroupedBacklinksCommandResult> => {
+  const id = requireString(command.blockId ?? command.id, 'blockId')
+  const workspaceId = await resolveBlockWorkspaceId(repo, id, command.workspaceId)
+  const filter = await resolveBacklinksFilter(repo, workspaceId, id, parseFilterSpec(command.filter))
+  const grouping = await resolveGroupedBacklinksConfig(
+    repo,
+    workspaceId,
+    id,
+    parseGroupingSpec(command.grouping),
+  )
+
+  const result = await repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+    workspaceId,
+    id,
+    groupingConfig: grouping,
+    ...(filter ? {filter} : {}),
+  }).load() as GroupedBacklinksResult
+
+  const memberIds = [...new Set(result.groups.flatMap(group => group.sourceIds))]
+  const [members, [target]] = await Promise.all([
+    hydrateBlockRefs(repo, workspaceId, memberIds),
+    hydrateBlockRefs(repo, workspaceId, [id]),
+  ])
+  const memberById = new Map(members.map(member => [member.id, member]))
+
+  return {
+    target,
+    workspaceId,
+    total: result.total,
+    filter: filter ?? null,
+    grouping,
+    groups: result.groups.map(group => ({
+      groupId: group.groupId,
+      label: group.label,
+      fallback: group.fallback,
+      deepLink: UUID_RE.test(group.groupId) ? deepLinkFor(workspaceId, group.groupId) : null,
+      members: group.sourceIds.map(sourceId =>
+        memberById.get(sourceId) ?? {
+          id: sourceId,
+          content: '',
+          types: [],
+          deepLink: deepLinkFor(workspaceId, sourceId),
+        },
+      ),
+    })),
+  }
+}
+
+// ----- page / daily-note / search -----------------------------------
+
+const hydrateData = (data: BlockData): HydratedBlockRef => ({
+  id: data.id,
+  content: data.content ?? '',
+  types: [...getBlockTypes(data)],
+  deepLink: deepLinkFor(data.workspaceId, data.id),
+})
+
+const commandWorkspaceId = (repo: Repo, override: unknown): string => {
+  if (isString(override) && override) return override
+  if (repo.activeWorkspaceId) return repo.activeWorkspaceId
+  throw new Error('No active workspace; pass workspaceId')
+}
+
+interface PageCommandResult {
+  query: string
+  workspaceId: string
+  match: HydratedBlockRef | null
+  candidates: Array<{id: string, alias: string, content: string, deepLink: string}>
+}
+
+const runPageCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<PageCommandResult> => {
+  const name = requireString(command.name, 'name')
+  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const limit = typeof command.limit === 'number' ? command.limit : 20
+
+  const exact = await repo.query.aliasLookup({workspaceId, alias: name}).load() as BlockData | null
+  const candidates = await repo.query.aliasMatches({workspaceId, filter: name, limit}).load()
+
+  return {
+    query: name,
+    workspaceId,
+    match: exact ? hydrateData(exact) : null,
+    candidates: candidates.map(row => ({
+      id: row.blockId,
+      alias: row.alias,
+      content: row.content,
+      deepLink: deepLinkFor(workspaceId, row.blockId),
+    })),
+  }
+}
+
+interface DailyNoteCommandResult {
+  input: string
+  iso: string
+  title: string
+  workspaceId: string
+  blockId: string
+  exists: boolean
+  deepLink: string
+  block: HydratedBlockRef | null
+}
+
+const runDailyNoteCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<DailyNoteCommandResult> => {
+  const input = requireString(command.date, 'date')
+  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const parsed = parseRelativeDate(input)
+  if (!parsed) {
+    throw new Error(
+      `Could not parse "${input}" as a date. Try today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday".`,
+    )
+  }
+
+  // Daily-note ids are deterministic (uuidv5 of workspace+ISO), so the
+  // id is known whether or not the note has been created yet.
+  const blockId = dailyNoteBlockId(workspaceId, parsed.iso)
+  const data = await repo.load(blockId)
+
+  return {
+    input,
+    iso: parsed.iso,
+    title: formatRoamDate(parsed.date),
+    workspaceId,
+    blockId,
+    exists: data !== null,
+    deepLink: deepLinkFor(workspaceId, blockId),
+    block: data ? hydrateData(data) : null,
+  }
+}
+
+interface SearchCommandResult {
+  query: string
+  workspaceId: string
+  total: number
+  results: HydratedBlockRef[]
+}
+
+const runSearchCommand = async (
+  repo: Repo,
+  command: KnownAgentCommand,
+): Promise<SearchCommandResult> => {
+  const query = requireString(command.query, 'query')
+  const workspaceId = commandWorkspaceId(repo, command.workspaceId)
+  const limit = typeof command.limit === 'number' ? command.limit : 50
+
+  const rows = await repo.query.searchByContent({workspaceId, query, limit}).load()
+  return {
+    query,
+    workspaceId,
+    total: rows.length,
+    results: rows.map(hydrateData),
+  }
+}
+
 const executeArbitraryCode = async (
   code: string,
   context: AgentRuntimeContext,
@@ -688,7 +1059,7 @@ export const createAgentRuntimeContext = ({
     sql: (sql, params, mode) => runSql(repo, sql, params, mode),
     block: id => repo.block(id),
     getBlock: id => repo.load(id),
-    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as BlockData[],
+    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
     installExtension: input => installRuntimeExtension(repo, input, context),
@@ -836,6 +1207,24 @@ export const executeCommand = async (
 
     case 'eval':
       return executeArbitraryCode(requireString(command.code, 'code'), context, command.data)
+
+    case 'backlinks':
+      return runBacklinksCommand(context.repo, command)
+
+    case 'grouped-backlinks':
+      return runGroupedBacklinksCommand(context.repo, command)
+
+    case 'data-model':
+      return DATA_MODEL_GUIDE
+
+    case 'page':
+      return runPageCommand(context.repo, command)
+
+    case 'daily-note':
+      return runDailyNoteCommand(context.repo, command)
+
+    case 'search':
+      return runSearchCommand(context.repo, command)
 
     default: {
       // Exhaustive — the union covers everything; TS narrows `command`

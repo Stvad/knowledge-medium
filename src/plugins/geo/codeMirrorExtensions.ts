@@ -1,7 +1,7 @@
 /** CodeMirror surface for the geo plugin: autocomplete theme + `@`
  *  completion source contributed via `EditorState.languageData`. The
  *  single central `autocompletion()` call (in
- *  `src/extensions/editorAutocomplete.ts`) walks language data and
+ *  `src/editor/autocomplete.ts`) walks language data and
  *  picks the source up.
  *
  *  Current-location flow: picking the sentinel does NOT auto-resolve —
@@ -20,7 +20,7 @@ import { EditorView } from '@codemirror/view'
 import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
-} from '@/extensions/editor.js'
+} from '@/editor/codeMirrorExtensions.js'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PLACE_TYPE } from './blockTypes'

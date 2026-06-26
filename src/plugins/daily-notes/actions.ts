@@ -48,10 +48,10 @@ import { CalendarDays, CalendarPlus } from 'lucide-react'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.js'
 import { parseAppHash } from '@/utils/routing.js'
 import {
+  navigate,
   navigateFromGlobalCommand,
-  resolveGlobalCommandTopLevelBlockId,
+  resolveGlobalCommandTarget,
 } from '@/utils/navigation.js'
-import { insertSidebarStackedPanel } from '@/utils/panelLayoutProjection.js'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'
@@ -83,27 +83,43 @@ const findContainingDailyNoteIso = async (
   return null
 }
 
-/** Resolve the ISO date of the daily note currently visible in the
- *  primary (or active, on mobile) panel. Returns null when the panel's
- *  top-level block isn't a daily note or no panel is open. Used by both
- *  the prev/next offset actions and the date picker to open with the
- *  correct month + selected day. */
+/** The panel a navigator command targets, as a daily-note anchor: the workspace
+ *  that panel lives in, plus the visible block's daily-note ISO (or null if it
+ *  isn't a daily note). Goes through the same policy + destination resolution as
+ *  the navigation, so the workspace and validation match where prev/next will
+ *  create + open — even under a policy that retargets the workspace. Returns
+ *  null only when no panel is open. */
+const resolveDailyNoteAnchor = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<{workspaceId: string; iso: string | null} | null> => {
+  const target = await resolveGlobalCommandTarget(repo, workspaceId)
+  if (!target) return null
+  return {
+    workspaceId: target.workspaceId,
+    iso: await findContainingDailyNoteIso(repo, target.blockId, target.workspaceId),
+  }
+}
+
+/** Resolve just the ISO date of the currently-visible daily note — for the date
+ *  picker, which only needs the month/day to open on. */
 export const resolveCurrentDailyNoteIso = async (
   repo: Repo,
   workspaceId: string,
-): Promise<string | null> => {
-  const topLevelBlockId = await resolveGlobalCommandTopLevelBlockId(repo, workspaceId)
-  if (!topLevelBlockId) return null
-  return findContainingDailyNoteIso(repo, topLevelBlockId, workspaceId)
-}
+): Promise<string | null> => (await resolveDailyNoteAnchor(repo, workspaceId))?.iso ?? null
 
 const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
   const route = parseAppHash(window.location.hash)
-  const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
-  if (!workspaceId) return
+  const fallbackWorkspaceId = route.workspaceId ?? repo.activeWorkspaceId
+  if (!fallbackWorkspaceId) return
 
-  const currentIso = await resolveCurrentDailyNoteIso(repo, workspaceId)
-  const targetIso = addDaysIso(currentIso ?? todayIso(), offsetDays)
+  // Anchor on the targeted panel's workspace uniformly — so under a
+  // workspace-retargeting policy we create + open the offset note in that same
+  // workspace even when the panel isn't currently a daily note. Falls back to
+  // the command workspace + today only when no panel is open.
+  const anchor = await resolveDailyNoteAnchor(repo, fallbackWorkspaceId)
+  const workspaceId = anchor?.workspaceId ?? fallbackWorkspaceId
+  const targetIso = addDaysIso(anchor?.iso ?? todayIso(), offsetDays)
   const note = await getOrCreateDailyNote(repo, workspaceId, targetIso)
   navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
 }
@@ -142,14 +158,25 @@ export const appendTodayDailyBlockInStack = async (
 
   await layoutSessionBlock.load()
   const sourcePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
-  const panelId = await insertSidebarStackedPanel(repo, layoutSessionBlock, blockId, {sourcePanelId})
+  // Route through navigate() (not insertSidebarStackedPanel directly) so the
+  // open is observable/interceptable via navigationVerb like every other
+  // navigation; the returned panelId is where we place the cursor.
+  const dest = await navigate(repo, {target: 'sidebar-stack', blockId, workspaceId, sourcePanelId, origin: 'daily-note'})
 
-  const cursor = content ? content.length : 0
-  const selection: EditorSelectionState = {blockId, start: cursor}
-  await repo.tx(async tx => {
-    await tx.setProperty(panelId, editorSelection, selection)
-    await tx.setProperty(panelId, isEditingProp, true)
-  }, {scope: ChangeScope.UiState, description: 'edit new daily block'})
+  // Only drop into edit mode when the navigation actually landed on the block
+  // we just created. A navigationVerb decorator can retarget the open to a
+  // different block; in that case the cursor (sized to our content) and the
+  // selection (pointing at our blockId) don't belong to the panel's displayed
+  // block, so we leave the panel as the decorator placed it rather than writing
+  // a mismatched selection. The created block still exists either way.
+  if (dest && dest.blockId === blockId) {
+    const cursor = content ? content.length : 0
+    const selection: EditorSelectionState = {blockId, start: cursor}
+    await repo.tx(async tx => {
+      await tx.setProperty(dest.panelId, editorSelection, selection)
+      await tx.setProperty(dest.panelId, isEditingProp, true)
+    }, {scope: ChangeScope.UiState, description: 'edit new daily block'})
+  }
 
   return blockId
 }

@@ -11,10 +11,11 @@ import {
   pasteEditModeMultilineText,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
-} from '@/utils/paste.js'
+} from '@/paste/operations.js'
+import { pasteDecisionVerb } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { codeMirrorExtensionsFacet } from '@/extensions/editor.js'
+import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { createFieldCreationKeydownExtension } from './fieldCreationKeydown.js'
 import { useBlockContext } from '@/context/block.js'
 
@@ -49,20 +50,47 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     e.stopPropagation()
     const text = e.clipboardData?.getData('text/plain')
     if (!text) return
+    // Read-only editors leave paste to the browser (a no-op on a
+    // non-editable surface) — matches the historical single-block guard.
+    if (repo.isReadOnly) return
 
-    // Cmd/Ctrl+Shift+V: drop the clipboard text into the current block
-    // verbatim (newlines kept), instead of splitting it into a tree.
-    // Reads synchronously from the paste event — same source as the
-    // split path below — so it works without the async Clipboard API.
-    if (pasteIntentRef.current === 'single-block') {
-      pasteIntentRef.current = 'split'
-      if (repo.isReadOnly) return
-      e.preventDefault()
-      const editorView = editorRef.current?.view
-      if (!editorView) return
+    // Latch + reset the chord intent — the paste event can't see modifiers,
+    // so the keydown handler latched it. `preventDefault` MUST run
+    // synchronously or the browser's native paste fires first; the editor
+    // always takes over the paste.
+    const intent = pasteIntentRef.current
+    pasteIntentRef.current = 'split'
+    const html = e.clipboardData?.getData('text/html') || undefined
+    e.preventDefault()
 
-      const selection = editorView.state.selection.main
-      const plan = planSingleBlockPaste(text, {from: selection.from, to: selection.to})
+    // Read the live editor state once: the decision is SYNCHRONOUS (`runSync`),
+    // so it resolves before any `await` below and the caret it keys on can't
+    // move between this read and the dispatch. (When the decision was async this
+    // had to be split into a pre-decision caret snapshot + a post-decision
+    // re-read, because an override could await and move the caret mid-flight.)
+    const editorView = editorRef.current?.view
+    if (!editorView) return
+    const selection = editorView.state.selection.main
+    const caret = {
+      line: editorView.state.doc.lineAt(selection.from).number,
+      lineCount: editorView.state.doc.lines,
+      from: selection.from,
+      to: selection.to,
+    }
+
+    // The paste verb decides how the clipboard lands; with no plugin
+    // contributions this returns `defaultPasteDecision`, i.e. the previous
+    // hardcoded behavior. It's a pure, synchronous policy — an override may key
+    // on the paste-time position (title line 1 vs body line 2+) but must decide
+    // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
+    // markdown) before it's applied.
+    const decision = pasteDecisionVerb.runSync(runtime, {text, html, intent, surface: 'editor', caret})
+
+    if (decision.kind === 'single-block') {
+      const plan = planSingleBlockPaste(decision.text ?? text, {
+        from: selection.from,
+        to: selection.to,
+      })
       editorView.dispatch({
         changes: {from: plan.from, to: plan.to, insert: plan.insert},
         selection: EditorSelection.cursor(plan.cursor),
@@ -70,37 +98,30 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    if (text.includes('\n')) {
-      e.preventDefault()
-      const editorView = editorRef.current?.view
-      if (!editorView) return
+    const plan = planEditModeMultilinePaste(decision.text ?? text, editorView.state.doc.toString(), {
+      from: selection.from,
+      to: selection.to,
+    })
+    if (!plan) return
 
-      const selection = editorView.state.selection.main
-      const plan = planEditModeMultilinePaste(text, editorView.state.doc.toString(), {
-        from: selection.from,
-        to: selection.to,
-      })
-      if (!plan) return
+    editorView.dispatch({
+      changes: {from: 0, to: editorView.state.doc.length, insert: plan.targetContent},
+      selection: EditorSelection.cursor(plan.focusOffsetInTarget),
+    })
 
-      editorView.dispatch({
-        changes: {from: 0, to: editorView.state.doc.length, insert: plan.targetContent},
-        selection: EditorSelection.cursor(plan.focusOffsetInTarget),
-      })
+    const result = await pasteEditModeMultilineText(plan, block, repo, {
+      scopeRootId: blockContext.scopeRootId,
+    })
+    const renderScopeId = typeof blockContext.renderScopeId === 'string'
+      ? blockContext.renderScopeId
+      : undefined
+    if (!result) return
 
-      const result = await pasteEditModeMultilineText(plan, block, repo, {
-        scopeRootId: blockContext.scopeRootId,
-      })
-      const renderScopeId = typeof blockContext.renderScopeId === 'string'
-        ? blockContext.renderScopeId
-        : undefined
-      if (!result) return
-
-      await uiStateBlock.set(editorSelection, {
-        blockId: result.focusBlock.id,
-        start: result.focusOffset,
-      })
-      void focusBlock(uiStateBlock, result.focusBlock.id, {edit: true, renderScopeId})
-    }
+    await uiStateBlock.set(editorSelection, {
+      blockId: result.focusBlock.id,
+      start: result.focusOffset,
+    })
+    void focusBlock(uiStateBlock, result.focusBlock.id, {edit: true, renderScopeId})
   }
 
   return (

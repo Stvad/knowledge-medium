@@ -27,6 +27,7 @@ import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   activePanelIdProp,
   focusBlock,
+  isCollapsedProp,
   topLevelBlockIdProp,
   editorSelection,
   setIsEditing,
@@ -52,7 +53,7 @@ import {
   cursorIsAtStart,
 } from '@/utils/codemirror.js'
 import { copySelectedBlocksToClipboard } from '@/utils/copy.js'
-import { pasteFromClipboard } from '@/utils/paste.js'
+import { pasteFromClipboard } from '@/paste/operations.js'
 import { actionContextsFacet, actionsFacet, appEffectsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
@@ -63,7 +64,6 @@ import {
   navigate,
   navigateFromGlobalCommand,
 } from '@/utils/navigation.js'
-import { navigateInPanel } from '@/utils/panelHistory.js'
 import {
   deletePanelRow,
   panelBlockId,
@@ -79,9 +79,9 @@ import {
   importRawSqliteDb,
   rawSqliteDbExportFilename,
 } from '@/utils/exportSqliteDb.js'
-import { broadcastWipeReload, flushUploadQueue, lockAndWipe } from '@/sync/keys/flows/lockAndWipe.js'
-import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
-import { getPowerSyncDb } from '@/data/repoProvider.js'
+import { openDialog } from '@/utils/dialogs.js'
+import { WipeLocalDataDialog } from '@/shortcuts/WipeLocalDataDialog.js'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
@@ -205,6 +205,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlock,
     copyBlockRef,
     copyBlockEmbed,
+    copyBlockContent,
+    copyBlockLink,
   } = createSharedBlockActions({repo})
 
   const indentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock)
@@ -231,6 +233,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const copyBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlock)
   const copyBlockRefAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockRef)
   const copyBlockEmbedAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockEmbed)
+  const copyBlockContentAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockContent)
+  const copyBlockLinkAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockLink)
 
   // Block-bound actions that operate on the focused/edited block in a
   // panel. Declared as BlockActions and bound below to both NORMAL_MODE
@@ -241,8 +245,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Zoom into focused block',
     icon: ZoomIn,
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      // navigateInPanel wraps in withMoveTransition internally.
-      await navigateInPanel(uiStateBlock, block.id)
+      // Through navigate() so zoom is observable/interceptable via
+      // navigationVerb; target 'panel' swaps this panel's content (the swap
+      // still wraps in withMoveTransition inside navigateInPanel) and marks this
+      // panel active (it's the one being interacted with) — a benign addition
+      // over the old direct navigateInPanel.
+      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: block.id, origin: 'zoom'})
     },
     defaultBinding: {
       keys: '$mod+.',
@@ -260,7 +268,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       const parent = repo.block(topLevelBlockId).parent
       if (!parent) return
 
-      await navigateInPanel(uiStateBlock, parent.id)
+      await navigate(repo, {target: 'panel', panelId: uiStateBlock.id, blockId: parent.id, origin: 'zoom'})
     },
     defaultBinding: {
       keys: '$mod+,',
@@ -276,6 +284,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         blockId: block.id,
         target: 'new-panel',
         sourcePanelId: uiStateBlock.id,
+        origin: 'open-in-panel',
       })
     },
     defaultBinding: {
@@ -316,6 +325,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     copyBlockAction,
     copyBlockRefAction,
     copyBlockEmbedAction,
+    copyBlockContentAction,
+    copyBlockLinkAction,
   ]
 
   // CodeMirror versions of move actions
@@ -517,55 +528,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     {
       id: 'lock_and_wipe_local_data',
-      description: 'Lock & wipe local data on this device',
+      description: 'Wipe local data on this device (guided)',
       context: ActionContextTypes.GLOBAL,
-      handler: async () => {
-        // §6 Lock & wipe: drop every workspace key and erase this device's
-        // local DB. Deliberate and user-only — never triggered automatically.
-        const ok = window.confirm(
-          'Lock & wipe local data on THIS device?\n\n' +
-          'This erases ALL locally stored data and removes every encryption key from ' +
-          'this device. Encrypted workspaces will require re-pasting their workspace key ' +
-          'to reopen — make sure you have it saved.\n\n' +
-          'Anything already synced to the server re-downloads; anything not synced ' +
-          '(or that only exists on this device) is permanently lost. You stay signed ' +
-          'in. The page reloads.',
-        )
-        if (!ok) return
-
-        const banner = showProgress('Flushing unsynced changes…')
-        try {
-          // Drain pending uploads first so unsynced edits aren't lost. If they
-          // can't flush (offline / sync stuck / local-only), let the user decide
-          // rather than silently dropping their work.
-          // The genuine PowerSyncDatabase singleton (not the metrics-wrapped
-          // `repo.db`) — it exposes the upload-queue stats + connection status.
-          const { flushed, remaining } = await flushUploadQueue(getPowerSyncDb(repo.user.id))
-          if (!flushed) {
-            const proceed = window.confirm(
-              `${remaining} change(s) haven't been saved to the server yet.\n\n` +
-              'Proceed and PERMANENTLY LOSE those changes?\n' +
-              'Cancel to keep your data — you can retry once they have synced.',
-            )
-            if (!proceed) {
-              banner.done('Lock & wipe cancelled — your data is unchanged')
-              return
-            }
-          }
-
-          banner.update('Wiping local data — reloading…')
-          await lockAndWipe({ userId: repo.user.id, keyStore: getWorkspaceKeyStore() })
-          // Reload every other same-user tab too (multi-tab): otherwise they
-          // keep the wiped plaintext in memory and hold the OPFS DB handle open,
-          // blocking the boot-time file delete. Then reload self — the armed
-          // marker makes the next boot delete the DB file before PowerSync
-          // reopens it.
-          broadcastWipeReload(repo.user.id)
-          window.location.reload()
-        } catch (err) {
-          console.error('[lock-and-wipe] failed:', err)
-          banner.fail(`Lock & wipe failed: ${err instanceof Error ? err.message : String(err)}`)
-        }
+      handler: () => {
+        // Panic wipe. We can't reliably destroy origin storage from JS, and
+        // can't emit a Clear-Site-Data header on GitHub Pages (a service worker
+        // can't synthesize one — see docs/clear-site-data-spike/). So the dialog
+        // reads this device's unsynced-change count to WARN if a wipe would lose
+        // work, then guides the user to the browser/OS "clear site data" control,
+        // which does the actual wipe + sign-out from outside the page context.
+        // (Background sync handles uploads, so there's nothing to drain here.)
+        void openDialog(WipeLocalDataDialog, { userId: repo.user.id })
       },
     },
     {
@@ -592,22 +565,58 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   ]
 
+  // Shift+Arrow selection in edit mode is a two-stage gesture: while the
+  // caret is inside the block, CodeMirror's native shift-selection must run;
+  // only once it reaches the block edge do we leave edit mode and escalate to
+  // block selection. Vertical motion here relies on the browser's native
+  // default action (see move_up_from_cm_start), so an unconditional
+  // preventDefault would swallow intra-block shift-selection. Bind with
+  // preventDefault: false and take over by hand only on the escalation path —
+  // mirroring move_up_from_cm_start. (The base extendSelection*Block actions
+  // keep preventDefault: true for NORMAL_MODE, where there's no editor caret to
+  // extend; bindBlockActionContext would inherit that here, hence the explicit
+  // override.)
+  //
+  // At the block edge the caret is already at head 0 / doc end, so the native
+  // Shift+Arrow is a no-op (nothing to select past the edge, and each block is
+  // its own editor) — which means preventDefault timing doesn't matter here. We
+  // can therefore resolve the escalation first and take over (suppress the key
+  // + leave edit mode) ONLY when there's actually a neighbour to select. At the
+  // first/last visible block there's no target, so we stay in edit mode rather
+  // than dropping the user into a dead state (out of edit mode, nothing
+  // selected, keystroke eaten). The `clearEditing` flag folds the
+  // isEditing→false write into the selection's transaction, so there's no
+  // intermediate render where the block is both editing and selected.
   const extendSelectionUpEdit = {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionUpBlock, {idPrefix: 'edit.cm'}),
-    handler: async (deps: CodeMirrorEditModeDependencies) => {
-      if (cursorIsAtStart(deps.editorView)) {
-        setIsEditing(deps.uiStateBlock, false)
-        await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
-      }
+    handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+      if (!cursorIsAtStart(deps.editorView)) return
+      const extended = await extendSelectionUp(
+        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true,
+      )
+      if (extended) trigger.preventDefault()
+    },
+    defaultBinding: {
+      keys: 'Shift+ArrowUp',
+      eventOptions: {
+        preventDefault: false,
+      },
     },
   }
   const extendSelectionDownEdit = {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionDownBlock, {idPrefix: 'edit.cm'}),
-    handler: async (deps: CodeMirrorEditModeDependencies) => {
-      if (cursorIsAtEnd(deps.editorView)) {
-        setIsEditing(deps.uiStateBlock, false)
-        await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen)
-      }
+    handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+      if (!cursorIsAtEnd(deps.editorView)) return
+      const extended = await extendSelectionDown(
+        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true,
+      )
+      if (extended) trigger.preventDefault()
+    },
+    defaultBinding: {
+      keys: 'Shift+ArrowDown',
+      eventOptions: {
+        preventDefault: false,
+      },
     },
   }
   // CodeMirror-specific edit mode actions
@@ -619,6 +628,38 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
       defaultBinding: {
         keys: 'Escape',
+      },
+    },
+    // Roam-style keyboard fold while editing — the non-vim analogue of vim's
+    // `z` (vim makes `z` work because it has a focused-block normal mode; the
+    // default config has no such mode, so fold lives here in edit mode). Cmd/
+    // Ctrl+Up collapses, Cmd/Ctrl+Down expands. preventDefault overrides
+    // CodeMirror's doc-start/doc-end caret jump — acceptable since blocks are
+    // short and the chevron / swipe menu remain for the mouse path.
+    {
+      id: 'collapse_block_cm',
+      description: 'Collapse block',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async ({block}: CodeMirrorEditModeDependencies) => {
+        if (!block) return
+        await withMoveTransition(async () => { await block.set(isCollapsedProp, true) })
+      },
+      defaultBinding: {
+        keys: '$mod+ArrowUp',
+        eventOptions: {preventDefault: true},
+      },
+    },
+    {
+      id: 'expand_block_cm',
+      description: 'Expand block',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async ({block}: CodeMirrorEditModeDependencies) => {
+        if (!block) return
+        await withMoveTransition(async () => { await block.set(isCollapsedProp, false) })
+      },
+      defaultBinding: {
+        keys: '$mod+ArrowDown',
+        eventOptions: {preventDefault: true},
       },
     },
     {
@@ -1122,5 +1163,10 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     // lifecycle (browser, post-mount) rather than as a build-time side
     // effect, so resolving the extension tree stays side-effect-free.
     appEffectsFacet.of(metricsConsoleHookEffect, {source: 'default-actions'}),
+    // `lock_and_wipe_local_data` opens a dialog via openDialog, which needs
+    // DialogHost mounted; pull it in here. The mount's `core.dialogs` id dedupes
+    // (dedupById), so DialogHost is registered once no matter how many
+    // dialog-using plugins contribute it.
+    dialogAppMountExtension,
   ])
 }

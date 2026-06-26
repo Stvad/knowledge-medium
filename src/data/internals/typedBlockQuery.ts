@@ -13,7 +13,7 @@ export interface CompiledTypedBlockQuery {
   readonly params: readonly unknown[]
 }
 
-export type TypedBlockQueryProjection = 'rows' | 'ids'
+export type TypedBlockQueryProjection = 'rows' | 'ids' | 'count'
 
 export const jsonPathForProperty = (name: string): string =>
   `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
@@ -575,12 +575,22 @@ export const compileTypedBlockQuery = (
     ? `WITH RECURSIVE ${candidatesCte.sql}, ${ANCESTOR_CHAIN_CTE_SQL}`
     : `WITH ${candidatesCte.sql}`
 
-  const orderClause = normalized.order === 'created-desc'
-    ? 'ORDER BY b.created_at DESC, b.id'
-    : 'ORDER BY b.created_at ASC, b.id ASC'
-  const selectClause = opts.projection === 'ids'
-    ? 'b.id AS id'
-    : buildQualifiedBlockColumnsSql('b')
+  // `count` aggregates the same candidate set as `ids` (candidates is
+  // `SELECT DISTINCT b.id`, joined 1:1 to blocks), so `COUNT(*)` is the
+  // distinct-source membership count — identical filtering to the id
+  // projection, just not materialised. ORDER BY is meaningless on the
+  // aggregate, so it's dropped.
+  const isCount = opts.projection === 'count'
+  const selectClause = isCount
+    ? 'COUNT(*) AS count'
+    : opts.projection === 'ids'
+      ? 'b.id AS id'
+      : buildQualifiedBlockColumnsSql('b')
+  const orderClause = isCount
+    ? ''
+    : normalized.order === 'created-desc'
+      ? 'ORDER BY b.created_at DESC, b.id'
+      : 'ORDER BY b.created_at ASC, b.id ASC'
 
   const sql = `
     ${ctes}

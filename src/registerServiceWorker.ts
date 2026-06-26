@@ -17,7 +17,7 @@ import { appUpdate } from '@/appUpdate.js'
  *    just reloads the tab on their own — is served by the new build in a
  *    single reload, instead of the new SW sitting "waiting" until every tab
  *    closes (which is why a plain reload used to keep serving the old build).
- *  - We then flag `appUpdate.markAvailable()` so the toast + sync-status
+ *  - We then flag `appUpdate.markAvailable()` so the toast + status
  *    chip can offer a deliberate "Reload" without surprising the user.
  *  - Long-lived PWA tabs may never navigate, so the browser's implicit
  *    update check never fires. We poll `registration.update()` on an

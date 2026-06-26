@@ -1,7 +1,12 @@
 import {
-  compileExtensionModule,
+  compileForVerification,
+  hashExtensionSource,
+  loadApprovedExtension,
+  readApproval,
   type CompileCache,
+  type ExtensionModule,
 } from '@/extensions/compileExtensionModule.js'
+import type {CompiledModuleCache} from '@/extensions/compiledModuleCache.js'
 import {
   AppExtension,
   FacetContribution,
@@ -24,6 +29,23 @@ export interface ExtensionLoadErrorReporter {
   (blockId: string, error: Error): void
 }
 
+/** Device-local trust status for a block the user has enabled (intent =
+ *  true) whose code is NOT currently running as-authored. Surfaced to the
+ *  settings UI so the user can act:
+ *    - `needs-approval`: enabled (here or on another device) but never
+ *      approved on THIS device → "Enable here" reviews + approves the live
+ *      source. Nothing runs until then.
+ *    - `update-available`: approved, but the live source has drifted from
+ *      the approved pin → the pinned version keeps running; "Update"
+ *      re-approves the live source. */
+export type ExtensionApprovalStatus =
+  | {kind: 'needs-approval'; liveHash: string}
+  | {kind: 'update-available'; liveHash: string; approvedHash: string}
+
+export interface ExtensionApprovalStatusReporter {
+  (blockId: string, status: ExtensionApprovalStatus): void
+}
+
 export interface DynamicExtensionsOptions {
   repo: Repo
   workspaceId: string
@@ -37,9 +59,21 @@ export interface DynamicExtensionsOptions {
    *  `userExtensionToggle` forces `defaultEnabled: true`). */
   overrides?: Overrides
   errorReporter?: ExtensionLoadErrorReporter
-  // Optional override for tests. Production uses the module-wide
-  // singleton in compileExtensionModule.ts.
+  /** Reports the device-local trust status of enabled blocks that aren't
+   *  running as-authored (needs-approval / update-available) so the
+   *  settings UI can offer the right action. */
+  approvalStatusReporter?: ExtensionApprovalStatusReporter
+  // Optional in-memory cache override for tests. Production uses the
+  // module-wide singleton in compileExtensionModule.ts.
   cache?: CompileCache
+  /** Device-local approval store (the trust gate). Defaults to the process
+   *  singleton; tests inject an in-memory instance they pre-seed. */
+  persistent?: CompiledModuleCache
+  /** Verification mode (agent install `--verify`): compile the LIVE source
+   *  directly and SKIP the device-local approval gate, so a brand-new
+   *  block can be resolved in isolation before any approval exists. Never
+   *  set on the user-facing load path. */
+  verifyLiveSource?: boolean
 }
 
 /**
@@ -65,13 +99,24 @@ export interface DynamicExtensionsOptions {
  * agent-bridge `describeRuntime` payload show contribution origin
  * unambiguously.
  *
- * Toggle integration: each enabled extension is wrapped in a
- * `userExtensionToggle(block)` boundary so the runtime resolver
- * can disable it without re-loading. Disabled blocks are NOT compiled
- * (their top-level module code never runs) — instead the loader emits
- * a `userExtensionShellToggle(block).of([])` so the row still appears
- * in the settings tree. Compile / validate failures also emit a shell
- * so a broken extension stays user-recoverable.
+ * Two-gate enable model (issue #67):
+ *   - Gate 1 — intent: the synced `overrides` map. A block the user hasn't
+ *     enabled (or any block in safe mode) is skipped without compiling, so
+ *     its top-level module code never runs.
+ *   - Gate 2 — device-local trust: even when intent is true, a block runs
+ *     only if THIS device holds an approval record, and it runs the
+ *     approval's PINNED output — never the live `block.content`. So a
+ *     source change synced from elsewhere can't silently execute new code:
+ *       · no approval here → emit a shell + report `needs-approval`
+ *         ("Enable here" reviews + approves the live source).
+ *       · live source drifted from the pin → keep running the pinned
+ *         version + report `update-available` ("Update" re-approves).
+ *
+ * Toggle integration: each running extension is wrapped in a
+ * `userExtensionToggle(block)` boundary so the runtime resolver can
+ * disable it without re-loading. Skipped / not-approved / broken blocks
+ * emit `userExtensionShellToggle(block).of([])` so the row still appears
+ * in the settings tree and stays user-recoverable.
  *
  * Failure isolation: a block whose source fails to compile or whose
  * default export is shaped wrong is reported via `errorReporter` and
@@ -80,8 +125,51 @@ export interface DynamicExtensionsOptions {
 export const dynamicExtensionsExtension = (
   options: DynamicExtensionsOptions,
 ): AppExtension => async () => {
-  const {repo, workspaceId, safeMode, overrides, errorReporter, cache} = options
+  const {
+    repo,
+    workspaceId,
+    safeMode,
+    overrides,
+    errorReporter,
+    approvalStatusReporter,
+    cache,
+    persistent,
+    verifyLiveSource,
+  } = options
   const effectiveOverrides: Overrides = overrides ?? new Map()
+
+  // Gate 2 — device-local trust. Returns the runnable module, or null when
+  // the block is enabled-by-intent but not currently runnable on this
+  // device (no approval). Reports the status so the settings UI can offer
+  // "Enable here" / "Update". In verify mode the approval gate is bypassed
+  // and the LIVE source is compiled directly (isolated verification only).
+  const resolveBlockModule = async (
+    block: BlockData,
+  ): Promise<ExtensionModule | null> => {
+    if (verifyLiveSource) {
+      return (await compileForVerification(block.content, block.id, cache)).module
+    }
+    const approval = await readApproval(block.id, persistent)
+    if (!approval) {
+      approvalStatusReporter?.(block.id, {
+        kind: 'needs-approval',
+        liveHash: await hashExtensionSource(block.content),
+      })
+      return null
+    }
+    const liveHash = await hashExtensionSource(block.content)
+    if (liveHash !== approval.sourceHash) {
+      approvalStatusReporter?.(block.id, {
+        kind: 'update-available',
+        liveHash,
+        approvedHash: approval.sourceHash,
+      })
+    }
+    // Run the PINNED approved output — never the (possibly drifted) live
+    // content. This is the #67 guarantee: a synced source change can't
+    // execute here until it's explicitly re-approved on this device.
+    return (await loadApprovedExtension(block.id, approval, cache, persistent)).module
+  }
 
   let extensionBlocks: BlockData[]
   try {
@@ -109,26 +197,30 @@ export const dynamicExtensionsExtension = (
     // disabling. Emitting shells makes the rows appear without running
     // any extension's top-level module code.
     const shell = userExtensionShellToggle(block)
+    // Gate 1 — intent: skip blocks the user hasn't asked to enable (and
+    // every block in safe mode). Their top-level module code never runs.
     if (safeMode || !isEnabled(shell, effectiveOverrides)) {
       collected.push(shell.of([]))
       continue
     }
 
-    // Compile + validate are per-block-fallible; any failure should
-    // still emit a shell so the row appears in settings and the user
-    // can disable the broken extension. Errors continue to flow through
-    // ExtensionLoadErrorStore for status-icon rendering at the row.
+    // Gate 2 + compile + validate are per-block-fallible; any failure (and
+    // the not-approved-here case) should still emit a shell so the row
+    // appears in settings and the user can act. Errors continue to flow
+    // through ExtensionLoadErrorStore for status-icon rendering at the row.
     try {
-      const {module} = await compileExtensionModule(block.content, block.id, cache)
+      const module = await resolveBlockModule(block)
+      if (module === null) {
+        // Enabled by intent but not approved-and-runnable here — the status
+        // reporter has the detail (needs-approval). Emit a shell so the row
+        // still appears with its "Enable here" affordance.
+        collected.push(shell.of([]))
+        continue
+      }
       const exported = module.default as AppExtension
       const handle = userExtensionToggle(block)
-      const wrapped = handle.of(exported)
-      const validated = validateAndPrefix(wrapped, block.id)
-      if (validated !== null) {
-        collected.push(validated)
-      } else {
-        collected.push(shell.of([]))
-      }
+      const validated = validateAndPrefix(handle.of(exported), block.id)
+      collected.push(validated ?? shell.of([]))
     } catch (error) {
       const wrapped = error instanceof Error ? error : new Error(String(error))
       errorReporter?.(block.id, wrapped)

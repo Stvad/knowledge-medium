@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   codecs,
   CodecError,
+  decodeRefListIds,
+  isEnumCodec,
   isRefCodec,
   isRefListCodec,
+  type RefListCodec,
 } from './codecs'
+import { assertRefListDeriveIsAddOnly } from '@/data/test/derivedDataContract'
 
 describe('codec type metadata', () => {
   it('tags primitive and composed codecs with stable type ids', () => {
@@ -26,6 +30,49 @@ describe('codec type metadata', () => {
     expect(isRefListCodec(codecs.refList())).toBe(true)
     expect(isRefCodec(codecs.string)).toBe(false)
     expect(isRefListCodec(codecs.list(codecs.string))).toBe(false)
+  })
+})
+
+describe('enum codec', () => {
+  it('normalizes bare strings and {value,label} options', () => {
+    const bare = codecs.enum(['compact', 'cozy'])
+    expect(bare.options).toEqual([
+      {value: 'compact', label: 'compact'},
+      {value: 'cozy', label: 'cozy'},
+    ])
+    const labelled = codecs.enum([{value: 'a', label: 'Apple'}, 'b'])
+    expect(labelled.options).toEqual([
+      {value: 'a', label: 'Apple'},
+      {value: 'b', label: 'b'},
+    ])
+    expect(isEnumCodec(bare)).toBe(true)
+    expect(isEnumCodec(codecs.string)).toBe(false)
+  })
+
+  it('rejects out-of-set values on write (encode/where) but not on read', () => {
+    const codec = codecs.enum(['open', 'done'])
+    expect(codec.encode('done')).toBe('done')
+    expect(codec.where!.encode('open')).toBe('open')
+    // Cast past the compile-time literal-union guard to exercise the
+    // runtime check (the out-of-set value a hand-edit / untyped caller
+    // could pass).
+    const widened = codec as unknown as {
+      encode(v: string): string
+      where: {encode(v: string): string}
+    }
+    expect(() => widened.encode('nope')).toThrow(CodecError)
+    expect(() => widened.where.encode('nope')).toThrow(CodecError)
+  })
+
+  it('decodes leniently so a value stored before an option changed stays usable', () => {
+    const codec = codecs.enum(['open', 'done'])
+    expect(codec.decode('done')).toBe('done')
+    // A string that's no longer a valid option still decodes (the select
+    // surfaces it as unknown) rather than throwing → decode-failure.
+    expect(codec.decode('archived')).toBe('archived')
+    // A non-string is a genuine shape error.
+    expect(() => codec.decode(123)).toThrow(CodecError)
+    expect(() => codec.decode(null)).toThrow(CodecError)
   })
 })
 
@@ -189,6 +236,57 @@ describe('codecs.refList', () => {
   it('rejects non-arrays and non-string members', () => {
     expect(() => codecs.refList().decode('target-1')).toThrow(CodecError)
     expect(() => codecs.refList().decode(['target-1', 42])).toThrow(CodecError)
+  })
+
+  it('decodeValid keeps well-formed ids and drops only the malformed elements (#189)', () => {
+    const inner = codecs.refList()
+    // The historical whole-field strip: one bad element must NOT discard the
+    // valid backlinks alongside it.
+    expect(inner.decodeValid!(['valid-1', 'valid-2', 42])).toEqual(['valid-1', 'valid-2'])
+    expect(inner.decodeValid!(['a', null, 'b', {}, 'c'])).toEqual(['a', 'b', 'c'])
+    expect(inner.decodeValid!([])).toEqual([])
+    expect(inner.decodeValid!(['a', 'b'])).toEqual(['a', 'b'])
+  })
+
+  it('decodeValid returns [] for non-array input (nothing recoverable)', () => {
+    expect(codecs.refList().decodeValid!('target-1')).toEqual([])
+    expect(codecs.refList().decodeValid!(42)).toEqual([])
+    expect(codecs.refList().decodeValid!(null)).toEqual([])
+  })
+})
+
+describe('decodeRefListIds', () => {
+  it('uses the codec decodeValid when present (lenient element-wise, #189)', () => {
+    expect(decodeRefListIds(codecs.refList(), ['valid-1', 42, 'valid-2'])).toEqual(['valid-1', 'valid-2'])
+    expect(decodeRefListIds(codecs.refList(), 'not-an-array')).toEqual([])
+  })
+
+  it('satisfies the element-wise refList decode contract (#189)', () => {
+    const codec = codecs.refList()
+    assertRefListDeriveIsAddOnly(value => decodeRefListIds(codec, value))
+  })
+
+  it('falls back to a method-free string filter for a codec lacking decodeValid', () => {
+    // Models a RefListCodec authored against the pre-decodeValid public
+    // interface (RefListCodec is exported, so external/older plugins may
+    // implement only the original shape). It must not throw
+    // `decodeValid is not a function` and abort the block's whole projection
+    // — it recovers the well-formed ids the same way.
+    const legacy: RefListCodec = {
+      type: 'refList',
+      targetTypes: [],
+      encode: v => v.map(item => item),
+      decode: j => {
+        if (!Array.isArray(j)) throw new CodecError('array', j)
+        return j.map(item => {
+          if (typeof item !== 'string') throw new CodecError('string', item)
+          return item
+        })
+      },
+    }
+    expect(legacy.decodeValid).toBeUndefined()
+    expect(decodeRefListIds(legacy, ['valid-1', 42, 'valid-2'])).toEqual(['valid-1', 'valid-2'])
+    expect(decodeRefListIds(legacy, 'not-an-array')).toEqual([])
   })
 })
 

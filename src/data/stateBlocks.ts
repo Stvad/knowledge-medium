@@ -177,8 +177,15 @@ const ensureStateChild = async (
   return child
 }
 
-const ensureUiChild = (repo: Repo, parent: Block, namespace: string): Promise<Block> =>
-  ensureStateChild(repo, parent, namespace, ChangeScope.UiState)
+const ensureUiChild = (
+  repo: Repo,
+  parent: Block,
+  namespace: string,
+  /** Optional display title; defaults to `namespace` (the internal key). Lets a
+   *  caller key a child by an opaque id but title it legibly. */
+  content?: string,
+): Promise<Block> =>
+  ensureStateChild(repo, parent, namespace, ChangeScope.UiState, {}, content)
 
 const ensureUserPrefsChild = (repo: Repo, parent: Block): Promise<Block> =>
   ensureStateChild(
@@ -399,8 +406,12 @@ export const getPluginUIStateBlock = memoize(
  *  Inherits the parent's `ChangeScope.UiState` (undo-segregated from
  *  document edits). Mirrors `getLayoutSessionBlock`. */
 export const getPluginUIStateChild = memoize(
-  async (pluginUIStateBlock: Block, key: string): Promise<Block> =>
-    ensureUiChild(pluginUIStateBlock.repo, pluginUIStateBlock, key),
+  async (pluginUIStateBlock: Block, key: string, content?: string): Promise<Block> =>
+    ensureUiChild(pluginUIStateBlock.repo, pluginUIStateBlock, key, content),
+  // Memo key ignores `content`: the child is identified by `key`, and `content`
+  // is a display title set only on first creation (ensureStateChild never
+  // rewrites a live row's content), so a later call with a different title still
+  // returns the existing block.
   (pluginUIStateBlock, key) =>
     instanceKey(pluginUIStateBlock.repo, pluginUIStateBlock.id, key),
 )

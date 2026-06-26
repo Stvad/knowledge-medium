@@ -50,7 +50,7 @@ export const createEncryptedWorkspace = async <T extends object>(
   name: string,
   deps: CreateEncryptedWorkspaceDeps<T>,
 ): Promise<T & { workspaceKey: string }> => {
-  // Preflight: e2ee needs durable pin storage (the pin is the wipe-surviving
+  // Preflight: e2ee needs durable pin storage (the pin is the durable mode
   // authority and the §6 gate keys off it). If localStorage can't persist,
   // refuse BEFORE creating the server row — otherwise we'd mint a server-side
   // encrypted workspace this device could never open (the pin would be lost and

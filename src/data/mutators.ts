@@ -27,7 +27,18 @@ import {
   type Tx,
 } from '@/data/api'
 import { BlockNotFoundError } from '@/data/api'
-import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from './orderKey'
+import {
+  keyAtEnd,
+  keyAtStart,
+  keyBetween,
+  keysBetween,
+} from './orderKey'
+import {
+  keyImmediatelyAfter,
+  keyImmediatelyBefore,
+  keysImmediatelyAfter,
+  keysImmediatelyBefore,
+} from './orderKeyPlacement'
 import { isCollapsedProp } from '@/data/properties'
 import {
   mergeBlocksInTx,
@@ -44,15 +55,24 @@ const requireBlock = async (tx: Tx, id: string) => {
   return data
 }
 
-const orderKeyAfterSibling = async (tx: Tx, sibling: BlockData): Promise<string> => {
-  const next = await tx.adjacentSibling(sibling, 'after')
-  return keyBetween(sibling.orderKey, next?.orderKey ?? null)
-}
+// `createSiblingAbove` / `createSiblingBelow` funnel through `orderKeyForInsert`
+// (rather than computing against `tx.adjacentSibling`) so the tie-safe
+// placement lives in exactly one place. The adjacent-sibling query resolves a
+// tied neighbour by the `(order_key, id)` tiebreak — i.e. it returns a row with
+// the SAME order_key — which would feed `keyBetween(equal, equal)` and throw
+// (A1). `orderKeyForInsert` instead places the new sibling exactly adjacent,
+// breaking the tie by re-keying the run when one blocks the slot.
+const orderKeyAfterSibling = (tx: Tx, sibling: BlockData): Promise<string> =>
+  orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
+    kind: 'after',
+    siblingId: sibling.id,
+  })
 
-const orderKeyBeforeSibling = async (tx: Tx, sibling: BlockData): Promise<string> => {
-  const previous = await tx.adjacentSibling(sibling, 'before')
-  return keyBetween(previous?.orderKey ?? null, sibling.orderKey)
-}
+const orderKeyBeforeSibling = (tx: Tx, sibling: BlockData): Promise<string> =>
+  orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
+    kind: 'before',
+    siblingId: sibling.id,
+  })
 
 /** Placement of a block within a parent's child list — an explicit
  *  position used by the insert/move mutators. */
@@ -62,20 +82,28 @@ type InsertPosition =
   | { kind: 'after'; siblingId: string }
   | { kind: 'before'; siblingId: string }
 
-/** Compute the order_key for inserting under `parentId` at a given
+/** Compute the order_key for placing a block under `parentId` at a given
  *  `position`. Reads sibling list from SQL (tx.childrenOf is sorted by
  *  (order_key, id) per §11.4). `parentId === null` enumerates
  *  workspace-root siblings; the caller passes `workspaceId` explicitly
  *  so the lookup is scoped correctly even before the tx has pinned a
  *  workspace via a write (kernel mutators read the sibling/parent row
- *  first and have the workspace in hand at that point). */
+ *  first and have the workspace in hand at that point).
+ *
+ *  `{before,after}` place the block EXACTLY adjacent to the anchor (between it
+ *  and its neighbour on that side), breaking a tie by re-keying the run when one
+ *  blocks the slot — so this MAY write to sibling rows (see `orderKeyPlacement`).
+ *  Pass `excludeId` when relocating an EXISTING block (so it isn't treated as a
+ *  sibling of itself / re-keyed by the move). */
 const orderKeyForInsert = async (
   tx: Tx,
   parentId: string | null,
   workspaceId: string,
   position: InsertPosition,
+  excludeId?: string,
 ): Promise<string> => {
-  const siblings = await tx.childrenOf(parentId, workspaceId)
+  const all = await tx.childrenOf(parentId, workspaceId)
+  const siblings = excludeId === undefined ? all : all.filter(s => s.id !== excludeId)
 
   if (position.kind === 'first') {
     return keyAtStart(siblings[0]?.orderKey ?? null)
@@ -83,20 +111,16 @@ const orderKeyForInsert = async (
   if (position.kind === 'last') {
     return keyAtEnd(siblings.at(-1)?.orderKey ?? null)
   }
-  // after / before — locate sibling and its neighbor
+  // after / before — locate the anchor sibling and place exactly adjacent.
   const ix = siblings.findIndex(s => s.id === position.siblingId)
   if (ix < 0) {
     throw new Error(
       `position.${position.kind === 'after' ? 'after' : 'before'} sibling ${position.siblingId} not found under ${parentId ?? 'root'}`,
     )
   }
-  if (position.kind === 'after') {
-    const next = siblings[ix + 1]
-    return keyBetween(siblings[ix].orderKey, next?.orderKey ?? null)
-  }
-  // before
-  const prev = siblings[ix - 1]
-  return keyBetween(prev?.orderKey ?? null, siblings[ix].orderKey)
+  return position.kind === 'after'
+    ? keyImmediatelyAfter(tx, parentId, siblings, ix)
+    : keyImmediatelyBefore(tx, parentId, siblings, ix)
 }
 
 const positionSchema = z.discriminatedUnion('kind', [
@@ -108,15 +132,17 @@ const positionSchema = z.discriminatedUnion('kind', [
 
 /** Re-home `block` under `parentId` at `position`, computing the order
  *  key. The shared core of `core.move` (explicit placement) and
- *  `moveVertical` (which computes a target then places the block) — both
- *  funnel their final write through here. */
+ *  `moveVertical`'s cross-parent edge case — both funnel their final write
+ *  through here. `block.id` is excluded from the sibling list so a same-parent
+ *  move places the block relative to the OTHER siblings (and the tie-break
+ *  re-key never moves the block out from under itself). */
 const relocateBlock = async (
   tx: Tx,
   block: BlockData,
   parentId: string | null,
   position: InsertPosition,
 ): Promise<void> => {
-  const orderKey = await orderKeyForInsert(tx, parentId, block.workspaceId, position)
+  const orderKey = await orderKeyForInsert(tx, parentId, block.workspaceId, position, block.id)
   await tx.move(block.id, {parentId, orderKey})
 }
 
@@ -385,15 +411,19 @@ export const insertChildren = defineMutator<InsertChildrenArgs, string[]>({
     const siblings = await tx.childrenOf(args.parentId)
     const position = args.position ?? {kind: 'last'}
 
-    const [lower, upper] = ((): [string | null, string | null] => {
-      if (position.kind === 'first') return [null, siblings[0]?.orderKey ?? null]
-      if (position.kind === 'last')  return [siblings.at(-1)?.orderKey ?? null, null]
+    const n = args.items.length
+    const keys = await (async (): Promise<string[]> => {
+      if (position.kind === 'first') return keysBetween(null, siblings[0]?.orderKey ?? null, n)
+      if (position.kind === 'last')  return keysBetween(siblings.at(-1)?.orderKey ?? null, null, n)
       const ix = siblings.findIndex(s => s.id === position.siblingId)
       if (ix < 0) throw new Error(`sibling ${position.siblingId} not found under ${args.parentId}`)
-      if (position.kind === 'after')  return [siblings[ix].orderKey, siblings[ix + 1]?.orderKey ?? null]
-      return [siblings[ix - 1]?.orderKey ?? null, siblings[ix].orderKey]
+      // Place the whole run exactly adjacent to the anchor (between it and its
+      // neighbour on that side), breaking a tie by re-keying the run when one
+      // blocks the slot (A1).
+      return position.kind === 'after'
+        ? keysImmediatelyAfter(tx, args.parentId, siblings, ix, n)
+        : keysImmediatelyBefore(tx, args.parentId, siblings, ix, n)
     })()
-    const keys = keysBetween(lower, upper, args.items.length)
     const ids: string[] = []
     for (let i = 0; i < args.items.length; i++) {
       const item = args.items[i]
@@ -441,6 +471,20 @@ export const move = defineMutator<MoveArgs, void>({
     // workspace_id is immutable (server-side trigger enforces it), so
     // it's also the destination workspace.
     const self = await requireBlock(tx, args.id)
+    // A self-anchored move ("place X immediately before/after X") is a no-op
+    // ONLY when X already lives under the target parent — then it's genuinely
+    // already at its own position. We short-circuit here because `relocateBlock`
+    // excludes the moving block from the sibling list and would otherwise fail
+    // to find the anchor and throw. A self-anchored move to a DIFFERENT parent
+    // is incoherent (X isn't a sibling of itself there); let it fall through so
+    // the normal anchor-not-found lookup throws rather than silently dropping it.
+    if (
+      (args.position.kind === 'after' || args.position.kind === 'before') &&
+      args.position.siblingId === args.id &&
+      self.parentId === args.parentId
+    ) {
+      return
+    }
     await relocateBlock(tx, self, args.parentId, args.position)
   },
 })
@@ -527,8 +571,10 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
       // Stale read — fall back to last position under grandparent.
       orderKey = keyAtEnd(grandSiblings.at(-1)?.orderKey ?? null)
     } else {
-      const next = grandSiblings[parentIx + 1]
-      orderKey = keyBetween(parent.orderKey, next?.orderKey ?? null)
+      // Place the outdented block immediately after its parent (between the
+      // parent and the parent's next sibling), breaking a tie by re-keying the
+      // run when the parent shares an order_key with its next grand-sibling (A1).
+      orderKey = await keyImmediatelyAfter(tx, grandparent, grandSiblings, parentIx)
     }
     await tx.move(id, {parentId: grandparent, orderKey})
     return true
@@ -599,49 +645,41 @@ export const moveVertical = defineMutator<MoveVerticalArgs, boolean>({
     const idx = siblings.findIndex(s => s.id === id)
     if (idx === -1) return false
 
-    const target = await ((): Promise<{parentId: string | null; position: InsertPosition} | null> => {
-      const up = direction === -1
-      const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1
-      if (hasAdjacentSibling) {
-        const adjacent = siblings[up ? idx - 1 : idx + 1]
-        return Promise.resolve({
-          parentId: self.parentId,
-          position: up
-            ? {kind: 'before', siblingId: adjacent.id}
-            : {kind: 'after', siblingId: adjacent.id},
-        })
-      }
-      // Edge of the sibling list — move into the neighbouring sibling
-      // subtree at the same depth. If the parent has no neighbouring
-      // sibling (it's itself the first/last child), the only one-step
-      // slot would be a shallower level, which would change indentation,
-      // so it's a no-op.
-      return (async () => {
-        // Cross-parent moves are bounded by the visible surface, so they
-        // need a scope root. Without one (e.g. a bridge run-action with no
-        // UI context) keep the move same-parent only — the edge is a
-        // no-op, matching the previous reorder behaviour — rather than
-        // reparenting into an unbounded neighbour/page.
-        if (scopeRootId === undefined || self.parentId === scopeRootId) return null
-        const parent = await requireBlock(tx, self.parentId!)
-        const parentSiblings = await tx.childrenOf(parent.parentId, self.workspaceId)
-        const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
-        const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
-        if (!neighbourParent) return null
-        return {
-          parentId: neighbourParent.id,
-          position: up ? {kind: 'last' as const} : {kind: 'first' as const},
-        }
-      })()
-    })()
-
-    if (!target) return false
-    // Moving INTO a neighbouring subtree (target parent ≠ current parent)
-    // reveals it if collapsed, so the block stays visible.
-    if (target.parentId !== null && target.parentId !== self.parentId) {
-      await revealChildren(tx, target.parentId)
+    const up = direction === -1
+    const hasAdjacentSibling = up ? idx > 0 : idx < siblings.length - 1
+    if (hasAdjacentSibling) {
+      // One-step swap with the adjacent sibling: re-insert `self` IMMEDIATELY
+      // before (up) / after (down) that neighbour on the sibling list with
+      // `self` removed. Going through `keyImmediatelyBefore/After` lands `self`
+      // exactly adjacent even across a tie — where the slot has to be opened by
+      // re-keying — instead of widening past the whole tied run (which would
+      // overshoot the swap by a slot).
+      const adjacent = siblings[up ? idx - 1 : idx + 1]
+      const others = siblings.filter(s => s.id !== id)
+      const anchor = others.findIndex(s => s.id === adjacent.id)
+      const orderKey = up
+        ? await keyImmediatelyBefore(tx, self.parentId, others, anchor)
+        : await keyImmediatelyAfter(tx, self.parentId, others, anchor)
+      await tx.move(id, {parentId: self.parentId, orderKey})
+      return true
     }
-    await relocateBlock(tx, self, target.parentId, target.position)
+
+    // Edge of the sibling list — move into the neighbouring sibling subtree at
+    // the same depth. Cross-parent moves are bounded by the visible surface, so
+    // they need a scope root; without one (e.g. a bridge run-action with no UI
+    // context) the edge is a no-op, matching the previous reorder behaviour. If
+    // the parent has no neighbouring sibling, the only one-step slot would be a
+    // shallower level (changing indentation), so it's also a no-op.
+    if (scopeRootId === undefined || self.parentId === scopeRootId) return false
+    const parent = await requireBlock(tx, self.parentId)
+    const parentSiblings = await tx.childrenOf(parent.parentId, self.workspaceId)
+    const pIdx = parentSiblings.findIndex(s => s.id === parent.id)
+    const neighbourParent = up ? parentSiblings[pIdx - 1] : parentSiblings[pIdx + 1]
+    if (!neighbourParent) return false
+    // Moving INTO a neighbouring subtree reveals it if collapsed, so the block
+    // stays visible.
+    await revealChildren(tx, neighbourParent.id)
+    await relocateBlock(tx, self, neighbourParent.id, up ? {kind: 'last'} : {kind: 'first'})
     return true
   },
 })
@@ -681,8 +719,16 @@ export const split = defineMutator<SplitArgs, string>({
     // pinned, but the explicit pass is clearer and less brittle).
     const siblings = await tx.childrenOf(self.parentId, self.workspaceId)
     const ix = siblings.findIndex(s => s.id === id)
-    const prev = ix >= 0 ? siblings[ix - 1] : undefined
-    const orderKey = keyBetween(prev?.orderKey ?? null, self.orderKey)
+
+    // The prefix sibling must sort IMMEDIATELY before `self` at its current
+    // position. When `self` ties with its predecessor there's no key strictly
+    // between them, so `keyImmediatelyBefore` breaks the tie (re-keying `self`
+    // and its tied successors just past the run) to open the slot — keeping a
+    // mid-run split in place instead of overshooting its successors, and never
+    // throwing/rolling back the typed edit. (`ix < 0` only on a stale read.)
+    const orderKey = ix < 0
+      ? keyBetween(null, self.orderKey)
+      : await keyImmediatelyBefore(tx, self.parentId, siblings, ix)
     return tx.create({
       workspaceId: self.workspaceId,
       parentId: self.parentId,

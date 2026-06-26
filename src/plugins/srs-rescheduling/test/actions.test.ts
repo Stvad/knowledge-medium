@@ -52,6 +52,8 @@ beforeEach(async () => {
     dailyNotesDataExtension,
     srsReschedulingDataExtension,
   ]))
+  // Undo/redo are scoped to the active workspace (issue #186).
+  repo.setActiveWorkspaceId(WORKSPACE)
 })
 
 afterEach(async () => {

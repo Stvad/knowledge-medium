@@ -19,12 +19,12 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
 import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
-import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions'
+import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
-import { pasteMultilineText } from '@/utils/paste'
+import { pasteMultilineText } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 
 const repoRef = vi.hoisted(() => ({
@@ -69,7 +69,7 @@ vi.mock('@/data/globalState.ts', async () => {
   }
 })
 
-vi.mock('@/utils/paste.ts', () => ({
+vi.mock('@/paste/operations.ts', () => ({
   pasteMultilineText: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
 }))
@@ -213,7 +213,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     expect(pasteMultilineText).not.toHaveBeenCalled()
   })
 
-  it('still handles paste on the focused block shell', () => {
+  it('still handles paste on the focused block shell', async () => {
     renderBlock()
 
     const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
@@ -224,13 +224,15 @@ describe('DefaultBlockRenderer paste handling', () => {
       event = dispatchPaste(shell!, 'first\nsecond')
     })
 
+    // preventDefault is synchronous; the apply now runs after the async
+    // paste-verb decision, so wait for the call.
     expect(event?.defaultPrevented).toBe(true)
-    expect(pasteMultilineText).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(pasteMultilineText).toHaveBeenCalledTimes(1))
     expect(pasteMultilineText).toHaveBeenCalledWith(
       'first\nsecond',
       repo.block('block-1'),
       repo,
-      {scopeRootId: 'root'},
+      {scopeRootId: 'root', asSingleBlock: false},
     )
   })
 

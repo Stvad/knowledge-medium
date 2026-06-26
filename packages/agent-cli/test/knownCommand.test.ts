@@ -20,7 +20,7 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['describe-runtime', {type: 'describe-runtime', guides: ['external-sync-plugin'], brief: true}],
     ['sql', {type: 'sql', sql: 'SELECT 1', mode: 'all'}],
     ['get-block', {type: 'get-block', id: 'b-1'}],
-    ['get-subtree', {type: 'get-subtree', rootId: 'r-1', includeRoot: true}],
+    ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
     ['update-block', {type: 'update-block', id: 'b-1', content: 'hi'}],
     ['install-extension', {type: 'install-extension', source: '// source', label: 'foo'}],
@@ -29,6 +29,15 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['uninstall-extension', {type: 'uninstall-extension', label: 'foo'}],
     ['run-action', {type: 'run-action', id: 'action-id'}],
     ['eval', {type: 'eval', code: 'return 1'}],
+    ['backlinks', {type: 'backlinks', id: 'b-1'}],
+    ['backlinks (mode filter)', {type: 'backlinks', id: 'b-1', filter: 'effective'}],
+    ['backlinks (object filter)', {type: 'backlinks', id: 'b-1', filter: {include: []}}],
+    ['grouped-backlinks', {type: 'grouped-backlinks', id: 'b-1'}],
+    ['grouped-backlinks (grouping)', {type: 'grouped-backlinks', id: 'b-1', grouping: 'none'}],
+    ['data-model', {type: 'data-model'}],
+    ['page', {type: 'page', name: 'Project Alpha'}],
+    ['daily-note', {type: 'daily-note', date: 'yesterday'}],
+    ['search', {type: 'search', query: 'recipe', limit: 10}],
   ]
 
   for (const [type, body] of cases) {
@@ -95,6 +104,32 @@ describe('knownCommandSchema — rejection', () => {
 
   it('rejects get-subtree without rootId', () => {
     expect(knownCommandSchema.safeParse({type: 'get-subtree'}).success).toBe(false)
+  })
+
+  it('rejects backlinks / grouped-backlinks with a non-string id', () => {
+    expect(knownCommandSchema.safeParse({type: 'backlinks', id: 42}).success).toBe(false)
+    expect(knownCommandSchema.safeParse({type: 'grouped-backlinks', id: 42}).success).toBe(false)
+  })
+
+  it('rejects page without name, daily-note without date, search without query', () => {
+    expect(knownCommandSchema.safeParse({type: 'page'}).success).toBe(false)
+    expect(knownCommandSchema.safeParse({type: 'daily-note'}).success).toBe(false)
+    expect(knownCommandSchema.safeParse({type: 'search'}).success).toBe(false)
+  })
+
+  it('passes filter / grouping bodies through verbatim (kernel coerces them)', () => {
+    const result = knownCommandSchema.safeParse({
+      type: 'grouped-backlinks',
+      id: 'b-1',
+      filter: 'stored',
+      grouping: {excludedTags: ['x']},
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      const data = result.data as Record<string, unknown>
+      expect(data.filter).toBe('stored')
+      expect(data.grouping).toEqual({excludedTags: ['x']})
+    }
   })
 })
 

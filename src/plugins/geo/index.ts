@@ -8,7 +8,7 @@
  *  irrelevant. */
 
 import { propertyEditorOverridesFacet } from '@/data/facets'
-import { codeMirrorExtensionsFacet } from '@/extensions/editor'
+import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions'
 import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import type { AppExtension } from '@/facets/facet'
 import { systemToggle } from '@/facets/togglable'

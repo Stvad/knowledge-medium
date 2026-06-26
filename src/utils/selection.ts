@@ -421,19 +421,25 @@ export async function extendSelection(
   repo: Repo,
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
-): Promise<void> {
+  clearEditing = false,
+): Promise<boolean> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
 
-  if (!scopeRootId) return
+  if (!scopeRootId) return false
 
   const currentAnchor = currentState?.anchorBlockId || focusedId
-  if (!currentAnchor) return
+  if (!currentAnchor) return false
 
   const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo, scopeRootForcesOpen)
 
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
-  await commitSelectionRange({
+  // Returns false when the range resolved empty (commitSelectionRange writes
+  // nothing). `clearEditing` folds the isEditing→false write into the same
+  // transaction as the selection, so a caller leaving edit mode for block
+  // selection never produces a render where the block is both editing and
+  // selected.
+  return commitSelectionRange({
     uiStateBlock,
     anchorBlockId: currentAnchor,
     targetLocation: {
@@ -441,5 +447,6 @@ export async function extendSelection(
       renderScopeId: currentLocation?.renderScopeId ?? outlineRenderScopeId(scopeRootId),
     },
     selectedBlockIds: rangeIds,
+    clearEditing,
   })
 }

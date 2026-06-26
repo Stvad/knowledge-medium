@@ -34,8 +34,6 @@ import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powers
 import { createSyncResolver, type SyncResolver } from '@/sync/keys/resolver.js'
 import { getWorkspaceKeyStore } from '@/sync/keys/keyStore.js'
 import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.js'
-import { consumePendingWipe } from '@/sync/keys/flows/lockAndWipe.js'
-import { removeOpfsDbFile } from '@/utils/exportSqliteDb.js'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
@@ -59,6 +57,7 @@ import {
   ensureBlockUserUpdatedAtColumn,
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
+import { onFirstSync } from '@/data/internals/firstSync.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import {
   applyLocalSchemaContributions,
@@ -193,14 +192,6 @@ export const ensurePowerSyncReady = async (
   useRemoteSync: boolean = hasRemoteSyncConfig,
 ) => {
   await assertOpfsAvailable()
-
-  // §6 Lock & wipe — second half. If a wipe was armed in a prior session, delete
-  // this user's DB file NOW, before getPowerSyncDb/init opens it (wa-sqlite must
-  // not hold an OPFS sync-access handle on a file being removed). A fresh init
-  // then recreates an empty DB and re-syncs; e2ee workspaces re-enter their
-  // locked state (their WKs were dropped at lock time) since the mode pins
-  // survive the wipe. Runs before any DB handle exists for this user.
-  await consumePendingWipe(userId, removeOpfsDbFile, dbFilenameForUser)
 
   const db = getPowerSyncDb(userId)
 
@@ -368,13 +359,6 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // `hasSynced`. If the first sync already completed in a prior session,
   // (a) above already covered it, so don't bother registering.
   if (!powerSyncDb.currentStatus?.hasSynced) {
-    let disposeSyncListener = () => {}
-    disposeSyncListener = powerSyncDb.registerListener({
-      statusChanged: status => {
-        if (!status.hasSynced) return
-        disposeSyncListener()
-        scheduleAnalyzeCheck('first-sync')
-      },
-    })
+    onFirstSync(powerSyncDb, () => scheduleAnalyzeCheck('first-sync'))
   }
 }

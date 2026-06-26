@@ -4,7 +4,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
 import { appUpdatePromptExtension } from '@/extensions/appUpdateMount.js'
-import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.js'
+import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
 import {
   defaultActionContextsExtension,
   defaultActionsExtension,

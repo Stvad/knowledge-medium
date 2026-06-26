@@ -240,7 +240,9 @@
 
   a {
     @apply text-link underline;
-    overflow-wrap: normal;
+    /* A long URL is a single unbreakable token; let it wrap to fit
+       rather than overflow the block and get clipped. */
+    overflow-wrap: break-word;
     word-break: normal;
   }
 
@@ -361,8 +363,11 @@
     max-width: 100%;
     overflow-x: clip;
     overflow-y: visible;
-    overflow-wrap: normal;
-    word-wrap: normal;
+    /* Break a token only when it can't fit on its own line (long URLs,
+       identifiers) — normal prose still wraps at spaces and is never
+       split mid-word. Without this, an over-long word overflows into
+       `overflow-x: clip` and gets cut off instead of wrapping. */
+    overflow-wrap: break-word;
     word-break: normal;
   }
 

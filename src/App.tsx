@@ -13,12 +13,12 @@ import { getLocalMemberRole, getLocalWorkspace } from '@/data/workspaces.js'
 import { layoutWorkspaceChanged, parseLayout } from '@/utils/routing.js'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.js'
 import { hasSafeModeSearchParam } from '@/utils/safeMode.js'
-import { onWipeReload } from '@/sync/keys/flows/lockAndWipe.js'
 import { PanelLayoutProjection } from '@/utils/panelLayoutProjection.js'
 import { resolveWorkspaceEntry } from '@/sync/keys/resolveWorkspaceEntry.js'
 import { WorkspaceKeyGate } from '@/components/workspace/WorkspaceKeyGate.js'
 import { resolveWorkspace } from '@/bootstrap/resolveWorkspace.js'
 import { bootstrapWorkspace } from '@/bootstrap/workspaceBootstrap.js'
+import { markStartup } from '@/utils/startupTimeline.js'
 
 // `ready`: the workspace materialized and bootstrapped normally. `locked`: the
 // §6 gate intercepted before any bootstrap write — the workspace is e2ee
@@ -53,8 +53,9 @@ const getCurrentHash = (): string =>
 // sequence — resolve the workspace, clear the §6 access gate, then run the
 // bootstrap writes — because each depends on the last: the gate must decide
 // BEFORE any write (those writes would otherwise land plaintext into an
-// encrypted-but-locked workspace), and `bootstrapWorkspace` keeps
-// seedTutorial-before-parseReferences inside itself.
+// encrypted-but-locked workspace). First-run seeding now lives in the
+// onboarding plugin's landing resolver, invoked from within
+// `bootstrapWorkspace`'s landing step.
 const resolveInitialLayout = async (
   repo: Repo,
   requestedHash: string,
@@ -91,6 +92,7 @@ const resolveInitialLayout = async (
   const entry = await resolveWorkspaceEntry(repo.user.id, workspaceId, id =>
     getLocalWorkspace(repo, id),
   )
+  markStartup('workspaceResolved')
   if (entry.kind === 'waiting') {
     // The workspaces row hasn't replicated yet and the pin can't settle access
     // without it. Don't bootstrap (would write plaintext into a possibly-e2ee
@@ -119,6 +121,7 @@ const resolveInitialLayout = async (
     requestedHash,
     requestedWorkspaceId: route.workspaceId,
   })
+  markStartup('bootstrapDone')
 
   return {kind: 'ready', workspaceId, layoutSessionBlock}
 }
@@ -230,6 +233,22 @@ const App = () => {
     repo.setReadOnly(activeRole === 'viewer')
   }, [initial.kind, activeRole, repo])
 
+  // TTI: stamp the first paint of the actual workspace layout (not a gate /
+  // loading screen). A double rAF lands the mark after the browser has painted
+  // the committed content; markStartup is first-write-wins, so later re-renders
+  // (hash changes, role updates) don't move it.
+  useEffect(() => {
+    if (initial.kind !== 'ready') return
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => markStartup('firstContentPaint'))
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [initial.kind])
+
   // Always watch the URL hash so navigating to a different workspace (Back
   // button / manual hash edit) re-resolves the layout — even while a gate or
   // loading screen is shown. In those states there's no layout, so the
@@ -254,15 +273,6 @@ const App = () => {
       window.removeEventListener('popstate', onHashChange)
     }
   }, [])
-
-  // §6 Lock & wipe is all-or-nothing across tabs: when one same-user tab wipes,
-  // every other tab must reload too, or it keeps the wiped plaintext in memory
-  // and holds the OPFS DB handle open (blocking the boot-time file delete). The
-  // wiping tab broadcasts; this listener reloads the rest into the fresh,
-  // re-locked state.
-  useEffect(() => {
-    return onWipeReload(repo.user.id, () => window.location.reload())
-  }, [repo.user.id])
 
   // Re-resolve the initial layout (bumping the version busts the cache) — used
   // when a gate is resolved or a pending workspace row finally replicates.

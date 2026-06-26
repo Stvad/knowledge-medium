@@ -11,6 +11,14 @@
 // Thresholds — keep in sync with comments in the monitoring memory note.
 
 import pg from 'pg'
+import { createHash } from 'node:crypto'
+
+// The probe's JSON snapshot is printed to stdout, which lands in a PUBLIC GitHub
+// Actions log (and the FAIL email body). `actor` (a user UUID) and `workspace_id`
+// are PII — never emit them raw. A truncated salt-free hash of a random UUID is
+// non-reversible (huge keyspace) yet stable, so the operator can still tell
+// "one actor did all of this" by hashing a known id, without leaking it.
+const redactId = (v) => (v == null ? null : createHash('sha256').update(String(v)).digest('hex').slice(0, 12))
 
 const SNAPSHOT_WARN_MB = 50
 const SNAPSHOT_FAIL_MB = 200
@@ -36,6 +44,39 @@ const EXPECTED_RLS_TABLES = ['workspaces', 'workspace_members', 'workspace_invit
 const EXPECTED_PUB_TABLES = ['blocks', 'workspace_members', 'workspaces']
 const EXPECTED_LOGICAL_SLOTS_MIN = 1
 const EXPECTED_LOGICAL_SLOTS_MAX = 1
+
+// --- Data-integrity (L5) detectors over blocks_history ---------------------
+// Read-only anomaly detection on the server-side change log. See
+// docs/data-integrity-defense.html §3 L5 for the design and §4 for blind
+// spots. Posture is WARN-by-default: every detector surfaces in the JSON
+// snapshot and, via the tail block, as a GitHub `::warning::` annotation; only
+// the catastrophe tiers (≥ FAIL) push to result.failures and exit(1) — which
+// reds the job and is the page. DATA_INTEGRITY_STRICT=1 promotes every WARN to
+// a FAIL (a migration-window toggle; leave off in steady state — `deletions`
+// reaches ~130/window in normal editing and STRICT would page on it).
+//
+// These detectors read the *server*, so they are plaintext-only: in an e2ee
+// workspace `references_json`/`properties_json` are ciphertext (never `[]` /
+// never `{...}`) and in a history-trigger-off window there are no rows — both
+// are documented blind spots, not bugs.
+//
+// Thresholds (per actor+workspace over the window, except at_rest = fleet
+// total) baselined 2026-06-23 against 48h/30 cron runs on the live fleet
+// (observed per-window maxima: refs_emptied durable 0, prop_key_removal 3,
+// deletions 131, bulk_bump 12, at_rest constant 1). Calibrated so a
+// few-hundred-row mistake pages while observed-normal activity never does.
+// Keep in sync with the §3 L5 table.
+const INTEGRITY_WINDOW_MIN = 90
+const CURATED_REF_PROPS = ['next-review-date']
+const REFS_EMPTIED_WARN = 25
+const REFS_EMPTIED_FAIL = 300
+const PROP_KEY_REMOVAL_WARN = 50
+const PROP_KEY_REMOVAL_FAIL = 300
+const DELETIONS_WARN = 200
+const DELETIONS_FAIL = 1000
+const BULK_BUMP_WARN = 50
+const AT_REST_PROPREF_WARN = 25
+const DATA_INTEGRITY_STRICT = process.env.DATA_INTEGRITY_STRICT === '1'
 
 const uri = process.env.SUPABASE_POOLER_URI
 const supabaseUrl = process.env.SUPABASE_URL
@@ -116,7 +157,9 @@ async function runDbChecks(client) {
     count: slots.length,
     logical_count: logicalSlots.length,
     slots: slots.map((s) => ({
-      name: s.slot_name,
+      // Redacted: slot names embed the PowerSync instance id, which is not in
+      // the public repo. Keep type/active/lag (the actionable health fields).
+      name: redactId(s.slot_name),
       type: s.slot_type,
       plugin: s.plugin,
       active: s.active,
@@ -128,12 +171,12 @@ async function runDbChecks(client) {
     fail('replication_slots', `expected >=${EXPECTED_LOGICAL_SLOTS_MIN} logical slot, found ${logicalSlots.length}`)
   } else if (logicalSlots.length > EXPECTED_LOGICAL_SLOTS_MAX) {
     result.checks.replication_slots.status = 'fail'
-    fail('replication_slots', `expected <=${EXPECTED_LOGICAL_SLOTS_MAX} logical slot, found ${logicalSlots.length}: ${logicalSlots.map((s) => s.slot_name).join(', ')}`)
+    fail('replication_slots', `expected <=${EXPECTED_LOGICAL_SLOTS_MAX} logical slot, found ${logicalSlots.length}: ${logicalSlots.map((s) => redactId(s.slot_name)).join(', ')}`)
   }
   for (const s of logicalSlots) {
     if (!s.active) {
       result.checks.replication_slots.status = 'fail'
-      fail('replication_slots', `slot ${s.slot_name} is inactive`)
+      fail('replication_slots', `slot ${redactId(s.slot_name)} is inactive`)
     }
   }
 
@@ -259,9 +302,18 @@ async function runDbChecks(client) {
     hours_since: r.last_run ? (now - new Date(r.last_run).getTime()) / 3600000 : null,
   }))
   const stale = tableAges.find((t) => t.dead_tup > 1000 && (t.hours_since == null || t.hours_since > VACUUM_WARN_HOURS))
-  result.checks.autovacuum = { status: stale ? 'warn' : 'pass', tables: tableAges }
+  // Redact table names in the public log: this query enumerates ALL public
+  // tables (it's what surfaced an ad-hoc backup table's existence). App-table
+  // names are already public via the repo's migrations, so the win is hiding
+  // any non-standard/ad-hoc table; hashing uniformly avoids one table standing
+  // out. Tuple counts stay (needed to judge vacuum health). Map a hash back to
+  // a name by re-running pg_stat_user_tables with privileged access.
+  result.checks.autovacuum = {
+    status: stale ? 'warn' : 'pass',
+    tables: tableAges.map((t) => ({ ...t, table: redactId(t.table) })),
+  }
   if (stale) {
-    warn('autovacuum', `${stale.table} has ${stale.dead_tup} dead tuples and last vacuum was ${stale.hours_since == null ? 'never' : Math.round(stale.hours_since) + 'h ago'}`)
+    warn('autovacuum', `${redactId(stale.table)} has ${stale.dead_tup} dead tuples and last vacuum was ${stale.hours_since == null ? 'never' : Math.round(stale.hours_since) + 'h ago'}`)
   }
 
   // RLS schema-drift regression check
@@ -304,13 +356,215 @@ async function runDbChecks(client) {
   }
 }
 
+const SEV_RANK = { pass: 0, warn: 1, error: 1, fail: 2 }
+const maxStatus = (a, b) => (SEV_RANK[b] > SEV_RANK[a] ? b : a)
+
+// Decide a status for one (actor, workspace) group count and record it on the
+// shared result. STRICT promotes a WARN to a FAIL (and thus to the email
+// channel). Returns the per-group status for rollup.
+function integrityThreshold(check, label, count, { warnAt, failAt }) {
+  if (failAt != null && count >= failAt) {
+    fail(`integrity.${check}`, `${label}: ${count} >= ${failAt}`)
+    return 'fail'
+  }
+  if (warnAt != null && count >= warnAt) {
+    if (DATA_INTEGRITY_STRICT) {
+      fail(`integrity.${check}`, `${label}: ${count} >= ${warnAt} (DATA_INTEGRITY_STRICT)`)
+      return 'fail'
+    }
+    warn(`integrity.${check}`, `${label}: ${count} >= ${warnAt}`)
+    return 'warn'
+  }
+  return 'pass'
+}
+
+// L5 — blocks_history anomaly detectors. Each detector is wrapped so a SQL
+// error degrades that one detector to `error` (and a warn) without aborting the
+// rest of the probe or reading as clean. The window is a single interval shared
+// by all rate detectors so the snapshot is internally consistent.
+async function runDataIntegrityChecks(client) {
+  const integrity = { status: 'pass', window_min: INTEGRITY_WINDOW_MIN, strict: DATA_INTEGRITY_STRICT, detectors: {} }
+  result.checks.data_integrity = integrity
+  const win = [INTEGRITY_WINDOW_MIN]
+
+  const detector = async (name, fn) => {
+    try {
+      const out = await fn()
+      integrity.detectors[name] = out
+      integrity.status = maxStatus(integrity.status, out.status)
+    } catch (e) {
+      integrity.detectors[name] = { status: 'error', error: String(e?.message ?? e) }
+      integrity.status = maxStatus(integrity.status, 'error')
+      // An errored detector must not read as clean — surface it (warn, no email).
+      warn(`integrity.${name}`, `detector errored: ${e?.message ?? e}`)
+    }
+  }
+
+  // (1) Mass references-only strip — U events that emptied a non-empty ref set
+  // to `[]`, keyed on the count that is STILL empty at window end (durable), so
+  // a self-healing burst is at most a WARN, not a FAIL. (incident #1, 06-09)
+  await detector('references_emptied', async () => {
+    const rows = (await client.query(`
+      WITH ref_changes AS (
+        SELECT h.block_id, h.workspace_id, h.actor,
+               h.before_diff->>'references_json' AS before_refs,
+               h.after_diff->>'references_json'  AS after_refs
+        FROM public.blocks_history h
+        WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+          AND h.op = 'U'
+          AND 'references_json' = ANY(h.changed_columns)
+      ),
+      emptied AS (
+        SELECT DISTINCT block_id, workspace_id, actor
+        FROM ref_changes
+        WHERE before_refs IS NOT NULL
+          AND before_refs NOT IN ('[]', '')
+          AND after_refs = '[]'
+      )
+      SELECT e.actor, e.workspace_id,
+             count(*)::int AS emptied,
+             count(*) FILTER (WHERE b.id IS NOT NULL AND b.references_json = '[]')::int AS durable
+      FROM emptied e
+      LEFT JOIN public.blocks b ON b.id = e.block_id AND b.workspace_id = e.workspace_id
+      GROUP BY e.actor, e.workspace_id
+      ORDER BY durable DESC
+    `, win)).rows
+    let status = 'pass'
+    for (const r of rows) {
+      status = maxStatus(status, integrityThreshold('references_emptied',
+        `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} refs emptied-and-still-empty`,
+        r.durable, { warnAt: REFS_EMPTIED_WARN, failAt: REFS_EMPTIED_FAIL }))
+    }
+    return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), emptied: r.emptied, durable: r.durable })) }
+  })
+
+  // (1b) References shrunk — informational only (routine link removal shrinks
+  // ref sets, so this is noisy by design). Never thresholds; a slow/partial
+  // strip is caught at rest by the curated check below, not here.
+  await detector('references_shrunk', async () => {
+    const row = (await client.query(`
+      SELECT count(*)::int AS shrunk
+      FROM public.blocks_history h
+      WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+        AND h.op = 'U'
+        AND 'references_json' = ANY(h.changed_columns)
+        AND h.before_diff->>'references_json' LIKE '[%'
+        AND h.after_diff->>'references_json'  LIKE '[%'
+        AND jsonb_array_length((h.after_diff->>'references_json')::jsonb)
+          < jsonb_array_length((h.before_diff->>'references_json')::jsonb)
+    `, win)).rows[0]
+    return { status: 'pass', informational: true, shrunk: row.shrunk }
+  })
+
+  // (2) Mass property-key removal — U events where properties_json lost keys.
+  // Guarded by LIKE '{%' so e2ee ciphertext is skipped, not cast-failed.
+  await detector('property_key_removal', async () => {
+    const rows = (await client.query(`
+      SELECT h.actor, h.workspace_id, count(*)::int AS removals
+      FROM public.blocks_history h
+      WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+        AND h.op = 'U'
+        AND 'properties_json' = ANY(h.changed_columns)
+        AND h.before_diff->>'properties_json' LIKE '{%'
+        AND h.after_diff->>'properties_json'  LIKE '{%'
+        AND (SELECT count(*) FROM jsonb_object_keys((h.after_diff->>'properties_json')::jsonb))
+          < (SELECT count(*) FROM jsonb_object_keys((h.before_diff->>'properties_json')::jsonb))
+      GROUP BY h.actor, h.workspace_id
+      ORDER BY removals DESC
+    `, win)).rows
+    let status = 'pass'
+    for (const r of rows) {
+      status = maxStatus(status, integrityThreshold('property_key_removal',
+        `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} prop-key removals`,
+        r.removals, { warnAt: PROP_KEY_REMOVAL_WARN, failAt: PROP_KEY_REMOVAL_FAIL }))
+    }
+    return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), removals: r.removals })) }
+  })
+
+  // (3) Mass deletions — D (hard) + soft_delete per actor in window.
+  await detector('deletions', async () => {
+    const rows = (await client.query(`
+      SELECT h.actor, h.workspace_id,
+             count(*) FILTER (WHERE h.op = 'D')::int AS hard,
+             count(*) FILTER (WHERE h.semantic_op = 'soft_delete')::int AS soft,
+             count(*)::int AS total
+      FROM public.blocks_history h
+      WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+        AND (h.op = 'D' OR h.semantic_op = 'soft_delete')
+      GROUP BY h.actor, h.workspace_id
+      ORDER BY total DESC
+    `, win)).rows
+    let status = 'pass'
+    for (const r of rows) {
+      status = maxStatus(status, integrityThreshold('deletions',
+        `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} deletions`,
+        r.total, { warnAt: DELETIONS_WARN, failAt: DELETIONS_FAIL }))
+    }
+    return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), hard: r.hard, soft: r.soft, total: r.total })) }
+  })
+
+  // (4) Bulk metadata-only bump — changed_columns ⊆ {updated_at, user_updated_at,
+  // updated_by} with updated_at present (the recovery-touch shape). Includes
+  // updated_by because a recovery done the recommended way (through repo.tx)
+  // stamps it alongside updated_at/user_updated_at — without it this would only
+  // catch a raw server-side updated_at touch, not the tx path the L6 harness
+  // steers toward. Any bulk occurrence warns; per #4 it deserves a human glance.
+  await detector('bulk_updated_at_bump', async () => {
+    const rows = (await client.query(`
+      SELECT h.actor, h.workspace_id, count(*)::int AS bumps
+      FROM public.blocks_history h
+      WHERE h.event_time >= now() - ($1::int * interval '1 minute')
+        AND h.op = 'U'
+        AND h.changed_columns <@ ARRAY['updated_at','user_updated_at','updated_by']::text[]
+        AND 'updated_at' = ANY(h.changed_columns)
+      GROUP BY h.actor, h.workspace_id
+      ORDER BY bumps DESC
+    `, win)).rows
+    let status = 'pass'
+    for (const r of rows) {
+      status = maxStatus(status, integrityThreshold('bulk_updated_at_bump',
+        `actor=${redactId(r.actor) ?? 'null'} ws=${redactId(r.workspace_id)} metadata-only bumps`,
+        r.bumps, { warnAt: BULK_BUMP_WARN }))
+    }
+    return { status, groups: rows.map((r) => ({ actor: redactId(r.actor), workspace_id: redactId(r.workspace_id), bumps: r.bumps })) }
+  })
+
+  // (5) At-rest property-ref inconsistency — curated high-value props whose
+  // value is present in properties_json but whose projected ref is absent from
+  // references_json. The proven 06-09 detection query; over the live table, so
+  // it catches durable residuals a rate detector misses. Plaintext-only.
+  await detector('at_rest_property_ref', async () => {
+    const conds = CURATED_REF_PROPS.map((_, i) =>
+      `(b.properties_json LIKE $${i * 2 + 1} AND b.references_json NOT LIKE $${i * 2 + 2})`).join(' OR ')
+    const params = CURATED_REF_PROPS.flatMap((p) => [`%"${p}"%`, `%"sourceField":"${p}"%`])
+    const rows = (await client.query(`
+      SELECT b.workspace_id, count(*)::int AS inconsistent
+      FROM public.blocks b
+      WHERE b.deleted IS NOT TRUE
+        AND (${conds})
+      GROUP BY b.workspace_id
+      ORDER BY inconsistent DESC
+    `, params)).rows
+    const total = rows.reduce((a, r) => a + r.inconsistent, 0)
+    const status = integrityThreshold('at_rest_property_ref',
+      `props=[${CURATED_REF_PROPS.join(',')}] value-present/ref-absent`,
+      total, { warnAt: AT_REST_PROPREF_WARN })
+    return {
+      status,
+      props: CURATED_REF_PROPS,
+      total,
+      by_workspace: rows.map((r) => ({ workspace_id: redactId(r.workspace_id), inconsistent: r.inconsistent })),
+    }
+  })
+}
+
 function round2(n) { return Math.round(n * 100) / 100 }
 
 const client = new pg.Client({ connectionString: uri, ssl: { rejectUnauthorized: false } })
 
 try {
   await client.connect()
-  await Promise.all([runDbChecks(client), checkServiceEndpoints()])
+  await Promise.all([runDbChecks(client), runDataIntegrityChecks(client), checkServiceEndpoints()])
 } catch (e) {
   result.failures.push({ check: 'connection', msg: e.message })
 } finally {
@@ -319,9 +573,23 @@ try {
 
 console.log(JSON.stringify(result, null, 2))
 
+// WARN awareness: a warning does NOT fail the job (no page), so without this it
+// would be invisible inside the JSON above. Emit each as a GitHub `::warning::`
+// annotation (surfaces on the run page + the Actions list) plus a stderr block.
+// FAILs additionally exit(1), which reds the job — that is the actual page.
+const annotate = (kind, items) => {
+  for (const it of items) console.log(`::${kind} title=${it.check}::${it.msg}`)
+}
+if (result.warnings.length > 0) {
+  console.error('\nWARNINGS:')
+  for (const w of result.warnings) console.error(`  [${w.check}] ${w.msg}`)
+  annotate('warning', result.warnings)
+}
+
 if (result.failures.length > 0) {
   console.error('\nFAILURES:')
   for (const f of result.failures) console.error(`  [${f.check}] ${f.msg}`)
+  annotate('error', result.failures)
   process.exit(1)
 }
 process.exit(0)

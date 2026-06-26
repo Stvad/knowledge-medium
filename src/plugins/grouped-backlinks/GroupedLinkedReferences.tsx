@@ -369,7 +369,6 @@ function GroupedReferencesView({
 
   return (
     <>
-      {controls}
       <div className="mt-4 pt-3 border-t border-border">
         <div className="flex items-center justify-between gap-2">
           <button
@@ -381,7 +380,7 @@ function GroupedReferencesView({
             <span>Grouped References</span>
             <span className="text-xs text-muted-foreground/70">{countLabel}</span>
           </button>
-          <div className="flex shrink-0 items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
               type="button"
               onClick={onToggleLiveUpdates}
@@ -406,6 +405,7 @@ function GroupedReferencesView({
             >
               <Filter className="h-4 w-4" />
             </button>
+            {controls}
           </div>
         </div>
 

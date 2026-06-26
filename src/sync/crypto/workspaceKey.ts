@@ -30,17 +30,21 @@ export const formatWorkspaceKey = (bytes: Uint8Array): string => {
 }
 
 /** Parse a pasted `kmp-wk-1:<base32>` string back to key bytes.
- *  Tolerates surrounding whitespace and case (users retype these). */
+ *  Tolerates whitespace (including internal) and case: users retype these
+ *  from paper or paste line-wrapped, and base32 carries no whitespace. */
 export const parseWorkspaceKey = (value: string): Uint8Array<ArrayBuffer> => {
-  const trimmed = value.trim()
+  // Strip ALL whitespace, not just the outer edges. A line-wrapped paste or
+  // a retyped paper backup can carry internal spaces/tabs/newlines; base32
+  // never does, so dropping them here is safe and keeps the decoder strict.
+  const cleaned = value.replace(/\s+/g, '')
   // Case-fold the prefix only. The base32 payload is upper-cased on decode
   // (base32.ts), so a user who upper-cased the WHOLE backup string —
   // `KMP-WK-1:…` — must still parse to honor the documented case tolerance;
   // a case-sensitive `startsWith` would reject exactly that paste.
-  if (trimmed.slice(0, WK_PREFIX.length).toLowerCase() !== WK_PREFIX) {
+  if (cleaned.slice(0, WK_PREFIX.length).toLowerCase() !== WK_PREFIX) {
     throw new Error('workspace key: missing kmp-wk-1: prefix')
   }
-  const bytes = base32ToBytes(trimmed.slice(WK_PREFIX.length))
+  const bytes = base32ToBytes(cleaned.slice(WK_PREFIX.length))
   if (bytes.length !== WK_BYTES) {
     throw new Error(`workspace key: expected ${WK_BYTES} bytes, got ${bytes.length}`)
   }

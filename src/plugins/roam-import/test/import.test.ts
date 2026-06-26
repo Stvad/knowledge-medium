@@ -22,7 +22,8 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { addBlockTypeToProperties, aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -506,6 +507,217 @@ describe('importRoam', () => {
     })
   })
 
+  it('retains an existing property-derived backlink on re-import when its ref schema is absent', async () => {
+    // Regression for the schema-absence deletion class
+    // (docs/contracts/derived-data-add-only.md) — the same shape that wiped
+    // ~10k SRS `next-review-date` backlinks. A page already carries a
+    // property-derived backlink under a ref field whose schema is NOT loaded
+    // at import time (plugin toggled off / ?safeMode / a UserSchemasService
+    // bucket that hasn't republished). Re-importing that page through the
+    // merge path — which runs applyPromotedAttributes and rebuilds
+    // references — must NOT silently drop the backlink the projection can't
+    // re-derive. Before the fix, the property-derived ref was filtered out
+    // and replace-written away; reconcileDerived now retains it.
+    const targetId = 'retain-backlink-target'
+    // A ref field with no registered schema. It only lives on the
+    // pre-existing row, never in the imported dump, so schema reconciliation
+    // never registers it — it stays absent at applyPromotedAttributes time.
+    const absentRefField = 'plugin:relatesTo'
+    const pageId = 'retain-existing-page'
+
+    await env.repo.tx(async tx => {
+      // The block the property-derived backlink points at.
+      await tx.create({
+        id: targetId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Backlink target',
+      })
+      // The page that already owns the property-derived backlink under the
+      // absent-schema field.
+      await tx.create({
+        id: pageId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'Retain Target',
+        properties: addBlockTypeToProperties({
+          [aliasesProp.name]: aliasesProp.codec.encode(['Retain Target']),
+          [absentRefField]: targetId,
+        }, PAGE_TYPE),
+        references: [{id: targetId, alias: targetId, sourceField: absentRefField}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Precondition: the field's schema really is absent from the registry,
+    // so the projection contributes nothing for it.
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import a page that merges into the existing one (matching alias) and
+    // carries a promoted inline attribute, so applyPromotedAttributes runs
+    // and rebuilds the page's references.
+    await importRoam([
+      {
+        title: 'Retain Target',
+        uid: 'retainReimport',
+        children: [
+          {string: 'note:: a promoted value', uid: 'retainNote'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const page = await readBlock(pageId)
+    const refs = JSON.parse(page!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // The absent-schema property-derived backlink survives the re-import.
+    expect(refs).toContainEqual({
+      id: targetId,
+      alias: targetId,
+      sourceField: absentRefField,
+    })
+    // And the promotion actually ran (so the merge path was exercised, not
+    // skipped) — proving the retain happened on the rebuild, not by accident.
+    const props = JSON.parse(page!.properties_json) as Record<string, unknown>
+    expect(props['roam:note']).toBe('a promoted value')
+  })
+
+  it('retains an existing property-derived backlink on re-import of a descendant block when its ref schema is absent', async () => {
+    // The descendant twin of the page-merge case above, on the route the
+    // canonical victims (SRS next-review-date cards) actually travel:
+    // upsertImportedBlock's existing-row branch. The page path re-reads
+    // existing.references in applyPromotedAttributes; the descendant path used
+    // to replace-write the dump-derived references and silently drop a backlink
+    // whose schema is absent. It must reconcile against the live row instead.
+    const targetId = 'desc-retain-target'
+    const absentRefField = 'plugin:relatesTo'
+    const descId = roamBlockId(WORKSPACE, 'descRetainUid')
+
+    await env.repo.tx(async tx => {
+      // The block the property-derived backlink points at.
+      await tx.create({
+        id: targetId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Backlink target',
+      })
+      // The existing descendant row carrying the absent-schema backlink. Its
+      // deterministic id (roamBlockId of the re-imported uid) is what makes the
+      // re-import upsert onto THIS row rather than insert a fresh one.
+      await tx.create({
+        id: descId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'card content',
+        properties: {[absentRefField]: targetId},
+        references: [{id: targetId, alias: targetId, sourceField: absentRefField}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import a graph whose child block reuses descRetainUid → upserts onto
+    // the existing descendant row via upsertImportedBlock.
+    await importRoam([
+      {
+        title: 'Desc Retain Page',
+        uid: 'descRetainPage',
+        children: [
+          {string: 'card content', uid: 'descRetainUid'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const desc = await readBlock(descId)
+    const refs = JSON.parse(desc!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // The absent-schema property-derived backlink survives the re-import.
+    expect(refs).toContainEqual({
+      id: targetId,
+      alias: targetId,
+      sourceField: absentRefField,
+    })
+    // The row really went through the upsert existing-row branch: it was
+    // reparented from null under the freshly-imported page.
+    expect(desc!.parent_id).toBe(roamBlockId(WORKSPACE, 'descRetainPage'))
+  })
+
+  it('drops a removed content ref while retaining the absent-schema backlink on descendant re-import (no over-retain)', async () => {
+    // The negative half of the contract on the upsert path: the reconcile must
+    // RETAIN the absent-schema property-derived backlink but still DROP a
+    // content ref the re-imported content no longer contains. Proves the fix is
+    // a content-authoritative reconcile, not a blanket "keep everything".
+    const contentTargetId = 'over-retain-content-target'
+    const propTargetId = 'over-retain-prop-target'
+    const absentRefField = 'plugin:relatesTo'
+    const descId = roamBlockId(WORKSPACE, 'overRetainUid')
+
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: contentTargetId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a0', content: 'content target',
+      })
+      await tx.create({
+        id: propTargetId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a1', content: 'prop target',
+      })
+      // Existing descendant: one content ref (sourceField empty) + one
+      // absent-schema property-derived backlink.
+      await tx.create({
+        id: descId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a2',
+        content: 'see [[KeepAlias]]',
+        properties: {[absentRefField]: propTargetId},
+        references: [
+          {id: contentTargetId, alias: 'KeepAlias'},
+          {id: propTargetId, alias: propTargetId, sourceField: absentRefField},
+        ],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import the same block (same uid) but with content that no longer
+    // mentions the ref → the content ref must drop.
+    await importRoam([
+      {
+        title: 'Over Retain Page',
+        uid: 'overRetainPage',
+        children: [
+          {string: 'plain text now, no refs', uid: 'overRetainUid'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const desc = await readBlock(descId)
+    const refs = JSON.parse(desc!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // Absent-schema property backlink retained…
+    expect(refs).toContainEqual({id: propTargetId, alias: propTargetId, sourceField: absentRefField})
+    // …but the removed content ref is gone (content stays import-authoritative).
+    expect(refs.some(r => r.id === contentTargetId)).toBe(false)
+  })
+
   it('creates permanent alias blocks for unmatched [[alias]] references', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,
@@ -819,6 +1031,324 @@ describe('importRoam', () => {
     const restored = await readBlock(placeholderId)
     expect(restored?.deleted).toBe(0)
     expect(restored?.content).toBe('')
+  })
+
+  it('does not blank-restore a tombstoned data-bearing block to an empty stub (#195)', async () => {
+    // 1. Import a real block under uid U, holding real content.
+    const realExport: RoamExport = [
+      {
+        title: 'page-with-real-block',
+        uid: 'pageReal195',
+        children: [
+          {
+            string: 'precious real content',
+            uid: 'realLeaf195',
+          },
+        ],
+      },
+    ]
+    await importRoam(realExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const blockId = roamBlockId(WORKSPACE, 'realLeaf195')
+    // Give the real block a property too, mirroring user-authored data
+    // that a blank-restore would silently destroy alongside content.
+    await env.repo.tx(async tx => {
+      const row = await tx.get(blockId)
+      if (!row) throw new Error('expected imported real block')
+      await tx.update(blockId, {
+        properties: {...row.properties, 'local:note': 'keep me'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // 2. User deletes the real block — tombstoned, still holding data.
+    await env.repo.mutate.delete({id: blockId})
+    const tombstoned = await readBlock(blockId)
+    expect(tombstoned?.deleted).toBe(1)
+    expect(tombstoned?.content).toBe('precious real content')
+
+    // 3. A later export references ((U)) but does NOT include the real
+    //    block, so the planner registers U as a placeholder. Without the
+    //    #195 guard, ensurePlaceholderRow would resurrect the
+    //    data-bearing tombstone as an empty root stub.
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-with-ref-195',
+        uid: 'pageRef195',
+        children: [
+          {
+            string: 'see ((realLeaf195))',
+            uid: 'refBlock195',
+            ':block/refs': [{':block/uid': 'realLeaf195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // 4. The data-bearing tombstone is NOT resurrected as an empty stub:
+    //    its content + properties survive and it stays tombstoned (the
+    //    lossless state — a later import that includes the real block can
+    //    still upsert it back).
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(after?.content).toBe('precious real content')
+    expect(JSON.parse(after!.properties_json)['local:note']).toBe('keep me')
+
+    // ...and the import still completed: the referencing block landed and
+    // rewrote ((U)) to the deterministic id, so the ref resolves (at a
+    // tombstone for now) rather than the guard breaking import/ref output.
+    const refBlock = await readBlock(roamBlockId(WORKSPACE, 'refBlock195'))
+    expect(refBlock?.content).toBe(`see ((${blockId}))`)
+  })
+
+  it('preserves a tombstone whose only payload is a real property (#195 properties arm)', async () => {
+    // A data-bearing block can carry meaningful state with empty content
+    // (e.g. a typed/annotated block). Create one directly, tombstone it,
+    // then reference its uid from a placeholder-only import.
+    const blockId = roamBlockId(WORKSPACE, 'propOnly195')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: blockId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+        properties: {'local:note': 'precious'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.delete({id: blockId})
+    expect((await readBlock(blockId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-prop-only',
+        uid: 'pagePropOnly195',
+        children: [
+          {
+            string: 'see ((propOnly195))',
+            uid: 'refPropOnly195',
+            ':block/refs': [{':block/uid': 'propOnly195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Empty content + no references, but a real property → still
+    // data-bearing → must NOT be blank-restored.
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.properties_json)['local:note']).toBe('precious')
+  })
+
+  it('preserves a tombstone whose only payload is references (#195 references arm)', async () => {
+    // A data-bearing block can carry only outgoing references (empty
+    // content, no properties) — e.g. a block that was just a link. Create
+    // one directly, tombstone it, then reference its uid from a
+    // placeholder-only import.
+    const blockId = roamBlockId(WORKSPACE, 'refsOnly195')
+    const refTargetId = roamBlockId(WORKSPACE, 'refsOnlyTarget195')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: blockId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+        references: [{id: refTargetId, alias: refTargetId}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.delete({id: blockId})
+    expect((await readBlock(blockId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-refs-only',
+        uid: 'pageRefsOnly195',
+        children: [
+          {
+            string: 'see ((refsOnly195))',
+            uid: 'refRefsOnly195',
+            ':block/refs': [{':block/uid': 'refsOnly195'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Empty content + no properties, but an outgoing reference → still
+    // data-bearing → must NOT be blank-restored.
+    const after = await readBlock(blockId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.references_json)).toEqual([{id: refTargetId, alias: refTargetId}])
+  })
+
+  it('leaves a tombstoned placeholder the user touched (any property → non-pristine) untouched (#195)', async () => {
+    // First import emits a blank placeholder for the unresolved ((leafUi)).
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-with-ui-ref',
+        uid: 'pageUiRef',
+        children: [
+          {
+            string: 'see ((leafUi))',
+            uid: 'parentUiRef',
+            ':block/refs': [{':block/uid': 'leafUi'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const placeholderId = roamBlockId(WORKSPACE, 'leafUi')
+    // The user touches the stub (collapses it → writes a property) before
+    // deleting it. We deliberately do NOT keep a cosmetic-property
+    // allowlist: ANY property makes the stub non-pristine, matching the
+    // alias-seat "restorable transient tombstone" convention where a
+    // user's explicit deletion is never undone.
+    await env.repo.mutate.setProperty({
+      id: placeholderId, schema: isCollapsedProp, value: true,
+    })
+    await env.repo.mutate.delete({id: placeholderId})
+    const tombstoned = await readBlock(placeholderId)
+    expect(tombstoned?.deleted).toBe(1)
+    // Non-vacuous: the property must really be on the tombstone.
+    expect(JSON.parse(tombstoned!.properties_json)[isCollapsedProp.name]).toBe(true)
+
+    // Re-importing the same export must leave the touched stub tombstoned
+    // (not blank-restored), preserving the row + its property.
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const after = await readBlock(placeholderId)
+    expect(after?.deleted).toBe(1)
+    expect(JSON.parse(after!.properties_json)[isCollapsedProp.name]).toBe(true)
+  })
+
+  it('leaves a tombstoned container with live children untouched instead of re-rooting its subtree (#195)', async () => {
+    // Build a page → container → child tree where the container's own
+    // content is empty but it has a LIVE child, then tombstone ONLY the
+    // container (raw tx.delete, no cascade) — a deleted container that
+    // still has a live subtree under a live page.
+    const pageId = roamBlockId(WORKSPACE, 'containerPageUid')
+    const containerId = roamBlockId(WORKSPACE, 'containerUid')
+    const childId = roamBlockId(WORKSPACE, 'childUid')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: pageId, workspaceId: WORKSPACE,
+        parentId: null, orderKey: 'a0', content: 'container page',
+      })
+      await tx.create({
+        id: containerId, workspaceId: WORKSPACE,
+        parentId: pageId, orderKey: 'a0', content: '',
+      })
+      await tx.create({
+        id: childId, workspaceId: WORKSPACE,
+        parentId: containerId, orderKey: 'a0', content: 'child content',
+      })
+      await tx.delete(containerId)
+    }, {scope: ChangeScope.BlockDefault})
+    expect((await readBlock(containerId))?.deleted).toBe(1)
+    expect((await readBlock(childId))?.deleted).toBe(0)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-ref-container',
+        uid: 'pageRefContainer',
+        children: [
+          {
+            string: 'see ((containerUid))',
+            uid: 'refContainer',
+            ':block/refs': [{':block/uid': 'containerUid'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // The container's own fields are empty, but its live child makes it
+    // non-pristine: it stays tombstoned under its page (NOT resurrected
+    // and re-rooted to the workspace root by a restore + move), and the
+    // child stays under the container.
+    const containerAfter = await readBlock(containerId)
+    expect(containerAfter?.deleted).toBe(1)
+    expect(containerAfter?.parent_id).toBe(pageId)
+    const childAfter = await readBlock(childId)
+    expect(childAfter?.deleted).toBe(0)
+    expect(childAfter?.parent_id).toBe(containerId)
+  })
+
+  it('does not resurrect a tombstoned container whose whole subtree was deleted (#195)', async () => {
+    // Build page → container(empty content) → child, then delete the
+    // container via the cascading kernel mutator so the WHOLE subtree is
+    // tombstoned. The container's own fields are empty and it has NO live
+    // children — but its tombstoned child means it was a real user-deleted
+    // container, not a never-populated stub. (This is the case tx.childrenOf
+    // alone misses; isPristineRestorableStub passes {includeDeleted: true}.)
+    const pageId = roamBlockId(WORKSPACE, 'delContainerPageUid')
+    const containerId = roamBlockId(WORKSPACE, 'delContainerUid')
+    const childId = roamBlockId(WORKSPACE, 'delChildUid')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: pageId, workspaceId: WORKSPACE,
+        parentId: null, orderKey: 'a0', content: 'del container page',
+      })
+      await tx.create({
+        id: containerId, workspaceId: WORKSPACE,
+        parentId: pageId, orderKey: 'a0', content: '',
+      })
+      await tx.create({
+        id: childId, workspaceId: WORKSPACE,
+        parentId: containerId, orderKey: 'a0', content: 'child content',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    // core.delete cascades — tombstones the container AND its subtree.
+    await env.repo.mutate.delete({id: containerId})
+    expect((await readBlock(containerId))?.deleted).toBe(1)
+    expect((await readBlock(childId))?.deleted).toBe(1)
+
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-ref-del-container',
+        uid: 'pageRefDelContainer',
+        children: [
+          {
+            string: 'see ((delContainerUid))',
+            uid: 'refDelContainer',
+            ':block/refs': [{':block/uid': 'delContainerUid'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    // Must stay tombstoned under its page — NOT resurrected (deleted→0)
+    // and re-rooted as a blank stub, which would undo the user's deletion.
+    const containerAfter = await readBlock(containerId)
+    expect(containerAfter?.deleted).toBe(1)
+    expect(containerAfter?.parent_id).toBe(pageId)
+    expect((await readBlock(childId))?.deleted).toBe(1)
+
+    // ...and the import still completed: the referencing block rewrote
+    // ((delContainerUid)) to the deterministic id (resolving at the
+    // tombstone) rather than the guard breaking import/ref output.
+    const refBlock = await readBlock(roamBlockId(WORKSPACE, 'refDelContainer'))
+    expect(refBlock?.content).toBe(`see ((${containerId}))`)
   })
 
   it('does not create placeholders for unconfirmed double-paren prose', async () => {

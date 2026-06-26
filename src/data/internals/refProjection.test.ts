@@ -6,6 +6,7 @@ import {
   type AnyPropertySchema,
 } from '@/data/api'
 import { makeBlockData } from '@/data/test/factories'
+import { assertRefListDeriveIsAddOnly } from '@/data/test/derivedDataContract'
 import {
   latestRefProjectionSchema,
   projectedRefsForField,
@@ -87,9 +88,24 @@ describe('projectedRefsForField', () => {
   })
 
   it('returns [] when the value fails to decode (malformed)', () => {
-    // ref expects a string; refList expects an array of strings.
+    // ref expects a string; refList expects an array of strings. A whole-value
+    // shape mismatch (non-array refList) has nothing to recover.
     expect(projectedRefsForField(block({ reviewer: 42 }), refProp, 'reviewer')).toEqual([])
     expect(projectedRefsForField(block({ related: 'not-an-array' }), refListProp, 'related')).toEqual([])
+  })
+
+  it('keeps the well-formed ids when one refList element is malformed (#189, no whole-field strip)', () => {
+    // ['target-b', 42, 'target-c'] must not strip target-b/target-c alongside 42.
+    expect(projectedRefsForField(block({ related: ['target-b', 42, 'target-c'] }), refListProp, 'related')).toEqual([
+      { id: 'target-b', alias: 'target-b', sourceField: 'related' },
+      { id: 'target-c', alias: 'target-c', sourceField: 'related' },
+    ])
+  })
+
+  it('satisfies the element-wise refList decode contract (#189)', () => {
+    assertRefListDeriveIsAddOnly(value =>
+      projectedRefsForField(block({ related: value }), refListProp, 'related').map(r => r.id),
+    )
   })
 
   it('returns [] for a present but non-ref schema', () => {

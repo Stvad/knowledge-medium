@@ -28,6 +28,7 @@ import {
   kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
+import {renderSubtreeOutline} from './subtreeOutline.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverScript = path.join(here, 'server.js')
@@ -114,6 +115,20 @@ const toStringArray = (value: unknown): string[] => {
   if (Array.isArray(value)) return value.map(String)
   if (typeof value === 'string') return [value]
   return []
+}
+
+// `--filter` / `--grouping` accept either a mode keyword (passed through
+// as a string) or inline JSON (an explicit filter / grouping object).
+// The kernel coerces whichever form it receives.
+const parseSpecArg = (
+  value: unknown,
+  modes: readonly string[],
+  label: string,
+): string | unknown | undefined => {
+  if (value === undefined) return undefined
+  const text = String(value)
+  if (modes.includes(text)) return text
+  return parseJson(text, label)
 }
 
 const evalReturnedUndefined = (value: unknown): boolean =>
@@ -932,12 +947,106 @@ cli
 
 cli
   .command('subtree <rootId>', wireDescription('get-subtree'))
-  .option('--include-root', 'Include the root block itself in the response')
-  .action(async (rootId: string, options: {includeRoot?: boolean}) => {
+  .option('--json', 'Print the raw flat array (each row a block + its depth) instead of the indented outline')
+  .action(async (rootId: string, options: {json?: boolean}) => {
+    if (options.json) {
+      await runAndPrint({type: 'get-subtree', rootId})
+      return
+    }
+    // Default: a depth-indented `- [id] content` outline. The subtree
+    // comes back already in pre-order / (order_key, id) order — we render
+    // it verbatim and never re-sort (see renderSubtreeOutline).
+    await ensureBridgeRunning()
+    const value = await runCommand({type: 'get-subtree', rootId})
+    process.stdout.write(`${renderSubtreeOutline(value)}\n`)
+  })
+
+cli
+  .command('backlinks <blockId>', wireDescription('backlinks'))
+  .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
+  .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
+  .action(async (blockId: string, options: {filter?: string, workspace?: string}) => {
+    const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
     await runAndPrint({
-      type: 'get-subtree',
-      rootId,
-      includeRoot: Boolean(options.includeRoot),
+      type: 'backlinks',
+      id: blockId,
+      ...(filter !== undefined ? {filter} : {}),
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+    })
+  })
+
+cli
+  .command('grouped-backlinks <blockId>', wireDescription('grouped-backlinks'))
+  .option('--filter <spec>', 'none|stored|effective, or inline JSON BacklinksFilter (default: none)')
+  .option('--grouping <spec>', 'user|none, or inline JSON grouping config (default: user)')
+  .option('--workspace <id>', "Workspace id (defaults to the block's workspace, then the active one)")
+  .action(async (
+    blockId: string,
+    options: {filter?: string, grouping?: string, workspace?: string},
+  ) => {
+    const filter = parseSpecArg(options.filter, ['none', 'stored', 'effective'], '--filter')
+    const grouping = parseSpecArg(options.grouping, ['user', 'none'], '--grouping')
+    await runAndPrint({
+      type: 'grouped-backlinks',
+      id: blockId,
+      ...(filter !== undefined ? {filter} : {}),
+      ...(grouping !== undefined ? {grouping} : {}),
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+    })
+  })
+
+cli
+  .command('data-model', wireDescription('data-model'))
+  .action(async () => {
+    await ensureBridgeRunning()
+    const value = await runCommand({type: 'data-model'})
+    process.stdout.write(
+      typeof value === 'string'
+        ? `${value}\n`
+        : `${JSON.stringify(value, null, 2)}\n`,
+    )
+  })
+
+cli
+  .command('page [...name]', wireDescription('page'))
+  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
+  .option('--limit <n>', 'Max substring candidates (default 20)')
+  .action(async (name: unknown, options: {workspace?: string, limit?: string}) => {
+    const text = toStringArray(name).join(' ').trim()
+    if (!text) throw new Error('page requires a <name> (e.g. `yarn agent page "Project Alpha"`)')
+    await runAndPrint({
+      type: 'page',
+      name: text,
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
+    })
+  })
+
+cli
+  .command('daily-note [...date]', wireDescription('daily-note'))
+  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
+  .action(async (date: unknown, options: {workspace?: string}) => {
+    const text = toStringArray(date).join(' ').trim()
+    if (!text) throw new Error('daily-note requires a <date> (e.g. `yarn agent daily-note yesterday`)')
+    await runAndPrint({
+      type: 'daily-note',
+      date: text,
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+    })
+  })
+
+cli
+  .command('search [...query]', wireDescription('search'))
+  .option('--workspace <id>', 'Workspace id (defaults to the active one)')
+  .option('--limit <n>', 'Max results (default 50)')
+  .action(async (query: unknown, options: {workspace?: string, limit?: string}) => {
+    const text = toStringArray(query).join(' ').trim()
+    if (!text) throw new Error('search requires a <query>')
+    await runAndPrint({
+      type: 'search',
+      query: text,
+      ...(options.workspace ? {workspaceId: options.workspace} : {}),
+      ...(options.limit !== undefined ? {limit: Number(options.limit)} : {}),
     })
   })
 

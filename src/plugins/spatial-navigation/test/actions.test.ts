@@ -129,6 +129,9 @@ describe('spatial navigation selection actions', () => {
     ])
     const panel = env.repo.block('panel')
     await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    // Seed an existing selection so this exercises the *extension* path (the
+    // Roam-style first press selects only the current block — covered below).
+    await panel.set(selectionStateProp, {selectedBlockIds: ['A'], anchorBlockId: 'A'})
     const fallback = vi.fn()
     const action = decorateAction({
       id: 'extend_selection_down',
@@ -155,6 +158,32 @@ describe('spatial navigation selection actions', () => {
       blockId: 'X',
       renderScopeId: 'panel:backlink:X',
     })
+  })
+
+  it('Roam-style first press selects only the focused block, not its neighbour', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    // No prior selection — the first Shift+Down should select just A.
+    const action = decorateAction({
+      id: 'extend_selection_down',
+      description: 'Extend selection down',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async deps => {
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
+      },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(panel.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['A'])
   })
 
   it('extends multi-select mode selection through DOM order without block dependencies', async () => {

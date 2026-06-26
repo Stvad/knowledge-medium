@@ -10,7 +10,7 @@ import {
   blockRenderersFacet,
   headerItemsFacet,
 } from '@/extensions/core.js'
-import { codeMirrorExtensionsFacet } from '@/extensions/editor.js'
+import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
 
 // The data-only / graph-free invariant for `plugins/<name>/dataExtension.ts`:

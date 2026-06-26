@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { useRepo } from '@/context/repo.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import {
@@ -21,7 +21,12 @@ import {
   ExtensionLoadErrorsProvider,
   ExtensionLoadErrorStore,
 } from '@/extensions/extensionLoadErrors.js'
+import {
+  ExtensionApprovalStatusProvider,
+  ExtensionApprovalStatusStore,
+} from '@/extensions/extensionApprovalStatus.js'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.js'
+import { toastExtensionLoadError } from '@/extensions/extensionLoadErrorToast.js'
 
 export function AppRuntimeProvider({
   children,
@@ -45,6 +50,21 @@ export function AppRuntimeProvider({
   const errorStore = useMemo(() => {
     void workspaceId
     return new ExtensionLoadErrorStore()
+  }, [workspaceId])
+
+  // Keys (`${workspaceId}:${blockId}`) we've already toasted a load error
+  // for. The runtime re-resolves on every toggle / refresh and a broken
+  // block re-reports each time; this keeps the toast to once per block per
+  // workspace for the provider's lifetime. The errorStore (status icons)
+  // still reflects every report.
+  const toastedLoadErrors = useRef<Set<string>>(new Set())
+
+  // Device-local trust status (needs-approval / update-available) for the
+  // current resolution, surfaced to the Extensions settings UI (#67). Same
+  // per-provider / per-workspace lifecycle as the error store.
+  const approvalStore = useMemo(() => {
+    void workspaceId
+    return new ExtensionApprovalStatusStore()
   }, [workspaceId])
 
   const runtimeContext: FacetResolveContext = useMemo(() => ({
@@ -100,9 +120,10 @@ export function AppRuntimeProvider({
 
   useEffect(() => {
     let cancelled = false
-    // Wipe stale errors from the previous resolution; the loader will
-    // re-report any that still apply.
+    // Wipe stale errors + trust statuses from the previous resolution; the
+    // loader will re-report any that still apply.
     errorStore.reset()
+    approvalStore.reset()
 
     if (!workspaceId) {
       // Should not happen — getInitialBlock sets activeWorkspaceId
@@ -126,6 +147,16 @@ export function AppRuntimeProvider({
             errorReporter: (blockId, error) => {
               if (cancelled) return
               errorStore.reportError(blockId, error)
+              toastExtensionLoadError(
+                toastedLoadErrors.current,
+                `${workspaceId}:${blockId}`,
+                blockId,
+                error,
+              )
+            },
+            approvalStatusReporter: (blockId, status) => {
+              if (cancelled) return
+              approvalStore.report(blockId, status)
             },
           }),
         ], {overrides, safeMode, context: runtimeContext})
@@ -156,7 +187,7 @@ export function AppRuntimeProvider({
     return () => {
       cancelled = true
     }
-  }, [baseExtensions, errorStore, overrides, repo, runtimeContext, safeMode, workspaceId])
+  }, [approvalStore, baseExtensions, errorStore, overrides, repo, runtimeContext, safeMode, workspaceId])
 
   useEffect(() => {
     if (!workspaceId) {
@@ -196,11 +227,13 @@ export function AppRuntimeProvider({
   return (
     <AppRuntimeContextProvider value={runtime}>
       <ExtensionLoadErrorsProvider store={errorStore}>
-        <ActiveContextsProvider>
-          <HotkeyReconciler/>
-          <AppMounts runtime={runtime}/>
-          {children}
-        </ActiveContextsProvider>
+        <ExtensionApprovalStatusProvider store={approvalStore}>
+          <ActiveContextsProvider>
+            <HotkeyReconciler/>
+            <AppMounts runtime={runtime}/>
+            {children}
+          </ActiveContextsProvider>
+        </ExtensionApprovalStatusProvider>
       </ExtensionLoadErrorsProvider>
     </AppRuntimeContextProvider>
   )

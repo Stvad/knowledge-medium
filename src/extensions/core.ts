@@ -1,4 +1,4 @@
-import { defineFacet, keyedMapFacet } from '@/facets/facet.js'
+import { dedupById, defineFacet, keyedMapFacet } from '@/facets/facet.js'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { Repo } from '../data/repo'
 import type { Block } from '../data/block'
@@ -27,8 +27,13 @@ export interface AppEffectContext {
  *  affordances (a [[Tutorial]] bullet etc.).
  *
  *  Runs BEFORE React mounts (inside App.tsx's bootstrap chain), so
- *  resolvers cannot use hooks or read the live `FacetRuntime`. Talk
- *  to the Repo directly. */
+ *  resolvers cannot use hooks or read the live `FacetRuntime`. Talk to the
+ *  Repo directly, including for type/schema lookups via
+ *  `repo.snapshotTypeRegistries()` — which at this point holds the
+ *  toggle-aware `staticAppExtensions` runtime that `bootstrapWorkspace`
+ *  installs before resolving landing. A resolver that seeds blocks of a
+ *  plugin type relies on that plugin's `dataExtension` being discovered into
+ *  `staticAppExtensions` (the glob) and the plugin being enabled. */
 export interface WorkspaceLandingContext {
   repo: Repo
   workspaceId: string
@@ -205,8 +210,15 @@ export const isAppMountContribution = (value: unknown): value is AppMountContrib
   typeof value.id === 'string' &&
   typeof value.component === 'function'
 
+// Dedup by logical `id` (last-wins) rather than the default keep-all: an
+// app mount is rendered once per contribution keyed by `id` (see
+// `AppMounts` in AppRuntimeProvider), and mounts are minted fresh inside
+// plugin factories, so resolver identity dedup can't catch a logical
+// duplicate — two same-id contributions would otherwise double-mount
+// (#64). See `dedupById` for the tie-break rationale.
 export const appMountsFacet = defineFacet<AppMountContribution, readonly AppMountContribution[]>({
   id: 'core.app-mounts',
+  combine: dedupById('core.app-mounts'),
   validate: isAppMountContribution,
 })
 
@@ -234,8 +246,11 @@ export const isPanelMountContribution = (value: unknown): value is PanelMountCon
   typeof value.id === 'string' &&
   typeof value.component === 'function'
 
+// Per-panel render mount keyed by `id` — same double-mount hazard as
+// `appMountsFacet`, so dedup by id (last-wins).
 export const panelMountsFacet = defineFacet<PanelMountContribution, readonly PanelMountContribution[]>({
   id: 'core.panel-mounts',
+  combine: dedupById('core.panel-mounts'),
   validate: isPanelMountContribution,
 })
 
@@ -248,8 +263,15 @@ export const isHeaderItemContribution = (value: unknown): value is HeaderItemCon
   isHeaderItemRegion(value.region) &&
   typeof value.component === 'function'
 
+// Header items are split into `start`/`end` regions and each region is
+// rendered as its own list keyed by `id` (see Header.tsx), so the real
+// render-key scope is `(region, id)` — dedup on that, NOT plain `id`.
+// Plain-id dedup would wrongly collapse a `start` and an `end` item that
+// share a logical id (dropping one) even though there's no key collision;
+// region-scoped dedup still catches a genuine same-region double-render.
 export const headerItemsFacet = defineFacet<HeaderItemContribution, readonly HeaderItemContribution[]>({
   id: 'core.header-items',
+  combine: dedupById('core.header-items', item => `${item.region}:${item.id}`),
   validate: isHeaderItemContribution,
 })
 

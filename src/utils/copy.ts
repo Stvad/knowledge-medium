@@ -11,11 +11,9 @@ const createIndentedContent = (content: string, depth: number): string => {
 
 export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
   // One SQL query hydrates the entire subtree in document order
-  // (SUBTREE_SQL ORDER BY path). We compute depth by walking that
-  // flat list once — the root sits at depth 0; every other row's
-  // depth is `parentDepth + 1` (parent must already have appeared
-  // since the query is depth-first). No per-parent handle creation,
-  // no recursive cache reads.
+  // (SUBTREE_SQL ORDER BY path), each row carrying its `depth` relative to
+  // the root (0 for the root). No per-parent handle creation, no recursive
+  // cache reads, and no re-deriving depth here.
   const blocks = await block.repo.query.subtree({id: block.id}).load()
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
@@ -28,18 +26,8 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
     }
   }
 
-  const depthById = new Map<string, number>()
-  const markdown: string[] = []
-  for (const b of blocks) {
-    const depth = b.id === block.id
-      ? 0
-      : (depthById.get(b.parentId ?? '') ?? 0) + 1
-    depthById.set(b.id, depth)
-    markdown.push(createIndentedContent(b.content, depth))
-  }
-
   return {
-    markdown: markdown.join('\n'),
+    markdown: blocks.map(b => createIndentedContent(b.content, b.depth)).join('\n'),
     blocks,
   }
 }

@@ -1,5 +1,6 @@
 import {
   CORE_BLOCK_MERGED_EVENT,
+  MergeIntoDescendantError,
   type BlockData,
   type BlockMergeAliasRewrite,
   type Tx,
@@ -46,6 +47,23 @@ export const mergeBlocksInTx = async (
     aliasRewrites = [],
   }: MergeBlocksInTxArgs,
 ): Promise<void> => {
+  // Merging a block into itself would tombstone it (delete), double its
+  // content (read-after-delete via requireExisting), and orphan its children
+  // under the tombstone. Treat self-merge as a no-op.
+  if (into.id === from.id) return
+
+  // Merging `from` into one of its own descendants can never succeed: the
+  // child re-homing below would move an ancestor of `into` under `into` and
+  // trip `tx.move`'s cycle guard mid-fold (clean rollback, raw CycleError).
+  // The alias-collision "Merge into…" button drives exactly this direction
+  // when an aliased ancestor page is renamed onto a descendant page's alias,
+  // so retries fail identically and the button gets stuck (#188). Pre-check
+  // with the same ancestry walk the cycle guard uses and surface a typed,
+  // user-actionable precondition error up front instead.
+  if (await tx.isDescendantOf(into.id, from.id)) {
+    throw new MergeIntoDescendantError(into.id, from.id)
+  }
+
   const intoChildren = await tx.childrenOf(into.id)
   const fromChildren = await tx.childrenOf(from.id)
   if (fromChildren.length > 0) {

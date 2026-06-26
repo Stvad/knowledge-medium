@@ -172,6 +172,17 @@ describe('repo.query.subtree', () => {
     expect(out.map(b => b.id)).toEqual(['r', 'c1', 'gc', 'c2'])
   })
 
+  it('carries each row depth relative to the root, dropping back across branches', async () => {
+    await create({id: 'r'})
+    await create({id: 'c1', parentId: 'r', orderKey: 'a0'})
+    await create({id: 'gc', parentId: 'c1', orderKey: 'a0'})
+    await create({id: 'c2', parentId: 'r', orderKey: 'a1'})
+    // Pre-order is [r, c1, gc, c2]; depth must drop from 2 (gc) back to 1
+    // (c2) — the shape where an out[i]↔rows[i] off-by-one would surface.
+    const out = await env.repo.query.subtree({id: 'r'}).load()
+    expect(out.map(b => [b.id, b.depth])).toEqual([['r', 0], ['c1', 1], ['gc', 2], ['c2', 1]])
+  })
+
   it('excludes soft-deleted descendants', async () => {
     await create({id: 'r'})
     await create({id: 'c1', parentId: 'r'})
@@ -319,6 +330,58 @@ describe('repo.query.byType', () => {
     await create({id: 'b', type: 'note', workspaceId: OTHER_WS})
     expect(asBlocks(await env.repo.query.byType({workspaceId: WS, type: 'note'}).load()).map(r => r.id)).toEqual(['a'])
     expect(asBlocks(await env.repo.query.byType({workspaceId: OTHER_WS, type: 'note'}).load()).map(r => r.id)).toEqual(['b'])
+  })
+})
+
+describe('repo.query.typedBlockCount', () => {
+  // The count projection must aggregate the SAME candidate set as the id
+  // projection — proven here on the non-referencedBy (types) path; the
+  // backlinks path is covered in plugins/backlinks/inline-counts.
+  it('equals typedBlockIds length, excluding tombstoned rows', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'b', type: 'note'})
+    await create({id: 'c', type: 'task'})
+    await env.repo.tx(tx => tx.delete('b'), {scope: ChangeScope.BlockDefault})
+
+    const ids = await env.repo.query.typedBlockIds({workspaceId: WS, types: ['note']}).load()
+    const n = await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note']}).load()
+    expect(n).toBe(ids.length)
+    expect(n).toBe(1)
+  })
+
+  it('scopes to workspaceId', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'b', type: 'note', workspaceId: OTHER_WS})
+    expect(await env.repo.query.typedBlockCount({workspaceId: WS, types: ['note']}).load()).toBe(1)
+    expect(await env.repo.query.typedBlockCount({workspaceId: OTHER_WS, types: ['note']}).load()).toBe(1)
+  })
+
+  it('returns 0 for an empty workspaceId', async () => {
+    expect(await env.repo.query.typedBlockCount({workspaceId: '', types: ['note']}).load()).toBe(0)
+  })
+
+  it('matches typedBlockIds length on the ancestor-scope path (COUNT must not multiply per ancestor_chain row)', async () => {
+    // `child` has TWO ancestors (`parent` and `gp`) that each reference `tag`,
+    // so the ancestor predicate matches the one candidate via two distinct
+    // ancestor_chain rows. A COUNT(*) over a multiplying ancestor JOIN would
+    // return 2; the correct EXISTS-in-WHERE count is 1. A single-ancestor
+    // fixture can't tell those apart — it returns 1 either way.
+    await create({id: 'target'})
+    await create({id: 'tag'})
+    await create({id: 'gp', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'parent', parentId: 'gp', references: [{id: 'tag', alias: 'Tag'}]})
+    await create({id: 'child', parentId: 'parent', references: [{id: 'target', alias: 'T'}]})
+    await create({id: 'sibling', references: [{id: 'target', alias: 'T'}]})
+
+    const query = {
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+      match: [{scope: 'ancestor' as const, referencedBy: {id: 'tag'}}],
+    }
+    const ids = await env.repo.query.typedBlockIds(query).load()
+    const n = await env.repo.query.typedBlockCount(query).load()
+    expect(ids).toEqual(['child']) // one candidate, even with two matching ancestors
+    expect(n).toBe(ids.length) // 1, not 2 — no per-ancestor multiplication
   })
 })
 
@@ -507,6 +570,26 @@ describe('repo.query.aliasesInWorkspace', () => {
     expect(out).toEqual(['Inbox'])
   })
 
+  it('matches LIKE metacharacters in the filter literally, not as wildcards', async () => {
+    await create({id: 'underscore', aliases: ['a_b']})
+    await create({id: 'single-char', aliases: ['axb']}) // `_`-as-wildcard would match this
+    await create({id: 'percent', aliases: ['50%done']})
+    await create({id: 'plain', aliases: ['anything']}) // a bare `%` would match this if unescaped
+    await create({id: 'backslash', aliases: ['a\\b']}) // contains a literal backslash
+
+    // `_` must match a literal underscore, not any single char.
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a_b'}).load())
+      .toEqual(['a_b'])
+    // A bare `%` must match only aliases containing a literal percent, not every row.
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: '%'}).load())
+      .toEqual(['50%done'])
+    // The escape char itself (`\`) must be escaped, so a backslash in the
+    // filter matches literally instead of corrupting the LIKE pattern
+    // (an unescaped `\b` would be read as escaped-`b` → pattern `%ab%`).
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a\\b'}).load())
+      .toEqual(['a\\b'])
+  })
+
   it('orders exact aliases before prefix and substring matches', async () => {
     await create({id: 'exact', aliases: ['i']})
     await create({id: 'prefix', aliases: ['Inbox']})
@@ -552,6 +635,13 @@ describe('repo.query.aliasMatches', () => {
 
     expect(out.map(row => row.alias)).toEqual(['Dating', 'Dating pool', 'Online Dating'])
   })
+
+  it('matches LIKE metacharacters in the filter literally, not as wildcards', async () => {
+    await create({id: 'lit', content: 'c', aliases: ['a_b']})
+    await create({id: 'wild', content: 'c', aliases: ['axb']}) // `_`-as-wildcard would match this
+    const out = await env.repo.query.aliasMatches({workspaceId: WS, filter: 'a_b'}).load()
+    expect(out.map(row => row.alias)).toEqual(['a_b'])
+  })
 })
 
 describe('repo.query.aliasMatchesFuzzy', () => {
@@ -578,6 +668,18 @@ describe('repo.query.aliasMatchesFuzzy', () => {
       prefixes: ['pr', 'rev'],
     }).load()
     expect(out.map(row => row.blockId).sort()).toEqual(['match'])
+  })
+
+  it('matches LIKE metacharacters in a prefix literally, not as wildcards', async () => {
+    // Prefixes are literal token substrings, not patterns — a typed `_`
+    // must not act as a single-char wildcard in the pre-filter.
+    await create({id: 'lit', aliases: ['a_b']})
+    await create({id: 'wild', aliases: ['axb']}) // `_`-as-wildcard would match this
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['a_b'],
+    }).load()
+    expect(out.map(row => row.blockId)).toEqual(['lit'])
   })
 
   it('returns workspace-wide rows when prefixes is empty', async () => {

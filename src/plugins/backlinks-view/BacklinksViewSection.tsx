@@ -48,9 +48,13 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
   if (!selected) return null
 
   const Selected = selected.render
+  // Compact text-toggle switcher. No top margin / block wrapper: the variants
+  // render this inline inside their header row (next to the filter icon), so it
+  // costs no extra vertical line. `variants.length > 1` ⇒ nothing when only the
+  // flat variant is registered.
   const controls = variants.length > 1 && (
     <div
-      className="mt-4 inline-flex items-center gap-0.5 text-xs text-muted-foreground"
+      className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
       role="group"
       aria-label="Backlinks view"
     >
@@ -61,10 +65,8 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
             key={variant.id}
             type="button"
             onClick={() => setOverrideId(variant.id === defaultId ? undefined : variant.id)}
-            className={`rounded-sm px-1.5 py-0.5 leading-4 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-              active
-                ? 'bg-accent text-foreground'
-                : 'hover:bg-accent/50 hover:text-foreground'
+            className={`leading-4 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+              active ? 'font-medium text-foreground' : 'hover:text-foreground'
             }`}
             aria-pressed={active}
           >

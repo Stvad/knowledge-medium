@@ -5,6 +5,7 @@ import {
   AtSign,
   Calendar,
   CheckSquare,
+  ChevronDownSquare,
   Hash,
   Link as LinkIcon,
   List,
@@ -32,6 +33,7 @@ import {
 } from './defaults'
 import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 import { RefTargetTypePicker } from './RefTargetTypePicker'
+import { SelectPropertyEditor } from './SelectPropertyEditor'
 
 /** Validates ref / refList preset config. `targetTypes`, when present,
  *  must be a string[]; anything else is rejected at the parse boundary
@@ -117,6 +119,22 @@ export const kernelValuePresets: readonly AnyValuePreset[] = [
     build: () => codecs.url,
     defaultValue: '',
     Editor: asEditor<string>(UrlPropertyEditor),
+  }),
+  definePreset<string>({
+    // Provides the `<select>` editor for stored enum properties (options
+    // ride on the codec). Hidden from the AddPropertyForm picker — an
+    // ad-hoc enum has no options-config UI, so it's only useful when a
+    // plugin's settings schema supplies the options via `codecs.enum`.
+    id: 'enum',
+    label: 'Choice',
+    Glyph: ChevronDownSquare,
+    // Placeholder codec: the preset only supplies the editor (resolved by
+    // codec.type), and is hidden from the picker, so this is never used to
+    // mint a schema. The explicit <string> keeps it a `Codec<string>`.
+    build: () => codecs.enum<string>([]),
+    defaultValue: '',
+    Editor: asEditor<string>(SelectPropertyEditor),
+    hideFromPicker: true,
   }),
   definePreset<string, RefCodecOptions>({
     id: 'ref',

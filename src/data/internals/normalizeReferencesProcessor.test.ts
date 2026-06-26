@@ -36,6 +36,8 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
   })
+  // Undo/redo are scoped to the active workspace (issue #186).
+  repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
 

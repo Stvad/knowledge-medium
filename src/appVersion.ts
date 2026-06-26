@@ -1,6 +1,6 @@
 /**
  * The running build's version, baked in at build time by Vite's `define`
- * (see vite.config.ts → resolveAppVersion). Surfaced in the sync-status
+ * (see vite.config.ts → resolveAppVersion). Surfaced in the status
  * dropdown and, later, used to detect when a newer build is deployed.
  */
 export interface AppVersion {

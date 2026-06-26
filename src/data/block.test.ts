@@ -60,6 +60,12 @@ const titleProp = defineProperty<string>('title', {
   changeScope: ChangeScope.BlockDefault,
 })
 
+const tagsProp = defineProperty<string[]>('tags', {
+  codec: codecs.list(codecs.string),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
+
 describe('Block.data / peek (sync)', () => {
   it('throws BlockNotLoadedError when the row isn\'t in cache', () => {
     const b = new Block(env.repo, 'cold')
@@ -464,6 +470,34 @@ describe('Block.set / setContent / delete (write sugar)', () => {
     const b = new Block(env.repo, 'w1')
     await b.set(titleProp, 'Hello')
     expect(b.get(titleProp)).toBe('Hello')
+  })
+
+  it('set(schema, updater) reads the current value and writes the result', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'fn1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const b = new Block(env.repo, 'fn1')
+    await b.set(tagsProp, ['a'])
+    await b.set(tagsProp, current => [...(current ?? []), 'b'])
+    expect(b.get(tagsProp)).toEqual(['a', 'b'])
+  })
+
+  it('concurrent set(schema, updater) calls both land (no lost update)', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'fn2', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const b = new Block(env.repo, 'fn2')
+    await b.set(tagsProp, [])
+    // Fire both before awaiting: each updater must read the OTHER's
+    // committed write (the serialized write-tx), not the empty snapshot
+    // both started from — that's the lost-update the overload prevents.
+    await Promise.all([
+      b.set(tagsProp, c => [...(c ?? []), 'x']),
+      b.set(tagsProp, c => [...(c ?? []), 'y']),
+    ])
+    expect([...(b.get(tagsProp) ?? [])].sort()).toEqual(['x', 'y'])
   })
 
   it('setContent routes through repo.mutate.setContent', async () => {

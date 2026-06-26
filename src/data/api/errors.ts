@@ -86,6 +86,24 @@ export class CycleError extends DataLayerError {
   }
 }
 
+/** Precondition failure raised by the block-merge helper when `into` is a
+ *  descendant of `from`. Folding `from`'s subtree into one of its own
+ *  descendants would re-home an ancestor of `into` under `into` (via
+ *  `tx.move`) and trip the cycle guard mid-fold — the merge can never
+ *  succeed in that direction. Surfaced up front as a typed, user-actionable
+ *  error (e.g. the alias-collision "Merge into…" affordance) instead of
+ *  leaking the raw `CycleError` after a partial fold + rollback (#188). */
+export class MergeIntoDescendantError extends DataLayerError {
+  constructor(
+    public readonly intoId: string,
+    public readonly fromId: string,
+  ) {
+    super(
+      `cannot merge ${fromId} into ${intoId}: ${intoId} is a descendant of ${fromId}`,
+    )
+  }
+}
+
 /** Thrown by the tx engine's parent preflight when a write references a
  *  non-existent parent_id. The storage layer still backs this invariant, but
  *  its local trigger collapses missing-parent and cross-workspace failures

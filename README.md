@@ -1,8 +1,44 @@
-# Malleable Thought Medium
+# Knowledge Medium
+
+**A malleable, offline-first medium for knowledge work.** &nbsp;·&nbsp; [**Try the live version →**](https://stvad.github.io/knowledge-medium/)
+
+A Roam/Workflowy-like outliner where *everything is a block and everything is an
+extension* — notes, daily notes, settings, even the renderers that draw the
+screen. The app is a thin host that assembles itself from those blocks at
+runtime, so you can reshape it from inside. It runs in the browser as an
+installable PWA, is local-first (instant, offline-capable), and syncs across
+devices via PowerSync + Supabase.
+
+**The idea:** log in and you get an opinionated knowledge-management tool (think
+Notion / Roam / Obsidian) you can be productive in immediately — but those
+defaults are an *example, not a prescription*. They're assembled from a small set
+of primitives, so you (or a coding agent on your behalf) can remix them into the
+tool that fits how your mind works; "Notion" and "Roam" are just different views
+over the same blocks. The hard, generic parts — sync, collaboration, offline,
+storage, querying — are solved once and exposed as building blocks, so shaping
+the app to you means composing components instead of rebuilding infrastructure.
+(In the spirit of [malleable
+software](https://www.inkandswitch.com/essay/malleable-software/).)
+
+**What's different:** one universal `blocks` table for everything (pages, todos,
+flashcards, places, settings, renderer source — set apart only by multi-valued
+types + typed properties); the whole app is facet-based extensions you can author
+live in-browser (no build step); config, prefs, and UI state live *in the
+document* as blocks (so they sync and version with your notes); and a runtime
+bridge lets agents/scripts drive the live app from your terminal.
+
+**Features** (learn them in the built-in `[[Tutorial]]`): outlining with fold /
+zoom / drag and vim or arrow-key motion · `[[wiki links]]`, block refs `((id))`,
+inline embeds `!((id))`, and indexed backlinks · side panels + multi-select ·
+QuickFind and workspace-wide find-and-replace · daily notes with quick capture ·
+typed properties & user-defined types · first-class places & maps · todos and
+SM-2.5 spaced repetition · Roam import, themes, and a touch-first mobile UI.
+
+---
 
 ## Supabase + PowerSync Setup
 
-This repo now expects:
+This repo expects:
 - Supabase hosted Postgres for the source database
 - Supabase Auth for app sessions (email OTP, with anonymous as a fallback)
 - PowerSync Cloud for syncing into local SQLite
@@ -125,11 +161,25 @@ yarn agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }
 
 Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
 
+For an agent-facing orientation to the data model, run `yarn agent data-model`.
+
 By default the bridge uses `http://127.0.0.1:8787`. The bridge secret is stored in the local config file (`~/.config/knowledge-medium/agent-bridge.json` by default), so pairing is normally one-time per browser profile and app origin. Run `yarn agent pair-url` or foreground the relay with `yarn agent:server` to get a bridge-only pairing URL. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
 
 The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires the bridge secret header; the CLI reads the persisted local secret automatically for `yarn agent status`.
 
 ---
+
+## Development
+
+```bash
+yarn dev      # start the app (Vite)
+yarn check    # the verification gate: typecheck, lint, and tests
+yarn build    # production build
+```
+
+See [`AGENTS.md`](./AGENTS.md) for verification, testing, and contribution
+conventions, and [`docs/`](./docs) for design notes (treat these as dated
+intent — the code and tests are authoritative).
 
 ## Expanding the ESLint configuration
 

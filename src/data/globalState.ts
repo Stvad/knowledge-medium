@@ -16,6 +16,7 @@ import { use, useCallback } from 'react'
 import { useBlockContext } from '@/context/block.js'
 import { useUser } from '@/components/Login.js'
 import { useRepo } from '@/context/repo.js'
+import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import {
   ChangeScope,
   isSystemAuthor,
@@ -74,7 +75,18 @@ export function usePanelsForLayoutSession(layoutSessionId = getLayoutSessionId()
 export function useUserBlock(): Block {
   const repo = useRepo()
   const user = useUser()
-  const workspaceId = requireWorkspaceId(repo, 'useUserBlock')
+  // `useActiveWorkspaceId` re-renders this hook on a workspace switch (via its
+  // hash subscription) while resolving the *committed* active workspace (the
+  // pin) — so persistent surfaces that hold the user block (the left sidebar's
+  // shortcuts) follow a switch instead of staying pinned to the previous
+  // workspace, without ever resolving a not-yet-validated URL workspace (which
+  // would have getUserBlock write a user-page row into it). The pin alone is
+  // non-reactive, so reading it without the subscription left those surfaces
+  // stale after a switch.
+  const workspaceId = useActiveWorkspaceId()
+  if (!workspaceId) {
+    throw new Error('useUserBlock requires an active workspace')
+  }
 
   return use(getUserBlock(repo, workspaceId, user))
 }

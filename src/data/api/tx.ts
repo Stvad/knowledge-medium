@@ -184,6 +184,18 @@ export interface Tx {
    *  row already constrains the query. */
   childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
 
+  /** Existence probe: does `parentId` have any child row? Live-only by
+   *  default (`SELECT 1 … WHERE parent_id = ? AND deleted = 0 LIMIT 1`,
+   *  index-served via the partial `idx_blocks_parent_order`).
+   *  `{includeDeleted: true}` also counts tombstoned children — used to
+   *  tell a row that ever had children (a real container, even one whose
+   *  whole subtree was soft-deleted) apart from a never-populated stub.
+   *  NOTE: the `includeDeleted` variant cannot use the partial
+   *  (`deleted = 0`) index and falls back to a table scan, so reach for it
+   *  only off hot paths. Cheaper than `childrenOf().length` — no row
+   *  materialization, no `ORDER BY` sort, and stops at the first match. */
+  hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean>
+
   /** Nearest live sibling before/after `anchor` in `(order_key, id)`
    *  order. Unlike `childrenOf`, this is a cursor lookup, so insertion
    *  mutators can compute adjacent order keys without loading a large
@@ -194,6 +206,14 @@ export interface Tx {
   /** Parent of `childId`, or null if `childId` has no parent or doesn't
    *  exist. Reads SQL via the writeTransaction. */
   parentOf(childId: string): Promise<BlockData | null>
+
+  /** True when `potentialAncestorId` is an ancestor of `id` (i.e. `id` is
+   *  a descendant of `potentialAncestorId`). Walks `parent_id` up from `id`
+   *  via the same bounded CTE (`IS_DESCENDANT_OF_SQL`) that backs
+   *  `tx.move`'s cycle guard, so — like that guard — it does NOT filter
+   *  soft-deleted nodes: a tombstone on the ancestor chain is still a real
+   *  structural edge (#183). `id === potentialAncestorId` returns true. */
+  isDescendantOf(id: string, potentialAncestorId: string): Promise<boolean>
 
   /** Look up the live block in `workspaceId` whose `aliases` property
    *  contains the exact `alias` text. Returns null when no such block

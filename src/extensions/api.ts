@@ -38,6 +38,17 @@ export {
   type VariantSelection,
 } from '@/facets/variantFacet.js'
 
+// --- Verb facet helper (observe / wrap / replace a single typed verb) ---
+export {
+  defineVerbFacet,
+  type VerbFacet,
+  type VerbImpl,
+  type VerbDecorator,
+  type VerbBefore,
+  type VerbAfter,
+  type VerbOutcome,
+} from '@/facets/verbFacet.js'
+
 // --- Blessed core facets ---
 export {
   actionTransformsFacet,
@@ -103,6 +114,57 @@ export {
 
 // --- Markdown rendering pipeline ---
 export { markdownExtensionsFacet } from '@/markdown/extensions.js'
+
+// --- Paste decision seam (override how clipboard content lands: split into
+// an outline vs drop as a single block, optionally rewriting the text) ---
+export {
+  pasteDecisionVerb,
+  defaultPasteDecision,
+  type PasteDecision,
+  type PasteRequest,
+  type PasteSurface,
+} from '@/paste/decision.js'
+
+// --- Navigation seams, two layers ---
+// Intent policy (`navigationIntentVerb`): remap the gesture→target mapping —
+// the modifier matrix, the follow-link/navigator role, or where global commands
+// land (active vs main). Execution (`navigationVerb`): observe / rewrite (by
+// target / origin / block) / veto / replace the act of going to a block —
+// analytics, confirm-before-leave, retarget by block type.
+export {
+  navigationVerb,
+  navigationIntentVerb,
+  defaultNavigationIntent,
+  // Build/transform an intent policy's `NavigationDecision`.
+  goTo,
+  PASSTHROUGH,
+  SUPPRESS,
+  mapNavigate,
+  navigate,
+  useNavigate,
+  navigateFromGesture,
+  navigateFromGlobalCommand,
+  useNavigateFromGlobalCommand,
+  // The standard way to wire a clickable surface that opens a block (links,
+  // buttons, map pins, list rows) — modifier-aware, routed through the policy.
+  useOpenBlock,
+  useBlockOpener,
+  // Route a resolved decision onto a click (gate `preventDefault`) — for custom
+  // surfaces that resolve the gesture themselves.
+  applyNavigationDecision,
+  type NavigateInput,
+  type NavigationDecision,
+  type ResolvedNavigateInput,
+  type GlobalCommandNavigateInput,
+  type NavigationRequest,
+  type NavigationResult,
+  type NavigationGesture,
+  type NavigationRole,
+  type NavigationViewport,
+  type BlockOpenerPlainClick,
+  type BlockOpenerOptions,
+  type OpenBlockContext,
+} from '@/utils/navigation.js'
 
 // --- Action / shortcut helpers ---
 export {

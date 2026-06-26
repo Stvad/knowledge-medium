@@ -45,7 +45,9 @@ import { z } from 'zod'
 import {
   ChangeScope,
   definePostCommitProcessor,
+  derivedRefKey,
   normalizeReferences,
+  reconcileDerived,
   type BlockData,
   type BlockReference,
   type AnyPostCommitProcessor,
@@ -58,7 +60,8 @@ import {
   parseReferences as parseAliasMarks,
   parseBlockRefs,
 } from './referenceParser.ts'
-import { projectPropertyReferences } from './referenceProjection.ts'
+import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
+import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
 import {
   dailyNoteBlockId,
@@ -167,27 +170,46 @@ const buildSourcePlan = async (
   }
 
   const propertyRefs = projectPropertyReferences(source, ctx.propertySchemas)
-  // Retain derived refs whose property schema is currently ABSENT from the
-  // registry — the owning plugin is toggled off / not yet loaded. Absence means
-  // "can't re-derive", NOT "delete": the value still encodes the relationship,
-  // so keep the existing projection rather than dropping it. Dropping here is
-  // the per-block "drip" that, fleet-wide, complements the reprojection
-  // mass-strip (both silently deleted ~10k SRS `next-review-date` backlinks).
-  // The one exception is when THIS write changed that field's value: a retained
-  // ref would then contradict the new value, and we can't re-derive it without
-  // the schema, so drop it. A *present* schema (ref or non-ref) is already
-  // handled by projectPropertyReferences above — it re-derives, or correctly
-  // drops a redefined-to-non-ref field's stale refs.
-  const retainedAbsentRefs = source.references.filter(ref => {
-    if (!ref.sourceField) return false
-    if (ctx.propertySchemas.has(ref.sourceField)) return false
-    const afterValue = source.properties[ref.sourceField]
-    if (afterValue === undefined) return false
-    return JSON.stringify(before?.properties[ref.sourceField]) === JSON.stringify(afterValue)
+  // Add-only / retain-on-source contract
+  // (docs/contracts/derived-data-add-only.md): recompute is authoritative for
+  // content + present-schema property refs, but a prior ref whose schema is
+  // ABSENT can't be re-derived, so `reconcileDerived` retains it rather than
+  // dropping it (see `isRetainableAbsentRef`). Dropping such a ref is the
+  // per-block "drip" that, fleet-wide, complements the reprojection mass-strip
+  // (both silently deleted ~10k SRS `next-review-date` backlinks).
+  const references = reconcileDerived<BlockReference>({
+    prior: source.references,
+    recomputed: [...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs],
+    keyOf: derivedRefKey,
+    retain: ref => isRetainableAbsentRef(ref, source, before, ctx.propertySchemas),
   })
-  const references: BlockReference[] = [
-    ...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs, ...retainedAbsentRefs,
-  ]
+  if (devAssertionsEnabled()) {
+    // L2 dev/test-only assertion (off in prod): the basis of the
+    // written refs is the committed source, and the reconcile must honor the
+    // add-only / retain-on-source contract AT THIS SITE — every recomputed ref
+    // (content + present-schema property) survives, and every prior ref we're
+    // bound to retain (absent-schema, value unchanged) survives. Catches a
+    // future "made it strip again" here, which a reconcileDerived unit test
+    // can't (wrong args at this call site would still pass there).
+    const resultKeys = new Set(references.map(derivedRefKey))
+    for (const ref of [...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs]) {
+      if (!resultKeys.has(derivedRefKey(ref))) {
+        throw new Error(
+          `[references] reconcile dropped a recomputed ref ${ref.sourceField ?? ''}/${ref.id} on ${source.id}`,
+        )
+      }
+    }
+    for (const ref of source.references) {
+      if (
+        isRetainableAbsentRef(ref, source, before, ctx.propertySchemas)
+        && !resultKeys.has(derivedRefKey(ref))
+      ) {
+        throw new Error(
+          `[references] reconcile dropped a retainable absent-schema ref ${ref.sourceField ?? ''}/${ref.id} on ${source.id}`,
+        )
+      }
+    }
+  }
   // tx.update normalises references on write, so `source.references`'s
   // JSON text — when written by any tx.* path — is already in canonical
   // form (sorted, deduped, omitted-empty-sourceField, no whitespace).

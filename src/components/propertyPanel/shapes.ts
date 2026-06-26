@@ -10,6 +10,7 @@ const KERNEL_TYPE_LABELS: Record<string, string> = {
   number: 'Number',
   boolean: 'Checkbox',
   object: 'Object',
+  enum: 'Choice',
   url: 'URL',
   ref: 'Reference',
   refList: 'References',

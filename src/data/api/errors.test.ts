@@ -8,6 +8,7 @@ import {
   DeletedConflictError,
   DeterministicIdCrossWorkspaceError,
   DuplicateIdError,
+  MergeIntoDescendantError,
   MutatorNotRegisteredError,
   NotDeletedError,
   ParentDeletedError,
@@ -29,6 +30,7 @@ describe('data-layer errors', () => {
       new DeletedConflictError('a'),
       new DeterministicIdCrossWorkspaceError('a', 'w1', 'w2'),
       new DuplicateIdError('a'),
+      new MergeIntoDescendantError('into', 'from'),
       new MutatorNotRegisteredError('m'),
       new NotDeletedError('a'),
       new ParentDeletedError('p'),
@@ -55,6 +57,12 @@ describe('data-layer errors', () => {
     const cyc = new CycleError('child', 'newParent')
     expect(cyc.movedId).toBe('child')
     expect(cyc.targetParentId).toBe('newParent')
+
+    const merge = new MergeIntoDescendantError('intoX', 'fromY')
+    expect(merge.intoId).toBe('intoX')
+    expect(merge.fromId).toBe('fromY')
+    expect(merge.message).toContain('intoX')
+    expect(merge.message).toContain('fromY')
 
     const cross = new DeterministicIdCrossWorkspaceError('id', 'wa', 'wb')
     expect(cross.id).toBe('id')

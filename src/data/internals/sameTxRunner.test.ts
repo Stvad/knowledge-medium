@@ -54,6 +54,8 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
   })
+  // Undo/redo are scoped to the active workspace (issue #186).
+  repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
 
@@ -339,6 +341,58 @@ describe('Same-tx runner — ordering', () => {
     // Amendment still landed.
     const row = await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['a'])
     expect(row.content).toBe('final')
+  })
+})
+
+describe('Same-tx runner — undo/redo replay skip (#187)', () => {
+  // A value-deriving same-tx processor: appends '!' to content whenever
+  // content changes (and isn't already suffixed). Non-idempotent in the
+  // sense that re-running on a restore would corrupt the restored value.
+  const appendBang: AnySameTxProcessor = {
+    name: 'test.appendBang',
+    watches: {kind: 'field', table: 'blocks', fields: ['content']},
+    apply: async (event, ctx) => {
+      for (const row of event.changedRows) {
+        if (row.after && !row.after.content.endsWith('!')) {
+          await ctx.tx.update(row.id, {content: `${row.after.content}!`}, {skipMetadata: true})
+        }
+      }
+    },
+  }
+
+  it('does not re-run a value-deriving same-tx processor during undo/redo (restore is exact)', async () => {
+    // Seed content='orig' BEFORE registering the processor, so the
+    // restored snapshot is the bare 'orig' (no '!' suffix). This is
+    // what makes the bug observable: if the same-tx pass re-ran on the
+    // undo's applyRaw write, 'orig' (no trailing '!') would be amended
+    // to 'orig!'.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'orig'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    env.repo.__setSameTxProcessorsForTesting([appendBang])
+
+    // Update to 'changed' → processor appends → 'changed!'. The undo
+    // entry for this tx captures before={content:'orig'},
+    // after={content:'changed!'}.
+    await env.repo.tx(async tx => {
+      await tx.update('a', {content: 'changed'})
+    }, {scope: ChangeScope.BlockDefault})
+    const changed = await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['a'])
+    expect(changed.content).toBe('changed!')
+
+    // Undo: applyRaw drives content back to exactly 'orig'. That's a
+    // content change in the replay tx, so a non-gated same-tx pass
+    // would re-derive to 'orig!'. With the replay-skip gate it stays
+    // 'orig' (#187).
+    expect(await env.repo.undo(ChangeScope.BlockDefault)).toBe(true)
+    const undone = await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['a'])
+    expect(undone.content).toBe('orig')
+
+    // Redo: applyRaw restores the post-update snapshot exactly.
+    expect(await env.repo.redo(ChangeScope.BlockDefault)).toBe(true)
+    const redone = await env.h.db.get<{content: string}>('SELECT content FROM blocks WHERE id = ?', ['a'])
+    expect(redone.content).toBe('changed!')
   })
 })
 

@@ -15,7 +15,9 @@
 import {
   ChangeScope,
   DeletedConflictError,
+  derivedRefKey,
   normalizeReferences,
+  reconcileDerived,
   type AnyPropertySchema,
   type BlockData,
   type BlockDataPatch,
@@ -58,7 +60,10 @@ import {
   type PreparedPage,
   type RoamImportPlan,
 } from './plan'
-import { projectPropertyReferences } from '@/plugins/references/referenceProjection.js'
+import {
+  isRetainableAbsentRef,
+  projectPropertyReferences,
+} from '@/plugins/references/referenceProjection.js'
 import type { RoamExport } from './types'
 import { writeImportLog } from './report'
 import { collectTypeCandidates, type RoamTypeCandidate } from './typeCandidates'
@@ -333,9 +338,13 @@ export const importRoam = async (
     )
   }
   for (const block of allPlannedBlocks) {
+    // Planner site: no separate prior row, so after === before === block.
     block.references = referencesWithProjectedProperties(
       block.references,
       projectPropertyReferences(block, repo.propertySchemas),
+      block,
+      block,
+      repo.propertySchemas,
     )
   }
   for (const page of plan.pages) {
@@ -503,6 +512,7 @@ export const importRoam = async (
       await upsertImportedBlock(
         tx,
         withPageAliases(recon.page.data, recon.aliasesToApply),
+        repo.propertySchemas,
         pageImportMergeOptions(),
       )
     }
@@ -542,7 +552,7 @@ export const importRoam = async (
         const desc = plan.descendants[i]
         const data = applyReparent(desc.data, reparentMap)
         appendRoamMemoExistingConflicts(plan.diagnostics, desc, await tx.get(data.id))
-        await upsertImportedBlock(tx, data, mergeOptionsForDescendant(desc))
+        await upsertImportedBlock(tx, data, repo.propertySchemas, mergeOptionsForDescendant(desc))
         await applyMappedTypesInTx(tx, desc, repo, typeSnapshot)
       }
     }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
@@ -1090,18 +1100,54 @@ const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
   }
 }
 
+/** Whether a tombstoned row is a genuinely pristine stub that is safe to
+ *  blank-restore as a placeholder. Pristine = empty content, no
+ *  references, NO properties at all (any property — even a cosmetic one
+ *  like collapse / show-properties — means a user touched this row), and
+ *  no children at all — live OR tombstoned. A container the user deleted
+ *  (which cascade-tombstones its whole subtree) still has child rows, so
+ *  counting deleted children keeps us from resurrecting + re-rooting that
+ *  container as a blank stub and thereby undoing the user's deletion.
+ *  Same spirit as the "restorable transient tombstone" test alias-seat
+ *  reuse applies in src/data/targets.ts (`isRestorableTransientTombstone`)
+ *  — empty seed + no children — but deliberately STRICTER on children:
+ *  that predicate ignores tombstoned children (live-only), whereas a Roam
+ *  placeholder id can collide with a real container the user deleted, so
+ *  here we also reject deleted children. Anything that is NOT pristine is
+ *  user data we must not resurrect or relocate (#195), so the placeholder
+ *  path leaves it tombstoned; an unresolved ((uid)) pointing at such a
+ *  tombstone is the correct, lossless state until a complete import
+ *  upserts the real block back via upsertImportedBlock. */
+const isPristineRestorableStub = async (tx: Tx, row: BlockData): Promise<boolean> =>
+  row.content === '' &&
+  row.references.length === 0 &&
+  Object.keys(row.properties).length === 0 &&
+  !(await tx.hasChildren(row.id, {includeDeleted: true}))
+
 /**
  * Ensure a placeholder row exists at `id`. Used for ((uid)) targets
  * whose real block isn't in this export — references[] in imported
- * content needs the row to be present so backlinks resolve. Three
- * branches:
+ * content needs the row to be present so backlinks resolve. Branches:
  *   - Fresh insert: write an empty stub at workspace root.
  *   - Live-row hit: leave alone (a real block with content may
  *     already live at this id; a placeholder must NOT clobber it).
- *   - Tombstone hit: tx.restore with empty content so the row comes
- *     back to life and references resolve. The user can re-delete
- *     after the import if they were intentionally cleaning up;
- *     leaving the row tombstoned would crash the import tx.
+ *   - Tombstone hit, pristine stub: tx.restore to an empty placeholder
+ *     and move it to the workspace root so references resolve. "Pristine"
+ *     = empty content/references/properties and no children (live or
+ *     tombstoned) (see isPristineRestorableStub). The user can re-delete
+ *     after the import if they were intentionally cleaning up; leaving the
+ *     row tombstoned would crash the import tx.
+ *   - Tombstone hit, NOT pristine: the deleted row is user data — a real
+ *     block deleted under this uid (content / properties / backlinks), a
+ *     stub the user touched (e.g. collapsed → a stray property), or a
+ *     container the user deleted (whose subtree is cascade-tombstoned but
+ *     still present). Blank-restoring it would destroy that data, or undo
+ *     the deletion and relocate the container to the workspace root (#195).
+ *     Preserving live user data — including history — is paramount, so we
+ *     leave it tombstoned. A later, more-complete import that DOES include
+ *     the real block upserts it back via upsertImportedBlock; an
+ *     unresolved ((uid)) pointing at a tombstone is the correct, lossless
+ *     state until then.
  */
 const ensurePlaceholderRow = async (
   tx: Tx,
@@ -1117,12 +1163,17 @@ const ensurePlaceholderRow = async (
     })
   } catch (err) {
     if (!(err instanceof DeletedConflictError)) throw err
-    // Restoring as an empty stub: clear references and properties too,
-    // not just content. The id may have previously been a real imported
-    // block whose tombstone left stale references / properties in place;
-    // a fresh placeholder must look genuinely fresh, otherwise old
-    // backlinks and property values can persist into the upgrade
-    // window (and indefinitely if the planned content is also empty).
+    // The id collides with a tombstone. Only a genuinely pristine stub is
+    // safe to blank-restore — anything else (a real block deleted under
+    // this uid, a stub the user touched, or a container the user deleted
+    // whose subtree is still present) is user data a blank-restore would
+    // destroy or relocate (#195). Leave non-pristine tombstones alone.
+    // tx.get returns deleted rows (no `deleted` filter).
+    const existing = await tx.get(id)
+    if (!existing || !(await isPristineRestorableStub(tx, existing))) return
+    // Pristine stub: restore as an empty placeholder so the ((uid)) ref
+    // resolves. The empty patch is a no-op on already-empty fields but
+    // keeps the restored shape explicit.
     await tx.restore(id, {content: '', references: [], properties: {}})
     // Move the restored row to the placeholder location. tx.restore
     // alone keeps parentId / orderKey at whatever they were when the
@@ -1171,13 +1222,41 @@ const ROAM_MEMO_SRS_CONFLICT_FIELDS = [
 const storedValuesEqual = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left) === JSON.stringify(right)
 
+/**
+ * Rebuild a block's `references` from freshly projected property refs while
+ * honouring the add-only / retain-on-source contract
+ * (docs/contracts/derived-data-add-only.md). Content refs (empty
+ * `sourceField`) are kept verbatim — the importer doesn't re-parse content
+ * here — and `propertyRefs` is authoritative for every property whose schema
+ * is PRESENT. A prior property-derived ref whose schema is ABSENT can't be
+ * re-derived, so `reconcileDerived` RETAINS it (via `isRetainableAbsentRef`)
+ * rather than dropping it: an absent ref-typed schema at import time
+ * (`?safeMode`, a toggled-off plugin, a not-yet-republished UserSchemasService
+ * bucket) must not silently delete a property-derived backlink — the per-block
+ * drip of the same class that wiped ~10k SRS `next-review-date` backlinks.
+ *
+ * `after` is the block's post-write properties (the basis `propertyRefs` was
+ * projected from); `before` is the pre-write state used to confirm an absent
+ * field's value didn't change in this write (the one case where a stale
+ * absent-schema ref is allowed to drop). At the planner site there is no
+ * separate prior row, so `after === before`.
+ */
 const referencesWithProjectedProperties = (
-  references: readonly BlockReference[] | undefined,
+  prior: readonly BlockReference[] | undefined,
   propertyRefs: readonly BlockReference[],
-): BlockReference[] => normalizeReferences([
-  ...(references ?? []).filter(ref => (ref.sourceField ?? '') === ''),
-  ...propertyRefs,
-])
+  after: Pick<BlockData, 'properties'>,
+  before: Pick<BlockData, 'properties'> | null,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): BlockReference[] => normalizeReferences(
+  reconcileDerived<BlockReference>({
+    prior: prior ?? [],
+    recomputed: [...propertyRefs],
+    keyOf: derivedRefKey,
+    retain: ref =>
+      (ref.sourceField ?? '') === ''
+      || isRetainableAbsentRef(ref, after, before, propertySchemas),
+  }),
+)
 
 const formatStoredForDiagnostic = (value: unknown): string =>
   Array.isArray(value) ? `[${value.length} items]` : JSON.stringify(value)
@@ -1302,6 +1381,7 @@ const applyMappedTypesInTx = async (
 const upsertImportedBlock = async (
   tx: Tx,
   data: NewBlockData & {id: string; content: string; createdAt?: number; userUpdatedAt?: number},
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   propertyMergeOptions: ImportPropertyMergeOptions = {},
 ) => {
   const references = normalizeReferences(data.references ?? [])
@@ -1335,8 +1415,28 @@ const upsertImportedBlock = async (
     const patch: BlockDataPatch = {}
     if (existing.content !== data.content) patch.content = data.content
     if (!storedValuesEqual(existing.properties, properties)) patch.properties = properties
-    if (!storedValuesEqual(normalizeReferences(existing.references), references)) {
-      patch.references = references
+    // On a live-row hit the dump is authoritative for content refs and
+    // present-schema property refs, but a prior property-derived backlink whose
+    // schema is ABSENT can't be re-derived — so reconcile against the live row
+    // rather than replace-writing the dump set, retaining it per the add-only
+    // contract (docs/contracts/derived-data-add-only.md). Without this, a
+    // re-import with a ref schema toggled off (?safeMode / plugin off /
+    // workspace-switch race) silently deletes the existing backlink — the
+    // descendant-row twin of the SRS next-review-date wipe, on the route those
+    // cards actually travel. `references` already carries content +
+    // present-schema property refs; only absent-schema prior refs need
+    // retaining, and a genuinely changed/cleared field still drops (the
+    // value-unchanged guard in isRetainableAbsentRef).
+    const reconciledReferences = normalizeReferences(
+      reconcileDerived<BlockReference>({
+        prior: existing.references,
+        recomputed: references,
+        keyOf: derivedRefKey,
+        retain: ref => isRetainableAbsentRef(ref, {properties}, existing, propertySchemas),
+      }),
+    )
+    if (!storedValuesEqual(normalizeReferences(existing.references), reconciledReferences)) {
+      patch.references = reconciledReferences
     }
     if (
       patch.content !== undefined
@@ -1350,10 +1450,30 @@ const upsertImportedBlock = async (
     }
   } catch (err) {
     if (!(err instanceof DeletedConflictError)) throw err
+    // Resurrect with the planned data (not the user's pre-deletion state) — but
+    // soft-delete leaves `references_json` intact on the tombstone, and a bare
+    // restore would replace it with the dump set, dropping an absent-schema
+    // property-derived backlink the planner can't re-derive. Reconcile against
+    // the tombstone so that backlink is retained (same add-only contract as the
+    // live-row branch), using the *planned* properties as the "after" basis: a
+    // field the planned data drops takes its backlink with it (no orphan), and
+    // an absent-schema field the planned data keeps unchanged keeps its backlink.
+    const tombstone = await tx.get(data.id)
+    const restoredReferences = tombstone
+      ? normalizeReferences(
+          reconcileDerived<BlockReference>({
+            prior: tombstone.references,
+            recomputed: references,
+            keyOf: derivedRefKey,
+            retain: ref =>
+              isRetainableAbsentRef(ref, {properties: data.properties ?? {}}, tombstone, propertySchemas),
+          }),
+        )
+      : references
     await tx.restore(data.id, {
       content: data.content,
       properties: data.properties ?? {},
-      references,
+      references: restoredReferences,
     })
     await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
   }
@@ -1391,6 +1511,9 @@ const applyPromotedAttributes = async (
   const references = referencesWithProjectedProperties(
     existing.references,
     projectPropertyReferences({...existing, properties: next}, propertySchemas),
+    {properties: next},
+    existing,
+    propertySchemas,
   )
   const referencesChanged = !storedValuesEqual(
     normalizeReferences(existing.references),

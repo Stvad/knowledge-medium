@@ -24,7 +24,8 @@ import {
 import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
-import { pasteMultilineText } from '@/utils/paste.js'
+import { pasteMultilineText } from '@/paste/operations.js'
+import { pasteDecisionVerb } from '@/paste/decision.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -107,7 +108,7 @@ export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicat
   return (
     <span
       className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-        (withChildrenIndicator ? 'bullet-with-children border-4 border-solid border-border box-content' : '')}/>
+        (withChildrenIndicator ? ' bullet-with-children border-4 border-solid border-border box-content' : '')}/>
   )
 }
 
@@ -471,15 +472,36 @@ export function DefaultBlockRenderer(
 
       e.preventDefault()
       const pastedText = e.clipboardData.getData('text/plain')
+      if (!pastedText) return
+      const html = e.clipboardData.getData('text/html') || undefined
 
-      const pasted = await pasteMultilineText(pastedText, block, repo, {
+      // Block-shell paste (block focused, NOT in edit mode) has no text
+      // caret, so the chord intent is always 'split'. Routing through the
+      // verb keeps plugin overrides (text rewrites, observers, a forced
+      // single-block) consistent with the in-editor paste path. With no
+      // contributions the decision is the historical outline paste. The
+      // decision is a pure, synchronous policy (`runSync`) — the clipboard text
+      // is already in hand, so nothing to await before deciding.
+      const decision = pasteDecisionVerb.runSync(runtime, {
+        text: pastedText,
+        html,
+        intent: 'split',
+        surface: 'shell',
+      })
+      // The default decision is surface-aware: a plain single-line shell
+      // paste resolves to `split` (parse as outline, the historical
+      // behavior), so `single-block` here only ever comes from an explicit
+      // override and is honored literally — the applied behavior matches
+      // the decision.
+      const pasted = await pasteMultilineText(decision.text ?? pastedText, block, repo, {
         scopeRootId,
+        asSingleBlock: decision.kind === 'single-block',
       })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
       }
     },
-    [block, blockContext.renderScopeId, repo, scopeRootId, uiStateBlock],
+    [block, blockContext.renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
   )
 
   // Content slot: the content surface div + its surface props + the

@@ -2,20 +2,19 @@
  * Unit tests for the extension-block → togglable decode (app layer).
  *
  * These cover the half of the toggle surface that reads block
- * properties: resolving a display name/description and the full alias
- * set from a block without compiling it. The pure kernel factories
- * (`userToggle`, `systemToggle`, `isEnabled`, `applyToggle`) are tested
- * in `@/facets/test/togglable.test.ts`.
+ * properties: resolving a display name/description and the identifying
+ * `extension:name` from a block without compiling it. The pure kernel
+ * factories (`userToggle`, `systemToggle`, `isEnabled`, `applyToggle`)
+ * are tested in `@/facets/test/togglable.test.ts`.
  */
 import {describe, expect, it} from 'vitest'
-import {aliasesProp} from '@/data/properties'
 import {makeBlockData} from '@/data/test/factories.js'
 import {
   extensionDescriptionProp,
   extensionNameProp,
 } from '@/data/properties.js'
 import {
-  extensionAliasValues,
+  extensionName,
   userExtensionShellToggle,
   userExtensionToggle,
 } from '@/extensions/extensionToggles.js'
@@ -44,31 +43,6 @@ describe('userExtensionToggle', () => {
     expect(handle.description).toBe('Property description')
   })
 
-  it('uses the first alias as the display name when present', () => {
-    const block = makeBlockData({
-      id: 'block-aliased',
-      workspaceId: 'ws',
-      properties: {
-        [aliasesProp.name]: aliasesProp.codec.encode(['My Extension', 'Alt name']),
-      },
-    })
-    const handle = userExtensionToggle(block)
-    expect(handle.name).toBe('My Extension')
-  })
-
-  it('prefers the extension name property over aliases', () => {
-    const block = makeBlockData({
-      id: 'block-name-wins',
-      workspaceId: 'ws',
-      properties: {
-        [extensionNameProp.name]: extensionNameProp.codec.encode('Extension property'),
-        [aliasesProp.name]: aliasesProp.codec.encode(['Alias fallback']),
-      },
-    })
-    const handle = userExtensionToggle(block)
-    expect(handle.name).toBe('Extension property')
-  })
-
   it('falls back to a block-id snippet when no name metadata exists', () => {
     const block = makeBlockData({id: 'abcdef1234567890', workspaceId: 'ws'})
     const handle = userExtensionToggle(block)
@@ -86,21 +60,20 @@ describe('userExtensionShellToggle', () => {
   })
 })
 
-describe('extensionAliasValues', () => {
-  it('returns aliases plus the extension name', () => {
+describe('extensionName', () => {
+  it('returns the extension:name property', () => {
     const block = makeBlockData({
       id: 'block-labels',
       workspaceId: 'ws',
       properties: {
         [extensionNameProp.name]: extensionNameProp.codec.encode('Canonical'),
-        [aliasesProp.name]: aliasesProp.codec.encode(['Alias one', 'Alias two']),
       },
     })
-    expect(extensionAliasValues(block)).toEqual(['Alias one', 'Alias two', 'Canonical'])
+    expect(extensionName(block)).toBe('Canonical')
   })
 
-  it('is empty when the block has no labels', () => {
+  it('is undefined when the block has no name', () => {
     const block = makeBlockData({id: 'bare', workspaceId: 'ws'})
-    expect(extensionAliasValues(block)).toEqual([])
+    expect(extensionName(block)).toBeUndefined()
   })
 })
