@@ -35,11 +35,6 @@ import { drainUploads } from './uploadDrain.js'
 import { reconcileUploads } from './uploadReconcile.js'
 import { getByteUploadStore } from './uploadStore.js'
 
-/** Boot-time stamp recorded on each staged record (set once per page load). The
- *  promote-only reconciler no longer uses it (it never reaps), so it is currently
- *  vestigial — kept as a cheap per-record provenance marker for §16 GC / debugging. */
-export const uploadGeneration = Date.now()
-
 let blobStoreSingleton: BlobStore | null = null
 /** The app's Supabase-backed blob store, or null when Supabase isn't configured
  *  (local-only build — nothing to upload to, so the lane is a no-op). */
@@ -87,16 +82,12 @@ const withLock = async <T>(name: string, work: () => Promise<T>): Promise<T> => 
   return locks?.request ? locks.request(name, work) : work()
 }
 
-// TWO per-user locks, deliberately separate:
-//  - the MINT lock serializes the fast "create/reap a staged record + check block
-//    presence" operations — capture (stage → tx → promote) AND the reconciler's
-//    reap. Holding it around the WHOLE capture is what prevents a later-booted
-//    tab's reconciler from reaping THIS tab's in-flight capture (its block is
-//    absent only because its tx hasn't committed yet — a generation stamp alone
-//    can't tell that live-but-earlier tab from a dead prior session).
-//  - the LANE lock serializes the SLOW drain (uploads). Kept distinct so a capture
-//    never blocks on another tab's long upload backlog.
-const mintLockName = (userId: string) => `km-asset-mint:${userId}`
+// One per-user lock: the LANE lock makes the SLOW drain (uploads) single-owner
+// across tabs, so N tabs don't multiply egress. Capture and the boot reconciler
+// need NO lock — every up-lane op on the queue is idempotent (stage is an upsert,
+// promote/delete are no-ops if absent) and the reconciler only PROMOTES (never the
+// destructive reap that the old MINT lock existed to serialize against capture), so
+// a capture racing a reconcile or another capture always converges.
 const laneLockName = (userId: string) => `km-asset-upload-lane:${userId}`
 
 /** Fire-and-forget drain of the active user's pending uploads (after a capture).
@@ -120,17 +111,14 @@ export const armUploadDrain = (userId: string): void => {
 /** Boot recovery: promote `staged` records whose block has materialized (a crash
  *  between commit and the in-session promote), then drain. A `staged` record whose
  *  block isn't in `blocks` yet is LEFT for a later boot — never reaped (§16 GC owns
- *  orphan-byte reclamation; see {@link reconcileUploads}). Runs under the MINT lock
- *  so it can't race an in-flight capture's stage→promote. */
+ *  orphan-byte reclamation; see {@link reconcileUploads}). Needs no lock: the
+ *  promote is idempotent, so racing an in-flight capture's stage→promote converges. */
 export const runUploadReconcile = async (userId: string, repo: Repo): Promise<void> => {
   if (!getBlobStore()) return
-  await withLock(mintLockName(userId), () =>
-    reconcileUploads(userId, {
-      store: getByteUploadStore(),
-      isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
-    }),
-  )
-  // Drain separately under the lane lock — never hold the mint lock across uploads.
+  await reconcileUploads(userId, {
+    store: getByteUploadStore(),
+    isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
+  })
   armUploadDrain(userId)
 }
 
@@ -143,14 +131,12 @@ const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({
   // ctx — so an account switch mid-capture can't split them across accounts.
   getUserId: () => ctx.userId,
   ...laneKeyDeps(ctx.resolver),
-  generation: uploadGeneration,
   drain: armUploadDrain,
 })
 
 /** Read each File's bytes and capture them as media blocks under `embedParentId`.
- *  The renderer's paste entry point. The whole capture (stage → tx → promote) runs
- *  under the per-user MINT lock so a reconciler in another tab can't reap an
- *  in-flight capture (see {@link mintLockName}).
+ *  The renderer's paste entry point. Needs no lock: every queue op is idempotent and
+ *  the reconciler only promotes, so a concurrent capture/reconcile converges.
  *
  *  Files are read + captured ONE AT A TIME (bounded memory), and a grossly-oversize
  *  file is rejected by its declared `size` BEFORE `arrayBuffer()` — a multi-GB paste
@@ -166,25 +152,22 @@ export const captureMediaFromFiles = async (
   // Snapshot the lane context at the paste boundary: the user, and that user's §6
   // resolver. Capture touches no remote session (it only stages + writes the block
   // via `repo`), so once bound it is fully self-consistent — a mid-capture account
-  // switch can't split it across accounts, and there is nothing to abort for.
+  // switch can't split it across accounts.
   const userId = getActiveUserId()
   if (!userId) return files.map(() => ({ ok: false, reason: 'no-user' as const }))
   const deps = captureDepsFor(repo, { userId, resolver: syncResolverForUser(userId) })
-  const run = async (): Promise<MediaCaptureResult[]> => {
-    const results: MediaCaptureResult[] = []
-    for (const file of files) {
-      if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {
-        results.push({ ok: false, reason: 'too-large' }) // reject without reading
-        continue
-      }
-      const source: MediaSource = {
-        bytes: new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>,
-        mime: file.type || 'application/octet-stream',
-        filename: file.name || undefined,
-      }
-      results.push(await captureMedia({ workspaceId, source, embedParentId }, deps))
+  const results: MediaCaptureResult[] = []
+  for (const file of files) {
+    if (file.size > DEFAULT_MAX_CAPTURE_BYTES) {
+      results.push({ ok: false, reason: 'too-large' }) // reject without reading
+      continue
     }
-    return results
+    const source: MediaSource = {
+      bytes: new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>,
+      mime: file.type || 'application/octet-stream',
+      filename: file.name || undefined,
+    }
+    results.push(await captureMedia({ workspaceId, source, embedParentId }, deps))
   }
-  return withLock(mintLockName(userId), run)
+  return results
 }

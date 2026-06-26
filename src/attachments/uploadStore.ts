@@ -20,10 +20,6 @@
  * store and this queue are shared across the browser profile's accounts but drain
  * per-user under the active session, so every op is namespaced by the user.
  *
- * `generation` is the app-boot stamp the boot reconciler uses to avoid reaping an
- * in-flight capture: it only reaps `staged` records from an OLDER boot (a prior
- * run that crashed mid-capture), never the current boot's.
- *
  * The production backing is IndexedDB (commit-durable — see {@link
  * IndexedDbByteUploadStore.tx}); tests and the no-IndexedDB fallback use
  * {@link InMemoryByteUploadStore}. Records are plain JSON, so unlike the keyStore
@@ -37,7 +33,7 @@ export type ByteUploadStatus = 'staged' | 'pending' | 'failed'
  *  keyed by `contentKey`). */
 export interface ByteUploadRecord {
   readonly userId: string
-  /** The deterministic asset block id, `media:<content-key>`. */
+  /** The deterministic asset block id (a UUIDv5 of workspace + content-key). */
   readonly assetBlockId: string
   readonly workspaceId: string
   /** `sha256:<hex>` of the PLAINTEXT bytes — the encode AAD + read-side verify. */
@@ -45,8 +41,6 @@ export interface ByteUploadRecord {
   /** The Storage path segment + OPFS byte-store key (raw sha256 / keyed-HMAC). */
   readonly contentKey: string
   readonly status: ByteUploadStatus
-  /** App-boot stamp; the reconciler reaps `staged` only from strictly older boots. */
-  readonly generation: number
   /** Drain retry counter — bumped on a transient failure, bounds the retries. */
   readonly attempts: number
   /** ms epoch when first staged — age-based retry bound. */
@@ -57,12 +51,12 @@ export interface ByteUploadRecord {
  *  `status: 'staged'`, `attempts: 0`, and `stagedAt` from its clock. */
 export type StageInput = Pick<
   ByteUploadRecord,
-  'userId' | 'assetBlockId' | 'workspaceId' | 'contentHash' | 'contentKey' | 'generation'
+  'userId' | 'assetBlockId' | 'workspaceId' | 'contentHash' | 'contentKey'
 >
 
 export interface ByteUploadStore {
   /** Upsert a `staged` record. Idempotent: a re-paste of the same content (same
-   *  `assetBlockId`) re-arms — status→staged, attempts→0, fresh generation/stagedAt. */
+   *  `assetBlockId`) re-arms — status→staged, attempts→0, fresh stagedAt. */
   stage(input: StageInput): Promise<void>
   get(userId: string, assetBlockId: string): Promise<ByteUploadRecord | null>
   /** All of the user's records in the given status (drain reads `pending`, the
@@ -74,7 +68,7 @@ export interface ByteUploadStore {
   recordAttempt(userId: string, assetBlockId: string): Promise<void>
   /** → failed. No-op if absent. */
   markFailed(userId: string, assetBlockId: string): Promise<void>
-  /** Remove the record (confirmed upload, or reaped by the reconciler). */
+  /** Remove the record (a confirmed upload). */
   delete(userId: string, assetBlockId: string): Promise<void>
   /** Drop every record FOR THIS USER (account isolation — the store is shared
    *  across the profile's accounts). */

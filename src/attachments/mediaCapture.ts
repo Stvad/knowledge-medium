@@ -16,11 +16,12 @@
  *
  * Why this order: staging BEFORE the tx with a NON-drainable status closes the
  * orphan-upload window (a crash between stage and commit leaves a `staged` record
- * the boot reconciler reaps because its block never committed — we never upload
- * bytes for a block that doesn't exist). Promoting only AFTER commit closes the
- * lost-upload window (a crash between commit and promote leaves the block with a
- * `staged` record the reconciler promotes, because its block IS present). So a
- * crash at any single point is recoverable, never a broken-image-forever.
+ * whose block never committed — it stays `staged` so it never uploads, and §16 GC
+ * reclaims its bytes; we never upload bytes for a block that doesn't exist).
+ * Promoting only AFTER commit closes the lost-upload window (a crash between commit
+ * and promote leaves the block with a `staged` record the reconciler promotes,
+ * because its block IS present). So a crash at any single point is recoverable,
+ * never a broken-image-forever.
  *
  * The block id is `uuidv5(<workspaceId>:<content-key>)` — a UUID, because the
  * embed is a block-ref (`!((id))`) and the block-ref grammar only recognises
@@ -107,8 +108,6 @@ export interface MediaCaptureDeps {
   readonly getMaterializability: GetMaterializability
   /** The workspace's K_id (§10) — required to derive an e2ee content-key. */
   readonly getContentKeyHmac: (workspaceId: string) => Promise<CryptoKey | null>
-  /** App-boot stamp (the reconciler reaps `staged` only from older boots). */
-  readonly generation: number
   /** Arm the up-lane after commit. Fire-and-forget — the boot reconciler /
    *  periodic sweep also drains, so a missed arm only delays, never drops. */
   readonly drain: (userId: string) => void
@@ -169,8 +168,9 @@ export const captureMedia = async (
   const assetBlockId = mediaBlockId(workspaceId, contentKey)
 
   // (2) + (3) Durable, BEFORE the block tx: the bytes (render source + upload
-  // source) then a NON-drainable `staged` record. If we crash here the reconciler
-  // reaps the staged record (its block never committed) — no orphan upload.
+  // source) then a NON-drainable `staged` record. If we crash here the staged
+  // record's block never committed; it stays `staged` (never drains, never an
+  // orphan upload) and its bytes are reclaimed by §16 GC — the reconciler never reaps.
   await deps.byteStore.put(userId, workspaceId, contentKey, bytes)
   await deps.uploadStore.stage({
     userId,
@@ -178,7 +178,6 @@ export const captureMedia = async (
     workspaceId,
     contentHash,
     contentKey,
-    generation: deps.generation,
   })
 
   // (4) Mint the asset under the workspace ASSETS container (idempotent ensure
@@ -231,18 +230,4 @@ export const captureMedia = async (
   deps.drain(userId)
 
   return { ok: true, assetBlockId, embedBlockId, deduped: !inserted }
-}
-
-/** Capture several files in order (each embed appended after the previous). */
-export const captureMediaFiles = async (
-  workspaceId: string,
-  embedParentId: string,
-  sources: readonly MediaSource[],
-  deps: MediaCaptureDeps,
-): Promise<MediaCaptureResult[]> => {
-  const results: MediaCaptureResult[] = []
-  for (const source of sources) {
-    results.push(await captureMedia({ workspaceId, source, embedParentId }, deps))
-  }
-  return results
 }

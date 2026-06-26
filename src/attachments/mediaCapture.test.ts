@@ -87,7 +87,6 @@ const deps = (over: Partial<Parameters<typeof captureMedia>[1]> = {}) => ({
   getUserId: () => USER as string | null,
   getMaterializability: mat('copy'),
   getContentKeyHmac: async () => null,
-  generation: 1,
   drain: (u: string) => env.drained.push(u),
   ...over,
 })

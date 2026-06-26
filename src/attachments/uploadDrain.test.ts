@@ -21,7 +21,6 @@ const stageInput = (over: Partial<StageInput> = {}): StageInput => ({
   workspaceId: WS,
   contentHash: HASH,
   contentKey: KEY,
-  generation: 1,
   ...over,
 })
 

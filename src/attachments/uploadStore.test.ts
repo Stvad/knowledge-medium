@@ -28,7 +28,6 @@ const stageInput = (over: Partial<StageInput> = {}): StageInput => ({
   workspaceId: 'ws1',
   contentHash: 'sha256:abc',
   contentKey: 'ck-abc',
-  generation: 100,
   ...over,
 })
 
@@ -74,7 +73,6 @@ for (const backend of backends) {
         contentHash: 'sha256:abc',
         contentKey: 'ck-abc',
         status: 'staged',
-        generation: 100,
         attempts: 0,
         stagedAt: 1000,
       })
@@ -88,11 +86,11 @@ for (const backend of backends) {
       await store.stage(stageInput())
       await store.promote('u1', 'media:ck-abc')
       await store.recordAttempt('u1', 'media:ck-abc')
-      // re-paste: same content-key, later boot/clock
+      // re-paste: same content-key, later clock
       clock = 2000
-      await store.stage(stageInput({ generation: 200 }))
+      await store.stage(stageInput())
       const rec = await store.get('u1', 'media:ck-abc')
-      expect(rec).toMatchObject({ status: 'staged', attempts: 0, generation: 200, stagedAt: 2000 })
+      expect(rec).toMatchObject({ status: 'staged', attempts: 0, stagedAt: 2000 })
     })
 
     it('promote flips staged → pending (the post-commit flip)', async () => {
