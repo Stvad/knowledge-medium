@@ -18,23 +18,24 @@ import {
  * Seeds the starter Tutorial subtree on a freshly-created personal
  * workspace. Three parent-less pages are written in one tx:
  *
- *   - `Tutorial` (vim variant; the default landing target)
- *   - `Tutorial (no vim)` (variant for users with vim mode disabled)
+ *   - `Tutorial` (default / non-vim variant; the landing target — vim is
+ *     off by default, so this matches the shipped keymap)
+ *   - `Tutorial (vim)` (variant for users who enable vim mode)
  *   - `extensions` (shared page that holds the explanatory bullets and
  *     the seven example-extension source blocks; both Tutorial variants
  *     link to it via `[[extensions]]` so the examples aren't duplicated)
  *
  * The two Tutorial variants share one outline builder so their
  * structure stays in sync between variants. Reachable from the landing
- * daily note via a `[[Tutorial]]` bullet that `App.tsx` prepends on
- * first run; the no-vim variant is reachable from a cross-link bullet
- * at the top of the vim Tutorial.
+ * daily note via a `[[Tutorial]]` bullet that the daily-notes landing
+ * resolver prepends on first run; the vim variant is reachable from a
+ * cross-link bullet at the top of the default Tutorial.
  *
  * All inserts run in a single `repo.tx` so the whole subtree appears
  * atomically AND the cross-page wiki links resolve correctly — every
  * alias row exists before `parseReferences` (the post-commit processor)
  * runs against the bullets that reference the other pages. Returns the
- * id of the vim Tutorial so callers can use it as a tutorial-first
+ * id of the default Tutorial so callers can use it as a tutorial-first
  * landing target.
  */
 export const seedTutorial = async (
@@ -81,7 +82,7 @@ export const seedTutorial = async (
     { scope: ChangeScope.BlockDefault, description: 'seed tutorial' },
   )
 
-  return vimTutorialId
+  return defaultTutorialId
 }
 
 interface SeedPageArgs {

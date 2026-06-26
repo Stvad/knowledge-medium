@@ -99,7 +99,9 @@ export default actionsFacet.of({
   id: 'user.fold-all',
   description: 'Fold/unfold every block in the current view',
   context: ActionContextTypes.NORMAL_MODE,
-  defaultBinding: { keys: '$mod+Shift+f' },
+  // $mod+Shift+u — $mod+Shift+f is taken by Find-and-replace (global), so
+  // pressing it would fire both. Pick a free chord for the demo.
+  defaultBinding: { keys: '$mod+Shift+u' },
   handler: async ({ uiStateBlock }) => {
     const topLevelId = uiStateBlock.peekProperty(topLevelBlockIdProp)
     if (!topLevelId) return
@@ -184,7 +186,9 @@ export default [
     id: 'user.add-reaction',
     description: 'Add a reaction emoji to the focused block',
     context: ActionContextTypes.NORMAL_MODE,
-    defaultBinding: { keys: '$mod+Shift+r' },
+    // $mod+Shift+e — $mod+Shift+r collides with SRS "Open review"
+    // (Control+Shift+r) on Linux/Windows, where $mod is Ctrl. Use a free chord.
+    defaultBinding: { keys: '$mod+Shift+e' },
     handler: async ({ block }) => cycleReaction(block),
   }),
 

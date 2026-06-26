@@ -3,8 +3,8 @@
  * Tests for `seedTutorial` — the personal-workspace bootstrap helper
  * that lays down the Tutorial subtree. Two parent-less Tutorial pages
  * are written from a shared outline builder (`tutorialOutline`):
- *   - `Tutorial` (vim variant; the default landing target)
- *   - `Tutorial (no vim)` (variant for users with vim mode disabled)
+ *   - `Tutorial` (default / non-vim variant; the landing target)
+ *   - `Tutorial (vim)` (variant for users who enable vim mode)
  *
  * Each page carries its canonical alias, the outline sections (Welcome,
  * basics, navigation, …), and an `extensions/` sub-page whose children
@@ -73,7 +73,7 @@ const findPageByAlias = async (h: TestDb, repo: Repo, alias: string): Promise<st
 }
 
 describe('seedTutorial', () => {
-  it('returns the vim Tutorial root id (the default landing target)', async () => {
+  it('returns the default Tutorial root id (the landing target)', async () => {
     const tutorialId = await seedTutorial(env.repo, WS)
     expect(typeof tutorialId).toBe('string')
     expect(tutorialId).toMatch(/^[0-9a-f-]{36}$/)
@@ -83,20 +83,20 @@ describe('seedTutorial', () => {
     const data = tutorial.peek()
     expect(data?.parentId).toBeNull()
     expect(data?.workspaceId).toBe(WS)
-    expect(data?.content).toBe(TUTORIAL_VIM_TITLE)
-    expect(tutorial.peekProperty(aliasesProp)).toEqual([TUTORIAL_VIM_TITLE])
+    expect(data?.content).toBe(TUTORIAL_DEFAULT_TITLE)
+    expect(tutorial.peekProperty(aliasesProp)).toEqual([TUTORIAL_DEFAULT_TITLE])
     expect(tutorial.hasType(PAGE_TYPE)).toBe(true)
   })
 
-  it('also creates a parent-less Tutorial (no vim) page with the canonical alias', async () => {
+  it('also creates a parent-less Tutorial (vim) page with the canonical alias', async () => {
     await seedTutorial(env.repo, WS)
-    const defaultId = await findPageByAlias(env.h, env.repo, TUTORIAL_DEFAULT_TITLE)
-    expect(defaultId).not.toBeNull()
-    const page = env.repo.block(defaultId!)
+    const vimId = await findPageByAlias(env.h, env.repo, TUTORIAL_VIM_TITLE)
+    expect(vimId).not.toBeNull()
+    const page = env.repo.block(vimId!)
     const data = page.peek()
     expect(data?.parentId).toBeNull()
-    expect(data?.content).toBe(TUTORIAL_DEFAULT_TITLE)
-    expect(page.peekProperty(aliasesProp)).toEqual([TUTORIAL_DEFAULT_TITLE])
+    expect(data?.content).toBe(TUTORIAL_VIM_TITLE)
+    expect(page.peekProperty(aliasesProp)).toEqual([TUTORIAL_VIM_TITLE])
     expect(page.hasType(PAGE_TYPE)).toBe(true)
   })
 
