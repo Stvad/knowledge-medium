@@ -12,7 +12,7 @@
 
 export { bytesToBase64Url, base64UrlToBytes } from './base64url.js'
 export { bytesToBase32, base32ToBytes } from './base32.js'
-export { bytesToHex } from './hex.js'
+export { bytesToHex, hexToBytes } from './hex.js'
 export {
   ENVELOPE_PREFIX,
   SCHEMA_VERSION,
@@ -35,7 +35,19 @@ export {
 export { contentAad, canaryAad, assetBytesAad } from './aad.js'
 export { seal, open } from './aead.js'
 export { sealBytes, openBytes } from './byteAead.js'
-export { CONTENT_HASH_PREFIX, sha256, computeContentHash, verifyContentHash } from './contentHash.js'
+export {
+  CONTENT_HASH_PREFIX,
+  sha256,
+  computeContentHash,
+  verifyContentHash,
+  digestFromContentHash,
+} from './contentHash.js'
+export {
+  CONTENT_KEY_HKDF_INFO,
+  deriveContentKeyHmac,
+  deriveContentKey,
+  type ContentKeyRef,
+} from './contentKey.js'
 export {
   WK_PREFIX,
   WK_BYTES,

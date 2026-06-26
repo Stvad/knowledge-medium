@@ -15,3 +15,25 @@ export const bytesToHex = (bytes: Uint8Array): string => {
   }
   return out
 }
+
+/** Decode a hex string (the inverse of {@link bytesToHex}) back to bytes —
+ *  used to recover the raw sha256 digest from the stored `sha256:<hex>` content
+ *  hash before re-deriving the content-addressed Storage path (§10). Strict: an
+ *  odd length or any non-hex character throws, so a malformed stored hash
+ *  fails closed at the resolver rather than producing a bogus path. */
+export const hexToBytes = (hex: string): Uint8Array<ArrayBuffer> => {
+  if (hex.length % 2 !== 0) {
+    throw new Error(`hexToBytes: odd-length hex string (${hex.length} chars)`)
+  }
+  const out = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < out.length; i++) {
+    const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+    // parseInt is lax (stops at the first non-hex, returns NaN only when the
+    // FIRST char is non-hex), so validate each pair explicitly.
+    if (!/^[0-9a-fA-F]{2}$/.test(hex.slice(i * 2, i * 2 + 2))) {
+      throw new Error(`hexToBytes: non-hex characters at offset ${i * 2}`)
+    }
+    out[i] = byte
+  }
+  return out
+}

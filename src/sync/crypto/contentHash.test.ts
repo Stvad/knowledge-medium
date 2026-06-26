@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { computeContentHash, sha256, verifyContentHash } from './contentHash.js'
+import {
+  computeContentHash,
+  digestFromContentHash,
+  sha256,
+  verifyContentHash,
+} from './contentHash.js'
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
 
@@ -29,5 +34,18 @@ describe('asset content hash', () => {
     const tampered = Uint8Array.from(data)
     tampered[0] ^= 0x01
     expect(await verifyContentHash(tampered, good)).toBe(false)
+  })
+
+  it('digestFromContentHash recovers the raw digest sha256() produced', async () => {
+    const data = utf8('abc')
+    const expected = await sha256(data)
+    expect(digestFromContentHash(await computeContentHash(data))).toEqual(expected)
+  })
+
+  it('digestFromContentHash rejects a missing prefix, wrong prefix, or wrong length', () => {
+    const hex = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    expect(() => digestFromContentHash(hex)).toThrow(/prefix/) // bare hex, no tag
+    expect(() => digestFromContentHash(`sha1:${hex}`)).toThrow(/prefix/)
+    expect(() => digestFromContentHash('sha256:dead')).toThrow(/32-byte/) // too short
   })
 })

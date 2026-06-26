@@ -11,10 +11,13 @@
  * workspace wraps it as HMAC(K_id, …).
  */
 
-import { bytesToHex } from './hex.js'
+import { bytesToHex, hexToBytes } from './hex.js'
 
 /** Prefix tag on the stored hash string — `sha256:<lowercase-hex>`. */
 export const CONTENT_HASH_PREFIX = 'sha256:'
+
+/** Raw sha256 digest length in bytes (sha256 = 256 bits). */
+const SHA256_BYTES = 32
 
 /** Raw sha256 digest of the plaintext bytes (32 bytes). The content-key
  *  derivation (§10) consumes this digest; {@link computeContentHash} formats
@@ -34,3 +37,20 @@ export const verifyContentHash = async (
   expected: string,
 ): Promise<boolean> =>
   (await computeContentHash(bytes)) === expected
+
+/** Recover the raw 32-byte sha256 digest from a stored `sha256:<hex>` content
+ *  hash — the inverse of {@link computeContentHash}. The content-key derivation
+ *  (§10) consumes this digest (raw for a plaintext workspace, HMAC'd for E2EE).
+ *  Strict: a missing/wrong prefix or a non-32-byte body throws, so a malformed
+ *  `block.properties.hash` fails closed at the resolver instead of routing to a
+ *  bogus Storage path. */
+export const digestFromContentHash = (contentHash: string): Uint8Array<ArrayBuffer> => {
+  if (!contentHash.startsWith(CONTENT_HASH_PREFIX)) {
+    throw new Error(`content hash: missing '${CONTENT_HASH_PREFIX}' prefix`)
+  }
+  const digest = hexToBytes(contentHash.slice(CONTENT_HASH_PREFIX.length))
+  if (digest.length !== SHA256_BYTES) {
+    throw new Error(`content hash: expected ${SHA256_BYTES}-byte digest, got ${digest.length}`)
+  }
+  return digest
+}
