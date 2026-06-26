@@ -64,7 +64,7 @@ const vimKeys = {
   enterCreates: '— or, while editing any block, press `Enter` to split / create a new one',
   move: '`j` / `k` (or arrow keys)',
   panelHop: '`h` / `l` (or arrow keys)',
-  firstLast: '`gg` jumps to the top of the panel, `Shift+G` to the last bullet in it',
+  firstLast: '`gg` jumps to the top of the panel, `Shift+G` to the last block in it',
   jumpMany: '`Ctrl+d` / `Ctrl+u` jump down / up by ~8 bullets',
   startSelect: 'press `Space` (or `v`) to select the focused bullet; `Shift+J` / `Shift+K` then grow the selection down / up — the first press selects the current block, each next press adds the neighbour',
   delete: 'press `d d` or `Delete`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
