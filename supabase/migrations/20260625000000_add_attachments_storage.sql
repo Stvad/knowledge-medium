@@ -40,7 +40,7 @@
 -- placeholder, never plaintext served). The only thing a write-time shape-guard
 -- adds is catching an HONEST
 -- client that accidentally uploads plaintext — which an off-path periodic audit
--- (scripts/attachments-ciphertext-audit.mjs) turns into a loud alert without
+-- (scripts/attachments-ciphertext-audit.ts) turns into a loud alert without
 -- sitting on the write path. The client encodes `encb:v1:` before upload (§9);
 -- that is the byte-shape invariant. (A malicious writer holds the workspace key
 -- and trivially forges an 8-byte magic prefix, so a write-time guard was never
