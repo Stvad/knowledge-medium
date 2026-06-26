@@ -127,7 +127,7 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
             <DialogHeader>
               <DialogTitle>New workspace</DialogTitle>
               <DialogDescription>
-                Workspaces are independent block trees. You start as the owner; invite others via Settings.
+                Workspaces are independent collections of blocks. You start as the owner; invite others via Settings.
               </DialogDescription>
             </DialogHeader>
             <form onSubmit={handleSubmit} className="space-y-4">

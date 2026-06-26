@@ -305,7 +305,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     advancedSect('Workspaces & encryption', [
-      'A workspace is an independent block tree. Create or switch workspaces from the workspace switcher; you start as the owner and can invite others from workspace **Settings**.',
+      'A workspace is an independent collection of blocks — many top-level pages and daily notes, not a single tree. Create or switch workspaces from the workspace switcher; you start as the owner and can invite others from workspace **Settings**.',
       'New workspaces can be **end-to-end encrypted** — tick "End-to-end encrypted" when creating one. Block content and properties are then encrypted on your device before syncing; the server only ever stores ciphertext.',
       'You hold the only key. On creation the app shows the **workspace key once** and makes you save it (a password manager is ideal) and retype its last characters to confirm. There is **no recovery** — lose the key and the data becomes permanently unreadable. On a new device, paste the key to unlock.',
       'To collaborate on an encrypted workspace, invite the person via Settings, then send them the key yourself over a channel you trust — the app never transmits it.',
