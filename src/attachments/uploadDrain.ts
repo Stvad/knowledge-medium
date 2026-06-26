@@ -7,6 +7,14 @@
  * `<ws>/<contentKey>` (§10.1, RLS-gated, first-write-wins). A confirmed upload
  * DELETES the record; the bytes stay in OPFS as the local render replica.
  *
+ * A 200 write clears the record. A 409 (the content-addressed path was already
+ * occupied) is NOT taken as success blind: Storage is untrusted + immutable, so the
+ * existing object may be a stale / buggy / POISONED body, not our content (§17).
+ * We fetch + decode + hash-verify it first — a match is a genuine cross-device
+ * dedup and clears the record; a mismatch leaves the record `failed` so the §9/§17
+ * opportunistic correction (writer-delete + re-upload) can act, rather than
+ * silently clearing the only entry that could ever fix the path.
+ *
  * Failure handling (the §9/§17 bounded-correction rule):
  *   - `defer` materializability (locked / unpinned / signed out) → leave `pending`,
  *     no attempt burn; the next sweep retries once the workspace is materializable.
@@ -15,12 +23,14 @@
  *     non-enumerated permanent) → bump attempts and retry, BUT bound by attempt
  *     count AND age so a never-enumerated-permanent can't hot-loop forever — once
  *     either bound is hit, → `failed`. (`permanent` only quarantines SOONER.)
+ *   - 409 + the existing object hash-MISMATCHES (poisoned path, §17) → `failed`;
+ *     a transient verify-GET failure → retry (the object exists, just unreadable now).
  *   - local bytes missing (OPFS eviction before the upload drained) → `failed`:
  *     unrecoverable from the queue; §9 recovery / a re-paste re-stages with bytes.
  *
  * SINGLE-OWNER: this is a background lane. The caller (Phase 5d) serializes it
  * under a `navigator.locks` lock so two tabs never drain concurrently; the upload
- * is idempotent (upsert:false, 409 = success) so even a racing drain is safe.
+ * is idempotent (upsert:false, first-write-wins) so even a racing drain is safe.
  *
  * SCOPE — undo-before-upload: this drain does NOT check whether the asset block is
  * still live before uploading. A paste-then-undo can leave a `pending` record
@@ -34,7 +44,8 @@
  * block-exists-before-PUT" note; correctness-equivalent given immutable objects.)
  */
 
-import { encodeBytes } from '../sync/byteTransform.js'
+import { decodeBytes, encodeBytes } from '../sync/byteTransform.js'
+import { verifyContentHash } from '../sync/crypto/contentHash.js'
 import type { GetCek, GetMaterializability, Materializability, SyncMode } from '../sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
@@ -131,13 +142,15 @@ const drainOne = async (
     return 'failed'
   }
 
-  // (3) Encode at drain + direct upload. Confirmed → delete the record.
+  // (3) Encode at drain + direct upload. A fresh 200 write → delete the record;
+  //     a 409 (path already occupied) → verify the existing object before clearing.
   try {
     const sealed = await encodeBytes(plaintext, mode, ctx.getCek, {
       contentHash: rec.contentHash,
       workspaceId: rec.workspaceId,
     })
-    await ctx.blobStore.put(rec.workspaceId, rec.contentKey, sealed)
+    const result = await ctx.blobStore.put(rec.workspaceId, rec.contentKey, sealed)
+    if (result === 'exists') return verifyExistingOrQuarantine(userId, rec, mode, ctx)
     await ctx.store.delete(userId, rec.assetBlockId)
     return 'uploaded'
   } catch (err) {
@@ -149,6 +162,45 @@ const drainOne = async (
     // all bounded so none can hot-loop.
     return retryOrFail(userId, rec, ctx)
   }
+}
+
+/** A 409 means the content-addressed path was already occupied — but Storage is
+ *  untrusted + immutable, so the existing object may be a stale / buggy / poisoned
+ *  body rather than our content (§17). Fetch + decode + hash-verify it:
+ *    - matches our hash → genuine cross-device dedup → delete the record (done).
+ *    - present but mismatches / can't decode → POISONED path → `failed`, so the
+ *      §9/§17 opportunistic correction (writer-delete + re-upload) can act. We must
+ *      NOT clear: that strands our good local bytes with no entry to fix the path.
+ *    - the verify-GET fails transiently → retry (the object exists, just unreadable
+ *      right now); never clear or quarantine on a transient read. */
+const verifyExistingOrQuarantine = async (
+  userId: string,
+  rec: ByteUploadRecord,
+  mode: SyncMode,
+  ctx: DrainOneCtx,
+): Promise<DrainOutcome> => {
+  let stored: Uint8Array<ArrayBuffer>
+  try {
+    stored = await ctx.blobStore.get(rec.workspaceId, rec.contentKey)
+  } catch {
+    return retryOrFail(userId, rec, ctx) // exists, but the verify read failed — transient
+  }
+  let decoded: Uint8Array<ArrayBuffer>
+  try {
+    decoded = await decodeBytes(stored, mode, ctx.getCek, {
+      contentHash: rec.contentHash,
+      workspaceId: rec.workspaceId,
+    })
+  } catch {
+    await ctx.store.markFailed(userId, rec.assetBlockId) // undecodable existing object — poisoned
+    return 'failed'
+  }
+  if (await verifyContentHash(decoded, rec.contentHash)) {
+    await ctx.store.delete(userId, rec.assetBlockId) // genuine dedup — the path holds our content
+    return 'uploaded'
+  }
+  await ctx.store.markFailed(userId, rec.assetBlockId) // present but wrong content — poisoned (§17)
+  return 'failed'
 }
 
 /** Drain every `pending` byte record for `userId`. Sequential — the queue is

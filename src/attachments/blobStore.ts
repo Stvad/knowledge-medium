@@ -58,10 +58,14 @@ export class BlobPutError extends Error {
 
 export interface BlobStore {
   /** Upload sealed bytes directly to `<workspaceId>/<contentKey>`, RLS-gated to
-   *  workspace writers. Resolves on success or idempotent dedup (an existing
-   *  path, §10.1); throws {@link BlobPutError}. The bytes come from `encodeBytes`
-   *  (§5), which is ArrayBuffer-backed. */
-  put(workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
+   *  workspace writers. Resolves `'written'` (200, freshly stored) or `'exists'`
+   *  (409 — the content-addressed path was already occupied, §10.1). `'exists'`
+   *  is NOT proof the stored object is OUR content: Storage is untrusted +
+   *  immutable, so a stale/buggy/poisoned body may sit there. The caller MUST
+   *  hash-verify the existing object before treating the upload as done (§17) —
+   *  clearing blind would strand the good local bytes. Throws {@link BlobPutError}.
+   *  The bytes come from `encodeBytes` (§5), which is ArrayBuffer-backed. */
+  put(workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<'written' | 'exists'>
   /** Direct RLS-gated GET of the stored object bytes (ArrayBuffer-backed, so it
    *  feeds `decodeBytes` directly). Throws if absent/denied. */
   get(workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer>>
@@ -147,10 +151,11 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
         throw new BlobPutError(`upload network error: ${String(cause)}`, false, undefined, 'network')
       }
 
-      if (!error) return // 200 — the object was written
-      // Idempotent dedup: the path is already present (§10.1). The client
-      // hash-verifies the stored object before clearing the §9 queue.
-      if (isAlreadyExists(error)) return
+      if (!error) return 'written' // 200 — the object was written
+      // Idempotent dedup: the path is already present (§10.1). Report it distinctly
+      // so the drain hash-verifies the stored object before clearing the §9 queue —
+      // a poisoned path must surface, not silently clear (§17).
+      if (isAlreadyExists(error)) return 'exists'
 
       // Permanent if EITHER the real HTTP status OR the symbolic code says so —
       // correct whether Storage gives us a numeric code (with a maybe-flattened

@@ -31,7 +31,7 @@ const fail = (statusCode?: string, httpStatus?: number): UploadFn => async () =>
 })
 
 /** Await a put expected to reject, returning the typed BlobPutError. */
-const putError = async (p: Promise<void>): Promise<BlobPutError> => {
+const putError = async (p: Promise<'written' | 'exists'>): Promise<BlobPutError> => {
   try {
     await p
   } catch (e) {
@@ -56,14 +56,15 @@ describe('SupabaseBlobStore.put', () => {
     expect(opts).toMatchObject({ upsert: false, contentType: 'application/octet-stream' })
   })
 
-  it('resolves on success', async () => {
-    await expect(makeStore(ok).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
+  it('resolves "written" on a fresh 200 upload', async () => {
+    await expect(makeStore(ok).store.put('ws', 'k', new Uint8Array())).resolves.toBe('written')
   })
 
-  it('resolves on a 409 (existing path) as idempotent first-write-wins dedup', async () => {
+  it('resolves "exists" on a 409 (existing path) as idempotent first-write-wins dedup', async () => {
     // The duplicate's HTTP line is the flattened 400; the '409' is in the body
     // statusCode — so detection must key on statusCode, not the numeric status.
-    await expect(makeStore(fail('409')).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
+    // 'exists' (not 'written') is what tells the drain to hash-verify before clearing.
+    await expect(makeStore(fail('409')).store.put('ws', 'k', new Uint8Array())).resolves.toBe('exists')
   })
 
   it('treats 403 (not a writer), 404 (no bucket), 413 (too large) as PERMANENT', async () => {
@@ -102,9 +103,9 @@ describe('SupabaseBlobStore.put', () => {
     expect(err.permanent).toBe(true)
   })
 
-  it('resolves on a symbolic duplicate code (ResourceAlreadyExists / KeyAlreadyExists)', async () => {
+  it('resolves "exists" on a symbolic duplicate code (ResourceAlreadyExists / KeyAlreadyExists)', async () => {
     for (const code of ['ResourceAlreadyExists', 'KeyAlreadyExists']) {
-      await expect(makeStore(fail(code, 409)).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
+      await expect(makeStore(fail(code, 409)).store.put('ws', 'k', new Uint8Array())).resolves.toBe('exists')
     }
   })
 

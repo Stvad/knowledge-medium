@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { decodeBytes } from '../sync/byteTransform.js'
+import { computeContentHash } from '../sync/crypto/contentHash.js'
 import type { GetCek, GetMaterializability, Materializability } from '../sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
 import { InMemoryByteStore } from './byteStore.js'
@@ -28,11 +29,19 @@ const stageInput = (over: Partial<StageInput> = {}): StageInput => ({
 class FakeBlobStore implements BlobStore {
   puts: Array<{ workspaceId: string; contentKey: string; bytes: Uint8Array<ArrayBuffer> }> = []
   fail: (() => never) | null = null
-  async put(workspaceId: string, contentKey: string, b: Uint8Array<ArrayBuffer>): Promise<void> {
+  /** When set, put() reports a 409 dedup and get() returns these bytes as the
+   *  existing remote object — so the drain's verify-on-409 path runs against them. */
+  existing: Uint8Array<ArrayBuffer> | null = null
+  /** When true, the verify GET throws (a transient read failure on the 409 path). */
+  getFails = false
+  async put(workspaceId: string, contentKey: string, b: Uint8Array<ArrayBuffer>): Promise<'written' | 'exists'> {
     if (this.fail) this.fail()
     this.puts.push({ workspaceId, contentKey, bytes: b })
+    return this.existing ? 'exists' : 'written'
   }
   async get(): Promise<Uint8Array<ArrayBuffer>> {
+    if (this.getFails) throw new Error('transient verify GET failure')
+    if (this.existing) return this.existing
     throw new Error('not used in drain tests')
   }
   async delete(): Promise<void> {}
@@ -83,6 +92,47 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     // plaintext mode is identity — the uploaded bytes equal the stored plaintext
     expect([...blobStore.puts[0].bytes]).toEqual([...bytes(32)])
     expect(await store.get(USER, BLOCK)).toBeNull()
+  })
+
+  it('409 whose existing object hash-MATCHES → clears the record (genuine cross-device dedup)', async () => {
+    const plain = bytes(24)
+    const realHash = await computeContentHash(plain)
+    await store.stage(stageInput({ contentHash: realHash }))
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, plain)
+    blobStore.existing = plain // the path already holds OUR exact (plaintext) content
+
+    const summary = await drainUploads(USER, deps())
+
+    expect(summary).toMatchObject({ uploaded: 1, failed: 0, retried: 0 })
+    expect(await store.get(USER, BLOCK)).toBeNull() // safe to clear — the dedup is genuine
+  })
+
+  it('409 whose existing object hash-MISMATCHES (poisoned path) → keeps the record failed, never clears', async () => {
+    // HASH never matches arbitrary bytes, so the existing object is "poisoned".
+    await store.stage(stageInput())
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, bytes(16))
+    blobStore.existing = bytes(99) // a different body already occupies the content path
+
+    const summary = await drainUploads(USER, deps())
+
+    expect(summary).toMatchObject({ failed: 1, uploaded: 0 })
+    // Preserved (not cleared) so §9/§17 correction can act — clearing would strand the good bytes.
+    expect((await store.get(USER, BLOCK))?.status).toBe('failed')
+  })
+
+  it('409 whose verify-GET fails transiently → retries (does not clear, does not quarantine)', async () => {
+    await store.stage(stageInput())
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, bytes(16))
+    blobStore.existing = bytes(16) // put → 'exists'
+    blobStore.getFails = true // …but the verify read fails transiently
+
+    const summary = await drainUploads(USER, deps({ maxAttempts: 5 }))
+
+    expect(summary).toMatchObject({ retried: 1, failed: 0, uploaded: 0 })
+    expect((await store.get(USER, BLOCK))).toMatchObject({ status: 'pending', attempts: 1 })
   })
 
   it('does NOT drain a staged (not-yet-promoted) record', async () => {
