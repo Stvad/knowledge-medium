@@ -72,13 +72,16 @@ const authHeaders = { apikey: serviceKey, authorization: `Bearer ${serviceKey}` 
 /** E2EE workspace ids — the only prefixes that must be ciphertext. Paged: an
  *  unpaginated select is silently capped at PostgREST's db-max-rows, so past that
  *  many E2EE workspaces the audit would skip the rest and report clean while
- *  plaintext could exist there. Advance by the ACTUAL page length (the server may
- *  cap below the requested limit) and stop on an empty page. */
+ *  plaintext could exist there. `order=id.asc` is REQUIRED — offset pagination
+ *  over an unordered result is planner-dependent and can skip/duplicate rows
+ *  across pages (a skipped workspace = unchecked prefix = false-clean). Advance by
+ *  the ACTUAL page length (the server may cap below the requested limit) and stop
+ *  on an empty page. */
 const e2eeWorkspaceIds = async () => {
   const ids = []
   for (let offset = 0; ; ) {
     const res = await fetch(
-      `${base}/rest/v1/workspaces?select=id&encryption_mode=eq.e2ee&limit=${LIST_PAGE}&offset=${offset}`,
+      `${base}/rest/v1/workspaces?select=id&encryption_mode=eq.e2ee&order=id.asc&limit=${LIST_PAGE}&offset=${offset}`,
       { headers: authHeaders },
     )
     // Status only — never interpolate the response body: this runs in public CI
@@ -103,7 +106,14 @@ const listObjects = async (workspaceId) => {
     const res = await fetch(`${base}/storage/v1/object/list/${BUCKET}`, {
       method: 'POST',
       headers: { ...authHeaders, 'content-type': 'application/json' },
-      body: JSON.stringify({ prefix: `${workspaceId}/`, limit: LIST_PAGE, offset }),
+      // Explicit stable sort — same reason as the workspace query: offset
+      // pagination needs a deterministic order or it can skip/duplicate entries.
+      body: JSON.stringify({
+        prefix: `${workspaceId}/`,
+        limit: LIST_PAGE,
+        offset,
+        sortBy: { column: 'name', order: 'asc' },
+      }),
     })
     if (!res.ok) throw new Error(`list failed (${res.status})`) // status only — no body (public CI)
     const page = await res.json()
