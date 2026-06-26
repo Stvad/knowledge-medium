@@ -1230,9 +1230,13 @@ hand-roll is now the platform's.)</div>
     boot-reconciler reap, which drops a record whose <em>own</em> block is absent-past-checkpoint while
     keeping shared bytes — different antecedent, same content-refcount gate.)</li>
   <li><strong>On capture:</strong> client-side mime/size guard → hash → create the asset block at a
-    <strong>deterministic, content-derived id</strong> (<code>media:&lt;content-key&gt;</code> — the keyed
-    hash for E2EE, raw <code>sha256</code> for plaintext, workspace-scoped, exactly like the storage path
-    §10). Mint it through the codebase's established deterministic-id helper
+    <strong>deterministic, content-derived id</strong> — <code>uuidv5(&lt;workspaceId&gt;:&lt;content-key&gt;)</code>,
+    where the content-key is the keyed hash for E2EE, raw <code>sha256</code> for plaintext (workspace-scoped,
+    like the storage path §10). It MUST be a <strong>UUID</strong>: the embed is a block-ref
+    (<code>!((id))</code>) and the block-ref grammar only matches UUID-shaped targets, so a literal
+    <code>media:&lt;content-key&gt;</code> id would render as plain <code>!((media:…))</code> text, never a media
+    embed. (The <code>media:…</code> form earlier in this doc is shorthand for "deterministic, content-derived",
+    not the literal id string.) Mint it through the codebase's established deterministic-id helper
     (<code>createOrRestoreTargetBlock</code> — the path daily-notes / roam-import / alias-seats already use),
     <em>not</em> a bare <code>createOrGet</code>: that helper (a) <code>systemMint</code>s the row at the
     pristine <code>updated_at = 0</code> sentinel, so two devices' first pastes reconcile to one row instead
@@ -1545,7 +1549,7 @@ vNext; the v1 commitment is only the reserved property + audience flag.
 <tr><td>First-write-wins is poisonable by a member</td>
     <td>Any member can compute <code>HMAC(K_id, sha256(x))</code> and pre-occupy a content path with
       garbage; first-write-wins then silently no-ops the honest upload of that exact content → a
-      workspace-wide broken image. The predictable <code>media:&lt;content-key&gt;</code> block id (§11) is a
+      workspace-wide broken image. The predictable <code>uuidv5(workspace:content-key)</code> block id (§11) is a
       second pre-occupiable target, but the consequence is identical and bounded (a member-authored,
       soft-deletable / restorable block whose hash-mismatch renders fail-closed) — a widened DoS surface, not
       a new spoof. A content-targeted DoS primitive the block-id path lacked.</td>
