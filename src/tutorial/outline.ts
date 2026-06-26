@@ -58,7 +58,7 @@ const vimKeys = {
   firstLast: '`gg` jumps to the first visible bullet, `Shift+G` to the last',
   jumpMany: '`Ctrl+d` / `Ctrl+u` jump down / up by ~8 bullets',
   startSelect: 'press `Space` (or `v`) on the focused bullet to start a selection',
-  delete: 'press `d d` (the vim `dd`), or `Delete` / `Backspace`',
+  delete: 'press `d d` (the vim `dd`) or `Delete`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
   properties: 'press `t`',
   copyRef: 'focus the block and press `Y R` (yank reference); `Y E` yanks an embed, `Y Y` the whole subtree, `Y C` just this block\'s text, `Y L` a shareable link',
   paste: '`p` pastes after the focused block, `Shift+P` before',
@@ -67,9 +67,13 @@ const vimKeys = {
 }
 
 const defaultKeys: typeof vimKeys = {
-  fold: 'click the `▸` / `▾` chevron that appears next to my bullet on hover (it stays visible on touch devices)',
-  edit: 'single-click anywhere in my text (double-click also works)',
-  exitEdit: 'press `Esc`',
+  fold: 'click the `▸` / `▾` chevron next to my bullet on hover (on touch it stays visible, and the block\'s swipe menu has a **Collapse** item) — there is no default keyboard fold without vim mode',
+  // Single-click edits in the default config; double-click-to-edit is a
+  // vim-only gesture (it exists because vim makes single-click just focus).
+  edit: 'single-click anywhere in my text to start typing',
+  // No keyboard "normal mode" without vim, so leaving the editor by
+  // keyboard buys nothing here — just click elsewhere. (`Esc` still blurs.)
+  exitEdit: '',
   newBelow: 'press `Enter` at the end of a bullet to create a new one below (`Shift+Enter` inserts a line break inside)',
   enterCreates: '',
   // Block motion in non-vim mode happens *while editing*: at a block edge
@@ -82,7 +86,7 @@ const defaultKeys: typeof vimKeys = {
   firstLast: '',
   jumpMany: '',
   startSelect: 'while editing, `Shift+↑` / `Shift+↓` — at a block edge the selection escalates to whole blocks',
-  delete: 'press `Delete`, or `Backspace` at the start of an empty block',
+  delete: 'select it (or several — see the **Multi-select** section) and press `Delete`; for a single empty block, `Backspace` at its start removes it and merges into the block above',
   properties: 'open the command palette with `Cmd+K` and run "Toggle block properties"',
   copyRef: 'open the on-block quick-actions menu ("Copy Ref" / "Copy Embed"); keyboard yanks (`Y R` / `Y E`) need vim mode',
   paste: '`Cmd+V` — pastes after the focused block',
@@ -145,7 +149,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
           { content: 'A folded parent shows a halo around its bullet so you can spot it from a distance.' },
         ],
       },
-      `Edit a block: ${km.edit}. Exit editing: ${km.exitEdit}.`,
+      `Edit a block: ${km.edit}.${km.exitEdit ? ` Exit editing: ${km.exitEdit}.` : ''}`,
       `Delete a block: ${km.delete}.`,
     ]),
 
@@ -204,6 +208,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Links are two-way. Open a page (or zoom into any block) and a **Backlinks** section appears below its content, listing every block elsewhere that links here — so a page accretes context from everywhere it\'s mentioned without you maintaining it.',
       'Each referencing block shows a small **reference-count badge**; click it to expand those backlinks inline, right where you are, without navigating away. Click again to collapse.',
       'The Backlinks section has a Flat / Grouped switcher in its header — Grouped nests each backlink under its own ancestors so you can see the context it came from.',
+      'See it live: open [[extensions]] and scroll to its **Backlinks** — this tutorial links there from several bullets, so they all show up listed under that page.',
     ]),
 
     sect('Search', [
@@ -264,6 +269,14 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     sect('Preferences & toggles', [
       `Open preferences: run **Open preferences** from the command palette (${sharedKeys.commandPalette}) — it has no default shortcut.`,
       "Run **Manage extensions** from the command palette to open the extensions tree — every extension can be toggled on or off there, and the toggle syncs to your other devices. Vim mode itself is an extension (`system:vim-normal-mode`); it's off by default. Tick it to get vim normal-mode keys (and switch this tutorial to the vim variant); untick it for the default click-to-edit experience.",
+    ]),
+
+    sect('On mobile', [
+      'On a phone-sized screen the app swaps in touch affordances:',
+      'A **bottom navigation bar** gives one-tap access to the sidebar, a new block, append-to-today, today\'s daily note, search, the command palette, and undo.',
+      'While editing, a **keyboard toolbar** floats above the on-screen keyboard with indent / outdent, move up / down, `[[` page-reference and `((` block-reference inserts, undo / redo, and a Done button to dismiss the keyboard.',
+      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete. This is how you reach the per-block actions on touch — the same ones vim binds to keys (`z`, `t`, `Y R`, …) — without a keyboard.',
+      'Swipe a block to the right to cycle its todo / done state.',
     ]),
 
     sect('Workspaces & encryption', [
