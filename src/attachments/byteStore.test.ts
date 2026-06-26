@@ -120,6 +120,18 @@ describe.each([
   it('purgeWorkspace is a no-op when nothing is stored', async () => {
     await expect(make().purgeWorkspace(U, WS)).resolves.toBeUndefined()
   })
+
+  it('delete drops a single object, leaving siblings; no-op when absent', async () => {
+    const store = make()
+    await store.put(U, WS, KEY, bytes(1))
+    await store.put(U, WS, 'other-key', bytes(2))
+
+    await store.delete(U, WS, KEY)
+    expect(await store.get(U, WS, KEY)).toBeNull() // deleted
+    expect(await store.get(U, WS, 'other-key')).toEqual(bytes(2)) // sibling survives
+
+    await expect(store.delete(U, WS, 'never-stored')).resolves.toBeUndefined() // no-op
+  })
 })
 
 describe('assetPathSegments', () => {

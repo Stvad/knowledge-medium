@@ -31,6 +31,9 @@ export interface ByteStore {
   put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
   /** Is the object present locally? (the §6 down-lane's "already replicated?" probe). */
   has(userId: string, workspaceId: string, contentKey: string): Promise<boolean>
+  /** Drop a single object's bytes — the §9 reconciler's orphan reap (a never-
+   *  committed capture's bytes). A no-op when absent. */
+  delete(userId: string, workspaceId: string, contentKey: string): Promise<void>
   /** Drop every byte for one (user, workspace) — the §8 revoke/leave claw-back.
    *  A no-op when nothing is stored. */
   purgeWorkspace(userId: string, workspaceId: string): Promise<void>
@@ -78,6 +81,10 @@ export class InMemoryByteStore implements ByteStore {
 
   async has(userId: string, workspaceId: string, contentKey: string): Promise<boolean> {
     return this.blobs.has(this.key(userId, workspaceId, contentKey))
+  }
+
+  async delete(userId: string, workspaceId: string, contentKey: string): Promise<void> {
+    this.blobs.delete(this.key(userId, workspaceId, contentKey))
   }
 
   async purgeWorkspace(userId: string, workspaceId: string): Promise<void> {
@@ -151,6 +158,16 @@ export class OpfsByteStore implements ByteStore {
       return true
     } catch (err) {
       if (isNotFound(err)) return false
+      throw err
+    }
+  }
+
+  async delete(userId: string, workspaceId: string, contentKey: string): Promise<void> {
+    try {
+      const dir = await this.workspaceDir(userId, workspaceId, false)
+      await dir.removeEntry(encodeURIComponent(contentKey))
+    } catch (err) {
+      if (isNotFound(err)) return // already gone — fine
       throw err
     }
   }
