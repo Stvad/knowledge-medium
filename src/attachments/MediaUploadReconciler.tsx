@@ -35,8 +35,14 @@ export const MediaUploadReconciler = (): null => {
       )
     })
 
-    // In-session retry sweep — single-owner drain on reconnect / refocus.
-    const sweep = () => armUploadDrain(userId)
+    // In-session retry sweep — single-owner drain on reconnect / refocus. Reads
+    // the CURRENT active user at fire time (not the effect-time `userId`), so a
+    // sweep always targets whoever is signed in now, independent of whether an
+    // account switch happens to remount this component.
+    const sweep = () => {
+      const active = getActiveUserId()
+      if (active) armUploadDrain(active)
+    }
     const onVisible = () => {
       if (document.visibilityState === 'visible') sweep()
     }
