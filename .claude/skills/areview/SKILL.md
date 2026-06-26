@@ -1,6 +1,6 @@
 ---
 name: areview
-description: Launch N parallel adversarial review agents that try to break the work done so far in this session, each from a different inferred perspective. Use when the user wants a multi-angle critique of the current session's changes (code or design/docs) before committing/shipping — e.g. "/areview 4". The number argument sets how many agents (and how many distinct perspectives) to run; default 2.
+description: Launch N parallel adversarial review agents that try to break the work done so far in this session, each from a different inferred perspective. Use when the user wants a multi-angle critique of the current session's changes (code or design/docs) before committing/shipping — e.g. "/areview 4". The number argument sets how many agents (and how many distinct perspectives) to run; default 2. A `codex` method lens (e.g. "/areview codex 4") makes every agent review by mechanical, ground-truth verification.
 ---
 
 # Adversarial review of the current session
@@ -10,6 +10,14 @@ Fan out several review agents **in parallel**, each told to break the work done 
 ## Argument
 
 `$ARGUMENTS` = number of agents **N** (default **2**), one perspective per agent. Trailing words are focus hints (e.g. `4 watch the sync path`). By default the skill implements the agreed improvements after presenting findings; add `--no-fix` to stop at the report. Add `loop` (e.g. `/areview loop` or `/areview loop 4`) to repeat the review→fix cycle until it converges.
+
+Add a **method lens** — a reserved keyword (like `loop`/`--no-fix`, parsed out before the rest becomes focus hints) that makes *every* agent review with a specific method, orthogonal to its per-agent perspective: `codex` — e.g. `/areview codex 4`, `/areview loop codex`. See **Method lenses** below.
+
+## Method lenses
+
+Recognize a known method-lens keyword in the arguments. The N perspectives are *risk-domain* lenses — *what* to scrutinize (data-loss, races, failure-paths, ungrounded claims), one per agent, non-overlapping. A **method lens** is orthogonal — *how* to scrutinize — and applies to ALL agents at once. Compose them: `/areview codex 4` = 4 agents on 4 distinct surfaces, each reviewing with the codex method.
+
+- **`codex`** (mechanical / empirical / ground-truth). Instruct every agent: verify per-statement and trace each branch with concrete values; ground **every** claim against the actual artifact — read the dependency source in `node_modules`, run the code, execute the SQL — never assert from memory; follow cross-references literally (does the cited section/symbol exist and say what the citing text claims?); for any tests, mutation-test them (would this test fail if the bug were reintroduced?); hunt edge values (empty / 0-byte / boundary / preexisting-state / unordered). Prefer "I ran it and observed X" over "this should…". This catches the implementation/contract bugs (pagination order, error-shape, idempotency, off-by-one, redaction) that thematic "is the abstraction sound?" review glosses over.
 
 ## What matters
 

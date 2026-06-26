@@ -245,7 +245,7 @@ describe('default CodeMirror shortcuts', () => {
     expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
-  it('escalates to block selection (preventDefault, exits edit mode) when the caret is at the block edge', async () => {
+  it('escalates to block selection (preventDefault, exits edit mode) when the caret is at the block edge — Roam-style: first press selects just the current block, next extends', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -259,19 +259,30 @@ describe('default CodeMirror shortcuts', () => {
     await focusBlock(uiStateBlock, 'current')
     await uiStateBlock.set(isEditingProp, true)
 
-    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
-    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler({
+    const editDeps = {
       block: env.repo.block('current'),
       editorView: codeMirrorEditorView('current', 0), // caret at block start
       uiStateBlock,
       scopeRootId: 'root',
-    } satisfies CodeMirrorEditModeDependencies, trigger)
+    } satisfies CodeMirrorEditModeDependencies
+
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(editDeps, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
-    // Escalation actually committed a block selection (and clearEditing folded
-    // the edit-mode exit into the same transaction) — not just exited edit mode.
-    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['prev', 'current'])
+    // First press selects ONLY the focused block (Roam-style) — and clearEditing
+    // folded the edit-mode exit into the same transaction.
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['current'])
+
+    // Second press now extends to the previous visible block.
+    await findEditModeAction(env.repo, 'edit.cm.extend_selection_up').handler(
+      editDeps,
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+    await waitFor(() =>
+      expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['prev', 'current']),
+    )
   })
 
   it('stays in edit mode when Shift+ArrowUp at block start has no previous block to escalate into', async () => {
@@ -305,9 +316,10 @@ describe('default CodeMirror shortcuts', () => {
     expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
-  it('stays in edit mode when Shift+ArrowDown at block end has no next block to escalate into', async () => {
-    // Editing the last block in a panel: there is no next visible block, so
-    // escalation must NOT eject the user from edit mode with nothing selected.
+  it('selects just the current block when Shift+ArrowDown at block end has no next block (Roam-style first press)', async () => {
+    // Editing the last block in a panel: there's no next visible block, but the
+    // Roam-style first press still selects the current block (so you can act on
+    // it) rather than no-opping.
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -328,8 +340,9 @@ describe('default CodeMirror shortcuts', () => {
       scopeRootId: 'root',
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
-    expect(trigger.preventDefault).not.toHaveBeenCalled()
-    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false))
+    expect(uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds).toEqual(['last'])
   })
 
   it('opens the root preferences block from the global action', async () => {

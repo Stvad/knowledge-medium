@@ -27,6 +27,7 @@ import { withMoveTransition } from '@/utils/viewTransition.js'
 import {
   activePanelIdProp,
   focusBlock,
+  isCollapsedProp,
   topLevelBlockIdProp,
   editorSelection,
   setIsEditing,
@@ -632,6 +633,38 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
       defaultBinding: {
         keys: 'Escape',
+      },
+    },
+    // Roam-style keyboard fold while editing — the non-vim analogue of vim's
+    // `z` (vim makes `z` work because it has a focused-block normal mode; the
+    // default config has no such mode, so fold lives here in edit mode). Cmd/
+    // Ctrl+Up collapses, Cmd/Ctrl+Down expands. preventDefault overrides
+    // CodeMirror's doc-start/doc-end caret jump — acceptable since blocks are
+    // short and the chevron / swipe menu remain for the mouse path.
+    {
+      id: 'collapse_block_cm',
+      description: 'Collapse block',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async ({block}: CodeMirrorEditModeDependencies) => {
+        if (!block) return
+        await withMoveTransition(async () => { await block.set(isCollapsedProp, true) })
+      },
+      defaultBinding: {
+        keys: '$mod+ArrowUp',
+        eventOptions: {preventDefault: true},
+      },
+    },
+    {
+      id: 'expand_block_cm',
+      description: 'Expand block',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async ({block}: CodeMirrorEditModeDependencies) => {
+        if (!block) return
+        await withMoveTransition(async () => { await block.set(isCollapsedProp, false) })
+      },
+      defaultBinding: {
+        keys: '$mod+ArrowDown',
+        eventOptions: {preventDefault: true},
       },
     },
     {

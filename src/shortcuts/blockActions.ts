@@ -12,6 +12,7 @@ import {
   isEditingProp,
   peekFocusedBlockLocation,
   requestEditorFocus,
+  selectionStateProp,
   setIsEditing,
   showPropertiesProp,
   type EditorSelectionState,
@@ -117,6 +118,12 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
  *  surface (no next block) or if the range resolved empty. Edit-mode callers
  *  use this to avoid leaving edit mode for nothing, and pass `clearEditing` so
  *  the exit folds into the selection's transaction (see extendSelectionDownEdit). */
+/** True when a block selection is already active. The Roam-style first
+ *  Shift+Direction selects just the focused block; only once something is
+ *  selected do further presses extend to neighbours. */
+const hasActiveSelection = (uiStateBlock: Block): boolean =>
+  (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
+
 export const extendSelectionDown = async (
   uiStateBlock: Block,
   repo: Repo,
@@ -128,6 +135,15 @@ export const extendSelectionDown = async (
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return false
+
+  // Roam-style: the first press selects just the focused block (so a single
+  // block can be selected/deleted); subsequent presses extend downward. Don't
+  // select the surface's own root — acting on the view root within its view is
+  // meaningless, so leave the keystroke native (matches the old no-op there).
+  if (!hasActiveSelection(uiStateBlock)) {
+    if (focusedId === scopeRootId) return false
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+  }
 
   const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, scopeRootForcesOpen)
   if (!nextBlock) return false
@@ -149,6 +165,12 @@ export const extendSelectionUp = async (
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return false
+
+  // Roam-style first press — see extendSelectionDown.
+  if (!hasActiveSelection(uiStateBlock)) {
+    if (focusedId === scopeRootId) return false
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, scopeRootForcesOpen, clearEditing)
+  }
 
   const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId)
   if (!prevBlock) return false

@@ -53,8 +53,9 @@ const getCurrentHash = (): string =>
 // sequence — resolve the workspace, clear the §6 access gate, then run the
 // bootstrap writes — because each depends on the last: the gate must decide
 // BEFORE any write (those writes would otherwise land plaintext into an
-// encrypted-but-locked workspace), and `bootstrapWorkspace` keeps
-// seedTutorial-before-parseReferences inside itself.
+// encrypted-but-locked workspace). First-run seeding now lives in the
+// onboarding plugin's landing resolver, invoked from within
+// `bootstrapWorkspace`'s landing step.
 const resolveInitialLayout = async (
   repo: Repo,
   requestedHash: string,
