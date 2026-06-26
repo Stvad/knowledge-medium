@@ -36,9 +36,10 @@ export function buildReport(outcome: AuditOutcome, redact: (s: string) => string
     return {
       exitCode: 0,
       notices: [],
-      warnings: [
-        'attachments ciphertext audit NOT ARMED — SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY unset; the tripwire did not run',
-      ],
+      // Generic wording on purpose: this file is under src/ (bundle-scanned), so
+      // it must not contain the literal privileged-key env var name. The exact
+      // var names live in the entrypoint + the workflow (neither bundled).
+      warnings: ['attachments ciphertext audit NOT ARMED — required credentials unset; the tripwire did not run'],
       errors: [],
       summary:
         '### ⚠️ Attachments ciphertext audit — NOT ARMED\nSecrets not configured; the audit did not run. Set the key before media capture (Phase 5) ships.',

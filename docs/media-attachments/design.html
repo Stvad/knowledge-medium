@@ -1393,7 +1393,10 @@ vNext; the v1 commitment is only the reserved property + audience flag.
     <td><code>attachments</code> bucket migration; storage RLS — read by member, insert/delete by writer,
       no update = immutability (with the explicit <code>private</code>-schema grants / wrapper, §10);
       <code>BlobStore</code> over Supabase Storage (direct writer-gated upload, §10.1); off-path
-      ciphertext audit. Post-create RLS audit per the Supabase rule.</td></tr>
+      ciphertext audit. The RLS contract (writer-gated flat insert, member read, no-update
+      immutability, writer delete) is verified end-to-end against a real stack with real gotrue
+      users by <code>scripts/attachments-rls-verify.ts</code> (a pre-deploy gate, not in
+      <code>yarn run check</code> — it needs a live stack; 13/13).</td></tr>
 <tr><td>3 — cache + resolver (in-thread)</td>
     <td>An in-thread asset resolver: fetch ciphertext (RLS-gated Storage <code>GET</code> with the app's
       session) → decrypt / passthrough / fail-closed per the three-valued materializability (pin read is
