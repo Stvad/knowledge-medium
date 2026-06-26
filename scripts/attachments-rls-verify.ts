@@ -126,6 +126,11 @@ async function run() {
   check('viewer (member, not writer) upload DENIED', !(await tryUpload(viewer.client, `${ws}/k-viewer`)).allowed)
   check('stranger (non-member) upload DENIED', !(await tryUpload(stranger.client, `${ws}/k-stranger`)).allowed)
   check('nested path <ws>/sub/k upload DENIED (flat layout)', !(await tryUpload(owner.client, `${ws}/sub/k`)).allowed)
+  // The migration's `right(name,1) <> '/'` + `array_length(...) = 1` guards reject an
+  // empty content-key (`<ws>/`), which would otherwise pass the 1-segment check and
+  // plant a key-less object that evades the resolver. Without this case, dropping
+  // those guards would regress unnoticed.
+  check('empty content-key <ws>/ upload DENIED', !(await tryUpload(owner.client, `${ws}/`)).allowed)
   check(
     'cross-workspace upload to otherWs DENIED (editor is not a writer there)',
     !(await tryUpload(editor.client, `${otherWs}/k-cross`)).allowed,

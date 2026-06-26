@@ -26,7 +26,7 @@ import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/paste/operations.js'
 import { pasteDecisionVerb } from '@/paste/decision.js'
-import { captureMediaFromFiles } from '@/attachments/assetUpload.js'
+import { captureMediaFromFiles, reportCaptureFailures } from '@/attachments/assetUpload.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -498,9 +498,9 @@ export function DefaultBlockRenderer(
         // Capture file(s) as media blocks embedded under the focused block (§11).
         const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
         if (workspaceId && fileList.length > 0) {
-          void captureMediaFromFiles(repo, workspaceId, block.id, fileList).catch((err) =>
-            console.warn('[media] paste capture failed', err),
-          )
+          void captureMediaFromFiles(repo, workspaceId, block.id, fileList)
+            .then(reportCaptureFailures)
+            .catch((err) => console.warn('[media] paste capture failed', err))
         } else if (fileList.length > 0) {
           console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
         }

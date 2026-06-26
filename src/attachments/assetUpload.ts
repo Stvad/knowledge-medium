@@ -22,12 +22,14 @@ import { getActiveUserId, syncResolverForUser } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
 import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase } from '@/services/supabase.js'
+import { showError } from '@/utils/toast.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
 import {
   captureMedia,
   DEFAULT_MAX_CAPTURE_BYTES,
   type MediaCaptureDeps,
+  type MediaCaptureFailure,
   type MediaCaptureResult,
   type MediaSource,
 } from './mediaCapture.js'
@@ -170,4 +172,25 @@ export const captureMediaFromFiles = async (
     results.push(await captureMedia({ workspaceId, source, embedParentId }, deps))
   }
   return results
+}
+
+/** User-facing message per capture failure. `captureMediaFromFiles` returns failures
+ *  as RESOLVED `{ok:false}` values (not throws), so without this a paste that's
+ *  rejected (oversize, locked workspace, …) does nothing visible — the user believes
+ *  it worked. */
+const CAPTURE_FAILURE_MESSAGE: Record<MediaCaptureFailure, string> = {
+  'no-user': 'Sign in to attach media.',
+  empty: 'That file is empty — nothing to attach.',
+  'too-large': 'That file is too large to attach.',
+  'unsupported-mime': 'That file type can’t be attached.',
+  'workspace-locked': 'Unlock this workspace to attach media.',
+  'no-content-key': 'Re-paste your workspace key to attach media.',
+}
+
+/** Toast the distinct failure reasons from a (possibly multi-file) capture. Call on
+ *  the resolved results of {@link captureMediaFromFiles} so a silently-rejected paste
+ *  becomes visible feedback. De-dupes identical reasons across files. */
+export const reportCaptureFailures = (results: readonly MediaCaptureResult[]): void => {
+  const reasons = new Set(results.flatMap(r => (r.ok ? [] : [r.reason])))
+  for (const reason of reasons) showError(CAPTURE_FAILURE_MESSAGE[reason])
 }

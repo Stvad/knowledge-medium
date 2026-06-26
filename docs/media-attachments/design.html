@@ -82,7 +82,7 @@
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
-<strong>Status:</strong> partially implemented — phases 1–4 have landed on branch
+<strong>Status:</strong> partially implemented — phases 1–5 have landed on branch
 <code>feat/media-attachments</code>. Phase 1 = the byte-crypto seam (§5/§5.1:
 the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, the
 read-side content-hash verify) in <code>src/sync/</code>. Phase 2 = the <code>attachments</code> bucket
@@ -99,7 +99,13 @@ store</strong>, fail-closed on every error, the read-side check now the sole byt
 in-thread, wraps them as an object URL, and renders through the existing lightbox; non-image MIMEs get a
 file chip; a fail-closed resolve shows a broken-asset placeholder, never an unverified source;
 <code>canRender</code> reads a <code>peek()</code> snapshot so it never throws above the block
-ErrorBoundary. Phases 5–6 (capture + up-lane, the down-lane) are <strong>not yet built</strong>.
+ErrorBoundary. Phase 5 = capture + the up-lane (§9/§11): paste/drop mints the asset block,
+stages bytes in a durable IndexedDB queue (stage-before-tx / promote-after-commit), and a
+single-owner lane drain encodes-at-drain + uploads (with a 409 poison-verify and a promote-only
+boot reconciler). <strong>Phase 6 (the down-lane — §8/§9 background replication) is not yet
+built</strong>; <strong>§16 reference-permanent GC is likewise deferred</strong> — until it lands,
+a never-promoted <code>staged</code> orphan and its OPFS bytes are retained (never reaped), and a
+<code>failed</code> upload record is recoverable only by re-paste (no §9 recovery actor yet).
 Last verified against code 2026-06-26. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
 solid; the recovery edges are where the spec is still hardening.
