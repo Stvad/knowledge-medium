@@ -27,6 +27,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { attachmentObjectPath } from './storagePaths.js'
 
 export const ATTACHMENTS_BUCKET = 'attachments'
 
@@ -126,8 +127,9 @@ const isAlreadyExists = (err: { status?: number; statusCode?: string | number })
 }
 
 export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore => {
+  // The flat `<ws>/<contentKey>` shape, shared with the off-path audit (§10).
+  const objectPath = attachmentObjectPath
   const { client, getAccessToken } = deps
-  const objectPath = (workspaceId: string, contentKey: string) => `${workspaceId}/${contentKey}`
 
   return {
     async put(workspaceId, contentKey, bytes) {

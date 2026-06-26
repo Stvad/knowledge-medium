@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { BINARY_ENVELOPE_MIN_BYTES, hasBinaryEnvelopeMagic } from '../../sync/crypto/binaryEnvelope.js'
+import { authenticatedObjectUrl } from '../storagePaths.js'
 import { collectPaged } from './paginate.js'
 import type { AuditIO, ObjectEntry, ObjectVerdict } from './types.js'
 
@@ -67,18 +68,14 @@ export function createSupabaseAuditIO(deps: SupabaseAuditIODeps): AuditIO {
       // (arrayBuffer) streams lazily and can drop mid-stream — any per-object
       // failure must degrade to 'unreadable', never abort the scan.
       try {
-        const encoded = path.split('/').map(encodeURIComponent).join('/')
         // Read the whole envelope MINIMUM (magic + nonce + tag), not just the
         // magic: an object that is `encb:v1:` followed by too few bytes to hold a
         // nonce + auth tag cannot be a real envelope, so the magic alone would let
         // a truncated/forged runt pass as 'ok'. A partial-content response clamps
-        // to the object size, so `head.length` is the true min(MIN, objectSize).
-        // Match the authenticated-download path shape storage-js itself uses —
-        // `/object/<bucket>/<path>` (StorageFileApi.download → `/object/${bucketId}/${path}`).
-        // An extra `/authenticated/` segment would address a bucket literally named
-        // "authenticated" → 404 → classified `gone`, so a real object would be
-        // silently skipped and the tripwire would report a clean run.
-        const res = await fetchFn(`${base}/storage/v1/object/${BUCKET}/${encoded}`, {
+        // to the object size, so `head.length` is the true min(MIN, objectSize). The
+        // URL is built via the shared helper so it can't drift from the storage-js
+        // download shape the app's own reads use (a wrong shape 404s → false-clean).
+        const res = await fetchFn(authenticatedObjectUrl(base, BUCKET, path), {
           headers: { ...authHeaders, range: `bytes=0-${BINARY_ENVELOPE_MIN_BYTES - 1}` },
         })
         if (res.status === 404) return 'gone'
