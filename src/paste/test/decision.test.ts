@@ -4,7 +4,6 @@ import type { PasteChordIntent } from '../operations.ts'
 import {
   defaultPasteDecision,
   pasteDecisionVerb,
-  textPasteDecision,
   type PasteCaret,
   type PasteDecision,
   type PasteRequest,
@@ -56,31 +55,12 @@ describe('defaultPasteDecision', () => {
       .toEqual({kind: 'split'})
   })
 
-  it('decides media for the FILE half when file(s) are present (text handled separately)', () => {
-    // The decision covers only the file half; the renderer also pastes any
-    // accompanying text via textPasteDecision (the "do both" behavior).
-    expect(defaultPasteDecision(request({files: [pngFile()], text: 'incidental', intent: 'single-block'})))
-      .toEqual({kind: 'media'})
-  })
-
-  it('ignores an empty files array (falls through to the text branch)', () => {
-    expect(defaultPasteDecision(request({files: [], text: 'a\nb'}))).toEqual({kind: 'split'})
-  })
-})
-
-describe('textPasteDecision (the text half — applied alongside media when a paste carries both)', () => {
-  it('single-block chord → single-block', () => {
-    expect(textPasteDecision(request({intent: 'single-block', text: 'a\nb'}))).toEqual({kind: 'single-block'})
-  })
-  it('multiline plain text → split', () => {
-    expect(textPasteDecision(request({text: 'a\nb'}))).toEqual({kind: 'split'})
-  })
-  it('single-line is surface-aware: editor → single-block, shell → split', () => {
-    expect(textPasteDecision(request({text: 'x', surface: 'editor'}))).toEqual({kind: 'single-block'})
-    expect(textPasteDecision(request({text: 'x', surface: 'shell'}))).toEqual({kind: 'split'})
-  })
-  it('ignores files entirely — the media half is captured separately', () => {
-    expect(textPasteDecision(request({files: [pngFile()], text: 'a\nb'}))).toEqual({kind: 'split'})
+  it('is text-only — IGNORES files (the "files → media" rule is the attachments decorator, not core)', () => {
+    // Moved out of core so it's gated on the attachments plugin's toggle; the core
+    // default never produces `media`, so a file paste here decides on its text.
+    expect(defaultPasteDecision(request({files: [pngFile()], text: 'a\nb'}))).toEqual({kind: 'split'})
+    expect(defaultPasteDecision(request({files: [pngFile()], text: 'x', surface: 'editor'})))
+      .toEqual({kind: 'single-block'})
   })
 })
 
@@ -177,10 +157,11 @@ describe('pasteDecisionVerb', () => {
       .toEqual({kind: 'single-block'})
   })
 
-  it('decides media for a file paste (and the media kind passes validateResult)', () => {
+  it('without a media contributor, a file paste is text-only (media capture is plugin-gated)', () => {
     const runtime = resolveFacetRuntimeSync([])
-    // A valid `media` decision must NOT be coerced to the text fallback.
-    expect(pasteDecisionVerb.runSync(runtime, request({files: [pngFile()]})))
-      .toEqual({kind: 'media'})
+    // Core alone never produces `media`; the attachments decorator (tested in
+    // pasteCaptureDecision.test.ts) is what turns a file paste into a media capture.
+    expect(pasteDecisionVerb.runSync(runtime, request({files: [pngFile()], text: 'a\nb'})))
+      .toEqual({kind: 'split'})
   })
 })

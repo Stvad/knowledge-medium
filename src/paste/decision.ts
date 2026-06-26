@@ -78,7 +78,9 @@ interface PasteRequestBase {
   html?: string
   /** File(s) carried by the paste/drop (`clipboardData.files` /
    *  `dataTransfer.files`), e.g. a pasted/dropped image. Present (non-empty) →
-   *  the default decision is `media`; absent → text branching as before. */
+   *  the attachments plugin's decorator decides `media` (see
+   *  `src/attachments/pasteCaptureDecision.ts`); with that plugin off, files fall
+   *  through to the text branches. */
   files?: readonly File[]
   /** Latched paste chord: plain Cmd/Ctrl+V (`split`) vs Cmd/Ctrl+Shift+V
    *  (`single-block`). The paste `ClipboardEvent` carries no modifier
@@ -101,24 +103,17 @@ interface PasteRequestBase {
  * verbatim" plugin works on single-line shell pastes too.
  */
 export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
-  // File(s) present → capture as media. Files and text are INDEPENDENT aspects of a
-  // paste, not an either/or: a renderer that gets `media` for a paste also carrying
-  // text captures the file(s) AND pastes the text via `textPasteDecision` — so e.g.
-  // a spreadsheet copy (TSV text + a PNG rendering) attaches the image and keeps the
-  // data. The `media` kind here decides only the FILE half.
-  if (request.files && request.files.length > 0) return {kind: 'media'}
-  return textPasteDecision(request)
-}
-
-/** A text-only paste outcome — {@link PasteDecision} minus `media`. */
-export type TextPasteDecision = Exclude<PasteDecision, {kind: 'media'}>
-
-/** The text half of the default decision (files ignored). Split out so a paste that
- *  carries files AND text can apply BOTH — capture media, then paste the text using
- *  this. Never returns `media`. Single-line text lands verbatim in the `editor`
- *  (native-like caret insert) but parses as an outline in the `shell` (no caret);
- *  multiline always splits. */
-export const textPasteDecision = (request: PasteRequest): TextPasteDecision => {
+  // Text-only by default. The "a paste carrying file(s) is a media paste" rule is
+  // NOT here — the attachments plugin contributes it as a `pasteDecisionVerb`
+  // decorator (src/attachments/pasteCaptureDecision.ts), so disabling that plugin
+  // cleanly disables media capture (files fall through to this text default) rather
+  // than minting media blocks nothing can render. `media` stays a valid decision
+  // KIND (the renderer↔verb contract); the core default just never produces it.
+  //
+  // On a `media` decision the renderer captures the file(s) AND re-runs this verb
+  // with files stripped to also handle any accompanying text — so files and text are
+  // independent aspects of one paste (a spreadsheet copy = TSV + a PNG → attach the
+  // image AND keep the data), and the text half still gets every plugin contribution.
   if (request.intent === 'single-block') return {kind: 'single-block'}
   if (request.text.includes('\n')) return {kind: 'split'}
   return request.surface === 'editor' ? {kind: 'single-block'} : {kind: 'split'}

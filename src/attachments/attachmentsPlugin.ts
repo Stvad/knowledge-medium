@@ -2,11 +2,12 @@
  * The `attachments` plugin (design §11) — packages the media block model + its
  * renderer, mirroring the video-player plugin's facet wiring.
  *
- * Phase 4 scope: the `media` block TYPE + its property schemas (typesFacet /
- * propertySchemasFacet) and the {@link MediaBlockRenderer} (blockRenderersFacet,
- * rendering blocks that carry the `media` type). Capture (paste/drop, §9) and the
- * background up/down lanes arrive in later phases; the bytes seam (§5), storage
- * (§10), and the resolver (§7.3) already exist underneath.
+ * Scope: the `media` block TYPE + its property schemas (typesFacet /
+ * propertySchemasFacet), the {@link MediaBlockRenderer} (blockRenderersFacet), the
+ * boot upload reconciler (appMountsFacet), and the paste rule that turns a file paste
+ * into a media capture (pasteDecisionVerb decorator). Everything the feature adds is
+ * gated on this one toggle — disable it and a file paste falls through to a text
+ * paste, no media blocks are minted, and the renderer/reconciler aren't mounted.
  */
 
 import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
@@ -15,6 +16,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { MediaBlockRenderer } from './MediaBlockRenderer.js'
 import { MediaUploadReconciler } from './MediaUploadReconciler.js'
+import { mediaPasteDecisionContribution } from './pasteCaptureDecision.js'
 import {
   ASSETS_TYPE_CONTRIBUTION,
   MEDIA_PROPERTY_SCHEMAS,
@@ -30,6 +32,9 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   typesFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'attachments' }),
   MEDIA_PROPERTY_SCHEMAS.map((schema) => propertySchemasFacet.of(schema, { source: 'attachments' })),
   blockRenderersFacet.of({ id: 'media', renderer: MediaBlockRenderer }, { source: 'attachments' }),
+  // A paste carrying file(s) → a media capture. Gated here so disabling the plugin
+  // disables capture (files fall through to a text paste).
+  mediaPasteDecisionContribution,
   // Boot recovery for crashed captures (§9) — gated on initial-sync settle.
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),
 ])
