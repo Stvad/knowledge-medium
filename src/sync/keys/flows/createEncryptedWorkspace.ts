@@ -68,12 +68,20 @@ export const createEncryptedWorkspace = async <T extends object>(
   // The paste-friendly string is the ONLY place the raw key ever leaves this
   // function; show it once, then it lives only as a non-extractable handle.
   const workspaceKey = formatWorkspaceKey(keyBytes)
-  const cryptoKey = await importWorkspaceKey(keyBytes)
-  // Derive K_id (§10) from the raw bytes BEFORE zeroing — their only in-scope
-  // window (the imported WK handle is non-extractable). Co-located with the WK
-  // in one keyStore record so they evict together.
-  const contentKeyHmac = await deriveContentKeyHmac(keyBytes)
-  keyBytes.fill(0) // drop the raw bytes once imported + K_id derived (the handles are enough)
+  let cryptoKey: CryptoKey
+  let contentKeyHmac: CryptoKey
+  try {
+    cryptoKey = await importWorkspaceKey(keyBytes)
+    // Derive K_id (§10) from the raw bytes BEFORE zeroing — their only in-scope
+    // window (the imported WK handle is non-extractable). Co-located with the WK
+    // in one keyStore record so they evict together.
+    contentKeyHmac = await deriveContentKeyHmac(keyBytes)
+  } finally {
+    // Zero on EVERY exit (success or a throw mid-import/derive) — symmetric with
+    // the §8.2 unlock flow, so a reject in import/derive can't leave the raw WK
+    // bytes on the GC heap.
+    keyBytes.fill(0)
+  }
 
   const wkCanary = await mintCanary(cryptoKey, workspaceId)
   // Self-check (§8.1): prove the EXACT string we show the user re-imports to a
