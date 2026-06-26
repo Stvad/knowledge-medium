@@ -57,7 +57,7 @@ const vimKeys = {
   panelHop: '`h` / `l` (or arrow keys)',
   firstLast: '`gg` jumps to the first visible bullet, `Shift+G` to the last',
   jumpMany: '`Ctrl+d` / `Ctrl+u` jump down / up by ~8 bullets',
-  startSelect: 'press `Space` (or `v`) on the focused bullet to start a selection',
+  startSelect: 'press `Space` (or `v`) to select the focused bullet; `Shift+J` / `Shift+K` then grow the selection down / up — the first press selects the current block, each next press adds the neighbour',
   delete: 'press `d d` (the vim `dd`) or `Delete`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
   properties: 'press `t`',
   copyRef: 'focus the block and press `Y R` (yank reference); `Y E` yanks an embed, `Y Y` the whole subtree, `Y C` just this block\'s text, `Y L` a shareable link',
@@ -67,7 +67,7 @@ const vimKeys = {
 }
 
 const defaultKeys: typeof vimKeys = {
-  fold: 'click the `▸` / `▾` chevron next to my bullet on hover (on touch it stays visible, and the block\'s swipe menu has a **Collapse** item) — there is no default keyboard fold without vim mode',
+  fold: 'while editing, `Cmd+Up` (`Ctrl+Up`) collapses the block and `Cmd+Down` (`Ctrl+Down`) expands it — or click the `▸` / `▾` chevron next to my bullet on hover (on touch it stays visible, and the block\'s swipe menu has a **Collapse** item)',
   // Single-click edits in the default config; double-click-to-edit is a
   // vim-only gesture (it exists because vim makes single-click just focus).
   edit: 'single-click anywhere in my text to start typing',
@@ -85,7 +85,7 @@ const defaultKeys: typeof vimKeys = {
   panelHop: 'click into the panel you want (keyboard panel-hop needs vim mode)',
   firstLast: '',
   jumpMany: '',
-  startSelect: 'while editing, `Shift+↑` / `Shift+↓` — at a block edge the selection escalates to whole blocks',
+  startSelect: 'while editing, `Shift+↓` / `Shift+↑` at a block edge first select the current block, then extend the selection down / up with each further press',
   delete: 'select it (or several — see the **Multi-select** section) and press `Delete`; for a single empty block, `Backspace` at its start removes it and merges into the block above',
   properties: 'open the command palette with `Cmd+K` and run "Toggle block properties"',
   copyRef: 'open the on-block quick-actions menu ("Copy Ref" / "Copy Embed"); keyboard yanks (`Y R` / `Y E`) need vim mode',

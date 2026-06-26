@@ -128,6 +128,15 @@ const extendSelectionVertical = async (
     return true
   }
 
+  // Roam-style: the first press (no active selection yet) selects just the
+  // focused block; only once a selection exists do further presses extend to
+  // the neighbour. Mirrors the structural extendSelectionDown/Up path.
+  const hasSelection = (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
+  if (!hasSelection) {
+    await extendSelectionToSpatialTarget(deps, current)
+    return true
+  }
+
   const next = verticalNeighbor(current, direction)
   if (!next) return true
   await extendSelectionToSpatialTarget(deps, next)
