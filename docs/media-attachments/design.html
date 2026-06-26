@@ -82,15 +82,20 @@
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
-<strong>Status:</strong> partially implemented — phases 1–2 have landed on branch
+<strong>Status:</strong> partially implemented — phases 1–3 have landed on branch
 <code>feat/media-attachments</code>. Phase 1 = the byte-crypto seam (§5/§5.1:
 the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, the
 read-side content-hash verify) in <code>src/sync/</code>. Phase 2 = the <code>attachments</code> bucket
 + RLS migration (read by member, <strong>insert/delete by writer</strong>, no update = immutability), and
 the <code>BlobStore</code> seam (§10/§10.1/§14), unit-tested. <strong>The §10.1 sole-writer Edge Function
 was removed</strong> (reversal, 2026-06-25) — uploads are now direct, writer-gated by RLS, with an off-path
-ciphertext audit as the tripwire. Phases 3–6 (in-thread resolver,
-block model + renderer, capture + up-lane, the down-lane) are <strong>not yet built</strong>.
+ciphertext audit as the tripwire. Phase 3 = the <code>K_id</code> content-key derivation (§10,
+<code>src/sync/crypto/contentKey.ts</code>, co-located with the WK in the keyStore + derived at
+unlock/create), the OPFS byte store (§8, <code>src/attachments/byteStore.ts</code>), and the in-thread
+asset resolver (§7.3, <code>src/attachments/resolver.ts</code>) — fetch → decode → <strong>hash-verify →
+store</strong>, fail-closed on every error, the read-side check now the sole byte-confidentiality control
+(returns verified bytes; the Phase-4 renderer wraps them as an object URL). Phases 4–6 (block model +
+renderer, capture + up-lane, the down-lane) are <strong>not yet built</strong>.
 Last verified against code 2026-06-25. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
 solid; the recovery edges are where the spec is still hardening.
@@ -1134,14 +1139,17 @@ function on every upload, because the byte-confidentiality <em>outcome</em> is a
     <code>encb:v1:</code>‖zeros‖plaintext‖zeros and passes it — or just exfiltrates with the workspace key
     they already hold. Against the threat that matters (a malicious writer / the untrusted server) it buys
     nothing.</li>
-  <li><strong>The read side fail-closes — and that is now the sole byte-confidentiality control, so it is a
-    hard Phase-3 acceptance gate, not an already-shipped guarantee.</strong> The resolver (§7.3,
-    <strong>Phase 3, not yet built</strong>) MUST hash-verify every fetched object against the block's synced
-    <code>hash</code> and AEAD-open it (§5.1/§7.3); anything that isn't the genuine plaintext renders a
-    broken-image placeholder and is <em>never served as content</em>. Phase 1 shipped the primitives
-    (<code>decodeBytes</code>, <code>verifyContentHash</code>); wiring them into the resolver — with the
-    tamper/swap and stale-replay tests §15 already lists — is what makes this reversal safe, and nothing reads
-    these objects until it lands. (This is the principled asymmetry with blocks: bytes are content-addressed
+  <li><strong>The read side fail-closes — and that is now the sole byte-confidentiality control, so it was a
+    hard Phase-3 acceptance gate.</strong> The resolver (§7.3,
+    <strong>built — <code>src/attachments/resolver.ts</code></strong>) hash-verifies every fetched object
+    against the block's synced
+    <code>hash</code> and AEAD-opens it (§5.1/§7.3); anything that isn't the genuine plaintext (a fetch
+    failure, an AEAD-open failure, or a hash mismatch — including a poisoned object that AEAD-opens under a
+    known-hash AAD) renders a
+    broken-image placeholder and is <em>never stored or served as content</em>. Phase 1 shipped the primitives
+    (<code>decodeBytes</code>, <code>verifyContentHash</code>); Phase 3 wired them into the resolver — with the
+    tamper/swap and hash-mismatch tests §15 lists — which is what makes this reversal safe; nothing read
+    these objects until it landed. (This is the principled asymmetry with blocks: bytes are content-addressed
     and self-verifying on read; block text is not — so byte-confidentiality <em>can</em> rest on a read-side
     check where block-confidentiality can't.)</li>
   <li><strong>It is a no-op for plaintext workspaces</strong> — no body to protect; the server holds those
@@ -1505,7 +1513,8 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       enforcement point would be a sole-writer Edge Function on every upload.</td>
     <td><strong>Decided: dropped</strong> (§10.1, 2026-06-25). The guard was shape-only (a malicious writer
       forges the 8-byte magic), a no-op for plaintext, and the served-plaintext outcome is fail-closed
-      read-side (§5.1/§7.3 — a Phase-3 resolver gate, since the reversal makes that read-check the sole
+      read-side (§5.1/§7.3 — the resolver's hash-verify gate, now built, since the reversal makes that
+      read-check the sole
       byte-confidentiality control); its only residual — an honest client accidentally uploading plaintext —
       is caught by an off-path audit (<code>scripts/attachments-ciphertext-audit.ts</code>), not worth a
       function on the write path.</td></tr>

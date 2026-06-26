@@ -18,7 +18,7 @@
  *              the §10.1 poison-correction, NOT by undo (§9).
  *
  * The E2EE `encb:v1:` byte shape is the CLIENT's invariant — it encodes before
- * upload (§9); the read side (the Phase-3 resolver, §7.3 — not yet built)
+ * upload (§9); the read side (the in-thread resolver, §7.3 — resolver.ts)
  * hash-verifies + AEAD-opens + fail-closes (§5.1), and an off-path audit
  * (scripts/attachments-ciphertext-audit.ts) alerts on a stray plaintext object.
  * No server inspects the body on write (§10.1 reversal, §17): a storage.objects
