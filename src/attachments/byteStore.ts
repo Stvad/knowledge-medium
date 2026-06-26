@@ -37,9 +37,13 @@ export interface ByteStore {
 }
 
 /** Path segments under the OPFS root for one object. Each segment is
- *  `encodeURIComponent`-escaped so a `/` or odd character in an id can't escape
- *  the tree or alias two distinct ids (a content-key is hex, but a workspace
- *  slug or account id is not guaranteed safe). */
+ *  `encodeURIComponent`-escaped so a `/` (or other reserved character) in an id
+ *  becomes one inert directory name — it can't introduce extra tree levels or
+ *  alias two distinct ids (a content-key is hex, but a workspace/account id is
+ *  not guaranteed safe). Note `encodeURIComponent` does NOT alter `.`/`..`/empty;
+ *  those aren't produced by real ids (UUID account/workspace, hex key), and the
+ *  File System API rejects such names with a `TypeError` that the resolver's
+ *  outer fail-closed guard turns into a placeholder (never a tree escape). */
 export const assetPathSegments = (userId: string, workspaceId: string, contentKey: string): string[] => [
   ASSETS_ROOT,
   encodeURIComponent(userId),

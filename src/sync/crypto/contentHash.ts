@@ -48,7 +48,16 @@ export const digestFromContentHash = (contentHash: string): Uint8Array<ArrayBuff
   if (!contentHash.startsWith(CONTENT_HASH_PREFIX)) {
     throw new Error(`content hash: missing '${CONTENT_HASH_PREFIX}' prefix`)
   }
-  const digest = hexToBytes(contentHash.slice(CONTENT_HASH_PREFIX.length))
+  const body = contentHash.slice(CONTENT_HASH_PREFIX.length)
+  // The canonical content hash is LOWERCASE hex (computeContentHash emits it) and
+  // the read-side verifyContentHash compares case-sensitively. Reject non-lowercase
+  // here too, so the derive side (content-key) and the verify side can't diverge —
+  // an uppercase hash would otherwise route to a valid path, fetch genuine bytes,
+  // then spuriously fail the hash check.
+  if (body !== body.toLowerCase()) {
+    throw new Error('content hash: expected lowercase hex')
+  }
+  const digest = hexToBytes(body)
   if (digest.length !== SHA256_BYTES) {
     throw new Error(`content hash: expected ${SHA256_BYTES}-byte digest, got ${digest.length}`)
   }

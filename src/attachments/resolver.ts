@@ -61,6 +61,10 @@ export type AssetFailReason =
   /** Decoded bytes don't match the block's `hash` — an untrusted-server replay
    *  or poison (§5.1). The discarded-and-never-served case. */
   | 'hash-mismatch'
+  /** An unexpected internal error (a misbehaving injected policy dep, an OPFS
+   *  error outside the guarded reads). The fail-closed safety net — `resolve`
+   *  returns a verdict, never a thrown promise (§7.3). */
+  | 'error'
 
 export type AssetResolveResult =
   | { readonly ok: true; readonly bytes: Uint8Array<ArrayBuffer> }
@@ -92,61 +96,79 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
 
   return {
     async resolve({ workspaceId, contentHash }): Promise<AssetResolveResult> {
-      const userId = getUserId()
-      if (!userId) return fail('deferred') // signed out — can't scope the store
-
-      // (1) Three-valued decode decision — defer fails CLOSED before any fetch.
-      const materializability = await getMaterializability(workspaceId)
-      if (materializability === 'defer') return fail('deferred')
-      const mode: SyncMode = materializability === 'decrypt' ? 'e2ee' : 'none'
-
-      // (2) The content-key (§10) addresses both the local store and the remote
-      // object. E2EE needs K_id; its absence (legacy device) fails closed — and
-      // since K_id co-lives with the WK, an unlocked e2ee workspace that stored
-      // bytes always has it, so this never strands already-stored bytes.
-      const contentKeyHmac = mode === 'e2ee' ? await getContentKeyHmac(workspaceId) : null
-      if (mode === 'e2ee' && !contentKeyHmac) return fail('no-content-key')
-      let contentKey: string
+      // Outer safety net: ANY unexpected throw (a misbehaving injected policy
+      // dep, an OPFS error the inner guards don't anticipate) returns a verdict,
+      // never a thrown promise — the renderer always gets a placeholder, never an
+      // unhandled rejection (the §7.3 fail-closed contract). The inner per-stage
+      // catches still run first, so a throw only reaches here if it's genuinely
+      // unanticipated.
       try {
-        contentKey = await deriveContentKey({ contentHash, mode, contentKeyHmac })
-      } catch {
-        return fail('invalid-hash')
-      }
+        const userId = getUserId()
+        if (!userId) return fail('deferred') // signed out — can't scope the store
 
-      // (3) Local hit — already verified when stored (§8), serve directly.
-      const local = await byteStore.get(userId, workspaceId, contentKey)
-      if (local) return { ok: true, bytes: local }
+        // (1) Three-valued decode decision — defer fails CLOSED before any fetch.
+        const materializability = await getMaterializability(workspaceId)
+        if (materializability === 'defer') return fail('deferred')
+        const mode: SyncMode = materializability === 'decrypt' ? 'e2ee' : 'none'
 
-      // (4) Miss → fetch the ciphertext (direct RLS-gated GET, §10.1).
-      let blob: Uint8Array<ArrayBuffer>
-      try {
-        blob = await blobStore.get(workspaceId, contentKey)
-      } catch {
-        return fail('fetch-failed') // absent / denied / offline — transient or §9 backstop
-      }
+        // (2) The content-key (§10) addresses both the local store and the remote
+        // object. E2EE needs K_id; its absence (legacy device) fails closed — and
+        // since K_id co-lives with the WK, an unlocked e2ee workspace that stored
+        // bytes always has it, so this never strands already-stored bytes.
+        const contentKeyHmac = mode === 'e2ee' ? await getContentKeyHmac(workspaceId) : null
+        if (mode === 'e2ee' && !contentKeyHmac) return fail('no-content-key')
+        let contentKey: string
+        try {
+          contentKey = await deriveContentKey({ contentHash, mode, contentKeyHmac })
+        } catch {
+          return fail('invalid-hash')
+        }
 
-      // (5) Decode: identity for plaintext, AEAD-open for e2ee (throws on a
-      // wrong key / tampered envelope / mismatched AAD).
-      let plaintext: Uint8Array<ArrayBuffer>
-      try {
-        plaintext = await decodeBytes(blob, mode, getCek, { contentHash, workspaceId })
-      } catch {
-        return fail('decode-failed')
-      }
+        // (3) Local hit — already verified when stored (§8), serve directly. A
+        // transient store-read error is treated as a MISS (the bytes are
+        // re-fetchable, §8), not a hard failure: fall through to the network.
+        let local: Uint8Array<ArrayBuffer> | null = null
+        try {
+          local = await byteStore.get(userId, workspaceId, contentKey)
+        } catch (err) {
+          console.warn(`[assetResolver] local byte-store read failed for ${workspaceId}; re-fetching`, err)
+        }
+        if (local) return { ok: true, bytes: local }
 
-      // (6) THE load-bearing check (§5.1). A mismatch is discarded — never
-      // stored, never served — even though step 5's AEAD tag passed.
-      if (!(await verifyContentHash(plaintext, contentHash))) return fail('hash-mismatch')
+        // (4) Miss → fetch the ciphertext (direct RLS-gated GET, §10.1).
+        let blob: Uint8Array<ArrayBuffer>
+        try {
+          blob = await blobStore.get(workspaceId, contentKey)
+        } catch {
+          return fail('fetch-failed') // absent / denied / offline — transient or §9 backstop
+        }
 
-      // (7) Cache the verified bytes, then serve. A cache-write failure (quota)
-      // must NOT deny the render — serve these verified bytes; the next render
-      // re-fetches.
-      try {
-        await byteStore.put(userId, workspaceId, contentKey, plaintext)
+        // (5) Decode: identity for plaintext, AEAD-open for e2ee (throws on a
+        // wrong key / tampered envelope / mismatched AAD).
+        let plaintext: Uint8Array<ArrayBuffer>
+        try {
+          plaintext = await decodeBytes(blob, mode, getCek, { contentHash, workspaceId })
+        } catch {
+          return fail('decode-failed')
+        }
+
+        // (6) THE load-bearing check (§5.1). A mismatch is discarded — never
+        // stored, never served — even though step 5's AEAD tag passed.
+        if (!(await verifyContentHash(plaintext, contentHash))) return fail('hash-mismatch')
+
+        // (7) Cache the verified bytes, then serve. A cache-write failure (quota)
+        // must NOT deny the render — serve these verified bytes; the next render
+        // re-fetches.
+        try {
+          await byteStore.put(userId, workspaceId, contentKey, plaintext)
+        } catch (err) {
+          console.warn(`[assetResolver] byte-store write failed for ${workspaceId}; serving uncached`, err)
+        }
+        return { ok: true, bytes: plaintext }
       } catch (err) {
-        console.warn(`[assetResolver] byte-store write failed for ${workspaceId}; serving uncached`, err)
+        console.warn(`[assetResolver] unexpected error resolving ${workspaceId}; failing closed`, err)
+        return fail('error')
       }
-      return { ok: true, bytes: plaintext }
     },
   }
 }

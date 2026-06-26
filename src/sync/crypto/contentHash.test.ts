@@ -48,4 +48,12 @@ describe('asset content hash', () => {
     expect(() => digestFromContentHash(`sha1:${hex}`)).toThrow(/prefix/)
     expect(() => digestFromContentHash('sha256:dead')).toThrow(/32-byte/) // too short
   })
+
+  it('digestFromContentHash rejects non-lowercase hex (canonical form only, matches verify)', () => {
+    // hexToBytes itself is case-insensitive, but the content hash is canonical
+    // lowercase; an uppercase one would derive a valid path then spuriously fail
+    // the case-sensitive read-side hash check, so reject it at the source.
+    const upper = 'BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD'
+    expect(() => digestFromContentHash(`sha256:${upper}`)).toThrow(/lowercase/)
+  })
 })

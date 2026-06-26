@@ -212,3 +212,32 @@ describe('createAssetResolver — fail-closed (the §7.3/§5.1 acceptance gate)'
     expect(await byteStore.has(USER, WS, await contentKeyFor('none', contentHash))).toBe(false)
   })
 })
+
+describe('createAssetResolver — never throws out of resolve (the §7.3 fail-closed contract)', () => {
+  it('treats a transient local-store read error (non-NotFound) as a miss and re-fetches', async () => {
+    // OpfsByteStore.get rethrows any DOMException that isn't NotFoundError; the
+    // resolver must treat it as a miss (bytes are re-fetchable, §8), not fail.
+    const plain = bytes(7, 7)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    vi.spyOn(byteStore, 'get').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalled() // fell through to the network
+  })
+
+  it('fails closed (error verdict, not a thrown promise) when an injected policy dep rejects', async () => {
+    const { resolver, blobGet } = build({
+      getMaterializability: () => Promise.reject(new Error('pin store exploded')),
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'error',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+})
