@@ -1,10 +1,14 @@
 /**
  * App-root mount that drives the up-lane's opportunistic recovery (design §9).
  * Mounted via `appMountsFacet`, it:
- *   - waits for the active user's PowerSync initial sync to SETTLE (so more synced
- *     blocks are materialized and get promoted this boot rather than the next),
- *     then runs the boot reconciler once — promote recoverable `staged` records,
- *     then drain;
+ *   - runs the boot reconciler at mount (promote recoverable `staged` records, then
+ *     drain `pending`) — UNCONDITIONALLY, because draining a prior session's pending
+ *     uploads is REQUIRED work that must not be gated on initial sync: `onFirstSync`
+ *     never fires in a connected-but-never-synced / offline session (see firstSync.ts),
+ *     so gating here would strand a whole session's un-uploaded bytes;
+ *   - re-runs it once initial sync SETTLES, to also promote `staged` records whose
+ *     blocks only just arrived via that sync (the reconcile is idempotent + the drain
+ *     is lane-locked, so the already-synced double-fire is harmless);
  *   - re-arms the drain on reconnect (`online`) and tab refocus
  *     (`visibilitychange` → visible), so a capture that `defer`red (workspace was
  *     locked) or hit a transient upload error recovers in-session, not only at the
@@ -26,15 +30,19 @@ export const MediaUploadReconciler = (): null => {
     const userId = getActiveUserId()
     if (!userId) return
 
-    // onFirstSync fires the callback once initial sync has settled (immediately
-    // if it already has) and returns a disposer; gate the reconcile on it so the
-    // most synced blocks are materialized + promoted this boot (a miss just defers
-    // to the next boot — never destructive, since the reconciler doesn't reap).
-    const disposeFirstSync = onFirstSync(getPowerSyncDb(userId), () => {
+    const reconcile = () =>
       void runUploadReconcile(userId, repo).catch((err) =>
         console.warn('[media] upload reconcile failed', err),
       )
-    })
+
+    // Required work — runs even with NO initial sync (offline / never-synced):
+    // promotes locally-present `staged` records and drains a prior session's
+    // `pending` uploads. Idempotent + lane-locked, so it's safe to re-run.
+    reconcile()
+    // Opportunistic re-run once initial sync settles, so `staged` records whose
+    // blocks only just arrived via that sync also promote this boot (a miss merely
+    // defers to the next boot — never destructive, since the reconciler doesn't reap).
+    const disposeFirstSync = onFirstSync(getPowerSyncDb(userId), reconcile)
 
     // In-session retry sweep — single-owner drain on reconnect / refocus. Reads
     // the CURRENT active user at fire time (not the effect-time `userId`), so a

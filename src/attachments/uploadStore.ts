@@ -43,7 +43,10 @@ export interface ByteUploadRecord {
   readonly status: ByteUploadStatus
   /** Drain retry counter — bumped on a transient failure, bounds the retries. */
   readonly attempts: number
-  /** ms epoch when first staged — age-based retry bound. */
+  /** ms epoch when (re-)staged — `stage` re-stamps it on every re-arm. Doubles as
+   *  the age-based retry bound AND the optimistic-concurrency stamp a drain passes to
+   *  {@link ByteUploadStore.markFailed}/{@link ByteUploadStore.recordAttempt} so a
+   *  stale terminal decision can't bury a concurrent re-paste (see those methods). */
   readonly stagedAt: number
 }
 
@@ -64,10 +67,15 @@ export interface ByteUploadStore {
   listByStatus(userId: string, status: ByteUploadStatus): Promise<ByteUploadRecord[]>
   /** staged → pending (the post-commit flip). No-op if the record is absent. */
   promote(userId: string, assetBlockId: string): Promise<void>
-  /** attempts += 1, status unchanged. No-op if absent. */
-  recordAttempt(userId: string, assetBlockId: string): Promise<void>
-  /** → failed. No-op if absent. */
-  markFailed(userId: string, assetBlockId: string): Promise<void>
+  /** attempts += 1, status unchanged. No-op if absent — or, when `expectedStagedAt`
+   *  is given and the live record's `stagedAt` has advanced (a re-paste re-armed it
+   *  since the drain snapshotted it), a no-op: a stale drain decision must not touch a
+   *  freshly re-armed record. */
+  recordAttempt(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void>
+  /** → failed. No-op if absent, or if the record was re-armed since `expectedStagedAt`
+   *  (see {@link recordAttempt}) — otherwise a stale drain buries a live re-paste in
+   *  `failed`, which nothing re-drains. */
+  markFailed(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void>
   /** Remove the record (a confirmed upload). */
   delete(userId: string, assetBlockId: string): Promise<void>
   /** Drop every record FOR THIS USER (account isolation — the store is shared
@@ -90,6 +98,15 @@ const stagedRecord = (input: StageInput, stagedAt: number): ByteUploadRecord => 
   attempts: 0,
   stagedAt,
 })
+
+/** Optimistic-concurrency guard for the drain's terminal/attempt writes. The drain
+ *  reads a `pending` snapshot, then does a SLOW upload before deciding to fail/retry
+ *  it — but capture is lock-free, so a re-paste of the same content can re-arm that
+ *  record (`stage` bumps `stagedAt`) during the upload. A re-arm supersedes the
+ *  drain's stale decision; `markFailed`/`recordAttempt` pass the snapshot's
+ *  `stagedAt` and skip the write when the live stamp has moved. */
+const supersededByReArm = (r: ByteUploadRecord, expectedStagedAt: number | undefined): boolean =>
+  expectedStagedAt !== undefined && r.stagedAt !== expectedStagedAt
 
 /** In-memory store. Tests + the fallback when IndexedDB is unavailable (the queue
  *  then lives only for the page's lifetime — a reload loses un-uploaded intents,
@@ -128,12 +145,16 @@ export class InMemoryByteUploadStore implements ByteUploadStore {
     this.mutate(userId, assetBlockId, r => ({ ...r, status: 'pending' }))
   }
 
-  async recordAttempt(userId: string, assetBlockId: string): Promise<void> {
-    this.mutate(userId, assetBlockId, r => ({ ...r, attempts: r.attempts + 1 }))
+  async recordAttempt(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    this.mutate(userId, assetBlockId, r =>
+      supersededByReArm(r, expectedStagedAt) ? r : { ...r, attempts: r.attempts + 1 },
+    )
   }
 
-  async markFailed(userId: string, assetBlockId: string): Promise<void> {
-    this.mutate(userId, assetBlockId, r => ({ ...r, status: 'failed' }))
+  async markFailed(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    this.mutate(userId, assetBlockId, r =>
+      supersededByReArm(r, expectedStagedAt) ? r : { ...r, status: 'failed' },
+    )
   }
 
   async delete(userId: string, assetBlockId: string): Promise<void> {
@@ -266,12 +287,16 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
     await this.mutate(userId, assetBlockId, r => ({ ...r, status: 'pending' }))
   }
 
-  async recordAttempt(userId: string, assetBlockId: string): Promise<void> {
-    await this.mutate(userId, assetBlockId, r => ({ ...r, attempts: r.attempts + 1 }))
+  async recordAttempt(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    await this.mutate(userId, assetBlockId, r =>
+      supersededByReArm(r, expectedStagedAt) ? r : { ...r, attempts: r.attempts + 1 },
+    )
   }
 
-  async markFailed(userId: string, assetBlockId: string): Promise<void> {
-    await this.mutate(userId, assetBlockId, r => ({ ...r, status: 'failed' }))
+  async markFailed(userId: string, assetBlockId: string, expectedStagedAt?: number): Promise<void> {
+    await this.mutate(userId, assetBlockId, r =>
+      supersededByReArm(r, expectedStagedAt) ? r : { ...r, status: 'failed' },
+    )
   }
 
   async delete(userId: string, assetBlockId: string): Promise<void> {

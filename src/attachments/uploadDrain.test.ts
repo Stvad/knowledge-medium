@@ -251,6 +251,27 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect((await store.get(USER, BLOCK))?.status).toBe('failed')
   })
 
+  it('a re-paste that re-arms a record mid-drain is NOT buried by the drain’s stale failure', async () => {
+    // The drain snapshots the pending record (stagedAt 1000) and starts a slow upload;
+    // a concurrent re-paste re-arms the SAME content (capture is lock-free) with a
+    // fresh stamp before the upload's failure is handled. The drain's stale `markFailed`
+    // must be dropped, leaving the live re-paste intact (else it lands in `failed`,
+    // which nothing re-drains).
+    await store.stage(stageInput()) // stagedAt 1000
+    await store.promote(USER, BLOCK)
+    await byteStore.put(USER, WS, KEY, bytes(8))
+    clock = 2000
+    blobStore.fail = () => {
+      void store.stage(stageInput()) // re-arm: staged, attempts 0, stagedAt 2000
+      throw new BlobPutError('offline', false, 0, 'network')
+    }
+
+    // maxAttempts 1 → the stale snapshot is "exhausted" → it WOULD markFailed.
+    await drainUploads(USER, deps({ maxAttempts: 1 }))
+
+    expect(await store.get(USER, BLOCK)).toMatchObject({ status: 'staged', attempts: 0, stagedAt: 2000 })
+  })
+
   it('quarantines (→failed) when the local bytes are gone (OPFS eviction before upload)', async () => {
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)

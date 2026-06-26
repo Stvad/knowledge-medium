@@ -121,6 +121,26 @@ for (const backend of backends) {
       expect(await store.get('u1', 'media:ck-abc')).toBeNull()
     })
 
+    it('markFailed / recordAttempt with a STALE expectedStagedAt no-op — a re-paste re-armed the record', async () => {
+      await store.stage(stageInput()) // stagedAt 1000
+      await store.promote('u1', 'media:ck-abc')
+      const staleStamp = (await store.get('u1', 'media:ck-abc'))?.stagedAt // 1000
+      // A re-paste of the same content re-arms it with a fresh stamp.
+      clock = 2000
+      await store.stage(stageInput()) // status staged, attempts 0, stagedAt 2000
+      // A drain decision computed from the OLD snapshot must not bury the re-paste.
+      await store.markFailed('u1', 'media:ck-abc', staleStamp)
+      await store.recordAttempt('u1', 'media:ck-abc', staleStamp)
+      expect(await store.get('u1', 'media:ck-abc')).toMatchObject({
+        status: 'staged',
+        attempts: 0,
+        stagedAt: 2000,
+      })
+      // The CURRENT stamp still applies (a non-stale drain isn't disarmed).
+      await store.markFailed('u1', 'media:ck-abc', 2000)
+      expect((await store.get('u1', 'media:ck-abc'))?.status).toBe('failed')
+    })
+
     it('promote / recordAttempt / markFailed on an absent record are no-ops (never throw)', async () => {
       await expect(store.promote('u1', 'gone')).resolves.toBeUndefined()
       await expect(store.recordAttempt('u1', 'gone')).resolves.toBeUndefined()

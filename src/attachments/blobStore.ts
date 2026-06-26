@@ -90,14 +90,14 @@ export interface SupabaseBlobStoreDeps {
   getAccessToken: () => Promise<string | null>
 }
 
-// Storage error shapes vary by storage-api version, and supabase-js surfaces
-// `statusCode = body.statusCode ?? body.code ?? String(httpStatus)` with
-// `.status = httpStatus`. So the same logical error reaches us as EITHER a
-// numeric code (statusCode '403', and some versions flatten .status to 400) OR a
-// symbolic code (statusCode 'AccessDenied', .status the real 403). We therefore
-// classify on BOTH the HTTP status AND the symbolic code, so we're correct under
-// either shape — keying on only one (e.g. the numeric set, or only `.status`)
-// misclassifies the other shape.
+// Storage error shapes vary by storage-api version. supabase-js surfaces
+// `statusCode = body.statusCode ?? body.code ?? String(httpStatus)` alongside a
+// numeric `.status`. So the same logical error reaches us as EITHER a numeric code
+// (statusCode '403') OR a symbolic one (statusCode 'AccessDenied'), and which of
+// `.status` / `statusCode` carries the usable HTTP status isn't guaranteed stable
+// across versions. We therefore classify on BOTH the HTTP status AND the symbolic
+// code, so we're correct under either shape — keying on only one misclassifies the
+// other.
 
 /** Permanent HTTP statuses — won't clear on retry → the §9 record goes to
  *  `failed`: 403 not-a-writer / removed member, 404 bucket missing (misconfig),
@@ -109,8 +109,8 @@ const PERMANENT_STORAGE_CODES = new Set(['AccessDenied', 'NoSuchBucket', 'Entity
 const ALREADY_EXISTS_CODES = new Set(['ResourceAlreadyExists', 'KeyAlreadyExists', 'Duplicate'])
 
 /** The real HTTP status of a Storage error: a numeric `statusCode` when present
- *  (the shape that flattens `.status` to 400), else `.status` (the shape that
- *  puts a word in `statusCode`). */
+ *  (the shape that puts the code there), else `.status` (the shape that puts a
+ *  word in `statusCode`). */
 const httpStatusOf = (err: { status?: number; statusCode?: string | number }): number | undefined => {
   const sc = err.statusCode != null ? String(err.statusCode) : undefined
   if (sc != null && /^\d+$/.test(sc)) return Number(sc)
@@ -139,7 +139,10 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       const token = await getAccessToken()
       if (!token) throw new BlobPutError('no active session', false, 401, 'no_session')
 
-      let error: { status?: number; statusCode?: string; message?: string } | null
+      // `statusCode` is `string | number`: supabase-js sets it from `body.statusCode
+      // ?? body.code ?? String(httpStatus)`, so a numeric body `code` arrives as a
+      // number. The classifier helpers `String()`-coerce it; type it honestly.
+      let error: { status?: number; statusCode?: string | number; message?: string } | null
       try {
         ;({ error } = await client.storage
           .from(ATTACHMENTS_BUCKET)

@@ -123,10 +123,10 @@ const retryOrFail = async (
 ): Promise<DrainOutcome> => {
   const exhausted = rec.attempts + 1 >= ctx.maxAttempts || ctx.now() - rec.stagedAt > ctx.maxAgeMs
   if (exhausted) {
-    await ctx.store.markFailed(userId, rec.assetBlockId)
+    await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
     return 'failed'
   }
-  await ctx.store.recordAttempt(userId, rec.assetBlockId)
+  await ctx.store.recordAttempt(userId, rec.assetBlockId, rec.stagedAt)
   return 'retried'
 }
 
@@ -154,7 +154,10 @@ const drainOne = async (
     return retryOrFail(userId, rec, ctx)
   }
   if (!plaintext) {
-    await ctx.store.markFailed(userId, rec.assetBlockId)
+    // A clean OPFS miss is terminal — BUT a concurrent re-paste writes fresh bytes to
+    // OPFS *before* it re-arms (bumps stagedAt), so the stamp guard turns this into a
+    // no-op when superseded, and the next drain finds the re-pasted bytes.
+    await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
     return 'failed'
   }
 
@@ -171,7 +174,7 @@ const drainOne = async (
     return 'uploaded'
   } catch (err) {
     if (err instanceof BlobPutError && err.permanent) {
-      await ctx.store.markFailed(userId, rec.assetBlockId)
+      await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
       return 'failed'
     }
     // Transient upload error, an encode error, or a non-enumerated permanent —
@@ -208,14 +211,14 @@ const verifyExistingOrQuarantine = async (
       workspaceId: rec.workspaceId,
     })
   } catch {
-    await ctx.store.markFailed(userId, rec.assetBlockId) // undecodable existing object — poisoned
+    await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt) // undecodable existing object — poisoned
     return 'failed'
   }
   if (await verifyContentHash(decoded, rec.contentHash)) {
     await ctx.store.delete(userId, rec.assetBlockId) // genuine dedup — the path holds our content
     return 'uploaded'
   }
-  await ctx.store.markFailed(userId, rec.assetBlockId) // present but wrong content — poisoned (§17)
+  await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt) // present but wrong content — poisoned (§17)
   return 'failed'
 }
 
