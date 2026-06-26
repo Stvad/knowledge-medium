@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block.js'
+import { typesProp } from '@/data/properties.js'
 import type { BlockRendererProps } from '@/types.js'
 
 // Control the block's props + the resolved URL state without the data layer.
@@ -10,6 +11,7 @@ const h = vi.hoisted(() => ({
 }))
 vi.mock('@/hooks/block.js', () => ({
   usePropertyValue: (_b: unknown, s: { name: string }) => [h.props[s.name], () => {}],
+  useWorkspaceId: () => 'ws-A',
 }))
 vi.mock('./useAssetObjectUrl.js', () => ({ useAssetObjectUrl: () => h.urlState }))
 vi.mock('./assetResolver.js', () => ({
@@ -61,10 +63,19 @@ describe('MediaContentRenderer — non-image branch', () => {
 })
 
 describe('MediaBlockRenderer.canRender', () => {
-  it('renders only media-typed blocks', () => {
-    const media = { hasType: (t: string) => t === 'media' } as unknown as Block
-    const note = { hasType: () => false } as unknown as Block
-    expect(MediaBlockRenderer.canRender?.({ block: media } as BlockRendererProps)).toBe(true)
-    expect(MediaBlockRenderer.canRender?.({ block: note } as BlockRendererProps)).toBe(false)
+  // canRender must gate on a LOADED snapshot via peek() — `block.hasType()` reads
+  // block.data, which THROWS for a not-yet-loaded / missing row, and useRenderer
+  // runs canRender for every block during its load window.
+  const peeking = (value: unknown) => ({ peek: () => value }) as unknown as Block
+  const typed = (types: string[]) => ({ properties: { [typesProp.name]: typesProp.codec.encode(types) } })
+
+  it('returns true only for a loaded media-typed block', () => {
+    expect(MediaBlockRenderer.canRender?.({ block: peeking(typed(['media'])) } as BlockRendererProps)).toBe(true)
+    expect(MediaBlockRenderer.canRender?.({ block: peeking(typed(['note'])) } as BlockRendererProps)).toBe(false)
+  })
+
+  it('never throws on a not-yet-loaded (undefined) or confirmed-missing (null) block', () => {
+    expect(MediaBlockRenderer.canRender?.({ block: peeking(undefined) } as BlockRendererProps)).toBe(false)
+    expect(MediaBlockRenderer.canRender?.({ block: peeking(null) } as BlockRendererProps)).toBe(false)
   })
 })
