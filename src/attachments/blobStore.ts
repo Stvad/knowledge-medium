@@ -37,11 +37,12 @@ export const ATTACHMENTS_BUCKET = 'attachments'
  * or expired session).
  *
  * `permanent` is an ADVISORY fast-path quarantine hint, NOT the sole exit from
- * the retry loop: only the enumerated permanent codes (403/404/413) set it, so a
- * permanent failure outside that set (e.g. a stray 400-family `InvalidKey`) would
- * otherwise retry forever. The §9 up-lane MUST therefore bound retries by attempt
- * count / age regardless of `permanent` (the §9/§17 bounded-correction→`failed`
- * rule) — `permanent` only lets it quarantine sooner.
+ * the retry loop: only the enumerated permanent statuses/codes (403/404/413 and
+ * AccessDenied/NoSuchBucket/EntityTooLarge) set it, so a permanent failure
+ * outside that set (e.g. a stray 400-family `InvalidKey`) would otherwise retry
+ * forever. The §9 up-lane MUST therefore bound retries by attempt count / age
+ * regardless of `permanent` (the §9/§17 bounded-correction→`failed` rule) —
+ * `permanent` only lets it quarantine sooner.
  */
 export class BlobPutError extends Error {
   constructor(
@@ -83,27 +84,41 @@ export interface SupabaseBlobStoreDeps {
   getAccessToken: () => Promise<string | null>
 }
 
-/** Supabase Storage flattens every non-500 HTTP status to 400; the real
- *  semantic code is the STRING body `statusCode` (e.g. '403' RLS-denied,
- *  '413' over file_size_limit), which supabase-js surfaces as
- *  `StorageApiError.statusCode`. So classify on `statusCode`, NOT on the
- *  flattened numeric `.status`. These codes won't clear on retry → the §9
- *  record goes to `failed`: '403' not-a-writer / removed member, '404' bucket
- *  missing (misconfig), '413' over the bucket's file_size_limit. Everything
- *  else is transient — notably '400' (which also carries an *expired JWT*, which
- *  MUST retry after a refresh; a genuinely-malformed path can't occur with the
- *  machine-generated <ws>/<content-key>), '401', 5xx, and network. */
-const PERMANENT_STATUS_CODES = new Set(['403', '404', '413'])
+// Storage error shapes vary by storage-api version, and supabase-js surfaces
+// `statusCode = body.statusCode ?? body.code ?? String(httpStatus)` with
+// `.status = httpStatus`. So the same logical error reaches us as EITHER a
+// numeric code (statusCode '403', and some versions flatten .status to 400) OR a
+// symbolic code (statusCode 'AccessDenied', .status the real 403). We therefore
+// classify on BOTH the HTTP status AND the symbolic code, so we're correct under
+// either shape — keying on only one (e.g. the numeric set, or only `.status`)
+// misclassifies the other shape.
 
-/** Storage "object already exists" → body `statusCode` '409'. The HTTP line is
- *  flattened to 400, so the numeric `.status` is NOT 409 — the string body code
- *  is the signal (the `.status === 409` arm is a defensive fallback, effectively
- *  dead against current Storage). A duplicate upload to a content-addressed path
- *  is first-write-wins SUCCESS, not an error (§10.1) — detect it so an unrelated
- *  error can't be mis-read as an idempotent success (which would clear the §9
- *  queue against an object that was never written). */
-const isAlreadyExists = (err: { status?: number; statusCode?: string | number }): boolean =>
-  String(err.statusCode) === '409' || err.status === 409
+/** Permanent HTTP statuses — won't clear on retry → the §9 record goes to
+ *  `failed`: 403 not-a-writer / removed member, 404 bucket missing (misconfig),
+ *  413 over the bucket's file_size_limit. */
+const PERMANENT_HTTP_STATUSES = new Set([403, 404, 413])
+/** The symbolic siblings of those statuses (the word-code shape). */
+const PERMANENT_STORAGE_CODES = new Set(['AccessDenied', 'NoSuchBucket', 'EntityTooLarge'])
+/** Duplicate-object codes (the symbolic shape's 409). */
+const ALREADY_EXISTS_CODES = new Set(['ResourceAlreadyExists', 'KeyAlreadyExists', 'Duplicate'])
+
+/** The real HTTP status of a Storage error: a numeric `statusCode` when present
+ *  (the shape that flattens `.status` to 400), else `.status` (the shape that
+ *  puts a word in `statusCode`). */
+const httpStatusOf = (err: { status?: number; statusCode?: string | number }): number | undefined => {
+  const sc = err.statusCode != null ? String(err.statusCode) : undefined
+  if (sc != null && /^\d+$/.test(sc)) return Number(sc)
+  return err.status
+}
+
+/** Storage "object already exists" — a first-write-wins SUCCESS, not an error
+ *  (§10.1): HTTP 409, or the symbolic `ResourceAlreadyExists` / `KeyAlreadyExists`.
+ *  Detect it so an unrelated error can't be mis-read as an idempotent success
+ *  (which would clear the §9 queue against an object that was never written). */
+const isAlreadyExists = (err: { status?: number; statusCode?: string | number }): boolean => {
+  const sc = err.statusCode != null ? String(err.statusCode) : ''
+  return sc === '409' || err.status === 409 || ALREADY_EXISTS_CODES.has(sc)
+}
 
 export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore => {
   const { client, getAccessToken } = deps
@@ -136,15 +151,21 @@ export const createSupabaseBlobStore = (deps: SupabaseBlobStoreDeps): BlobStore 
       // hash-verifies the stored object before clearing the §9 queue.
       if (isAlreadyExists(error)) return
 
-      // Classify on the string body `statusCode` (the semantic code); the
-      // numeric `.status` is flattened to 400 for every non-500 error, so it
-      // can't distinguish a permanent 403/413 from a transient expired-JWT 400.
-      const code = error.statusCode != null ? String(error.statusCode) : undefined
-      const numeric = code != null && /^\d+$/.test(code) ? Number(code) : error.status
+      // Permanent if EITHER the real HTTP status OR the symbolic code says so —
+      // correct whether Storage gives us a numeric code (with a maybe-flattened
+      // .status) or a word code (with the real .status). Anything else (an
+      // expired JWT, 401, 5xx, network) is transient. `.permanent` is advisory:
+      // a permanent error outside both sets falls through to transient, so the
+      // §9 up-lane must still bound retries by attempt/age (see BlobPutError).
+      const sc = error.statusCode != null ? String(error.statusCode) : undefined
+      const status = httpStatusOf(error)
+      const permanent =
+        (status != null && PERMANENT_HTTP_STATUSES.has(status)) ||
+        (sc != null && PERMANENT_STORAGE_CODES.has(sc))
       throw new BlobPutError(
-        `upload failed${code != null ? ` (${code})` : ''}: ${error.message ?? 'unknown error'}`,
-        code != null && PERMANENT_STATUS_CODES.has(code),
-        numeric,
+        `upload failed${sc != null ? ` (${sc})` : status != null ? ` (${status})` : ''}: ${error.message ?? 'unknown error'}`,
+        permanent,
+        status,
       )
     },
 

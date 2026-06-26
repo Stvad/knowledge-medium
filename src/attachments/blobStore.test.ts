@@ -16,12 +16,15 @@ const makeStore = (upload: UploadFn, token: string | null = 'tok-123') => {
 }
 
 const ok = async (): Promise<UploadResult> => ({ error: null })
-// Mirror the REAL supabase-js shape: Storage flattens every non-500 HTTP status
-// to 400, and the semantic code lives in the STRING body `statusCode` (500 stays
-// 500). A statusless error models an offline StorageUnknownError.
-const fail = (statusCode?: string): UploadFn => async () => ({
+// Mirror the supabase-js StorageApiError: `.statusCode` is the body `statusCode`
+// (numeric string) OR the body `code` (a word), and `.status` is the HTTP status.
+// `fail(code)` models the NUMERIC shape (statusCode '403', .status flattened to
+// 400; 500 stays 500). `fail(code, httpStatus)` models the SYMBOLIC shape
+// (statusCode 'AccessDenied', .status the real code). A statusless error models
+// an offline StorageUnknownError.
+const fail = (statusCode?: string, httpStatus?: number): UploadFn => async () => ({
   error: {
-    status: statusCode == null ? undefined : statusCode === '500' ? 500 : 400,
+    status: httpStatus ?? (statusCode == null ? undefined : statusCode === '500' ? 500 : 400),
     statusCode,
     message: `code ${statusCode ?? 'network'}`,
   },
@@ -75,6 +78,38 @@ describe('SupabaseBlobStore.put', () => {
     // Storage surfaces an expired token as statusCode '400'; it must retry after
     // a session refresh, NOT burn the §9 record to `failed`.
     const err = await putError(makeStore(fail('400')).store.put('ws', 'k', new Uint8Array()))
+    expect(err.permanent).toBe(false)
+  })
+
+  // The SYMBOLIC error shape (newer storage-api): statusCode is a word, .status
+  // is the real HTTP code. Classification must stay correct under it too.
+  it('treats symbolic permanent codes (AccessDenied/NoSuchBucket/EntityTooLarge) as PERMANENT', async () => {
+    for (const [code, http] of [
+      ['AccessDenied', 403],
+      ['NoSuchBucket', 404],
+      ['EntityTooLarge', 413],
+    ] as const) {
+      const err = await putError(makeStore(fail(code, http)).store.put('ws', 'k', new Uint8Array()))
+      expect(err.permanent, `${code} should be permanent`).toBe(true)
+      expect(err.status).toBe(http)
+    }
+  })
+
+  it('still classifies a symbolic permanent code PERMANENT even if .status is flattened to 400', async () => {
+    // Worst case: the word is in statusCode AND the HTTP line is flattened, so
+    // only the symbolic-code set can catch it.
+    const err = await putError(makeStore(fail('AccessDenied', 400)).store.put('ws', 'k', new Uint8Array()))
+    expect(err.permanent).toBe(true)
+  })
+
+  it('resolves on a symbolic duplicate code (ResourceAlreadyExists / KeyAlreadyExists)', async () => {
+    for (const code of ['ResourceAlreadyExists', 'KeyAlreadyExists']) {
+      await expect(makeStore(fail(code, 409)).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
+    }
+  })
+
+  it('treats a symbolic auth error (InvalidJWT, real 401) as TRANSIENT', async () => {
+    const err = await putError(makeStore(fail('InvalidJWT', 401)).store.put('ws', 'k', new Uint8Array()))
     expect(err.permanent).toBe(false)
   })
 

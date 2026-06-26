@@ -69,13 +69,24 @@ if (!url || !serviceKey) {
 const base = url.replace(/\/$/, '')
 const authHeaders = { apikey: serviceKey, authorization: `Bearer ${serviceKey}` }
 
-/** E2EE workspace ids — the only prefixes that must be ciphertext. */
+/** E2EE workspace ids — the only prefixes that must be ciphertext. Paged: an
+ *  unpaginated select is silently capped at PostgREST's db-max-rows, so past that
+ *  many E2EE workspaces the audit would skip the rest and report clean while
+ *  plaintext could exist there. Advance by the ACTUAL page length (the server may
+ *  cap below the requested limit) and stop on an empty page. */
 const e2eeWorkspaceIds = async () => {
-  const res = await fetch(`${base}/rest/v1/workspaces?select=id&encryption_mode=eq.e2ee`, {
-    headers: authHeaders,
-  })
-  if (!res.ok) throw new Error(`workspaces query failed (${res.status}): ${await res.text()}`)
-  return (await res.json()).map((w) => w.id)
+  const ids = []
+  for (let offset = 0; ; ) {
+    const res = await fetch(
+      `${base}/rest/v1/workspaces?select=id&encryption_mode=eq.e2ee&limit=${LIST_PAGE}&offset=${offset}`,
+      { headers: authHeaders },
+    )
+    if (!res.ok) throw new Error(`workspaces query failed (${res.status}): ${await res.text()}`)
+    const page = await res.json()
+    if (page.length === 0) return ids
+    for (const w of page) ids.push(w.id)
+    offset += page.length
+  }
 }
 
 /** All object names under a workspace prefix (flat <ws>/<key> layout), paginated. */
