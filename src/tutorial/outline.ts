@@ -131,6 +131,11 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
   return [
     { content: altLabel },
+    ...(variant === 'default'
+      ? [{
+          content: 'New to "vim keybindings"? It\'s an optional **navigation** layer, not a different way of typing — editing text is identical either way. With it on, a block has a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and then keys move you around and restructure without reaching for the mouse — `j`/`k` move between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `Y R` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
+        }]
+      : []),
 
     sect('Welcome', [
       'This is a malleable thought medium. Every line below is a **block** you can fold, link, drag around, and extend — including this tutorial itself.',
@@ -165,7 +170,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Panels sit side by side. Each panel has its own focused block, its own zoom level, and its own edit state — opening something in a new panel means you keep what you were looking at.',
       `Open the focused block in a new side panel: ${sharedKeys.openInPanel}. Close the current panel: ${sharedKeys.closePanel}.`,
       `Move between panels: ${km.panelHop}.`,
-      'Wiki-link / block-ref clicks pick a destination based on modifiers — plain click replaces the current panel, `Shift+Alt+Click` opens the link in a brand new side panel, `Shift+Click` puts it in a vertical sidebar stack, `Alt+Click` opens it in the main panel. (Plain `Cmd+Click` / `Ctrl+Click` falls through to a browser new-tab as usual.)',
+      'Wiki-link / block-ref clicks pick a destination based on modifiers. Try them on this link → [[extensions]]: plain click replaces the current panel, `Shift+Alt+Click` opens it in a brand new side panel, `Shift+Click` puts it in a vertical sidebar stack, `Alt+Click` opens it in the main panel. (Plain `Cmd+Click` / `Ctrl+Click` falls through to a browser new-tab as usual.)',
       `In quick-find (${sharedKeys.quickFind}): \`Shift+Enter\` (or \`Cmd+Enter\` / \`Ctrl+Enter\`) opens the selected page in a new panel instead of replacing the current view.`,
       `Quick capture into a side panel: ${sharedKeys.appendToday} appends a new block to today's daily note in a side panel without taking you away from where you are.`,
     ]),
