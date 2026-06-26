@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createAssetResolver, type AssetResolverDeps } from './resolver.js'
+import { NO_REMOTE_BLOB_STORE } from './assetResolver.js'
 import { InMemoryByteStore } from './byteStore.js'
 import type { BlobStore } from './blobStore.js'
 import { encodeBytes } from '../sync/byteTransform.js'
@@ -109,6 +110,28 @@ describe('createAssetResolver — happy paths', () => {
       serve: async () => seal('none', plain, contentHash),
     })
     expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+  })
+})
+
+describe('NO_REMOTE_BLOB_STORE — local-only build (no Supabase)', () => {
+  it('serves a locally-captured paste from the byte store with no remote object store', async () => {
+    const plain = bytes(7, 7, 7)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const { resolver } = build({ getMaterializability: mat('copy'), byteStore, blobStore: NO_REMOTE_BLOB_STORE })
+
+    // The local-only paste rendered from disk — no remote object store needed.
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+  })
+
+  it('fails closed (fetch-failed, no crash) on a true miss with no remote object store', async () => {
+    const plain = bytes(1, 2)
+    const contentHash = await hashOf(plain)
+    const { resolver } = build({ getMaterializability: mat('copy'), blobStore: NO_REMOTE_BLOB_STORE })
+
+    // Nothing local + no remote → fail closed (the placeholder), never a throw.
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
   })
 })
 

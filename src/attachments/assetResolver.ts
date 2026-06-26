@@ -10,36 +10,54 @@
  *   - getUserId  — the active account, the byte store's isolation scope (§7).
  *
  * Built once, lazily. When Supabase isn't configured (a local-only / unauthed
- * build) there's no object store to fetch from, so the resolver always fails
- * closed — the renderer shows the placeholder, never a broken fetch.
+ * build) there's no REMOTE object store — but a locally-captured paste still wrote
+ * its plaintext to the OPFS byte store, so we still build the NORMAL resolver, just
+ * with a blob store whose remote `get` always misses ({@link NO_REMOTE_BLOB_STORE}).
+ * The resolver checks the local byte store first (§7.3), so a local-only paste
+ * renders from disk; only a genuine remote miss fails closed (placeholder).
  */
 
 import { getActiveSyncResolver, getActiveUserId } from '@/data/repoProvider.js'
 import { supabase } from '@/services/supabase.js'
-import { createSupabaseBlobStore } from './blobStore.js'
+import { BlobPutError, createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
 import { createAssetResolver, type AssetResolver } from './resolver.js'
 
 let singleton: AssetResolver | null = null
 
+/** A blob store for a build with no remote object store (local-only / unauthed):
+ *  `get` always misses, so the resolver serves LOCAL byte-store hits and fails
+ *  closed (`fetch-failed`) only on a true miss. `put`/`delete` are never reached
+ *  via the resolver (the up-lane has its own blob store) but are total for safety. */
+export const NO_REMOTE_BLOB_STORE: BlobStore = {
+  put: async () => {
+    throw new BlobPutError('no remote object store configured', false, undefined, 'no_remote')
+  },
+  get: async () => {
+    throw new Error('no remote object store configured')
+  },
+  delete: async () => {},
+}
+
 export const getAssetResolver = (): AssetResolver => {
   if (singleton) return singleton
 
-  if (!supabase) {
-    // No object store reachable — every resolve fails closed (placeholder).
-    singleton = { resolve: async () => ({ ok: false, reason: 'error' }) }
-    return singleton
+  let blobStore: BlobStore
+  if (supabase) {
+    const client = supabase
+    blobStore = createSupabaseBlobStore({
+      // Presence probe only — the upload/download ride the client's own session.
+      client,
+      getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
+    })
+  } else {
+    blobStore = NO_REMOTE_BLOB_STORE
   }
-  const client = supabase
 
   singleton = createAssetResolver({
     getUserId: getActiveUserId,
     byteStore: getByteStore(),
-    blobStore: createSupabaseBlobStore({
-      client,
-      // Presence probe only — the upload/download ride the client's own session.
-      getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
-    }),
+    blobStore,
     // Delegate the three-valued decode + key decisions to the active user's §6
     // resolver; signed out → fail closed (defer / no key).
     getMaterializability: (ws) => getActiveSyncResolver()?.getMaterializability(ws) ?? 'defer',
