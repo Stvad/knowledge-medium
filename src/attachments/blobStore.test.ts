@@ -1,18 +1,24 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it, vi } from 'vitest'
-import { BlobPutError, createSupabaseBlobStore } from './blobStore.js'
+import { ATTACHMENTS_BUCKET, BlobPutError, createSupabaseBlobStore } from './blobStore.js'
 
-const makeStore = (fetchFn: typeof fetch, token: string | null = 'tok-123') =>
-  createSupabaseBlobStore({
-    client: {} as SupabaseClient, // put() never touches the client
-    supabaseUrl: 'https://proj.supabase.co',
-    anonKey: 'anon-key',
-    getAccessToken: async () => token,
-    fetchFn,
-  })
+/** A StorageApiError-shaped result error, as supabase-js surfaces it. */
+type UploadResult = { error: { status?: number; statusCode?: string; message?: string } | null }
+type UploadFn = (path: string, body: unknown, opts: unknown) => Promise<UploadResult>
 
-const jsonResponse = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+/** Minimal client exposing just `storage.from(bucket).upload(...)` — put() never
+ *  touches anything else. Returns the captured upload spy for assertions. */
+const makeStore = (upload: UploadFn, token: string | null = 'tok-123') => {
+  const from = vi.fn(() => ({ upload }))
+  const client = { storage: { from } } as unknown as SupabaseClient
+  const store = createSupabaseBlobStore({ client, getAccessToken: async () => token })
+  return { store, from }
+}
+
+const ok = async (): Promise<UploadResult> => ({ error: null })
+const fail = (status?: number, statusCode?: string): UploadFn => async () => ({
+  error: { status, statusCode, message: `status ${status ?? statusCode}` },
+})
 
 /** Await a put expected to reject, returning the typed BlobPutError. */
 const putError = async (p: Promise<void>): Promise<BlobPutError> => {
@@ -26,80 +32,63 @@ const putError = async (p: Promise<void>): Promise<BlobPutError> => {
 }
 
 describe('SupabaseBlobStore.put', () => {
-  it('POSTs to the guard function with workspace_id + content_key params and bearer auth', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(200, { ok: true }))
+  it('uploads directly to <ws>/<contentKey> in the attachments bucket, first-write-wins', async () => {
+    const upload = vi.fn<UploadFn>(ok)
     const bytes = new Uint8Array([1, 2, 3])
-    await makeStore(fetchFn).put('ws-A', 'deadbeef', bytes)
+    const { store, from } = makeStore(upload)
+    await store.put('ws-A', 'deadbeef', bytes)
 
-    expect(fetchFn).toHaveBeenCalledOnce()
-    const [url, init] = fetchFn.mock.calls[0]
-    expect(url).toBe(
-      'https://proj.supabase.co/functions/v1/attachments-upload?workspace_id=ws-A&content_key=deadbeef',
-    )
-    expect(init?.method).toBe('POST')
-    const headers = init?.headers as Record<string, string>
-    expect(headers.authorization).toBe('Bearer tok-123')
-    expect(headers.apikey).toBe('anon-key')
-    expect(headers['content-type']).toBe('application/octet-stream')
-    expect(init?.body).toBe(bytes)
+    expect(from).toHaveBeenCalledWith(ATTACHMENTS_BUCKET)
+    expect(upload).toHaveBeenCalledOnce()
+    const [path, body, opts] = upload.mock.calls[0]
+    expect(path).toBe('ws-A/deadbeef')
+    expect(body).toBe(bytes)
+    expect(opts).toMatchObject({ upsert: false, contentType: 'application/octet-stream' })
   })
 
-  it('resolves on a 200 (including the idempotent-dedup response)', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(200, { ok: true, deduped: true }))
-    await expect(makeStore(fetchFn).put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
+  it('resolves on success', async () => {
+    await expect(makeStore(ok).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
   })
 
-  it('throws a PERMANENT BlobPutError on 422, carrying the body code', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(422, { code: 'not_ciphertext' }))
-    const err = await putError(makeStore(fetchFn).put('ws', 'k', new Uint8Array()))
-    expect(err.permanent).toBe(true)
-    expect(err.status).toBe(422)
-    expect(err.code).toBe('not_ciphertext')
+  it('resolves on a 409 (existing path) as idempotent first-write-wins dedup', async () => {
+    // supabase-js carries the duplicate as numeric .status AND string .statusCode.
+    await expect(makeStore(fail(409, '409')).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
+    await expect(makeStore(fail(undefined, '409')).store.put('ws', 'k', new Uint8Array())).resolves.toBeUndefined()
   })
 
-  it('treats 403 (not a writer) and 404 (no workspace) as permanent', async () => {
-    for (const status of [403, 404]) {
-      const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(status, { code: 'x' }))
-      const err = await putError(makeStore(fetchFn).put('ws', 'k', new Uint8Array()))
+  it('treats 403 (not a writer), 404 (no bucket), 413 (too large), 400 (bad path) as PERMANENT', async () => {
+    for (const status of [403, 404, 413, 400]) {
+      const err = await putError(makeStore(fail(status)).store.put('ws', 'k', new Uint8Array()))
       expect(err.permanent, `status ${status} should be permanent`).toBe(true)
+      expect(err.status).toBe(status)
     }
   })
 
-  it('treats 5xx, 429, and network errors as TRANSIENT (retryable)', async () => {
-    const transientResponders: Array<typeof fetch> = [
-      vi.fn<typeof fetch>(async () => jsonResponse(500, {})),
-      vi.fn<typeof fetch>(async () => jsonResponse(429, {})),
-      vi.fn<typeof fetch>(async () => {
-        throw new Error('offline')
-      }),
-    ]
-    for (const fetchFn of transientResponders) {
-      const err = await putError(makeStore(fetchFn).put('ws', 'k', new Uint8Array()))
-      expect(err.permanent).toBe(false)
+  it('treats 401 (expired token), 5xx, and an unknown/network error as TRANSIENT (retryable)', async () => {
+    for (const status of [401, 500, 503]) {
+      const err = await putError(makeStore(fail(status)).store.put('ws', 'k', new Uint8Array()))
+      expect(err.permanent, `status ${status} should be transient`).toBe(false)
     }
+    // A statusless error (e.g. an offline StorageUnknownError) is transient.
+    const networkErr = await putError(makeStore(fail()).store.put('ws', 'k', new Uint8Array()))
+    expect(networkErr.permanent).toBe(false)
+    expect(networkErr.status).toBeUndefined()
   })
 
-  it('treats a server 401 (expired token) as transient', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(401, { code: 'invalid_token' }))
-    const err = await putError(makeStore(fetchFn).put('ws', 'k', new Uint8Array()))
+  it('treats an unexpected throw from upload as a transient network error', async () => {
+    const upload = vi.fn<UploadFn>(async () => {
+      throw new Error('offline')
+    })
+    const err = await putError(makeStore(upload).store.put('ws', 'k', new Uint8Array()))
     expect(err.permanent).toBe(false)
-    expect(err.status).toBe(401)
+    expect(err.code).toBe('network')
   })
 
-  it('classifies on status even when the error body is not JSON (code stays undefined)', async () => {
-    const fetchFn = vi.fn<typeof fetch>(
-      async () => new Response('<html>502 Bad Gateway</html>', { status: 502 }),
-    )
-    const err = await putError(makeStore(fetchFn).put('ws', 'k', new Uint8Array()))
-    expect(err.permanent).toBe(false) // 502 → transient, classified by status not body
-    expect(err.code).toBeUndefined()
-  })
-
-  it('treats a missing session token as transient and never attempts the upload', async () => {
-    const fetchFn = vi.fn<typeof fetch>(async () => jsonResponse(200, {}))
-    const err = await putError(makeStore(fetchFn, null).put('ws', 'k', new Uint8Array()))
+  it('treats a missing session as transient and never attempts the upload', async () => {
+    const upload = vi.fn<UploadFn>(ok)
+    const err = await putError(makeStore(upload, null).store.put('ws', 'k', new Uint8Array()))
     expect(err.permanent).toBe(false)
     expect(err.code).toBe('no_session')
-    expect(fetchFn).not.toHaveBeenCalled()
+    expect(upload).not.toHaveBeenCalled()
   })
 })

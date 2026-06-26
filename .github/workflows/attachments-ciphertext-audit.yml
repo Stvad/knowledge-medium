@@ -1,0 +1,29 @@
+name: Attachments Ciphertext Audit
+
+# Off-path tripwire (design §10.1 / §17): there is no body-inspecting upload
+# service, so this scheduled job verifies that every object under an E2EE
+# workspace prefix is encb:v1: ciphertext — catching an honest-client regression
+# that uploads plaintext. It never gates uploads. Needs a service-role key; the
+# script skips cleanly (green) until SUPABASE_SERVICE_ROLE_KEY is configured.
+on:
+  schedule:
+    - cron: '37 6 * * *' # daily — uploads are rare, this is a tripwire not a gate
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+
+      - name: Run ciphertext audit
+        env:
+          SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/attachments-ciphertext-audit.mjs
