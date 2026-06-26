@@ -330,7 +330,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Every daily note is filed under the [[Journal]] page — open it for a reverse-chronological list of them all.',
       ...(variant === 'vim'
         ? ['Scrub a date in place: focus a dated block and **hold `s`**. While held, `k` / `↑` move the date +1 day and `j` / `↓` −1 day; `l` / `→` +7 days and `h` / `←` −7 days. Release `s` to commit, `Esc` to cancel.']
-        : []),
+        : ['**Scrub a date in place** — nudge a dated block\'s date forward or back without retyping it. This one\'s a vim-mode perk: tick **Vim normal mode** in **Manage extensions**, then focus the date and **hold `s`**, moving by day (`j` / `k`) or week (`h` / `l`). On a phone, a two-finger horizontal drag does it with no vim needed.']),
     ]),
 
     advancedSect('Undo, redo, copy, paste', [
