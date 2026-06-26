@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { WorkspaceKeyRecord } from './keyStore.js'
 import type { ModePin } from './modePin.js'
 import type { GateWorkspace } from './resolveWorkspaceEntry.js'
 
@@ -7,7 +8,8 @@ import type { GateWorkspace } from './resolveWorkspaceEntry.js'
 // pure decideWorkspaceEntry can't see (key lookup, its failure handling, and
 // the name/canary enrichment for the lock prompt).
 const getModePin = vi.fn<(userId: string, workspaceId: string) => ModePin | null>()
-const keyGet = vi.fn<(userId: string, workspaceId: string) => Promise<CryptoKey | null>>()
+const keyGet = vi.fn<(userId: string, workspaceId: string) => Promise<WorkspaceKeyRecord | null>>()
+const aRecord = (): WorkspaceKeyRecord => ({ wk: {} as CryptoKey, contentKeyHmac: null })
 
 vi.mock('./modePin.js', () => ({getModePin: (u: string, w: string) => getModePin(u, w)}))
 vi.mock('./keyStore.js', () => ({getWorkspaceKeyStore: () => ({get: keyGet})}))
@@ -37,7 +39,7 @@ describe('resolveWorkspaceEntry (read-inputs half of the §6 gate)', () => {
 
   it('e2ee pin reads the key store; key present → ready', async () => {
     getModePin.mockReturnValue('e2ee')
-    keyGet.mockResolvedValue({} as CryptoKey)
+    keyGet.mockResolvedValue(aRecord())
     expect(await resolveWorkspaceEntry('u', 'w', async () => null)).toEqual({kind: 'ready'})
     expect(keyGet).toHaveBeenCalledWith('u', 'w')
   })

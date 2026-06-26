@@ -7,9 +7,11 @@ const USER = 'user-1'
 const WS = 'ws-A'
 
 // The resolver only checks the key for presence (truthiness) and hands it to
-// the seam unchanged, so a sentinel stands in for a real non-extractable
-// CryptoKey — the crypto round-trip is exercised in transform/aead tests.
+// the seam unchanged, so sentinels stand in for real non-extractable
+// CryptoKeys — the crypto round-trip is exercised in transform/aead tests.
 const FAKE_KEY = {} as CryptoKey
+const FAKE_HMAC = { name: 'k_id' } as unknown as CryptoKey
+const record = (wk: CryptoKey, contentKeyHmac: CryptoKey | null = null) => ({ wk, contentKeyHmac })
 
 beforeEach(() => localStorage.clear())
 afterEach(() => localStorage.clear())
@@ -30,7 +32,7 @@ describe('createSyncResolver — getMaterializability (§6 policy collapse)', ()
   it('e2ee pin with WK loaded → decrypt', async () => {
     const { resolver, keyStore } = build()
     setModePin(USER, WS, 'e2ee')
-    await keyStore.put(USER, WS, FAKE_KEY)
+    await keyStore.put(USER, WS, record(FAKE_KEY))
     expect(await resolver.getMaterializability(WS)).toBe('decrypt')
   })
 
@@ -68,9 +70,9 @@ describe('createSyncResolver — getMaterializability (§6 policy collapse)', ()
 })
 
 describe('createSyncResolver — getCek', () => {
-  it('returns the stored workspace key', async () => {
+  it('returns the stored workspace key (the record WK), not the whole record', async () => {
     const { resolver, keyStore } = build()
-    await keyStore.put(USER, WS, FAKE_KEY)
+    await keyStore.put(USER, WS, record(FAKE_KEY, FAKE_HMAC))
     expect(await resolver.getCek(WS)).toBe(FAKE_KEY)
   })
 
@@ -86,7 +88,7 @@ describe('createSyncResolver — getCek', () => {
 
   it('scopes the lookup to the current user', async () => {
     const keyStore = new InMemoryWorkspaceKeyStore()
-    await keyStore.put('other-user', WS, FAKE_KEY)
+    await keyStore.put('other-user', WS, record(FAKE_KEY))
     const resolver = createSyncResolver(() => USER, keyStore)
     expect(await resolver.getCek(WS)).toBeNull()
   })
@@ -102,6 +104,46 @@ describe('createSyncResolver — getCek', () => {
     }
     const resolver = createSyncResolver(() => USER, throwingStore)
     await expect(resolver.getCek(WS)).resolves.toBeNull()
+  })
+})
+
+describe('createSyncResolver — getContentKeyHmac (§10 asset path)', () => {
+  it('returns the record K_id when present', async () => {
+    const { resolver, keyStore } = build()
+    await keyStore.put(USER, WS, record(FAKE_KEY, FAKE_HMAC))
+    expect(await resolver.getContentKeyHmac(WS)).toBe(FAKE_HMAC)
+  })
+
+  it('returns null for a LEGACY record (WK present, no K_id) → media fails closed', async () => {
+    const { resolver, keyStore } = build()
+    await keyStore.put(USER, WS, record(FAKE_KEY, null))
+    // WK still resolves (text works) but K_id is absent (media fail-closed) —
+    // the §10 re-paste migration state.
+    expect(await resolver.getCek(WS)).toBe(FAKE_KEY)
+    expect(await resolver.getContentKeyHmac(WS)).toBeNull()
+  })
+
+  it('returns null when no record is stored', async () => {
+    const { resolver } = build()
+    expect(await resolver.getContentKeyHmac(WS)).toBeNull()
+  })
+
+  it('returns null when signed out without touching the store', async () => {
+    const { resolver } = build(null)
+    expect(await resolver.getContentKeyHmac(WS)).toBeNull()
+  })
+
+  it('returns null (does not throw) when the key store read fails', async () => {
+    const throwingStore = {
+      get: async () => {
+        throw new Error('boom')
+      },
+      put: async () => {},
+      delete: async () => {},
+      clearForUser: async () => {},
+    }
+    const resolver = createSyncResolver(() => USER, throwingStore)
+    await expect(resolver.getContentKeyHmac(WS)).resolves.toBeNull()
   })
 })
 

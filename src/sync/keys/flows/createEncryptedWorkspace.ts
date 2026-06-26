@@ -16,6 +16,7 @@
  */
 
 import { validateCanary, mintCanary } from '../../crypto/canary.js'
+import { deriveContentKeyHmac } from '../../crypto/contentKey.js'
 import {
   formatWorkspaceKey,
   generateWorkspaceKeyBytes,
@@ -68,7 +69,11 @@ export const createEncryptedWorkspace = async <T extends object>(
   // function; show it once, then it lives only as a non-extractable handle.
   const workspaceKey = formatWorkspaceKey(keyBytes)
   const cryptoKey = await importWorkspaceKey(keyBytes)
-  keyBytes.fill(0) // drop the raw bytes once imported (the handle is enough)
+  // Derive K_id (§10) from the raw bytes BEFORE zeroing — their only in-scope
+  // window (the imported WK handle is non-extractable). Co-located with the WK
+  // in one keyStore record so they evict together.
+  const contentKeyHmac = await deriveContentKeyHmac(keyBytes)
+  keyBytes.fill(0) // drop the raw bytes once imported + K_id derived (the handles are enough)
 
   const wkCanary = await mintCanary(cryptoKey, workspaceId)
   // Self-check (§8.1): prove the EXACT string we show the user re-imports to a
@@ -89,7 +94,7 @@ export const createEncryptedWorkspace = async <T extends object>(
   // WK would loop on the same failed write. Cleaned up immediately; the real key
   // is persisted after the row exists.
   try {
-    await deps.keyStore.put(deps.userId, KEY_STORE_PROBE_ID, cryptoKey)
+    await deps.keyStore.put(deps.userId, KEY_STORE_PROBE_ID, { wk: cryptoKey, contentKeyHmac })
     await deps.keyStore.delete(deps.userId, KEY_STORE_PROBE_ID)
   } catch {
     throw new Error(
@@ -123,7 +128,7 @@ export const createEncryptedWorkspace = async <T extends object>(
     )
   }
   try {
-    await deps.keyStore.put(deps.userId, workspaceId, cryptoKey)
+    await deps.keyStore.put(deps.userId, workspaceId, { wk: cryptoKey, contentKeyHmac })
   } catch (err) {
     console.warn(
       `createEncryptedWorkspace: key store write failed for ${workspaceId}; ` +

@@ -20,6 +20,7 @@
  */
 
 import { validateCanary } from '../../crypto/canary.js'
+import { deriveContentKeyHmac } from '../../crypto/contentKey.js'
 import { importWorkspaceKey, parseWorkspaceKey } from '../../crypto/workspaceKey.js'
 import type { WorkspaceKeyStore } from '../keyStore.js'
 import { setModePin } from '../modePin.js'
@@ -48,8 +49,16 @@ export const unlockWorkspaceWithKey = async (
   const { userId, workspaceId, canary, pastedKey, keyStore } = args
 
   let key: CryptoKey
+  let contentKeyHmac: CryptoKey
   try {
-    key = await importWorkspaceKey(parseWorkspaceKey(pastedKey))
+    const wkBytes = parseWorkspaceKey(pastedKey)
+    key = await importWorkspaceKey(wkBytes)
+    // Derive K_id (§10) from the raw bytes in their ONLY in-scope window — the
+    // stored WK handle is non-extractable, so this is the one chance — then zero
+    // them. (Unlock previously let the parsed bytes drop to GC un-zeroed; this
+    // also closes that standalone leak.)
+    contentKeyHmac = await deriveContentKeyHmac(wkBytes)
+    wkBytes.fill(0)
   } catch {
     return { ok: false, reason: 'format' }
   }
@@ -66,7 +75,7 @@ export const unlockWorkspaceWithKey = async (
   // reset and report. Re-pinning an already-e2ee workspace is a no-op.
   try {
     setModePin(userId, workspaceId, 'e2ee')
-    await keyStore.put(userId, workspaceId, key)
+    await keyStore.put(userId, workspaceId, { wk: key, contentKeyHmac })
   } catch (err) {
     console.warn(`unlockWorkspaceWithKey: persisting unlock failed for ${workspaceId}`, err)
     return { ok: false, reason: 'storage' }
