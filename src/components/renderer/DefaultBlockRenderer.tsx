@@ -25,7 +25,7 @@ import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/paste/operations.js'
-import { pasteDecisionVerb, textPasteDecision, type PasteRequest } from '@/paste/decision.js'
+import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
 import { captureMediaFromFiles, reportCaptureFailures } from '@/attachments/assetUpload.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
@@ -503,11 +503,13 @@ export function DefaultBlockRenderer(
         // attaches the file(s) AND pastes the text. No text → done here.
         if (!pastedText.trim()) return
       }
-      // The TEXT half: when the paste was media, also paste any accompanying text via
-      // the file-less decision; otherwise the decision is already a text outcome. The
-      // shell hardcodes intent 'split', so `single-block` only comes from an explicit
-      // override and is honored literally — the applied behavior matches the decision.
-      const decision = decided.kind === 'media' ? textPasteDecision(request) : decided
+      // The TEXT half ALSO flows through the verb (plugin text handling still
+      // applies): for a media paste, re-decide with files stripped so the file half
+      // doesn't re-trigger media. The shell hardcodes intent 'split', so `single-block`
+      // only comes from an explicit override and is honored literally.
+      const decision =
+        decided.kind === 'media' ? pasteDecisionVerb.runSync(runtime, {...request, files: []}) : decided
+      if (decision.kind === 'media') return // a plugin returned media without files — nothing to paste
       const pasted = await pasteMultilineText(decision.text ?? pastedText, block, repo, {
         scopeRootId,
         asSingleBlock: decision.kind === 'single-block',

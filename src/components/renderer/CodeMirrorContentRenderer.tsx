@@ -12,7 +12,7 @@ import {
   planEditModeMultilinePaste,
   planSingleBlockPaste,
 } from '@/paste/operations.js'
-import { pasteDecisionVerb, textPasteDecision, type PasteRequest } from '@/paste/decision.js'
+import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
 import { captureMediaFromFiles, reportCaptureFailures } from '@/attachments/assetUpload.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -110,9 +110,12 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       if (!text.trim()) return
     }
 
-    // The TEXT half: when the paste was media, also paste any accompanying text via
-    // the file-less decision; otherwise the decision is already a text outcome.
-    const decision = decided.kind === 'media' ? textPasteDecision(request) : decided
+    // The TEXT half ALSO flows through the verb (so plugin text handling still
+    // applies): for a media paste, re-decide with files stripped so the file half
+    // doesn't re-trigger media; otherwise `decided` is already the text outcome.
+    const decision =
+      decided.kind === 'media' ? pasteDecisionVerb.runSync(runtime, {...request, files: []}) : decided
+    if (decision.kind === 'media') return // a plugin returned media without files — nothing to paste
 
     if (decision.kind === 'single-block') {
       const plan = planSingleBlockPaste(decision.text ?? text, {
