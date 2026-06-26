@@ -131,12 +131,16 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
   const refDemoTargetId = uuidv4()
 
   return [
-    { content: altLabel },
-    ...(variant === 'default'
-      ? [{
-          content: 'New to "vim keybindings"? It\'s an optional **navigation** layer, not a different way of typing — editing text is identical either way. With it on, a block has a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and then keys move you around and restructure without reaching for the mouse — `j`/`k` move between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `Y R` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
-        }]
-      : []),
+    {
+      content: altLabel,
+      ...(variant === 'default'
+        ? {
+            children: [{
+              content: 'New to "vim keybindings"? It\'s an optional **navigation** layer, not a different way of typing — editing text is identical either way. With it on, a block has a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and then keys move you around and restructure without reaching for the mouse — `j`/`k` move between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `Y R` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
+            }],
+          }
+        : {}),
+    },
 
     sect('Welcome', [
       'This is a malleable thought medium. Every line below is a **block** you can fold, link, drag around, and extend — including this tutorial itself.',
@@ -214,13 +218,13 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     sect('Backlinks', [
       'Links are two-way. Open a page (or zoom into any block) and a **Backlinks** section appears below its content, listing every block elsewhere that links here — so a page accretes context from everywhere it\'s mentioned without you maintaining it.',
       'Each referencing block shows a small **reference-count badge**; click it to expand those backlinks inline, right where you are, without navigating away. Click again to collapse.',
-      'The Backlinks section has a Flat / Grouped switcher in its header — Grouped nests each backlink under its own ancestors so you can see the context it came from.',
+      'The Backlinks section has a Flat / Grouped switcher in its header. Flat is one plain list; Grouped clusters the references by a shared key — e.g. the page each one lives on, or a type/attribute they share — so related mentions (say, every daily note that links here) sit together.',
       'See it live: open [[extensions]] and scroll to its **Backlinks** — this tutorial links there from several bullets, so they all show up listed under that page.',
     ]),
 
     advancedSect('Search', [
       `QuickFind (${sharedKeys.quickFind}) searches page aliases first, then block content. Press Enter to open the selected result; if the name is missing, QuickFind can create a new page for it.`,
-      'Plain words are all required but can appear anywhere: `project notes` finds blocks containing both `project` and `notes`, even if the order is different.',
+      'Multiple words must all appear, in any order: `project notes` matches blocks that contain both `project` and `notes`.',
       'Wrap text in quotes for an exact phrase: `"project notes"` only matches that contiguous text.',
       'Use uppercase `OR` for alternatives: `project OR meeting` finds either term.',
       'Use a leading minus to exclude a term when the query also has something positive to search for: `project -archived` and `-archived project` both mean "project, but not archived". By itself, `-archived` searches for the literal text `-archived`.',
@@ -231,7 +235,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     advancedSect('Properties & types', [
       `Properties are typed key/value pairs attached to any block. To open the properties panel on a focused block: ${km.properties}.`,
       'Try giving me a property — e.g. `priority: high`. It will appear under my content.',
-      "Types attach behavior to a block via the special `types` property. `types = ['page']` makes a block a page (parent-less, alias-resolvable). `types = ['extension']` makes it an extension — see below.",
+      "Types attach behavior to a block via the special `types` property. `types = ['page']` makes a block a page — addressable by name (through its aliases) and resolvable from wiki links, wherever it lives in the tree. `types = ['extension']` makes it an extension — see below.",
       'Aliases (a list property on a page) let you reach the page from multiple names — including ones with spaces or different casing. Wiki links resolve through aliases.',
       'Every property you define is catalogued on the [[Properties]] page, and every type on [[Types]] — open either to see (and edit) what exists in this workspace.',
     ]),
@@ -239,7 +243,18 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     advancedSect('Typed blocks — behaviour from a tag', [
       'Beyond identity, a type can attach *behaviour* to a block. Add the type via the `types` property (see above) or a block\'s quick-actions menu. A few that ship by default:',
       "**Todo** — type `todo` adds a checkbox to the block; click it to toggle done (done items strike through). Great for inline task lists anywhere in your outline.",
-      "**Video** — paste a video URL (YouTube, Vimeo, and more) as a block's content and it renders an inline player — no type needed. Switch the player to its notes view to jot notes beside the video; `1:23`-style timestamps you type become clickable seeks.",
+      {
+        content: "**Video** — paste a video URL (YouTube, Vimeo, and more) as a block's content and it renders an inline player — no type needed. Switch the player to its **notes view** to jot notes beside the video; `1:23`-style timestamps you type there become clickable seeks. The block below is a live demo (already in notes view):",
+        children: [
+          {
+            content: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+            properties: { 'video:playerView': 'notes' },
+            children: [
+              { content: 'Notes sit beside the player. Click `0:10` to jump there, or `1:00` for later — each timestamp is a seek link.' },
+            ],
+          },
+        ],
+      },
       "**Character counter** — type `char-counter` shows a live character count under the block, with an optional per-block limit. The limit is visual only — it never blocks typing.",
       {
         content: '**Spaced repetition** — turn any block into a flashcard and let the app schedule reviews for you (SM-2.5 algorithm).',
