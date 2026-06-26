@@ -160,7 +160,7 @@ describe('pasteDecisionVerb', () => {
   it('without a media contributor, a file paste is text-only (media capture is plugin-gated)', () => {
     const runtime = resolveFacetRuntimeSync([])
     // Core alone never produces `media`; the attachments decorator (tested in
-    // pasteCaptureDecision.test.ts) is what turns a file paste into a media capture.
+    // pasteCapture.test.ts) is what turns a file paste into a media capture.
     expect(pasteDecisionVerb.runSync(runtime, request({files: [pngFile()], text: 'a\nb'})))
       .toEqual({kind: 'split'})
   })

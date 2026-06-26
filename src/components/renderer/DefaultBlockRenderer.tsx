@@ -26,7 +26,7 @@ import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/paste/operations.js'
 import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
-import { captureMediaFromFiles, reportCaptureFailures } from '@/attachments/assetUpload.js'
+import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -490,12 +490,13 @@ export function DefaultBlockRenderer(
       const request: PasteRequest = {text: pastedText, html, files: fileList, intent: 'split', surface: 'shell'}
       const decided = pasteDecisionVerb.runSync(runtime, request)
       if (decided.kind === 'media') {
-        // Capture file(s) as media blocks embedded under the focused block (§11).
+        // Capture file(s) as media blocks embedded under the focused block (§11), via
+        // the capture verb — the attachments plugin owns the effect (no import here).
         const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
         if (workspaceId && fileList.length > 0) {
-          void captureMediaFromFiles(repo, workspaceId, block.id, fileList)
-            .then(reportCaptureFailures)
-            .catch((err) => console.warn('[media] paste capture failed', err))
+          void Promise.resolve(
+            captureMediaVerb.runSync(runtime, {repo, workspaceId, parentBlockId: block.id, files: fileList}),
+          ).catch((err) => console.warn('[media] paste capture failed', err))
         } else if (fileList.length > 0) {
           console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
         }

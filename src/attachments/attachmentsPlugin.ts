@@ -16,7 +16,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { MediaBlockRenderer } from './MediaBlockRenderer.js'
 import { MediaUploadReconciler } from './MediaUploadReconciler.js'
-import { mediaPasteDecisionContribution } from './pasteCaptureDecision.js'
+import { captureMediaContribution, mediaPasteDecisionContribution } from './pasteCapture.js'
 import {
   ASSETS_TYPE_CONTRIBUTION,
   MEDIA_PROPERTY_SCHEMAS,
@@ -32,9 +32,11 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   typesFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'attachments' }),
   MEDIA_PROPERTY_SCHEMAS.map((schema) => propertySchemasFacet.of(schema, { source: 'attachments' })),
   blockRenderersFacet.of({ id: 'media', renderer: MediaBlockRenderer }, { source: 'attachments' }),
-  // A paste carrying file(s) → a media capture. Gated here so disabling the plugin
-  // disables capture (files fall through to a text paste).
+  // The capture path: DECIDE a file paste is media (decorator) + ACT on it (the
+  // captureMediaVerb impl). Both gated here, so disabling the plugin disables capture
+  // (a file paste falls through to a text paste, and the verb is a no-op).
   mediaPasteDecisionContribution,
+  captureMediaContribution,
   // Boot recovery for crashed captures (§9) — gated on initial-sync settle.
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),
 ])

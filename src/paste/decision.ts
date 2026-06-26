@@ -79,7 +79,7 @@ interface PasteRequestBase {
   /** File(s) carried by the paste/drop (`clipboardData.files` /
    *  `dataTransfer.files`), e.g. a pasted/dropped image. Present (non-empty) →
    *  the attachments plugin's decorator decides `media` (see
-   *  `src/attachments/pasteCaptureDecision.ts`); with that plugin off, files fall
+   *  `src/attachments/pasteCapture.ts`); with that plugin off, files fall
    *  through to the text branches. */
   files?: readonly File[]
   /** Latched paste chord: plain Cmd/Ctrl+V (`split`) vs Cmd/Ctrl+Shift+V
@@ -105,7 +105,7 @@ interface PasteRequestBase {
 export const defaultPasteDecision = (request: PasteRequest): PasteDecision => {
   // Text-only by default. The "a paste carrying file(s) is a media paste" rule is
   // NOT here — the attachments plugin contributes it as a `pasteDecisionVerb`
-  // decorator (src/attachments/pasteCaptureDecision.ts), so disabling that plugin
+  // decorator (src/attachments/pasteCapture.ts), so disabling that plugin
   // cleanly disables media capture (files fall through to this text default) rather
   // than minting media blocks nothing can render. `media` stays a valid decision
   // KIND (the renderer↔verb contract); the core default just never produces it.

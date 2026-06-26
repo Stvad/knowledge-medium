@@ -13,7 +13,7 @@ import {
   planSingleBlockPaste,
 } from '@/paste/operations.js'
 import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
-import { captureMediaFromFiles, reportCaptureFailures } from '@/attachments/assetUpload.js'
+import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -95,13 +95,14 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
     if (decided.kind === 'media') {
       // Capture the file(s) as content-addressed media blocks embedded under the
-      // current block (§11). Async + fire-and-forget — the up-lane handles the
-      // upload; a failure degrades to a broken-asset placeholder, never a throw.
+      // current block (§11), via the capture verb — the attachments plugin owns the
+      // effect (this renderer never imports it). Async + fire-and-forget: the up-lane
+      // handles the upload; a failure degrades to a broken-asset placeholder.
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
       if (workspaceId && fileList.length > 0) {
-        void captureMediaFromFiles(repo, workspaceId, block.id, fileList)
-          .then(reportCaptureFailures)
-          .catch((err) => console.warn('[media] paste capture failed', err))
+        void Promise.resolve(
+          captureMediaVerb.runSync(runtime, {repo, workspaceId, parentBlockId: block.id, files: fileList}),
+        ).catch((err) => console.warn('[media] paste capture failed', err))
       } else if (fileList.length > 0) {
         console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
       }

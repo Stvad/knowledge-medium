@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { Repo } from '@/data/repo.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
-import { mediaPasteDecisionContribution } from './pasteCaptureDecision.js'
+
+// Stub the up-lane so the capture-impl test asserts the WIRING (arg mapping) without
+// real capture/upload — and without loading assetUpload's heavy deps.
+const mocks = vi.hoisted(() => ({
+  captureMediaFromFiles: vi.fn(async () => []),
+  reportCaptureFailures: vi.fn(),
+}))
+vi.mock('./assetUpload.js', () => mocks)
+
+const { captureMediaContribution, mediaPasteDecisionContribution } = await import('./pasteCapture.js')
 
 const pngFile = () => new File([new Uint8Array([1, 2, 3])], 'cat.png', { type: 'image/png' })
 
@@ -30,5 +41,18 @@ describe('mediaPasteDecisionContribution (attachments-owned paste rule)', () => 
     // This is also what the renderer's "text half" re-run (files stripped) relies on.
     expect(pasteDecisionVerb.runSync(runtime, shell({ text: 'a\nb' }))).toEqual({ kind: 'split' })
     expect(pasteDecisionVerb.runSync(runtime, shell({ files: [], text: 'a\nb' }))).toEqual({ kind: 'split' })
+  })
+})
+
+describe('captureMediaContribution (the captureMediaVerb impl)', () => {
+  it('forwards the verb input to captureMediaFromFiles, then reports failures', async () => {
+    mocks.captureMediaFromFiles.mockClear()
+    mocks.reportCaptureFailures.mockClear()
+    const runtime = resolveFacetRuntimeSync([captureMediaContribution])
+    const repo = {} as Repo
+    const files = [pngFile()]
+    await captureMediaVerb.runSync(runtime, { repo, workspaceId: 'ws', parentBlockId: 'b1', files })
+    expect(mocks.captureMediaFromFiles).toHaveBeenCalledWith(repo, 'ws', 'b1', files)
+    expect(mocks.reportCaptureFailures).toHaveBeenCalledTimes(1)
   })
 })
