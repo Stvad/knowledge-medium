@@ -66,43 +66,51 @@ const drainDepsFor = (blobStore: BlobStore) => ({
   getCek,
 })
 
-/** Run `work` holding the per-user lane lock — one tab runs the background lane
- *  at a time. Falls back to running directly where `navigator.locks` is absent. */
-const laneLockName = (userId: string) => `km-asset-upload-lane:${userId}`
-const withLane = async (userId: string, work: () => Promise<void>): Promise<void> => {
+/** Run `work` holding a named lock — falls back to running directly where
+ *  `navigator.locks` is absent. */
+const withLock = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  if (locks?.request) {
-    await locks.request(laneLockName(userId), work)
-  } else {
-    await work()
-  }
+  return locks?.request ? locks.request(name, work) : work()
 }
 
+// TWO per-user locks, deliberately separate:
+//  - the MINT lock serializes the fast "create/reap a staged record + check block
+//    presence" operations — capture (stage → tx → promote) AND the reconciler's
+//    reap. Holding it around the WHOLE capture is what prevents a later-booted
+//    tab's reconciler from reaping THIS tab's in-flight capture (its block is
+//    absent only because its tx hasn't committed yet — a generation stamp alone
+//    can't tell that live-but-earlier tab from a dead prior session).
+//  - the LANE lock serializes the SLOW drain (uploads). Kept distinct so a capture
+//    never blocks on another tab's long upload backlog.
+const mintLockName = (userId: string) => `km-asset-mint:${userId}`
+const laneLockName = (userId: string) => `km-asset-upload-lane:${userId}`
+
 /** Fire-and-forget drain of the active user's pending uploads (after a capture).
- *  Single-owner; a no-op when Supabase isn't configured. */
+ *  Single-owner (lane lock); a no-op when Supabase isn't configured. */
 export const armUploadDrain = (userId: string): void => {
   const blobStore = getBlobStore()
   if (!blobStore) return
-  void withLane(userId, async () => {
+  void withLock(laneLockName(userId), async () => {
     await drainUploads(userId, drainDepsFor(blobStore))
   }).catch((err) => console.warn('[assetUpload] drain failed', err))
 }
 
-/** Boot recovery: promote `staged` records whose block committed, reap orphans,
- *  then drain. MUST be called only AFTER PowerSync reports initial sync settled
- *  (so an absent block is truly-absent, not unhydrated). Single-owner. */
+/** Boot recovery: promote `staged` records whose block committed, reap orphans
+ *  (under the MINT lock so it can't reap an in-flight capture), then drain. MUST
+ *  be called only AFTER PowerSync reports initial sync settled (so an absent block
+ *  is truly-absent, not unhydrated). */
 export const runUploadReconcile = async (userId: string, repo: Repo): Promise<void> => {
-  const blobStore = getBlobStore()
-  if (!blobStore) return
-  await withLane(userId, async () => {
-    await reconcileUploads(userId, {
+  if (!getBlobStore()) return
+  await withLock(mintLockName(userId), () =>
+    reconcileUploads(userId, {
       store: getByteUploadStore(),
       byteStore: getByteStore(),
       isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
       currentGeneration: uploadGeneration,
-    })
-    await drainUploads(userId, drainDepsFor(blobStore))
-  })
+    }),
+  )
+  // Drain separately under the lane lock — never hold the mint lock across uploads.
+  armUploadDrain(userId)
 }
 
 const captureDepsFor = (repo: Repo): MediaCaptureDeps => ({
@@ -117,7 +125,9 @@ const captureDepsFor = (repo: Repo): MediaCaptureDeps => ({
 })
 
 /** Read each File's bytes and capture them as media blocks under `embedParentId`.
- *  The renderer's paste/drop entry point. */
+ *  The renderer's paste/drop entry point. The whole capture (stage → tx → promote)
+ *  runs under the per-user MINT lock so a reconciler in another tab can't reap an
+ *  in-flight capture (see {@link mintLockName}). */
 export const captureMediaFromFiles = async (
   repo: Repo,
   workspaceId: string,
@@ -131,5 +141,7 @@ export const captureMediaFromFiles = async (
       filename: file.name || undefined,
     })),
   )
-  return captureMediaFiles(workspaceId, embedParentId, sources, captureDepsFor(repo))
+  const run = () => captureMediaFiles(workspaceId, embedParentId, sources, captureDepsFor(repo))
+  const userId = getActiveUserId()
+  return userId ? withLock(mintLockName(userId), run) : run()
 }

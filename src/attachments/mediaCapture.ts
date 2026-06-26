@@ -183,9 +183,10 @@ export const captureMedia = async (
     inserted = minted.inserted
 
     // The embed at the paste site — appended under the pasting block. (Precise
-    // caret placement is the renderer's job, Phase 5c-ii.)
+    // caret placement is the renderer's job, Phase 5c-ii.) `childrenOf` returns
+    // rows already ordered by (order_key, id), so the last one is the max key.
     const siblings = await tx.childrenOf(embedParentId, workspaceId)
-    const lastKey = siblings.length ? siblings.map((s) => s.orderKey).sort().at(-1) ?? null : null
+    const lastKey = siblings.at(-1)?.orderKey ?? null
     embedBlockId = await tx.create({
       workspaceId,
       parentId: embedParentId,

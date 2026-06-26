@@ -101,6 +101,8 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         void captureMediaFromFiles(repo, workspaceId, block.id, fileList).catch((err) =>
           console.warn('[media] paste capture failed', err),
         )
+      } else if (fileList.length > 0) {
+        console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
       }
       return
     }
