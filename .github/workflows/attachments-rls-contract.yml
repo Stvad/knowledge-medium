@@ -1,0 +1,90 @@
+name: Attachments RLS Contract
+
+# Regression guard for the `attachments` Storage RLS contract (design §10), the
+# allow/deny matrix that scripts/attachments-rls-verify.ts asserts. Storage RLS
+# can't be unit-tested (it needs real gotrue + real Storage), so the contract has
+# NO coverage in `yarn run check` — a future migration edit that weakens a policy
+# (drops a path guard, loosens the writer gate) would ship silently. This job
+# closes that gap: it stands up a throwaway `supabase start` stack, applies the
+# migrations, and runs the verifier against it.
+#
+# This is the REGRESSION guard (does the migration SQL still enforce the
+# contract?) and runs entirely against an EPHEMERAL local stack — zero writes to
+# the hosted project, no secrets. It is NOT the DRIFT guard (does the live hosted
+# stack match the SQL?); drift can only change at `db push` and is verified by a
+# deliberate `yarn rls:verify-attachments` against hosted as a post-push step, not
+# on a timer (the policies are static between deploys, and that run writes to
+# prod). See scripts/attachments-rls-verify.ts.
+#
+# Triggered only when the contract could actually change — a migration, the
+# verifier, the storage config, or this workflow.
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/config.toml'
+      - 'scripts/attachments-rls-verify.ts'
+      - '.github/workflows/attachments-rls-contract.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'supabase/migrations/**'
+      - 'supabase/config.toml'
+      - 'scripts/attachments-rls-verify.ts'
+      - '.github/workflows/attachments-rls-contract.yml'
+  workflow_dispatch:
+
+jobs:
+  rls-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # Brings up db + gotrue + storage-api + postgrest + kong and applies the
+      # migrations. studio/imgproxy/edge-runtime/logflare/vector are excluded — the
+      # contract test only needs auth + storage + rest. The `attachments` bucket is
+      # created here from config.toml ([storage.buckets.attachments]).
+      - name: Start Supabase (ephemeral stack)
+        run: supabase start -x studio,imgproxy,edge-runtime,logflare,vector
+
+      # The attachments migration GUARDS its bucket+policy block on
+      # `to_regclass('storage.buckets')` and no-ops when the storage tables are
+      # absent — which they are when migrations run at `supabase start` (the
+      # Storage container boots AFTER). So the policies are NOT applied by start.
+      # Re-apply the (idempotent: `drop policy if exists` + `on conflict`)
+      # migration now that Storage is up, so the policies actually land — exactly
+      # what `db push` does on hosted. Without this, every deny assertion would
+      # FALSE-PASS (no policy ⇒ storage's own default-deny, not our contract).
+      - name: Apply attachments Storage RLS (skipped at start; Storage now up)
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+          DB_URL=$(supabase status -o json | jq -r '.DB_URL')
+          psql "$DB_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20260625000000_add_attachments_storage.sql
+
+      # Keys come from the ephemeral stack itself (vanilla start ⇒ the demo JWT
+      # secret matches the keys `status` reports), so no repo secrets are needed
+      # and fork PRs run this too.
+      - name: Verify the RLS allow/deny contract
+        run: |
+          export SUPABASE_URL=$(supabase status -o json | jq -r '.API_URL')
+          export ANON_KEY=$(supabase status -o json | jq -r '.ANON_KEY')
+          export SUPABASE_SECRET_KEY=$(supabase status -o json | jq -r '.SERVICE_ROLE_KEY')
+          yarn rls:verify-attachments
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop

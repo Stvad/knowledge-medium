@@ -66,6 +66,18 @@ async function makeUser(tag: string): Promise<User> {
   return { id: data.user.id, client }
 }
 
+// Track every gotrue user + workspace we create so the run-level `finally` can
+// tear them down on EVERY exit path — including a mid-setup throw. Without this a
+// partial run (a failed seed/upload after some users exist) orphans real
+// users/workspaces/objects in whatever stack this hit (esp. hosted).
+const createdUsers: User[] = []
+const createdWorkspaces: string[] = []
+async function newUser(tag: string): Promise<User> {
+  const u = await makeUser(tag)
+  createdUsers.push(u)
+  return u
+}
+
 /** Attempt an upload as `client`; report allowed (no error) vs denied + status. */
 async function tryUpload(client: SupabaseClient, path: string, upsert = false) {
   const { error } = await client.storage
@@ -89,10 +101,10 @@ const objectExists = async (path: string) => {
 
 async function run() {
   console.log(`— set up real users + workspaces (run ${rid}) —`)
-  const owner = await makeUser('owner')
-  const editor = await makeUser('editor')
-  const viewer = await makeUser('viewer')
-  const stranger = await makeUser('stranger')
+  const owner = await newUser('owner')
+  const editor = await newUser('editor')
+  const viewer = await newUser('viewer')
+  const stranger = await newUser('stranger')
   const ws = `rlsws-${rid}`
   const otherWs = `rlsws-${rid}-other`
   const now = Date.now()
@@ -102,6 +114,7 @@ async function run() {
       .from('workspaces')
       .insert({ id, name: id, owner_user_id: ownerId, create_time: now, update_time: now, encryption_mode: 'none' })
     if (error) throw new Error(`seed workspace ${id}: ${error.message}`)
+    createdWorkspaces.push(id)
   }
   const seedMember = async (wsId: string, userId: string, role: string) => {
     const { error } = await admin.from('workspace_members').insert({
@@ -161,9 +174,6 @@ async function run() {
   await owner.client.storage.from(BUCKET).remove([path])
   check('writer delete removed the object', !(await objectExists(path)))
 
-  await cleanup([ws, otherWs], [owner, editor, viewer, stranger])
-  console.log(`\n=== ${pass} passed, ${fail} failed ===`)
-  process.exit(fail ? 1 : 0)
 }
 
 async function cleanup(workspaceIds: string[], users: User[]) {
@@ -176,7 +186,24 @@ async function cleanup(workspaceIds: string[], users: User[]) {
   for (const u of users) await admin.auth.admin.deleteUser(u.id)
 }
 
-run().catch((e) => {
-  console.error('FATAL', e)
-  process.exit(3)
-})
+run()
+  .then(() => {
+    console.log(`\n=== ${pass} passed, ${fail} failed ===`)
+    process.exitCode = fail ? 1 : 0
+  })
+  .catch((e) => {
+    console.error('FATAL', e)
+    process.exitCode = 3
+  })
+  .finally(async () => {
+    // Always tear down what we created, on every exit path (pass, check-fail, or a
+    // mid-run throw) — orphaned users/workspaces/objects must never linger in the
+    // target stack. cleanup is itself best-effort: a teardown error is logged, not
+    // allowed to mask the run's real exit code.
+    try {
+      await cleanup(createdWorkspaces, createdUsers)
+    } catch (e) {
+      console.error('cleanup failed — orphans may remain in the target stack:', e)
+    }
+    process.exit(process.exitCode ?? 0)
+  })
