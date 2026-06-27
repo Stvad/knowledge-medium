@@ -12,8 +12,12 @@
  *   - otherwise → LEAVE it staged. It's either a committed block not yet
  *     materialized (a locked-e2ee / not-yet-hydrated workspace — it promotes on a
  *     later boot once it materializes; it couldn't drain while locked anyway), or
- *     the rare true orphan (a crash in the tiny stage→commit window; a CAUGHT tx
- *     throw already cleans up inline, §11).
+ *     the rare true orphan: something in the tiny stage→commit window — a crash, OR
+ *     a thrown block tx — left a `staged` record whose block never committed.
+ *     `captureMedia` does NOT roll the stage back on a tx throw (deleting the
+ *     content-addressed bytes blind could strand a dedup'd sibling block's only
+ *     copy), so a caught throw lands here exactly like a crash: left staged, its
+ *     bytes reclaimed by §16 GC (below), the dead record harmless (it never drains).
  *
  * Why no reap: a `staged` record is non-drainable, so an orphan never uploads on
  * its own — leaving it costs only its bytes, which the §16 content-refcount GC

@@ -44,8 +44,10 @@ export const NO_REMOTE_BLOB_STORE: BlobStore = {
  *  remote miss), so the resolver still serves local OPFS hits but never makes a
  *  Supabase request — the read-side half of the "no remote requests in local-only"
  *  contract (Codex P1). Checked PER CALL, so a re-login mode switch is respected
- *  without rebuilding the singleton. */
-const remoteSyncGated = (remote: BlobStore): BlobStore => ({
+ *  without rebuilding the singleton. Shared with the up-lane (assetUpload's
+ *  getBlobStore) so the WRITE side gets the same per-call gate: an arm-time-only
+ *  check can go stale if remote sync is toggled off while a drain lock is held. */
+export const remoteSyncGated = (remote: BlobStore): BlobStore => ({
   put: (ws, key, bytes) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).put(ws, key, bytes),
   get: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).get(ws, key),
   delete: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).delete(ws, key),

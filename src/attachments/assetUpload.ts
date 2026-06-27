@@ -23,6 +23,7 @@ import type { Repo } from '@/data/repo.js'
 import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase } from '@/services/supabase.js'
 import { showError } from '@/utils/toast.js'
+import { remoteSyncGated } from './assetResolver.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
 import { resolveCaptureMime } from './mediaBlock.js'
@@ -48,13 +49,18 @@ let blobStoreSingleton: BlobStore | null = null
  *  is dynamic across an account/mode switch. */
 const getBlobStore = (): BlobStore | null => {
   if (!supabase || !isRemoteSyncActive()) return null
-  if (blobStoreSingleton) return blobStoreSingleton
-  const client = supabase
-  blobStoreSingleton = createSupabaseBlobStore({
-    client,
-    getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
-  })
-  return blobStoreSingleton
+  if (!blobStoreSingleton) {
+    const client = supabase
+    blobStoreSingleton = createSupabaseBlobStore({
+      client,
+      getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
+    })
+  }
+  // Per-call gate (not just the arm-time check above): the drain captures this store
+  // once and PUTs inside a lock that can outlive a flip to local-only. Wrapping makes
+  // every op re-check `isRemoteSyncActive()` — a mid-lock flip routes to a remote miss
+  // (transient → record stays pending), never a real upload during local-only.
+  return remoteSyncGated(blobStoreSingleton)
 }
 
 /** The §6 encode/key accessors bound to ONE user's resolver. The up-lane snapshots
