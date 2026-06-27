@@ -61,6 +61,10 @@ const envHitIn = seg => {
 }
 
 // Split into shell segments so a reader anywhere in a pipe/chain is caught.
+// (Limitation: a reader nested in a command substitution — `echo $(cat .env)`
+// — isn't caught; scanning substitution bodies false-positives on quoted/literal
+// `$(…)`. This is a guard against accidental/naive reads, not an adversarial
+// sandbox, so the precise first-verb check is the better trade-off.)
 const segments = cmd.split(/[;\n]|\|\|?|&&|&/)
 let hit = null
 for (const seg of segments) {
