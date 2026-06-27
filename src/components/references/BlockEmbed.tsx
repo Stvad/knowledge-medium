@@ -6,7 +6,13 @@ import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
 import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js'
 
-const EMBED_CONTEXT_OVERRIDES = {isNestedSurface: true, isEmbedded: true}
+// `isReference: false` CLEARS an inherited reference flag: a reference renders
+// its raw markdown content, which can itself contain a `!((id))` embed. Without
+// clearing it, that nested embed would inherit `isReference` (context merges,
+// never clears) and wrongly render via the reference layout — inline, no
+// children, not editable — instead of as an embed. An embed is its own surface,
+// never a reference.
+const EMBED_CONTEXT_OVERRIDES = {isNestedSurface: true, isEmbedded: true, isReference: false}
 
 export function BlockEmbed({
   blockId,

@@ -302,6 +302,32 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     expect(box.querySelector('[data-block-id="target"][data-editing]')).toBeTruthy()
   })
 
+  it('an embed nested inside a reference context still renders as an embed, not a reference', async () => {
+    // Simulate a `!((target))` embed appearing inside a referenced block's raw
+    // content: the surrounding context carries `isReference`. BlockEmbed must
+    // clear it so the embedded block renders as an EMBED (editable shell + box),
+    // not inherit the reference layout (inline raw content, no shell).
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{panelId: 'panel', scopeRootId: 'source', isReference: true, isNestedSurface: true}}>
+          <ActiveContextsProvider>
+            <BlockEmbed blockId="target" sourceBlockId="source" occurrenceId="occ-1"/>
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    const box = await waitFor(() => {
+      const el = document.querySelector('.blockembed')
+      expect(el).toBeTruthy()
+      return el!
+    })
+    // The editable content surface + shell render (embed) — NOT the reference
+    // layout, which would render only inline raw content with no shell.
+    expect(box.querySelector('.block-content')).toBeTruthy()
+    expect(box.querySelector('[data-block-id="target"][data-editing]')).toBeTruthy()
+  })
+
   it('a reference skips the interactive shell — no shell decorators or shortcut activations run', async () => {
     renderInSource(<BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1"/>)
     await screen.findByText('Hello world')

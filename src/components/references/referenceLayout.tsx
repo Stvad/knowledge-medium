@@ -36,8 +36,10 @@ const ReferenceLayout: BlockLayout = ({block, RawContent}: BlockLayoutSlots) => 
 
 /**
  * Self-gates on `isReference` (set by `BlockRef` via `NestedBlockContextProvider`).
- * The reference layout renders no children, so `isReference` never propagates
- * through rendered descendants — gating on the flag alone is sufficient.
+ * The layout renders no `Children`, but `RawContent` is the block's markdown,
+ * which CAN contain a nested `!((id))` embed; that embed clears `isReference`
+ * (see `BlockEmbed`), so it renders as an embed rather than inheriting this
+ * layout. A nested `((id))` reference sets `isReference` itself, which is correct.
  */
 export const referenceLayoutContribution: BlockLayoutContribution = ctx => {
   if (!ctx.blockContext?.isReference) return null
