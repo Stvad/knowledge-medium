@@ -7,10 +7,9 @@ import {
   codecs,
   defineProperty,
 } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets'
 import { focusedBlockLocationProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
@@ -20,7 +19,7 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
 import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
+import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
@@ -120,19 +119,7 @@ describe('DefaultBlockRenderer paste handling', () => {
 
     await resetTestDb(sharedDb.db)
     h = sharedDb
-    let now = 1700_000_000_000
-    let txSeq = 0
-    repo = new Repo({
-      db: h.db,
-      cache: new BlockCache(),
-      user: {id: 'user-1'},
-      now: () => ++now,
-      newId: () => crypto.randomUUID(),
-      newTxSeq: () => ++txSeq,
-      startSyncObserver: false,
-    })
-    runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
+    const extensions = [
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       defaultEditorInteractionExtension,
@@ -141,8 +128,14 @@ describe('DefaultBlockRenderer paste handling', () => {
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
         {source: 'test'},
       ),
-    ])
-    repo.setFacetRuntime(runtime)
+    ]
+    repo = createTestRepo({
+      db: h.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions,
+    }).repo
+    runtime = repo.facetRuntime!
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
 
@@ -186,7 +179,6 @@ describe('DefaultBlockRenderer paste handling', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
-    repo.stopSyncObserver()
   })
 
   const renderBlock = () =>

@@ -83,6 +83,11 @@ export const runtimeSummaryCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const healthCommandSchema = z.looseObject({
+  type: z.literal('health'),
+  ...commandIdField,
+})
+
 export const describeRuntimeCommandSchema = z.looseObject({
   type: z.literal('describe-runtime'),
   actions: z.array(z.string()).optional(),
@@ -280,6 +285,7 @@ export const searchCommandSchema = z.looseObject({
 export const knownCommandSchema = z.discriminatedUnion('type', [
   pingCommandSchema,
   runtimeSummaryCommandSchema,
+  healthCommandSchema,
   describeRuntimeCommandSchema,
   sqlCommandSchema,
   getBlockCommandSchema,
@@ -314,6 +320,7 @@ export type KnownCommandType = KnownCommand['type']
 export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   pingCommandSchema,
   runtimeSummaryCommandSchema,
+  healthCommandSchema,
   describeRuntimeCommandSchema,
   sqlCommandSchema,
   getBlockCommandSchema,
@@ -371,6 +378,10 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'runtime-summary': {
     usage: 'kmagent runtime-summary',
     description: 'Compact agent-oriented runtime context.',
+  },
+  'health': {
+    usage: 'kmagent health',
+    description: 'Layout B sync-health snapshot: app-visible block count vs blocks_synced, distinct blocks queued for upload, and the materialization backlog. One read to triage a stuck or unsynced client (healthy = both queues 0 and blocks ≈ blocks_synced).',
   },
   'describe-runtime': {
     usage: 'kmagent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>] [--modules <text>] [--components <text>] [--storage]',

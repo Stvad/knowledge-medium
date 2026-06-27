@@ -1,9 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { Repo } from '../repo'
-import { BlockCache } from '../blockCache'
 import { ChangeScope } from '../api'
 import { createOrRestoreTargetBlock } from '../targets'
 import { createTestDb, resetTestDb, type TestDb } from './createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 
 /**
  * Write-side pristine sentinel: `tx.create` / `tx.createOrGet` with
@@ -24,9 +24,8 @@ describe('systemMint pristine sentinel', () => {
   afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
-    repo = new Repo({db: sharedDb.db, cache: new BlockCache(), user: {id: USER}, startSyncObserver: false})
+    repo = createTestRepo({db: sharedDb.db, user: {id: USER}, startSyncObserver: false}).repo
   })
-  afterEach(() => { repo.stopSyncObserver() })
 
   const create = (id: string, opts?: {systemMint?: boolean}) =>
     repo.tx(async tx => {

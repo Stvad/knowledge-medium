@@ -1,11 +1,11 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { typesProp } from '@/data/properties.js'
 import {
@@ -29,13 +29,14 @@ let sharedDb: TestDb
 let h: TestDb
 let repo: Repo
 
+const extensions = [
+  dailyNotesDataExtension,
+  srsReschedulingPlugin,
+  blockDateAdapterFacet.of(referenceDateAdapter, {source: 'test-ref'}),
+]
+
 const setupRuntime = () => {
-  const runtime = resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-    srsReschedulingPlugin,
-    blockDateAdapterFacet.of(referenceDateAdapter, {source: 'test-ref'}),
-  ])
+  const runtime = resolveFacetRuntimeSync([kernelDataExtension, ...extensions])
   repo.setFacetRuntime(runtime)
   return runtime
 }
@@ -45,14 +46,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   h = sharedDb
-  repo = new Repo({
-    db: h.db, cache: new BlockCache(), user: {id: 'user-1'},
-  })
-  setupRuntime()
-})
-
-afterEach(async () => {
-  repo.stopSyncObserver()
+  repo = createTestRepo({db: h.db, user: {id: 'user-1'}, extensions}).repo
 })
 
 describe('srsBlockDateAdapter', () => {

@@ -8,9 +8,9 @@ import {
   defineBlockType,
   defineProperty,
 } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { typesFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
@@ -119,18 +119,11 @@ describe('BlockProperties component', () => {
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     h = sharedDb
-    let now = 1700_000_000_000
-    let idSeq = 0
-    let txSeq = 0
-    repo = new Repo({
+    ;({repo} = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      now: () => ++now,
-      newId: () => `generated-${++idSeq}`,
-      newTxSeq: () => ++txSeq,
       startSyncObserver: false,
-    })
+    }))
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
       kernelPropertyUiExtension,
@@ -171,7 +164,6 @@ describe('BlockProperties component', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
-    repo.stopSyncObserver()
   })
 
   it('keeps primitive value edits local until blur commits them', async () => {

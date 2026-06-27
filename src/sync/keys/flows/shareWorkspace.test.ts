@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '../keyStore.js'
 import { getModePin } from '../modePin.js'

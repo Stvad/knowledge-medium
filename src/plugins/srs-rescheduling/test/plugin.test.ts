@@ -2,10 +2,9 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { actionsFacet } from '@/extensions/core.js'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
@@ -87,17 +86,11 @@ describe('srsReschedulingPlugin', () => {
     vi.setSystemTime(new Date(2026, 4, 5))
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
 
-    const repo = new Repo({
+    const { repo } = createTestRepo({
       db: sharedDb.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      startSyncObserver: false,
+      extensions: [dailyNotesDataExtension, srsReschedulingPlugin],
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      kernelDataExtension,
-      dailyNotesDataExtension,
-      srsReschedulingPlugin,
-    ]))
 
     const nextReview = await getOrCreateDailyNote(repo, 'ws-1', '2026-05-01')
     await repo.tx(tx => tx.create({
@@ -281,20 +274,12 @@ describe('srsReschedulingPlugin', () => {
     // The swipe/quick-action path dispatches through canDispatch (the dispatch
     // gate), so SRS-only actions whose handler trusts the block must refuse a
     // non-SRS target there — isVisible alone (menu filtering) isn't enough.
-    let txSeq = 0
-    const repo = new Repo({
+    const { repo } = createTestRepo({
       db: sharedDb.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      newTxSeq: () => ++txSeq,
-      startSyncObserver: false,
+      extensions: [dailyNotesDataExtension, srsReschedulingPlugin],
     })
-    const runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
-      dailyNotesDataExtension,
-      srsReschedulingPlugin,
-    ])
-    repo.setFacetRuntime(runtime)
+    const runtime = repo.facetRuntime!
 
     const snapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
@@ -341,20 +326,12 @@ describe('srsReschedulingPlugin', () => {
     // after the `rescheduleBlock` await, so a workspace switch in that
     // window bound the toast (and its Undo) to an unrelated workspace.
     showCustomMock.mockClear()
-    let txSeq = 0
-    const repo = new Repo({
+    const { repo } = createTestRepo({
       db: sharedDb.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      newTxSeq: () => ++txSeq,
-      startSyncObserver: false,
+      extensions: [dailyNotesDataExtension, srsReschedulingPlugin],
     })
-    const runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
-      dailyNotesDataExtension,
-      srsReschedulingPlugin,
-    ])
-    repo.setFacetRuntime(runtime)
+    const runtime = repo.facetRuntime!
 
     await repo.tx(async tx => {
       await tx.create({id: 'card', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Card'})
@@ -383,27 +360,22 @@ describe('srsReschedulingPlugin', () => {
   })
 
   it('decorates the swipe-right block action to archive SRS blocks', async () => {
-    let txSeq = 0
-    const repo = new Repo({
-      db: sharedDb.db,
-      cache: new BlockCache(),
-      user: {id: 'user-1'},
-      newTxSeq: () => ++txSeq,
-      startSyncObserver: false,
-    })
     const baseSwipeRight = vi.fn(async () => undefined)
-    const runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
-      dailyNotesDataExtension,
-      srsReschedulingPlugin,
-      actionsFacet.of({
-        id: SWIPE_RIGHT_BLOCK_ACTION_ID,
-        description: 'Swipe right',
-        context: ActionContextTypes.NORMAL_MODE,
-        handler: baseSwipeRight,
-      }, {source: 'test'}),
-    ])
-    repo.setFacetRuntime(runtime)
+    const { repo } = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      extensions: [
+        dailyNotesDataExtension,
+        srsReschedulingPlugin,
+        actionsFacet.of({
+          id: SWIPE_RIGHT_BLOCK_ACTION_ID,
+          description: 'Swipe right',
+          context: ActionContextTypes.NORMAL_MODE,
+          handler: baseSwipeRight,
+        }, {source: 'test'}),
+      ],
+    })
+    const runtime = repo.facetRuntime!
 
     const snapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
@@ -441,22 +413,17 @@ describe('srsReschedulingPlugin', () => {
   })
 
   it('decorates cmd-enter todo cycle actions to archive SRS blocks', async () => {
-    let txSeq = 0
-    const repo = new Repo({
+    const { repo } = createTestRepo({
       db: sharedDb.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      newTxSeq: () => ++txSeq,
-      startSyncObserver: false,
+      extensions: [
+        dailyNotesDataExtension,
+        todoDataExtension,
+        todoActionsExtension,
+        srsReschedulingPlugin,
+      ],
     })
-    const runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
-      dailyNotesDataExtension,
-      todoDataExtension,
-      todoActionsExtension,
-      srsReschedulingPlugin,
-    ])
-    repo.setFacetRuntime(runtime)
+    const runtime = repo.facetRuntime!
 
     const snapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
@@ -539,20 +506,12 @@ describe('srsReschedulingPlugin', () => {
 
   describe('srs.cut / srs.paste flow', () => {
     const setupRepo = () => {
-      let txSeq = 0
-      const repo = new Repo({
+      const { repo } = createTestRepo({
         db: sharedDb.db,
-        cache: new BlockCache(),
         user: {id: 'user-1'},
-        newTxSeq: () => ++txSeq,
-        startSyncObserver: false,
+        extensions: [dailyNotesDataExtension, srsReschedulingPlugin],
       })
-      const runtime = resolveFacetRuntimeSync([
-        kernelDataExtension,
-        dailyNotesDataExtension,
-        srsReschedulingPlugin,
-      ])
-      repo.setFacetRuntime(runtime)
+      const runtime = repo.facetRuntime!
       return {repo, runtime}
     }
 
@@ -675,22 +634,14 @@ describe('srsReschedulingPlugin', () => {
   })
 
   it('does not rewrite legacy inline SRS content from edit mode', async () => {
-    let now = 1700_000_000_000
     let id = 0
-    const repo = new Repo({
+    const { repo } = createTestRepo({
       db: sharedDb.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      now: () => ++now,
       newId: () => `generated-${++id}`,
-      startSyncObserver: false,
+      extensions: [dailyNotesDataExtension, srsReschedulingPlugin],
     })
-    const runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
-      dailyNotesDataExtension,
-      srsReschedulingPlugin,
-    ])
-    repo.setFacetRuntime(runtime)
+    const runtime = repo.facetRuntime!
     await repo.tx(async tx => {
       await tx.create({
         id: 'legacy-inline-srs',

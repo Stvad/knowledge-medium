@@ -10,13 +10,11 @@
  * get-or-creates each (idempotent, deterministic id).
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { aliasesProp } from '@/data/properties'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
 import { geoDataExtension } from '@/plugins/geo/dataExtension'
 
@@ -34,21 +32,13 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
-    db: h.db,
-    cache,
-    user: { id: 'user-1' },
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-  })
   // Install the data extensions that own system pages — exactly the data-layer
   // surface production gives the repo at construction (src/context/repo.tsx).
-  repo.setFacetRuntime(
-    resolveFacetRuntimeSync([kernelDataExtension, dailyNotesDataExtension, geoDataExtension]),
-  )
+  const { repo } = createTestRepo({
+    db: h.db,
+    user: { id: 'user-1' },
+    extensions: [dailyNotesDataExtension, geoDataExtension],
+  })
   return { h, repo }
 }
 
@@ -57,7 +47,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const aliasesInWorkspace = async (h: TestDb, repo: Repo): Promise<Set<string>> => {
   const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')

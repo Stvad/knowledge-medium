@@ -11,12 +11,12 @@
 // (`block_references`, `block_aliases`, `blocks_fts`) are part of the test
 // DB schema, so manual references / aliases / content project
 // deterministically on insert without that processor.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type BlockReference } from '@/data/api'
 import type { BlockProperties } from '@/types.js'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '@/data/repo'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import { type Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
@@ -61,7 +61,7 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  repo = new Repo({db: sharedDb.db, cache: new BlockCache(), user: USER})
+  repo = createTestRepo({db: sharedDb.db, user: USER}).repo
   repo.setActiveWorkspaceId(WS)
   const runtime = resolveFacetRuntimeSync(
     [kernelDataExtension, backlinksDataExtension, groupedBacklinksDataExtension],
@@ -70,7 +70,6 @@ beforeEach(async () => {
   repo.setFacetRuntime(runtime)
   context = createAgentRuntimeContext({repo, runtime, safeMode: false})
 })
-afterEach(() => { repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string

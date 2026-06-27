@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { CompletionContext } from '@codemirror/autocomplete'
 import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'

@@ -1,13 +1,11 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, codecs, defineProperty } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets.js'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { moveSrsState } from '../moveSrsState.ts'
 import {
@@ -100,25 +98,16 @@ describe('moveSrsState', () => {
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     h = sharedDb
-    let txSeq = 0
-    repo = new Repo({
+    ;({repo} = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      newTxSeq: () => ++txSeq,
       startSyncObserver: false,
-    })
-    const runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
-      dailyNotesDataExtension,
-      srsReschedulingDataExtension,
-      propertySchemasFacet.of(unrelatedProp, {source: 'test'}),
-    ])
-    repo.setFacetRuntime(runtime)
-  })
-
-  afterEach(async () => {
-    repo.stopSyncObserver()
+      extensions: [
+        dailyNotesDataExtension,
+        srsReschedulingDataExtension,
+        propertySchemasFacet.of(unrelatedProp, {source: 'test'}),
+      ],
+    }))
   })
 
   const loadProps = async (id: string) => {

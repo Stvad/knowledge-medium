@@ -5,6 +5,7 @@ import { actionsFacet, actionTransformsFacet } from '@/extensions/core.js'
 import { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { Repo } from '../../data/repo'
+import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
 import { vimNormalModeActionsExtension } from './actions.ts'
 import {
   enterBlockEditModeOnGestureAction,
@@ -39,4 +40,8 @@ export const vimNormalModePlugin = ({repo}: { repo: Repo }): AppExtension =>
   }).of([
     vimNormalModeInteractionExtension,
     vimNormalModeActionsExtension({repo}),
+    // Nested sub-toggle: Colemak remaps of the vim movement keys. Lives
+    // here (not top-level) so it's gated by vim — with normal mode off the
+    // remaps have nothing to act on, and the settings UI shows it under Vim.
+    colemakKeybindingsPlugin,
   ])

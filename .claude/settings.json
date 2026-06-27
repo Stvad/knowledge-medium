@@ -1,5 +1,67 @@
 {
   "enabledPlugins": {
-	"security-guidance@claude-plugins-official": true
+    "security-guidance@claude-plugins-official": true
+  },
+  "permissions": {
+    "allow": [
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(yarn run *)",
+      "Bash(yarn compile *)",
+      "Bash(yarn test *)",
+      "Bash(yarn vitest:*)",
+      "Bash(npx tsc *)",
+      "Bash(npx vitest *)",
+      "Bash(yarn agent ping:*)",
+      "Bash(yarn agent status:*)",
+      "Bash(yarn agent profiles:*)",
+      "Bash(yarn agent runtime-summary:*)",
+      "Bash(yarn agent describe-runtime:*)",
+      "Bash(yarn agent health:*)",
+      "Bash(yarn agent get-block:*)",
+      "Bash(yarn agent subtree:*)",
+      "Bash(yarn agent types:*)",
+      "Bash(yarn agent sql all:*)",
+      "Bash(yarn agent sql get:*)",
+      "Bash(yarn agent sql optional:*)"
+    ],
+    "ask": [
+      "Read(.env)",
+      "Read(.env.*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-staged-pii.mjs\"",
+            "if": "Bash(git *)",
+            "statusMessage": "Scanning staged changes for PII…"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/check-env-read.mjs\"",
+            "statusMessage": "Checking for secret-file reads…"
+          }
+        ]
+      }
+    ]
   }
 }

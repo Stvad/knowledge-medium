@@ -3,8 +3,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope, codecs, definePreset, defineProperty, type AnyValuePreset } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -28,28 +28,20 @@ const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harn
   // Shared DB opened once per file (beforeAll); each test calls setup()
   // inline, so reset here gives the per-test clean slate.
   await resetTestDb(sharedDb.db)
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    startSyncObserver: false,
+    extensions: [
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+      ...extraPresets.map(p => valuePresetsFacet.of(p, {source: 'test'})),
+    ],
   })
   repo.setActiveWorkspaceId(WS)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    kernelPropertyUiExtension,
-    kernelValuePresetsExtension,
-    ...extraPresets.map(p => valuePresetsFacet.of(p, {source: 'test'})),
-  ]))
   await getOrCreatePropertiesPage(repo, WS)
   const service = repo.userSchemas
   const dispose = service.start()
-  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => {}}
   return {h, repo, service, dispose}
 }
 

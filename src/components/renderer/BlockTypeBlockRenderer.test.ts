@@ -2,13 +2,10 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { blockTypeLabelProp } from '@/data/properties'
-import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { writeBlockTypeLabel } from './BlockTypeBlockRenderer'
 
 describe('writeBlockTypeLabel', () => {
@@ -21,19 +18,13 @@ describe('writeBlockTypeLabel', () => {
 
   it('mirrors the type label into block content for ordinary block search', async () => {
     h = await createTestDb()
-    let now = 1700_000_000_000
     let idSeq = 0
-    let txSeq = 0
-    const repo = new Repo({
+    const { repo } = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-      now: () => ++now,
       newId: () => `generated-${++idSeq}`,
-      newTxSeq: () => ++txSeq,
       startSyncObserver: false,
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
     repo.setActiveWorkspaceId('ws-1')
 
     await repo.tx(async tx => {

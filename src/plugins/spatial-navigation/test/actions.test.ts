@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BlockCache } from '@/data/blockCache.js'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   focusBlock,
   focusedBlockLocationProp,
@@ -34,9 +34,8 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
   })
   repo.setActiveWorkspaceId(WS)
@@ -118,7 +117,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   document.body.innerHTML = ''
-  env.repo.stopSyncObserver()
 })
 
 describe('spatial navigation selection actions', () => {
@@ -336,6 +334,91 @@ describe('spatial navigation shift-click selection', () => {
     } as BlockPointerDependencies, {} as ActionTrigger)
 
     expect(structural).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('spatial navigation jump-to-edge actions', () => {
+  it('jumps to the first block in visible DOM order', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A'},
+      {blockId: 'B', renderScopeId: 'panel:B'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'B', {renderScopeId: 'panel:B'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'jump_to_first_visible_block',
+      description: 'Jump to first visible block',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('B'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:B',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'A',
+      renderScopeId: 'panel:A',
+    })
+  })
+
+  it('jumps to the last block in visible DOM order — reaching a backlink the data tree would skip', async () => {
+    buildPanelDom([
+      {blockId: 'A', renderScopeId: 'panel:A'},
+      {blockId: 'B', renderScopeId: 'panel:B'},
+      {blockId: 'X', renderScopeId: 'panel:backlink:X'},
+    ])
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'jump_to_last_visible_block',
+      description: 'Jump to last visible block',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).not.toHaveBeenCalled()
+    expect(panel.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'X',
+      renderScopeId: 'panel:backlink:X',
+    })
+  })
+
+  it('falls through to the structural handler when the panel has no live DOM', async () => {
+    // No buildPanelDom — panelById finds nothing, so the data-tree vim
+    // handler must run instead of swallowing the keystroke.
+    const panel = env.repo.block('panel')
+    await focusBlock(panel, 'A', {renderScopeId: 'panel:A'})
+    const fallback = vi.fn()
+    const action = decorateAction({
+      id: 'jump_to_last_visible_block',
+      description: 'Jump to last visible block',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async () => { fallback() },
+    })
+
+    await action.handler({
+      block: env.repo.block('A'),
+      uiStateBlock: panel,
+      renderScopeId: 'panel:A',
+      scopeRootId: 'top',
+    } satisfies BlockShortcutDependencies, {} as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
   })
 })
 

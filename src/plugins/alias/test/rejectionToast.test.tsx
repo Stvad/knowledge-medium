@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import type { ReactElement } from 'react'
 import { ProcessorRejection } from '@/data/api'

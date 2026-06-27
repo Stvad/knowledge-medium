@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Codec contract for the Extensions overrides property.
  *

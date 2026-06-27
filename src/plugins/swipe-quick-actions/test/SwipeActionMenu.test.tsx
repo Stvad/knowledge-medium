@@ -3,8 +3,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { actionContextsFacet, actionTransformsFacet, actionsFacet } from '@/extensions/core'
@@ -97,14 +97,10 @@ describe('SwipeActionMenu', () => {
 
     await resetTestDb(sharedDb.db)
     h = sharedDb
-    let txSeq = 0
-    repo = new Repo({
+    repo = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: USER,
-      newTxSeq: () => ++txSeq,
-      startSyncObserver: false,
-    })
+    }).repo
     repo.setActiveWorkspaceId(WS)
     runtime = buildRuntime([
       actionsFacet.of({
@@ -150,7 +146,6 @@ describe('SwipeActionMenu', () => {
     cleanup()
     vi.unstubAllGlobals()
     uiStateBlockRef.current = undefined
-    repo.stopSyncObserver()
   })
 
   const renderMenu = () =>

@@ -1,4 +1,3 @@
-/* eslint-disable react-refresh/only-export-components */
 import type { ComponentType } from 'react'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'

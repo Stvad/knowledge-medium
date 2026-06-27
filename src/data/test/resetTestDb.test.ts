@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 
 const WS = 'ws-1'
 const count = async (h: TestDb, table: string): Promise<number> =>
@@ -16,11 +16,9 @@ describe('resetTestDb', () => {
   beforeEach(async () => { await resetTestDb(h.db) })
 
   const seed = async (): Promise<Repo> => {
-    const repo = new Repo({
+    const { repo } = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: {id: 'u1'},
-      startSyncObserver: false,
     })
     repo.setActiveWorkspaceId(WS)
     await repo.tx(async tx => {

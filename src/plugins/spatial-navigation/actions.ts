@@ -34,6 +34,7 @@ import {
 import {
   horizontalNeighborPanel,
   locationOf,
+  panelById,
   panelOf,
   panelInstances,
   resolveCurrentAnchor,
@@ -281,6 +282,35 @@ const crossPanelFocus = async (
   }, {scope: ChangeScope.UiState, description: 'spatial-navigation cross-panel focus'})
 }
 
+/**
+ * Jump focus to the first / last navigable instance in the panel, in
+ * visible DOM order. This is the `gg` / `Shift+G` counterpart to
+ * `moveVertical`: since spatial nav steps `j`/`k` through the rendered
+ * DOM (outline bullets *and* trailing surfaces like backlinks/embeds),
+ * the edges must bound that same sequence — otherwise `Shift+G` would
+ * stop at the last data-tree descendant and skip the backlinks the user
+ * can still `j` into. Same return contract as `moveVertical`: `false`
+ * means "no live panel DOM — fall through to vim's data-model handler"
+ * (SSR/headless, or the panel hasn't mounted); `true` means handled.
+ */
+const jumpToPanelEdge = async (
+  deps: BlockShortcutDependencies,
+  edge: 'first' | 'last',
+): Promise<boolean> => {
+  const {uiStateBlock} = deps
+  if (!uiStateBlock) return false
+  if (typeof document === 'undefined') return false
+  const panel = panelById(uiStateBlock.id)
+  if (!panel) return false
+  const instances = panelInstances(panel)
+  if (instances.length === 0) return false
+  const target = edge === 'first' ? instances[0] : instances[instances.length - 1]
+  const location = locationOf(target)
+  if (!location) return false
+  await focusBlock(uiStateBlock, location.blockId, {renderScopeId: location.renderScopeId})
+  return true
+}
+
 export function getSpatialNavigationActions(): ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] {
   const bindNormal = (action: BlockAction) =>
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, action)
@@ -317,6 +347,21 @@ const verticalDecorator = (
     description,
     handler: async (deps, trigger, dispatch) => {
       if (await moveVertical(deps as BlockShortcutDependencies, direction)) return
+      await action.handler(deps, trigger, dispatch)
+    },
+  }),
+})
+
+const jumpEdgeDecorator = (
+  actionId: 'jump_to_first_visible_block' | 'jump_to_last_visible_block',
+  edge: 'first' | 'last',
+): ActionTransform => ({
+  actionId,
+  context: ActionContextTypes.NORMAL_MODE,
+  apply: action => ({
+    ...action,
+    handler: async (deps, trigger, dispatch) => {
+      if (await jumpToPanelEdge(deps as BlockShortcutDependencies, edge)) return
       await action.handler(deps, trigger, dispatch)
     },
   }),
@@ -375,6 +420,8 @@ export function getSpatialNavigationActionDecorators(): ActionTransform[] {
   return [
     verticalDecorator('move_down', 'down', 'Move focus down (next block, then stack-sibling panel below)'),
     verticalDecorator('move_up', 'up', 'Move focus up (previous block, then stack-sibling panel above)'),
+    jumpEdgeDecorator('jump_to_first_visible_block', 'first'),
+    jumpEdgeDecorator('jump_to_last_visible_block', 'last'),
     selectionVerticalDecorator('extend_selection_down', ActionContextTypes.NORMAL_MODE, 'down'),
     selectionVerticalDecorator('extend_selection_up', ActionContextTypes.NORMAL_MODE, 'up'),
     selectionVerticalDecorator('multi_select.extend_selection_down', ActionContextTypes.MULTI_SELECT_MODE, 'down'),
