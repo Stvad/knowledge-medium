@@ -39,9 +39,12 @@
       "Bash(yarn agent sql optional:*)"
     ],
     "ask": [
-      "Bash(grep:* .env*)",
-      "Bash(rg:* .env*)",
-      "Bash(cat:* .env*)"
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Bash(grep * .env*)",
+      "Bash(rg * .env*)"
     ]
   },
   "hooks": {

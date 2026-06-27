@@ -223,12 +223,16 @@ describe('collectStartupMetricsEffect', () => {
 
   it('does not record before first paint (no firstContentPaint mark)', async () => {
     startEffect(WS)
-    // The effect is live, but the interactive detector re-polls for the paint
-    // mark and writes nothing until it appears — so there is no record yet.
+    // The recorder's only write paths are deferred (setTimeout / scheduleIdle),
+    // so an immediate count is trivially 0 even if the paint gate were broken.
+    // A prove-absence check has no event to vi.waitFor, so give an erroneous
+    // pre-paint write a real window to land before asserting it didn't. 50ms
+    // stays well under the effect's settle-fallback.
+    await new Promise(r => setTimeout(r, 50))
     expect(await countRecords()).toBe(0)
-    // Marking paint lets the same re-poll accept interactive and write exactly
-    // one record: the count goes 0 → 1, proving nothing was recorded before
-    // paint. (Fences the negative on a positive outcome instead of a sleep.)
+    // Then prove the effect is genuinely live (so the 0 above isn't a dead
+    // effect): once paint is marked, the same re-poll writes exactly one
+    // record — the count goes 0 → 1, never to a spurious pre-paint extra.
     markStartup('firstContentPaint')
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
   })

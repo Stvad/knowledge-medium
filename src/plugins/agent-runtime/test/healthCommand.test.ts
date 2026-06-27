@@ -25,8 +25,11 @@ describe('runHealthCommand', () => {
     // Nothing was staged through the sync path in this test.
     expect(health.blocksSynced).toBe(0)
     expect(health.materializeBacklog).toBe(0)
-    // Two blocks is far below the preview cap.
+    // The two created blocks are queued for upload as two distinct blocks,
+    // well below the preview cap (so not flagged approximate). Asserting the
+    // exact count guards against returning the wrong SQL (e.g. the raw ps_crud
+    // row count, or blocksSynced) — a `>= 0` assertion would not.
+    expect(health.uploadQueueBlocks).toBe(2)
     expect(health.uploadQueueApproximate).toBe(false)
-    expect(health.uploadQueueBlocks).toBeGreaterThanOrEqual(0)
   })
 })

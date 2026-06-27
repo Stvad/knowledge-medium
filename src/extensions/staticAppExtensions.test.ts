@@ -27,9 +27,13 @@ describe('app boot composition', () => {
 
     const runtime = resolveAppRuntimeSync(extensions, { overrides: new Map(), safeMode: false })
 
-    // The plugins actually flowed into the runtime: core facets are non-empty.
-    expect(runtime.read(actionsFacet).length).toBeGreaterThan(0)
-    expect(runtime.read(appMountsFacet).length).toBeGreaterThan(0)
+    // The plugins actually flowed into the runtime. These floors are a
+    // mass-drop-out tripwire, not an exact count: the full set yields ~136
+    // actions and ~12 app mounts, so a regression where many plugins silently
+    // stop contributing (without throwing) trips this. Bump the floors if you
+    // legitimately remove enough plugins to fall below them.
+    expect(runtime.read(actionsFacet).length).toBeGreaterThan(100)
+    expect(runtime.read(appMountsFacet).length).toBeGreaterThan(8)
   })
 
   it('still composes in safe mode (degraded-boot path)', () => {

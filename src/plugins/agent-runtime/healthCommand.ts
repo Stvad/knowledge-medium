@@ -18,8 +18,11 @@ export interface SyncHealthResult {
   activeWorkspaceId: string | null
   /** App-visible, non-deleted blocks. */
   blocks: number
-  /** Rows in the synced staging table. Healthy state: blocks ≈ blocksSynced — a
-   *  large shortfall means unmaterialized downloads or local-only data. */
+  /** Non-deleted rows in the synced staging table (filtered to match `blocks`,
+   *  so the two are an apples-to-apples comparison). `blocks` >= `blocksSynced`
+   *  is the normal state — the excess is local-only data not yet uploaded. The
+   *  warning sign is the other direction: `blocks` materially BELOW
+   *  `blocksSynced` means downloaded rows the observer hasn't materialized. */
   blocksSynced: number
   /** Distinct blocks queued for upload (capped preview). Healthy: 0. */
   uploadQueueBlocks: number
@@ -34,7 +37,7 @@ const countOf = async (repo: Repo, sql: string): Promise<number> =>
 
 export const runHealthCommand = async (repo: Repo): Promise<SyncHealthResult> => {
   const blocks = await countOf(repo, 'SELECT count(*) AS count FROM blocks WHERE deleted = 0')
-  const blocksSynced = await countOf(repo, 'SELECT count(*) AS count FROM blocks_synced')
+  const blocksSynced = await countOf(repo, 'SELECT count(*) AS count FROM blocks_synced WHERE deleted = 0')
   const uploadQueueBlocks = await countOf(repo, uploadQueuePreviewCountSql)
   const materializeBacklog = await countOf(repo, materializeQueueCountSql)
   return {
