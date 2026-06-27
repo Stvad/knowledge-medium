@@ -18,6 +18,7 @@
  * `yarn run check` — it needs a live stack.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { isAlreadyExists } from '@/attachments/blobStore'
 
 const url = process.env.SUPABASE_URL
 const anon = process.env.ANON_KEY
@@ -28,11 +29,6 @@ if (!url || !anon || !secret) {
 }
 
 const BUCKET = 'attachments'
-// Storage signals "object already exists" as EITHER HTTP 409 or a symbolic code,
-// depending on the storage-api version (mirrors blobStore's ALREADY_EXISTS_CODES).
-// Match both so this pre-deploy gate can't FALSE-FAIL on a stack that returns the
-// word form while the policy is in fact behaving (first-write-wins).
-const ALREADY_EXISTS = new Set(['409', 'ResourceAlreadyExists', 'KeyAlreadyExists', 'Duplicate'])
 const noPersist = { auth: { autoRefreshToken: false, persistSession: false } }
 const admin = createClient(url, secret, noPersist) // secret key — bypasses RLS for setup
 const rid = Math.random().toString(36).slice(2, 8)
@@ -78,14 +74,44 @@ async function newUser(tag: string): Promise<User> {
   return u
 }
 
-/** Attempt an upload as `client`; report allowed (no error) vs denied + status. */
+/** Attempt an upload as `client`; report allowed (no error) vs denied + the error
+ *  (so callers can classify it through blobStore's `isAlreadyExists`). */
 async function tryUpload(client: SupabaseClient, path: string, upsert = false) {
   const { error } = await client.storage
     .from(BUCKET)
     .upload(path, bytes(), { upsert, contentType: 'application/octet-stream' })
   if (!error) return { allowed: true as const }
   const e = error as { statusCode?: string; status?: number }
-  return { allowed: false as const, status: e.statusCode ?? (e.status != null ? String(e.status) : '?') }
+  return { allowed: false as const, status: e.statusCode ?? (e.status != null ? String(e.status) : '?'), error: e }
+}
+
+/** Issue a RAW authenticated Storage upload, bypassing supabase-js's path
+ *  normalization. storage-js's `_removeEmptyFolders` strips a trailing slash
+ *  CLIENT-side, so `tryUpload('<ws>/')` never lets the server see a name ending in
+ *  '/' — it ends up exercising `array_length(...) = 1` (via the stripped bare
+ *  `<ws>`), NOT `right(name,1) <> '/'`. To actually exercise the empty-key guard we
+ *  must hand the server the literal trailing-slash name ourselves. */
+async function rawUpload(token: string, objectName: string) {
+  const res = await fetch(`${url}/storage/v1/object/${BUCKET}/${objectName}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      apikey: anon!,
+      'content-type': 'application/octet-stream',
+      'x-upsert': 'false',
+    },
+    body: bytes(),
+  })
+  return { allowed: res.ok, status: String(res.status) }
+}
+
+/** The signed-in user's access token, for `rawUpload` (the upload rides the user's
+ *  own RLS identity, exactly as supabase-js would). */
+async function accessToken(client: SupabaseClient): Promise<string> {
+  const { data } = await client.auth.getSession()
+  const token = data.session?.access_token
+  if (!token) throw new Error('no active access token for raw upload')
+  return token
 }
 
 const canRead = async (client: SupabaseClient, path: string) => {
@@ -135,6 +161,7 @@ async function run() {
 
   const key = 'sha256deadbeef'
   const path = `${ws}/${key}`
+  const ownerToken = await accessToken(owner.client) // for the raw (storage-js-bypassing) empty-key probe
 
   console.log('\n— INSERT: writer-gated, flat, no cross-workspace —')
   check('owner (writer) uploads a flat object', (await tryUpload(owner.client, path)).allowed)
@@ -142,11 +169,17 @@ async function run() {
   check('viewer (member, not writer) upload DENIED', !(await tryUpload(viewer.client, `${ws}/k-viewer`)).allowed)
   check('stranger (non-member) upload DENIED', !(await tryUpload(stranger.client, `${ws}/k-stranger`)).allowed)
   check('nested path <ws>/sub/k upload DENIED (flat layout)', !(await tryUpload(owner.client, `${ws}/sub/k`)).allowed)
-  // The migration's `right(name,1) <> '/'` + `array_length(...) = 1` guards reject an
-  // empty content-key (`<ws>/`), which would otherwise pass the 1-segment check and
-  // plant a key-less object that evades the resolver. Without this case, dropping
-  // those guards would regress unnoticed.
-  check('empty content-key <ws>/ upload DENIED', !(await tryUpload(owner.client, `${ws}/`)).allowed)
+  // The migration rejects an empty content-key (`<ws>/`) — a key-less object that
+  // passes the 1-segment check but evades the resolver — with TWO guards, and they
+  // must be exercised separately:
+  //  * storage-js strips the trailing slash CLIENT-side (`_removeEmptyFolders`), so
+  //    this `<ws>/` upload reaches the server as bare `<ws>`, exercising
+  //    `array_length(storage.foldername(name),1) = 1` (empty array → NULL ≠ 1).
+  check('client-normalized <ws>/ → bare <ws> upload DENIED (array_length=1)', !(await tryUpload(owner.client, `${ws}/`)).allowed)
+  //  * to exercise `right(name,1) <> '/'` the server must actually SEE a name ending
+  //    in '/', which only a raw request (bypassing storage-js) can deliver. Without
+  //    this, that guard could be dropped from the migration and the test stay green.
+  check('empty content-key <ws>/ (raw, server-side) upload DENIED (right(name,1))', !(await rawUpload(ownerToken, `${ws}/`)).allowed)
   check(
     'cross-workspace upload to otherWs DENIED (editor is not a writer there)',
     !(await tryUpload(editor.client, `${otherWs}/k-cross`)).allowed,
@@ -161,7 +194,7 @@ async function run() {
   const dup = await tryUpload(owner.client, path, false)
   check(
     're-upload to an existing path → already-exists (first-write-wins, not overwrite)',
-    !dup.allowed && ALREADY_EXISTS.has(dup.status),
+    !dup.allowed && isAlreadyExists(dup.error),
     `status ${dup.allowed ? 'allowed' : dup.status}`,
   )
   check('overwrite via upsert:true DENIED (no UPDATE policy)', !(await tryUpload(owner.client, path, true)).allowed)

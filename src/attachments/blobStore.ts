@@ -120,8 +120,11 @@ const httpStatusOf = (err: { status?: number; statusCode?: string | number }): n
 /** Storage "object already exists" — a first-write-wins SUCCESS, not an error
  *  (§10.1): HTTP 409, or the symbolic `ResourceAlreadyExists` / `KeyAlreadyExists`.
  *  Detect it so an unrelated error can't be mis-read as an idempotent success
- *  (which would clear the §9 queue against an object that was never written). */
-const isAlreadyExists = (err: { status?: number; statusCode?: string | number }): boolean => {
+ *  (which would clear the §9 queue against an object that was never written).
+ *  Exported so the RLS verifier (scripts/attachments-rls-verify.ts) classifies the
+ *  first-write-wins re-upload through the SAME predicate it's meant to validate,
+ *  instead of a drifting copy of the code set. */
+export const isAlreadyExists = (err: { status?: number; statusCode?: string | number }): boolean => {
   const sc = err.statusCode != null ? String(err.statusCode) : ''
   return sc === '409' || err.status === 409 || ALREADY_EXISTS_CODES.has(sc)
 }
