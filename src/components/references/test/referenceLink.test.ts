@@ -51,6 +51,16 @@ describe('classifyReferenceClick', () => {
     expect(classifyReferenceClick(clickOn(img, a))).toBe('rich')
   })
 
+  it("a LINKED image (markdown link wraps the image) → 'anchor' (follow the link, not the lightbox)", () => {
+    const a = link()
+    const inner = append(a, document.createElement('a'))
+    inner.href = 'https://example.com'
+    const img = append(inner, document.createElement('img'))
+    // The <img> (rich) sits closer to the target than the wrapping <a>, but an
+    // explicit link is meant to be followed — anchor wins.
+    expect(classifyReferenceClick(clickOn(img, a))).toBe('anchor')
+  })
+
   it("the video player + audio/canvas/button/[role=button] → 'rich'", () => {
     const a = link()
     const video = append(a, document.createElement('video'))

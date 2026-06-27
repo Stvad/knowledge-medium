@@ -50,6 +50,22 @@ describe('ReferenceLink onClick wiring', () => {
     expect(event.defaultPrevented).toBe(true)
   })
 
+  it('a click that finished selecting text inside the reference → does NOT navigate (keeps the selection)', () => {
+    const { getByText } = render(<ReferenceLink block={block}><span>hello</span></ReferenceLink>)
+    const span = getByText('hello')
+    // An active (non-collapsed) selection anchored inside the reference — what a
+    // drag-select / double-click leaves behind by the time `click` fires.
+    const getSelection = vi.spyOn(window, 'getSelection').mockReturnValue(
+      { isCollapsed: false, anchorNode: span } as unknown as Selection,
+    )
+    try {
+      clickAndGetEvent(span)
+    } finally {
+      getSelection.mockRestore()
+    }
+    expect(openBlock).not.toHaveBeenCalled()
+  })
+
   // Regression: a cmd/ctrl-click on rich content must STILL be suppressed. The
   // rich element's own handler (e.g. an image lightbox) already fired on the way
   // up; if the reference also reached the opener, the modifier would passthrough

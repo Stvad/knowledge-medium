@@ -13,28 +13,47 @@ const RICH_CONTENT_SELECTOR =
 
 /**
  * Classify a click inside the reference link. Walk from the click target up to —
- * but NOT including — the reference link itself (`currentTarget`); whichever owner
- * is found closest to the target wins. Excluding `currentTarget` is essential:
- * the reference's OWN `<a href>` is an ancestor of every click, so counting it
- * would mishandle plain text.
+ * but NOT including — the reference link itself (`currentTarget`). Excluding
+ * `currentTarget` is essential: the reference's OWN `<a href>` is an ancestor of
+ * every click, so counting it would mishandle plain text.
  *
- *  - `'anchor'`: a nested `<a href>` (a markdown link, a nested reference). It
- *    owns navigation via its NATIVE default action / its own handler — so the
- *    reference must do nothing and must NOT `preventDefault`, or the inner link's
- *    navigation dies with it.
- *  - `'rich'`: non-anchor interactive/media content. It handled its own click
- *    (lightbox / play / button), so the reference suppresses its OWN navigation
- *    (`preventDefault`) but doesn't open the target.
+ *  - `'anchor'`: an enclosing nested `<a href>` (a markdown link, a nested
+ *    reference). A link is explicitly meant to be followed, so it wins over a
+ *    rich descendant it wraps (a LINKED image `[![](img)](url)` follows the link,
+ *    not the lightbox). It navigates via its NATIVE default action / own handler,
+ *    so the reference must do nothing and must NOT `preventDefault`, or the inner
+ *    link's navigation dies with it.
+ *  - `'rich'`: non-anchor interactive/media content NOT wrapped in a link. It
+ *    handled its own click (lightbox / play / button), so the reference suppresses
+ *    its OWN navigation (`preventDefault`) but doesn't open the target.
  *  - `null`: plain content — the reference navigates to its target.
  */
 export const classifyReferenceClick = (event: MouseEvent): 'anchor' | 'rich' | null => {
   const { target, currentTarget } = event
   if (!(target instanceof Element)) return null
+  let rich = false
   for (let el: Element | null = target; el && el !== currentTarget; el = el.parentElement) {
+    // An enclosing link owns the click even when a rich descendant (the linked
+    // image) sits closer to the target — keep walking past the rich match to see
+    // if a link wraps it.
     if (el.matches('a[href]')) return 'anchor'
-    if (el.matches(RICH_CONTENT_SELECTOR)) return 'rich'
+    if (!rich && el.matches(RICH_CONTENT_SELECTOR)) rich = true
   }
-  return null
+  return rich ? 'rich' : null
+}
+
+/**
+ * A click that concludes a TEXT SELECTION anchored inside the reference (a
+ * drag-select, a double-click-to-select) shouldn't navigate and throw the
+ * selection away. A plain click collapses any prior selection on `mousedown`, so
+ * a non-collapsed selection at click time was produced by this very gesture; we
+ * only treat it as ours when its anchor (where the selection started) is inside
+ * the reference, so a stray selection elsewhere on the page doesn't block nav.
+ */
+const concludesTextSelection = (currentTarget: Element): boolean => {
+  if (typeof window === 'undefined') return false
+  const selection = window.getSelection()
+  return !!selection && !selection.isCollapsed && currentTarget.contains(selection.anchorNode)
 }
 
 /**
@@ -78,6 +97,9 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
           event.preventDefault()
           return
         }
+        // Don't navigate (and discard the selection) when the click just finished
+        // selecting text inside the reference.
+        if (concludesTextSelection(event.currentTarget)) return
         openBlock(event)
       }}
     >
