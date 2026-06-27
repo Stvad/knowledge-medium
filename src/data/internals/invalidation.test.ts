@@ -22,14 +22,14 @@
  * so a local write can't double-fire through the sync path by construction.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { Repo } from '../repo'
-import { type AppExtension } from '@/facets/facet.js'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import {
   LoaderHandle,
   snapshotsToChangeNotification,
@@ -46,12 +46,17 @@ const setup = async (
   // Shared DB opened once per file (beforeAll), reset per test in setup().
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const {repo, cache} = createTestRepo({
+  const cache = new BlockCache()
+  const repo = new Repo({
     db: h.db,
+    cache,
     user: {id: 'u1'},
     startSyncObserver: opts.startTail ?? false, // off by default for determinism
-    ...(opts.extraExtensions?.length ? {extensions: opts.extraExtensions} : {}),
   })
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    ...(opts.extraExtensions ?? []),
+  ]))
   return {h, cache, repo}
 }
 
@@ -59,6 +64,10 @@ let sharedDb: TestDb
 let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
+afterEach(() => {
+  // Dispose the per-test observer; the shared DB closes once in afterAll.
+  if (env) env.repo.stopSyncObserver()
+})
 
 const create = async (
   id: string,
