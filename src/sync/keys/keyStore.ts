@@ -21,9 +21,45 @@
  * IndexedDB glue itself is covered by the browser-validated flows in §8.
  */
 
+/**
+ * One per-device record per `(user_id, workspace_id)`: the workspace key (WK)
+ * and its derived content-key HMAC subkey (`K_id`, §10).
+ *
+ * They are CO-LOCATED in one record (not two) so they evict together: IndexedDB
+ * is best-effort evictable, and losing only `K_id` while the WK handle survived
+ * would silently fail-close media (text still working) — a confusing partial
+ * state. One record means one atomic write/evict.
+ *
+ * `contentKeyHmac` is `null` for a LEGACY record written before this feature
+ * (the WK was stored as a bare `CryptoKey`; the raw bytes K_id needs are long
+ * since zeroed, and K_id can't be re-derived from the non-extractable WK). The
+ * §6 gate ({@link resolveWorkspaceEntry}) treats a K_id-less record as LOCKED, so
+ * an upgrading device is prompted to re-paste / re-unlock the WK once — which
+ * co-derives K_id — rather than opening `ready` into permanently-broken media. (A
+ * one-time re-unlock briefly gates text too; accepted as the simplest migration at
+ * our scale.) `normalizeKeyRecord` maps the legacy shape to `{ wk, contentKeyHmac:
+ * null }` on read.
+ */
+export interface WorkspaceKeyRecord {
+  readonly wk: CryptoKey
+  readonly contentKeyHmac: CryptoKey | null
+}
+
+/** Normalize a raw stored value to a {@link WorkspaceKeyRecord}: a new-shape
+ *  record passes through; a LEGACY bare `CryptoKey` (pre-K_id) becomes
+ *  `{ wk, contentKeyHmac: null }`; `null`/`undefined` stays `null`. Exported for
+ *  direct unit testing — the IndexedDB read can't be exercised under Node. */
+export const normalizeKeyRecord = (stored: unknown): WorkspaceKeyRecord | null => {
+  if (stored == null) return null
+  // The new shape is a plain object carrying `wk`; a legacy value is the bare
+  // WK CryptoKey itself (no `wk` property).
+  if (typeof stored === 'object' && 'wk' in stored) return stored as WorkspaceKeyRecord
+  return { wk: stored as CryptoKey, contentKeyHmac: null }
+}
+
 export interface WorkspaceKeyStore {
-  get(userId: string, workspaceId: string): Promise<CryptoKey | null>
-  put(userId: string, workspaceId: string, key: CryptoKey): Promise<void>
+  get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null>
+  put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void>
   delete(userId: string, workspaceId: string): Promise<void>
   /** Drop every stored WK FOR THIS USER. Scoped to `userId` (not the whole
    *  store) because the IndexedDB store is shared across all accounts in the
@@ -50,14 +86,14 @@ export const keyStoreRecordId = (userId: string, workspaceId: string): string =>
  *  unavailable (the WK then lives only for the page's lifetime, which the
  *  backup-required model tolerates). */
 export class InMemoryWorkspaceKeyStore implements WorkspaceKeyStore {
-  private readonly keys = new Map<string, CryptoKey>()
+  private readonly keys = new Map<string, WorkspaceKeyRecord>()
 
-  async get(userId: string, workspaceId: string): Promise<CryptoKey | null> {
-    return this.keys.get(keyStoreRecordId(userId, workspaceId)) ?? null
+  async get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null> {
+    return normalizeKeyRecord(this.keys.get(keyStoreRecordId(userId, workspaceId)))
   }
 
-  async put(userId: string, workspaceId: string, key: CryptoKey): Promise<void> {
-    this.keys.set(keyStoreRecordId(userId, workspaceId), key)
+  async put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void> {
+    this.keys.set(keyStoreRecordId(userId, workspaceId), record)
   }
 
   async delete(userId: string, workspaceId: string): Promise<void> {
@@ -138,16 +174,18 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
     return result
   }
 
-  async get(userId: string, workspaceId: string): Promise<CryptoKey | null> {
-    const result = await this.tx<CryptoKey | undefined>('readonly', store =>
+  async get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null> {
+    // A value written before the K_id feature is a bare CryptoKey; normalize it
+    // to the record shape (with no K_id) so legacy devices read back cleanly.
+    const result = await this.tx<unknown>('readonly', store =>
       store.get(keyStoreRecordId(userId, workspaceId)),
     )
-    return result ?? null
+    return normalizeKeyRecord(result)
   }
 
-  async put(userId: string, workspaceId: string, key: CryptoKey): Promise<void> {
+  async put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void> {
     await this.tx('readwrite', store =>
-      store.put(key, keyStoreRecordId(userId, workspaceId)),
+      store.put(record, keyStoreRecordId(userId, workspaceId)),
     )
   }
 

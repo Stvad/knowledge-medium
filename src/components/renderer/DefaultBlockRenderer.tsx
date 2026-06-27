@@ -24,8 +24,8 @@ import {
 import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
-import { pasteMultilineText } from '@/paste/operations.js'
-import { pasteDecisionVerb } from '@/paste/decision.js'
+import { pasteMultilineText, resolvePasteWithMediaCapture } from '@/paste/operations.js'
+import type { PasteRequest } from '@/paste/decision.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -471,8 +471,12 @@ export function DefaultBlockRenderer(
       if (!isFocusedBlock(uiStateBlock, block.id, renderScopeId)) return
 
       e.preventDefault()
+      // File(s) on the clipboard (a pasted image) carry no text/plain — read
+      // them before the no-text early return so an image paste isn't dropped.
+      const files = e.clipboardData.files
+      const fileList = files && files.length > 0 ? Array.from(files) : []
       const pastedText = e.clipboardData.getData('text/plain')
-      if (!pastedText) return
+      if (!pastedText && fileList.length === 0) return
       const html = e.clipboardData.getData('text/html') || undefined
 
       // Block-shell paste (block focused, NOT in edit mode) has no text
@@ -482,20 +486,17 @@ export function DefaultBlockRenderer(
       // contributions the decision is the historical outline paste. The
       // decision is a pure, synchronous policy (`runSync`) — the clipboard text
       // is already in hand, so nothing to await before deciding.
-      const decision = pasteDecisionVerb.runSync(runtime, {
-        text: pastedText,
-        html,
-        intent: 'split',
-        surface: 'shell',
-      })
-      // The default decision is surface-aware: a plain single-line shell
-      // paste resolves to `split` (parse as outline, the historical
-      // behavior), so `single-block` here only ever comes from an explicit
-      // override and is honored literally — the applied behavior matches
-      // the decision.
-      const pasted = await pasteMultilineText(decision.text ?? pastedText, block, repo, {
+      const request: PasteRequest = {text: pastedText, html, files: fileList, intent: 'split', surface: 'shell'}
+      // Resolve the decision, capturing any pasted media first (its `!((id))` embed
+      // text is spliced into the paste, so the attachment lands per the text policy —
+      // NOT a forced child). `null` ⇒ nothing to paste. The shell has no detachable
+      // surface, so no post-await liveness re-check is needed here.
+      const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+      const resolved = await resolvePasteWithMediaCapture(runtime, request, {repo, workspaceId})
+      if (!resolved) return
+      const pasted = await pasteMultilineText(resolved.text, block, repo, {
         scopeRootId,
-        asSingleBlock: decision.kind === 'single-block',
+        asSingleBlock: resolved.decision.kind === 'single-block',
       })
       if (pasted[0]) {
         void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})

@@ -46,3 +46,19 @@ export const contentAad = (
  *  domain-separates it from any content column. */
 export const canaryAad = (workspaceId: string): Uint8Array<ArrayBuffer> =>
   canonicalAad([workspaceId, 'canary', String(SCHEMA_VERSION)])
+
+/** AAD for a sealed asset-byte object (§5.1 / §10). Binds the content hash
+ *  (`sha256:<hex>` — the same value stored in `block.properties.hash` and
+ *  verified on read), the workspace, the literal `asset-bytes` domain
+ *  separator, and the schema version. The object is content-addressed and
+ *  shared by every block carrying these bytes (§10), so it binds the CONTENT
+ *  HASH, not a block id — binding a block id would stop a co-referencing block
+ *  from opening it. The `asset-bytes` literal sits in the same slot as a
+ *  content column name and is disjoint from the three real column names
+ *  (content | properties_json | references_json), so no content AAD collides
+ *  with it. */
+export const assetBytesAad = (
+  contentHash: string,
+  workspaceId: string,
+): Uint8Array<ArrayBuffer> =>
+  canonicalAad([contentHash, workspaceId, 'asset-bytes', String(SCHEMA_VERSION)])

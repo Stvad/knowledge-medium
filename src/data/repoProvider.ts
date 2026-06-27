@@ -105,6 +105,11 @@ export const dbFilenameForUser = (userId: string) => {
 const dbsByUser = new Map<string, PowerSyncDatabase>()
 const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
+// Whether the ACTIVE session connects to remote (vs local-only mode). Set alongside
+// activeUserId in ensurePowerSyncReady; read by the attachment up-lane + resolver so a
+// local-only session makes NO Supabase Storage request — the same "no remote requests
+// in local-only" contract this module already upholds for the PowerSync connect below.
+let activeRemoteSync = false
 let connectChain: Promise<void> = Promise.resolve()
 
 // One §6 sync resolver per user, shared by both halves of the Layout B
@@ -121,6 +126,30 @@ const resolverForUser = (userId: string): SyncResolver => {
   }
   return resolver
 }
+
+/** The active user id (whose per-user PowerSync DB is mounted), or null when
+ *  signed out. The asset byte path (§7.3) scopes its OPFS store + resolver to
+ *  this — re-read at call time so an account switch is reflected. */
+export const getActiveUserId = (): string | null => activeUserId
+
+/** Whether the active session has remote sync ENABLED (vs local-only). The attachment
+ *  up-lane + resolver gate on this so a local-only session uploads/fetches NOTHING
+ *  to/from Supabase Storage — `supabase` being non-null only means auth is CONFIGURED,
+ *  not that this session opted into remote. */
+export const isRemoteSyncActive = (): boolean => activeRemoteSync
+
+/** The active user's §6 sync resolver (materializability / WK / K_id), or null
+ *  when signed out. The in-thread asset resolver delegates its decode + content-
+ *  key decisions to it, so they share the one §6 policy source. */
+export const getActiveSyncResolver = (): SyncResolver | null =>
+  activeUserId ? resolverForUser(activeUserId) : null
+
+/** The §6 sync resolver for a SPECIFIC user (materializability / WK / K_id),
+ *  regardless of who is active. The byte up-lane binds this at its entry boundary
+ *  (capture / drain) so an operation initiated for one user can't read another
+ *  user's keys if the active account switches mid-flight. (The read-path asset
+ *  resolver legitimately follows the ACTIVE user instead — see assetResolver.ts.) */
+export const syncResolverForUser = (userId: string): SyncResolver => resolverForUser(userId)
 
 /** Observer deps for the Repo's `syncObserverDeps` parameter, drawn from
  *  the same per-user resolver the upload connector uses — so download
@@ -202,16 +231,24 @@ export const ensurePowerSyncReady = async (
   }
   await initPromise
 
+  // The local DB is now mounted for this user — record it as the active account in
+  // BOTH modes. The asset byte path (§7.3) + media capture key off getActiveUserId,
+  // so a local-only session must still set it or every image/file paste reaches
+  // captureMedia as `no-user` and is silently dropped. Only the REMOTE connect
+  // below is gated on useRemoteSync.
+  const previousUserId = activeUserId
+  const alreadyActive = activeUserId === userId
+  activeUserId = userId
+  // Record the session's mode for the asset lane (set in BOTH modes, like activeUserId).
+  activeRemoteSync = useRemoteSync
+
   if (!useRemoteSync) {
     return
   }
 
-  if (activeUserId === userId) {
+  if (alreadyActive) {
     return
   }
-
-  const previousUserId = activeUserId
-  activeUserId = userId
 
   // Run disconnect+connect serially so we don't race two connect
   // attempts. Don't await the chain — connect can take a while and

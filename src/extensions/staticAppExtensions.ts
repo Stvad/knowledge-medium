@@ -29,6 +29,7 @@ import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
+import { attachmentsPlugin } from '@/attachments/attachmentsPlugin'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { referencesPlugin } from '@/plugins/references'
@@ -112,6 +113,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   spatialNavigationPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
+  attachmentsPlugin,
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,

@@ -11,8 +11,9 @@ import {
   pasteEditModeMultilineText,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
+  resolvePasteWithMediaCapture,
 } from '@/paste/operations.js'
-import { pasteDecisionVerb } from '@/paste/decision.js'
+import type { PasteRequest } from '@/paste/decision.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -48,11 +49,16 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     e.stopPropagation()
-    const text = e.clipboardData?.getData('text/plain')
-    if (!text) return
     // Read-only editors leave paste to the browser (a no-op on a
     // non-editable surface) — matches the historical single-block guard.
     if (repo.isReadOnly) return
+    // File(s) on the clipboard (a pasted image) carry no text/plain, so read
+    // them BEFORE the no-text early return below — otherwise an image paste
+    // would fall through to the browser.
+    const files = e.clipboardData?.files
+    const fileList = files && files.length > 0 ? Array.from(files) : []
+    const text = e.clipboardData?.getData('text/plain') ?? ''
+    if (!text && fileList.length === 0) return
 
     // Latch + reset the chord intent — the paste event can't see modifiers,
     // so the keydown handler latched it. `preventDefault` MUST run
@@ -84,12 +90,26 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     // on the paste-time position (title line 1 vs body line 2+) but must decide
     // synchronously. `decision.text` lets it rewrite the content (e.g. CSV →
     // markdown) before it's applied.
-    const decision = pasteDecisionVerb.runSync(runtime, {text, html, intent, surface: 'editor', caret})
+    const request: PasteRequest = {text, html, files: fileList, intent, surface: 'editor', caret}
+    // Resolve the decision, capturing any pasted media first (async) — its `!((id))`
+    // embed text is spliced into the paste below, so the attachment lands at the caret
+    // per the text policy (NOT a forced child block). The capture verb is the
+    // attachments plugin's effect; this renderer never imports it. `null` ⇒ nothing to
+    // paste (no embeds + no text, or a plugin returned media without files).
+    const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+    const resolved = await resolvePasteWithMediaCapture(runtime, request, {repo, workspaceId})
+    if (!resolved) return
+    // The capture may have awaited; the editor view can have unmounted in that window.
+    if (!editorRef.current?.view) return
+    const {decision, text: pasteText} = resolved
+
+    // Re-read the caret: a media capture may have awaited above, so use the live selection.
+    const insertAt = editorView.state.selection.main
 
     if (decision.kind === 'single-block') {
-      const plan = planSingleBlockPaste(decision.text ?? text, {
-        from: selection.from,
-        to: selection.to,
+      const plan = planSingleBlockPaste(pasteText, {
+        from: insertAt.from,
+        to: insertAt.to,
       })
       editorView.dispatch({
         changes: {from: plan.from, to: plan.to, insert: plan.insert},
@@ -98,9 +118,9 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    const plan = planEditModeMultilinePaste(decision.text ?? text, editorView.state.doc.toString(), {
-      from: selection.from,
-      to: selection.to,
+    const plan = planEditModeMultilinePaste(pasteText, editorView.state.doc.toString(), {
+      from: insertAt.from,
+      to: insertAt.to,
     })
     if (!plan) return
 
