@@ -27,12 +27,9 @@ interface MarkdownContentRendererProps extends BlockRendererProps {
 
 export function MarkdownContentRenderer({
   block,
-  inline = false,
   contentTransform,
-  // Inline rendering implies a `span` container (a `div` can't sit in inline
-  // flow); an explicit `containerElement` still wins for callers that pass it.
-  containerClassName = inline ? '' : DEFAULT_CONTAINER_CLASS,
-  containerElement: Container = inline ? 'span' : 'div',
+  containerClassName,
+  containerElement,
 }: MarkdownContentRendererProps) {
   const renderData = useHandle(block, {
     selector: doc => doc
@@ -47,6 +44,18 @@ export function MarkdownContentRenderer({
   const runtime = useAppRuntime()
 
   if (!renderData) return null
+
+  // Inline flow is a property of the rendering surface, not a synthetic flag:
+  // the same read content renders as a block by default and INLINE inside a
+  // reference (`isReference`), where it sits in the surrounding text as a
+  // citation. Inline implies a `span` container (a `div` can't sit in inline
+  // flow) + collapsing the block-level paragraph wrapper to a fragment. An
+  // explicit `containerElement`/`containerClassName` (e.g. the breadcrumb
+  // preview) still wins.
+  const inline = blockContext.isReference === true
+  const Container = containerElement ?? (inline ? 'span' : 'div')
+  const className = containerClassName ?? (inline ? '' : DEFAULT_CONTAINER_CLASS)
+
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   const markdownConfig = resolveMarkdownConfig({block, blockContext})
   const components = inline
@@ -55,7 +64,7 @@ export function MarkdownContentRenderer({
   const content = contentTransform ? contentTransform(renderData.content) : renderData.content
 
   return (
-    <Container className={containerClassName}>
+    <Container className={className}>
       <Markdown
         remarkPlugins={markdownConfig.remarkPlugins}
         components={components}

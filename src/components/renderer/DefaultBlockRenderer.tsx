@@ -570,19 +570,22 @@ export function DefaultBlockRenderer(
     }
   }, [block, resolveContext, runtime, isTopLevel, DefaultContentRenderer, contentContainerRef])
 
-  // Raw content slot: the block's base READ content renderer, rendered
-  // inline and chrome-free — no editable `block-content` wrapper, no
-  // surface props, no gesture ref. Built from `DefaultContentRenderer`
-  // (the read renderer) directly, NOT the edit-dispatcher-resolved
-  // `ContentRenderer`, so a reference can never flip into an editor just
-  // because the target is in edit mode elsewhere on the page. Layouts that
-  // present a block as inline raw content (the reference layout) render
-  // this instead of `Content`.
+  // Raw content slot: the block's READ content renderer, chrome-free — no
+  // editable `block-content` wrapper, no surface props, no gesture ref. It is
+  // the SAME read content the `Content` slot renders as its read branch (the
+  // content dispatcher's `primary` is this very `DefaultContentRenderer`); the
+  // editable `Content` surface is just the chrome + edit-mode swap WRAPPED
+  // around it. It's built from `DefaultContentRenderer` directly (NOT the
+  // edit-dispatcher-resolved `ContentRenderer`), so a reference can never flip
+  // into an editor because the target is in edit mode elsewhere; and it renders
+  // INLINE automatically inside a reference (the renderer derives inline from
+  // the `isReference` surface — no synthetic flag). Layouts that present a block
+  // as inline raw content (the reference layout) render this instead of `Content`.
   const RawContentSlot = useMemo<ComponentType>(() => {
     return function BlockRawContentSlot() {
       return (
         <ErrorBoundary FallbackComponent={FallbackComponent}>
-          <DefaultContentRenderer block={block} inline/>
+          <DefaultContentRenderer block={block}/>
         </ErrorBoundary>
       )
     }
