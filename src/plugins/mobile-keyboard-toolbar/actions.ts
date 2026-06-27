@@ -44,14 +44,14 @@ const completionTriggerAction = (
 export const mobileKeyboardToolbarActions: readonly ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>[] = [
   completionTriggerAction(
     INSERT_PAGE_REF_TRIGGER_ACTION_ID,
-    'Insert page reference trigger',
+    'Insert page reference',
     '[[',
     ']]',
     Brackets,
   ),
   completionTriggerAction(
     INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
-    'Insert block reference trigger',
+    'Insert block reference',
     '((',
     '))',
     Parentheses,

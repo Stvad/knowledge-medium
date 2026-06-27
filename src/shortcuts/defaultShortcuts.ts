@@ -338,13 +338,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const moveBlockUpCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, moveBlockUp),
     id: 'move_block_up_cm',
-    description: 'Move block up (CodeMirror)',
+    description: 'Move block up',
   }
 
   const moveBlockDownCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
     ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, moveBlockDown),
     id: 'move_block_down_cm',
-    description: 'Move block down (CodeMirror)',
+    description: 'Move block down',
   }
 
   const globalActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = [
@@ -890,7 +890,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     {
       id: 'delete_empty_block_cm',
-      description: 'Backspace at block start: delete empty / merge into previous (CodeMirror)',
+      description: 'Backspace at block start: delete empty / merge into previous',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
