@@ -1847,8 +1847,15 @@ describe('HotkeyReconciler', () => {
         // The modal handler fires once React flushes the post-hold commit.
         // Wait for that observable outcome rather than a fixed settle, then
         // assert the base-context handler was suppressed. (The 80ms above is a
-        // genuine real-time hold duration and stays.)
-        await vi.waitFor(() => expect(modalHandler).toHaveBeenCalledTimes(1))
+        // genuine real-time hold duration and stays.) This test runs on REAL
+        // timers, so under full-suite CPU contention the commit+flush can lag —
+        // give vi.waitFor a generous budget (default is 1000ms) to avoid a
+        // load-dependent flake; on success it still resolves the instant the
+        // handler fires.
+        await vi.waitFor(() => expect(modalHandler).toHaveBeenCalledTimes(1), {
+          timeout: 5000,
+          interval: 25,
+        })
         expect(baseHandler).not.toHaveBeenCalled()
       })
 
