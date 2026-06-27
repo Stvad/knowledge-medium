@@ -69,6 +69,9 @@ export interface ByteUploadStore {
   /** All of the user's records in the given status (drain reads `pending`, the
    *  reconciler reads `staged`). Scoped to `userId`. */
   listByStatus(userId: string, status: ByteUploadStatus): Promise<ByteUploadRecord[]>
+  /** Count the user's records in the given status WITHOUT materializing them — the
+   *  health surface only needs the `failed` count, not the records. Scoped to `userId`. */
+  countByStatus(userId: string, status: ByteUploadStatus): Promise<number>
   /** staged → pending (the post-commit flip). No-op if the record is absent. */
   promote(userId: string, assetBlockId: string): Promise<void>
   /** attempts += 1, status unchanged. No-op if absent — or, when `expectedStagedAt`
@@ -153,6 +156,13 @@ export class InMemoryByteUploadStore implements ByteUploadStore {
     return [...this.records.entries()]
       .filter(([id, r]) => id.startsWith(prefix) && r.status === status)
       .map(([, r]) => r)
+  }
+
+  async countByStatus(userId: string, status: ByteUploadStatus): Promise<number> {
+    const prefix = uploadUserPrefix(userId)
+    let count = 0
+    for (const [id, r] of this.records) if (id.startsWith(prefix) && r.status === status) count += 1
+    return count
   }
 
   private mutate(
@@ -291,6 +301,29 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
         const record = cursor.value as ByteUploadRecord
         if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
           out.push(record)
+        }
+        cursor.continue()
+      }
+      request.onerror = () => reject(request.error)
+    })
+  }
+
+  async countByStatus(userId: string, status: ByteUploadStatus): Promise<number> {
+    const prefix = uploadUserPrefix(userId)
+    const db = await this.openDb()
+    const store = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME)
+    return new Promise<number>((resolve, reject) => {
+      let count = 0
+      const request = store.openCursor()
+      request.onsuccess = () => {
+        const cursor = request.result
+        if (!cursor) {
+          resolve(count)
+          return
+        }
+        const record = cursor.value as ByteUploadRecord
+        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
+          count += 1
         }
         cursor.continue()
       }

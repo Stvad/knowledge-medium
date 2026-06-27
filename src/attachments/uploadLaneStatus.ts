@@ -28,7 +28,7 @@ export const refreshUploadLaneStatus = async (
   store: ByteUploadStore,
   userId: string | null,
 ): Promise<void> => {
-  const next = userId ? (await store.listByStatus(userId, 'failed')).length : 0
+  const next = userId ? await store.countByStatus(userId, 'failed') : 0
   if (next === failedCount) return
   failedCount = next
   for (const listener of listeners) listener()

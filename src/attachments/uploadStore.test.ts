@@ -180,6 +180,21 @@ for (const backend of backends) {
       expect((await store.listByStatus('u1', 'pending')).every(r => r.userId === 'u1')).toBe(true)
     })
 
+    it('countByStatus counts by status, scoped to the user', async () => {
+      await store.stage(stageInput({ assetBlockId: 'media:a' }))
+      await store.stage(stageInput({ assetBlockId: 'media:b' }))
+      await store.promote('u1', 'media:b')
+      await store.markFailed('u1', 'media:b')
+      // another account's failed record must not be counted for u1
+      await store.stage(stageInput({ userId: 'u2', assetBlockId: 'media:c' }))
+      await store.promote('u2', 'media:c')
+      await store.markFailed('u2', 'media:c')
+
+      expect(await store.countByStatus('u1', 'staged')).toBe(1)
+      expect(await store.countByStatus('u1', 'failed')).toBe(1)
+      expect(await store.countByStatus('u1', 'pending')).toBe(0)
+    })
+
     it('clearForUser drops only that user’s records', async () => {
       await store.stage(stageInput({ userId: 'u1', assetBlockId: 'media:a' }))
       await store.stage(stageInput({ userId: 'u2', assetBlockId: 'media:b' }))
