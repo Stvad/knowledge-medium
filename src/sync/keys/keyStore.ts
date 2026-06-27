@@ -15,11 +15,16 @@
  * no-IndexedDB fallback use {@link InMemoryWorkspaceKeyStore}.
  *
  * NOTE on testing: a `CryptoKey` is structured-cloneable in browsers but
- * NOT under Node's `structuredClone`, so the IndexedDB implementation
- * below can only be exercised in a real browser. Its keying logic is
- * factored into the pure {@link keyStoreRecordId} (unit-tested); the
- * IndexedDB glue itself is covered by the browser-validated flows in §8.
+ * NOT under Node's `structuredClone`, so the `CryptoKey`-storing path below
+ * can only be exercised in a real browser. Its keying logic is factored into
+ * the pure {@link keyStoreRecordId} (unit-tested), and the IndexedDB plumbing
+ * now lives in the shared {@link IdbKeyedStore} (Node-tested via fake-indexeddb).
+ * What remains browser-only is this store's wiring of that plumbing to a
+ * `CryptoKey` value — browser-validated via the §8 flows (unlock → reload →
+ * still unlocked).
  */
+
+import {IdbKeyedStore, idbKeyPrefix, idbRecordId} from '@/utils/idbKeyedStore.js'
 
 /**
  * One per-device record per `(user_id, workspace_id)`: the workspace key (WK)
@@ -70,17 +75,15 @@ export interface WorkspaceKeyStore {
   clearForUser(userId: string): Promise<void>
 }
 
-/** localStorage/IndexedDB record-id prefix for all of a user's keys. The
- *  trailing `:` plus `encodeURIComponent` (which escapes any literal `:` to
- *  `%3A`) makes this an unambiguous, collision-free prefix — `enc("ab"):` is
- *  never a prefix of `enc("abc"):…`. */
-export const keyStoreUserPrefix = (userId: string): string =>
-  `${encodeURIComponent(userId)}:`
+/** IndexedDB record-id prefix for all of a user's keys — the shared
+ *  collision-free `encodeURIComponent`-delimited prefix ({@link idbKeyPrefix}):
+ *  `enc("ab"):` is never a prefix of `enc("abc"):…`. */
+export const keyStoreUserPrefix = (userId: string): string => idbKeyPrefix(userId)
 
 /** Composite record id. Encoded so a delimiter inside an id can't make
- *  two distinct (user, workspace) pairs collide. */
+ *  two distinct (user, workspace) pairs collide ({@link idbRecordId}). */
 export const keyStoreRecordId = (userId: string, workspaceId: string): string =>
-  `${keyStoreUserPrefix(userId)}${encodeURIComponent(workspaceId)}`
+  idbRecordId(userId, workspaceId)
 
 /** In-memory store. Used in tests and as the fallback when IndexedDB is
  *  unavailable (the WK then lives only for the page's lifetime, which the
@@ -110,121 +113,41 @@ export class InMemoryWorkspaceKeyStore implements WorkspaceKeyStore {
 
 const DB_NAME = 'km-e2ee-keys'
 const STORE_NAME = 'workspace_keys'
-const DB_VERSION = 1
 
-// TODO(idb-keyed-store): this IndexedDB glue (`promisifyRequest`, the cached
-// `openDb` with clear-on-reject, and the commit-aware `tx` below) duplicates the
-// shared `@/utils/idbKeyedStore.ts` (`IdbKeyedStore` + `idbRecordId`), which
-// `compiledModuleCache.ts` already builds on. This store deliberately keeps its
-// own copy for now: its IndexedDB path stores a `CryptoKey` (NOT structured-
-// cloneable under Node), so `yarn run check` exercises NONE of this glue, and a
-// silent regression means an e2ee workspace can't be unlocked (effective data
-// loss). Migrating to the shared helper MUST be browser-validated — unlock an
-// e2ee workspace → reload → confirm it's still unlocked (WK persisted) and that
-// media in it still renders; also exercise delete/clearForUser if practical —
-// not gate-validated. Do the swap once that validation can be run.
-
-const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
-  new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-
-/** IndexedDB-backed store (browser-only — see file header on testing). */
+/** IndexedDB-backed store. Stores a `CryptoKey`-bearing record, so the
+ *  round-trip can only run in a real browser (see the file header on testing);
+ *  the cached connection + commit-durable `tx` come from {@link IdbKeyedStore}. */
 export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
-  private dbPromise: Promise<IDBDatabase> | null = null
-
-  private openDb(): Promise<IDBDatabase> {
-    if (!this.dbPromise) {
-      this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open(DB_NAME, DB_VERSION)
-        request.onupgradeneeded = () => {
-          const db = request.result
-          if (!db.objectStoreNames.contains(STORE_NAME)) {
-            db.createObjectStore(STORE_NAME)
-          }
-        }
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error)
-      }).catch((err: unknown) => {
-        // Don't cache a rejected open: a transient failure (storage pressure, a
-        // racing version upgrade) would otherwise wedge every later get/put on
-        // this instance forever. Clear the handle so the next call retries a
-        // fresh open; the backup-required model tolerates a missed read.
-        this.dbPromise = null
-        throw err
-      })
-    }
-    return this.dbPromise
-  }
-
-  private async tx<T>(
-    mode: IDBTransactionMode,
-    run: (store: IDBObjectStore) => IDBRequest<T>,
-  ): Promise<T> {
-    const db = await this.openDb()
-    const transaction = db.transaction(STORE_NAME, mode)
-    // Resolve on the TRANSACTION commit, not just the request's `onsuccess`. A
-    // readwrite write (put/delete/clear) is only durable once the tx commits
-    // (`oncomplete`); `onsuccess` fires earlier, while the tx is still open.
-    // Callers may navigate/reload right after a clear, so without awaiting the
-    // commit the navigation can abort the not-yet-committed tx and roll the
-    // clear back — leaving workspace keys in IndexedDB that should be gone.
-    // Register the completion handlers synchronously here so we can't miss an
-    // `oncomplete` that fires before we start awaiting. (Readonly txs commit
-    // trivially — harmless.)
-    const committed = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve()
-      transaction.onabort = () =>
-        reject(transaction.error ?? new Error('IndexedDB transaction aborted'))
-      transaction.onerror = () =>
-        reject(transaction.error ?? new Error('IndexedDB transaction error'))
-    })
-    const store = transaction.objectStore(STORE_NAME)
-    const result = await promisifyRequest(run(store))
-    await committed
-    return result
-  }
+  private readonly idb = new IdbKeyedStore(DB_NAME, STORE_NAME)
 
   async get(userId: string, workspaceId: string): Promise<WorkspaceKeyRecord | null> {
     // A value written before the K_id feature is a bare CryptoKey; normalize it
     // to the record shape (with no K_id) so legacy devices read back cleanly.
-    const result = await this.tx<unknown>('readonly', store =>
+    const result = await this.idb.tx<unknown>('readonly', store =>
       store.get(keyStoreRecordId(userId, workspaceId)),
     )
     return normalizeKeyRecord(result)
   }
 
   async put(userId: string, workspaceId: string, record: WorkspaceKeyRecord): Promise<void> {
-    await this.tx('readwrite', store =>
+    await this.idb.tx('readwrite', store =>
       store.put(record, keyStoreRecordId(userId, workspaceId)),
     )
   }
 
   async delete(userId: string, workspaceId: string): Promise<void> {
-    await this.tx('readwrite', store =>
+    await this.idb.tx('readwrite', store =>
       store.delete(keyStoreRecordId(userId, workspaceId)),
     )
   }
 
   async clearForUser(userId: string): Promise<void> {
     const prefix = keyStoreUserPrefix(userId)
-    const db = await this.openDb()
-    const transaction = db.transaction(STORE_NAME, 'readwrite')
-    // Await the commit (durability), same as `tx` — a caller that navigates/
-    // reloads right after this resolves could otherwise have its un-committed
-    // delete rolled back, leaving keys behind. Handlers registered synchronously.
-    const committed = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve()
-      transaction.onabort = () =>
-        reject(transaction.error ?? new Error('IndexedDB transaction aborted'))
-      transaction.onerror = () =>
-        reject(transaction.error ?? new Error('IndexedDB transaction error'))
-    })
-    const store = transaction.objectStore(STORE_NAME)
+    const {store, committed} = await this.idb.openTransaction('readwrite')
     // Cursor over the (small) store, deleting only this user's records. A plain
     // startsWith check avoids any IDBKeyRange string-bound subtlety; the store
-    // holds at most a handful of keys (one per workspace per account).
+    // holds at most a handful of keys (one per workspace per account). The commit
+    // fence (durability) matters: a caller may navigate/reload right after this.
     await new Promise<void>((resolve, reject) => {
       const request = store.openCursor()
       request.onsuccess = () => {
