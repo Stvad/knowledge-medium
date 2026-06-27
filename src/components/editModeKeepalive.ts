@@ -58,3 +58,36 @@ export const resolveEditModeKeepalive = (): 'exit' | 'refocus' | 'yield' => {
   if (refocusHolds > 0) return 'refocus'
   return 'exit'
 }
+
+/** How long a hold lingers past the point its action resolves. The blur the
+ *  hold exists to outlast lands AFTER the mutation's promise settles — the
+ *  reparent rides PowerSync → React render → DOM commit → blur, several frames
+ *  late and variably (~150ms on mobile WebViews in Playwright). Releasing the
+ *  instant the action resolves would drop the hold before the blur it's meant to
+ *  suppress; 400ms covers the worst case with headroom. */
+const KEEPALIVE_RELEASE_DELAY_MS = 400
+
+/** Hold an edit-mode keepalive for the duration of `fn`, then release it on a
+ *  delay (so the late post-commit blur above still sees the hold). The standard
+ *  wrapper for fire-and-forget edit-mode surfaces — a mobile toolbar button, the
+ *  image picker — so no caller hand-rolls acquire / try-finally / timed-release
+ *  and risks leaking a hold (a leaked hold pins edit mode app-wide). Re-throws
+ *  whatever `fn` throws, but only AFTER scheduling the release, so an error can't
+ *  strand the hold.
+ *
+ *  NOT for lifecycle-bound holds: the command palette holds across its whole
+ *  open lifetime and releases in an effect cleanup, which doesn't map to a single
+ *  async call — it acquires/releases directly. */
+export const withEditModeKeepalive = async <T>(
+  mode: EditModeKeepaliveMode,
+  fn: () => T | Promise<T>,
+): Promise<T> => {
+  const release = acquireEditModeKeepalive(mode)
+  try {
+    return await fn()
+  } finally {
+    // Bare `setTimeout` (not `window.`) keeps this module env-agnostic — it's
+    // pure latch state otherwise, and its unit test runs in the node env.
+    setTimeout(release, KEEPALIVE_RELEASE_DELAY_MS)
+  }
+}

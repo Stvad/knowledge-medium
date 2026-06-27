@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
-import { acquireEditModeKeepalive, resolveEditModeKeepalive } from './editModeKeepalive.js'
+import { describe, it, expect, vi } from 'vitest'
+import {
+  acquireEditModeKeepalive,
+  resolveEditModeKeepalive,
+  withEditModeKeepalive,
+} from './editModeKeepalive.js'
 
 // The latch is process-wide module state, so every test must release every
 // hold it acquires (the `resolve` assertions double as leak checks: a stray
@@ -52,5 +56,43 @@ describe('editModeKeepalive', () => {
     expect(resolveEditModeKeepalive()).toBe('refocus')
     releaseB()
     expect(resolveEditModeKeepalive()).toBe('exit')
+  })
+})
+
+describe('withEditModeKeepalive', () => {
+  it('holds during fn and KEEPS holding past resolution, releasing on the delay', async () => {
+    vi.useFakeTimers()
+    try {
+      let duringFn: ReturnType<typeof resolveEditModeKeepalive> | undefined
+      await withEditModeKeepalive('refocus', () => {
+        duringFn = resolveEditModeKeepalive()
+      })
+      expect(duringFn).toBe('refocus')
+      // The whole point: the hold lingers after fn resolves so the late
+      // post-commit blur still sees it. It only clears once the timer fires.
+      expect(resolveEditModeKeepalive()).toBe('refocus')
+      vi.runAllTimers()
+      expect(resolveEditModeKeepalive()).toBe('exit')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('releases (after the delay) and re-throws when fn throws', async () => {
+    vi.useFakeTimers()
+    try {
+      await expect(
+        withEditModeKeepalive('refocus', () => {
+          throw new Error('boom')
+        }),
+      ).rejects.toThrow('boom')
+      // The release is scheduled in finally before the re-throw, so a throwing
+      // action can't strand the hold.
+      expect(resolveEditModeKeepalive()).toBe('refocus')
+      vi.runAllTimers()
+      expect(resolveEditModeKeepalive()).toBe('exit')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

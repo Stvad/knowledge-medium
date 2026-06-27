@@ -15,7 +15,7 @@ import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import type { Block } from '@/data/block.js'
 import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
-import { acquireEditModeKeepalive, resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { resolveEditModeKeepalive, withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { showError } from '@/utils/toast.js'
 
 export const INSERT_IMAGE_ACTION_ID = 'edit.cm.insert_image'
@@ -140,17 +140,19 @@ export async function pickAndInsertImages(
 ): Promise<void> {
   const { from, to } = editorView.state.selection.main
   const caret = { from, to }
-  // Keep edit mode alive across the picker: it blurs the editor, and the
-  // deferred exit-on-blur would otherwise see focus on the file input (or, on
-  // return, on nothing) and tear edit mode down. 'refocus' keeps edit mode AND
-  // snaps focus back. See editModeKeepalive.
-  const releaseKeepalive = acquireEditModeKeepalive('refocus')
   try {
-    const files = await pickImageFiles()
-    if (files.length === 0) return
-    const references = await captureFilesToReferences(block, files)
-    if (references.length === 0) return
-    insertReferencesAtCaret(editorView, block, caret, references)
+    // Keep edit mode alive across the picker: it blurs the editor, and the
+    // deferred exit-on-blur would otherwise see focus on the file input (or, on
+    // return, on nothing) and tear edit mode down. 'refocus' keeps edit mode AND
+    // snaps focus back; withEditModeKeepalive holds it past the round-trip and
+    // the late post-insert commit. See editModeKeepalive.
+    await withEditModeKeepalive('refocus', async () => {
+      const files = await pickImageFiles()
+      if (files.length === 0) return
+      const references = await captureFilesToReferences(block, files)
+      if (references.length === 0) return
+      insertReferencesAtCaret(editorView, block, caret, references)
+    })
   } finally {
     requestAnimationFrame(() => {
       // Don't pull focus back if another surface (an open palette holding a
@@ -160,7 +162,6 @@ export async function pickAndInsertImages(
         editorView.focus()
       }
     })
-    window.setTimeout(releaseKeepalive, 400)
   }
 }
 

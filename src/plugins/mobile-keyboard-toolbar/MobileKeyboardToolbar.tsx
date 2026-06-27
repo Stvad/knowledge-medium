@@ -4,7 +4,7 @@ import { useRunAction } from '@/shortcuts/runAction.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
 import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
-import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
 import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts'
 
@@ -199,36 +199,35 @@ export function MobileKeyboardToolbar() {
     // misrepresent a click as a keyboard event.
     const trigger = new CustomEvent('mobile-toolbar-action', {detail: {actionId}})
 
-    // Some actions reorder the focused block's DOM node, and the
-    // reparenting drops native focus from the contenteditable. The
-    // editor's onBlur then schedules a raf that exits edit mode
-    // because document.activeElement is no longer inside any
-    // .cm-editor. The blur fires whenever React eventually commits
-    // the post-mutation render — that's *after* this handler returns,
-    // and the timing is variable (PowerSync subscription → React
-    // batched render → DOM diff/commit → blur). Stacked requestAnimation
-    // Frames aren't enough; the blur regularly lands several frames
-    // later still. Acquire a hold for a window that covers the worst-
-    // case render delay (~150ms in playwright) plus headroom; the
-    // BlockEditor's onBlur honors the hold by re-focusing instead of
-    // dropping out of edit mode. The Done button is the *one* path
-    // that genuinely wants edit mode off — leave its blur alone.
-    const releaseHold = actionId === EXIT_EDIT_ACTION_ID
-      ? null
-      : acquireEditModeKeepalive('refocus')
-    try {
-      await runAction(actionId, trigger)
-    } catch (error) {
-      console.error(`[MobileKeyboardToolbar] Failed to run ${actionId}`, error)
+    const run = async () => {
+      try {
+        await runAction(actionId, trigger)
+      } catch (error) {
+        console.error(`[MobileKeyboardToolbar] Failed to run ${actionId}`, error)
+      }
     }
-    if (releaseHold) {
-      window.setTimeout(releaseHold, 400)
-      // Snap focus back immediately for the common case where the editor
-      // is already remounted under the new DOM position. If it isn't yet,
-      // the suppressed blur won't tear us out of edit mode and the next
-      // edit-driven focus effect catches up.
-      requestAnimationFrame(() => editorView?.focus())
+
+    // The Done button is the *one* path that genuinely wants edit mode off —
+    // run it with no keepalive so its blur tears edit mode down.
+    if (actionId === EXIT_EDIT_ACTION_ID) {
+      await run()
+      return
     }
+
+    // Some actions reorder the focused block's DOM node, and the reparenting
+    // drops native focus from the contenteditable. The editor's onBlur then
+    // schedules a raf that exits edit mode because document.activeElement is no
+    // longer inside any .cm-editor — and that blur lands AFTER this handler
+    // returns, several frames late and variably (PowerSync → React render → DOM
+    // commit → blur). Hold a 'refocus' keepalive across the action and past its
+    // resolution (withEditModeKeepalive owns the timed release) so the late blur
+    // re-focuses instead of dropping out of edit mode.
+    await withEditModeKeepalive('refocus', run)
+    // Snap focus back immediately for the common case where the editor is
+    // already remounted under the new DOM position. If it isn't yet, the
+    // suppressed blur won't tear us out of edit mode and the next edit-driven
+    // focus effect catches up.
+    requestAnimationFrame(() => editorView?.focus())
   }
 
   return (
