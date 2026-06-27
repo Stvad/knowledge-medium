@@ -47,6 +47,7 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent ping` | Ping the bridge + runtime; print a status summary. |
 | `kmagent status` | Show bridge status (clients, commands). |
 | `kmagent runtime-summary` | Compact agent-oriented runtime context. |
+| `kmagent health` | Sync-health snapshot: block vs blocks_synced counts, upload queue, materialization backlog. |
 | `kmagent describe-runtime` | Full or targeted runtime diagnostics (`--guide <id>`, `--storage`, …). |
 | `kmagent sql <mode> <sql> [paramsJson]` | Run SQL (mode: `all\|get\|optional\|execute`). |
 | `kmagent get-block <id>` | Fetch a block. |

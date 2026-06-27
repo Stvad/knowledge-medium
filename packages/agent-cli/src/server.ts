@@ -241,6 +241,7 @@ const isReadOnlyCommand = (command: CommandPayload): boolean => {
     case 'ping':
     case 'runtime-summary':
     case 'describe-runtime':
+    case 'health':
     case 'get-block':
     case 'get-subtree':
       return true

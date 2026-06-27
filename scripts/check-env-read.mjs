@@ -40,12 +40,15 @@ const cmd = payload?.tool_input?.command ?? ''
 if (!cmd) allow()
 if (/\bREAD_ENV_OK=1\b/.test(cmd)) allow() // explicit, user-authorized read
 
-// Commands that read/dump file contents to stdout.
+// Commands that read/dump file contents (or, for source/`.`, load+expose them).
 const READERS = new Set([
   'cat', 'head', 'tail', 'less', 'more', 'nl', 'tac', 'od', 'xxd', 'hexdump',
   'strings', 'sort', 'base64', 'cut', 'dd', 'bat', 'view', 'grep', 'egrep',
-  'fgrep', 'rg', 'ripgrep', 'sed', 'awk',
+  'fgrep', 'rg', 'ripgrep', 'sed', 'awk', 'source', '.',
 ])
+// Search verbs take a PATTERN as their first non-flag arg (not a file), so a
+// `.env` *pattern* (`grep ".env" src/`) must not be read as a `.env` file.
+const SEARCH = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ripgrep', 'sed', 'awk'])
 
 // A `.env` secret file as a path token: preceded by a boundary (start /
 // whitespace / quote / = ( : / slash), then `.env` + an optional single dotted
@@ -80,7 +83,16 @@ for (const seg of segments) {
   }
   const verb = (tokens[i] || '').replace(/.*\//, '') // basename, strip any path
   if (!READERS.has(verb)) continue
-  hit = envHitIn(seg)
+  // Scan only the file ARGUMENTS, not the verb. For a search verb, drop the
+  // first non-flag arg (its pattern) so `grep ".env" src/` isn't mistaken for
+  // reading a `.env` file — but `grep KEY .env.local` (a real read) still trips.
+  const argv = tokens.slice(i + 1)
+  if (SEARCH.has(verb)) {
+    let p = 0
+    while (p < argv.length && argv[p].startsWith('-')) p++
+    if (p < argv.length) argv.splice(p, 1)
+  }
+  hit = envHitIn(argv.join(' '))
   if (hit) break
 }
 if (!hit) allow()

@@ -22,6 +22,12 @@
  * derived from real time can flip its apply decisions under this counter. Such
  * tests should pass `now: Date.now` (or keep a hand-rolled `new Repo`). This
  * bit invalidation/cycleDetection/typedBlockQuery — they stayed on `new Repo`.
+ *
+ * CAVEAT — multiple Repos over one db: each `createTestRepo()` call gets its OWN
+ * fresh `newId`/`newTxSeq` counters (both restart at `gen-1` / 1). Two Repos
+ * sharing one db in the same test will therefore mint COLLIDING block ids and
+ * tx-seqs. A two-device/convergence test must give at least one Repo distinct
+ * generators, e.g. `newId: uuidv4` (see globalState.test.ts / mutators.test.ts).
  */
 
 import type { User } from '@/data/api/user.js'
