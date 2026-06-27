@@ -104,11 +104,12 @@ export class IdbKeyedStore {
   }
 
   /**
-   * Open a transaction and return its object store plus a commit fence. For
-   * cursor scans or read-modify-write ops that need raw store access across
-   * multiple requests. The caller MUST issue its first request synchronously
-   * after awaiting (see the activeness note in the file header) and MUST
-   * `await committed` after its last request for durability.
+   * Open a transaction and return its object store plus a commit fence. Low-level
+   * escape hatch — prefer {@link runTransaction} / {@link tx} / {@link deleteByPrefix},
+   * which manage the fence for you. The caller MUST issue its first request
+   * synchronously after awaiting (see the activeness note in the file header) and
+   * MUST observe `committed` on EVERY path — `await` it after the last request, and
+   * on an error path `.catch` it — or a tx abort surfaces as an unhandled rejection.
    */
   async openTransaction(
     mode: IDBTransactionMode,
@@ -122,17 +123,68 @@ export class IdbKeyedStore {
   }
 
   /**
-   * Run a single request against the store and resolve on the transaction
-   * COMMIT (durability), not the request's `onsuccess`. The common case;
-   * cursor / RMW ops use {@link openTransaction} instead.
+   * Run `body` against the store within one transaction and resolve on the
+   * transaction COMMIT (durability), not a request's `onsuccess`. `body` MUST
+   * issue its first request synchronously — it is invoked in the same task that
+   * created the tx (see the file header on activeness). If `body` rejects (or the
+   * commit fence does), the fence's rejection is observed here so it can't surface
+   * as an unhandled rejection, and the original error propagates. Use for cursor
+   * scans / read-modify-write; single-request ops use {@link tx}.
+   */
+  async runTransaction<T>(
+    mode: IDBTransactionMode,
+    body: (store: IDBObjectStore) => Promise<T>,
+  ): Promise<T> {
+    const {store, committed} = await this.openTransaction(mode)
+    try {
+      const result = await body(store)
+      await committed
+      return result
+    } catch (err) {
+      // body — or the awaited fence — rejected; the tx aborts. Attach a handler so
+      // the fence's (possibly still-pending) rejection is observed, then rethrow.
+      committed.catch(() => {})
+      throw err
+    }
+  }
+
+  /**
+   * Run a single request against the store, resolving on the transaction COMMIT
+   * (durability). The common case; multi-request / cursor work uses
+   * {@link runTransaction}.
    */
   async tx<T>(
     mode: IDBTransactionMode,
     run: (store: IDBObjectStore) => IDBRequest<T>,
   ): Promise<T> {
-    const {store, committed} = await this.openTransaction(mode)
-    const result = await promisifyRequest(run(store))
-    await committed
-    return result
+    return this.runTransaction(mode, store => promisifyRequest(run(store)))
+  }
+
+  /**
+   * Delete every record whose key starts with `prefix` (the per-owner namespace
+   * from {@link idbKeyPrefix}), in one commit-durable readwrite transaction. A
+   * plain `startsWith` over the (small) store avoids IDBKeyRange string-bound
+   * subtleties; the `:`-delimited prefix is collision-free across owners.
+   */
+  async deleteByPrefix(prefix: string): Promise<void> {
+    await this.runTransaction(
+      'readwrite',
+      store =>
+        new Promise<void>((resolve, reject) => {
+          const request = store.openCursor()
+          request.onsuccess = () => {
+            const cursor = request.result
+            if (!cursor) {
+              resolve()
+              return
+            }
+            if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
+              cursor.delete()
+            }
+            cursor.continue()
+          }
+          request.onerror = () => reject(request.error)
+        }),
+    )
   }
 }

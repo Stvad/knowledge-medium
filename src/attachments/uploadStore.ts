@@ -242,50 +242,48 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
 
   async listByStatus(userId: string, status: ByteUploadStatus): Promise<ByteUploadRecord[]> {
     const prefix = uploadUserPrefix(userId)
-    const {store, committed} = await this.idb.openTransaction('readonly')
-    const out = await new Promise<ByteUploadRecord[]>((resolve, reject) => {
-      const acc: ByteUploadRecord[] = []
-      const request = store.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) {
-          resolve(acc)
-          return
+    return this.idb.runTransaction('readonly', store =>
+      new Promise<ByteUploadRecord[]>((resolve, reject) => {
+        const acc: ByteUploadRecord[] = []
+        const request = store.openCursor()
+        request.onsuccess = () => {
+          const cursor = request.result
+          if (!cursor) {
+            resolve(acc)
+            return
+          }
+          const record = cursor.value as ByteUploadRecord
+          if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
+            acc.push(record)
+          }
+          cursor.continue()
         }
-        const record = cursor.value as ByteUploadRecord
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
-          acc.push(record)
-        }
-        cursor.continue()
-      }
-      request.onerror = () => reject(request.error)
-    })
-    await committed
-    return out
+        request.onerror = () => reject(request.error)
+      }),
+    )
   }
 
   async countByStatus(userId: string, status: ByteUploadStatus): Promise<number> {
     const prefix = uploadUserPrefix(userId)
-    const {store, committed} = await this.idb.openTransaction('readonly')
-    const count = await new Promise<number>((resolve, reject) => {
-      let n = 0
-      const request = store.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) {
-          resolve(n)
-          return
+    return this.idb.runTransaction('readonly', store =>
+      new Promise<number>((resolve, reject) => {
+        let n = 0
+        const request = store.openCursor()
+        request.onsuccess = () => {
+          const cursor = request.result
+          if (!cursor) {
+            resolve(n)
+            return
+          }
+          const record = cursor.value as ByteUploadRecord
+          if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
+            n += 1
+          }
+          cursor.continue()
         }
-        const record = cursor.value as ByteUploadRecord
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
-          n += 1
-        }
-        cursor.continue()
-      }
-      request.onerror = () => reject(request.error)
-    })
-    await committed
-    return count
+        request.onerror = () => reject(request.error)
+      }),
+    )
   }
 
   /** Read-modify-write a single record inside one readwrite tx. A missing record
@@ -296,10 +294,10 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
     fn: (r: ByteUploadRecord) => ByteUploadRecord,
   ): Promise<void> {
     const id = uploadRecordId(userId, assetBlockId)
-    const {store, committed} = await this.idb.openTransaction('readwrite')
-    const existing = await promisifyRequest(store.get(id) as IDBRequest<ByteUploadRecord | undefined>)
-    if (existing) await promisifyRequest(store.put(fn(existing), id))
-    await committed
+    await this.idb.runTransaction('readwrite', async store => {
+      const existing = await promisifyRequest(store.get(id) as IDBRequest<ByteUploadRecord | undefined>)
+      if (existing) await promisifyRequest(store.put(fn(existing), id))
+    })
   }
 
   async promote(userId: string, assetBlockId: string): Promise<void> {
@@ -323,22 +321,7 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
   }
 
   async clearForUser(userId: string): Promise<void> {
-    const prefix = uploadUserPrefix(userId)
-    const {store, committed} = await this.idb.openTransaction('readwrite')
-    await new Promise<void>((resolve, reject) => {
-      const request = store.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) {
-          resolve()
-          return
-        }
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) cursor.delete()
-        cursor.continue()
-      }
-      request.onerror = () => reject(request.error)
-    })
-    await committed
+    await this.idb.deleteByPrefix(uploadUserPrefix(userId))
   }
 }
 

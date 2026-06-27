@@ -1,7 +1,7 @@
 // File-scoped IndexedDB polyfill — sets global `indexedDB`/`IDBKeyRange` for
 // this file only (vitest isolates modules per file), so the real IdbKeyedStore
-// path runs in Node. We store plain-JSON values here; the CryptoKey consumer
-// (keyStore) can only be exercised in a real browser, so it's NOT migrated yet.
+// path runs in Node. We store plain-JSON values here; keyStore's CryptoKey-bearing
+// path can only be exercised in a real browser (browser-validated separately).
 import 'fake-indexeddb/auto'
 
 import {afterEach, describe, expect, it, vi} from 'vitest'
@@ -41,9 +41,14 @@ describe('IdbKeyedStore', () => {
     expect(await store.tx('readonly', s => s.get('missing'))).toBeUndefined()
   })
 
-  it('a write is durable across a "reload" (fresh instance, same DB)', async () => {
+  it('a write survives a "reload" (fresh instance, same DB)', async () => {
     // A brand-new instance has its own connection handle but reopens the same
-    // named DB — the row, committed by the `tx` fence, must still be there.
+    // named DB — the row must still be there. NOTE: this proves cross-instance
+    // persistence, NOT the commit fence specifically: fake-indexeddb persists at a
+    // request's `onsuccess`, so this would pass even if `tx` resolved on
+    // `onsuccess` instead of the tx `oncomplete`. The fence's observable behavior
+    // (reject on abort) is covered below; its navigation-durability guarantee is
+    // only distinguishable in a real browser.
     const writer = new IdbKeyedStore('km-test-reload', 'things')
     await writer.tx('readwrite', s => s.put({v: 'PERSISTED'}, 'k'))
 
@@ -117,5 +122,33 @@ describe('IdbKeyedStore', () => {
     // promisifyRequest must surface it as a rejection, not hang.
     await expect(promisifyRequest(s.add({}, 'dup'))).rejects.toBeTruthy()
     await committed.catch(() => {}) // the failed add aborts the tx
+  })
+
+  it('runTransaction surfaces a body rejection and does not leak the commit fence', async () => {
+    // A duplicate-key `add` rejects the body's request AND aborts the tx, so the
+    // commit fence rejects too. runTransaction must rethrow the body error and
+    // observe the fence's rejection itself — note we do NOT catch any fence here
+    // (unlike the raw openTransaction test above); if it leaked, vitest would
+    // flag an unhandled rejection.
+    const store = new IdbKeyedStore('km-test-rt-leak', 'things')
+    await store.tx('readwrite', s => s.put({}, 'dup'))
+    await expect(
+      store.runTransaction('readwrite', s => promisifyRequest(s.add({}, 'dup'))),
+    ).rejects.toBeTruthy()
+  })
+
+  it('deleteByPrefix removes only the owner\'s records (sibling-prefix safe)', async () => {
+    const store = new IdbKeyedStore('km-test-delprefix', 'things')
+    await store.tx('readwrite', s => s.put({n: 1}, idbRecordId('u', 'a')))
+    await store.tx('readwrite', s => s.put({n: 2}, idbRecordId('u', 'b')))
+    // 'uX' shares 'u' as a textual prefix but is a DIFFERENT owner — the
+    // `:`-delimited prefix must not reap it (the invariant clearForUser relies on).
+    await store.tx('readwrite', s => s.put({n: 3}, idbRecordId('uX', 'a')))
+
+    await store.deleteByPrefix(idbKeyPrefix('u'))
+
+    expect(await store.tx('readonly', s => s.get(idbRecordId('u', 'a')))).toBeUndefined()
+    expect(await store.tx('readonly', s => s.get(idbRecordId('u', 'b')))).toBeUndefined()
+    expect(await store.tx('readonly', s => s.get(idbRecordId('uX', 'a')))).toEqual({n: 3})
   })
 })

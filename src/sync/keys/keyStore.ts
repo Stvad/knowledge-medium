@@ -142,28 +142,10 @@ export class IndexedDbWorkspaceKeyStore implements WorkspaceKeyStore {
   }
 
   async clearForUser(userId: string): Promise<void> {
-    const prefix = keyStoreUserPrefix(userId)
-    const {store, committed} = await this.idb.openTransaction('readwrite')
-    // Cursor over the (small) store, deleting only this user's records. A plain
-    // startsWith check avoids any IDBKeyRange string-bound subtlety; the store
-    // holds at most a handful of keys (one per workspace per account). The commit
-    // fence (durability) matters: a caller may navigate/reload right after this.
-    await new Promise<void>((resolve, reject) => {
-      const request = store.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) {
-          resolve()
-          return
-        }
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
-          cursor.delete()
-        }
-        cursor.continue()
-      }
-      request.onerror = () => reject(request.error)
-    })
-    await committed
+    // Delete only this user's records (commit-durable — a caller may navigate/
+    // reload right after). The store is shared across the profile's accounts, so
+    // the prefix scoping is load-bearing: it must not touch another account.
+    await this.idb.deleteByPrefix(keyStoreUserPrefix(userId))
   }
 }
 
