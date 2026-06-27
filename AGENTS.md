@@ -2,6 +2,12 @@ verification:
 - use `yarn run check` for verification unless otherwise stated
 - bridge/server tests that bind `127.0.0.1` fail in the Codex sandbox with `listen EPERM`; run `yarn run check` or those specific tests with elevated permissions
 
+inner loop (this repo is built primarily by agents — keep the edit→verify cycle tight):
+- iterate against ONE test file: `yarn vitest run <path>` (~1s). `yarn run check` (~64s, the full gate) is for *before a commit*, not after every edit.
+- inspect the LIVE client with no rebuild via the agent bridge: `yarn agent <verb>` — `runtime-summary` / `describe-runtime` for runtime + data-model context, `sql all "<query>"`, `get-block`, `subtree` for data. Full surface + pairing: `packages/agent-cli/README.md`. Read verbs (above) are safe to run freely; mutating verbs (`eval`, `sql execute`, `create-block`/`update-block`, `run-action`, `reload`, `navigate`) act on the live user client — use deliberately, and prefer a scratch page over touching real data.
+- the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
+- `yarn run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`yarn agent types`).
+
 secret handling:
 - do not read `.env`, `.env.*`, or other local secret files unless the user explicitly asks for it
 - do not print, echo, cat, grep, or otherwise reveal secrets or secret-bearing files in chat or command output
