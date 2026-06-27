@@ -26,6 +26,7 @@ import { showError } from '@/utils/toast.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
 import { resolveCaptureMime } from './mediaBlock.js'
+import { refreshUploadLaneStatus } from './uploadLaneStatus.js'
 import {
   captureMedia,
   DEFAULT_MAX_CAPTURE_BYTES,
@@ -112,6 +113,9 @@ export const armUploadDrain = (userId: string): void => {
       ...drainDepsFor(blobStore, resolver),
       isActiveUser: () => getActiveUserId() === userId,
     })
+    // Publish the post-drain FAILED count to the status indicator (a background
+    // upload failure is otherwise silent — it's off the paste hot-path).
+    await refreshUploadLaneStatus(getByteUploadStore(), userId)
   }).catch((err) => console.warn('[assetUpload] drain failed', err))
 }
 
@@ -121,6 +125,9 @@ export const armUploadDrain = (userId: string): void => {
  *  orphan-byte reclamation; see {@link reconcileUploads}). Needs no lock: the
  *  promote is idempotent, so racing an in-flight capture's stage→promote converges. */
 export const runUploadReconcile = async (userId: string, repo: Repo): Promise<void> => {
+  // Surface any PRE-EXISTING failed records on boot — even in local-only, where the
+  // drain below doesn't run (a failure from a prior remote session must still show).
+  await refreshUploadLaneStatus(getByteUploadStore(), userId)
   if (!getBlobStore()) return
   await reconcileUploads(userId, {
     store: getByteUploadStore(),

@@ -14,9 +14,11 @@ import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
 import { appMountsFacet, blockRenderersFacet } from '@/extensions/core.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
+import { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'
 import { MediaBlockRenderer } from './MediaBlockRenderer.js'
 import { MediaUploadReconciler } from './MediaUploadReconciler.js'
 import { captureMediaContribution, mediaPasteDecisionContribution } from './pasteCapture.js'
+import { uploadLaneDiagnosticSource } from './uploadLaneStatus.js'
 import {
   ASSETS_TYPE_CONTRIBUTION,
   MEDIA_PROPERTY_SCHEMAS,
@@ -39,4 +41,7 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   captureMediaContribution,
   // Boot recovery for crashed captures (§9) — gated on initial-sync settle.
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),
+  // Surface background upload FAILURES in the status indicator (a failed drain is
+  // otherwise silent — off the paste hot-path).
+  diagnosticsFacet.of(uploadLaneDiagnosticSource, { source: 'attachments' }),
 ])
