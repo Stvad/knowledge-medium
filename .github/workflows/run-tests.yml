@@ -19,9 +19,10 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: '24.x'
+          cache: yarn
 
       - name: Install dependencies
-        run: yarn install
+        run: yarn install --frozen-lockfile
 
       - name: Run checks
         run: yarn run check
