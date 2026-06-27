@@ -12,9 +12,9 @@
  *
  *  2. EFFECT ({@link captureMediaContribution}) — the {@link captureMediaVerb} impl:
  *     turn the files into content-addressed media blocks (the up-lane handles upload),
- *     surface any failures, and RETURN the `!((assetBlockId))` embed text per captured
- *     file for the renderer to place. Lives here so core declares the capture seam
- *     while the plugin owns the actual capture — the renderers run the verb, never
+ *     surface any failures, and RETURN the `((assetBlockId))` reference text per
+ *     captured file for the renderer to place. Lives here so core declares the capture
+ *     seam while the plugin owns the actual capture — the renderers run the verb, never
  *     importing attachments. Disabling the plugin leaves the verb's no-op default.
  */
 import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
@@ -26,17 +26,19 @@ export const mediaPasteDecisionContribution = pasteDecisionVerb.decorator(
   { source: 'attachments' },
 )
 
-/** The `!((id))` block-embed text for a captured asset — the grammar the references
- *  plugin parses (a UUID-shaped target; `mediaBlockId` is a UUIDv5). */
-const embedRef = (assetBlockId: string): string => `!((${assetBlockId}))`
+/** The `((id))` block-REFERENCE text for a captured asset — the same block-ref grammar
+ *  the references plugin parses (a UUID-shaped target; `mediaBlockId` is a UUIDv5). A
+ *  reference (not an embed): the asset renders inline as raw content at the paste site,
+ *  not as a boxed, editable, child-bearing subtree. */
+const referenceText = (assetBlockId: string): string => `((${assetBlockId}))`
 
 export const captureMediaContribution = captureMediaVerb.impl(
   async ({ repo, workspaceId, files }) => {
     const results = await captureMediaFromFiles(repo, workspaceId, files)
     reportCaptureFailures(results)
-    // One embed per SUCCESSFUL capture, in file order; the renderer inserts them as
+    // One reference per SUCCESSFUL capture, in file order; the renderer inserts them as
     // text at the caret (per the text policy), not as a forced child.
-    return { embeds: results.flatMap((r) => (r.ok ? [embedRef(r.assetBlockId)] : [])) }
+    return { references: results.flatMap((r) => (r.ok ? [referenceText(r.assetBlockId)] : [])) }
   },
   { source: 'attachments' },
 )

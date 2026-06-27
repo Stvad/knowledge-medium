@@ -16,12 +16,13 @@
  * and surface-agnostic (testable as a value), so folding the effect into it would
  * force editor/repo internals into the decision input and lose that property.
  *
- * Returns the EMBED TEXT (`!((assetBlockId))`) for each captured file — capture mints
- * the content-addressed asset block (under the workspace ASSETS container) but does
- * NOT place the embed: the renderer inserts these via its normal text-paste path, so
- * a pasted attachment lands at the caret per the text policy (NOT as a forced child).
- * The verb is awaited (`run`), but the slow upload is still fire-and-forget inside the
- * impl, so the caller only waits for the fast asset-block write, not the upload.
+ * Returns the REFERENCE TEXT (`((assetBlockId))`) for each captured file — capture
+ * mints the content-addressed asset block (under the workspace ASSETS container) but
+ * does NOT place the reference: the renderer inserts these via its normal text-paste
+ * path, so a pasted attachment lands at the caret per the text policy (NOT as a forced
+ * child). The verb is awaited (`run`), but the slow upload is still fire-and-forget
+ * inside the impl, so the caller only waits for the fast asset-block write, not the
+ * upload.
  */
 import type { Repo } from '@/data/repo.js'
 import { defineVerbFacet } from '@/facets/verbFacet.js'
@@ -33,13 +34,13 @@ export interface CaptureMediaInput {
 }
 
 export interface CaptureMediaOutcome {
-  /** `!((assetBlockId))` for each SUCCESSFULLY captured file, in file order. The
+  /** `((assetBlockId))` for each SUCCESSFULLY captured file, in file order. The
    *  renderer inserts these as text (at the caret, per the text policy). Empty when
    *  capture is off (the default no-op impl), there are no files, or all failed. */
-  readonly embeds: readonly string[]
+  readonly references: readonly string[]
 }
 
-const NOTHING: CaptureMediaOutcome = { embeds: [] }
+const NOTHING: CaptureMediaOutcome = { references: [] }
 
 export const captureMediaVerb = defineVerbFacet<CaptureMediaInput, CaptureMediaOutcome | Promise<CaptureMediaOutcome>>({
   id: 'paste.capture-media',

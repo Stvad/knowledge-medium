@@ -399,7 +399,7 @@ export async function pasteEditModeMultilineText(
 
 /** The applied paste once any media capture is done: a non-`media` decision plus
  *  the final text to paste (the decision's own rewrite, else the source text with
- *  the captured embeds spliced in). */
+ *  the captured references spliced in). */
 export interface ResolvedTextPaste {
   readonly decision: Exclude<PasteDecision, { kind: 'media' }>
   readonly text: string
@@ -407,13 +407,13 @@ export interface ResolvedTextPaste {
 
 /** Resolve a paste decision, performing MEDIA CAPTURE when the decision is `media`:
  *  capture the files via {@link captureMediaVerb} (the attachments plugin's effect —
- *  this module never imports the plugin), splice the returned `!((id))` embed text
- *  into the paste, and RE-DECIDE with the files stripped so the embeds flow through
+ *  this module never imports the plugin), splice the returned `((id))` reference text
+ *  into the paste, and RE-DECIDE with the files stripped so the references flow through
  *  the normal text path (landing at the caret like any pasted text, not a forced
  *  child). Surface-agnostic: the caller applies the returned decision its own way
  *  (outline insert vs editor dispatch), and reads `request.surface`/`caret` itself.
  *
- *  Returns `null` when there's nothing to paste — a capture that yielded no embeds
+ *  Returns `null` when there's nothing to paste — a capture that yielded no references
  *  AND no accompanying text, or a plugin that returned `media` with no files. A
  *  capture THROW is swallowed (a buggy plugin must not break the paste; the text
  *  half still pastes). The capture awaits, so a caller with a DETACHABLE surface (an
@@ -428,11 +428,11 @@ export async function resolvePasteWithMediaCapture(
   if (decided.kind !== 'media') return { decision: decided, text: decided.text ?? request.text }
 
   const files = request.files ?? []
-  let embeds: readonly string[] = []
+  let references: readonly string[] = []
   if (capture.workspaceId && files.length > 0) {
     try {
-      embeds = (await captureMediaVerb.run(runtime, { repo: capture.repo, workspaceId: capture.workspaceId, files }))
-        .embeds
+      references = (await captureMediaVerb.run(runtime, { repo: capture.repo, workspaceId: capture.workspaceId, files }))
+        .references
     } catch (err) {
       // A buggy capture plugin must not break the paste — the text half still pastes.
       console.warn('[media] paste capture failed', err)
@@ -441,8 +441,8 @@ export async function resolvePasteWithMediaCapture(
     console.warn('[media] could not capture pasted file(s): no workspace')
   }
 
-  // Clipboard text first, then one embed per captured file — each on its own line.
-  const text = [request.text, ...embeds].filter(Boolean).join('\n')
+  // Clipboard text first, then one reference per captured file — each on its own line.
+  const text = [request.text, ...references].filter(Boolean).join('\n')
   if (!text) return null // nothing captured and no text
 
   // Re-decide with files stripped + the spliced text, so the file half doesn't
