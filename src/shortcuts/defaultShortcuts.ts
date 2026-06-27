@@ -1,4 +1,4 @@
-import { ImagePlus, PanelRightOpen, Plus, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { PanelRightOpen, Plus, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -85,7 +85,6 @@ import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
-import { INSERT_IMAGE_ACTION_ID, pickAndInsertImages } from '@/editor/insertImage.js'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -634,21 +633,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
       defaultBinding: {
         keys: 'Escape',
-      },
-    },
-    // Open the OS picker and drop the captured ((assetBlockId)) reference at the
-    // caret. No default chord (there's no keyboard idiom for "open a native
-    // picker"); reached via the mobile toolbar button and the command palette.
-    // The handler clicks the picker synchronously so the dispatching gesture
-    // (toolbar tap / palette select) still counts as user activation.
-    {
-      id: INSERT_IMAGE_ACTION_ID,
-      description: 'Insert image',
-      context: ActionContextTypes.EDIT_MODE_CM,
-      icon: ImagePlus,
-      handler: async ({block, editorView}: CodeMirrorEditModeDependencies) => {
-        if (!block || !editorView) return
-        await pickAndInsertImages({editorView, block})
       },
     },
     // Roam-style keyboard fold while editing — the non-vim analogue of vim's

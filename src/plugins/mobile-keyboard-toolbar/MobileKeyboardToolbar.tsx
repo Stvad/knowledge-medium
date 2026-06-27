@@ -1,61 +1,23 @@
-import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
-import {
-  IndentDecrease,
-  IndentIncrease,
-  ArrowUp,
-  ArrowDown,
-  ImagePlus,
-  Undo2,
-  Redo2,
-  KeyboardOff,
-} from 'lucide-react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { useIsMobile } from '@/utils/react.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
 import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
-import { INSERT_IMAGE_ACTION_ID } from '@/editor/insertImage.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
-  INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
-  INSERT_PAGE_REF_TRIGGER_ACTION_ID,
-} from './actions.ts'
+  EXIT_EDIT_ACTION_ID,
+  mobileKeyboardToolbarItemsFacet,
+  type MobileKeyboardToolbarItem,
+} from './facet.ts'
 
-type ToolbarAction = {
-  kind: 'icon'
-  id: string
-  actionId: string
-  label: string
-  icon: typeof IndentDecrease
-} | {
-  kind: 'text'
-  id: string
-  actionId: string
-  label: string
-  text: string
-}
-
-const EXIT_EDIT_ACTION_ID = 'exit_edit_mode_cm'
-
-const TOOLBAR_ACTIONS: readonly ToolbarAction[] = [
-  {kind: 'icon', id: 'outdent', actionId: 'edit.cm.outdent_block', label: 'Outdent', icon: IndentDecrease},
-  {kind: 'icon', id: 'indent', actionId: 'edit.cm.indent_block', label: 'Indent', icon: IndentIncrease},
-  {kind: 'text', id: 'page-ref', actionId: INSERT_PAGE_REF_TRIGGER_ACTION_ID, label: 'Page reference', text: '[['},
-  {kind: 'text', id: 'block-ref', actionId: INSERT_BLOCK_REF_TRIGGER_ACTION_ID, label: 'Block reference', text: '(('},
-  {kind: 'icon', id: 'insert-image', actionId: INSERT_IMAGE_ACTION_ID, label: 'Insert image', icon: ImagePlus},
-  {kind: 'icon', id: 'move-up', actionId: 'move_block_up_cm', label: 'Move up', icon: ArrowUp},
-  {kind: 'icon', id: 'move-down', actionId: 'move_block_down_cm', label: 'Move down', icon: ArrowDown},
-  {kind: 'icon', id: 'undo', actionId: 'undo', label: 'Undo', icon: Undo2},
-  {kind: 'icon', id: 'redo', actionId: 'redo', label: 'Redo', icon: Redo2},
-  {kind: 'icon', id: 'done', actionId: EXIT_EDIT_ACTION_ID, label: 'Done', icon: KeyboardOff},
-]
-
-const ToolbarButtonContent = ({action}: {action: ToolbarAction}) => {
-  if (action.kind === 'text') {
-    return <span className="font-mono text-base font-semibold leading-none">{action.text}</span>
+const ToolbarButtonContent = ({item}: {item: MobileKeyboardToolbarItem}) => {
+  if (item.kind === 'text') {
+    return <span className="font-mono text-base font-semibold leading-none">{item.text}</span>
   }
 
-  const Icon = action.icon
+  const Icon = item.icon
   return <Icon className="h-5 w-5"/>
 }
 
@@ -167,10 +129,12 @@ const useKeyboardInset = (active: boolean): number => {
 }
 
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
- *  block is being edited, exposing tap targets for the workflowy/roam-
- *  style block commands (indent / outdent / reorder / undo / done).
- *  Each button dispatches the same action id that the keyboard binding
- *  invokes, so behavior stays in lockstep with the desktop shortcuts. */
+ *  block is being edited. Its buttons are facet contributions
+ *  (`mobileKeyboardToolbarItemsFacet`): the structural/reference set comes
+ *  from this plugin, and other plugins add their own (the image button from
+ *  attachments, the todo toggle from todo). Each button dispatches the same
+ *  action id that the keyboard binding invokes, so behavior stays in lockstep
+ *  with the desktop shortcuts. */
 export function MobileKeyboardToolbar() {
   const isMobile = useIsMobile()
   // Editing state is per-panel (`isEditingProp` is set on the panel's
@@ -182,6 +146,10 @@ export function MobileKeyboardToolbar() {
   const activeContexts = useActiveContextsState()
   const isEditing = activeContexts.has(ActionContextTypes.EDIT_MODE_CM)
   const runAction = useRunAction()
+  // Buttons are facet contributions, ordered by contribution precedence
+  // (applied by `runtime.read`). Contributions are static, so memo on runtime.
+  const runtime = useAppRuntime()
+  const items = useMemo(() => runtime.read(mobileKeyboardToolbarItemsFacet), [runtime])
   // Hooks above the early-return must run on every render. Pass the
   // activation flag in so the sentinel only mounts/listens while the
   // toolbar is on screen.
@@ -287,17 +255,17 @@ export function MobileKeyboardToolbar() {
       style={{bottom: keyboardInset}}
       data-block-interaction="ignore"
     >
-      {TOOLBAR_ACTIONS.map(action => (
+      {items.map(item => (
         <button
-          key={action.id}
+          key={item.id}
           type="button"
-          aria-label={action.label}
-          title={action.label}
+          aria-label={item.label}
+          title={item.label}
           onMouseDown={handleMouseDown}
-          onClick={handleClick(action.actionId)}
+          onClick={handleClick(item.actionId)}
           className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
         >
-          <ToolbarButtonContent action={action}/>
+          <ToolbarButtonContent item={item}/>
         </button>
       ))}
     </div>
