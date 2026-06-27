@@ -15,6 +15,13 @@
  * `beforeAll`, `resetTestDb()` in `beforeEach`, a fresh `createTestRepo()` per
  * test for registry / cache / handle-store isolation. For sync-materialization
  * tests, pass `startSyncObserver: true` and stop it in your own cleanup.
+ *
+ * CAVEAT — last-write-wins observer tests: the default `now` is a deterministic
+ * counter starting at 1.7e12, NOT `Date.now`. A sync-observer test whose
+ * last-write-wins gates compare the local `now()` against synced-row timestamps
+ * derived from real time can flip its apply decisions under this counter. Such
+ * tests should pass `now: Date.now` (or keep a hand-rolled `new Repo`). This
+ * bit invalidation/cycleDetection/typedBlockQuery — they stayed on `new Repo`.
  */
 
 import type { User } from '@/data/api/user.js'
