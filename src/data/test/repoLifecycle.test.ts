@@ -20,9 +20,9 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
 
 interface Harness {
@@ -35,13 +35,11 @@ interface Harness {
 // it must NOT reset — reset lives in beforeEach. `h.cleanup` disposes this
 // harness's observer without closing the shared DB.
 const setup = async (): Promise<Harness> => {
-  const cache = new BlockCache()
-  const repo = new Repo({
+  const {repo} = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
   })
-  return {h: {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}, repo}
+  return {h: {db: sharedDb.db, cleanup: async () => {}}, repo}
 }
 
 let sharedDb: TestDb
@@ -93,9 +91,8 @@ describe('repo.setReadOnly', () => {
   it('respects opts.isReadOnly at construction', () => {
     // Construction-only assertion — no DB I/O — so it rides the shared DB
     // with the observer off rather than opening its own harness.
-    const repo = new Repo({
+    const {repo} = createTestRepo({
       db: sharedDb.db,
-      cache: new BlockCache(),
       user: {id: 'u'},
       isReadOnly: true,
       startSyncObserver: false,

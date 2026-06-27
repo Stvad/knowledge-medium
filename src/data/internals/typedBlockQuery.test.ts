@@ -1,18 +1,16 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ChangeScope,
   codecs,
   defineProperty,
   type BlockReference,
 } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
 import { propertySchemasFacet } from '../facets'
-import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
@@ -69,26 +67,19 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    extensions: [
+      propertySchemasFacet.of(statusProp, {source: 'test'}),
+      propertySchemasFacet.of(doneProp, {source: 'test'}),
+      propertySchemasFacet.of(priorityProp, {source: 'test'}),
+      propertySchemasFacet.of(dueProp, {source: 'test'}),
+      propertySchemasFacet.of(weirdNameProp, {source: 'test'}),
+      propertySchemasFacet.of(labelsProp, {source: 'test'}),
+      propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+    ],
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    propertySchemasFacet.of(statusProp, {source: 'test'}),
-    propertySchemasFacet.of(doneProp, {source: 'test'}),
-    propertySchemasFacet.of(priorityProp, {source: 'test'}),
-    propertySchemasFacet.of(dueProp, {source: 'test'}),
-    propertySchemasFacet.of(weirdNameProp, {source: 'test'}),
-    propertySchemasFacet.of(labelsProp, {source: 'test'}),
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-  ]))
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
@@ -98,9 +89,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer (some tests start it explicitly)
-// so its db.onChange subscription doesn't leak onto the shared DB.
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string

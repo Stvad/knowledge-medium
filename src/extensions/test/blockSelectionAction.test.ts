@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BlockCache } from '@/data/blockCache.js'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { selectionStateProp } from '@/data/properties.js'
 import type { ActionTrigger, BlockPointerDependencies } from '@/shortcuts/types.js'
 import { toggleBlockSelectionAction } from '@/extensions/blockSelectionAction.js'
@@ -20,7 +20,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  repo = new Repo({db: sharedDb.db, cache: new BlockCache(), user: USER})
+  repo = createTestRepo({db: sharedDb.db, user: USER}).repo
   repo.setActiveWorkspaceId(WS)
   await repo.tx(async tx => {
     await tx.create({id: 'panel', workspaceId: WS, parentId: null, orderKey: 'a0'})
@@ -28,8 +28,6 @@ beforeEach(async () => {
     await tx.create({id: 'B', workspaceId: WS, parentId: null, orderKey: 'c0', content: 'B'})
   }, {scope: ChangeScope.UiState})
 })
-
-afterEach(() => { repo.stopSyncObserver() })
 
 describe('toggleBlockSelectionAction', () => {
   const toggle = (blockId: string) =>

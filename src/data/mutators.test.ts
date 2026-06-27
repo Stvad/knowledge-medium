@@ -13,7 +13,7 @@
  * (stage 1.6) will migrate to.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   CORE_BLOCK_MERGED_EVENT,
   ChangeScope,
@@ -26,6 +26,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from './repo'
 import { aliasesProp, isCollapsedProp } from '@/data/properties'
 
@@ -45,20 +46,14 @@ const setup = async (): Promise<Harness> => {
   // test keeps the cache / handle-store / registry isolated.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  // Mutator tests assert on user-facing tx side-effects (cache,
+  // command_events) against the kernel-only runtime the constructor
+  // installs — no plugin post-commit processors are registered here, so
+  // no follow-up txs run. Plugin-processor integration lives in the
+  // backlinks plugin processor tests.
+  const {repo, cache} = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    // Mutator tests assert on user-facing tx side-effects (cache,
-    // command_events) against the kernel-only runtime the constructor
-    // installs — no plugin post-commit processors are registered here, so
-    // no follow-up txs run. Plugin-processor integration lives in the
-    // backlinks plugin processor tests.
   })
   // Undo/redo are scoped to the active workspace (issue #186); the
   // seeded blocks live in ws-1.
@@ -82,10 +77,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer (started by default in the Repo
-// constructor) so its db.onChange subscription doesn't leak onto the shared
-// DB; the DB itself is closed once in afterAll.
-afterEach(() => { env.repo.stopSyncObserver() })
 
 /** Seed a small tree: root, three children A/B/C at depth 1. */
 const seedABC = async () => {
@@ -196,12 +187,18 @@ describe('core.setProperty', () => {
       tx => tx.create({id: 'p3', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    const ro = await import('./repo').then(m => new m.Repo({
+    // `ro` shares the DB with `env.repo`. txId comes from `newId`; the
+    // harness gives every Repo the same `gen-<n>` counter from 0, so a
+    // second Repo on the same DB would collide on command_events.tx_id.
+    // The original `ro` used the Repo default (uuidv4); give it a distinct
+    // id space here so its tx ids don't clash with `env.repo`'s.
+    let roId = 0
+    const {repo: ro} = createTestRepo({
       db: env.h.db,
-      cache: env.cache,
       user: {id: 'user-1', name: 'Test'},
       isReadOnly: true,
-    }))
+      newId: () => `ro-${++roId}`,
+    })
     // BlockDefault throws ReadOnlyError; UiState and UserPrefs pass through.
     await expect(
       ro.mutate.setProperty({id: 'p3', schema: titleProp, value: 'no'}),

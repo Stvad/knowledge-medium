@@ -3,8 +3,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import type { User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
@@ -44,12 +44,9 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  let txSeq = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
-    newTxSeq: () => ++txSeq,
     startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
@@ -72,7 +69,6 @@ describe('LayoutRenderer', () => {
 
   afterEach(async () => {
     cleanup()
-    env.repo.stopSyncObserver()
   })
 
   const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)

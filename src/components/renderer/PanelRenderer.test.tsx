@@ -3,9 +3,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import type { Block } from '@/data/block'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   activePanelIdProp,
@@ -90,12 +90,9 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  let txSeq = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
-    newTxSeq: () => ++txSeq,
     startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
@@ -152,7 +149,6 @@ describe('PanelRenderer', () => {
   afterEach(async () => {
     cleanup()
     repoRef.current = undefined
-    env.repo.stopSyncObserver()
   })
 
   const renderPanel = (wideScrollSurface: boolean) =>

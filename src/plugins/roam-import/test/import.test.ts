@@ -25,17 +25,15 @@ import { ChangeScope } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../../../data/repo'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import {
   dailyNoteBlockId,
   dailyNotesDataExtension,
   journalBlockId,
   todayIso,
 } from '@/plugins/daily-notes'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
@@ -69,27 +67,21 @@ const setup = async (): Promise<Harness> => {
   // returned h.cleanup disposes this Repo's observer rather than closing the
   // shared DB, so the existing afterEach stays correct.
   await resetTestDb(sharedDb.db)
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const {repo} = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: USER_ID},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    startSyncObserver: true,
+    extensions: [
+      kernelValuePresetsExtension,
+      dailyNotesDataExtension,
+      todoDataExtension,
+      srsReschedulingDataExtension,
+    ],
     // The importer pre-populates references[] explicitly; running
     // parseReferences on top would re-parse content + clobber. The
     // importer also calls processors itself for alias resolution.
   })
   repo.setActiveWorkspaceId(WORKSPACE)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    kernelValuePresetsExtension,
-    dailyNotesDataExtension,
-    todoDataExtension,
-    srsReschedulingDataExtension,
-  ]))
   await getOrCreatePropertiesPage(repo, WORKSPACE)
   const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {h, repo}

@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BlockCache } from '@/data/blockCache.js'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb.js'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   focusBlock,
   focusedBlockLocationProp,
@@ -34,9 +34,8 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
   })
   repo.setActiveWorkspaceId(WS)
@@ -118,7 +117,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   document.body.innerHTML = ''
-  env.repo.stopSyncObserver()
 })
 
 describe('spatial navigation selection actions', () => {

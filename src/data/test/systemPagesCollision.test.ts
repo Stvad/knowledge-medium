@@ -17,11 +17,9 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, ProcessorRejection } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { referencesDataExtension } from '@/plugins/references/dataExtension'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension'
@@ -38,25 +36,18 @@ interface Harness { h: TestDb; repo: Repo }
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
-    db: h.db,
-    cache,
-    user: { id: 'user-1' },
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-  })
   // Full data surface needed for the bug: references (auto-create on `[[ ]]`),
   // alias (collision detection), plus the owners of the system pages.
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    referencesDataExtension,
-    aliasDataExtension,
-    dailyNotesDataExtension,
-    geoDataExtension,
-  ]))
+  const { repo } = createTestRepo({
+    db: h.db,
+    user: { id: 'user-1' },
+    extensions: [
+      referencesDataExtension,
+      aliasDataExtension,
+      dailyNotesDataExtension,
+      geoDataExtension,
+    ],
+  })
   repo.setActiveWorkspaceId(WS)
   return { h, repo }
 }
@@ -71,7 +62,6 @@ beforeEach(async () => {
 })
 afterEach(() => {
   vi.useRealTimers()
-  env.repo.stopSyncObserver()
 })
 
 const flush = async () => {

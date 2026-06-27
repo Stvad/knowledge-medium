@@ -23,10 +23,10 @@
  * `navigator.clipboard.write` and would require a DOM environment.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../../data/repo'
 import { serializeBlock, serializeSelectedBlocks } from '@/utils/copy'
 
@@ -41,15 +41,9 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file (beforeAll), reset here per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
   })
   return {h, repo}
 }
@@ -59,7 +53,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
 
 interface SeedNode {
   id: string

@@ -1,10 +1,8 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
@@ -31,23 +29,15 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    startSyncObserver: false,
+    extensions: [
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+    ],
   })
   repo.setActiveWorkspaceId(WS)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    kernelPropertyUiExtension,
-    kernelValuePresetsExtension,
-  ]))
   await getOrCreatePropertiesPage(repo, WS)
   await getOrCreateTypesPage(repo, WS)
   const userSchemas = repo.userSchemas

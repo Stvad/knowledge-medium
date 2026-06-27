@@ -4,9 +4,9 @@
  * write, and the synced→drained→settled collector orchestration.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks'
 import { getClientId, resetClientIdCache } from '@/utils/clientId'
 import type { User } from '@/data/api'
@@ -32,7 +32,6 @@ const USER: User = { id: 'user-1', name: 'Alice' }
 
 let sharedDb: TestDb
 let repo: Repo
-let txSeq = 0
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
@@ -41,12 +40,10 @@ beforeEach(async () => {
   resetStartupTimeline()
   resetStartupMetricsRecorded()
   resetClientIdCache()
-  txSeq = 0
-  repo = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: USER, newTxSeq: () => ++txSeq })
+  repo = createTestRepo({ db: sharedDb.db, user: USER }).repo
   repo.setActiveWorkspaceId(WS)
 })
 afterEach(() => {
-  repo.stopSyncObserver()
   vi.restoreAllMocks()
 })
 

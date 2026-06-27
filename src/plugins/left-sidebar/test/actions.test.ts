@@ -2,8 +2,8 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import type { User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   __resetLayoutSessionIdForTesting,
@@ -22,29 +22,26 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  let id = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
-    newId: () => `gen-${++id}`,
   })
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
 
 let sharedDb: TestDb
-let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 
 beforeEach(async () => {
   __resetLayoutSessionIdForTesting()
-  env = await setup()
+  // setup() sets the active workspace as a side effect; the actions under test
+  // operate on the global runtime, so the returned handle isn't read directly.
+  await setup()
 })
 
 afterEach(async () => {
-  env.repo.stopSyncObserver()
   leftSidebarToggle.close()
 })
 

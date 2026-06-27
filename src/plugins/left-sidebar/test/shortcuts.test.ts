@@ -1,10 +1,11 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope, type User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { getUserBlock } from '@/data/stateBlocks.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { journalBlockId } from '@/plugins/daily-notes'
 import {
@@ -22,10 +23,17 @@ interface Harness {
 }
 
 const createRepo = (h: TestDb): Repo => {
-  const repo = new Repo({
+  // Reproduce Repo's own non-deterministic defaults (uuid ids, Date.now-seeded
+  // tx-seqs) rather than the harness's deterministic-from-0 counters: the
+  // multi-Repo convergence tests construct two Repos on the same db, and the
+  // harness defaults would collide across instances on command_events.tx_id
+  // (derived from newId) and tx_seq.
+  let seq = Date.now()
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
+    newId: uuidv4,
+    newTxSeq: () => ++seq,
   })
   repo.setActiveWorkspaceId(WS)
   return repo
@@ -55,9 +63,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('deterministic ids', () => {
   it('shortcutsBlockId is stable for a given user-page id', () => {

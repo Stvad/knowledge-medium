@@ -1,11 +1,11 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet.js'
 import {
   SRS_SM25_TYPE,
@@ -36,13 +36,7 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   h = sharedDb
-  repo = new Repo({
-    db: h.db,
-    cache: new BlockCache(),
-    user: {id: 'user-1'},
-  })
-  runtime = resolveFacetRuntimeSync([
-    kernelDataExtension,
+  const extensions = [
     dailyNotesDataExtension,
     srsReschedulingDataExtension,
     // Adapters are normally contributed by their plugins'
@@ -55,12 +49,13 @@ beforeEach(async () => {
       precedence: -1,
     }),
     blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
-  ])
-  repo.setFacetRuntime(runtime)
-})
-
-afterEach(async () => {
-  repo.stopSyncObserver()
+  ]
+  ;({repo} = createTestRepo({
+    db: h.db,
+    user: {id: 'user-1'},
+    extensions,
+  }))
+  runtime = resolveFacetRuntimeSync([kernelDataExtension, ...extensions])
 })
 
 const seedSrsBlock = async (id: string): Promise<void> => {

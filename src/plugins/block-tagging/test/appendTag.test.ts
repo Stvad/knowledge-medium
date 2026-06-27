@@ -1,11 +1,9 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { ChangeScope } from '@/data/api'
 import { appendTagToBlocks, appendTagToContent } from '../appendTag.ts'
 
@@ -64,15 +62,11 @@ describe('appendTagToBlocks', () => {
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     h = sharedDb
-    repo = new Repo({
+    repo = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: {id: 'user-1'},
-    })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    }).repo
   })
-
-  afterEach(() => { repo.stopSyncObserver() })
 
   const seed = async (id: string, content: string): Promise<void> => {
     await repo.tx(tx => tx.create({

@@ -2,10 +2,10 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render, waitFor } from '@testing-library/react'
-import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   focusedBlockLocationProp,
   peekFocusedBlockLocation,
@@ -30,9 +30,8 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
   })
   repo.setActiveWorkspaceId(WS)
@@ -113,7 +112,6 @@ afterEach(async () => {
   cleanup()
   __resetSpatialNavigationForTesting()
   document.body.innerHTML = ''
-  env.repo.stopSyncObserver()
 })
 
 describe('PanelFocusRecovery', () => {

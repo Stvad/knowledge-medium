@@ -7,13 +7,11 @@
 // of `exclude`, not in the query we build. These tests run the actual
 // query so that regression stays caught.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope, type BlockReference } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { typesProp } from '@/data/properties'
 import { propertySchemasFacet, typesFacet } from '@/data/facets'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { dailyNoteDateProp, dailyNoteType, DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
 import {
@@ -32,13 +30,9 @@ interface Harness { h: TestDb; repo: Repo }
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
     // No live sync observer (the sanctioned deterministic-timing pattern).
     // This suite does explicit local writes + queries and never needs
@@ -47,15 +41,14 @@ const setup = async (): Promise<Harness> => {
     // — could land after this test's resetTestDb cleared command_events and
     // collide on the UNIQUE command_events.tx_id under full-suite load.
     startSyncObserver: false,
+    extensions: [
+      typesFacet.of(dailyNoteType, {source: 'test'}),
+      typesFacet.of(srsSm25Type, {source: 'test'}),
+      propertySchemasFacet.of(dailyNoteDateProp, {source: 'test'}),
+      propertySchemasFacet.of(srsNextReviewDateProp, {source: 'test'}),
+      propertySchemasFacet.of(srsArchivedProp, {source: 'test'}),
+    ],
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    typesFacet.of(dailyNoteType, {source: 'test'}),
-    typesFacet.of(srsSm25Type, {source: 'test'}),
-    propertySchemasFacet.of(dailyNoteDateProp, {source: 'test'}),
-    propertySchemasFacet.of(srsNextReviewDateProp, {source: 'test'}),
-    propertySchemasFacet.of(srsArchivedProp, {source: 'test'}),
-  ]))
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
