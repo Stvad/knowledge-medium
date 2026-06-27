@@ -215,6 +215,13 @@ export interface BlockLayoutSlots {
   block: Block
   /** Block content surface — content renderer + surface props + error boundary. */
   Content: ComponentType
+  /** Read-only, chrome-free inline content — the block's *base read* content
+   *  renderer, with no editable `block-content` wrapper, surface props, or
+   *  gesture ref. This is the raw content as it appears in an inline citation
+   *  (a block reference): it never becomes an editor even when the same block
+   *  is being edited at its home location, because it is built from the read
+   *  renderer rather than the edit-aware dispatcher. */
+  RawContent: ComponentType
   /** Block properties (metadata key/value pairs); `null` when hidden. */
   Properties: ComponentType | null
   /** Block children subtree (raw `BlockChildren`; layout decides whether to wrap in CollapsibleContent). */

@@ -63,6 +63,12 @@ export interface WorkspaceMemberWithEmail extends WorkspaceMembership {
 export interface BlockRendererProps {
     block: Block;
     context?: BlockContextType;
+    /** Render this block's content in inline flow (a citation / raw-content
+     *  context such as a block reference) rather than as a standalone block.
+     *  Content renderers that have an inline form honour it (the markdown
+     *  renderer drops to a `span` container + coerces block-level wrappers to
+     *  fragments); renderers without one ignore it. */
+    inline?: boolean;
 }
 
 /**
@@ -131,6 +137,12 @@ export interface BlockContextType {
     isEmbedded?: boolean
     isBacklink?: boolean
     isBreadcrumb?: boolean
+    /** A block rendered as an inline reference (`((id))`). Set alongside
+     *  `isNestedSurface`, so it inherits focal-exclusion / nested-surface
+     *  behaviour from the umbrella; the specific flag lets the reference
+     *  layout self-gate (render the navigating link + raw content) without
+     *  matching embeds or backlink entries. */
+    isReference?: boolean
     [key: string]: unknown
 }
 

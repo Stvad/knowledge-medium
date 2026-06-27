@@ -48,15 +48,15 @@ export function BlockEmbed({
     )
   }
 
-  // Just the highlighted box around the rendered subtree — the bullet on
-  // each row inside is already navigable, so no separate "source" link.
+  // The embed mounts the target through the one block-rendering pipeline; the
+  // highlighted box chrome lives in the embed layout (gated on `isEmbedded` +
+  // the embed root). The bullet on each row inside is already navigable, so
+  // there's no separate "source" link.
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
-      <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">
-        <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
-          <BlockComponent blockId={blockId}/>
-        </NestedBlockContextProvider>
-      </div>
+      <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
+        <BlockComponent blockId={blockId}/>
+      </NestedBlockContextProvider>
     </BlockRefAncestorsProvider>
   )
 }

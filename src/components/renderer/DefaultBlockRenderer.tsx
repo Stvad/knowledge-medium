@@ -536,6 +536,24 @@ export function DefaultBlockRenderer(
     }
   }, [block, ContentRenderer, contentSurfaceProps, isTopLevel, contentGestureRef])
 
+  // Raw content slot: the block's base READ content renderer, rendered
+  // inline and chrome-free — no editable `block-content` wrapper, no
+  // surface props, no gesture ref. Built from `DefaultContentRenderer`
+  // (the read renderer) directly, NOT the edit-dispatcher-resolved
+  // `ContentRenderer`, so a reference can never flip into an editor just
+  // because the target is in edit mode elsewhere on the page. Layouts that
+  // present a block as inline raw content (the reference layout) render
+  // this instead of `Content`.
+  const RawContentSlot = useMemo<ComponentType>(() => {
+    return function BlockRawContentSlot() {
+      return (
+        <ErrorBoundary FallbackComponent={FallbackComponent}>
+          <DefaultContentRenderer block={block} inline/>
+        </ErrorBoundary>
+      )
+    }
+  }, [block, DefaultContentRenderer])
+
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null
     return function BlockPropertiesSlot() {
@@ -631,6 +649,7 @@ export function DefaultBlockRenderer(
       const layoutSlots: BlockLayoutSlots = {
         block,
         Content: ContentSlot,
+        RawContent: RawContentSlot,
         Properties: PropertiesSlot,
         Children: ChildrenSlot,
         Footer: FooterSlot,
@@ -643,7 +662,7 @@ export function DefaultBlockRenderer(
     }
   }, [
     block,
-    ContentSlot, PropertiesSlot, ChildrenSlot, FooterSlot,
+    ContentSlot, RawContentSlot, PropertiesSlot, ChildrenSlot, FooterSlot,
     ControlsSlot, HeaderSlot,
     Layout,
   ])
