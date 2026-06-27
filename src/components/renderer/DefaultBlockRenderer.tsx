@@ -3,7 +3,7 @@ import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
-import type { ComponentType, RefObject } from 'react'
+import type { ComponentType, FunctionComponent, RefObject } from 'react'
 import {
   showPropertiesProp,
   isCollapsedProp,
@@ -483,7 +483,10 @@ export function DefaultBlockRenderer(
   // dispatcher), so a reference can never flip into an editor because the target
   // is in edit mode elsewhere; it renders INLINE automatically inside a reference
   // (the renderer derives inline from the `isReference` surface — no synthetic flag).
-  const RawContentSlot = useMemo<ComponentType>(() => {
+  // Typed as a `FunctionComponent` (not `ComponentType`) so it's assignable both
+  // to the `RawContent` slot AND directly to the dispatcher's `primary`
+  // `BlockRenderer` slot below — no thunk needed.
+  const RawContentSlot = useMemo<FunctionComponent>(() => {
     return function BlockRawContentSlot() {
       return (
         <ErrorBoundary FallbackComponent={FallbackComponent}>
@@ -508,16 +511,13 @@ export function DefaultBlockRenderer(
     isTopLevel,
     blockContext,
     contentRenderers: [
-      // The display (read) slot IS `RawContent`, so the edit dispatcher renders
-      // `<RawContent/>` in read mode (and the editor in edit mode) and the
-      // editable `Content` slot composes the same read node the reference layout
-      // mounts — one source of "the read content", not two. (Wrapped in a
-      // `BlockRenderer`-shaped thunk: `RawContent` is a zero-prop slot component,
-      // and it already closes over `block`, so the dispatcher's `{...props}` is
-      // moot.)
+      // The display (read) slot IS `RawContent`: the edit dispatcher renders it in
+      // read mode (and the editor in edit mode), so the editable `Content` slot
+      // composes the same read node the reference layout mounts — one source of
+      // "the read content", not two.
       {
         id: 'primary',
-        renderer: () => <RawContentSlot/>,
+        renderer: RawContentSlot,
       },
       {
         id: 'secondary',
