@@ -14,7 +14,7 @@ import { useIsMobile } from '@/utils/react.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
-import { acquireBlurExitSuppression } from '@/components/BlockEditor.js'
+import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -293,7 +293,7 @@ export function MobileKeyboardToolbar() {
     // that genuinely wants edit mode off — leave its blur alone.
     const releaseHold = actionId === EXIT_EDIT_ACTION_ID
       ? null
-      : acquireBlurExitSuppression()
+      : acquireEditModeKeepalive('refocus')
     try {
       await runAction(actionId, trigger)
     } catch (error) {
@@ -374,7 +374,7 @@ export function MobileKeyboardToolbar() {
     // returns it would see focus on this file input (not a .cm-editor) and
     // tear down edit mode. The hold makes BlockEditor re-focus the editor
     // instead of exiting; released when the picker resolves.
-    imagePickReleaseRef.current = acquireBlurExitSuppression()
+    imagePickReleaseRef.current = acquireEditModeKeepalive('refocus')
 
     // A dismissed picker fires `cancel`, not `change`, and must still release
     // the hold. `cancel` doesn't bubble, so React's delegated onCancel can't
