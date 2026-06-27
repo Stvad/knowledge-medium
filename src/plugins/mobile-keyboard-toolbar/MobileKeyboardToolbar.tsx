@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type MouseEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
 import {
   IndentDecrease,
   IndentIncrease,
@@ -9,17 +9,13 @@ import {
   Redo2,
   KeyboardOff,
 } from 'lucide-react'
-import { EditorSelection } from '@codemirror/state'
 import { useIsMobile } from '@/utils/react.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
 import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
-import { useRepo } from '@/context/repo.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
-import { showError } from '@/utils/toast.js'
+import { INSERT_IMAGE_ACTION_ID } from '@/editor/insertImage.js'
 import {
   INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
   INSERT_PAGE_REF_TRIGGER_ACTION_ID,
@@ -37,25 +33,6 @@ type ToolbarAction = {
   actionId: string
   label: string
   text: string
-} | {
-  // The image button is the one toolbar entry that doesn't dispatch an
-  // action id — it opens the OS file picker and inserts the captured
-  // reference itself (see handleInsertImageClick), since there's no
-  // keyboard chord for "open a native picker" to stay in lockstep with.
-  kind: 'image'
-  id: string
-  label: string
-  icon: typeof IndentDecrease
-}
-
-/** Where a picked image's `((assetBlockId))` reference is dropped. Snapshotted
- *  when the button is tapped — BEFORE the OS picker steals focus — because the
- *  picker is async and blurs the editor, so the live selection is gone by the
- *  time the file(s) arrive. */
-type ImageInsertTarget = {
-  editorView: CodeMirrorEditModeDependencies['editorView']
-  block: CodeMirrorEditModeDependencies['block']
-  caret: {from: number; to: number}
 }
 
 const EXIT_EDIT_ACTION_ID = 'exit_edit_mode_cm'
@@ -65,7 +42,7 @@ const TOOLBAR_ACTIONS: readonly ToolbarAction[] = [
   {kind: 'icon', id: 'indent', actionId: 'edit.cm.indent_block', label: 'Indent', icon: IndentIncrease},
   {kind: 'text', id: 'page-ref', actionId: INSERT_PAGE_REF_TRIGGER_ACTION_ID, label: 'Page reference', text: '[['},
   {kind: 'text', id: 'block-ref', actionId: INSERT_BLOCK_REF_TRIGGER_ACTION_ID, label: 'Block reference', text: '(('},
-  {kind: 'image', id: 'insert-image', label: 'Insert image', icon: ImagePlus},
+  {kind: 'icon', id: 'insert-image', actionId: INSERT_IMAGE_ACTION_ID, label: 'Insert image', icon: ImagePlus},
   {kind: 'icon', id: 'move-up', actionId: 'move_block_up_cm', label: 'Move up', icon: ArrowUp},
   {kind: 'icon', id: 'move-down', actionId: 'move_block_down_cm', label: 'Move down', icon: ArrowDown},
   {kind: 'icon', id: 'undo', actionId: 'undo', label: 'Undo', icon: Undo2},
@@ -205,17 +182,6 @@ export function MobileKeyboardToolbar() {
   const activeContexts = useActiveContextsState()
   const isEditing = activeContexts.has(ActionContextTypes.EDIT_MODE_CM)
   const runAction = useRunAction()
-  const repo = useRepo()
-  const runtime = useAppRuntime()
-
-  // Image-picker plumbing. The hidden <input> is clicked by the image
-  // button; the picker round-trip is async (and blurs the editor), so the
-  // insert target snapshotted at click time and the edit-mode-keepalive
-  // hold are stashed in refs and read back when the file(s) arrive.
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const pendingImageInsertRef = useRef<ImageInsertTarget | null>(null)
-  const imagePickReleaseRef = useRef<(() => void) | null>(null)
-  const detachPickCancelRef = useRef<(() => void) | null>(null)
   // Hooks above the early-return must run on every render. Pass the
   // activation flag in so the sentinel only mounts/listens while the
   // toolbar is on screen.
@@ -309,117 +275,6 @@ export function MobileKeyboardToolbar() {
     }
   }
 
-  // Drop the edit-mode-keepalive hold once the picker has resolved, snapping
-  // focus back into the editor first so the post-return blur rAF — which
-  // would otherwise see focus on the file input (not a .cm-editor) and exit
-  // edit mode — is covered until the editor is focused again. Idempotent.
-  const releaseImagePickHold = () => {
-    const release = imagePickReleaseRef.current
-    imagePickReleaseRef.current = null
-    const target = pendingImageInsertRef.current
-    pendingImageInsertRef.current = null
-    if (target?.editorView.dom.isConnected) {
-      requestAnimationFrame(() => target.editorView.focus())
-    }
-    if (release) window.setTimeout(release, 400)
-  }
-
-  const insertReferencesAtCaret = (
-    {editorView, block, caret}: ImageInsertTarget,
-    references: readonly string[],
-  ) => {
-    // One reference per captured file, each on its own line — matches the
-    // paste path's separator (src/paste/operations.ts), so a multi-image
-    // insert reads the same whether it came from paste or this button.
-    const insertText = references.join('\n')
-
-    // Common case: the picker blurred the editor but didn't unmount it, so
-    // dispatch into the live view — this lands the caret right after the
-    // inserted reference and routes the change through the editor's normal
-    // commit path. If the editor DID unmount (edit mode torn down mid-
-    // picker), write the block content directly instead.
-    if (editorView.dom.isConnected) {
-      const docLength = editorView.state.doc.length
-      const from = Math.min(caret.from, docLength)
-      const to = Math.min(caret.to, docLength)
-      editorView.dispatch({
-        changes: {from, to, insert: insertText},
-        selection: EditorSelection.cursor(from + insertText.length),
-      })
-      editorView.focus()
-      return
-    }
-
-    const content = block.peek()?.content ?? ''
-    const from = Math.min(caret.from, content.length)
-    const to = Math.min(caret.to, content.length)
-    void block.setContent(content.slice(0, from) + insertText + content.slice(to))
-  }
-
-  const handleInsertImageClick = () => {
-    const editDeps = activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as
-      | CodeMirrorEditModeDependencies
-      | undefined
-    const editorView = editDeps?.editorView
-    const block = editDeps?.block
-    const input = fileInputRef.current
-    if (!editorView || !block || !input) return
-
-    const {from, to} = editorView.state.selection.main
-    pendingImageInsertRef.current = {editorView, block, caret: {from, to}}
-
-    // Keep edit mode alive across the OS picker. While the picker is up the
-    // editor blurs and `document.hasFocus()` is false, so BlockEditor's
-    // exit-on-blur rAF no-ops — but if that rAF is deferred until focus
-    // returns it would see focus on this file input (not a .cm-editor) and
-    // tear down edit mode. The hold makes BlockEditor re-focus the editor
-    // instead of exiting; released when the picker resolves.
-    imagePickReleaseRef.current = acquireEditModeKeepalive('refocus')
-
-    // A dismissed picker fires `cancel`, not `change`, and must still release
-    // the hold. `cancel` doesn't bubble, so React's delegated onCancel can't
-    // see it — attach natively (once) and remember how to detach it so a
-    // successful `change` can cancel the pending listener.
-    const onCancel = () => {
-      detachPickCancelRef.current = null
-      releaseImagePickHold()
-    }
-    detachPickCancelRef.current = () => input.removeEventListener('cancel', onCancel)
-    input.addEventListener('cancel', onCancel, {once: true})
-
-    input.click()
-  }
-
-  const handleFilesSelected = async (event: ChangeEvent<HTMLInputElement>) => {
-    const input = event.currentTarget
-    const files = input.files ? Array.from(input.files) : []
-    input.value = '' // let the same file be picked again next time
-    // A selection resolved, so the cancel listener won't fire — detach it.
-    detachPickCancelRef.current?.()
-    detachPickCancelRef.current = null
-
-    const target = pendingImageInsertRef.current
-    try {
-      if (!target || files.length === 0) return
-      const workspaceId = target.block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
-      if (!workspaceId) {
-        showError('Open a workspace to attach images.')
-        return
-      }
-      // Capture via the shared verb seam (the attachments plugin's effect) —
-      // same path the paste handler uses, so storage/upload/dedup stay in one
-      // place and this never imports attachments. Empty references ⇒ capture
-      // failed (already toasted) or attachments is disabled.
-      const {references} = await captureMediaVerb.run(runtime, {repo, workspaceId, files})
-      if (references.length === 0) return
-      insertReferencesAtCaret(target, references)
-    } catch (error) {
-      console.error('[MobileKeyboardToolbar] image insert failed', error)
-    } finally {
-      releaseImagePickHold()
-    }
-  }
-
   return (
     <div
       ref={toolbarRef}
@@ -432,14 +287,6 @@ export function MobileKeyboardToolbar() {
       style={{bottom: keyboardInset}}
       data-block-interaction="ignore"
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        multiple
-        hidden
-        onChange={handleFilesSelected}
-      />
       {TOOLBAR_ACTIONS.map(action => (
         <button
           key={action.id}
@@ -447,7 +294,7 @@ export function MobileKeyboardToolbar() {
           aria-label={action.label}
           title={action.label}
           onMouseDown={handleMouseDown}
-          onClick={action.kind === 'image' ? handleInsertImageClick : handleClick(action.actionId)}
+          onClick={handleClick(action.actionId)}
           className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
         >
           <ToolbarButtonContent action={action}/>

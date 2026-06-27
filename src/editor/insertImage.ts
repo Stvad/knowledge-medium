@@ -1,0 +1,121 @@
+/**
+ * Pick image file(s) from the OS and insert their captured `((assetBlockId))`
+ * reference(s) at the editor's caret — the editor-layer counterpart to the
+ * paste path, reusable from any edit-mode surface (the mobile keyboard toolbar
+ * button, the command palette, a future desktop button).
+ *
+ * It deliberately owns the whole awkward async-picker dance so callers don't
+ * have to: snapshot the caret up front (the picker blurs the editor), hold edit
+ * mode alive across the round-trip, capture through the shared media seam, and
+ * refocus when done. Capture goes through {@link captureMediaVerb} (the
+ * attachments plugin's effect) so byte storage / upload / content-dedup live in
+ * exactly one place and this never imports the plugin.
+ */
+import { EditorSelection } from '@codemirror/state'
+import type { EditorView } from '@codemirror/view'
+import type { Block } from '@/data/block.js'
+import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
+import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { showError } from '@/utils/toast.js'
+
+export const INSERT_IMAGE_ACTION_ID = 'edit.cm.insert_image'
+
+/** Open the OS file picker for image(s); resolves with the chosen files, or an
+ *  empty array if the user dismissed it. MUST be called synchronously inside a
+ *  user gesture (it clicks a transient `<input>` before returning) or the
+ *  browser won't open the picker. */
+function pickImageFiles(): Promise<File[]> {
+  return new Promise<File[]>(resolve => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*'
+    input.multiple = true
+    // Off-screen-in-document rather than detached: some browsers only open the
+    // picker for an input that's actually in the document.
+    input.style.position = 'fixed'
+    input.style.left = '-9999px'
+    const cleanup = (files: File[]) => {
+      input.removeEventListener('change', onChange)
+      input.removeEventListener('cancel', onCancel)
+      input.remove()
+      resolve(files)
+    }
+    const onChange = () => cleanup(input.files ? Array.from(input.files) : [])
+    // A dismissed picker fires `cancel`, not `change` — resolve empty so the
+    // caller's keepalive hold is released instead of leaking.
+    const onCancel = () => cleanup([])
+    input.addEventListener('change', onChange)
+    input.addEventListener('cancel', onCancel)
+    document.body.appendChild(input)
+    input.click()
+  })
+}
+
+/** Insert reference text at a caret, preferring the live editor (caret lands
+ *  after the insert, change rides the editor's normal commit path); falls back
+ *  to writing block content directly if the editor unmounted while the picker
+ *  was open. */
+function insertReferencesAtCaret(
+  editorView: EditorView,
+  block: Block,
+  caret: { from: number; to: number },
+  references: readonly string[],
+): void {
+  // One reference per captured file, each on its own line — matches the paste
+  // path's separator (src/paste/operations.ts), so a multi-image insert reads
+  // the same whether it came from paste or this picker.
+  const insertText = references.join('\n')
+
+  if (editorView.dom.isConnected) {
+    const docLength = editorView.state.doc.length
+    const from = Math.min(caret.from, docLength)
+    const to = Math.min(caret.to, docLength)
+    editorView.dispatch({
+      changes: { from, to, insert: insertText },
+      selection: EditorSelection.cursor(from + insertText.length),
+    })
+    editorView.focus()
+    return
+  }
+
+  const content = block.peek()?.content ?? ''
+  const from = Math.min(caret.from, content.length)
+  const to = Math.min(caret.to, content.length)
+  void block.setContent(content.slice(0, from) + insertText + content.slice(to))
+}
+
+/** Pick image file(s) and insert their captured references at the editor's
+ *  caret. MUST be reached synchronously from a user gesture (it clicks the
+ *  picker before its first await) so the OS picker actually opens. */
+export async function pickAndInsertImages(
+  { editorView, block }: { editorView: EditorView; block: Block },
+): Promise<void> {
+  const { from, to } = editorView.state.selection.main
+  const caret = { from, to }
+  // Keep edit mode alive across the picker: it blurs the editor, and the
+  // deferred exit-on-blur would otherwise see focus on the file input (or, on
+  // return, on nothing) and tear edit mode down. 'refocus' keeps edit mode AND
+  // snaps focus back. See editModeKeepalive.
+  const releaseKeepalive = acquireEditModeKeepalive('refocus')
+  try {
+    const files = await pickImageFiles()
+    if (files.length === 0) return
+    const repo = block.repo
+    const runtime = repo.facetRuntime
+    if (!runtime) return
+    const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+    if (!workspaceId) {
+      showError('Open a workspace to attach images.')
+      return
+    }
+    // Empty references ⇒ capture failed (already toasted) or attachments is off.
+    const { references } = await captureMediaVerb.run(runtime, { repo, workspaceId, files })
+    if (references.length === 0) return
+    insertReferencesAtCaret(editorView, block, caret, references)
+  } finally {
+    requestAnimationFrame(() => {
+      if (editorView.dom.isConnected) editorView.focus()
+    })
+    window.setTimeout(releaseKeepalive, 400)
+  }
+}
