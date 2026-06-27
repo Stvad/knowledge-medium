@@ -203,6 +203,19 @@ const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
     request.onerror = () => reject(request.error)
   })
 
+/** Resolve when the transaction COMMITS (durability), reject on abort/error. The
+ *  handlers are registered synchronously by the caller (before any await), so an
+ *  `oncomplete` that fires early can't be missed. Shared by every readwrite path —
+ *  `tx`, the RMW `mutate`, and the cursor-based `clearForUser` each need the commit
+ *  fence but have different request shapes (single request / read-then-write /
+ *  cursor), so they build their own transaction and call this. */
+const txCommitted = (transaction: IDBTransaction): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    transaction.oncomplete = () => resolve()
+    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB tx aborted'))
+    transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB tx error'))
+  })
+
 /** IndexedDB-backed store. Writes resolve on the TRANSACTION commit (`oncomplete`),
  *  not the request's `onsuccess`, so a capture's `stage` is genuinely durable
  *  before we proceed to the block tx (the whole point of staging-before-commit). */
@@ -240,11 +253,7 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
   ): Promise<T> {
     const db = await this.openDb()
     const transaction = db.transaction(STORE_NAME, mode)
-    const committed = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve()
-      transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB tx aborted'))
-      transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB tx error'))
-    })
+    const committed = txCommitted(transaction)
     const store = transaction.objectStore(STORE_NAME)
     const result = await promisifyRequest(run(store))
     await committed
@@ -299,11 +308,7 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
     const id = uploadRecordId(userId, assetBlockId)
     const db = await this.openDb()
     const transaction = db.transaction(STORE_NAME, 'readwrite')
-    const committed = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve()
-      transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB tx aborted'))
-      transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB tx error'))
-    })
+    const committed = txCommitted(transaction)
     const store = transaction.objectStore(STORE_NAME)
     const existing = await promisifyRequest(store.get(id) as IDBRequest<ByteUploadRecord | undefined>)
     if (existing) await promisifyRequest(store.put(fn(existing), id))
@@ -334,11 +339,7 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
     const prefix = uploadUserPrefix(userId)
     const db = await this.openDb()
     const transaction = db.transaction(STORE_NAME, 'readwrite')
-    const committed = new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve()
-      transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB tx aborted'))
-      transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB tx error'))
-    })
+    const committed = txCommitted(transaction)
     const store = transaction.objectStore(STORE_NAME)
     await new Promise<void>((resolve, reject) => {
       const request = store.openCursor()
