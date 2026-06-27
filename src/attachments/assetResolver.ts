@@ -17,7 +17,7 @@
  * renders from disk; only a genuine remote miss fails closed (placeholder).
  */
 
-import { getActiveSyncResolver, getActiveUserId } from '@/data/repoProvider.js'
+import { getActiveSyncResolver, getActiveUserId, isRemoteSyncActive } from '@/data/repoProvider.js'
 import { supabase } from '@/services/supabase.js'
 import { BlobPutError, createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
@@ -39,17 +39,31 @@ export const NO_REMOTE_BLOB_STORE: BlobStore = {
   delete: async () => {},
 }
 
+/** Wrap the remote blob store so it's consulted ONLY while the active session has
+ *  remote sync on; in local-only mode it behaves as {@link NO_REMOTE_BLOB_STORE} (a
+ *  remote miss), so the resolver still serves local OPFS hits but never makes a
+ *  Supabase request — the read-side half of the "no remote requests in local-only"
+ *  contract (Codex P1). Checked PER CALL, so a re-login mode switch is respected
+ *  without rebuilding the singleton. */
+const remoteSyncGated = (remote: BlobStore): BlobStore => ({
+  put: (ws, key, bytes) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).put(ws, key, bytes),
+  get: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).get(ws, key),
+  delete: (ws, key) => (isRemoteSyncActive() ? remote : NO_REMOTE_BLOB_STORE).delete(ws, key),
+})
+
 export const getAssetResolver = (): AssetResolver => {
   if (singleton) return singleton
 
   let blobStore: BlobStore
   if (supabase) {
     const client = supabase
-    blobStore = createSupabaseBlobStore({
-      // Presence probe only — the upload/download ride the client's own session.
-      client,
-      getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
-    })
+    blobStore = remoteSyncGated(
+      createSupabaseBlobStore({
+        // Presence probe only — the upload/download ride the client's own session.
+        client,
+        getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
+      }),
+    )
   } else {
     blobStore = NO_REMOTE_BLOB_STORE
   }

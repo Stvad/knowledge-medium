@@ -18,7 +18,7 @@
  * idempotent anyway, but this avoids N× egress). Capture stays per-tab.
  */
 
-import { getActiveUserId, syncResolverForUser } from '@/data/repoProvider.js'
+import { getActiveUserId, isRemoteSyncActive, syncResolverForUser } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
 import type { SyncResolver } from '@/sync/keys/resolver.js'
 import { supabase } from '@/services/supabase.js'
@@ -38,11 +38,15 @@ import { reconcileUploads } from './uploadReconcile.js'
 import { getByteUploadStore } from './uploadStore.js'
 
 let blobStoreSingleton: BlobStore | null = null
-/** The app's Supabase-backed blob store, or null when Supabase isn't configured
- *  (local-only build — nothing to upload to, so the lane is a no-op). */
+/** The app's Supabase-backed blob store, or null when there's nothing to upload to.
+ *  Gated on the RUNTIME remote-sync state, NOT just `supabase != null`: a local-only
+ *  session (the user opted out of remote at login, or toggled local-only) keeps a
+ *  configured Supabase client but must upload NOTHING — capture stays in OPFS and the
+ *  lane is a no-op (Codex P1). Re-checked each call (before the singleton) so the gate
+ *  is dynamic across an account/mode switch. */
 const getBlobStore = (): BlobStore | null => {
+  if (!supabase || !isRemoteSyncActive()) return null
   if (blobStoreSingleton) return blobStoreSingleton
-  if (!supabase) return null
   const client = supabase
   blobStoreSingleton = createSupabaseBlobStore({
     client,

@@ -105,6 +105,11 @@ export const dbFilenameForUser = (userId: string) => {
 const dbsByUser = new Map<string, PowerSyncDatabase>()
 const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
+// Whether the ACTIVE session connects to remote (vs local-only mode). Set alongside
+// activeUserId in ensurePowerSyncReady; read by the attachment up-lane + resolver so a
+// local-only session makes NO Supabase Storage request — the same "no remote requests
+// in local-only" contract this module already upholds for the PowerSync connect below.
+let activeRemoteSync = false
 let connectChain: Promise<void> = Promise.resolve()
 
 // One §6 sync resolver per user, shared by both halves of the Layout B
@@ -126,6 +131,12 @@ const resolverForUser = (userId: string): SyncResolver => {
  *  signed out. The asset byte path (§7.3) scopes its OPFS store + resolver to
  *  this — re-read at call time so an account switch is reflected. */
 export const getActiveUserId = (): string | null => activeUserId
+
+/** Whether the active session has remote sync ENABLED (vs local-only). The attachment
+ *  up-lane + resolver gate on this so a local-only session uploads/fetches NOTHING
+ *  to/from Supabase Storage — `supabase` being non-null only means auth is CONFIGURED,
+ *  not that this session opted into remote. */
+export const isRemoteSyncActive = (): boolean => activeRemoteSync
 
 /** The active user's §6 sync resolver (materializability / WK / K_id), or null
  *  when signed out. The in-thread asset resolver delegates its decode + content-
@@ -228,6 +239,8 @@ export const ensurePowerSyncReady = async (
   const previousUserId = activeUserId
   const alreadyActive = activeUserId === userId
   activeUserId = userId
+  // Record the session's mode for the asset lane (set in BOTH modes, like activeUserId).
+  activeRemoteSync = useRemoteSync
 
   if (!useRemoteSync) {
     return

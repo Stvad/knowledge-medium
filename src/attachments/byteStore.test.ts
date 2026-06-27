@@ -140,6 +140,26 @@ describe('assetPathSegments', () => {
     // A '/' in an id is escaped so it cannot escape the tree or alias ids.
     expect(assetPathSegments('a/b', 'c/d', 'e')).toEqual([ASSETS_ROOT, 'a%2Fb', 'c%2Fd', 'e'])
   })
+
+  it('remaps the OPFS-illegal . / .. / empty segments (a LOCAL account id is the typed username)', () => {
+    // encodeURIComponent leaves these three unchanged and getDirectoryHandle rejects
+    // them, so byteStore put/get would throw for a user named '.'/'..'/''. Each is
+    // remapped to a distinct sentinel, and NONE of the produced segments is illegal.
+    expect(assetPathSegments('.', WS, KEY)).toEqual([ASSETS_ROOT, '%2Edot', WS, KEY])
+    expect(assetPathSegments('..', WS, KEY)).toEqual([ASSETS_ROOT, '%2Edotdot', WS, KEY])
+    expect(assetPathSegments('', WS, KEY)).toEqual([ASSETS_ROOT, '%2Eempty', WS, KEY])
+    for (const seg of assetPathSegments('..', '.', '')) expect(['', '.', '..']).not.toContain(seg)
+  })
+
+  it('leaves every NORMAL id byte-identical to encodeURIComponent (no migration of existing paths)', () => {
+    // The remap fires ONLY for '.'/'..'/'' — every other id (incl. ones with reserved
+    // chars) encodes exactly as before, so existing on-disk objects stay reachable.
+    for (const id of ['u-1', 'deadbeef', 'a/b', 'c d', 'née.png', '..ok', 'x.']) {
+      expect(assetPathSegments(id, id, id)).toEqual([
+        ASSETS_ROOT, encodeURIComponent(id), encodeURIComponent(id), encodeURIComponent(id),
+      ])
+    }
+  })
 })
 
 describe('OpfsByteStore — on-disk layout', () => {

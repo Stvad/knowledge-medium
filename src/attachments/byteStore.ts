@@ -24,6 +24,23 @@
 /** Root directory name under the OPFS root for all asset bytes. */
 export const ASSETS_ROOT = 'assets'
 
+// All path-segment encoding routes through here. `encodeURIComponent` turns a `/`
+// (or other reserved char) in an id into one inert directory name, but it leaves
+// '', '.', '..' UNCHANGED — and the File System API rejects those three as names.
+// A UUID/hex id never is one, but a LOCAL account id is the user's typed name
+// (Login.tsx: `id` = the typed username), so it can be. Remap exactly those three to
+// a `%2E`-built sentinel: `encodeURIComponent` never EMITS `%2E` ('.' is unreserved —
+// the only source of a literal dot, and it's left bare), so the sentinel collides
+// with no normal segment AND needs no migration (every other id encodes as before).
+const encodeComponent = encodeURIComponent
+const encodeSegment = (s: string): string => {
+  const e = encodeComponent(s)
+  if (e === '') return '%2Eempty'
+  if (e === '.') return '%2Edot'
+  if (e === '..') return '%2Edotdot'
+  return e
+}
+
 export interface ByteStore {
   /** The stored plaintext bytes, or `null` on a miss. */
   get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null>
@@ -39,19 +56,16 @@ export interface ByteStore {
   purgeWorkspace(userId: string, workspaceId: string): Promise<void>
 }
 
-/** Path segments under the OPFS root for one object. Each segment is
- *  `encodeURIComponent`-escaped so a `/` (or other reserved character) in an id
- *  becomes one inert directory name — it can't introduce extra tree levels or
- *  alias two distinct ids (a content-key is hex, but a workspace/account id is
- *  not guaranteed safe). Note `encodeURIComponent` does NOT alter `.`/`..`/empty;
- *  those aren't produced by real ids (UUID account/workspace, hex key), and the
- *  File System API rejects such names with a `TypeError` that the resolver's
- *  outer fail-closed guard turns into a placeholder (never a tree escape). */
+/** Path segments under the OPFS root for one object. Each is {@link encodeSegment}-
+ *  escaped so a `/` (or other reserved char) in an id becomes one inert directory
+ *  name — it can't introduce extra tree levels or alias two distinct ids — and so a
+ *  `.`/`..`/empty id (reachable: a local account id is the typed username) is remapped
+ *  to a collision-free sentinel the File System API accepts, rather than throwing. */
 export const assetPathSegments = (userId: string, workspaceId: string, contentKey: string): string[] => [
   ASSETS_ROOT,
-  encodeURIComponent(userId),
-  encodeURIComponent(workspaceId),
-  encodeURIComponent(contentKey),
+  encodeSegment(userId),
+  encodeSegment(workspaceId),
+  encodeSegment(contentKey),
 ]
 
 const isNotFound = (err: unknown): boolean =>
@@ -88,7 +102,7 @@ export class InMemoryByteStore implements ByteStore {
   }
 
   async purgeWorkspace(userId: string, workspaceId: string): Promise<void> {
-    const prefix = `${ASSETS_ROOT}/${encodeURIComponent(userId)}/${encodeURIComponent(workspaceId)}/`
+    const prefix = `${ASSETS_ROOT}/${encodeSegment(userId)}/${encodeSegment(workspaceId)}/`
     for (const k of [...this.blobs.keys()]) {
       if (k.startsWith(prefix)) this.blobs.delete(k)
     }
@@ -125,13 +139,13 @@ export class OpfsByteStore implements ByteStore {
 
   /** The `assets/<user>/<ws>` directory holding one workspace's object files. */
   private workspaceDir(userId: string, workspaceId: string, create: boolean): Promise<FileSystemDirectoryHandle> {
-    return this.walk([ASSETS_ROOT, encodeURIComponent(userId), encodeURIComponent(workspaceId)], create)
+    return this.walk([ASSETS_ROOT, encodeSegment(userId), encodeSegment(workspaceId)], create)
   }
 
   async get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null> {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
-      const fileHandle = await dir.getFileHandle(encodeURIComponent(contentKey))
+      const fileHandle = await dir.getFileHandle(encodeSegment(contentKey))
       const file = await fileHandle.getFile()
       return new Uint8Array(await file.arrayBuffer())
     } catch (err) {
@@ -142,7 +156,7 @@ export class OpfsByteStore implements ByteStore {
 
   async put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
     const dir = await this.workspaceDir(userId, workspaceId, true)
-    const fileHandle = await dir.getFileHandle(encodeURIComponent(contentKey), { create: true })
+    const fileHandle = await dir.getFileHandle(encodeSegment(contentKey), { create: true })
     const writable = await fileHandle.createWritable()
     try {
       await writable.write(bytes)
@@ -154,7 +168,7 @@ export class OpfsByteStore implements ByteStore {
   async has(userId: string, workspaceId: string, contentKey: string): Promise<boolean> {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
-      await dir.getFileHandle(encodeURIComponent(contentKey))
+      await dir.getFileHandle(encodeSegment(contentKey))
       return true
     } catch (err) {
       if (isNotFound(err)) return false
@@ -165,7 +179,7 @@ export class OpfsByteStore implements ByteStore {
   async delete(userId: string, workspaceId: string, contentKey: string): Promise<void> {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
-      await dir.removeEntry(encodeURIComponent(contentKey))
+      await dir.removeEntry(encodeSegment(contentKey))
     } catch (err) {
       if (isNotFound(err)) return // already gone — fine
       throw err
@@ -175,8 +189,8 @@ export class OpfsByteStore implements ByteStore {
   async purgeWorkspace(userId: string, workspaceId: string): Promise<void> {
     try {
       // Walk to the USER dir, then remove the workspace subtree from it.
-      const userDir = await this.walk([ASSETS_ROOT, encodeURIComponent(userId)], false)
-      await userDir.removeEntry(encodeURIComponent(workspaceId), { recursive: true })
+      const userDir = await this.walk([ASSETS_ROOT, encodeSegment(userId)], false)
+      await userDir.removeEntry(encodeSegment(workspaceId), { recursive: true })
     } catch (err) {
       if (isNotFound(err)) return // nothing stored for this (user, workspace) — fine
       throw err
