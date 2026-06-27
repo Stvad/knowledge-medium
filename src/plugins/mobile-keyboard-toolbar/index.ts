@@ -3,7 +3,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { mobileKeyboardToolbarActions } from './actions.ts'
 import { mobileKeyboardToolbarItemsFacet } from './facet.ts'
-import { DEFAULT_ITEM_PRECEDENCE, defaultToolbarItems } from './defaultItems.ts'
+import { defaultToolbarItems } from './defaultItems.ts'
 import { MobileKeyboardToolbar } from './MobileKeyboardToolbar.tsx'
 
 export { MobileKeyboardToolbar } from './MobileKeyboardToolbar.tsx'
@@ -25,11 +25,8 @@ export const mobileKeyboardToolbarPlugin: AppExtension = systemToggle({
   description: 'Editing toolbar that floats above the on-screen keyboard on mobile.',
 }).of([
   mobileKeyboardToolbarActions.map(action => actionsFacet.of(action, {source: 'mobile-keyboard-toolbar'})),
-  defaultToolbarItems.map(item =>
-    mobileKeyboardToolbarItemsFacet.of(item, {
-      source: 'mobile-keyboard-toolbar',
-      precedence: DEFAULT_ITEM_PRECEDENCE[item.id] ?? 0,
-    }),
+  defaultToolbarItems.map(({item, precedence}) =>
+    mobileKeyboardToolbarItemsFacet.of(item, {source: 'mobile-keyboard-toolbar', precedence}),
   ),
   appMountsFacet.of(mobileKeyboardToolbarMount, {source: 'mobile-keyboard-toolbar'}),
 ])
