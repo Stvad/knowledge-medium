@@ -19,6 +19,8 @@ import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { showError } from '@/utils/toast.js'
 
 export const INSERT_IMAGE_ACTION_ID = 'edit.cm.insert_image'
+/** Normal-mode variant (no caret) — appends the image to the focused block. */
+export const INSERT_IMAGE_NORMAL_MODE_ACTION_ID = 'insert_image'
 
 /** Open the OS file picker for image(s); resolves with the chosen files, or an
  *  empty array if the user dismissed it. MUST be called synchronously inside a
@@ -84,6 +86,23 @@ function insertReferencesAtCaret(
   void block.setContent(content.slice(0, from) + insertText + content.slice(to))
 }
 
+/** Capture already-read files into `((assetBlockId))` reference strings via the
+ *  shared media seam, deriving repo/runtime/workspace from the target block.
+ *  Returns [] when there's nothing to insert (no runtime/workspace, or capture
+ *  failed — failures are toasted by the verb impl). */
+async function captureFilesToReferences(block: Block, files: readonly File[]): Promise<string[]> {
+  const repo = block.repo
+  const runtime = repo.facetRuntime
+  if (!runtime) return []
+  const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+  if (!workspaceId) {
+    showError('Open a workspace to attach images.')
+    return []
+  }
+  const { references } = await captureMediaVerb.run(runtime, { repo, workspaceId, files: [...files] })
+  return [...references]
+}
+
 /** Pick image file(s) and insert their captured references at the editor's
  *  caret. MUST be reached synchronously from a user gesture (it clicks the
  *  picker before its first await) so the OS picker actually opens. */
@@ -100,16 +119,7 @@ export async function pickAndInsertImages(
   try {
     const files = await pickImageFiles()
     if (files.length === 0) return
-    const repo = block.repo
-    const runtime = repo.facetRuntime
-    if (!runtime) return
-    const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
-    if (!workspaceId) {
-      showError('Open a workspace to attach images.')
-      return
-    }
-    // Empty references ⇒ capture failed (already toasted) or attachments is off.
-    const { references } = await captureMediaVerb.run(runtime, { repo, workspaceId, files })
+    const references = await captureFilesToReferences(block, files)
     if (references.length === 0) return
     insertReferencesAtCaret(editorView, block, caret, references)
   } finally {
@@ -118,4 +128,21 @@ export async function pickAndInsertImages(
     })
     window.setTimeout(releaseKeepalive, 400)
   }
+}
+
+/** Pick image file(s) and append their captured references to a block's
+ *  content — the normal-mode counterpart to {@link pickAndInsertImages}, for
+ *  when there's no editor/caret (a focused-but-not-editing block). No keepalive:
+ *  there's no edit-mode session to preserve. Appends on its own line(s) — the
+ *  image renders inline after the block's existing content, matching the
+ *  at-caret insert's "inline in this block" semantics. MUST be reached
+ *  synchronously from a user gesture so the picker opens. */
+export async function pickImagesIntoBlock(block: Block): Promise<void> {
+  const files = await pickImageFiles()
+  if (files.length === 0) return
+  const references = await captureFilesToReferences(block, files)
+  if (references.length === 0) return
+  const content = block.peek()?.content ?? ''
+  const refsText = references.join('\n')
+  await block.setContent(content ? `${content}\n${refsText}` : refsText)
 }

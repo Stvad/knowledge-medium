@@ -19,7 +19,11 @@ import { mobileKeyboardToolbarItemsFacet } from '@/plugins/mobile-keyboard-toolb
 import { MediaBlockRenderer } from './MediaBlockRenderer.js'
 import { MediaUploadReconciler } from './MediaUploadReconciler.js'
 import { captureMediaContribution, mediaPasteDecisionContribution } from './pasteCapture.js'
-import { insertImageAction, insertImageToolbarItem } from './insertImageContribution.js'
+import {
+  insertImageAction,
+  insertImageNormalModeAction,
+  insertImageToolbarItem,
+} from './insertImageContribution.js'
 import { uploadLaneDiagnosticSource } from './uploadLaneStatus.js'
 import {
   ASSETS_TYPE_CONTRIBUTION,
@@ -41,11 +45,13 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   // (a file paste falls through to a text paste, and the verb is a no-op).
   mediaPasteDecisionContribution,
   captureMediaContribution,
-  // Image insertion (beyond paste): the EDIT_MODE_CM action + the mobile keyboard
-  // toolbar button that dispatches it. Gated here so they only exist when capture
-  // does — both reachable from the command palette while editing. Precedence 50
-  // slots the toolbar button between the reference triggers and the move buttons.
+  // Image insertion (beyond paste): the edit-mode (at-caret) + normal-mode
+  // (append-to-block) actions, and the mobile keyboard toolbar button that
+  // dispatches the edit-mode one. Gated here so they only exist when capture
+  // does — reachable from the command palette. Precedence 50 slots the toolbar
+  // button between the reference triggers and the move buttons.
   actionsFacet.of(insertImageAction, { source: 'attachments' }),
+  actionsFacet.of(insertImageNormalModeAction, { source: 'attachments' }),
   mobileKeyboardToolbarItemsFacet.of(insertImageToolbarItem, { source: 'attachments', precedence: 50 }),
   // Boot recovery for crashed captures (§9) — gated on initial-sync settle.
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),

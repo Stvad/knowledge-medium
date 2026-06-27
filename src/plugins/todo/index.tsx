@@ -10,12 +10,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { usePropertyValue } from '@/hooks/block.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
-import { SquareCheck } from 'lucide-react'
-import {
-  mobileKeyboardToolbarItemsFacet,
-  type MobileKeyboardToolbarItem,
-} from '@/plugins/mobile-keyboard-toolbar/facet.js'
-import { EDIT_MODE_TODO_CYCLE_ACTION_ID, todoActionsExtension } from './actions.ts'
+import { todoActionsExtension } from './actions.ts'
 import { todoDataExtension } from './dataExtension.ts'
 import { statusProp, TODO_TYPE, type TodoStatus } from './schema.ts'
 
@@ -74,16 +69,6 @@ const decorateTodoContent: BlockContentDecorator = inner => {
 const todoContentDecoratorContribution: BlockContentDecoratorContribution =
   () => decorateTodoContent
 
-/** Cycle the current block's todo state from the mobile keyboard toolbar.
- *  Precedence 60 places it after the image button (see facet ordering). */
-const todoCycleToolbarItem: MobileKeyboardToolbarItem = {
-  kind: 'icon',
-  id: 'todo-cycle',
-  actionId: EDIT_MODE_TODO_CYCLE_ACTION_ID,
-  label: 'Toggle todo',
-  icon: SquareCheck,
-}
-
 export const todoPlugin: AppExtension = systemToggle({
   id: 'system:todo',
   name: 'Todo',
@@ -92,7 +77,6 @@ export const todoPlugin: AppExtension = systemToggle({
   todoDataExtension,
   todoActionsExtension,
   blockContentDecoratorsFacet.of(todoContentDecoratorContribution, {source: 'todo'}),
-  mobileKeyboardToolbarItemsFacet.of(todoCycleToolbarItem, {source: 'todo', precedence: 60}),
 ])
 
 export { cycleTodoState, todoActions } from './actions.ts'

@@ -1,4 +1,4 @@
-import { PanelRightOpen, Plus, Settings, Undo2, ZoomIn } from 'lucide-react'
+import { KeyboardOff, PanelRightOpen, Plus, Redo2, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -363,6 +363,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'redo',
       description: 'Redo',
       context: ActionContextTypes.GLOBAL,
+      icon: Redo2,
       handler: async () => { await repo.redo() },
       defaultBinding: {
         // $mod+Shift+z is the macOS (Cmd+Shift+Z) and Windows/Linux
@@ -630,6 +631,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'exit_edit_mode_cm',
       description: 'Exit edit mode',
       context: ActionContextTypes.EDIT_MODE_CM,
+      icon: KeyboardOff,
       handler: async (deps: CodeMirrorEditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
       defaultBinding: {
         keys: 'Escape',
