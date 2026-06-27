@@ -9,6 +9,11 @@
  * whoever is signed in — the down-lane only READS + caches locally, so unlike the
  * up-lane it needs no per-user session binding (a mid-switch pass just fails closed
  * for the wrong user and the re-arm picks up the new workspace).
+ *
+ * Durable storage (§8 "so the byte store isn't best-effort evicted") is NOT requested
+ * here: `navigator.storage.persist()` is origin-wide and already requested once at boot
+ * via {@link import('@/requestPersistentStorage.js')} (which carries the don't-nag
+ * cooldown + permission-denied guards), so the OPFS byte store is already covered.
  */
 
 import { getActiveUserId, isRemoteSyncActive } from '@/data/repoProvider.js'
@@ -42,7 +47,17 @@ export const collectReplicationRequests = async (
   for (const row of rows) {
     const encoded = row.properties[mediaHashProp.name]
     if (encoded === undefined) continue
-    const contentHash = mediaHashProp.codec.decode(encoded)
+    // Decode TOTAL: the cache boundary validates JSON syntax, not shape, so a legacy /
+    // imported / hand-edited row could carry a non-string `media:hash` (the string codec
+    // THROWS on it). Skip that one block rather than let it abort the whole workspace's
+    // walk — same throw-free stance as the renderer's canRender (MediaBlockRenderer). The
+    // block just won't background-replicate; it's still demand-fetchable (fail-closed) on view.
+    let contentHash: string
+    try {
+      contentHash = mediaHashProp.codec.decode(encoded)
+    } catch {
+      continue
+    }
     if (!contentHash || seen.has(contentHash)) continue
     seen.add(contentHash)
     out.push({ workspaceId, contentHash })
@@ -63,21 +78,4 @@ export const runDownLaneReconcile = async (repo: Repo, workspaceId: string): Pro
     if (requests.length === 0) return
     await reconcileDownLane(requests, { resolver: getAssetResolver() })
   })
-}
-
-/** Ask the platform to make origin storage DURABLE (§8) so the OPFS byte store isn't
- *  best-effort evicted under quota pressure. Idempotent (a prior grant short-circuits)
- *  and fail-soft — denial just means the store falls back to best-effort, where an
- *  evicted replicated byte is re-fetchable; only UN-uploaded bytes are the sole copy,
- *  and capture guards those separately (§9). Returns whether storage is persisted. */
-export const requestPersistentStorage = async (): Promise<boolean> => {
-  try {
-    const storage = typeof navigator !== 'undefined' ? navigator.storage : undefined
-    if (!storage?.persist) return false
-    if (await storage.persisted?.()) return true // already granted — don't re-prompt
-    return await storage.persist()
-  } catch (err) {
-    console.warn('[media] navigator.storage.persist() failed', err)
-    return false
-  }
 }

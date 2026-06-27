@@ -19,6 +19,7 @@ const fakeResolver = (outcomes: Record<string, AssetReplicateResult>) => {
 const present = { ok: true, status: 'present' } as const
 const replicated = { ok: true, status: 'replicated' } as const
 const fetchFailed = { ok: false, reason: 'fetch-failed' } as const
+const noKey = { ok: false, reason: 'no-content-key' } as const // a prepare-stage (no-egress) failure
 
 describe('reconcileDownLane', () => {
   it('the steady state (all present) costs only probes — zero fetch attempts, nothing skipped', async () => {
@@ -27,14 +28,14 @@ describe('reconcileDownLane', () => {
 
     const summary = await reconcileDownLane(hashes.map(req), { resolver })
 
-    expect(summary).toEqual({ present: 3, replicated: 0, failed: 0, skipped: 0 })
+    expect(summary).toEqual({ present: 3, replicated: 0, failed: 0, unavailable: 0, skipped: 0 })
     expect(replicate).toHaveBeenCalledTimes(3) // every block probed (has()), none skipped
   })
 
   it('replicates the absent blocks and tallies them', async () => {
     const { resolver } = fakeResolver({ a: present, b: replicated, c: replicated })
     const summary = await reconcileDownLane([req('a'), req('b'), req('c')], { resolver })
-    expect(summary).toEqual({ present: 1, replicated: 2, failed: 0, skipped: 0 })
+    expect(summary).toEqual({ present: 1, replicated: 2, failed: 0, unavailable: 0, skipped: 0 })
   })
 
   it('caps FETCH ATTEMPTS per pass at the budget — the long tail is skipped (not attempted)', async () => {
@@ -43,7 +44,7 @@ describe('reconcileDownLane', () => {
 
     const summary = await reconcileDownLane(hashes.map(req), { resolver, budget: 2 })
 
-    expect(summary).toEqual({ present: 0, replicated: 2, failed: 0, skipped: 3 })
+    expect(summary).toEqual({ present: 0, replicated: 2, failed: 0, unavailable: 0, skipped: 3 })
     // The 3 skipped were never even probed — the pass STOPS at the budget.
     expect(replicate).toHaveBeenCalledTimes(2)
   })
@@ -61,7 +62,7 @@ describe('reconcileDownLane', () => {
 
     const summary = await reconcileDownLane(['a', 'b', 'c', 'd', 'e'].map(req), { resolver, budget: 2 })
 
-    expect(summary).toEqual({ present: 2, replicated: 2, failed: 0, skipped: 1 })
+    expect(summary).toEqual({ present: 2, replicated: 2, failed: 0, unavailable: 0, skipped: 1 })
     expect(replicate).toHaveBeenCalledTimes(4) // 2 free probes + 2 budgeted downloads
   })
 
@@ -71,7 +72,7 @@ describe('reconcileDownLane', () => {
 
     const summary = await reconcileDownLane(hashes.map(req), { resolver, budget: 2 })
 
-    expect(summary).toEqual({ present: 0, replicated: 0, failed: 2, skipped: 1 })
+    expect(summary).toEqual({ present: 0, replicated: 0, failed: 2, unavailable: 0, skipped: 1 })
     expect(replicate).toHaveBeenCalledTimes(2) // stopped after 2 attempts, even though all failed
   })
 
@@ -82,12 +83,36 @@ describe('reconcileDownLane', () => {
       c: present,
     })
     const summary = await reconcileDownLane([req('a'), req('b'), req('c')], { resolver, budget: 10 })
-    expect(summary).toEqual({ present: 1, replicated: 1, failed: 1, skipped: 0 })
+    expect(summary).toEqual({ present: 1, replicated: 1, failed: 1, unavailable: 0, skipped: 0 })
+  })
+
+  it('prepare-stage failures (no key / locked) are FREE — they never burn the fetch budget', async () => {
+    // A workspace missing its key: every block fails `no-content-key` BEFORE any fetch.
+    // Budget 2, but a [no-key × 3] PREFIX must not consume it — so the two genuinely-
+    // absent blocks AFTER the prefix still download, and nothing is skipped.
+    const { resolver, replicate } = fakeResolver({
+      a: noKey,
+      b: noKey,
+      c: noKey,
+      d: replicated,
+      e: replicated,
+    })
+
+    const summary = await reconcileDownLane(['a', 'b', 'c', 'd', 'e'].map(req), { resolver, budget: 2 })
+
+    expect(summary).toEqual({ present: 0, replicated: 2, failed: 0, unavailable: 3, skipped: 0 })
+    expect(replicate).toHaveBeenCalledTimes(5) // all walked — the free failures didn't starve the tail
   })
 
   it('an empty work-list is a no-op', async () => {
     const { resolver, replicate } = fakeResolver({})
-    expect(await reconcileDownLane([], { resolver })).toEqual({ present: 0, replicated: 0, failed: 0, skipped: 0 })
+    expect(await reconcileDownLane([], { resolver })).toEqual({
+      present: 0,
+      replicated: 0,
+      failed: 0,
+      unavailable: 0,
+      skipped: 0,
+    })
     expect(replicate).not.toHaveBeenCalled()
   })
 })

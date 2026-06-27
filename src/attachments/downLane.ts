@@ -33,7 +33,7 @@
  * "synced block can outlive its bytes" backstop self-heals when the origin uploads).
  */
 
-import type { AssetReplicateResult, AssetResolveRequest } from './resolver.js'
+import { PRE_FETCH_FAIL_REASONS, type AssetReplicateResult, type AssetResolveRequest } from './resolver.js'
 
 /** Default fetch-attempt budget per pass — bounds eager replication egress while
  *  staying large enough that a modest workspace fully replicates in a pass or two.
@@ -54,8 +54,11 @@ export interface DownLaneSummary {
   readonly present: number
   /** Freshly fetched + verified + stored this pass. */
   readonly replicated: number
-  /** Attempted but fail-closed (offline / poisoned / locked). Re-tried next pass. */
+  /** A FETCH was attempted but failed (offline / poisoned). Egress; re-tried next pass. */
   readonly failed: number
+  /** Can't replicate now WITHOUT a fetch (locked / no key / malformed hash) — FREE, so
+   *  it never consumes the budget or blocks the absent tail behind it (§ PRE_FETCH_FAIL_REASONS). */
+  readonly unavailable: number
   /** Left unattempted because the per-pass fetch budget was reached — the lazy tail. */
   readonly skipped: number
 }
@@ -70,6 +73,7 @@ export const reconcileDownLane = async (
   let present = 0
   let replicated = 0
   let failed = 0
+  let unavailable = 0
   let attempts = 0
 
   for (let i = 0; i < requests.length; i++) {
@@ -80,12 +84,21 @@ export const reconcileDownLane = async (
       present += 1
       continue
     }
-    // A genuine fetch was attempted — success OR failure — so it consumed egress.
+    // A prepare-stage fail-closed (locked / no key / malformed hash) did NO fetch, so
+    // it's also FREE: it can't replicate now, but it must not consume the egress budget
+    // or block the absent tail behind it (a no-key workspace would otherwise starve).
+    if (!r.ok && PRE_FETCH_FAIL_REASONS.has(r.reason)) {
+      unavailable += 1
+      continue
+    }
+    // A genuine fetch was attempted — success OR a fetch/verify failure — egress consumed.
     attempts += 1
     if (r.ok) replicated += 1
     else failed += 1
-    if (attempts >= budget) return { present, replicated, failed, skipped: requests.length - 1 - i }
+    if (attempts >= budget) {
+      return { present, replicated, failed, unavailable, skipped: requests.length - 1 - i }
+    }
   }
 
-  return { present, replicated, failed, skipped: 0 }
+  return { present, replicated, failed, unavailable, skipped: 0 }
 }
