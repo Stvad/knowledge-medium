@@ -50,10 +50,18 @@ export function CommandPalette() {
   }, [open, actions, activeContexts])
 
   const runCommand = (actionId: string) => {
-    try {
-      runAction(actionId, new CustomEvent('command-pallet-trigger'))
-    } catch (error) {
+    const logFailure = (error: unknown) =>
       console.error(`[CommandPalette] Failed to execute action: ${actionId}`, error)
+    try {
+      // `runAction` returns the handler's `void | Promise<void>`. The try/catch
+      // only catches a synchronous throw (e.g. resolve failing), so attach a
+      // `.catch` to surface an async handler rejection too rather than leaking
+      // it as an unhandled rejection.
+      void Promise.resolve(
+        runAction(actionId, new CustomEvent('command-pallet-trigger')),
+      ).catch(logFailure)
+    } catch (error) {
+      logFailure(error)
     } finally {
       commandPaletteToggle.close()
     }

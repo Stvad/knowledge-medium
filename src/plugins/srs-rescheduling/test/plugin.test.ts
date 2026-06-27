@@ -2,15 +2,17 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
+import type { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { actionsFacet } from '@/extensions/core.js'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.js'
-import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet.js'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
-import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
+import { ActionConfig, ActionContextTypes, type ActionTrigger, type BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { invokeAction } from '@/shortcuts/actionDispatch.js'
 import {
   DATE_SCRUB_CONTEXT,
   dailyNoteBlockId,
@@ -57,6 +59,20 @@ vi.mock('@/utils/toast.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/utils/toast.js')>()),
   showCustom: showCustomMock,
 }))
+
+// The srs-archive behaviour is now an action-dispatch decorator (not part of the
+// effective handler), so these tests dispatch through the `invokeAction` choke
+// with minimal deps for the target block — the same path the runtime uses.
+const dispatchForBlock = (
+  runtime: FacetRuntime,
+  action: ActionConfig | undefined,
+  block: Block,
+  extraDeps: Record<string, unknown> = {},
+) => invokeAction(runtime, {
+  action: action!,
+  deps: {block, uiStateBlock: block, ...extraDeps} as unknown as BaseShortcutDependencies,
+  trigger: {} as ActionTrigger,
+})
 
 describe('srsReschedulingPlugin', () => {
   let sharedDb: TestDb
@@ -402,13 +418,13 @@ describe('srsReschedulingPlugin', () => {
 
     const srsBlock = repo.block('srs-block')
     await srsBlock.load()
-    await action!.handler({block: srsBlock, uiStateBlock: srsBlock}, {} as CustomEvent)
+    await dispatchForBlock(runtime, action, srsBlock)
     expect(srsBlock.get(srsArchivedProp)).toBe(true)
     expect(baseSwipeRight).not.toHaveBeenCalled()
 
     const plainBlock = repo.block('plain-block')
     await plainBlock.load()
-    await action!.handler({block: plainBlock, uiStateBlock: plainBlock}, {} as CustomEvent)
+    await dispatchForBlock(runtime, action, plainBlock)
     expect(baseSwipeRight).toHaveBeenCalledOnce()
   })
 
@@ -469,37 +485,30 @@ describe('srsReschedulingPlugin', () => {
     expect(normalAction).toBeDefined()
     expect(editAction).toBeDefined()
 
+    const editorViewDeps = {editorView: {dispatch: vi.fn()}}
     const srsNormal = repo.block('srs-normal')
     await srsNormal.load()
-    await normalAction!.handler({block: srsNormal, uiStateBlock: srsNormal}, {} as KeyboardEvent)
+    await dispatchForBlock(runtime, normalAction, srsNormal)
     expect(srsNormal.get(srsArchivedProp)).toBe(true)
     expect(srsNormal.types).toContain(SRS_SM25_TYPE)
     expect(srsNormal.types).not.toContain(TODO_TYPE)
 
     const srsEdit = repo.block('srs-edit')
     await srsEdit.load()
-    await editAction!.handler({
-      block: srsEdit,
-      uiStateBlock: srsEdit,
-      editorView: {dispatch: vi.fn()},
-    } as never, {} as KeyboardEvent)
+    await dispatchForBlock(runtime, editAction, srsEdit, editorViewDeps)
     expect(srsEdit.get(srsArchivedProp)).toBe(true)
     expect(srsEdit.types).toContain(SRS_SM25_TYPE)
     expect(srsEdit.types).not.toContain(TODO_TYPE)
 
     const plainNormal = repo.block('plain-normal')
     await plainNormal.load()
-    await normalAction!.handler({block: plainNormal, uiStateBlock: plainNormal}, {} as KeyboardEvent)
+    await dispatchForBlock(runtime, normalAction, plainNormal)
     expect(plainNormal.types).toContain(TODO_TYPE)
     expect(plainNormal.get(statusProp)).toBe('open')
 
     const plainEdit = repo.block('plain-edit')
     await plainEdit.load()
-    await editAction!.handler({
-      block: plainEdit,
-      uiStateBlock: plainEdit,
-      editorView: {dispatch: vi.fn()},
-    } as never, {} as KeyboardEvent)
+    await dispatchForBlock(runtime, editAction, plainEdit, editorViewDeps)
     expect(plainEdit.types).toContain(TODO_TYPE)
     expect(plainEdit.get(statusProp)).toBe('open')
   })

@@ -6,12 +6,11 @@ import {
   TODO_CYCLE_ACTION_ID,
 } from '@/plugins/todo/actions.js'
 import type {
-  ActionConfig,
   ActionContextType,
-  ActionTransform,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
+import type { ActionDispatchDecorator } from '@/shortcuts/actionDispatch.js'
 import { SRS_SM25_TYPE, srsArchivedProp } from './schema.ts'
 
 export const archiveSrsBlock = async (block: Block): Promise<boolean> => {
@@ -27,23 +26,26 @@ export const archiveSrsBlock = async (block: Block): Promise<boolean> => {
 const decorateActionToArchiveSrsBlock = (
   actionId: string,
   context?: ActionContextType,
-): ActionTransform => ({
+): ActionDispatchDecorator => ({
   actionId,
   ...(context ? {context} : {}),
-  apply: (action: ActionConfig): ActionConfig => ({
-    ...action,
-    handler: async (deps, trigger) => {
-      const block = (deps as BlockShortcutDependencies).block
-      if (block && (await archiveSrsBlock(block))) return
-      await action.handler(deps as never, trigger)
-    },
-  }),
+  // Behaviour wrap at DISPATCH time (was an `actionTransformsFacet` handler
+  // rewrite): on an SRS block, archive it and handle the gesture; otherwise
+  // delegate to the action's own handler. `await next` (not `return next`)
+  // mirrors the old `await action.handler(...)` — an async wrap can't propagate
+  // the inner sync `false` sentinel (`ActionHandlerResult` forbids
+  // `Promise<false>`), so it resolves to `Promise<void>` (handled).
+  wrap: async (deps, trigger, next) => {
+    const block = (deps as BlockShortcutDependencies).block
+    if (block && (await archiveSrsBlock(block))) return
+    await next(deps, trigger)
+  },
 })
 
-export const srsSwipeRightDecorator: ActionTransform =
+export const srsSwipeRightDecorator: ActionDispatchDecorator =
   decorateActionToArchiveSrsBlock(SWIPE_RIGHT_BLOCK_ACTION_ID)
 
-export const srsTodoCycleDecorators: readonly ActionTransform[] = [
+export const srsTodoCycleDecorators: readonly ActionDispatchDecorator[] = [
   decorateActionToArchiveSrsBlock(
     TODO_CYCLE_ACTION_ID,
     ActionContextTypes.NORMAL_MODE,

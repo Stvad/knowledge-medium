@@ -10,6 +10,7 @@ import {
   ShortcutDependenciesMap, ActionTrigger,
 } from './types'
 import { withMoveTransition } from '@/utils/viewTransition'
+import { invokeAction } from './actionDispatch.ts'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
   const target = event.target as HTMLElement
@@ -122,6 +123,12 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
     // collapses the bulk action into one entry; today each per-block
     // action commits its own tx and is its own undo step.
 
+    // Route each per-block sub-invocation through the dispatch choke so the
+    // action-dispatch middleware (telemetry, guards, redirects) covers the
+    // multi-select fan-out the same as a single dispatch. `repo.facetRuntime`
+    // is the live runtime; the early-boot / minimal-harness path with no
+    // runtime falls back to calling the handler directly.
+    const runtime = uiStateBlock.repo.facetRuntime
     await withMoveTransition(async () => {
       // Process blocks sequentially, awaiting each one before proceeding
       for (const block of blocks) {
@@ -132,7 +139,9 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
           scopeRootId,
         } as ShortcutDependenciesMap[T]
 
-        await actionConfig.handler(originalDeps, trigger)
+        await (runtime
+          ? invokeAction(runtime, {action: actionConfig as ActionConfig, deps: originalDeps, trigger})
+          : actionConfig.handler(originalDeps, trigger))
       }
     })
   }

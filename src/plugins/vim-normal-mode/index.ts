@@ -1,7 +1,8 @@
 import {
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
-import { actionsFacet, actionTransformsFacet } from '@/extensions/core.js'
+import { actionsFacet } from '@/extensions/core.js'
+import { actionDispatchWrap } from '@/shortcuts/actionDispatch.js'
 import { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { Repo } from '../../data/repo'
@@ -9,12 +10,12 @@ import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
 import { vimNormalModeActionsExtension } from './actions.ts'
 import {
   enterBlockEditModeOnGestureAction,
-  vimClickToFocusTransform,
+  vimClickToFocusDecorator,
   vimNormalModeActivation,
 } from './interactions.ts'
 
 export const vimNormalModeInteractionExtension: AppExtension = [
-  actionTransformsFacet.of(vimClickToFocusTransform, {
+  actionDispatchWrap(vimClickToFocusDecorator, {
     source: 'vim-normal-mode',
   }),
   actionsFacet.of(enterBlockEditModeOnGestureAction, {
