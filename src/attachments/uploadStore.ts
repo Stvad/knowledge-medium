@@ -20,11 +20,19 @@
  * store and this queue are shared across the browser profile's accounts but drain
  * per-user under the active session, so every op is namespaced by the user.
  *
- * The production backing is IndexedDB (commit-durable — see {@link
- * IndexedDbByteUploadStore.tx}); tests and the no-IndexedDB fallback use
- * {@link InMemoryByteUploadStore}. Records are plain JSON, so unlike the keyStore
- * the IndexedDB implementation IS exercisable under Node (fake-indexeddb).
+ * The production backing is IndexedDB (commit-durable — the cached connection +
+ * commit fence come from the shared {@link IdbKeyedStore}); tests and the
+ * no-IndexedDB fallback use {@link InMemoryByteUploadStore}. Records are plain
+ * JSON, so unlike the keyStore the IndexedDB implementation IS exercisable under
+ * Node (fake-indexeddb).
  */
+
+import {
+  IdbKeyedStore,
+  idbKeyPrefix,
+  idbRecordId,
+  promisifyRequest,
+} from '@/utils/idbKeyedStore.js'
 
 export type ByteUploadStatus = 'staged' | 'pending' | 'failed'
 
@@ -90,14 +98,14 @@ export interface ByteUploadStore {
   clearForUser(userId: string): Promise<void>
 }
 
-/** Record-id prefix for all of a user's records. Trailing `:` + `encodeURIComponent`
- *  (which escapes any literal `:`) makes it an unambiguous, collision-free prefix. */
-export const uploadUserPrefix = (userId: string): string => `${encodeURIComponent(userId)}:`
+/** Record-id prefix for all of a user's records — the shared collision-free
+ *  `encodeURIComponent`-delimited prefix ({@link idbKeyPrefix}). */
+export const uploadUserPrefix = (userId: string): string => idbKeyPrefix(userId)
 
 /** Composite record id; encoded so a delimiter inside an id can't make two
- *  distinct (user, asset) pairs collide. */
+ *  distinct (user, asset) pairs collide ({@link idbRecordId}). */
 export const uploadRecordId = (userId: string, assetBlockId: string): string =>
-  `${uploadUserPrefix(userId)}${encodeURIComponent(assetBlockId)}`
+  idbRecordId(userId, assetBlockId)
 
 const stagedRecord = (input: StageInput, stagedAt: number): ByteUploadRecord => ({
   ...input,
@@ -205,130 +213,48 @@ export class InMemoryByteUploadStore implements ByteUploadStore {
 
 export const UPLOAD_STORE_DB_NAME = 'km-byte-uploads'
 const STORE_NAME = 'uploads'
-const DB_VERSION = 1
-
-const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
-  new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-
-/** Resolve when the transaction COMMITS (durability), reject on abort/error. The
- *  handlers are registered synchronously by the caller (before any await), so an
- *  `oncomplete` that fires early can't be missed. Shared by every readwrite path —
- *  `tx`, the RMW `mutate`, and the cursor-based `clearForUser` each need the commit
- *  fence but have different request shapes (single request / read-then-write /
- *  cursor), so they build their own transaction and call this. */
-const txCommitted = (transaction: IDBTransaction): Promise<void> =>
-  new Promise<void>((resolve, reject) => {
-    transaction.oncomplete = () => resolve()
-    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB tx aborted'))
-    transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB tx error'))
-  })
 
 /** IndexedDB-backed store. Writes resolve on the TRANSACTION commit (`oncomplete`),
  *  not the request's `onsuccess`, so a capture's `stage` is genuinely durable
- *  before we proceed to the block tx (the whole point of staging-before-commit). */
+ *  before we proceed to the block tx (the whole point of staging-before-commit) —
+ *  the cached connection + commit fence come from the shared {@link IdbKeyedStore}. */
 export class IndexedDbByteUploadStore implements ByteUploadStore {
-  private dbPromise: Promise<IDBDatabase> | null = null
+  private readonly idb = new IdbKeyedStore(UPLOAD_STORE_DB_NAME, STORE_NAME)
   private readonly clock: () => number
 
   constructor(now: () => number = () => Date.now()) {
     this.clock = monotonicClock(now)
   }
 
-  private openDb(): Promise<IDBDatabase> {
-    if (!this.dbPromise) {
-      this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open(UPLOAD_STORE_DB_NAME, DB_VERSION)
-        request.onupgradeneeded = () => {
-          const db = request.result
-          if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME)
-        }
-        request.onsuccess = () => resolve(request.result)
-        request.onerror = () => reject(request.error)
-      }).catch((err: unknown) => {
-        // Don't cache a rejected open — clear the handle so the next call retries.
-        this.dbPromise = null
-        throw err
-      })
-    }
-    return this.dbPromise
-  }
-
-  /** Run `run` against the store and resolve on the tx COMMIT (durability). */
-  private async tx<T>(
-    mode: IDBTransactionMode,
-    run: (store: IDBObjectStore) => IDBRequest<T>,
-  ): Promise<T> {
-    const db = await this.openDb()
-    const transaction = db.transaction(STORE_NAME, mode)
-    const committed = txCommitted(transaction)
-    const store = transaction.objectStore(STORE_NAME)
-    const result = await promisifyRequest(run(store))
-    await committed
-    return result
-  }
-
   async stage(input: StageInput): Promise<void> {
     const record = stagedRecord(input, this.clock())
-    await this.tx('readwrite', store =>
+    await this.idb.tx('readwrite', store =>
       store.put(record, uploadRecordId(input.userId, input.assetBlockId)),
     )
   }
 
   async get(userId: string, assetBlockId: string): Promise<ByteUploadRecord | null> {
-    const result = await this.tx<ByteUploadRecord | undefined>('readonly', store =>
+    const result = await this.idb.tx<ByteUploadRecord | undefined>('readonly', store =>
       store.get(uploadRecordId(userId, assetBlockId)),
     )
     return result ?? null
   }
 
   async listByStatus(userId: string, status: ByteUploadStatus): Promise<ByteUploadRecord[]> {
-    const prefix = uploadUserPrefix(userId)
-    const db = await this.openDb()
-    const transaction = db.transaction(STORE_NAME, 'readonly')
-    const store = transaction.objectStore(STORE_NAME)
-    return new Promise<ByteUploadRecord[]>((resolve, reject) => {
-      const out: ByteUploadRecord[] = []
-      const request = store.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) {
-          resolve(out)
-          return
-        }
-        const record = cursor.value as ByteUploadRecord
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
-          out.push(record)
-        }
-        cursor.continue()
-      }
-      request.onerror = () => reject(request.error)
+    const out: ByteUploadRecord[] = []
+    await this.idb.scanByPrefix('readonly', uploadUserPrefix(userId), cursor => {
+      const record = cursor.value as ByteUploadRecord
+      if (record.status === status) out.push(record)
     })
+    return out
   }
 
   async countByStatus(userId: string, status: ByteUploadStatus): Promise<number> {
-    const prefix = uploadUserPrefix(userId)
-    const db = await this.openDb()
-    const store = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME)
-    return new Promise<number>((resolve, reject) => {
-      let count = 0
-      const request = store.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) {
-          resolve(count)
-          return
-        }
-        const record = cursor.value as ByteUploadRecord
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
-          count += 1
-        }
-        cursor.continue()
-      }
-      request.onerror = () => reject(request.error)
+    let n = 0
+    await this.idb.scanByPrefix('readonly', uploadUserPrefix(userId), cursor => {
+      if ((cursor.value as ByteUploadRecord).status === status) n += 1
     })
+    return n
   }
 
   /** Read-modify-write a single record inside one readwrite tx. A missing record
@@ -339,13 +265,10 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
     fn: (r: ByteUploadRecord) => ByteUploadRecord,
   ): Promise<void> {
     const id = uploadRecordId(userId, assetBlockId)
-    const db = await this.openDb()
-    const transaction = db.transaction(STORE_NAME, 'readwrite')
-    const committed = txCommitted(transaction)
-    const store = transaction.objectStore(STORE_NAME)
-    const existing = await promisifyRequest(store.get(id) as IDBRequest<ByteUploadRecord | undefined>)
-    if (existing) await promisifyRequest(store.put(fn(existing), id))
-    await committed
+    await this.idb.runTransaction('readwrite', async store => {
+      const existing = await promisifyRequest(store.get(id) as IDBRequest<ByteUploadRecord | undefined>)
+      if (existing) await promisifyRequest(store.put(fn(existing), id))
+    })
   }
 
   async promote(userId: string, assetBlockId: string): Promise<void> {
@@ -365,29 +288,11 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
   }
 
   async delete(userId: string, assetBlockId: string): Promise<void> {
-    await this.tx('readwrite', store => store.delete(uploadRecordId(userId, assetBlockId)))
+    await this.idb.tx('readwrite', store => store.delete(uploadRecordId(userId, assetBlockId)))
   }
 
   async clearForUser(userId: string): Promise<void> {
-    const prefix = uploadUserPrefix(userId)
-    const db = await this.openDb()
-    const transaction = db.transaction(STORE_NAME, 'readwrite')
-    const committed = txCommitted(transaction)
-    const store = transaction.objectStore(STORE_NAME)
-    await new Promise<void>((resolve, reject) => {
-      const request = store.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) {
-          resolve()
-          return
-        }
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) cursor.delete()
-        cursor.continue()
-      }
-      request.onerror = () => reject(request.error)
-    })
-    await committed
+    await this.idb.deleteByPrefix(uploadUserPrefix(userId))
   }
 }
 
