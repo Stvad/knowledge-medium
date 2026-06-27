@@ -50,15 +50,22 @@ const READERS = new Set([
 // `.env` *pattern* (`grep ".env" src/`) must not be read as a `.env` file.
 const SEARCH = new Set(['grep', 'egrep', 'fgrep', 'rg', 'ripgrep', 'sed', 'awk'])
 
-// A `.env` secret file as a path token: preceded by a boundary (start /
-// whitespace / quote / = ( : / slash), then `.env` + an optional single dotted
-// suffix, then a non-word char. m[1] is the suffix (".local", ".example", "").
-const ENV_REF = /(?:^|[\s='"(:;|&`/\\])\.env(\.[A-Za-z0-9_-]+)?(?![\w-])/g
-const TEMPLATE = /^\.(example|sample|template|dist|defaults|md)$/i
+// A secret env file as a path token: preceded by a boundary (start / whitespace
+// / quote / = ( : / slash), then either `.envrc` (direnv) or `.env` + a CHAIN of
+// dotted suffixes (`.env.local`, `.env.production.local`), then a non-word char.
+// CASE-INSENSITIVE: the dev FS is case-insensitive, so `.ENV.LOCAL` reads the
+// same bytes as `.env.local` and must block too. m[1] = the full file token;
+// m[2] = the `.env` suffix chain (undefined for `.envrc`, "" for bare `.env`).
+const ENV_REF = /(?:^|[\s='"(:;|&`/\\])(\.envrc|\.env((?:\.[a-z0-9_-]+)*))(?![\w-])/gi
+// A suffix that is EXACTLY one non-secret template token. A COMPOUND suffix like
+// `.example.local` is a real local override, NOT a template, so it still blocks.
+const TEMPLATE = /^\.(example|sample|template|dist|defaults)$/i
 
 const envHitIn = seg => {
   for (const m of seg.matchAll(ENV_REF)) {
-    if (!TEMPLATE.test(m[1] ?? '')) return `.env${m[1] ?? ''}`
+    const suffix = m[2] // undefined for `.envrc`; "" / ".local" / ".example.local" for `.env…`
+    if (suffix !== undefined && TEMPLATE.test(suffix)) continue // exact-template → not a secret
+    return m[1] // the full filename (no longer truncated to the first suffix)
   }
   return null
 }

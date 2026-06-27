@@ -31,6 +31,7 @@
       "Bash(yarn agent profiles:*)",
       "Bash(yarn agent runtime-summary:*)",
       "Bash(yarn agent describe-runtime:*)",
+      "Bash(yarn agent health:*)",
       "Bash(yarn agent get-block:*)",
       "Bash(yarn agent subtree:*)",
       "Bash(yarn agent types:*)",

@@ -18,11 +18,14 @@ export interface SyncHealthResult {
   activeWorkspaceId: string | null
   /** App-visible, non-deleted blocks. */
   blocks: number
-  /** Non-deleted rows in the synced staging table (filtered to match `blocks`,
-   *  so the two are an apples-to-apples comparison). `blocks` >= `blocksSynced`
-   *  is the normal state — the excess is local-only data not yet uploaded. The
-   *  warning sign is the other direction: `blocks` materially BELOW
-   *  `blocksSynced` means downloaded rows the observer hasn't materialized. */
+  /** Non-deleted rows in the synced staging table. A ROUGH companion to
+   *  `blocks` (both filter `deleted = 0`), not an exact invariant: `blocks` >=
+   *  `blocksSynced` is normal (the excess is local-only data not yet uploaded),
+   *  and `blocks` materially below `blocksSynced` usually means downloaded rows
+   *  the observer hasn't materialized — BUT a locked/undecryptable e2ee
+   *  workspace also keeps ciphertext rows in staging that never materialize into
+   *  `blocks` (see materializeStagingRows), so a shortfall there is expected.
+   *  The precise health numbers are `uploadQueueBlocks` / `materializeBacklog`. */
   blocksSynced: number
   /** Distinct blocks queued for upload (capped preview). Healthy: 0. */
   uploadQueueBlocks: number
@@ -36,10 +39,15 @@ const countOf = async (repo: Repo, sql: string): Promise<number> =>
   (await repo.db.get<{ count: number }>(sql)).count
 
 export const runHealthCommand = async (repo: Repo): Promise<SyncHealthResult> => {
-  const blocks = await countOf(repo, 'SELECT count(*) AS count FROM blocks WHERE deleted = 0')
-  const blocksSynced = await countOf(repo, 'SELECT count(*) AS count FROM blocks_synced WHERE deleted = 0')
-  const uploadQueueBlocks = await countOf(repo, uploadQueuePreviewCountSql)
-  const materializeBacklog = await countOf(repo, materializeQueueCountSql)
+  // The four counts are independent — run them concurrently so the command's
+  // latency is the slowest single query, not their sum (the upload-preview and
+  // materialize-backlog scans can be the slow ones on a mid-sync client).
+  const [blocks, blocksSynced, uploadQueueBlocks, materializeBacklog] = await Promise.all([
+    countOf(repo, 'SELECT count(*) AS count FROM blocks WHERE deleted = 0'),
+    countOf(repo, 'SELECT count(*) AS count FROM blocks_synced WHERE deleted = 0'),
+    countOf(repo, uploadQueuePreviewCountSql),
+    countOf(repo, materializeQueueCountSql),
+  ])
   return {
     activeWorkspaceId: repo.activeWorkspaceId,
     blocks,

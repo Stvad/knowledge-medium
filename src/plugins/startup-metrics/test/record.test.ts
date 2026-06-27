@@ -223,11 +223,14 @@ describe('collectStartupMetricsEffect', () => {
 
   it('does not record before first paint (no firstContentPaint mark)', async () => {
     startEffect(WS)
-    // The recorder's only write paths are deferred (setTimeout / scheduleIdle),
-    // so an immediate count is trivially 0 even if the paint gate were broken.
-    // A prove-absence check has no event to vi.waitFor, so give an erroneous
-    // pre-paint write a real window to land before asserting it didn't. 50ms
-    // stays well under the effect's settle-fallback.
+    // Deliberate exception to AGENTS.md's "poll with vi.waitFor, not setTimeout"
+    // rule: that rule is for waiting on an EXPECTED round-trip. This is the
+    // inverse — a prove-absence check with no event to poll for. The recorder's
+    // only write paths are deferred (setTimeout / scheduleIdle), so an immediate
+    // count is trivially 0 even if the paint gate were broken; we must give an
+    // erroneous pre-paint write a real window to land before asserting it
+    // didn't. 50ms stays well under the effect's 60s settle-fallback. (The
+    // positive fence below proves the effect is live, so the 0 isn't a no-op.)
     await new Promise(r => setTimeout(r, 50))
     expect(await countRecords()).toBe(0)
     // Then prove the effect is genuinely live (so the 0 above isn't a dead
