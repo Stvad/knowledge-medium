@@ -51,18 +51,30 @@ function pickImageFiles(): Promise<File[]> {
     // Dismissal fallback. The `cancel` event isn't fired by older iOS Safari /
     // WebViews (< Safari 16.4), so a dismissed picker would otherwise resolve
     // NEITHER event — hanging the promise and leaking the caller's edit-mode
-    // keepalive hold (pinning edit mode app-wide). When focus returns to the
-    // window after the picker closes and no files were chosen, treat it as a
-    // dismissal. Deferred a tick so a real `change` (which populates
-    // `input.files` first) wins; the `input.files` check avoids cancelling a
-    // slow selection.
+    // keepalive hold (pinning edit mode app-wide). So when focus returns to the
+    // window AFTER the picker took it (we wait for the open-induced blur first),
+    // with no files chosen, treat it as a dismissal. Deferred a tick so a real
+    // `change` (which populates `input.files` first) wins, and the `input.files`
+    // check avoids cancelling a slow selection.
+    //
+    // Known trade-off (standard window-focus idiom): no web API distinguishes
+    // "picker closed" from "user alt-tabbed back with the picker still open", so
+    // the latter can resolve `[]` early and drop a subsequent selection. That's
+    // strictly better than the pre-fallback failure (a permanent edit-mode wedge)
+    // and is recoverable by re-picking; on the cancel-less mobile WebViews this
+    // actually matters for, the picker is a full-screen sheet where alt-tab-while-
+    // open isn't a thing.
+    let blurredSinceOpen = false
+    const onWindowBlur = () => { blurredSinceOpen = true }
     const onWindowFocus = () => {
+      if (!blurredSinceOpen) return
       window.setTimeout(() => {
         if (!input.files || input.files.length === 0) cleanup([])
       }, 300)
     }
     input.addEventListener('change', onChange)
     input.addEventListener('cancel', onCancel)
+    window.addEventListener('blur', onWindowBlur)
     window.addEventListener('focus', onWindowFocus)
     document.body.appendChild(input)
     input.click()
