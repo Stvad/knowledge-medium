@@ -62,7 +62,8 @@ export type ReportDecodeFailure = (url: string) => void
 
 export function useAssetObjectUrl(
   args: AssetUrlArgs,
-  resolver: AssetResolver,
+  // The DEMAND lane — only ever `resolve` (the backlog `replicate` is the down-lane's).
+  resolver: Pick<AssetResolver, 'resolve'>,
 ): readonly [AssetUrlState, ReportDecodeFailure] {
   const { workspaceId, contentHash, mime } = args
   // A settled result is tagged with the inputs it was resolved FOR. The derived

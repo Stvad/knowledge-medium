@@ -17,6 +17,7 @@ import { systemToggle } from '@/facets/togglable.js'
 import { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'
 import { mobileKeyboardToolbarItemsFacet } from '@/plugins/mobile-keyboard-toolbar/facet.js'
 import { MediaBlockRenderer } from './MediaBlockRenderer.js'
+import { MediaDownLaneReplicator } from './MediaDownLaneReplicator.js'
 import { MediaUploadReconciler } from './MediaUploadReconciler.js'
 import { captureMediaContribution, mediaPasteDecisionContribution } from './pasteCapture.js'
 import {
@@ -55,6 +56,8 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   mobileKeyboardToolbarItemsFacet.of(insertImageToolbarItem, { source: 'attachments', precedence: 50 }),
   // Boot recovery for crashed captures (§9) — gated on initial-sync settle.
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),
+  // Background replication of the active workspace's bytes to the local store (§8/§9).
+  appMountsFacet.of({ id: 'attachments.down-lane-replicator', component: MediaDownLaneReplicator }, { source: 'attachments' }),
   // Surface background upload FAILURES in the status indicator (a failed drain is
   // otherwise silent — off the paste hot-path).
   diagnosticsFacet.of(uploadLaneDiagnosticSource, { source: 'attachments' }),

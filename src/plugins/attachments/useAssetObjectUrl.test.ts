@@ -25,10 +25,10 @@ afterEach(() => vi.restoreAllMocks())
 const bytes = new Uint8Array([1, 2, 3, 4])
 const args = { workspaceId: 'ws', contentHash: 'sha256:ab', mime: 'image/png' }
 
-const okResolver = (b = bytes): AssetResolver => ({
+const okResolver = (b = bytes): Pick<AssetResolver, 'resolve'> => ({
   resolve: vi.fn(async (): Promise<AssetResolveResult> => ({ ok: true, bytes: b })),
 })
-const failResolver = (reason: AssetFailReason): AssetResolver => ({
+const failResolver = (reason: AssetFailReason): Pick<AssetResolver, 'resolve'> => ({
   resolve: vi.fn(async (): Promise<AssetResolveResult> => ({ ok: false, reason })),
 })
 
@@ -83,7 +83,7 @@ describe('useAssetObjectUrl', () => {
 
   it('drops a resolve that lands after unmount — no URL created, no setState', async () => {
     let settle!: (r: AssetResolveResult) => void
-    const resolver: AssetResolver = { resolve: () => new Promise((r) => (settle = r)) }
+    const resolver: Pick<AssetResolver, 'resolve'> = { resolve: () => new Promise((r) => (settle = r)) }
     const { unmount } = renderHook(() => useAssetObjectUrl(args, resolver))
 
     unmount()
@@ -97,7 +97,7 @@ describe('useAssetObjectUrl', () => {
   it('retries a TRANSIENT failure (fetch-failed) on reconnect and recovers', async () => {
     // First resolve misses (object not replicated yet), the next succeeds.
     let calls = 0
-    const resolver: AssetResolver = {
+    const resolver: Pick<AssetResolver, 'resolve'> = {
       resolve: vi.fn(async (): Promise<AssetResolveResult> =>
         ++calls === 1 ? { ok: false, reason: 'fetch-failed' } : { ok: true, bytes },
       ),
