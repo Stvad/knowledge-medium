@@ -57,6 +57,9 @@ import {
   type BlockLayoutSlots,
   type BlockResolveContext,
   type BlockShellDecorator,
+  type BlockShellRender,
+  type BlockShellSlot,
+  type BlockShellSlotProps,
   type BlockShellState,
   type BlockShellProps,
 } from '@/extensions/blockInteraction.js'
@@ -248,12 +251,11 @@ export const DefaultBlockLayout: BlockLayout = ({
   block,
   Content, Properties, Children, Footer,
   Controls, Header,
-  shellProps,
+  Shell,
 }) => {
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
-  const {className: shellClassName, ...collapsibleProps} = shellProps
 
   // No per-block `view-transition-name`. Tried it (commit b1bfa4ef,
   // reverted): the slide-between-positions effect was barely
@@ -269,30 +271,40 @@ export const DefaultBlockLayout: BlockLayout = ({
   // overlay; a future scoped-view-transitions or per-panel-rooted
   // setup could revisit. For now, the root-level crossfade is enough.
 
+  // The interactive shell wraps the focusable Collapsible (the shell props
+  // land on it, exactly as before); rendering `Shell` is what makes this an
+  // editable, shortcut-bearing block surface.
   return (
     <div>
       <Header/>
 
-      <Collapsible
-        {...collapsibleProps}
-        open={!isCollapsed || isTopLevel}
-        className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
-      >
-        <Controls/>
+      <Shell>
+        {(shellProps) => {
+          const {className: shellClassName, ...collapsibleProps} = shellProps
+          return (
+            <Collapsible
+              {...collapsibleProps}
+              open={!isCollapsed || isTopLevel}
+              className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+            >
+              <Controls/>
 
-        <div className="block-body flex-grow relative flex flex-col">
-          <div className="flex flex-col rounded-sm">
-            <Content/>
-            {Properties && <Properties/>}
-          </div>
+              <div className="block-body flex-grow relative flex flex-col">
+                <div className="flex flex-col rounded-sm">
+                  <Content/>
+                  {Properties && <Properties/>}
+                </div>
 
-          <CollapsibleContent>
-            <Children/>
-          </CollapsibleContent>
+                <CollapsibleContent>
+                  <Children/>
+                </CollapsibleContent>
 
-          <Footer/>
-        </div>
-      </Collapsible>
+                <Footer/>
+              </div>
+            </Collapsible>
+          )
+        }}
+      </Shell>
     </div>
   )
 }
@@ -341,6 +353,124 @@ function BlockShellDecoratorStack({
   )
 }
 
+/**
+ * The opt-in interactive block surface (the `Shell` slot's body). Encapsulates
+ * everything the editable block wrapper bears — the canonical data attributes +
+ * focusable tabIndex, click/paste dispatch, the shell decorators
+ * (selection/focus/spatial), and `useShortcutSurfaceActivations` — and yields
+ * the composed `shellProps` to the layout's render-prop. A layout renders
+ * `<Shell>{shellProps => <wrapper {...shellProps}/>}</Shell>` to become a
+ * focusable/editable block; a read-only layout (a reference) omits it, so none
+ * of this machinery runs.
+ */
+function BlockShell({
+  resolveContext,
+  shellRef,
+  contentRef,
+  children,
+}: {
+  resolveContext: BlockResolveContext
+  shellRef: RefObject<HTMLDivElement | null>
+  contentRef: RefObject<HTMLDivElement | null>
+  children: BlockShellRender
+}) {
+  const runtime = useAppRuntime()
+  const {block, repo, uiStateBlock, scopeRootId} = resolveContext
+  // Always defined in practice (the parent passes `useBlockContext()`); the
+  // `?? {}` keeps the type honest and returns the same stable object.
+  const blockContext = resolveContext.blockContext ?? {}
+  const inEditMode = useInEditMode(block.id)
+
+  const resolveBlockClickHandler = runtime.read(blockClickHandlersFacet)
+  const handleBlockClick = useMemo(
+    () => resolveBlockClickHandler(resolveContext),
+    [resolveBlockClickHandler, resolveContext],
+  )
+
+  // Reads live focus at fire time via `isFocusedBlock` (peekProperty) rather
+  // than capturing the reactive `inFocus`, so this closure stays stable.
+  // todo this plausibly should be a global handler and not on the block
+  const handlePaste = useMemo(
+    () => async (e: ClipboardEvent<HTMLElement>) => {
+      if (e.defaultPrevented || isInteractiveContentEvent(e)) return
+      const renderScopeId = typeof blockContext.renderScopeId === 'string'
+        ? blockContext.renderScopeId
+        : undefined
+      if (!isFocusedBlock(uiStateBlock, block.id, renderScopeId)) return
+
+      e.preventDefault()
+      // File(s) on the clipboard (a pasted image) carry no text/plain — read
+      // them before the no-text early return so an image paste isn't dropped.
+      const files = e.clipboardData.files
+      const fileList = files && files.length > 0 ? Array.from(files) : []
+      const pastedText = e.clipboardData.getData('text/plain')
+      if (!pastedText && fileList.length === 0) return
+      const html = e.clipboardData.getData('text/html') || undefined
+
+      // Block-shell paste (block focused, NOT in edit mode) has no text caret,
+      // so the chord intent is always 'split'. Resolve the decision, capturing
+      // any pasted media first (its reference/embed text is spliced into the
+      // paste, so the attachment lands per the text policy — NOT a forced
+      // child). `null` ⇒ nothing to paste.
+      const request: PasteRequest = {text: pastedText, html, files: fileList, intent: 'split', surface: 'shell'}
+      const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+      const resolved = await resolvePasteWithMediaCapture(runtime, request, {repo, workspaceId})
+      if (!resolved) return
+      const pasted = await pasteMultilineText(resolved.text, block, repo, {
+        scopeRootId,
+        asSingleBlock: resolved.decision.kind === 'single-block',
+      })
+      if (pasted[0]) {
+        void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
+      }
+    },
+    [block, blockContext.renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
+  )
+
+  const shellProps = useMemo<BlockShellProps>(() => ({
+    'data-block-id': block.id,
+    'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
+      ? blockContext.renderScopeId
+      : undefined,
+    'data-editing': inEditMode ? 'true' : 'false',
+    tabIndex: 0,
+    ref: shellRef,
+    onClick: handleBlockClick
+      ? (event) => { void handleBlockClick(event) }
+      : undefined,
+    onPaste: (event) => { void handlePaste(event) },
+  }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, handlePaste, shellRef])
+
+  const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
+  const shellDecorators = useMemo(
+    () => resolveBlockShellDecorators(resolveContext),
+    [resolveBlockShellDecorators, resolveContext],
+  )
+
+  const initialShellState = useMemo<BlockShellState>(() => ({
+    shellProps,
+    shortcutSurfaceOptions: {},
+  }), [shellProps])
+
+  const ShellBody = useMemo<ComponentType<{state: BlockShellState}>>(() => {
+    return function BlockShellBody({state}: {state: BlockShellState}) {
+      useShortcutSurfaceActivations(block, 'block', state.shortcutSurfaceOptions)
+      return <>{children(state.shellProps)}</>
+    }
+  }, [block, children])
+
+  return (
+    <BlockShellDecoratorStack
+      decorators={shellDecorators}
+      resolveContext={resolveContext}
+      shellRef={shellRef}
+      contentRef={contentRef}
+      state={initialShellState}
+      ShellBody={ShellBody}
+    />
+  )
+}
+
 export function DefaultBlockRenderer(
   {
     block,
@@ -352,7 +482,6 @@ export function DefaultBlockRenderer(
   const runtime = useAppRuntime()
   const blockContext = useBlockContext()
   const uiStateBlock = useUIStateBlock()
-  const inEditMode = useInEditMode(block.id)
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
   const [types] = usePropertyValue(block, typesProp)
 
@@ -398,125 +527,52 @@ export function DefaultBlockRenderer(
     EditContentRenderer,
   ])
 
-  // Continuous-gesture recognizers (swipe, date-scrub, …) attach native
-  // Pointer Event listeners + touch-action to the content surface and dispatch
-  // recognized gestures through the action system. A no-op until a recognizer
-  // is contributed, so blocks with none pay nothing.
-  const contentGestureRef = useContinuousGestures(resolveContext, contentContainerRef)
-
-  // Memoize on resolveContext so contributions that synthesize a fresh
-  // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
-  // hand back a new identity every render and remount the entire content
-  // subtree underneath. The runtime.read result is itself cached per
-  // facet runtime, so the resolver function is already stable.
-  const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
-  // Variant facet: contributions self-gate, last truthy variant wins —
-  // matches the previous combineLastContributionResult semantics. When
-  // nothing contributes, fall through to the host's primary renderer.
-  const baseContentRenderer = useMemo(
-    () =>
-      resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
-    [resolveBlockContentRenderer, resolveContext, DefaultContentRenderer],
-  )
-  const decorateContent = runtime.read(blockContentDecoratorsFacet)
-  const ContentRenderer = useMemo(
-    () => decorateContent(resolveContext, baseContentRenderer),
-    [decorateContent, resolveContext, baseContentRenderer],
-  )
-  const resolveBlockClickHandler = runtime.read(blockClickHandlersFacet)
-  const handleBlockClick = useMemo(
-    () => resolveBlockClickHandler(resolveContext),
-    [resolveBlockClickHandler, resolveContext],
-  )
-  const resolveContentSurfaceProps = runtime.read(blockContentSurfacePropsFacet)
-  const contentSurfaceProps = useMemo(
-    () => resolveContentSurfaceProps(resolveContext),
-    [resolveContext, resolveContentSurfaceProps],
-  )
-  const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
-  const childrenFooterSections = useMemo(
-    () => resolveChildrenFooterSections(resolveContext),
-    [resolveContext, resolveChildrenFooterSections],
-  )
-  const resolveHeaderSections = runtime.read(blockHeaderFacet)
-  const headerSections = useMemo(
-    () => resolveHeaderSections(resolveContext),
-    [resolveContext, resolveHeaderSections],
-  )
+  // Only the layout is resolved eagerly — it decides which slots get mounted,
+  // and each slot owns (and only then pays for) its own machinery: the gesture
+  // ref + content/click/surface facets live in `Content`, the section facets in
+  // `Header`/`Footer`, and the whole interactive surface (paste, shell
+  // decorators, shortcut activations) in `Shell`. A read-only layout (a block
+  // reference) that mounts only `RawContent` therefore runs none of those
+  // hooks — the lazy-slot equivalent of "don't allocate what you don't use".
   const resolveBlockLayout = runtime.read(blockLayoutFacet)
-  // Last-wins on the variant facet — same migration shape as content
-  // renderer above. `DefaultBlockLayout` is the no-contribution fallback.
+  // Last-wins on the variant facet. `DefaultBlockLayout` is the no-contribution
+  // fallback.
   const Layout = useMemo(
     () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
     [resolveContext, resolveBlockLayout],
   )
-  const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
-  const shellDecorators = useMemo(
-    () => resolveBlockShellDecorators(resolveContext),
-    [resolveBlockShellDecorators, resolveContext],
-  )
 
-  // Memoized on stable inputs so shellProps below doesn't churn on
-  // focus toggles. The "is this block focused?" check reads live state
-  // at fire time via `peekProperty`, not via the React `inFocus` prop —
-  // capturing `inFocus` would tie this closure (and shellProps) to
-  // reactive state, defeating the resolveContext stability split above.
-  // todo this plausibly should be a global handler and not on the block
-  const handlePaste = useMemo(
-    () => async (e: ClipboardEvent<HTMLElement>) => {
-      if (e.defaultPrevented || isInteractiveContentEvent(e)) return
-      const renderScopeId = typeof blockContext.renderScopeId === 'string'
-        ? blockContext.renderScopeId
-        : undefined
-      if (!isFocusedBlock(uiStateBlock, block.id, renderScopeId)) return
-
-      e.preventDefault()
-      // File(s) on the clipboard (a pasted image) carry no text/plain — read
-      // them before the no-text early return so an image paste isn't dropped.
-      const files = e.clipboardData.files
-      const fileList = files && files.length > 0 ? Array.from(files) : []
-      const pastedText = e.clipboardData.getData('text/plain')
-      if (!pastedText && fileList.length === 0) return
-      const html = e.clipboardData.getData('text/html') || undefined
-
-      // Block-shell paste (block focused, NOT in edit mode) has no text
-      // caret, so the chord intent is always 'split'. Routing through the
-      // verb keeps plugin overrides (text rewrites, observers, a forced
-      // single-block) consistent with the in-editor paste path. With no
-      // contributions the decision is the historical outline paste. The
-      // decision is a pure, synchronous policy (`runSync`) — the clipboard text
-      // is already in hand, so nothing to await before deciding.
-      const request: PasteRequest = {text: pastedText, html, files: fileList, intent: 'split', surface: 'shell'}
-      // Resolve the decision, capturing any pasted media first (its `!((id))` embed
-      // text is spliced into the paste, so the attachment lands per the text policy —
-      // NOT a forced child). `null` ⇒ nothing to paste. The shell has no detachable
-      // surface, so no post-await liveness re-check is needed here.
-      const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
-      const resolved = await resolvePasteWithMediaCapture(runtime, request, {repo, workspaceId})
-      if (!resolved) return
-      const pasted = await pasteMultilineText(resolved.text, block, repo, {
-        scopeRootId,
-        asSingleBlock: resolved.decision.kind === 'single-block',
-      })
-      if (pasted[0]) {
-        void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
-      }
-    },
-    [block, blockContext.renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
-  )
-
-  // Content slot: the content surface div + its surface props + the
-  // resolved/decorated ContentRenderer. Stable across renders unless one
-  // of the underlying inputs (block, decorated renderer, surface props)
-  // actually changed.
+  // Content slot: the editable content surface — gesture ref + surface props +
+  // the resolved/decorated content renderer. Each input is resolved inside the
+  // slot so it's only paid for when a layout actually mounts `<Content/>`.
   const ContentSlot = useMemo<ComponentType>(() => {
-    // Top-of-panel content renders as a title: larger font, less
-    // bullet-list visual weight. The Controls slot already returns
-    // null for top-level so there's no inline bullet to suppress
-    // here. Class hook is applied here (not on the layout's outer
-    // shell) so contributing renderers don't have to opt in.
-    const topLevelClass = isTopLevel ? ' top-level-content' : ''
     return function BlockContentSlot() {
+      // Continuous-gesture recognizers (swipe, date-scrub, …) attach native
+      // Pointer Event listeners + touch-action to the content surface. A no-op
+      // until a recognizer is contributed, so blocks with none pay nothing.
+      const contentGestureRef = useContinuousGestures(resolveContext, contentContainerRef)
+      // Memoize on resolveContext so contributions that synthesize a fresh
+      // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
+      // hand back a new identity every render and remount the content subtree.
+      const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
+      const baseContentRenderer = useMemo(
+        () => resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
+        [resolveBlockContentRenderer],
+      )
+      const decorateContent = runtime.read(blockContentDecoratorsFacet)
+      const ContentRenderer = useMemo(
+        () => decorateContent(resolveContext, baseContentRenderer),
+        [decorateContent, baseContentRenderer],
+      )
+      const resolveContentSurfaceProps = runtime.read(blockContentSurfacePropsFacet)
+      const contentSurfaceProps = useMemo(
+        () => resolveContentSurfaceProps(resolveContext),
+        [resolveContentSurfaceProps],
+      )
+      // Top-of-panel content renders as a title: larger font, less bullet-list
+      // weight. The Controls slot already returns null for top-level so there's
+      // no inline bullet to suppress here.
+      const topLevelClass = isTopLevel ? ' top-level-content' : ''
       return (
         <div
           {...contentSurfaceProps}
@@ -525,16 +581,12 @@ export function DefaultBlockRenderer(
           ref={contentGestureRef}
         >
           <ErrorBoundary FallbackComponent={FallbackComponent}>
-            {/* ContentRenderer comes from the registry-driven
-                decorate(blockContentDecoratorsFacet) memo above —
-                stable identity per blockInteractionContext, not a
-                fresh component each render. */}
             <ContentRenderer block={block}/>
           </ErrorBoundary>
         </div>
       )
     }
-  }, [block, ContentRenderer, contentSurfaceProps, isTopLevel, contentGestureRef])
+  }, [block, resolveContext, runtime, isTopLevel, DefaultContentRenderer, contentContainerRef])
 
   // Raw content slot: the block's base READ content renderer, rendered
   // inline and chrome-free — no editable `block-content` wrapper, no
@@ -569,6 +621,11 @@ export function DefaultBlockRenderer(
 
   const FooterSlot = useMemo<ComponentType>(() => {
     return function BlockFooterSlot() {
+      const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
+      const childrenFooterSections = useMemo(
+        () => resolveChildrenFooterSections(resolveContext),
+        [resolveChildrenFooterSections],
+      )
       return (
         <>
           {childrenFooterSections.map((SectionRenderer, index) => (
@@ -579,7 +636,7 @@ export function DefaultBlockRenderer(
         </>
       )
     }
-  }, [block, childrenFooterSections])
+  }, [block, resolveContext, runtime])
 
   // Controls slot: bullet + expand affordances. Self-aware of top-level
   // (returns null since top-level blocks have no bullet) and of mobile
@@ -611,6 +668,11 @@ export function DefaultBlockRenderer(
 
   const HeaderSlot = useMemo<ComponentType>(() => {
     return function BlockHeaderSlot() {
+      const resolveHeaderSections = runtime.read(blockHeaderFacet)
+      const headerSections = useMemo(
+        () => resolveHeaderSections(resolveContext),
+        [resolveHeaderSections],
+      )
       return (
         <>
           {headerSections.map((SectionRenderer, index) => (
@@ -621,60 +683,36 @@ export function DefaultBlockRenderer(
         </>
       )
     }
-  }, [block, headerSections])
+  }, [block, resolveContext, runtime])
 
-  const shellProps = useMemo<BlockShellProps>(() => ({
-    'data-block-id': block.id,
-    'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
-      ? blockContext.renderScopeId
-      : undefined,
-    'data-editing': inEditMode ? 'true' : 'false',
-    tabIndex: 0,
-    ref: shellRef,
-    onClick: handleBlockClick
-      ? (event) => { void handleBlockClick(event) }
-      : undefined,
-    onPaste: (event) => { void handlePaste(event) },
-  }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, handlePaste])
-
-  const initialShellState = useMemo<BlockShellState>(() => ({
-    shellProps,
-    shortcutSurfaceOptions: {},
-  }), [shellProps])
-
-  const ShellBody = useMemo<ComponentType<{state: BlockShellState}>>(() => {
-    return function BlockShellBody({state}: {state: BlockShellState}) {
-      useShortcutSurfaceActivations(block, 'block', state.shortcutSurfaceOptions)
-
-      const layoutSlots: BlockLayoutSlots = {
-        block,
-        Content: ContentSlot,
-        RawContent: RawContentSlot,
-        Properties: PropertiesSlot,
-        Children: ChildrenSlot,
-        Footer: FooterSlot,
-        Controls: ControlsSlot,
-        Header: HeaderSlot,
-        shellProps: state.shellProps,
-      }
-
-      return <Layout {...layoutSlots}/>
+  // The opt-in interactive shell. Layouts render `<Shell>{shellProps => …}</Shell>`
+  // to become focusable/editable; the shell's machinery (paste/click, shell
+  // decorators, shortcut activations) only runs when mounted — see `BlockShell`.
+  const ShellSlot = useMemo<BlockShellSlot>(() => {
+    return function BlockShellSlot({children}: BlockShellSlotProps) {
+      return (
+        <BlockShell
+          resolveContext={resolveContext}
+          shellRef={shellRef}
+          contentRef={contentContainerRef}
+        >
+          {children}
+        </BlockShell>
+      )
     }
-  }, [
-    block,
-    ContentSlot, RawContentSlot, PropertiesSlot, ChildrenSlot, FooterSlot,
-    ControlsSlot, HeaderSlot,
-    Layout,
-  ])
+  }, [resolveContext, shellRef, contentContainerRef])
 
-  return (
-    <BlockShellDecoratorStack
-      decorators={shellDecorators}
-      resolveContext={resolveContext}
-      shellRef={shellRef}
-      contentRef={contentContainerRef}
-      state={initialShellState}
-      ShellBody={ShellBody}
-    />
-  )
+  const layoutSlots: BlockLayoutSlots = {
+    block,
+    Content: ContentSlot,
+    RawContent: RawContentSlot,
+    Properties: PropertiesSlot,
+    Children: ChildrenSlot,
+    Footer: FooterSlot,
+    Controls: ControlsSlot,
+    Header: HeaderSlot,
+    Shell: ShellSlot,
+  }
+
+  return <Layout {...layoutSlots}/>
 }

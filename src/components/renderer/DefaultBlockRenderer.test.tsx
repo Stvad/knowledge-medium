@@ -85,10 +85,14 @@ const statusProp = defineProperty<string>('test:status', {
   changeScope: ChangeScope.BlockDefault,
 })
 
-const propertyOnlyLayout: BlockLayout = ({Properties, shellProps}) => (
-  <div {...shellProps}>
-    {Properties && <Properties />}
-  </div>
+const propertyOnlyLayout: BlockLayout = ({Properties, Shell}) => (
+  <Shell>
+    {(shellProps) => (
+      <div {...shellProps}>
+        {Properties && <Properties />}
+      </div>
+    )}
+  </Shell>
 )
 
 const TestContentRenderer = ({block}: BlockRendererProps) => (

@@ -20,7 +20,12 @@ import { BlockContextProvider } from '@/context/block'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
-import { blockLayoutFacet } from '@/extensions/blockInteraction'
+import {
+  blockLayoutFacet,
+  blockShellDecoratorsFacet,
+  shortcutSurfaceActivationsFacet,
+  type BlockShellDecoratorProps,
+} from '@/extensions/blockInteraction'
 import { referenceLayoutContribution } from '@/components/references/referenceLayout'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -73,6 +78,17 @@ vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
   LazyViewportMount: ({children}: {children: ReactNode}) => <>{children}</>,
 }))
 
+// Spies that record which blocks actually ran the interactive shell — the
+// shell decorators and the shortcut-surface activations only fire when a layout
+// mounts the `Shell` slot, so a read-only reference layout leaves them empty.
+const shellDecoratorRuns: string[] = []
+const shortcutActivationRuns: string[] = []
+
+const SpyShellDecorator = ({resolveContext, state, children}: BlockShellDecoratorProps) => {
+  shellDecoratorRuns.push(resolveContext.block.id)
+  return <>{children(state)}</>
+}
+
 const extensions = [
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
@@ -80,6 +96,11 @@ const extensions = [
   defaultRenderersExtension,
   plainOutlinerPlugin,
   blockLayoutFacet.of(referenceLayoutContribution, {source: 'references'}),
+  blockShellDecoratorsFacet.of(() => SpyShellDecorator, {source: 'test-spy'}),
+  shortcutSurfaceActivationsFacet.of((ctx) => {
+    shortcutActivationRuns.push(ctx.block.id)
+    return null
+  }, {source: 'test-spy'}),
 ]
 
 describe('block reference / embed rendering through the unified pipeline', () => {
@@ -110,6 +131,8 @@ describe('block reference / embed rendering through the unified pipeline', () =>
   })
 
   beforeEach(async () => {
+    shellDecoratorRuns.length = 0
+    shortcutActivationRuns.length = 0
     await resetTestDb(sharedDb.db)
     repo = createTestRepo({
       db: sharedDb.db,
@@ -256,5 +279,24 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     // (unlike a reference, which renders only raw content).
     expect(box.querySelector('.block-content')).toBeTruthy()
     expect(box.querySelector('[data-block-id="target"][data-editing]')).toBeTruthy()
+  })
+
+  it('a reference skips the interactive shell — no shell decorators or shortcut activations run', async () => {
+    renderInSource(<BlockRef blockId="target" sourceBlockId="source" occurrenceId="occ-1"/>)
+    await screen.findByText('Hello world')
+
+    // The reference layout renders only `RawContent`, never `Shell`, so the
+    // upstream interactive machinery is never paid for.
+    expect(shellDecoratorRuns).not.toContain('target')
+    expect(shortcutActivationRuns).not.toContain('target')
+  })
+
+  it('an embed runs the interactive shell (decorators + shortcut activations)', async () => {
+    renderInSource(<BlockEmbed blockId="target" sourceBlockId="source" occurrenceId="occ-1"/>)
+    await screen.findByText('Hello world')
+
+    // The embed renders the full default layout, which mounts `Shell`.
+    await waitFor(() => expect(shellDecoratorRuns).toContain('target'))
+    expect(shortcutActivationRuns).toContain('target')
   })
 })
