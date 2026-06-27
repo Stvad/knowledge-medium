@@ -4,7 +4,6 @@ import { useRepo } from '@/context/repo'
 import { useWorkspaceId } from '@/hooks/block'
 import { buildAppHash } from '@/utils/routing'
 import { useOpenBlock } from '@/utils/navigation'
-import { isSelectionClick } from '@/extensions/blockInteraction'
 
 // Non-anchor content that drives its OWN click inside a reference via a JS
 // handler: a media image's zoom lightbox, a video player's controls/iframe, a
@@ -62,14 +61,18 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
       // so the rich content's own pointer gestures work.
       draggable={false}
       onClick={(event) => {
-        // A modified click (cmd/ctrl/shift) reaches the opener — so plain text and
-        // the link chrome open in a new panel; on a nested link the browser
-        // follows that link instead. Otherwise, let the content own its click: a
-        // nested link navigates natively (do nothing — NOT preventDefault, or its
-        // nav dies too); other rich content (image lightbox, video controls)
-        // handled itself, so suppress the reference's own navigation. Plain
-        // content opens the reference target.
-        const owner = isSelectionClick(event) ? null : classifyReferenceClick(event)
+        // Classify FIRST — whatever sits under the click owns it, modified click
+        // or not. A nested link navigates natively (do nothing — NOT
+        // preventDefault, or its nav dies too, in this tab or a new one). Other
+        // rich content (an image's lightbox, video controls) ALREADY ran its own
+        // handler on the bubble up and we can't un-run it, so the reference must
+        // suppress its OWN navigation EVEN on a modified click — otherwise a
+        // cmd-click fires the lightbox AND opens the target in a new tab (the
+        // reference's own `<a href>` is the nearest anchor). Only plain content,
+        // with no owner, reaches the opener; `openBlock` reads the modifier itself
+        // (cmd/ctrl → new tab, shift/alt → new panel/window) so a modified click
+        // on the link's text/chrome still opens the target out-of-place.
+        const owner = classifyReferenceClick(event)
         if (owner === 'anchor') return
         if (owner === 'rich') {
           event.preventDefault()

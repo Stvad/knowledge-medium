@@ -15,8 +15,8 @@ vi.mock('@/utils/navigation', () => ({ useOpenBlock: () => openBlock }))
 const { ReferenceLink } = await import('../ReferenceLink')
 
 const block = { id: 'target' } as Block
-const clickAndGetEvent = (el: Element) => {
-  const event = createEvent.click(el, { bubbles: true, cancelable: true })
+const clickAndGetEvent = (el: Element, init: MouseEventInit = {}) => {
+  const event = createEvent.click(el, { bubbles: true, cancelable: true, ...init })
   fireEvent(el, event)
   return event
 }
@@ -48,5 +48,25 @@ describe('ReferenceLink onClick wiring', () => {
     const event = clickAndGetEvent(container.querySelector('img')!)
     expect(openBlock).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(true)
+  })
+
+  // Regression: a cmd/ctrl-click on rich content must STILL be suppressed. The
+  // rich element's own handler (e.g. an image lightbox) already fired on the way
+  // up; if the reference also reached the opener, the modifier would passthrough
+  // to the native href and open the target in a new tab — a double action.
+  it('modified click on rich content (image) → still suppressed, opener NOT reached', () => {
+    const { container } = render(<ReferenceLink block={block}><img alt="" src="x"/></ReferenceLink>)
+    const event = clickAndGetEvent(container.querySelector('img')!, { metaKey: true })
+    expect(openBlock).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  // The opener is still reached for a modified click on PLAIN content, so
+  // cmd/shift-clicking the link's text opens the target out-of-place (the opener
+  // resolves the modifier itself).
+  it('modified click on plain text → reaches the opener', () => {
+    const { getByText } = render(<ReferenceLink block={block}><span>hello</span></ReferenceLink>)
+    clickAndGetEvent(getByText('hello'), { metaKey: true })
+    expect(openBlock).toHaveBeenCalledTimes(1)
   })
 })
