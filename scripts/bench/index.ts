@@ -8,7 +8,7 @@
  *   yarn bench -- --out path.json   # write JSON results to path
  *
  * Suites:
- *   writes, reads, handles, search, tail, scale
+ *   writes, reads, handles, search, scale, nav
  *
  * Output:
  *   - markdown table per suite to stdout,
@@ -23,8 +23,8 @@ import { runWriteBenches } from './bench-writes'
 import { runReadBenches } from './bench-reads'
 import { runHandleBenches } from './bench-handles'
 import { runSearchBenches } from './bench-search'
-import { runTailBenches } from './bench-tail'
 import { runScaleBenches } from './bench-scale'
+import { runNavBenches } from './bench-nav'
 
 interface SuiteSpec {
   name: string
@@ -36,8 +36,8 @@ const SUITES: SuiteSpec[] = [
   {name: 'reads', run: () => runReadBenches()},
   {name: 'handles', run: () => runHandleBenches()},
   {name: 'search', run: () => runSearchBenches()},
-  {name: 'tail', run: () => runTailBenches()},
   {name: 'scale', run: (opts) => runScaleBenches(opts)},
+  {name: 'nav', run: (opts) => runNavBenches(opts)},
 ]
 
 const parseArgs = (argv: readonly string[]): {suites: SuiteSpec[]; full: boolean; out: string | null} => {
