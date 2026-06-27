@@ -93,8 +93,10 @@ const fail = (reason: AssetFailReason): AssetResolveResult => ({ ok: false, reas
 
 export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
   const { getUserId, byteStore, blobStore, getMaterializability, getCek, getContentKeyHmac } = deps
+  // Coalesce concurrent identical resolves (see the returned `resolve` below).
+  const inFlight = new Map<string, Promise<AssetResolveResult>>()
 
-  return {
+  const impl: AssetResolver = {
     async resolve({ workspaceId, contentHash }): Promise<AssetResolveResult> {
       // Outer safety net: ANY unexpected throw (a misbehaving injected policy
       // dep, an OPFS error the inner guards don't anticipate) returns a verdict,
@@ -182,6 +184,24 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
         console.warn(`[assetResolver] unexpected error resolving ${workspaceId}; failing closed`, err)
         return fail('error')
       }
+    },
+  }
+
+  return {
+    resolve(request) {
+      // Coalesce CONCURRENT resolves of the same (workspace, contentHash): the same
+      // asset embedded N times mounts N components that each resolve in the same tick;
+      // share ONE OPFS-read + decrypt + verify instead of N. NOT a persistent cache —
+      // the entry is dropped the moment the resolve settles, so verified plaintext is
+      // never retained past the in-flight window (each consumer wraps the shared bytes
+      // in its own Blob). `impl.resolve` never throws (it fails closed to a verdict),
+      // so one shared promise is safe to hand to every concurrent caller.
+      const key = `${request.workspaceId}\n${request.contentHash}`
+      const existing = inFlight.get(key)
+      if (existing) return existing
+      const pending = impl.resolve(request).finally(() => inFlight.delete(key))
+      inFlight.set(key, pending)
+      return pending
     },
   }
 }

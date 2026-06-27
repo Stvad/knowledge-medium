@@ -277,3 +277,29 @@ describe('createAssetResolver — never throws out of resolve (the §7.3 fail-cl
     expect(blobGet).not.toHaveBeenCalled()
   })
 })
+
+describe('createAssetResolver — concurrency', () => {
+  it('coalesces concurrent resolves of the same asset into ONE fetch', async () => {
+    const plain = bytes(9, 8, 7)
+    const contentHash = await hashOf(plain)
+    const served = await seal('none', plain, contentHash)
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), serve: async () => served })
+
+    // Two resolves fired in the SAME tick, before either settles (the same asset
+    // embedded twice). The in-flight dedup must share one fetch+decode+verify, not
+    // run it twice (both would otherwise miss the still-empty byte store and fetch).
+    const [a, b] = await Promise.all([
+      resolver.resolve({ workspaceId: WS, contentHash }),
+      resolver.resolve({ workspaceId: WS, contentHash }),
+    ])
+    expect(a).toEqual({ ok: true, bytes: plain })
+    expect(b).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+
+    // Settling drops the in-flight entry; a later resolve is a normal local hit
+    // (now served from the byte store), still without a second remote fetch.
+    blobGet.mockClear()
+    await resolver.resolve({ workspaceId: WS, contentHash })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+})
