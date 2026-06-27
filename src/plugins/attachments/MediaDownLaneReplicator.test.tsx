@@ -10,7 +10,6 @@ const h = vi.hoisted(() => ({
   workspaceId: 'ws-1' as string | null,
   userId: 'u1' as string | null,
   runDownLaneReconcile: vi.fn(async () => {}),
-  requestPersistentStorage: vi.fn(async () => true),
   // The settle callback the component registers via onFirstSync — captured so a test
   // can fire it (the "re-run once initial sync settles" path).
   settleCallback: null as null | (() => void),
@@ -31,7 +30,6 @@ vi.mock('@/data/internals/firstSync.js', () => ({
 vi.mock('./assetDownLane.js', () => ({
   DOWN_LANE_SWEEP_INTERVAL_MS: 600_000,
   runDownLaneReconcile: h.runDownLaneReconcile,
-  requestPersistentStorage: h.requestPersistentStorage,
 }))
 
 const { MediaDownLaneReplicator } = await import('./MediaDownLaneReplicator.js')
@@ -45,15 +43,12 @@ beforeEach(() => {
   h.workspaceId = 'ws-1'
   h.userId = 'u1'
   h.runDownLaneReconcile.mockClear()
-  h.requestPersistentStorage.mockClear()
   h.settleCallback = null
 })
 
 describe('MediaDownLaneReplicator', () => {
-  it('requests durable storage and runs a down-lane pass for the active workspace', async () => {
+  it('runs a down-lane pass for the active workspace (off the cold-start window)', async () => {
     render(<MediaDownLaneReplicator />)
-    expect(h.requestPersistentStorage).toHaveBeenCalledOnce()
-
     await flushIdle()
     expect(h.runDownLaneReconcile).toHaveBeenCalledWith(h.repo, 'ws-1')
   })
@@ -67,12 +62,11 @@ describe('MediaDownLaneReplicator', () => {
     expect(h.runDownLaneReconcile).toHaveBeenCalledWith(h.repo, 'ws-1')
   })
 
-  it('does NOT run a pass without an active workspace, but still requests durable storage', async () => {
+  it('does NOT run a pass without an active workspace', async () => {
     h.workspaceId = null
     render(<MediaDownLaneReplicator />)
 
     await flushIdle()
     expect(h.runDownLaneReconcile).not.toHaveBeenCalled()
-    expect(h.requestPersistentStorage).toHaveBeenCalledOnce() // workspace-independent
   })
 })

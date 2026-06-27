@@ -4,8 +4,6 @@
  * available offline. Mounted via `appMountsFacet`. Renders nothing.
  *
  * It:
- *   - requests DURABLE origin storage once (so the byte store isn't best-effort
- *     evicted, §8) — independent of the workspace;
  *   - runs a down-lane pass for the ACTIVE workspace, re-arming when the user SWITCHES
  *     workspaces (the effect's `workspaceId` dep) so only opened workspaces replicate
  *     (the §8 scope rule);
@@ -16,6 +14,8 @@
  *
  * The pass itself is single-owner across tabs + a no-op in local-only / signed-out
  * (see {@link runDownLaneReconcile}); this component is just the per-tab arming.
+ * (Durable origin storage for the byte store, §8, is requested once at boot — origin-
+ * wide — by `@/requestPersistentStorage.js`, so it isn't this component's concern.)
  */
 
 import { useEffect } from 'react'
@@ -24,16 +24,11 @@ import { onFirstSync } from '@/data/internals/firstSync.js'
 import { getActiveUserId, getPowerSyncDb } from '@/data/repoProvider.js'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
-import { DOWN_LANE_SWEEP_INTERVAL_MS, requestPersistentStorage, runDownLaneReconcile } from './assetDownLane.js'
+import { DOWN_LANE_SWEEP_INTERVAL_MS, runDownLaneReconcile } from './assetDownLane.js'
 
 export const MediaDownLaneReplicator = (): null => {
   const repo = useRepo()
   const workspaceId = useActiveWorkspaceId()
-
-  // Durable storage — once, fail-soft, independent of the workspace (§8).
-  useEffect(() => {
-    void requestPersistentStorage()
-  }, [])
 
   useEffect(() => {
     if (!workspaceId) return

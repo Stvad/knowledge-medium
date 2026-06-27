@@ -75,6 +75,19 @@ export type AssetResolveResult =
   | { readonly ok: true; readonly bytes: Uint8Array<ArrayBuffer> }
   | { readonly ok: false; readonly reason: AssetFailReason }
 
+/** The fail-closed reasons that arise BEFORE any network fetch (the `prepare` stage:
+ *  signed-out, locked, missing K_id, malformed hash). They cost NO egress, so the
+ *  down-lane's fetch budget must not charge them — else a locked / no-key workspace's
+ *  blocks would exhaust the budget on free failures and starve the genuinely-absent
+ *  tail behind them. The fetch-stage reasons (`fetch-failed` / `decode-failed` /
+ *  `hash-mismatch`) DID hit the network and rightly consume budget; `error` is treated
+ *  as egress (conservative — it may have thrown after the fetch). */
+export const PRE_FETCH_FAIL_REASONS: ReadonlySet<AssetFailReason> = new Set([
+  'deferred',
+  'no-content-key',
+  'invalid-hash',
+])
+
 /** The down-lane backlog outcome (§8/§9): the asset's verified plaintext is now in
  *  the local byte store. `present` = already there (a cheap has() probe, no fetch);
  *  `replicated` = freshly fetched + verified + stored. A failure carries the same

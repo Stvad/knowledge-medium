@@ -30,11 +30,7 @@ import {
   MEDIA_TYPE_CONTRIBUTION,
   mediaHashProp,
 } from './mediaBlock.js'
-import {
-  collectReplicationRequests,
-  requestPersistentStorage,
-  runDownLaneReconcile,
-} from './assetDownLane.js'
+import { collectReplicationRequests, runDownLaneReconcile } from './assetDownLane.js'
 
 const WS = 'ws-1'
 const USER = 'user-1'
@@ -70,6 +66,27 @@ const addMediaBlock = async (id: string, orderKey: string, hash?: string): Promi
   )
 }
 
+/** Create a media block carrying a RAW (un-encoded) `media:hash` value — models a
+ *  legacy / imported / hand-edited row the cache boundary admitted (it validates JSON
+ *  syntax, not codec shape), so `mediaHashProp.codec.decode` would THROW on read. */
+const addMediaBlockRawHash = async (id: string, orderKey: string, rawHash: unknown): Promise<void> => {
+  const snap = repo.snapshotTypeRegistries()
+  await repo.tx(
+    async (tx) => {
+      await tx.create({
+        id,
+        workspaceId: WS,
+        parentId: null,
+        orderKey,
+        content: '',
+        properties: { [mediaHashProp.name]: rawHash },
+      })
+      await repo.addTypeInTx(tx, id, MEDIA_TYPE, {}, snap)
+    },
+    { scope: ChangeScope.BlockDefault },
+  )
+}
+
 beforeAll(async () => {
   sharedDb = await createTestDb()
 })
@@ -96,6 +113,20 @@ describe('collectReplicationRequests', () => {
 
     const requests = await collectReplicationRequests(repo, WS)
 
+    expect(requests).toEqual([
+      { workspaceId: WS, contentHash: 'sha256:aaaa' },
+      { workspaceId: WS, contentHash: 'sha256:bbbb' },
+    ])
+  })
+
+  it('skips a malformed (non-string) media:hash instead of throwing and stalling the walk', async () => {
+    await addMediaBlock('m1', 'a0', 'sha256:aaaa')
+    await addMediaBlockRawHash('m-bad', 'a1', 12345) // a number where a string is expected
+    await addMediaBlock('m2', 'a2', 'sha256:bbbb')
+
+    // The bad row is skipped; the whole workspace must NOT lose its down-lane to one
+    // corrupt block (the renderer's throw-free canRender stance).
+    const requests = await collectReplicationRequests(repo, WS)
     expect(requests).toEqual([
       { workspaceId: WS, contentHash: 'sha256:aaaa' },
       { workspaceId: WS, contentHash: 'sha256:bbbb' },
@@ -137,40 +168,5 @@ describe('runDownLaneReconcile — gating', () => {
     h.userId = null
     await runDownLaneReconcile(repo, WS)
     expect(h.replicate).not.toHaveBeenCalled()
-  })
-})
-
-describe('requestPersistentStorage', () => {
-  afterEach(() => vi.unstubAllGlobals())
-
-  it('returns false (no throw) where the persist API is absent', async () => {
-    vi.stubGlobal('navigator', {})
-    expect(await requestPersistentStorage()).toBe(false)
-  })
-
-  it('short-circuits without re-prompting when storage is ALREADY persisted', async () => {
-    const persist = vi.fn(async () => true)
-    vi.stubGlobal('navigator', { storage: { persisted: async () => true, persist } })
-    expect(await requestPersistentStorage()).toBe(true)
-    expect(persist).not.toHaveBeenCalled() // already granted — don't ask again
-  })
-
-  it('requests persistence when not yet granted', async () => {
-    const persist = vi.fn(async () => true)
-    vi.stubGlobal('navigator', { storage: { persisted: async () => false, persist } })
-    expect(await requestPersistentStorage()).toBe(true)
-    expect(persist).toHaveBeenCalledOnce()
-  })
-
-  it('fails soft (false) when persist() throws', async () => {
-    vi.stubGlobal('navigator', {
-      storage: {
-        persisted: async () => false,
-        persist: async () => {
-          throw new Error('denied')
-        },
-      },
-    })
-    expect(await requestPersistentStorage()).toBe(false)
   })
 })
