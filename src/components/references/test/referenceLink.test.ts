@@ -1,62 +1,69 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest'
 import type { MouseEvent } from 'react'
-import { rawContentOwnsClick } from '../ReferenceLink'
+import { classifyReferenceClick } from '../ReferenceLink'
 
-// A reference renders its raw content INSIDE its own `<a href>`. The guard must
-// distinguish a click on rich content (which owns it) from a click on plain text
-// (which should navigate) — WITHOUT the link's own anchor counting as "rich".
-// So every case nests the clicked node inside a real `<a href>` (the currentTarget).
+// A reference renders its raw content INSIDE its own `<a href>`. Classify a click
+// as: 'anchor' (a nested link — navigates natively, the reference does nothing),
+// 'rich' (image/video/button — handled itself, the reference suppresses its nav),
+// or null (plain text — the reference navigates). Every case nests the clicked
+// node inside a real `<a href>` (the currentTarget), so the link's OWN anchor
+// never counts.
 const link = (): HTMLAnchorElement => {
   const a = document.createElement('a')
   a.href = '#target'
   return a
 }
-const clickOn = (target: Element, currentTarget: Element): MouseEvent =>
+const append = <T extends Element>(parent: Element, child: T): T => {
+  parent.appendChild(child)
+  return child
+}
+const clickOn = (target: Node, currentTarget: Element): MouseEvent =>
   ({ target, currentTarget } as unknown as MouseEvent)
 
-describe('rawContentOwnsClick — a reference defers to rich raw content, never its own link', () => {
-  it('a plain-text span inside the link navigates (the link owns it)', () => {
+describe('classifyReferenceClick', () => {
+  it('plain text / the link element itself → null (the reference navigates)', () => {
     const a = link()
-    const span = document.createElement('span')
+    const span = append(a, document.createElement('span'))
     span.textContent = 'hello'
-    a.appendChild(span)
-    expect(rawContentOwnsClick(clickOn(span, a))).toBe(false)
+    expect(classifyReferenceClick(clickOn(span, a))).toBeNull()
+    expect(classifyReferenceClick(clickOn(a, a))).toBeNull()
   })
 
-  it('a click on the reference link element itself navigates', () => {
+  it('a non-Element target (a raw text node) → null', () => {
     const a = link()
-    expect(rawContentOwnsClick(clickOn(a, a))).toBe(false)
+    const text = append(a, document.createElement('span')).appendChild(document.createTextNode('x'))
+    expect(classifyReferenceClick(clickOn(text, a))).toBeNull()
   })
 
-  it('a media image inside the link owns its click (lightbox, not navigate)', () => {
+  it("a nested link (markdown link / nested reference) → 'anchor' (it navigates natively)", () => {
     const a = link()
-    const img = document.createElement('img')
-    a.appendChild(img)
-    expect(rawContentOwnsClick(clickOn(img, a))).toBe(true)
+    const inner = append(a, document.createElement('a'))
+    inner.href = 'https://example.com'
+    const innerText = append(inner, document.createElement('span'))
+    expect(classifyReferenceClick(clickOn(inner, a))).toBe('anchor')
+    expect(classifyReferenceClick(clickOn(innerText, a))).toBe('anchor')
   })
 
-  it('the video player (video[controls] / iframe) and a button own their clicks', () => {
+  it("a media image → 'rich' (lightbox, not navigate)", () => {
     const a = link()
-    const video = document.createElement('video')
+    const img = append(a, document.createElement('img'))
+    expect(classifyReferenceClick(clickOn(img, a))).toBe('rich')
+  })
+
+  it("the video player + audio/canvas/button/[role=button] → 'rich'", () => {
+    const a = link()
+    const video = append(a, document.createElement('video'))
     video.setAttribute('controls', '')
-    a.appendChild(video)
-    const iframe = document.createElement('iframe')
-    a.appendChild(iframe)
-    const button = document.createElement('button')
-    a.appendChild(button)
-    expect(rawContentOwnsClick(clickOn(video, a))).toBe(true)
-    expect(rawContentOwnsClick(clickOn(iframe, a))).toBe(true)
-    expect(rawContentOwnsClick(clickOn(button, a))).toBe(true)
-  })
-
-  it('a nested reference/link inside the content owns its click (the inner link navigates, not the outer)', () => {
-    const a = link()
-    const inner = document.createElement('a')
-    inner.href = '#inner'
-    const innerText = document.createElement('span')
-    inner.appendChild(innerText)
-    a.appendChild(inner)
-    expect(rawContentOwnsClick(clickOn(innerText, a))).toBe(true)
+    const iframe = append(a, document.createElement('iframe'))
+    const audio = append(a, document.createElement('audio'))
+    const button = append(a, document.createElement('button'))
+    const roleButton = append(a, document.createElement('div'))
+    roleButton.setAttribute('role', 'button')
+    expect(classifyReferenceClick(clickOn(video, a))).toBe('rich')
+    expect(classifyReferenceClick(clickOn(iframe, a))).toBe('rich')
+    expect(classifyReferenceClick(clickOn(audio, a))).toBe('rich')
+    expect(classifyReferenceClick(clickOn(button, a))).toBe('rich')
+    expect(classifyReferenceClick(clickOn(roleButton, a))).toBe('rich')
   })
 })

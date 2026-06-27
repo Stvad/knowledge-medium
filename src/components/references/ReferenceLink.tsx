@@ -6,29 +6,36 @@ import { buildAppHash } from '@/utils/routing'
 import { useOpenBlock } from '@/utils/navigation'
 import { isSelectionClick } from '@/extensions/blockInteraction'
 
-// Content that owns its own click inside a reference: a media image's zoom
-// lightbox, a video player's controls/iframe, a nested reference or markdown
-// link, an explicit opt-out. NOTE: this deliberately matches the link's *inner*
-// content, never the reference's own wrapping `<a href>` (which the walk below
-// excludes via `currentTarget`).
+// Non-anchor content that drives its OWN click inside a reference via a JS
+// handler: a media image's zoom lightbox, a video player's controls/iframe, a
+// button, an explicit opt-out. (Anchors are handled separately — see below.)
 const RICH_CONTENT_SELECTOR =
-  'img, video, audio, iframe, canvas, button, a[href], [role="button"], [data-block-interaction="ignore"]'
+  'img, video, audio, iframe, canvas, button, [role="button"], [data-block-interaction="ignore"]'
 
-/** A reference wraps the target's RAW content in a navigating link, but rich raw
- *  content has its own click behaviour (a video player's controls, an image's
- *  zoom lightbox, a nested reference/link). Those clicks should drive the
- *  content, NOT navigate. Walk from the click target up to — but NOT including —
- *  the reference link itself (`currentTarget`): a rich/interactive element
- *  between them owns the click. Excluding `currentTarget` is essential — the
- *  reference's OWN `<a href>` is an `a[href]` ancestor of every click, so
- *  matching it would suppress navigation for plain text too. */
-export const rawContentOwnsClick = (event: MouseEvent): boolean => {
+/**
+ * Classify a click inside the reference link. Walk from the click target up to —
+ * but NOT including — the reference link itself (`currentTarget`); whichever owner
+ * is found closest to the target wins. Excluding `currentTarget` is essential:
+ * the reference's OWN `<a href>` is an ancestor of every click, so counting it
+ * would mishandle plain text.
+ *
+ *  - `'anchor'`: a nested `<a href>` (a markdown link, a nested reference). It
+ *    owns navigation via its NATIVE default action / its own handler — so the
+ *    reference must do nothing and must NOT `preventDefault`, or the inner link's
+ *    navigation dies with it.
+ *  - `'rich'`: non-anchor interactive/media content. It handled its own click
+ *    (lightbox / play / button), so the reference suppresses its OWN navigation
+ *    (`preventDefault`) but doesn't open the target.
+ *  - `null`: plain content — the reference navigates to its target.
+ */
+export const classifyReferenceClick = (event: MouseEvent): 'anchor' | 'rich' | null => {
   const { target, currentTarget } = event
-  if (!(target instanceof Element)) return false
+  if (!(target instanceof Element)) return null
   for (let el: Element | null = target; el && el !== currentTarget; el = el.parentElement) {
-    if (el.matches(RICH_CONTENT_SELECTOR)) return true
+    if (el.matches('a[href]')) return 'anchor'
+    if (el.matches(RICH_CONTENT_SELECTOR)) return 'rich'
   }
-  return false
+  return null
 }
 
 /**
@@ -50,11 +57,15 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
       className="blockref text-inherit no-underline cursor-pointer rounded-sm px-0.5 hover:bg-muted/60"
       data-block-id={block.id}
       onClick={(event) => {
-        // A PLAIN click on rich raw content (video player, image lightbox, a
-        // nested link) belongs to the content, so suppress the link's
-        // navigation. Modified clicks (cmd/ctrl/shift) still reach the opener,
-        // so "open in a new panel" keeps working anywhere on the reference.
-        if (!isSelectionClick(event) && rawContentOwnsClick(event)) {
+        // A modified click (cmd/ctrl/shift) always reaches the opener so
+        // "open in a new panel" works anywhere on the reference. Otherwise, let
+        // the content own its click: a nested link navigates natively (do
+        // nothing — NOT preventDefault, or its nav dies too); other rich content
+        // (image lightbox, video controls) handled itself, so suppress the
+        // reference's own navigation. Plain content opens the reference target.
+        const owner = isSelectionClick(event) ? null : classifyReferenceClick(event)
+        if (owner === 'anchor') return
+        if (owner === 'rich') {
           event.preventDefault()
           return
         }
