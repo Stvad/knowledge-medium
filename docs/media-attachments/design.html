@@ -105,7 +105,8 @@ single-owner lane drain encodes-at-drain + uploads (with a 409 poison-verify and
 boot reconciler). Phase 6 = the down-lane (§8/§9 background replication): the resolver's
 <code>replicate</code> backlog lane (a cheap <code>has()</code> probe → present, else the SAME coalesced
 fetch the demand lane uses), the sequential, budget-bounded <code>reconcileDownLane</code> reconciler
-(present probes free, only fetch egress consumes budget, prepare-stage fail-closed reasons free), and
+(present probes free; only a SUCCESSFUL download consumes the per-pass budget; failures are free and never halt
+the walk, so a stable-ordered failing prefix can't shadow the healthier tail), and
 <code>MediaDownLaneReplicator</code> — a per-active-workspace, single-owner (<code>navigator.locks</code>
 <code>ifAvailable</code>), deep-idle-scheduled pass re-armed on workspace switch / first-sync settle /
 reconnect / a slow sweep. Durable origin storage (§8) is the boot-time origin-wide

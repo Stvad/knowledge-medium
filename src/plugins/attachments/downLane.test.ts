@@ -38,18 +38,18 @@ describe('reconcileDownLane', () => {
     expect(summary).toEqual({ present: 1, replicated: 2, failed: 0, unavailable: 0, skipped: 0 })
   })
 
-  it('caps FETCH ATTEMPTS per pass at the budget — the long tail is skipped (not attempted)', async () => {
-    const hashes = ['a', 'b', 'c', 'd', 'e'] // all absent
+  it('caps SUCCESSFUL DOWNLOADS per pass at the budget — the long tail is skipped (not attempted)', async () => {
+    const hashes = ['a', 'b', 'c', 'd', 'e'] // all absent, all replicate-able
     const { resolver, replicate } = fakeResolver(Object.fromEntries(hashes.map((h) => [h, replicated])))
 
     const summary = await reconcileDownLane(hashes.map(req), { resolver, budget: 2 })
 
     expect(summary).toEqual({ present: 0, replicated: 2, failed: 0, unavailable: 0, skipped: 3 })
-    // The 3 skipped were never even probed — the pass STOPS at the budget.
+    // The 3 skipped were never even probed — the pass STOPS at the budget of successes.
     expect(replicate).toHaveBeenCalledTimes(2)
   })
 
-  it('present blocks are FREE — they do not consume the fetch budget', async () => {
+  it('present blocks are FREE — they do not consume the download budget', async () => {
     // [present, present, absent, absent, absent], budget 2: the two presents cost
     // nothing, so BOTH downloads still happen past them; only the 5th is skipped.
     const { resolver, replicate } = fakeResolver({
@@ -66,14 +66,23 @@ describe('reconcileDownLane', () => {
     expect(replicate).toHaveBeenCalledTimes(4) // 2 free probes + 2 budgeted downloads
   })
 
-  it('a FAILED fetch also consumes the budget — offline does not hammer every absent block', async () => {
-    const hashes = ['a', 'b', 'c'] // all absent, all offline-miss
-    const { resolver, replicate } = fakeResolver(Object.fromEntries(hashes.map((h) => [h, fetchFailed])))
+  it('a failing PREFIX never shadows the healthy tail — failures do not consume the budget (Codex P2)', async () => {
+    // Stable request order with 3 permanently-failing OLDER blocks at the head, then 2
+    // healthy. budget 2: if a fetch-stage failure consumed the budget (and early-returned),
+    // the head would eat both slots every sweep and the healthy tail would NEVER
+    // background-replicate. Failures must be FREE so the walk reaches the healthy blocks.
+    const { resolver, replicate } = fakeResolver({
+      a: fetchFailed, // missing / offline (§9 backstop) — older block
+      b: { ok: false, reason: 'hash-mismatch' }, // poisoned older block
+      c: fetchFailed,
+      d: replicated, // healthy — MUST still replicate
+      e: replicated,
+    })
 
-    const summary = await reconcileDownLane(hashes.map(req), { resolver, budget: 2 })
+    const summary = await reconcileDownLane(['a', 'b', 'c', 'd', 'e'].map(req), { resolver, budget: 2 })
 
-    expect(summary).toEqual({ present: 0, replicated: 0, failed: 2, unavailable: 0, skipped: 1 })
-    expect(replicate).toHaveBeenCalledTimes(2) // stopped after 2 attempts, even though all failed
+    expect(summary).toEqual({ present: 0, replicated: 2, failed: 3, unavailable: 0, skipped: 0 })
+    expect(replicate).toHaveBeenCalledTimes(5) // walked PAST all 3 failures to the healthy tail
   })
 
   it('a fail-closed block (hash-mismatch) is counted failed but does NOT halt the walk', async () => {
