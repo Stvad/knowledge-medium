@@ -15,7 +15,7 @@ import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import type { Block } from '@/data/block.js'
 import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
-import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { acquireEditModeKeepalive, resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { showError } from '@/utils/toast.js'
 
 export const INSERT_IMAGE_ACTION_ID = 'edit.cm.insert_image'
@@ -36,18 +36,34 @@ function pickImageFiles(): Promise<File[]> {
     // picker for an input that's actually in the document.
     input.style.position = 'fixed'
     input.style.left = '-9999px'
+    let settled = false
     const cleanup = (files: File[]) => {
+      if (settled) return
+      settled = true
       input.removeEventListener('change', onChange)
       input.removeEventListener('cancel', onCancel)
+      window.removeEventListener('focus', onWindowFocus)
       input.remove()
       resolve(files)
     }
     const onChange = () => cleanup(input.files ? Array.from(input.files) : [])
-    // A dismissed picker fires `cancel`, not `change` — resolve empty so the
-    // caller's keepalive hold is released instead of leaking.
     const onCancel = () => cleanup([])
+    // Dismissal fallback. The `cancel` event isn't fired by older iOS Safari /
+    // WebViews (< Safari 16.4), so a dismissed picker would otherwise resolve
+    // NEITHER event — hanging the promise and leaking the caller's edit-mode
+    // keepalive hold (pinning edit mode app-wide). When focus returns to the
+    // window after the picker closes and no files were chosen, treat it as a
+    // dismissal. Deferred a tick so a real `change` (which populates
+    // `input.files` first) wins; the `input.files` check avoids cancelling a
+    // slow selection.
+    const onWindowFocus = () => {
+      window.setTimeout(() => {
+        if (!input.files || input.files.length === 0) cleanup([])
+      }, 300)
+    }
     input.addEventListener('change', onChange)
     input.addEventListener('cancel', onCancel)
+    window.addEventListener('focus', onWindowFocus)
     document.body.appendChild(input)
     input.click()
   })
@@ -124,7 +140,12 @@ export async function pickAndInsertImages(
     insertReferencesAtCaret(editorView, block, caret, references)
   } finally {
     requestAnimationFrame(() => {
-      if (editorView.dom.isConnected) editorView.focus()
+      // Don't pull focus back if another surface (an open palette holding a
+      // 'yield-focus' keepalive) owns it — mirror the blur handler's
+      // yield-over-refocus precedence. Skip a torn-down editor.
+      if (resolveEditModeKeepalive() !== 'yield' && editorView.dom.isConnected) {
+        editorView.focus()
+      }
     })
     window.setTimeout(releaseKeepalive, 400)
   }
@@ -142,7 +163,14 @@ export async function pickImagesIntoBlock(block: Block): Promise<void> {
   if (files.length === 0) return
   const references = await captureFilesToReferences(block, files)
   if (references.length === 0) return
-  const content = block.peek()?.content ?? ''
+  // Ensure the row is loaded before deriving new content — `peek()` is
+  // `undefined` for a not-yet-resident block, and `?? ''` would turn the append
+  // into a full overwrite that drops the real content.
+  const data = block.peek() ?? await block.load()
+  if (!data) return
   const refsText = references.join('\n')
-  await block.setContent(content ? `${content}\n${refsText}` : refsText)
+  // Trim trailing whitespace/newlines so the append doesn't open a blank line
+  // (or strand a whitespace-only block before the image).
+  const base = (data.content ?? '').replace(/\s+$/, '')
+  await block.setContent(base ? `${base}\n${refsText}` : refsText)
 }

@@ -71,10 +71,17 @@ export function CommandPalette() {
     if (!editorView) return // opened from normal mode / not editing — nothing to keep alive
     const release = acquireEditModeKeepalive('yield-focus')
     return () => {
-      // Palette closing: hand focus back to the editor we kept in edit mode,
-      // then drop the hold. focus() on an editor an invoked command may have
-      // unmounted is a harmless no-op.
-      editorView.focus()
+      // Palette closing: hand focus back to the editor we kept in edit mode —
+      // but only if it's STILL the active edit context and mounted. A command
+      // run from the palette may have moved focus to another block or unmounted
+      // this editor; refocusing a stale view would steal focus from the command,
+      // and focus() on a torn-down view can throw (no `destroyed` guard in CM).
+      const liveView = (
+        activeRef.current.get(ActionContextTypes.EDIT_MODE_CM) as
+          | CodeMirrorEditModeDependencies
+          | undefined
+      )?.editorView
+      if (liveView === editorView && editorView.dom.isConnected) editorView.focus()
       release()
     }
   }, [open])
