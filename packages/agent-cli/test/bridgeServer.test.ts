@@ -157,6 +157,30 @@ describe('agent runtime bridge', () => {
     expect(write.status).toBe(403)
   })
 
+  it('derives the read-only allowlist from the command registry', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1', scope: 'read-only'}],
+    })
+
+    // A verb classified `readOnly: true` in knownCommandRegistry (not in
+    // the old hand-listed switch) is accepted — proving the allowlist is
+    // registry-derived, not a stale literal set.
+    const read = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'search', query: 'anything'}),
+    })
+    expect(read.status).toBe(202)
+
+    // A verb classified `readOnly: false` is denied.
+    const write = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'create-block', content: 'nope'}),
+    })
+    expect(write.status).toBe(403)
+  })
+
   it('rejects commands with an unknown token', async () => {
     const response = await fetch(`${baseUrl}/runtime/commands`, {
       method: 'POST',
