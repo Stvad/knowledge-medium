@@ -884,6 +884,12 @@ cli
   })
 
 cli
+  .command('health', wireDescription('health'))
+  .action(async () => {
+    await runAndPrint({type: 'health'})
+  })
+
+cli
   .command('describe-runtime', wireDescription('describe-runtime'))
   .option('--actions <text>', 'Filter actions (repeatable)')
   .option('--facets <text>', 'Filter facets (repeatable)')

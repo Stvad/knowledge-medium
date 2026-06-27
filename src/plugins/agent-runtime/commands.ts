@@ -20,6 +20,7 @@ import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
+import { runHealthCommand } from './healthCommand.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
 import {
   actionsFacet,
@@ -1087,6 +1088,9 @@ export const executeCommand = async (
 
     case 'runtime-summary':
       return describeRuntimeSummary(context)
+
+    case 'health':
+      return runHealthCommand(context.repo)
 
     case 'describe-runtime':
       return describeRuntime(context, {
