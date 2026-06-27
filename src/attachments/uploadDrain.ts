@@ -19,10 +19,15 @@
  *   - `defer` materializability (locked / unpinned / signed out) → leave `pending`,
  *     no attempt burn; the next sweep retries once the workspace is materializable.
  *   - PERMANENT BlobPutError (403/404/413, the advisory hint) → `failed` at once.
- *   - any other failure (transient 4xx/5xx/network, an encode error, a stray
- *     non-enumerated permanent) → bump attempts and retry, BUT bound by attempt
- *     count AND age so a never-enumerated-permanent can't hot-loop forever — once
- *     either bound is hit, → `failed`. (`permanent` only quarantines SOONER.)
+ *   - TRANSIENT BlobPutError (offline / no-session / 401 / 5xx / network — EVERY
+ *     non-permanent upload error) → leave `pending`, NO attempt burn; it clears on
+ *     reconnect / token refresh / server recovery, so only the AGE backstop ever
+ *     quarantines it. (Crucial: the reconciler re-arms the drain on every
+ *     `online`/`visible` event, so a flaky-network paste must NOT exhaust the small
+ *     attempt budget in a few refocuses and land in `failed`, which nothing re-drains.)
+ *   - an ENCODE error or a local OPFS read THROW (a non-connectivity failure that a
+ *     refocus can't fix) → bump attempts and retry, bounded by attempt count AND age
+ *     so a persistent bug can't retry on every refocus forever.
  *   - 409 + the existing object hash-MISMATCHES (poisoned path, §17) → `failed`;
  *     a transient verify-GET failure → retry (the object exists, just unreadable now).
  *   - local bytes missing (OPFS eviction before the upload drained) → `failed`:
@@ -130,6 +135,25 @@ const retryOrFail = async (
   return 'retried'
 }
 
+/** A CLEARLY-transient failure (offline, token absent, Storage 5xx — anything that
+ *  clears on reconnect / token refresh / server recovery): leave the record PENDING
+ *  WITHOUT burning the bounded attempt budget. The reconciler re-arms the drain on
+ *  every `online`/`visible` event, so a flaky-network paste retried a handful of
+ *  times would otherwise exhaust `maxAttempts` and quarantine a perfectly good upload
+ *  in seconds — `failed` is terminal (nothing re-drains it). Only the AGE backstop
+ *  applies here; past it, give up. */
+const deferTransientOrFail = async (
+  userId: string,
+  rec: ByteUploadRecord,
+  ctx: DrainOneCtx,
+): Promise<DrainOutcome> => {
+  if (ctx.now() - rec.stagedAt > ctx.maxAgeMs) {
+    await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
+    return 'failed'
+  }
+  return 'deferred'
+}
+
 const drainOne = async (
   userId: string,
   rec: ByteUploadRecord,
@@ -173,12 +197,18 @@ const drainOne = async (
     await ctx.store.delete(userId, rec.assetBlockId)
     return 'uploaded'
   } catch (err) {
-    if (err instanceof BlobPutError && err.permanent) {
-      await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
-      return 'failed'
+    if (err instanceof BlobPutError) {
+      if (err.permanent) {
+        await ctx.store.markFailed(userId, rec.assetBlockId, rec.stagedAt)
+        return 'failed'
+      }
+      // A non-permanent BlobPutError is TRANSIENT (offline / no-session / 401 / 5xx /
+      // network — the blobStore's classification): it clears on its own, so don't burn
+      // the attempt budget on a refocus-driven retry. Age-bounded only.
+      return deferTransientOrFail(userId, rec, ctx)
     }
-    // Transient upload error, an encode error, or a non-enumerated permanent —
-    // all bounded so none can hot-loop.
+    // A non-BlobPutError throw is an ENCODE error — a persistent bug, not connectivity:
+    // attempt-bound it so it can't retry on every refocus indefinitely.
     return retryOrFail(userId, rec, ctx)
   }
 }

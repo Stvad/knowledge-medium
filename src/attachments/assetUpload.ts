@@ -25,6 +25,7 @@ import { supabase } from '@/services/supabase.js'
 import { showError } from '@/utils/toast.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
+import { resolveCaptureMime } from './mediaBlock.js'
 import {
   captureMedia,
   DEFAULT_MAX_CAPTURE_BYTES,
@@ -168,9 +169,13 @@ export const captureMediaFromFiles = async (
       results.push({ ok: false, reason: 'too-large' }) // reject without reading
       continue
     }
+    const bytes = new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>
     const source: MediaSource = {
-      bytes: new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>,
-      mime: file.type || 'application/octet-stream',
+      bytes,
+      // Derive the MIME from the bytes when File.type is missing/generic — a typeless
+      // image must still render inline, and the stored MIME must be a function of the
+      // bytes so it can't disagree with a content-dedup'd row (Codex P2).
+      mime: resolveCaptureMime(file.type, bytes),
       filename: file.name || undefined,
     }
     results.push(await captureMedia({ workspaceId, source, embedParentId }, deps))

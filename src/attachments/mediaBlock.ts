@@ -69,6 +69,40 @@ export const MEDIA_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
 export const isImageMime = (mime: string | undefined): boolean =>
   typeof mime === 'string' && mime.toLowerCase().startsWith('image/')
 
+/** The fallback MIME for a file with no declared type. */
+export const GENERIC_MIME = 'application/octet-stream'
+
+/** Sniff a common raster image MIME from the leading magic bytes. Returns `null`
+ *  for anything unrecognized (incl. a too-short buffer). */
+export const sniffImageMime = (b: Uint8Array): string | null => {
+  if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png'
+  if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg'
+  if (b.length >= 4 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'image/gif'
+  if (
+    b.length >= 12 &&
+    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && // "RIFF"
+    b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 // "WEBP"
+  ) return 'image/webp'
+  if (b.length >= 2 && b[0] === 0x42 && b[1] === 0x4d) return 'image/bmp' // "BM"
+  return null
+}
+
+/** The MIME to STORE for a captured file. `File.type` is unreliable — a pasted or
+ *  dropped image often arrives with an empty, generic (`octet-stream`), or even wrong
+ *  type, and because captures are content-addressed + DEDUP'd, the FIRST capture's
+ *  MIME sticks for every later embed of the same bytes. So the BYTES are authoritative:
+ *  if they're a recognizable image, store that (the stored MIME is then a function of
+ *  the bytes, like the content key — a typeless/mislabeled image still renders inline,
+ *  and no re-paste can disagree with the dedup'd row). Otherwise trust a specific
+ *  declared type, else fall back to generic. A false-positive sniff is harmless — the
+ *  renderer's hash-verified `<img>` falls to the placeholder on a decode failure. */
+export const resolveCaptureMime = (declared: string | undefined, bytes: Uint8Array): string => {
+  const sniffed = sniffImageMime(bytes)
+  if (sniffed) return sniffed
+  const d = declared?.trim()
+  return d && d.toLowerCase() !== GENERIC_MIME ? d : GENERIC_MIME
+}
+
 // ──── The workspace-level ASSETS container (§11) ────
 //
 // Captured media blocks are dedup'd by content (one block per content-key), so an

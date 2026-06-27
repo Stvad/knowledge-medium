@@ -205,7 +205,7 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
     expect((await store.get(USER, BLOCK))?.status).toBe('failed')
   })
 
-  it('retries (bumps attempts, stays pending) on a TRANSIENT rejection below the bound', async () => {
+  it('a TRANSIENT rejection DEFERS (no attempt burn) and stays pending', async () => {
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
     await byteStore.put(USER, WS, KEY, bytes(8))
@@ -215,12 +215,12 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
 
     const summary = await drainUploads(USER, deps({ maxAttempts: 5 }))
 
-    expect(summary).toMatchObject({ retried: 1, failed: 0 })
+    expect(summary).toMatchObject({ deferred: 1, retried: 0, failed: 0 })
     const rec = await store.get(USER, BLOCK)
-    expect(rec).toMatchObject({ status: 'pending', attempts: 1 })
+    expect(rec).toMatchObject({ status: 'pending', attempts: 0 }) // attempt budget untouched
   })
 
-  it('a transient failure that exhausts the attempt bound is quarantined', async () => {
+  it('a transient failure CANNOT exhaust the attempt budget — only AGE quarantines (Codex P2)', async () => {
     await store.stage(stageInput())
     await store.promote(USER, BLOCK)
     await byteStore.put(USER, WS, KEY, bytes(8))
@@ -228,12 +228,14 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
       throw new BlobPutError('offline', false, 0, 'network')
     }
 
-    // maxAttempts=2: drain #1 → attempts 1 (retried), drain #2 → bound reached → failed
-    await drainUploads(USER, deps({ maxAttempts: 2 }))
-    expect((await store.get(USER, BLOCK))?.status).toBe('pending')
-    const second = await drainUploads(USER, deps({ maxAttempts: 2 }))
-    expect(second).toMatchObject({ failed: 1 })
-    expect((await store.get(USER, BLOCK))?.status).toBe('failed')
+    // The reconciler re-arms the drain on every online/visible event. With a tiny
+    // attempt budget, the PRE-FIX code quarantined a good paste in a handful of drains;
+    // now a transient miss only defers (the clock doesn't advance, so age never trips).
+    for (let i = 0; i < 12; i++) {
+      const s = await drainUploads(USER, deps({ maxAttempts: 2 }))
+      expect(s).toMatchObject({ deferred: 1, failed: 0 })
+    }
+    expect(await store.get(USER, BLOCK)).toMatchObject({ status: 'pending', attempts: 0 })
   })
 
   it('a transient failure past the age bound is quarantined regardless of attempts', async () => {
@@ -266,8 +268,10 @@ describe('drainUploads (Phase 5b — the up-lane)', () => {
       throw new BlobPutError('offline', false, 0, 'network')
     }
 
-    // maxAttempts 1 → the stale snapshot is "exhausted" → it WOULD markFailed.
-    await drainUploads(USER, deps({ maxAttempts: 1 }))
+    // A transient miss now quarantines only by AGE: maxAgeMs 500 with the stale
+    // snapshot stamp 1000 vs now 2000 → it WOULD markFailed(stale 1000), but the CAS
+    // sees the live stamp moved to 2000 and drops the write.
+    await drainUploads(USER, deps({ maxAgeMs: 500 }))
 
     expect(await store.get(USER, BLOCK)).toMatchObject({ status: 'staged', attempts: 0, stagedAt: 2000 })
   })

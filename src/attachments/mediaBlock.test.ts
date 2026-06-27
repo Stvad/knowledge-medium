@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { MEDIA_TYPE, MEDIA_TYPE_CONTRIBUTION, isImageMime, mediaHashProp } from './mediaBlock.js'
+import {
+  GENERIC_MIME,
+  MEDIA_TYPE,
+  MEDIA_TYPE_CONTRIBUTION,
+  isImageMime,
+  mediaHashProp,
+  resolveCaptureMime,
+  sniffImageMime,
+} from './mediaBlock.js'
+
+const png = () => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0])
+const jpeg = () => new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0])
 
 describe('isImageMime', () => {
   it('is true only for image/* MIME types', () => {
@@ -19,6 +30,37 @@ describe('isImageMime', () => {
   it('is case-insensitive (MIME types are, even if File.type is lowercased)', () => {
     expect(isImageMime('IMAGE/PNG')).toBe(true)
     expect(isImageMime('Image/Gif')).toBe(true)
+  })
+})
+
+describe('sniffImageMime', () => {
+  it('recognizes common raster image magic, null otherwise', () => {
+    expect(sniffImageMime(png())).toBe('image/png')
+    expect(sniffImageMime(jpeg())).toBe('image/jpeg')
+    expect(sniffImageMime(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))).toBe('image/gif')
+    expect(sniffImageMime(new Uint8Array([0x42, 0x4d, 0, 0]))).toBe('image/bmp')
+    expect(sniffImageMime(new Uint8Array([0x25, 0x50, 0x44, 0x46]))).toBeNull() // %PDF
+    expect(sniffImageMime(new Uint8Array([0x89]))).toBeNull() // too short
+  })
+})
+
+describe('resolveCaptureMime', () => {
+  it('derives image MIME from bytes when File.type is missing or generic (the dedup fix)', () => {
+    // The core Codex P2 case: a typeless/octet-stream image must still store image/* so
+    // it renders inline AND every dedup'd embed of the same bytes agrees.
+    expect(resolveCaptureMime(undefined, png())).toBe('image/png')
+    expect(resolveCaptureMime('', png())).toBe('image/png')
+    expect(resolveCaptureMime(GENERIC_MIME, png())).toBe('image/png')
+  })
+
+  it('the bytes WIN over a mislabeled declared type for a recognizable image', () => {
+    expect(resolveCaptureMime('application/pdf', jpeg())).toBe('image/jpeg')
+  })
+
+  it('trusts a specific declared type when the bytes are not a recognizable image', () => {
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46])
+    expect(resolveCaptureMime('application/pdf', pdf)).toBe('application/pdf')
+    expect(resolveCaptureMime(undefined, pdf)).toBe(GENERIC_MIME)
   })
 })
 
