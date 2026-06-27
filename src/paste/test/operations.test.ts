@@ -452,7 +452,9 @@ describe('resolvePasteWithMediaCapture', () => {
   )
   // The helper only forwards files to the (stubbed) capture verb; it never reads them.
   const files = [{} as File]
-  const req = (over: Partial<PasteRequest> = {}): PasteRequest => ({
+  // Narrow override (not Partial<PasteRequest>) so `surface: 'shell'` stays literal and
+  // the shell variant of the discriminated union is preserved.
+  const req = (over: { text?: string; files?: readonly File[] } = {}): PasteRequest => ({
     text: '',
     intent: 'split',
     surface: 'shell',

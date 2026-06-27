@@ -72,6 +72,12 @@ vi.mock('@/data/globalState.ts', async () => {
 vi.mock('@/paste/operations.ts', () => ({
   pasteMultilineText: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
+  // The renderer resolves the decision (+ any media capture) through this; for a
+  // plain text paste it returns the split decision and the text unchanged.
+  resolvePasteWithMediaCapture: vi.fn(async (_runtime: unknown, request: { text: string }) => ({
+    decision: { kind: 'split' as const },
+    text: request.text,
+  })),
 }))
 
 const statusProp = defineProperty<string>('test:status', {
