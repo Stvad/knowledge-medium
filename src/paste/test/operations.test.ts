@@ -456,29 +456,29 @@ describe('resolvePasteWithMediaCapture', () => {
   const repo = {} as Repo // capture is stubbed; repo is forwarded, not used
 
   it('passes a non-media paste straight through, no capture', async () => {
-    const runtime = resolveFacetRuntimeSync([mediaWhenFiles, captureMediaVerb.impl(() => ({ embeds: ['!((x))'] }))])
+    const runtime = resolveFacetRuntimeSync([mediaWhenFiles, captureMediaVerb.impl(() => ({ references: ['((x))'] }))])
     const r = await resolvePasteWithMediaCapture(runtime, req({ text: 'hello' }), { repo, workspaceId: 'ws' })
     expect(r).toEqual({ decision: { kind: 'split' }, text: 'hello' })
   })
 
-  it('captures media, splices the embed text per file, and re-decides as text', async () => {
+  it('captures media, splices the reference text per file, and re-decides as text', async () => {
     const seen: { workspaceId: string }[] = []
     const runtime = resolveFacetRuntimeSync([
       mediaWhenFiles,
       captureMediaVerb.impl(i => {
         seen.push({ workspaceId: i.workspaceId })
-        return { embeds: ['!((a))', '!((b))'] }
+        return { references: ['((a))', '((b))'] }
       }),
     ])
     const r = await resolvePasteWithMediaCapture(runtime, req({ text: 'note', files }), { repo, workspaceId: 'ws-x' })
     expect(seen[0]).toEqual({ workspaceId: 'ws-x' })
-    // Re-decided with files stripped → no longer media; clipboard text then one embed/line.
+    // Re-decided with files stripped → no longer media; clipboard text then one reference/line.
     expect(r?.decision.kind).toBe('split')
-    expect(r?.text).toBe('note\n!((a))\n!((b))')
+    expect(r?.text).toBe('note\n((a))\n((b))')
   })
 
-  it('returns null when capture yields no embeds and there is no text', async () => {
-    const runtime = resolveFacetRuntimeSync([mediaWhenFiles, captureMediaVerb.impl(() => ({ embeds: [] }))])
+  it('returns null when capture yields no references and there is no text', async () => {
+    const runtime = resolveFacetRuntimeSync([mediaWhenFiles, captureMediaVerb.impl(() => ({ references: [] }))])
     expect(await resolvePasteWithMediaCapture(runtime, req({ text: '', files }), { repo, workspaceId: 'ws' })).toBeNull()
   })
 

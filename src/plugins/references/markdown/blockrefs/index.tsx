@@ -36,7 +36,15 @@ export const blockrefMarkdownExtension: MarkdownExtension = ({block}) => ({
     blockref: ({node, children}: BlockrefComponentProps) => {
       const blockId = getBlockId(node)
       if (!blockId) return null
-      return <BlockRef blockId={blockId}>{isAliased(node) ? children : undefined}</BlockRef>
+      return (
+        <BlockRef
+          blockId={blockId}
+          sourceBlockId={block.id}
+          occurrenceId={getOccurrenceId(node)}
+        >
+          {isAliased(node) ? children : undefined}
+        </BlockRef>
+      )
     },
     blockembed: ({node}: BlockrefComponentProps) => {
       const blockId = getBlockId(node)

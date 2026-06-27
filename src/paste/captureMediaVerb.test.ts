@@ -13,18 +13,18 @@ const input = (over: Partial<CaptureMediaInput> = {}): CaptureMediaInput => ({
 describe('captureMediaVerb (the media-capture effect seam)', () => {
   it('captures NOTHING by default — no provider installed (attachments off)', async () => {
     const runtime = resolveFacetRuntimeSync([])
-    expect(await captureMediaVerb.run(runtime, input())).toEqual({ embeds: [] })
+    expect(await captureMediaVerb.run(runtime, input())).toEqual({ references: [] })
   })
 
-  it('runs the registered impl with the input and returns its embeds (for the renderer to place)', async () => {
+  it('runs the registered impl with the input and returns its references (for the renderer to place)', async () => {
     const seen: CaptureMediaInput[] = []
     const runtime = resolveFacetRuntimeSync([
       captureMediaVerb.impl((i): CaptureMediaOutcome => {
         seen.push(i)
-        return { embeds: ['!((a))'] }
+        return { references: ['((a))'] }
       }),
     ])
-    expect(await captureMediaVerb.run(runtime, input({ workspaceId: 'ws-x' }))).toEqual({ embeds: ['!((a))'] })
+    expect(await captureMediaVerb.run(runtime, input({ workspaceId: 'ws-x' }))).toEqual({ references: ['((a))'] })
     expect(seen[0]).toMatchObject({ workspaceId: 'ws-x' })
   })
 
@@ -33,12 +33,12 @@ describe('captureMediaVerb (the media-capture effect seam)', () => {
     const runtime = resolveFacetRuntimeSync([
       captureMediaVerb.impl((): CaptureMediaOutcome => {
         captured = true
-        return { embeds: ['!((a))'] }
+        return { references: ['((a))'] }
       }),
-      // A guard that declines to call `next` short-circuits the capture (no embeds).
-      captureMediaVerb.decorator(() => () => ({ embeds: [] })),
+      // A guard that declines to call `next` short-circuits the capture (no references).
+      captureMediaVerb.decorator(() => () => ({ references: [] })),
     ])
-    expect(await captureMediaVerb.run(runtime, input())).toEqual({ embeds: [] })
+    expect(await captureMediaVerb.run(runtime, input())).toEqual({ references: [] })
     expect(captured).toBe(false)
   })
 })

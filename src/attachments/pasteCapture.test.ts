@@ -45,7 +45,7 @@ describe('mediaPasteDecisionContribution (attachments-owned paste rule)', () => 
 })
 
 describe('captureMediaContribution (the captureMediaVerb impl)', () => {
-  it('forwards the verb input to captureMediaFromFiles, reports failures, and returns the embed text', async () => {
+  it('forwards the verb input to captureMediaFromFiles, reports failures, and returns the reference text', async () => {
     mocks.captureMediaFromFiles.mockClear()
     mocks.reportCaptureFailures.mockClear()
     const runtime = resolveFacetRuntimeSync([captureMediaContribution])
@@ -54,7 +54,7 @@ describe('captureMediaContribution (the captureMediaVerb impl)', () => {
     const outcome = await captureMediaVerb.run(runtime, { repo, workspaceId: 'ws', files })
     expect(mocks.captureMediaFromFiles).toHaveBeenCalledWith(repo, 'ws', files)
     expect(mocks.reportCaptureFailures).toHaveBeenCalledTimes(1)
-    // The renderer places these — one !((assetBlockId)) per successful capture.
-    expect(outcome).toEqual({ embeds: ['!((asset-1))'] })
+    // The renderer places these — one ((assetBlockId)) reference per successful capture.
+    expect(outcome).toEqual({ references: ['((asset-1))'] })
   })
 })

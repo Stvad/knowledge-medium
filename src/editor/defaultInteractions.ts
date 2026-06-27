@@ -24,6 +24,7 @@ import {
   toggleBlockSelectionAction,
 } from '@/extensions/blockSelectionAction.js'
 import { blockFocusShellDecorator } from '@/extensions/BlockFocusShellDecorator.js'
+import { blockPasteShellDecorator } from './BlockPasteShellDecorator.js'
 import { systemToggle } from '@/facets/togglable.js'
 
 export const codeMirrorEditModeActivation: ShortcutActivationContribution = context => {
@@ -170,6 +171,7 @@ export const defaultEditorInteractionExtension: AppExtension = systemToggle({
   essential: true,
 }).of([
   blockShellDecoratorsFacet.of(blockSelectionShellDecorator, {source: 'default-block-selection'}),
+  blockShellDecoratorsFacet.of(blockPasteShellDecorator, {source: 'default-block-paste'}),
   blockShellDecoratorsFacet.of(blockFocusShellDecorator, {
     precedence: 1000,
     source: 'default-block-focus',

@@ -156,7 +156,7 @@ const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({
 
 /** Read each File's bytes and capture them as content-addressed media blocks (under
  *  the workspace ASSETS container). Returns one result per file — the caller builds +
- *  places the `!((assetBlockId))` embeds. Needs no lock: every queue op is idempotent
+ *  places the `((assetBlockId))` references. Needs no lock: every queue op is idempotent
  *  and the reconciler only promotes, so a concurrent capture/reconcile converges.
  *
  *  Files are read + captured ONE AT A TIME (bounded memory), and a grossly-oversize

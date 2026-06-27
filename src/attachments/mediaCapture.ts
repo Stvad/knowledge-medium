@@ -1,6 +1,7 @@
 /**
  * Media capture (design §9/§11) — turns raw pasted/dropped bytes into a
- * content-addressed `media` block + its `!((id))` embed, and arms the up-lane.
+ * content-addressed `media` block (the renderer places a `((id))` reference to it),
+ * and arms the up-lane.
  *
  * The ORDER is the data-loss-critical contract (§11 staging box):
  *
@@ -9,8 +10,9 @@
  *   2. write the plaintext to the OPFS byte store           ─┐ durable, and
  *   3. STAGE a byte-upload record (status `staged`, NOT       │ BEFORE the block
  *      drainable)                                            ─┘ tx.
- *   4. mint the asset block under the workspace ASSETS container + create the
- *      `!((id))` embed under the pasting block, in ONE repo.tx.
+ *   4. mint the asset block under the workspace ASSETS container, in ONE repo.tx.
+ *      (Capture mints NO placement block — the renderer inserts a `((id))` reference
+ *      as text at the paste site, per the text policy.)
  *   5. AFTER the tx commits: promote `staged` → `pending` (now drainable) + arm
  *      the drain.
  *
@@ -24,9 +26,9 @@
  * never a broken-image-forever.
  *
  * The block id is `uuidv5(<workspaceId>:<content-key>)` — a UUID, because the
- * embed is a block-ref (`!((id))`) and the block-ref grammar only recognises
+ * reference is a block-ref (`((id))`) and the block-ref grammar only recognises
  * UUID-shaped targets (referenceParser `UUID_RE_SOURCE`); a `media:…`-style id
- * would render as literal `!((media:…))` text, never a media embed. It's keyed on
+ * would render as literal `((media:…))` text, never a media reference. It's keyed on
  * the workspace AND content-key, so it stays both deterministic and
  * workspace-scoped: re-pasting identical content into the SAME workspace dedups to
  * one block (createOrRestoreTargetBlock, systemMint pristine so two devices' first
@@ -37,7 +39,7 @@
  * which `createOrGet` rejects, and the upload-queue records from clobbering). The
  * asset lives under a SHARED workspace ASSETS container, never under the pasting
  * note (a note delete must not tombstone a shared asset, §11). Each paste adds
- * only the `!((id))` embed at the paste site.
+ * only the `((id))` reference at the paste site.
  */
 
 import { v5 as uuidv5 } from 'uuid'
@@ -73,7 +75,7 @@ export const DEFAULT_MAX_CAPTURE_BYTES = 50 * 1024 * 1024
 /** uuid v5 namespace for media asset block ids (distinct from ASSETS_NS). */
 const MEDIA_BLOCK_NS = 'a1f4c7e2-9b3d-4e6a-8c5f-2d0b1e7a4c93'
 
-/** The deterministic asset block id — a UUIDv5 (the embed is a `!((id))` block-ref
+/** The deterministic asset block id — a UUIDv5 (the reference is a `((id))` block-ref
  *  and the block-ref grammar only matches UUID-shaped targets, so a `media:…` id
  *  would render as literal text). Keyed on workspace + content-key so the same
  *  plaintext content (whose content-key is the raw sha256, identical across
@@ -123,8 +125,8 @@ export type MediaCaptureFailure =
 
 export type MediaCaptureResult =
   // `assetBlockId` is the content-addressed media block (under the ASSETS container);
-  // the caller builds the `!((assetBlockId))` embed and PLACES it (the renderer's job
-  // — capture no longer mints the embed block).
+  // the caller builds the `((assetBlockId))` reference and PLACES it (the renderer's job
+  // — capture no longer mints the reference/embed block).
   | { readonly ok: true; readonly assetBlockId: string; readonly deduped: boolean }
   | { readonly ok: false; readonly reason: MediaCaptureFailure }
 
@@ -178,7 +180,7 @@ export const captureMedia = async (
   })
 
   // (4) Mint the asset under the workspace ASSETS container (idempotent ensure
-  // first, its own tx), then the asset block in one tx. The `!((assetBlockId))`
+  // first, its own tx), then the asset block in one tx. The `((assetBlockId))`
   // EMBED is NOT minted here — the caller (renderer) places it via the text-paste
   // path, so a pasted attachment lands at the caret per the text policy.
   await getOrCreateKernelPage(deps.repo, workspaceId, {

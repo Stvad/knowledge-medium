@@ -149,9 +149,9 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     expect(hasBlockType(container!, ASSETS_TYPE)).toBe(true)
   })
 
-  it('mints a UUID-shaped asset id, so the renderer’s !((id)) embed parses — not literal text', async () => {
+  it('mints a UUID-shaped asset id, so the renderer’s ((id)) reference parses — not literal text', async () => {
     // The block-ref grammar only matches UUID-shaped targets, so the asset id MUST
-    // be a UUID or the `!((id))` embed renders as literal text, not the media block.
+    // be a UUID or the `((id))` reference renders as literal text, not the media block.
     const bytes = bytesOf(20)
     const { assetBlockId } = await expectedIds(bytes, 'none', null)
     expect(isBlockRefId(assetBlockId)).toBe(true)
@@ -159,10 +159,10 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     const result = await captureMedia({ workspaceId: WS, source: { bytes, mime: 'image/png' } }, deps())
     expect(result.ok && result.assetBlockId).toBe(assetBlockId)
 
-    // The embed the renderer builds for this asset is block-ref-parseable.
-    const refs = parseBlockRefs(`!((${assetBlockId}))`)
+    // The reference the renderer builds for this asset is block-ref-parseable.
+    const refs = parseBlockRefs(`((${assetBlockId}))`)
     expect(refs).toHaveLength(1)
-    expect(refs[0]).toMatchObject({ blockId: assetBlockId, embed: true })
+    expect(refs[0]).toMatchObject({ blockId: assetBlockId, embed: false })
   })
 
   it('STAGE happens before the block tx and PROMOTE only after commit (crash recovery)', async () => {
