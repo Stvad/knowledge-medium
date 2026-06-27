@@ -1,12 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
 import { useIsMobile } from '@/utils/react.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
-import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
 import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
 import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts'
 
 /** Computes the on-screen keyboard's CSS-px inset for the toolbar.
@@ -134,18 +133,11 @@ export function MobileKeyboardToolbar() {
   const activeContexts = useActiveContextsState()
   const isEditing = activeContexts.has(ActionContextTypes.EDIT_MODE_CM)
   const runAction = useRunAction()
-  // Buttons are facet contributions, ordered by contribution precedence
-  // (applied by `runtime.read`); each button's glyph + label are read from its
-  // action (icon / description), so presentation lives on the action. Both
-  // contributions and the action set are static, so memo on runtime.
-  const runtime = useAppRuntime()
-  const {items, actionsByKey} = useMemo(
-    () => ({
-      items: runtime.read(mobileKeyboardToolbarItemsFacet),
-      actionsByKey: new Map(getEffectiveActions(runtime).map(a => [actionRuntimeKey(a), a])),
-    }),
-    [runtime],
-  )
+  // Buttons are facet contributions, ordered by contribution precedence; each
+  // button's glyph + label are read from its action (icon / description), so
+  // presentation lives on the action. The toolbar only shows in edit mode, so
+  // unqualified items resolve against EDIT_MODE_CM.
+  const resolved = useActionRefItems(mobileKeyboardToolbarItemsFacet, ActionContextTypes.EDIT_MODE_CM)
   // Hooks above the early-return must run on every render. Pass the
   // activation flag in so the sentinel only mounts/listens while the
   // toolbar is on screen.
@@ -251,22 +243,19 @@ export function MobileKeyboardToolbar() {
       style={{bottom: keyboardInset}}
       data-block-interaction="ignore"
     >
-      {items.map(({id, actionId, context}) => {
-        const action = actionsByKey.get(
-          actionRuntimeKey({id: actionId, context: context ?? ActionContextTypes.EDIT_MODE_CM}),
-        )
+      {resolved.map(({item, action}) => {
         // A button with no resolved icon is skipped (its plugin may be disabled,
         // or the action lacks an icon) — same contract as the bottom nav.
         if (!action?.icon) return null
         const Icon = action.icon
         return (
           <button
-            key={id}
+            key={item.id}
             type="button"
             aria-label={action.description}
             title={action.description}
             onMouseDown={handleMouseDown}
-            onClick={handleClick(actionId)}
+            onClick={handleClick(item.actionId)}
             className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
           >
             <Icon className="h-5 w-5"/>
