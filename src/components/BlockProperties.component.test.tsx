@@ -650,11 +650,7 @@ describe('BlockProperties component', () => {
     })
     await waitFor(() => {
       const nextRow = propertyRow(reviewerRefProp.name)
-      // The `.blockembed` box is now contributed by the embed layout (via the
-      // real block renderer); this panel test mounts the embedded block through
-      // a stub renderer, so assert the ref-embed slot (its remove affordance)
-      // and the target content rather than the layout-owned box class.
-      expect(within(nextRow).getByLabelText('Remove block reference')).toBeTruthy()
+      expect(nextRow.querySelector('.blockembed')).toBeTruthy()
       expect(within(nextRow).getByText('Target ref block')).toBeTruthy()
     })
   })
@@ -700,8 +696,7 @@ describe('BlockProperties component', () => {
     })
     await waitFor(() => {
       const nextRow = propertyRow(relatedRefsProp.name)
-      // Exactly one ref-embed slot (see note above re: the layout-owned box).
-      expect(within(nextRow).getAllByLabelText('Remove block reference')).toHaveLength(1)
+      expect(nextRow.querySelectorAll('.blockembed')).toHaveLength(1)
       expect(within(nextRow).getByText('Related target block')).toBeTruthy()
     })
   })

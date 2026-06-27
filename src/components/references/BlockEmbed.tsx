@@ -48,15 +48,23 @@ export function BlockEmbed({
     )
   }
 
-  // The embed mounts the target through the one block-rendering pipeline; the
-  // highlighted box chrome lives in the embed layout (gated on `isEmbedded` +
-  // the embed root). The bullet on each row inside is already navigable, so
-  // there's no separate "source" link.
+  // The embed already renders the target through the one block-rendering
+  // pipeline (`BlockComponent` → the block's renderer → its layout). The box is
+  // OUTER chrome around that fully-rendered block, not an alternative layout of
+  // it — so unlike the reference (whose layout changes *what* renders: raw
+  // content instead of the editable surface), the embed keeps a plain wrapper
+  // here rather than a `blockLayoutFacet` contribution. Keeping it outside the
+  // layout axis avoids coupling the box to the inner renderer and avoids
+  // fighting per-block layouts (e.g. the video player) for the single-winner
+  // layout slot. The bullet on each row inside is already navigable, so there's
+  // no separate "source" link.
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
-      <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
-        <BlockComponent blockId={blockId}/>
-      </NestedBlockContextProvider>
+      <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">
+        <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
+          <BlockComponent blockId={blockId}/>
+        </NestedBlockContextProvider>
+      </div>
     </BlockRefAncestorsProvider>
   )
 }

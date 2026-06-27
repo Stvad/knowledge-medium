@@ -22,7 +22,6 @@ import { defaultRenderersExtension } from '@/extensions/defaultRenderers'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { blockLayoutFacet } from '@/extensions/blockInteraction'
 import { referenceLayoutContribution } from '@/components/references/referenceLayout'
-import { embedLayoutContribution } from '@/components/references/embedLayout'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
@@ -81,7 +80,6 @@ const extensions = [
   defaultRenderersExtension,
   plainOutlinerPlugin,
   blockLayoutFacet.of(referenceLayoutContribution, {source: 'references'}),
-  blockLayoutFacet.of(embedLayoutContribution, {source: 'references'}),
 ]
 
 describe('block reference / embed rendering through the unified pipeline', () => {
