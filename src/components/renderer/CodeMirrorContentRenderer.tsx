@@ -13,7 +13,7 @@ import {
   planSingleBlockPaste,
 } from '@/paste/operations.js'
 import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
-import { fireCaptureMedia } from '@/paste/captureMediaVerb.js'
+import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { useRepo } from '@/context/repo.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
@@ -93,33 +93,49 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const request: PasteRequest = {text, html, files: fileList, intent, surface: 'editor', caret}
     const decided = pasteDecisionVerb.runSync(runtime, request)
 
+    // For a media paste, capture the file(s) FIRST (async) — the embed(s) are TEXT we
+    // splice into the paste below, so the attachment lands at the caret per the text
+    // policy, exactly like the clipboard text (NOT a forced child block). The capture
+    // verb is the attachments plugin's effect; this renderer never imports it. The
+    // slow upload stays fire-and-forget inside the impl, so we only await the (fast)
+    // asset-block write.
+    let pasteText = text
     if (decided.kind === 'media') {
-      // Capture the file(s) as content-addressed media blocks embedded under the
-      // current block (§11), via the capture verb — the attachments plugin owns the
-      // effect (this renderer never imports it). Async + fire-and-forget: the up-lane
-      // handles the upload; a failure degrades to a broken-asset placeholder.
       const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+      let embeds: readonly string[] = []
       if (workspaceId && fileList.length > 0) {
-        fireCaptureMedia(runtime, {repo, workspaceId, parentBlockId: block.id, files: fileList})
+        try {
+          embeds = (await captureMediaVerb.run(runtime, {repo, workspaceId, files: fileList})).embeds
+        } catch (err) {
+          // A buggy capture plugin must not break the paste — the text half still pastes.
+          console.warn('[media] paste capture failed', err)
+        }
       } else if (fileList.length > 0) {
         console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
       }
-      // Files and text are independent: an image-with-text paste attaches the image
-      // AND pastes the text. Image-only (no meaningful text) is done here.
-      if (!text.trim()) return
+      // Clipboard text first, then one embed per captured file — each on its own line.
+      pasteText = [text, ...embeds].filter(Boolean).join('\n')
+      if (!pasteText) return // nothing captured and no text
+      // The capture awaited; the view may have unmounted in that window.
+      if (!editorRef.current?.view) return
     }
 
-    // The TEXT half ALSO flows through the verb (so plugin text handling still
-    // applies): for a media paste, re-decide with files stripped so the file half
-    // doesn't re-trigger media; otherwise `decided` is already the text outcome.
+    // The paste text (clipboard ± embeds) flows through the verb so plugin text
+    // handling still applies; for a media paste re-decide with files stripped + the
+    // spliced text, so the file half doesn't re-trigger media.
     const decision =
-      decided.kind === 'media' ? pasteDecisionVerb.runSync(runtime, {...request, files: []}) : decided
+      decided.kind === 'media'
+        ? pasteDecisionVerb.runSync(runtime, {...request, text: pasteText, files: []})
+        : decided
     if (decision.kind === 'media') return // a plugin returned media without files — nothing to paste
 
+    // Re-read the caret: a media capture awaited above, so use the live selection.
+    const insertAt = editorView.state.selection.main
+
     if (decision.kind === 'single-block') {
-      const plan = planSingleBlockPaste(decision.text ?? text, {
-        from: selection.from,
-        to: selection.to,
+      const plan = planSingleBlockPaste(decision.text ?? pasteText, {
+        from: insertAt.from,
+        to: insertAt.to,
       })
       editorView.dispatch({
         changes: {from: plan.from, to: plan.to, insert: plan.insert},
@@ -128,9 +144,9 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       return
     }
 
-    const plan = planEditModeMultilinePaste(decision.text ?? text, editorView.state.doc.toString(), {
-      from: selection.from,
-      to: selection.to,
+    const plan = planEditModeMultilinePaste(decision.text ?? pasteText, editorView.state.doc.toString(), {
+      from: insertAt.from,
+      to: insertAt.to,
     })
     if (!plan) return
 

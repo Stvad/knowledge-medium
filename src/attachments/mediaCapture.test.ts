@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { propertySchemasFacet, typesFacet } from '@/data/facets'
@@ -116,16 +116,16 @@ afterEach(() => {
 })
 
 describe('captureMedia (Phase 5c — capture, plaintext)', () => {
-  it('mints the asset block + embed, stores bytes, promotes the record, arms the drain', async () => {
+  it('mints the asset block, stores bytes, promotes the record, arms the drain', async () => {
     const bytes = bytesOf(64)
     const { contentHash, contentKey, assetBlockId } = await expectedIds(bytes, 'none', null)
 
     const result = await captureMedia(
-      { workspaceId: WS, source: { bytes, mime: 'image/png', filename: 'cat.png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes, mime: 'image/png', filename: 'cat.png' } },
       deps(),
     )
 
-    expect(result).toEqual({ ok: true, assetBlockId, embedBlockId: expect.any(String), deduped: false })
+    expect(result).toEqual({ ok: true, assetBlockId, deduped: false })
 
     // bytes are in the OPFS replica under the content-key
     expect([...((await env.byteStore.get(USER, WS, contentKey)) ?? [])]).toEqual([...bytes])
@@ -144,29 +144,23 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     expect(mediaSizeProp.codec.decode(asset!.properties[mediaSizeProp.name])).toBe(64)
     expect(mediaFilenameProp.codec.decode(asset!.properties[mediaFilenameProp.name])).toBe('cat.png')
 
-    // the embed is a !((id)) block under the pasting block
-    const embed = await env.repo.load(result.ok ? result.embedBlockId : '')
-    expect(embed!.content).toBe(`!((${assetBlockId}))`)
-    expect(embed!.parentId).toBe(env.parentId)
-
     // the ASSETS container exists + is tagged
     const container = await env.repo.load(kernelPageBlockId(WS, ASSETS_NS))
     expect(hasBlockType(container!, ASSETS_TYPE)).toBe(true)
   })
 
-  it('emits a block-ref-parseable (UUID-shaped) embed — not literal !((media:…)) text', async () => {
+  it('mints a UUID-shaped asset id, so the renderer’s !((id)) embed parses — not literal text', async () => {
     // The block-ref grammar only matches UUID-shaped targets, so the asset id MUST
     // be a UUID or the `!((id))` embed renders as literal text, not the media block.
     const bytes = bytesOf(20)
     const { assetBlockId } = await expectedIds(bytes, 'none', null)
     expect(isBlockRefId(assetBlockId)).toBe(true)
 
-    const result = await captureMedia(
-      { workspaceId: WS, source: { bytes, mime: 'image/png' }, embedParentId: env.parentId },
-      deps(),
-    )
-    const embed = await env.repo.load(result.ok ? result.embedBlockId : '')
-    const refs = parseBlockRefs(embed!.content)
+    const result = await captureMedia({ workspaceId: WS, source: { bytes, mime: 'image/png' } }, deps())
+    expect(result.ok && result.assetBlockId).toBe(assetBlockId)
+
+    // The embed the renderer builds for this asset is block-ref-parseable.
+    const refs = parseBlockRefs(`!((${assetBlockId}))`)
     expect(refs).toHaveLength(1)
     expect(refs[0]).toMatchObject({ blockId: assetBlockId, embed: true })
   })
@@ -175,14 +169,14 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     const bytes = bytesOf(32)
     const { contentKey, assetBlockId } = await expectedIds(bytes, 'none', null)
 
-    // A non-existent embed parent makes the block tx throw — modeling a crash
-    // mid-mint. The durable pre-tx writes (bytes + staged record) must survive,
-    // and the record must NOT be promoted, nor the drain armed.
+    // Fail the asset-block tx (its addType step) to model a crash mid-mint, AFTER the
+    // durable pre-tx writes. (Pre-Phase-5c-ii this was triggered via a bad embed parent;
+    // the embed is now the renderer's job, so fail the asset tx directly.) The bytes +
+    // staged record must survive, and the record must NOT be promoted, nor the drain armed.
+    vi.spyOn(env.repo, 'addTypeInTx').mockRejectedValueOnce(new Error('simulated mid-mint crash'))
+
     await expect(
-      captureMedia(
-        { workspaceId: WS, source: { bytes, mime: 'image/png' }, embedParentId: 'does-not-exist' },
-        deps(),
-      ),
+      captureMedia({ workspaceId: WS, source: { bytes, mime: 'image/png' } }, deps()),
     ).rejects.toThrow()
 
     expect([...((await env.byteStore.get(USER, WS, contentKey)) ?? [])]).toEqual([...bytes])
@@ -192,43 +186,28 @@ describe('captureMedia (Phase 5c — capture, plaintext)', () => {
     expect(await env.repo.load(assetBlockId)).toBeNull()
   })
 
-  it('dedups identical content to one asset block, adding a fresh embed each paste', async () => {
+  it('dedups identical content to one asset block', async () => {
     const bytes = bytesOf(48, 7)
     const first = await captureMedia(
-      { workspaceId: WS, source: { bytes, mime: 'image/png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes, mime: 'image/png' } },
       deps(),
     )
     const second = await captureMedia(
-      { workspaceId: WS, source: { bytes, mime: 'image/png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes, mime: 'image/png' } },
       deps(),
     )
 
     expect(first.ok && second.ok).toBe(true)
     expect(first.ok && second.ok && first.assetBlockId).toBe(second.ok ? second.assetBlockId : '')
     expect(second.ok && second.deduped).toBe(true)
-    // two distinct embed blocks, both under the pasting block
-    expect(first.ok && second.ok && first.embedBlockId).not.toBe(second.ok ? second.embedBlockId : '')
   })
 
   it('captures the same plaintext content in TWO workspaces as distinct blocks (no cross-workspace collision)', async () => {
     const bytes = bytesOf(24, 3)
     const WS2 = 'ws-2'
-    let parent2 = ''
-    await env.repo.tx(
-      async (tx) => {
-        parent2 = await tx.create({ workspaceId: WS2, parentId: null, orderKey: 'm0', content: 'note2' })
-      },
-      { scope: ChangeScope.BlockDefault },
-    )
 
-    const a = await captureMedia(
-      { workspaceId: WS, source: { bytes, mime: 'image/png' }, embedParentId: env.parentId },
-      deps(),
-    )
-    const b = await captureMedia(
-      { workspaceId: WS2, source: { bytes, mime: 'image/png' }, embedParentId: parent2 },
-      deps(),
-    )
+    const a = await captureMedia({ workspaceId: WS, source: { bytes, mime: 'image/png' } }, deps())
+    const b = await captureMedia({ workspaceId: WS2, source: { bytes, mime: 'image/png' } }, deps())
 
     expect(a.ok && b.ok).toBe(true)
     // distinct ids (workspace-scoped) — neither the block create nor the upload
@@ -250,7 +229,7 @@ describe('captureMedia — e2ee + guards', () => {
     expect(e2ee.assetBlockId).not.toBe(plain.assetBlockId)
 
     const result = await captureMedia(
-      { workspaceId: WS, source: { bytes, mime: 'image/png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes, mime: 'image/png' } },
       deps({ getMaterializability: mat('decrypt'), getContentKeyHmac: async () => kId }),
     )
 
@@ -263,7 +242,7 @@ describe('captureMedia — e2ee + guards', () => {
     ['too-large', bytesOf(2048), { maxBytes: 1024 }, 'image/png'],
   ] as const)('rejects %s without any durable write', async (reason, bytes, over, mime) => {
     const result = await captureMedia(
-      { workspaceId: WS, source: { bytes, mime }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes, mime } },
       deps(over),
     )
     expect(result).toEqual({ ok: false, reason })
@@ -279,14 +258,14 @@ describe('captureMedia — e2ee + guards', () => {
     const atCap = bytesOf(1024)
 
     const e2ee = await captureMedia(
-      { workspaceId: WS, source: { bytes: atCap, mime: 'image/png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes: atCap, mime: 'image/png' } },
       deps({ maxBytes: 1024, getMaterializability: mat('decrypt'), getContentKeyHmac: async () => kId }),
     )
     expect(e2ee).toEqual({ ok: false, reason: 'too-large' }) // would 413 at upload otherwise
     expect(await env.uploadStore.listByStatus(USER, 'staged')).toHaveLength(0)
 
     const plain = await captureMedia(
-      { workspaceId: WS, source: { bytes: atCap, mime: 'image/png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes: atCap, mime: 'image/png' } },
       deps({ maxBytes: 1024 }), // copy mode (default) — passthrough, no envelope overhead
     )
     expect(plain).toMatchObject({ ok: true })
@@ -294,7 +273,7 @@ describe('captureMedia — e2ee + guards', () => {
 
   it('rejects an unsupported MIME when an allow-list is supplied', async () => {
     const result = await captureMedia(
-      { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'application/x-evil' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'application/x-evil' } },
       deps({ isAllowedMime: (m) => m.startsWith('image/') }),
     )
     expect(result).toEqual({ ok: false, reason: 'unsupported-mime' })
@@ -302,7 +281,7 @@ describe('captureMedia — e2ee + guards', () => {
 
   it('rejects capture into a locked (defer) workspace', async () => {
     const result = await captureMedia(
-      { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'image/png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'image/png' } },
       deps({ getMaterializability: mat('defer') }),
     )
     expect(result).toEqual({ ok: false, reason: 'workspace-locked' })
@@ -310,7 +289,7 @@ describe('captureMedia — e2ee + guards', () => {
 
   it('rejects an e2ee capture with no K_id on this device (the §10 re-paste migration)', async () => {
     const result = await captureMedia(
-      { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'image/png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'image/png' } },
       deps({ getMaterializability: mat('decrypt'), getContentKeyHmac: async () => null }),
     )
     expect(result).toEqual({ ok: false, reason: 'no-content-key' })
@@ -318,7 +297,7 @@ describe('captureMedia — e2ee + guards', () => {
 
   it('rejects when signed out', async () => {
     const result = await captureMedia(
-      { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'image/png' }, embedParentId: env.parentId },
+      { workspaceId: WS, source: { bytes: bytesOf(8), mime: 'image/png' } },
       deps({ getUserId: () => null }),
     )
     expect(result).toEqual({ ok: false, reason: 'no-user' })

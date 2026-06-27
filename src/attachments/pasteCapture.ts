@@ -11,10 +11,11 @@
  *     straight through to `next`.)
  *
  *  2. EFFECT ({@link captureMediaContribution}) — the {@link captureMediaVerb} impl:
- *     turn the files into content-addressed media blocks (the up-lane handles upload)
- *     and surface any failures. Lives here so core declares the capture seam while the
- *     plugin owns the actual capture — the renderers run the verb, never importing
- *     attachments. Disabling the plugin leaves the verb's no-op default.
+ *     turn the files into content-addressed media blocks (the up-lane handles upload),
+ *     surface any failures, and RETURN the `!((assetBlockId))` embed text per captured
+ *     file for the renderer to place. Lives here so core declares the capture seam
+ *     while the plugin owns the actual capture — the renderers run the verb, never
+ *     importing attachments. Disabling the plugin leaves the verb's no-op default.
  */
 import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { pasteDecisionVerb } from '@/paste/decision.js'
@@ -25,8 +26,17 @@ export const mediaPasteDecisionContribution = pasteDecisionVerb.decorator(
   { source: 'attachments' },
 )
 
+/** The `!((id))` block-embed text for a captured asset — the grammar the references
+ *  plugin parses (a UUID-shaped target; `mediaBlockId` is a UUIDv5). */
+const embedRef = (assetBlockId: string): string => `!((${assetBlockId}))`
+
 export const captureMediaContribution = captureMediaVerb.impl(
-  ({ repo, workspaceId, parentBlockId, files }) =>
-    captureMediaFromFiles(repo, workspaceId, parentBlockId, files).then(reportCaptureFailures),
+  async ({ repo, workspaceId, files }) => {
+    const results = await captureMediaFromFiles(repo, workspaceId, files)
+    reportCaptureFailures(results)
+    // One embed per SUCCESSFUL capture, in file order; the renderer inserts them as
+    // text at the caret (per the text policy), not as a forced child.
+    return { embeds: results.flatMap((r) => (r.ok ? [embedRef(r.assetBlockId)] : [])) }
+  },
   { source: 'attachments' },
 )

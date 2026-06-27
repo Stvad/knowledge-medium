@@ -91,9 +91,6 @@ export interface MediaSource {
 export interface MediaCaptureRequest {
   readonly workspaceId: string
   readonly source: MediaSource
-  /** The block the `!((id))` embed is added under (the pasting block). The asset
-   *  block itself goes under the workspace ASSETS container, NOT here. */
-  readonly embedParentId: string
 }
 
 export interface MediaCaptureDeps {
@@ -125,7 +122,10 @@ export type MediaCaptureFailure =
   | 'no-content-key'
 
 export type MediaCaptureResult =
-  | { readonly ok: true; readonly assetBlockId: string; readonly embedBlockId: string; readonly deduped: boolean }
+  // `assetBlockId` is the content-addressed media block (under the ASSETS container);
+  // the caller builds the `!((assetBlockId))` embed and PLACES it (the renderer's job
+  // — capture no longer mints the embed block).
+  | { readonly ok: true; readonly assetBlockId: string; readonly deduped: boolean }
   | { readonly ok: false; readonly reason: MediaCaptureFailure }
 
 const encodeModeFor = (m: 'decrypt' | 'copy' | 'defer'): SyncMode | null =>
@@ -136,7 +136,7 @@ export const captureMedia = async (
   request: MediaCaptureRequest,
   deps: MediaCaptureDeps,
 ): Promise<MediaCaptureResult> => {
-  const { workspaceId, source, embedParentId } = request
+  const { workspaceId, source } = request
   const { bytes, mime, filename } = source
 
   const userId = deps.getUserId()
@@ -181,7 +181,9 @@ export const captureMedia = async (
   })
 
   // (4) Mint the asset under the workspace ASSETS container (idempotent ensure
-  // first, its own tx), then the asset block + the embed in one tx.
+  // first, its own tx), then the asset block in one tx. The `!((assetBlockId))`
+  // EMBED is NOT minted here — the caller (renderer) places it via the text-paste
+  // path, so a pasted attachment lands at the caret per the text policy.
   await getOrCreateKernelPage(deps.repo, workspaceId, {
     namespace: ASSETS_NS,
     alias: ASSETS_ALIAS,
@@ -191,7 +193,6 @@ export const captureMedia = async (
   const typeSnapshot = deps.repo.snapshotTypeRegistries()
 
   let inserted = false
-  let embedBlockId = ''
   await deps.repo.tx(async (tx) => {
     const minted = await createOrRestoreTargetBlock(tx, {
       id: assetBlockId,
@@ -211,23 +212,11 @@ export const captureMedia = async (
       },
     })
     inserted = minted.inserted
-
-    // The embed at the paste site — appended under the pasting block. (Precise
-    // caret placement is the renderer's job, Phase 5c-ii.) `childrenOf` returns
-    // rows already ordered by (order_key, id), so the last one is the max key.
-    const siblings = await tx.childrenOf(embedParentId, workspaceId)
-    const lastKey = siblings.at(-1)?.orderKey ?? null
-    embedBlockId = await tx.create({
-      workspaceId,
-      parentId: embedParentId,
-      orderKey: keyAtEnd(lastKey),
-      content: `!((${assetBlockId}))`,
-    })
   }, { scope: ChangeScope.BlockDefault, description: 'capture media' })
 
   // (5) AFTER commit: the record is safe to drain, and the block exists.
   await deps.uploadStore.promote(userId, assetBlockId)
   deps.drain(userId)
 
-  return { ok: true, assetBlockId, embedBlockId, deduped: !inserted }
+  return { ok: true, assetBlockId, deduped: !inserted }
 }

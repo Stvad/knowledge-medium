@@ -7,7 +7,7 @@ import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
 // Stub the up-lane so the capture-impl test asserts the WIRING (arg mapping) without
 // real capture/upload — and without loading assetUpload's heavy deps.
 const mocks = vi.hoisted(() => ({
-  captureMediaFromFiles: vi.fn(async () => []),
+  captureMediaFromFiles: vi.fn(async () => [{ ok: true as const, assetBlockId: 'asset-1', deduped: false }]),
   reportCaptureFailures: vi.fn(),
 }))
 vi.mock('./assetUpload.js', () => mocks)
@@ -45,14 +45,16 @@ describe('mediaPasteDecisionContribution (attachments-owned paste rule)', () => 
 })
 
 describe('captureMediaContribution (the captureMediaVerb impl)', () => {
-  it('forwards the verb input to captureMediaFromFiles, then reports failures', async () => {
+  it('forwards the verb input to captureMediaFromFiles, reports failures, and returns the embed text', async () => {
     mocks.captureMediaFromFiles.mockClear()
     mocks.reportCaptureFailures.mockClear()
     const runtime = resolveFacetRuntimeSync([captureMediaContribution])
     const repo = {} as Repo
     const files = [pngFile()]
-    await captureMediaVerb.runSync(runtime, { repo, workspaceId: 'ws', parentBlockId: 'b1', files })
-    expect(mocks.captureMediaFromFiles).toHaveBeenCalledWith(repo, 'ws', 'b1', files)
+    const outcome = await captureMediaVerb.run(runtime, { repo, workspaceId: 'ws', files })
+    expect(mocks.captureMediaFromFiles).toHaveBeenCalledWith(repo, 'ws', files)
     expect(mocks.reportCaptureFailures).toHaveBeenCalledTimes(1)
+    // The renderer places these — one !((assetBlockId)) per successful capture.
+    expect(outcome).toEqual({ embeds: ['!((asset-1))'] })
   })
 })

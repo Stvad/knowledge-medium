@@ -148,9 +148,10 @@ const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({
   drain: armUploadDrain,
 })
 
-/** Read each File's bytes and capture them as media blocks under `embedParentId`.
- *  The renderer's paste entry point. Needs no lock: every queue op is idempotent and
- *  the reconciler only promotes, so a concurrent capture/reconcile converges.
+/** Read each File's bytes and capture them as content-addressed media blocks (under
+ *  the workspace ASSETS container). Returns one result per file — the caller builds +
+ *  places the `!((assetBlockId))` embeds. Needs no lock: every queue op is idempotent
+ *  and the reconciler only promotes, so a concurrent capture/reconcile converges.
  *
  *  Files are read + captured ONE AT A TIME (bounded memory), and a grossly-oversize
  *  file is rejected by its declared `size` BEFORE `arrayBuffer()` — a multi-GB paste
@@ -160,7 +161,6 @@ const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({
 export const captureMediaFromFiles = async (
   repo: Repo,
   workspaceId: string,
-  embedParentId: string,
   files: readonly File[],
 ): Promise<MediaCaptureResult[]> => {
   // Snapshot the lane context at the paste boundary: the user, and that user's §6
@@ -185,7 +185,7 @@ export const captureMediaFromFiles = async (
       mime: resolveCaptureMime(file.type, bytes),
       filename: file.name || undefined,
     }
-    results.push(await captureMedia({ workspaceId, source, embedParentId }, deps))
+    results.push(await captureMedia({ workspaceId, source }, deps))
   }
   return results
 }

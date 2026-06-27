@@ -26,7 +26,7 @@ import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
 import { pasteMultilineText } from '@/paste/operations.js'
 import { pasteDecisionVerb, type PasteRequest } from '@/paste/decision.js'
-import { fireCaptureMedia } from '@/paste/captureMediaVerb.js'
+import { captureMediaVerb } from '@/paste/captureMediaVerb.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -489,27 +489,36 @@ export function DefaultBlockRenderer(
       // is already in hand, so nothing to await before deciding.
       const request: PasteRequest = {text: pastedText, html, files: fileList, intent: 'split', surface: 'shell'}
       const decided = pasteDecisionVerb.runSync(runtime, request)
+      // For a media paste, capture first (async) — the embed(s) are TEXT we splice into
+      // the paste, so the attachment lands per the text policy (NOT a forced child).
+      // The capture verb is the attachments plugin's effect (no import here).
+      let pasteText = pastedText
       if (decided.kind === 'media') {
-        // Capture file(s) as media blocks embedded under the focused block (§11), via
-        // the capture verb — the attachments plugin owns the effect (no import here).
         const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
+        let embeds: readonly string[] = []
         if (workspaceId && fileList.length > 0) {
-          fireCaptureMedia(runtime, {repo, workspaceId, parentBlockId: block.id, files: fileList})
+          try {
+            embeds = (await captureMediaVerb.run(runtime, {repo, workspaceId, files: fileList})).embeds
+          } catch (err) {
+            // A buggy capture plugin must not break the paste — the text half still pastes.
+            console.warn('[media] paste capture failed', err)
+          }
         } else if (fileList.length > 0) {
           console.warn('[media] could not capture pasted file(s): no workspace for block', block.id)
         }
-        // Files and text are independent: a media paste that also carries text
-        // attaches the file(s) AND pastes the text. No text → done here.
-        if (!pastedText.trim()) return
+        pasteText = [pastedText, ...embeds].filter(Boolean).join('\n')
+        if (!pasteText) return // nothing captured and no text
       }
-      // The TEXT half ALSO flows through the verb (plugin text handling still
-      // applies): for a media paste, re-decide with files stripped so the file half
-      // doesn't re-trigger media. The shell hardcodes intent 'split', so `single-block`
-      // only comes from an explicit override and is honored literally.
+      // The paste text (clipboard ± embeds) flows through the verb (plugin text handling
+      // still applies); for a media paste re-decide with files stripped + the spliced
+      // text. The shell hardcodes intent 'split', so `single-block` only comes from an
+      // explicit override and is honored literally.
       const decision =
-        decided.kind === 'media' ? pasteDecisionVerb.runSync(runtime, {...request, files: []}) : decided
+        decided.kind === 'media'
+          ? pasteDecisionVerb.runSync(runtime, {...request, text: pasteText, files: []})
+          : decided
       if (decision.kind === 'media') return // a plugin returned media without files — nothing to paste
-      const pasted = await pasteMultilineText(decision.text ?? pastedText, block, repo, {
+      const pasted = await pasteMultilineText(decision.text ?? pasteText, block, repo, {
         scopeRootId,
         asSingleBlock: decision.kind === 'single-block',
       })
