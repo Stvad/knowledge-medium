@@ -5,7 +5,6 @@ import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
 import type { ComponentType, RefObject } from 'react'
 import {
-  focusBlock,
   showPropertiesProp,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -13,7 +12,7 @@ import {
 } from '@/data/properties.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
-import { useRef, ClipboardEvent, useMemo } from 'react'
+import { useRef, useMemo } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -24,8 +23,6 @@ import {
 import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.js'
 import { navigate, useOpenBlock } from '@/utils/navigation.js'
-import { pasteMultilineText, resolvePasteWithMediaCapture } from '@/paste/operations.js'
-import type { PasteRequest } from '@/paste/decision.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
 import { useIsMobile } from '@/utils/react.js'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -52,7 +49,6 @@ import {
   blockHeaderFacet,
   blockLayoutFacet,
   blockShellDecoratorsFacet,
-  isInteractiveContentEvent,
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
@@ -65,7 +61,6 @@ import {
 } from '@/extensions/blockInteraction.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useContinuousGestures } from '@/extensions/continuousGestures.js'
-import { isFocusedBlock } from '@/data/properties.js'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -381,9 +376,9 @@ function BlockShellDecoratorStack({
 /**
  * The opt-in interactive block surface (the `Shell` slot's body). Encapsulates
  * everything the editable block wrapper bears — the canonical data attributes +
- * focusable tabIndex, click/paste dispatch, the shell decorators
- * (selection/focus/spatial), and `useShortcutSurfaceActivations` — and yields
- * the composed `shellProps` to the layout's render-prop. A layout renders
+ * focusable tabIndex, the click handler (`blockClickHandlersFacet`), the shell
+ * decorators (selection/focus/paste/spatial), and `useShortcutSurfaceActivations`
+ * — and yields the composed `shellProps` to the layout's render-prop. A layout renders
  * `<Shell>{shellProps => <wrapper {...shellProps}/>}</Shell>` to become a
  * focusable/editable block; a read-only layout (a reference) omits it, so none
  * of this machinery runs.
@@ -400,7 +395,7 @@ function BlockShell({
   children: BlockShellRender
 }) {
   const runtime = useAppRuntime()
-  const {block, repo, uiStateBlock, scopeRootId} = resolveContext
+  const {block} = resolveContext
   // Always defined in practice (the parent passes `useBlockContext()`); the
   // `?? {}` keeps the type honest and returns the same stable object.
   const blockContext = resolveContext.blockContext ?? {}
@@ -412,46 +407,10 @@ function BlockShell({
     [resolveBlockClickHandler, resolveContext],
   )
 
-  // Reads live focus at fire time via `isFocusedBlock` (peekProperty) rather
-  // than capturing the reactive `inFocus`, so this closure stays stable.
-  // todo this plausibly should be a global handler and not on the block
-  const handlePaste = useMemo(
-    () => async (e: ClipboardEvent<HTMLElement>) => {
-      if (e.defaultPrevented || isInteractiveContentEvent(e)) return
-      const renderScopeId = typeof blockContext.renderScopeId === 'string'
-        ? blockContext.renderScopeId
-        : undefined
-      if (!isFocusedBlock(uiStateBlock, block.id, renderScopeId)) return
-
-      e.preventDefault()
-      // File(s) on the clipboard (a pasted image) carry no text/plain — read
-      // them before the no-text early return so an image paste isn't dropped.
-      const files = e.clipboardData.files
-      const fileList = files && files.length > 0 ? Array.from(files) : []
-      const pastedText = e.clipboardData.getData('text/plain')
-      if (!pastedText && fileList.length === 0) return
-      const html = e.clipboardData.getData('text/html') || undefined
-
-      // Block-shell paste (block focused, NOT in edit mode) has no text caret,
-      // so the chord intent is always 'split'. Resolve the decision, capturing
-      // any pasted media first (its reference/embed text is spliced into the
-      // paste, so the attachment lands per the text policy — NOT a forced
-      // child). `null` ⇒ nothing to paste.
-      const request: PasteRequest = {text: pastedText, html, files: fileList, intent: 'split', surface: 'shell'}
-      const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId ?? ''
-      const resolved = await resolvePasteWithMediaCapture(runtime, request, {repo, workspaceId})
-      if (!resolved) return
-      const pasted = await pasteMultilineText(resolved.text, block, repo, {
-        scopeRootId,
-        asSingleBlock: resolved.decision.kind === 'single-block',
-      })
-      if (pasted[0]) {
-        void focusBlock(uiStateBlock, pasted[0].id, {renderScopeId})
-      }
-    },
-    [block, blockContext.renderScopeId, repo, runtime, scopeRootId, uiStateBlock],
-  )
-
+  // Base shell props. `onClick` comes from `blockClickHandlersFacet`; `onPaste`
+  // is NOT set here — it's contributed by `blockPasteShellDecorator` (like
+  // selection/focus), so paste composes with the rest of the shell decorators
+  // rather than being hardcoded on the wrapper.
   const shellProps = useMemo<BlockShellProps>(() => ({
     'data-block-id': block.id,
     'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
@@ -463,8 +422,7 @@ function BlockShell({
     onClick: handleBlockClick
       ? (event) => { void handleBlockClick(event) }
       : undefined,
-    onPaste: (event) => { void handlePaste(event) },
-  }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, handlePaste, shellRef])
+  }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, shellRef])
 
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(
