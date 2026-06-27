@@ -169,7 +169,8 @@ export class IdbKeyedStore {
    * across owners, so a scan never reaches a sibling owner. `visit` is synchronous
    * (it runs in the cursor's `onsuccess`, while the tx is active) and may read
    * `cursor.value` or, in a `'readwrite'` scan, `cursor.delete()`; accumulate into
-   * a variable it closes over.
+   * a variable it closes over. If `visit` throws, the scan aborts (rolling back a
+   * readwrite scan's partial writes) and rejects with that error.
    */
   async scanByPrefix(
     mode: IDBTransactionMode,
@@ -187,10 +188,24 @@ export class IdbKeyedStore {
               resolve()
               return
             }
-            if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
-              visit(cursor)
+            try {
+              if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
+                visit(cursor)
+              }
+              cursor.continue()
+            } catch (err) {
+              // `visit` broke its total/synchronous contract. Left uncaught the throw
+              // escapes the handler — aborting the tx but leaving THIS promise
+              // unsettled, so the scan would hang AND the fence rejection would leak.
+              // Abort explicitly (rolls back a readwrite scan's partial writes), then
+              // reject so runTransaction surfaces the error and observes the fence.
+              try {
+                store.transaction.abort()
+              } catch {
+                // tx already settling — nothing to roll back
+              }
+              reject(err)
             }
-            cursor.continue()
           }
           request.onerror = () => reject(request.error)
         }),

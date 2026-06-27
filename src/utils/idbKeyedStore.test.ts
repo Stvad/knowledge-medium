@@ -102,6 +102,31 @@ describe('IdbKeyedStore', () => {
     expect(keys.sort()).toEqual([idbRecordId('u', 'a'), idbRecordId('u', 'b')].sort())
   })
 
+  it('scanByPrefix rejects (and rolls back) when visit throws — no hang, no leak', async () => {
+    // A throwing `visit` left uncaught would abort the tx but leave the scan promise
+    // unsettled (hang) AND leak the fence rejection. The guard turns it into a clean
+    // rejection. A readwrite scan that deletes then throws mid-walk must roll back —
+    // both records survive. (If the scan hung instead, this test would time out; if
+    // the fence leaked, vitest would flag an unhandled rejection.)
+    const store = new IdbKeyedStore('km-test-scan-throw', 'things')
+    await store.tx('readwrite', s => s.put({n: 1}, idbRecordId('u', 'a')))
+    await store.tx('readwrite', s => s.put({n: 2}, idbRecordId('u', 'b')))
+
+    const boom = new Error('visit boom')
+    let seen = 0
+    await expect(
+      store.scanByPrefix('readwrite', idbKeyPrefix('u'), cursor => {
+        seen += 1
+        cursor.delete()
+        if (seen === 2) throw boom
+      }),
+    ).rejects.toBe(boom)
+
+    // The first delete is rolled back by the abort: both records still present.
+    expect(await store.tx('readonly', s => s.get(idbRecordId('u', 'a')))).toEqual({n: 1})
+    expect(await store.tx('readonly', s => s.get(idbRecordId('u', 'b')))).toEqual({n: 2})
+  })
+
   it('runTransaction surfaces a body rejection and does not leak the commit fence', async () => {
     // A duplicate-key `add` rejects the body's request (exercising promisifyRequest's
     // error path) AND aborts the tx, so the commit fence rejects too. runTransaction
