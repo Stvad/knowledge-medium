@@ -6,7 +6,9 @@ import { revealChildren } from '@/data/mutators'
 import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
-import { pasteDecisionVerb } from './decision.js'
+import { FacetRuntime } from '@/facets/facet.js'
+import { captureMediaVerb } from './captureMediaVerb.js'
+import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
 
 type PastePosition = 'before' | 'after'
 type PastePlacement = 'visible' | 'sibling'
@@ -393,6 +395,61 @@ export async function pasteEditModeMultilineText(
   }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text at editor selection'})
 
   return {pasted: rootBlocks, focusBlock, focusOffset}
+}
+
+/** The applied paste once any media capture is done: a non-`media` decision plus
+ *  the final text to paste (the decision's own rewrite, else the source text with
+ *  the captured embeds spliced in). */
+export interface ResolvedTextPaste {
+  readonly decision: Exclude<PasteDecision, { kind: 'media' }>
+  readonly text: string
+}
+
+/** Resolve a paste decision, performing MEDIA CAPTURE when the decision is `media`:
+ *  capture the files via {@link captureMediaVerb} (the attachments plugin's effect —
+ *  this module never imports the plugin), splice the returned `!((id))` embed text
+ *  into the paste, and RE-DECIDE with the files stripped so the embeds flow through
+ *  the normal text path (landing at the caret like any pasted text, not a forced
+ *  child). Surface-agnostic: the caller applies the returned decision its own way
+ *  (outline insert vs editor dispatch), and reads `request.surface`/`caret` itself.
+ *
+ *  Returns `null` when there's nothing to paste — a capture that yielded no embeds
+ *  AND no accompanying text, or a plugin that returned `media` with no files. A
+ *  capture THROW is swallowed (a buggy plugin must not break the paste; the text
+ *  half still pastes). The capture awaits, so a caller with a DETACHABLE surface (an
+ *  editor view that can unmount mid-await) must re-check liveness AFTER this resolves
+ *  and before applying. */
+export async function resolvePasteWithMediaCapture(
+  runtime: FacetRuntime,
+  request: PasteRequest,
+  capture: { repo: Repo; workspaceId: string },
+): Promise<ResolvedTextPaste | null> {
+  const decided = pasteDecisionVerb.runSync(runtime, request)
+  if (decided.kind !== 'media') return { decision: decided, text: decided.text ?? request.text }
+
+  const files = request.files ?? []
+  let embeds: readonly string[] = []
+  if (capture.workspaceId && files.length > 0) {
+    try {
+      embeds = (await captureMediaVerb.run(runtime, { repo: capture.repo, workspaceId: capture.workspaceId, files }))
+        .embeds
+    } catch (err) {
+      // A buggy capture plugin must not break the paste — the text half still pastes.
+      console.warn('[media] paste capture failed', err)
+    }
+  } else if (files.length > 0) {
+    console.warn('[media] could not capture pasted file(s): no workspace')
+  }
+
+  // Clipboard text first, then one embed per captured file — each on its own line.
+  const text = [request.text, ...embeds].filter(Boolean).join('\n')
+  if (!text) return null // nothing captured and no text
+
+  // Re-decide with files stripped + the spliced text, so the file half doesn't
+  // re-trigger `media`.
+  const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, files: [] })
+  if (decision.kind === 'media') return null // a plugin returned media without files — nothing to paste
+  return { decision, text: decision.text ?? text }
 }
 
 /** Read the clipboard and paste it around `pasteTarget`. This is the
