@@ -112,6 +112,18 @@ const DB_NAME = 'km-e2ee-keys'
 const STORE_NAME = 'workspace_keys'
 const DB_VERSION = 1
 
+// TODO(idb-keyed-store): this IndexedDB glue (`promisifyRequest`, the cached
+// `openDb` with clear-on-reject, and the commit-aware `tx` below) duplicates the
+// shared `@/utils/idbKeyedStore.ts` (`IdbKeyedStore` + `idbRecordId`), which
+// `compiledModuleCache.ts` already builds on. This store deliberately keeps its
+// own copy for now: its IndexedDB path stores a `CryptoKey` (NOT structured-
+// cloneable under Node), so `yarn run check` exercises NONE of this glue, and a
+// silent regression means an e2ee workspace can't be unlocked (effective data
+// loss). Migrating to the shared helper MUST be browser-validated — unlock an
+// e2ee workspace → reload → confirm it's still unlocked (WK persisted) and that
+// media in it still renders; also exercise delete/clearForUser if practical —
+// not gate-validated. Do the swap once that validation can be run.
+
 const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
   new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result)
