@@ -37,12 +37,14 @@ function pickImageFiles(): Promise<File[]> {
     input.style.position = 'fixed'
     input.style.left = '-9999px'
     let settled = false
+    let backstop = 0
     const cleanup = (files: File[]) => {
       if (settled) return
       settled = true
       input.removeEventListener('change', onChange)
       input.removeEventListener('cancel', onCancel)
       window.removeEventListener('focus', onWindowFocus)
+      window.clearTimeout(backstop)
       input.remove()
       resolve(files)
     }
@@ -50,31 +52,30 @@ function pickImageFiles(): Promise<File[]> {
     const onCancel = () => cleanup([])
     // Dismissal fallback. The `cancel` event isn't fired by older iOS Safari /
     // WebViews (< Safari 16.4), so a dismissed picker would otherwise resolve
-    // NEITHER event — hanging the promise and leaking the caller's edit-mode
-    // keepalive hold (pinning edit mode app-wide). So when focus returns to the
-    // window AFTER the picker took it (we wait for the open-induced blur first),
-    // with no files chosen, treat it as a dismissal. Deferred a tick so a real
-    // `change` (which populates `input.files` first) wins, and the `input.files`
-    // check avoids cancelling a slow selection.
+    // neither `change` nor `cancel` — hanging the promise and leaking the
+    // caller's edit-mode keepalive (pinning edit mode app-wide). So when focus
+    // returns to the window with no files chosen, treat it as a dismissal,
+    // deferred a tick so a real `change` (which populates `input.files` first)
+    // wins.
     //
-    // Known trade-off (standard window-focus idiom): no web API distinguishes
-    // "picker closed" from "user alt-tabbed back with the picker still open", so
-    // the latter can resolve `[]` early and drop a subsequent selection. That's
-    // strictly better than the pre-fallback failure (a permanent edit-mode wedge)
-    // and is recoverable by re-picking; on the cancel-less mobile WebViews this
-    // actually matters for, the picker is a full-screen sheet where alt-tab-while-
-    // open isn't a thing.
-    let blurredSinceOpen = false
-    const onWindowBlur = () => { blurredSinceOpen = true }
+    // Known trade-off: alt-tabbing back while the picker is still open can
+    // false-cancel and drop a subsequent selection — recoverable by re-picking,
+    // and far better than a hung promise. We deliberately do NOT gate this on a
+    // prior window `blur`: the cancel-less WebViews this exists for may not fire
+    // one when the picker opens, which would suppress the release on exactly the
+    // environments that need it.
     const onWindowFocus = () => {
-      if (!blurredSinceOpen) return
       window.setTimeout(() => {
         if (!input.files || input.files.length === 0) cleanup([])
       }, 300)
     }
+    // Absolute backstop: guarantee the promise resolves (and the keepalive
+    // releases) even in an environment that fires neither `cancel` nor window
+    // `focus`. Generous so a slow real pick — which still resolves via `change` —
+    // is never cut short; only a truly event-less dismissal waits this out.
+    backstop = window.setTimeout(() => cleanup([]), 3 * 60_000)
     input.addEventListener('change', onChange)
     input.addEventListener('cancel', onCancel)
-    window.addEventListener('blur', onWindowBlur)
     window.addEventListener('focus', onWindowFocus)
     document.body.appendChild(input)
     input.click()
