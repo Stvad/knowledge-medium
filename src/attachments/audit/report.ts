@@ -54,12 +54,21 @@ export function buildReport(outcome: AuditOutcome, redact: (s: string) => string
   const notices = [`attachments ciphertext audit: ${tally}`]
 
   if (findings.length === 0) {
+    // Surface the coverage BOUND so a green run isn't misread as "no plaintext
+    // anywhere": the scan set is the workspaces the server LABELS e2ee
+    // (`listE2eeWorkspaceIds`, keyed on the design-untrusted `encryption_mode`
+    // column). A workspace mislabeled non-e2ee is not enumerated, so its objects
+    // aren't checked here — the read-side hash-verify (§5.1) is the load-bearing
+    // confidentiality control; this audit is an honest-client tripwire over the
+    // labeled set, not a proof over all storage (§10.1/§17).
+    const coverageNote =
+      'Coverage is scoped to server-labeled e2ee workspaces — a workspace mislabeled non-e2ee is not scanned, so this is not proof of zero plaintext across all storage.'
     return {
       exitCode: 0,
       notices,
       warnings: [],
       errors: [],
-      summary: `### ✅ Attachments ciphertext audit — armed and clean\n${tally}.`,
+      summary: `### ✅ Attachments ciphertext audit — armed and clean\n${tally}.\n\n> ${coverageNote}`,
     }
   }
 

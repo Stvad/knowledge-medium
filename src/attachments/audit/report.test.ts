@@ -22,6 +22,9 @@ describe('buildReport', () => {
     expect(r.notices.join(' ')).toContain('2 E2EE workspace(s), 5 object(s) scanned, 0 finding(s)')
     expect(r.errors).toEqual([])
     expect(r.summary).toMatch(/✅/)
+    // The clean run must state its coverage BOUND (scoped to server-labeled e2ee
+    // workspaces) so a green can't be misread as proof of zero plaintext anywhere.
+    expect(r.summary).toMatch(/scoped to server-labeled e2ee/i)
   })
 
   it('findings → exit 1, one REDACTED ::error:: per finding + an aggregate, ❌ summary', () => {
