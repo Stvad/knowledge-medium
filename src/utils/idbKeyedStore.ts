@@ -10,23 +10,24 @@
  * copy or they silently diverged. This module is the single copy. Consumers:
  *   - `src/extensions/compiledModuleCache.ts` (approved/compiled extensions)
  *   - `src/sync/keys/keyStore.ts` (per-device workspace keys — browser-only path)
- *   - `src/attachments/uploadStore.ts` (the byte-upload staging queue; adopts
- *     this when #265 lands — see that file)
+ *   - `src/attachments/uploadStore.ts` (the byte-upload staging queue)
  *
  * Records are stored under an opaque string key; {@link idbRecordId} builds a
  * collision-free `(owner, id)` composite for the stores that namespace records
- * per account.
+ * per account, and {@link IdbKeyedStore.scanByPrefix}/{@link IdbKeyedStore.deleteByPrefix}
+ * walk one such namespace.
  *
  * TRANSACTION ACTIVENESS (load-bearing): an IndexedDB transaction is only
  * "active" within the task that created it and its request callbacks — it
  * auto-commits once control returns to the event loop with no outstanding
- * request. {@link tx} and {@link openTransaction} therefore issue (or hand back
- * a store ready to issue) the FIRST request in the same task that created the
- * transaction: every `await` between creating the tx and issuing its first
- * request resolves via a microtask within that same task (the awaited promises
- * are either already-settled or settle on the IDB open event), so the tx is
- * still active. A caller of {@link openTransaction} MUST likewise issue its
- * first request synchronously after the await, before yielding to a later task.
+ * request. The public ops ({@link IdbKeyedStore.tx}, {@link IdbKeyedStore.runTransaction},
+ * {@link IdbKeyedStore.scanByPrefix}) all invoke their request-issuing callback
+ * synchronously in the same task that created the transaction: every `await`
+ * between creating the tx and issuing its first request resolves via a microtask
+ * within that same task (the awaited promises are either already-settled or settle
+ * on the IDB open event), so the tx is still active. The callback a caller passes
+ * MUST likewise issue its first request synchronously, before any `await` that
+ * yields to a later task.
  */
 
 /** Promisify a single `IDBRequest` — resolve on success, reject on error. */
@@ -104,14 +105,14 @@ export class IdbKeyedStore {
   }
 
   /**
-   * Open a transaction and return its object store plus a commit fence. Low-level
-   * escape hatch — prefer {@link runTransaction} / {@link tx} / {@link deleteByPrefix},
-   * which manage the fence for you. The caller MUST issue its first request
-   * synchronously after awaiting (see the activeness note in the file header) and
-   * MUST observe `committed` on EVERY path — `await` it after the last request, and
-   * on an error path `.catch` it — or a tx abort surfaces as an unhandled rejection.
+   * Open a transaction and return its object store plus a commit fence. PRIVATE
+   * and footgun-laden by design — the caller must issue its first request
+   * synchronously and observe `committed` on EVERY path (await it, or `.catch` it
+   * on an error path) or a tx abort surfaces as an unhandled rejection. The public
+   * ops ({@link runTransaction}, {@link tx}, {@link scanByPrefix}) wrap exactly
+   * that contract so callers never have to.
    */
-  async openTransaction(
+  private async openTransaction(
     mode: IDBTransactionMode,
   ): Promise<{store: IDBObjectStore; committed: Promise<void>}> {
     const db = await this.openDb()
@@ -161,14 +162,22 @@ export class IdbKeyedStore {
   }
 
   /**
-   * Delete every record whose key starts with `prefix` (the per-owner namespace
-   * from {@link idbKeyPrefix}), in one commit-durable readwrite transaction. A
-   * plain `startsWith` over the (small) store avoids IDBKeyRange string-bound
-   * subtleties; the `:`-delimited prefix is collision-free across owners.
+   * Walk every record whose key starts with `prefix` (the per-owner namespace
+   * from {@link idbKeyPrefix}), calling `visit` with each matching cursor, in one
+   * commit-durable transaction. A plain `startsWith` over the (small) store avoids
+   * IDBKeyRange string-bound subtleties; the `:`-delimited prefix is collision-free
+   * across owners, so a scan never reaches a sibling owner. `visit` is synchronous
+   * (it runs in the cursor's `onsuccess`, while the tx is active) and may read
+   * `cursor.value` or, in a `'readwrite'` scan, `cursor.delete()`; accumulate into
+   * a variable it closes over.
    */
-  async deleteByPrefix(prefix: string): Promise<void> {
+  async scanByPrefix(
+    mode: IDBTransactionMode,
+    prefix: string,
+    visit: (cursor: IDBCursorWithValue) => void,
+  ): Promise<void> {
     await this.runTransaction(
-      'readwrite',
+      mode,
       store =>
         new Promise<void>((resolve, reject) => {
           const request = store.openCursor()
@@ -179,12 +188,20 @@ export class IdbKeyedStore {
               return
             }
             if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
-              cursor.delete()
+              visit(cursor)
             }
             cursor.continue()
           }
           request.onerror = () => reject(request.error)
         }),
     )
+  }
+
+  /**
+   * Delete every record whose key starts with `prefix`, in one commit-durable
+   * readwrite transaction. Sugar over {@link scanByPrefix}.
+   */
+  async deleteByPrefix(prefix: string): Promise<void> {
+    await this.scanByPrefix('readwrite', prefix, cursor => cursor.delete())
   }
 }

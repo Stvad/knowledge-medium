@@ -56,14 +56,17 @@ describe('IdbKeyedStore', () => {
     expect(await reader.tx('readonly', s => s.get('k'))).toEqual({v: 'PERSISTED'})
   })
 
-  it('rejects the commit fence when the transaction aborts', async () => {
+  it('rejects via the commit fence when the transaction aborts', async () => {
     const store = new IdbKeyedStore('km-test-abort', 'things')
-    const {store: s, committed} = await store.openTransaction('readwrite')
-    // Abort with no pending request, so we hit the onabort path cleanly (a
-    // pending request's bubbled error would instead trip onerror — still a
-    // rejection, but a different branch).
-    s.transaction.abort()
-    await expect(committed).rejects.toThrow(/aborted/i)
+    // Body RESOLVES but aborts the tx with no pending request, so the failure
+    // arrives through the commit fence's `onabort` (not a request error) —
+    // runTransaction must propagate it rather than resolve as if committed.
+    await expect(
+      store.runTransaction('readwrite', s => {
+        s.transaction.abort()
+        return Promise.resolve()
+      }),
+    ).rejects.toThrow(/aborted/i)
   })
 
   it('does not cache a rejected open: a later op retries a fresh open', async () => {
@@ -84,52 +87,26 @@ describe('IdbKeyedStore', () => {
     expect(calls).toBeGreaterThanOrEqual(2)
   })
 
-  it('openTransaction gives raw store access for cursor scans + a commit fence', async () => {
+  it('scanByPrefix visits only the prefix-owned records (sibling-prefix safe)', async () => {
     const store = new IdbKeyedStore('km-test-cursor', 'things')
     await store.tx('readwrite', s => s.put({n: 1}, idbRecordId('u', 'a')))
     await store.tx('readwrite', s => s.put({n: 2}, idbRecordId('u', 'b')))
     await store.tx('readwrite', s => s.put({n: 3}, idbRecordId('other', 'a')))
 
-    const prefix = idbKeyPrefix('u')
-    const {store: s, committed} = await store.openTransaction('readonly')
     const keys: string[] = []
-    await new Promise<void>((resolve, reject) => {
-      const request = s.openCursor()
-      request.onsuccess = () => {
-        const cursor = request.result
-        if (!cursor) {
-          resolve()
-          return
-        }
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
-          keys.push(cursor.key)
-        }
-        cursor.continue()
-      }
-      request.onerror = () => reject(request.error)
+    await store.scanByPrefix('readonly', idbKeyPrefix('u'), cursor => {
+      if (typeof cursor.key === 'string') keys.push(cursor.key)
     })
-    await committed
 
     // Only the 'u'-owned records, never 'other' (sibling-prefix safe).
     expect(keys.sort()).toEqual([idbRecordId('u', 'a'), idbRecordId('u', 'b')].sort())
   })
 
-  it('promisifyRequest rejects on a request error', async () => {
-    const store = new IdbKeyedStore('km-test-promisify', 'things')
-    await store.tx('readwrite', s => s.put({}, 'dup'))
-    const {store: s, committed} = await store.openTransaction('readwrite')
-    // `add` on an existing key fails with a ConstraintError on the request —
-    // promisifyRequest must surface it as a rejection, not hang.
-    await expect(promisifyRequest(s.add({}, 'dup'))).rejects.toBeTruthy()
-    await committed.catch(() => {}) // the failed add aborts the tx
-  })
-
   it('runTransaction surfaces a body rejection and does not leak the commit fence', async () => {
-    // A duplicate-key `add` rejects the body's request AND aborts the tx, so the
-    // commit fence rejects too. runTransaction must rethrow the body error and
-    // observe the fence's rejection itself — note we do NOT catch any fence here
-    // (unlike the raw openTransaction test above); if it leaked, vitest would
-    // flag an unhandled rejection.
+    // A duplicate-key `add` rejects the body's request (exercising promisifyRequest's
+    // error path) AND aborts the tx, so the commit fence rejects too. runTransaction
+    // must rethrow the body error and observe the fence's rejection itself — we do
+    // NOT catch any fence here; if it leaked, vitest would flag an unhandled rejection.
     const store = new IdbKeyedStore('km-test-rt-leak', 'things')
     await store.tx('readwrite', s => s.put({}, 'dup'))
     await expect(

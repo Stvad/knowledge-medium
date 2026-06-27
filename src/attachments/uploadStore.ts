@@ -241,49 +241,20 @@ export class IndexedDbByteUploadStore implements ByteUploadStore {
   }
 
   async listByStatus(userId: string, status: ByteUploadStatus): Promise<ByteUploadRecord[]> {
-    const prefix = uploadUserPrefix(userId)
-    return this.idb.runTransaction('readonly', store =>
-      new Promise<ByteUploadRecord[]>((resolve, reject) => {
-        const acc: ByteUploadRecord[] = []
-        const request = store.openCursor()
-        request.onsuccess = () => {
-          const cursor = request.result
-          if (!cursor) {
-            resolve(acc)
-            return
-          }
-          const record = cursor.value as ByteUploadRecord
-          if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
-            acc.push(record)
-          }
-          cursor.continue()
-        }
-        request.onerror = () => reject(request.error)
-      }),
-    )
+    const out: ByteUploadRecord[] = []
+    await this.idb.scanByPrefix('readonly', uploadUserPrefix(userId), cursor => {
+      const record = cursor.value as ByteUploadRecord
+      if (record.status === status) out.push(record)
+    })
+    return out
   }
 
   async countByStatus(userId: string, status: ByteUploadStatus): Promise<number> {
-    const prefix = uploadUserPrefix(userId)
-    return this.idb.runTransaction('readonly', store =>
-      new Promise<number>((resolve, reject) => {
-        let n = 0
-        const request = store.openCursor()
-        request.onsuccess = () => {
-          const cursor = request.result
-          if (!cursor) {
-            resolve(n)
-            return
-          }
-          const record = cursor.value as ByteUploadRecord
-          if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix) && record.status === status) {
-            n += 1
-          }
-          cursor.continue()
-        }
-        request.onerror = () => reject(request.error)
-      }),
-    )
+    let n = 0
+    await this.idb.scanByPrefix('readonly', uploadUserPrefix(userId), cursor => {
+      if ((cursor.value as ByteUploadRecord).status === status) n += 1
+    })
+    return n
   }
 
   /** Read-modify-write a single record inside one readwrite tx. A missing record
