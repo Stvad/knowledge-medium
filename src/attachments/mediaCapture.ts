@@ -49,7 +49,7 @@ import { createOrRestoreTargetBlock } from '@/data/targets'
 import { BINARY_ENVELOPE_OVERHEAD_BYTES } from '../sync/crypto/binaryEnvelope.js'
 import { computeContentHash } from '../sync/crypto/contentHash.js'
 import { deriveContentKey } from '../sync/crypto/contentKey.js'
-import type { GetMaterializability, SyncMode } from '../sync/transform.js'
+import { materializabilityToMode, type GetMaterializability } from '../sync/transform.js'
 import type { ByteStore } from './byteStore.js'
 import {
   ASSETS_ALIAS,
@@ -128,9 +128,6 @@ export type MediaCaptureResult =
   | { readonly ok: true; readonly assetBlockId: string; readonly deduped: boolean }
   | { readonly ok: false; readonly reason: MediaCaptureFailure }
 
-const encodeModeFor = (m: 'decrypt' | 'copy' | 'defer'): SyncMode | null =>
-  m === 'decrypt' ? 'e2ee' : m === 'copy' ? 'none' : null
-
 /** Capture ONE file. See the module header for the ordering contract. */
 export const captureMedia = async (
   request: MediaCaptureRequest,
@@ -149,7 +146,7 @@ export const captureMedia = async (
   if (deps.isAllowedMime && !deps.isAllowedMime(mime)) return { ok: false, reason: 'unsupported-mime' }
 
   // (1b) Mode + content identity. A locked workspace can't derive a content-key.
-  const mode = encodeModeFor(await deps.getMaterializability(workspaceId))
+  const mode = materializabilityToMode(await deps.getMaterializability(workspaceId))
   if (mode === null) return { ok: false, reason: 'workspace-locked' }
 
   // The uploaded OBJECT is the encoded bytes: e2ee wraps the plaintext in the

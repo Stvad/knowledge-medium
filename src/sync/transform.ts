@@ -56,6 +56,24 @@ export type GetMaterializability = (
   workspaceId: string,
 ) => Materializability | Promise<Materializability>
 
+/** The §6 encode/decode MODE for a materializability decision, or `null` when the
+ *  workspace can't be turned into bytes right now — `defer`, OR an unexpected value
+ *  from a buggy/hostile provider (NEVER fall through to plaintext). The asset
+ *  capture, drain, and resolver paths all key off this ONE mapping so they can't
+ *  diverge (a capture that stages `e2ee` while a drain encodes `none` would corrupt
+ *  the object). Callers that must distinguish `defer` from an unexpected value (the
+ *  resolver's fail-closed split) re-inspect the input on a `null`. */
+export const materializabilityToMode = (m: Materializability): SyncMode | null => {
+  switch (m) {
+    case 'decrypt':
+      return 'e2ee'
+    case 'copy':
+      return 'none'
+    default:
+      return null
+  }
+}
+
 /** The block columns the seam transforms. Identifiers (id, workspace_id)
  *  stay in clear — they're needed for routing and AAD binding — and the
  *  three content columns are the encrypted payload in E2EE mode. Extra

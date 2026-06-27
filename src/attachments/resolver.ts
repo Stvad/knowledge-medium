@@ -32,7 +32,7 @@
 import { decodeBytes } from '../sync/byteTransform.js'
 import { deriveContentKey } from '../sync/crypto/contentKey.js'
 import { verifyContentHash } from '../sync/crypto/contentHash.js'
-import type { GetCek, GetMaterializability, SyncMode } from '../sync/transform.js'
+import { materializabilityToMode, type GetCek, type GetMaterializability } from '../sync/transform.js'
 import type { BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
 
@@ -111,21 +111,17 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
         // closed: it must NOT fall through to plaintext passthrough — that default
         // is exactly the two-valued downgrade this resolver exists to avoid.
         const materializability = await getMaterializability(workspaceId)
-        let mode: SyncMode
-        switch (materializability) {
-          case 'decrypt':
-            mode = 'e2ee'
-            break
-          case 'copy':
-            mode = 'none'
-            break
-          case 'defer':
-            return fail('deferred')
-          default:
-            console.warn(
-              `[assetResolver] unexpected materializability "${materializability}" for ${workspaceId}; failing closed`,
-            )
-            return fail('error')
+        const mode = materializabilityToMode(materializability)
+        if (mode === null) {
+          // `defer` fails closed (no fetch, no passthrough). Any OTHER null — an
+          // unexpected value from a buggy/hostile provider — must ALSO fail closed,
+          // loudly: never fall through to plaintext (the two-valued downgrade this
+          // resolver exists to avoid).
+          if (materializability === 'defer') return fail('deferred')
+          console.warn(
+            `[assetResolver] unexpected materializability "${materializability}" for ${workspaceId}; failing closed`,
+          )
+          return fail('error')
         }
 
         // (2) The content-key (§10) addresses both the local store and the remote

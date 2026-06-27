@@ -51,7 +51,7 @@
 
 import { decodeBytes, encodeBytes } from '../sync/byteTransform.js'
 import { verifyContentHash } from '../sync/crypto/contentHash.js'
-import type { GetCek, GetMaterializability, Materializability, SyncMode } from '../sync/transform.js'
+import { materializabilityToMode, type GetCek, type GetMaterializability, type SyncMode } from '../sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
 import type { ByteUploadRecord, ByteUploadStore } from './uploadStore.js'
@@ -92,20 +92,6 @@ export interface DrainSummary {
 }
 
 type DrainOutcome = 'uploaded' | 'failed' | 'deferred' | 'retried'
-
-/** Map the read-lane's three-valued materializability to an encode mode, or
- *  `null` when the workspace can't be materialized right now (defer / unexpected
- *  — both leave the record pending, never an attempt burn). */
-const encodeModeFor = (m: Materializability): SyncMode | null => {
-  switch (m) {
-    case 'decrypt':
-      return 'e2ee'
-    case 'copy':
-      return 'none'
-    default:
-      return null
-  }
-}
 
 interface DrainOneCtx {
   readonly store: ByteUploadStore
@@ -166,8 +152,8 @@ const drainOne = async (
   if (!ctx.isActiveUser()) return 'deferred'
 
   // (1) Can we encode for this workspace right now? defer/unexpected → leave pending.
-  const mode = encodeModeFor(await ctx.getMaterializability(rec.workspaceId))
-  if (mode === null) return 'deferred'
+  const mode = materializabilityToMode(await ctx.getMaterializability(rec.workspaceId))
+  if (mode === null) return 'deferred' // defer / unexpected — leave pending, never an attempt burn
 
   // (2) The plaintext bytes (capture wrote them before staging). A read THROW is
   //     transient (retry); a clean MISS means the bytes were evicted → quarantine.
