@@ -32,10 +32,13 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      'react-refresh/only-export-components': [
-        'warn',
-        { allowConstantExport: true },
-      ],
+      // Off by design: `only-export-components` guards Vite Fast Refresh, a
+      // dev-HMR-only ergonomic. This repo is driven primarily by agents that
+      // verify via `yarn vitest` + the live bridge (not by hand-saving in a
+      // running dev server), so the rule only emitted ~47 standing warnings
+      // that added noise to every lint/check run with no signal. Turn it back
+      // on if interactive HMR becomes part of the loop again.
+      'react-refresh/only-export-components': 'off',
       // The React Compiler rules folded into react-hooks v7 are treated
       // as errors so new compiler-incompatible patterns fail CI.
       'react-hooks/set-state-in-effect': 'error',
