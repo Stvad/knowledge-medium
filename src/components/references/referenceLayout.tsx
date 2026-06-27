@@ -16,6 +16,17 @@ import { ReferenceLink } from './ReferenceLink.tsx'
  * Crucially the reference layout renders NEITHER the editable content surface
  * (`Content`) NOR `Children` — only the inline raw content. It therefore
  * attaches no shell/paste/gesture handlers and can never become an editor.
+ *
+ * KNOWN LIMITATION: `RawContent` renders the block's content renderer as-is.
+ * `MarkdownContentRenderer` honours `inline` (drops to a span); a content
+ * renderer with NO inline form renders its full UI inside the citation link.
+ * This is not only the video player — every editor-style content renderer
+ * (block-type / property-schema / types-page editors with their inputs and
+ * pickers, the CodeMirror extension viewer) does too, i.e. form controls nested
+ * in an `<a>` (invalid HTML; a click may navigate instead of edit). It's the
+ * accepted "content renders wherever raw content lands" consequence — fixing it
+ * would need a render-mode distinction, deliberately out of scope. Common refs
+ * (plain text, image) are fine.
  */
 const ReferenceLayout: BlockLayout = ({block, RawContent}: BlockLayoutSlots) => (
   <ReferenceLink block={block}>

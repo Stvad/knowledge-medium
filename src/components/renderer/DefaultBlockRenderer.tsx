@@ -309,6 +309,28 @@ export const DefaultBlockLayout: BlockLayout = ({
   )
 }
 
+/**
+ * Stable leaf of the shell-decorator stack. Module-level, so its component
+ * IDENTITY never changes — the layout's `render` closure arrives as an ordinary
+ * prop, so when the layout hands a fresh one (every render, since it closes over
+ * collapse/selection/focus state) the leaf RE-RENDERS rather than remounting.
+ * If the leaf's type churned, React would tear down the whole block subtree
+ * (Collapsible → content → CodeMirror) on every selection/collapse toggle. Also
+ * the home of the block's 'block' shortcut surface.
+ */
+function BlockShellLeaf({
+  block,
+  state,
+  render,
+}: {
+  block: Block
+  state: BlockShellState
+  render: BlockShellRender
+}) {
+  useShortcutSurfaceActivations(block, 'block', state.shortcutSurfaceOptions)
+  return <>{render(state.shellProps)}</>
+}
+
 function BlockShellDecoratorStack({
   decorators,
   index = 0,
@@ -316,7 +338,8 @@ function BlockShellDecoratorStack({
   shellRef,
   contentRef,
   state,
-  ShellBody,
+  block,
+  render,
 }: {
   decorators: readonly BlockShellDecorator[]
   index?: number
@@ -324,10 +347,11 @@ function BlockShellDecoratorStack({
   shellRef: RefObject<HTMLDivElement | null>
   contentRef: RefObject<HTMLDivElement | null>
   state: BlockShellState
-  ShellBody: ComponentType<{state: BlockShellState}>
+  block: Block
+  render: BlockShellRender
 }) {
   const Decorator = decorators[index]
-  if (!Decorator) return <ShellBody state={state}/>
+  if (!Decorator) return <BlockShellLeaf block={block} state={state} render={render}/>
 
   return (
     <ExtensionRenderBoundary>
@@ -345,7 +369,8 @@ function BlockShellDecoratorStack({
             shellRef={shellRef}
             contentRef={contentRef}
             state={nextState}
-            ShellBody={ShellBody}
+            block={block}
+            render={render}
           />
         )}
       </Decorator>
@@ -452,13 +477,11 @@ function BlockShell({
     shortcutSurfaceOptions: {},
   }), [shellProps])
 
-  const ShellBody = useMemo<ComponentType<{state: BlockShellState}>>(() => {
-    return function BlockShellBody({state}: {state: BlockShellState}) {
-      useShortcutSurfaceActivations(block, 'block', state.shortcutSurfaceOptions)
-      return <>{children(state.shellProps)}</>
-    }
-  }, [block, children])
-
+  // The layout's `children` render-prop is passed straight through to the stable
+  // `BlockShellLeaf` as the `render` prop — NOT baked into a memoized component.
+  // The layout hands a fresh closure every render (it closes over collapse/
+  // selection/focus state); routing it as data through a stable-identity leaf
+  // re-renders the block subtree instead of remounting it on every toggle.
   return (
     <BlockShellDecoratorStack
       decorators={shellDecorators}
@@ -466,7 +489,8 @@ function BlockShell({
       shellRef={shellRef}
       contentRef={contentRef}
       state={initialShellState}
-      ShellBody={ShellBody}
+      block={block}
+      render={children}
     />
   )
 }

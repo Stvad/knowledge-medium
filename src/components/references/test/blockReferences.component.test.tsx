@@ -27,9 +27,12 @@ import {
   type BlockShellDecoratorProps,
 } from '@/extensions/blockInteraction'
 import { referenceLayoutContribution } from '@/components/references/referenceLayout'
+import { blockRenderersFacet } from '@/extensions/core'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
+import type { BlockRenderer, BlockRendererProps } from '@/types'
 import { BlockRefAncestorsProvider } from '../cycleGuard'
 import { BlockRef } from '../BlockRef'
 import { BlockEmbed } from '../BlockEmbed'
@@ -89,6 +92,19 @@ const SpyShellDecorator = ({resolveContext, state, children}: BlockShellDecorato
   return <>{children(state)}</>
 }
 
+// A block whose top-level renderer wraps DefaultBlockRenderer with a CUSTOM read
+// content renderer (a stand-in for e.g. a media/image renderer). Used to prove a
+// reference renders the block's actual content renderer — not the hardcoded
+// markdown content string the old BlockRef used (which rendered media empty).
+const MarkerContentRenderer = ({block}: BlockRendererProps) => (
+  <span data-testid="marker-content">CONTENT_RENDERER:{block.id}</span>
+)
+const MarkerRenderer: BlockRenderer = (props: BlockRendererProps) => (
+  <DefaultBlockRenderer {...props} ContentRenderer={MarkerContentRenderer} />
+)
+MarkerRenderer.canRender = ({block}: BlockRendererProps) => block.id === 'marker-target'
+MarkerRenderer.priority = () => 100
+
 const extensions = [
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
@@ -101,6 +117,7 @@ const extensions = [
     shortcutActivationRuns.push(ctx.block.id)
     return null
   }, {source: 'test-spy'}),
+  blockRenderersFacet.of({id: 'marker', renderer: MarkerRenderer}, {source: 'test-spy'}),
 ]
 
 describe('block reference / embed rendering through the unified pipeline', () => {
@@ -156,6 +173,10 @@ describe('block reference / embed rendering through the unified pipeline', () =>
       await tx.create({
         id: 'target-child', workspaceId: 'ws-1', parentId: 'target', orderKey: 'a0',
         content: 'Child content',
+      })
+      await tx.create({
+        id: 'marker-target', workspaceId: 'ws-1', parentId: null, orderKey: 'a3',
+        content: 'plain markdown body',
       })
       await tx.create({
         id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a2',
@@ -289,6 +310,18 @@ describe('block reference / embed rendering through the unified pipeline', () =>
     // upstream interactive machinery is never paid for.
     expect(shellDecoratorRuns).not.toContain('target')
     expect(shortcutActivationRuns).not.toContain('target')
+  })
+
+  it('renders the target\'s own content renderer, not a hardcoded markdown string (fixes empty media refs)', async () => {
+    renderInSource(<BlockRef blockId="marker-target" sourceBlockId="source" occurrenceId="occ-1"/>)
+
+    // RawContent rendered the block's actual (custom) content renderer through
+    // the unified pipeline...
+    const marker = await screen.findByTestId('marker-content')
+    expect(marker.textContent).toContain('CONTENT_RENDERER:marker-target')
+    expect(marker.closest('a.blockref')).toBeTruthy()
+    // ...NOT the raw markdown content string the old BlockRef hardcoded.
+    expect(screen.queryByText('plain markdown body')).toBeNull()
   })
 
   it('an embed runs the interactive shell (decorators + shortcut activations)', async () => {

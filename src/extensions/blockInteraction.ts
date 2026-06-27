@@ -227,7 +227,11 @@ export interface BlockShellSlotProps {
 
 /** Opt-in interactive block surface. Rendering it runs the shell decorators
  *  + `useShortcutSurfaceActivations` and yields the composed `shellProps` to
- *  the layout's render-prop; not rendering it skips all of that. */
+ *  the layout's render-prop; not rendering it skips all of that. It is an
+ *  indivisible bundle — there's no way to get just the focusable data
+ *  attributes without the decorators/activations, and a layout should mount it
+ *  at most once (two mounts = duplicate shortcut activations + duplicate
+ *  `data-block-id`/nav nodes for one block). */
 export type BlockShellSlot = ComponentType<BlockShellSlotProps>
 
 export interface BlockLayoutSlots {
