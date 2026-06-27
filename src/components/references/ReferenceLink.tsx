@@ -56,13 +56,19 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
       href={href}
       className="blockref text-inherit no-underline cursor-pointer rounded-sm px-0.5 hover:bg-muted/60"
       data-block-id={block.id}
+      // An `<a>` is draggable by default, which would start a native LINK drag on
+      // press-drag inside the reference — hijacking a video's scrub or an image's
+      // drag-out (the now-default presentation of pasted media). Opt the link out
+      // so the rich content's own pointer gestures work.
+      draggable={false}
       onClick={(event) => {
-        // A modified click (cmd/ctrl/shift) always reaches the opener so
-        // "open in a new panel" works anywhere on the reference. Otherwise, let
-        // the content own its click: a nested link navigates natively (do
-        // nothing — NOT preventDefault, or its nav dies too); other rich content
-        // (image lightbox, video controls) handled itself, so suppress the
-        // reference's own navigation. Plain content opens the reference target.
+        // A modified click (cmd/ctrl/shift) reaches the opener — so plain text and
+        // the link chrome open in a new panel; on a nested link the browser
+        // follows that link instead. Otherwise, let the content own its click: a
+        // nested link navigates natively (do nothing — NOT preventDefault, or its
+        // nav dies too); other rich content (image lightbox, video controls)
+        // handled itself, so suppress the reference's own navigation. Plain
+        // content opens the reference target.
         const owner = isSelectionClick(event) ? null : classifyReferenceClick(event)
         if (owner === 'anchor') return
         if (owner === 'rich') {
