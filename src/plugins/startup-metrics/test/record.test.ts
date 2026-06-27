@@ -226,18 +226,25 @@ describe('collectStartupMetricsEffect', () => {
 
   it('does not record before first paint (no firstContentPaint mark)', async () => {
     startEffect(WS)
-    // Interactive detection re-polls for the paint mark; nothing is written.
-    await new Promise(r => setTimeout(r, 50))
+    // The effect is live, but the interactive detector re-polls for the paint
+    // mark and writes nothing until it appears — so there is no record yet.
     expect(await countRecords()).toBe(0)
+    // Marking paint lets the same re-poll accept interactive and write exactly
+    // one record: the count goes 0 → 1, proving nothing was recorded before
+    // paint. (Fences the negative on a positive outcome instead of a sleep.)
+    markStartup('firstContentPaint')
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1))
   })
 
   it('records at most once per session even if the effect restarts', async () => {
     markStartup('firstContentPaint')
     startEffect(WS)
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
-    // A second workspace open in the same session must not log a second startup.
+    // A second workspace open in the same session must not log a second
+    // startup. The once-per-session guard (`recorded`) makes the restart a
+    // synchronous no-op — no further write is scheduled — so the count is
+    // already final, no settle wait needed.
     startEffect('ws-2')
-    await new Promise(r => setTimeout(r, 0))
     expect(await countRecords()).toBe(1)
   })
 

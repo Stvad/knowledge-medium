@@ -1844,11 +1844,12 @@ describe('HotkeyReconciler', () => {
         dispatchKeydown('s')
         await new Promise(r => setTimeout(r, 80))
         dispatchKeydown('h')
-        // Allow any pending React work to settle, then assert.
-        await new Promise(r => setTimeout(r, 50))
-
+        // The modal handler fires once React flushes the post-hold commit.
+        // Wait for that observable outcome rather than a fixed settle, then
+        // assert the base-context handler was suppressed. (The 80ms above is a
+        // genuine real-time hold duration and stays.)
+        await vi.waitFor(() => expect(modalHandler).toHaveBeenCalledTimes(1))
         expect(baseHandler).not.toHaveBeenCalled()
-        expect(modalHandler).toHaveBeenCalledTimes(1)
       })
 
       it('skips sequence-chord hold bindings (warned at install)', () => {
