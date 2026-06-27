@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'

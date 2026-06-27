@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'

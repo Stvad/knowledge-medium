@@ -5,7 +5,15 @@ import { resolve } from 'path'
 export default defineConfig({
   plugins: [react()],
   test: {
-    environment: 'jsdom',
+    // Default to the `node` environment: most test files here are pure logic
+    // (data/markdown/utils/sync/…) and a per-file jsdom instance was the bulk
+    // of the suite's wall-clock (the `environment` phase). Files that need a
+    // DOM (React component tests, anything touching document/window) opt in
+    // with a `// @vitest-environment jsdom` docblock on line 1 — the long-
+    // standing per-file convention here (145+ files already annotate). A new
+    // `.test.tsx` or DOM-touching test that forgets the docblock fails loudly
+    // in node rather than silently passing, which is the intended tripwire.
+    environment: 'node',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['**/*.{test,spec}.{ts,tsx}'],

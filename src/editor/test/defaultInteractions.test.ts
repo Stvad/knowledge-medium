@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import type { MouseEvent, RefObject, TouchEvent } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'

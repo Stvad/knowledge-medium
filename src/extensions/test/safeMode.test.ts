@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Safe-mode behaviour at the resolver level.
  *
