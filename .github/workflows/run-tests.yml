@@ -24,5 +24,25 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
+      # Persist the incremental build caches across runs: tsc -b writes
+      # node_modules/.tmp/*.tsbuildinfo, eslint --cache writes
+      # node_modules/.cache/eslint. Both live under node_modules and are wiped
+      # on a cold runner. The key hashes the tsconfig/eslint config + rules +
+      # lockfile, so any change to type config, lint rules, or deps busts the
+      # cache (a stale eslint cache would otherwise false-pass after a rule
+      # change). The run-unique suffix saves a fresh cache each run; the
+      # restore-keys prefix falls back to the latest cache with the same config
+      # for incremental reuse. tsc's content-hash invalidation keeps the
+      # tsbuildinfo reuse sound.
+      - name: Cache tsc + eslint build state
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules/.tmp
+            node_modules/.cache/eslint
+          key: build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'yarn.lock') }}-${{ github.sha }}
+          restore-keys: |
+            build-${{ runner.os }}-${{ hashFiles('tsconfig*.json', 'packages/agent-cli/tsconfig.json', 'eslint.config.js', 'eslint-rules/**', 'yarn.lock') }}-
+
       - name: Run checks
         run: yarn run check
