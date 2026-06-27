@@ -247,6 +247,21 @@ export class Block implements Handle<BlockData | null> {
     return this.repo.query.childIds({id: this.id})
   }
 
+  /** Render-grade child-id handle: same id list as `childIds`, but opts
+   *  into `{hydrate: true}` so the loader runs the full CHILDREN_SQL and
+   *  primes each child row into the cache. This is the handle the outliner
+   *  keeps warm while a block is on screen (`useChildIds`), so it's the one
+   *  visible-tree *navigation* should read too — sharing the key means an
+   *  arrow press over rendered content resolves from the renderer's warm,
+   *  subscribed handle instead of issuing its own CHILDREN_IDS_SQL round-
+   *  trip (which, in a big DB, lands behind the sync drain — p99 ~600ms).
+   *  Both variants declare only the same `parent-edge` dep, so invalidation
+   *  is identical; the lean `childIds` stays the right pick for non-render,
+   *  id-only scans (counting / background walks) that shouldn't prime rows. */
+  get renderChildIds(): LoaderHandle<string[]> {
+    return this.repo.query.childIds({id: this.id, hydrate: true})
+  }
+
   /** Reactive children-rows list. Same shape as `childIds` but loads
    *  the full BlockData rows (per-row deps included), suitable for
    *  imperative tree walks that need content / properties without an
