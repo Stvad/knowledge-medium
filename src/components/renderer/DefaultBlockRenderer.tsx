@@ -472,6 +472,27 @@ export function DefaultBlockRenderer(
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = useIsFocalRender(block)
 
+  // The block's READ content, bare: the per-type read renderer in an error
+  // boundary, no editable `block-content` wrapper, surface props, or gesture ref.
+  // The SINGLE definition of "what the read content is": the reference layout
+  // mounts it directly via the `RawContent` slot, AND it is the `primary`
+  // (display) slot of the edit dispatcher below — so the editable `Content` slot
+  // is literally chrome + edit-swap wrapped around this very node
+  // (`<Content><RawContent/></Content>` in read mode), not a parallel re-render of
+  // the same renderer. Built from `DefaultContentRenderer` (NOT the edit
+  // dispatcher), so a reference can never flip into an editor because the target
+  // is in edit mode elsewhere; it renders INLINE automatically inside a reference
+  // (the renderer derives inline from the `isReference` surface — no synthetic flag).
+  const RawContentSlot = useMemo<ComponentType>(() => {
+    return function BlockRawContentSlot() {
+      return (
+        <ErrorBoundary FallbackComponent={FallbackComponent}>
+          <DefaultContentRenderer block={block}/>
+        </ErrorBoundary>
+      )
+    }
+  }, [block, DefaultContentRenderer])
+
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
   // produce keep stable identity. This is what stops UpdateIndicator
@@ -487,9 +508,16 @@ export function DefaultBlockRenderer(
     isTopLevel,
     blockContext,
     contentRenderers: [
+      // The display (read) slot IS `RawContent`, so the edit dispatcher renders
+      // `<RawContent/>` in read mode (and the editor in edit mode) and the
+      // editable `Content` slot composes the same read node the reference layout
+      // mounts — one source of "the read content", not two. (Wrapped in a
+      // `BlockRenderer`-shaped thunk: `RawContent` is a zero-prop slot component,
+      // and it already closes over `block`, so the dispatcher's `{...props}` is
+      // moot.)
       {
         id: 'primary',
-        renderer: DefaultContentRenderer,
+        renderer: () => <RawContentSlot/>,
       },
       {
         id: 'secondary',
@@ -505,7 +533,7 @@ export function DefaultBlockRenderer(
     scopeRootId,
     isTopLevel,
     blockContext,
-    DefaultContentRenderer,
+    RawContentSlot,
     EditContentRenderer,
   ])
 
@@ -569,27 +597,6 @@ export function DefaultBlockRenderer(
       )
     }
   }, [block, resolveContext, runtime, isTopLevel, DefaultContentRenderer, contentContainerRef])
-
-  // Raw content slot: the block's READ content renderer, chrome-free — no
-  // editable `block-content` wrapper, no surface props, no gesture ref. It is
-  // the SAME read content the `Content` slot renders as its read branch (the
-  // content dispatcher's `primary` is this very `DefaultContentRenderer`); the
-  // editable `Content` surface is just the chrome + edit-mode swap WRAPPED
-  // around it. It's built from `DefaultContentRenderer` directly (NOT the
-  // edit-dispatcher-resolved `ContentRenderer`), so a reference can never flip
-  // into an editor because the target is in edit mode elsewhere; and it renders
-  // INLINE automatically inside a reference (the renderer derives inline from
-  // the `isReference` surface — no synthetic flag). Layouts that present a block
-  // as inline raw content (the reference layout) render this instead of `Content`.
-  const RawContentSlot = useMemo<ComponentType>(() => {
-    return function BlockRawContentSlot() {
-      return (
-        <ErrorBoundary FallbackComponent={FallbackComponent}>
-          <DefaultContentRenderer block={block}/>
-        </ErrorBoundary>
-      )
-    }
-  }, [block, DefaultContentRenderer])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null
