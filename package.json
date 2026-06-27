@@ -17,6 +17,7 @@
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/ --cache-strategy content",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:changed": "vitest run --changed",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "gen:sync-config": "vite-node scripts/gen-sync-config.ts",
