@@ -1,60 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
-import {
-  IndentDecrease,
-  IndentIncrease,
-  ArrowUp,
-  ArrowDown,
-  Undo2,
-  Redo2,
-  KeyboardOff,
-} from 'lucide-react'
 import { useIsMobile } from '@/utils/react.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
-import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
-import { acquireBlurExitSuppression } from '@/components/BlockEditor.js'
+import { useActiveContextsState, editorViewFromActiveContexts } from '@/shortcuts/ActiveContexts.js'
+import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
-import {
-  INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
-  INSERT_PAGE_REF_TRIGGER_ACTION_ID,
-} from './actions.ts'
-
-type ToolbarAction = {
-  kind: 'icon'
-  id: string
-  actionId: string
-  label: string
-  icon: typeof IndentDecrease
-} | {
-  kind: 'text'
-  id: string
-  actionId: string
-  label: string
-  text: string
-}
-
-const EXIT_EDIT_ACTION_ID = 'exit_edit_mode_cm'
-
-const TOOLBAR_ACTIONS: readonly ToolbarAction[] = [
-  {kind: 'icon', id: 'outdent', actionId: 'edit.cm.outdent_block', label: 'Outdent', icon: IndentDecrease},
-  {kind: 'icon', id: 'indent', actionId: 'edit.cm.indent_block', label: 'Indent', icon: IndentIncrease},
-  {kind: 'text', id: 'page-ref', actionId: INSERT_PAGE_REF_TRIGGER_ACTION_ID, label: 'Page reference', text: '[['},
-  {kind: 'text', id: 'block-ref', actionId: INSERT_BLOCK_REF_TRIGGER_ACTION_ID, label: 'Block reference', text: '(('},
-  {kind: 'icon', id: 'move-up', actionId: 'move_block_up_cm', label: 'Move up', icon: ArrowUp},
-  {kind: 'icon', id: 'move-down', actionId: 'move_block_down_cm', label: 'Move down', icon: ArrowDown},
-  {kind: 'icon', id: 'undo', actionId: 'undo', label: 'Undo', icon: Undo2},
-  {kind: 'icon', id: 'redo', actionId: 'redo', label: 'Redo', icon: Redo2},
-  {kind: 'icon', id: 'done', actionId: EXIT_EDIT_ACTION_ID, label: 'Done', icon: KeyboardOff},
-]
-
-const ToolbarButtonContent = ({action}: {action: ToolbarAction}) => {
-  if (action.kind === 'text') {
-    return <span className="font-mono text-base font-semibold leading-none">{action.text}</span>
-  }
-
-  const Icon = action.icon
-  return <Icon className="h-5 w-5"/>
-}
+import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts'
 
 /** Computes the on-screen keyboard's CSS-px inset for the toolbar.
  *
@@ -164,10 +116,12 @@ const useKeyboardInset = (active: boolean): number => {
 }
 
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
- *  block is being edited, exposing tap targets for the workflowy/roam-
- *  style block commands (indent / outdent / reorder / undo / done).
- *  Each button dispatches the same action id that the keyboard binding
- *  invokes, so behavior stays in lockstep with the desktop shortcuts. */
+ *  block is being edited. Its buttons are facet contributions
+ *  (`mobileKeyboardToolbarItemsFacet`): the structural/reference set comes
+ *  from this plugin, and other plugins add their own (the image button from
+ *  attachments, the todo toggle from todo). Each button dispatches the same
+ *  action id that the keyboard binding invokes, so behavior stays in lockstep
+ *  with the desktop shortcuts. */
 export function MobileKeyboardToolbar() {
   const isMobile = useIsMobile()
   // Editing state is per-panel (`isEditingProp` is set on the panel's
@@ -179,6 +133,11 @@ export function MobileKeyboardToolbar() {
   const activeContexts = useActiveContextsState()
   const isEditing = activeContexts.has(ActionContextTypes.EDIT_MODE_CM)
   const runAction = useRunAction()
+  // Buttons are facet contributions, ordered by contribution precedence; each
+  // button's glyph + label are read from its action (icon / description), so
+  // presentation lives on the action. The toolbar only shows in edit mode, so
+  // unqualified items resolve against EDIT_MODE_CM.
+  const resolved = useActionRefItems(mobileKeyboardToolbarItemsFacet, ActionContextTypes.EDIT_MODE_CM)
   // Hooks above the early-return must run on every render. Pass the
   // activation flag in so the sentinel only mounts/listens while the
   // toolbar is on screen.
@@ -218,13 +177,6 @@ export function MobileKeyboardToolbar() {
     event.preventDefault()
   }
 
-  const getActiveEditorView = () => {
-    const editDeps = activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as
-      | CodeMirrorEditModeDependencies
-      | undefined
-    return editDeps?.editorView
-  }
-
   const handleClick = (actionId: string) => async (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
     event.stopPropagation()
@@ -232,7 +184,7 @@ export function MobileKeyboardToolbar() {
     // Snapshot the editor view from the EDIT_MODE_CM dependencies
     // BEFORE the action runs, so a structural action that swaps panels
     // mid-flight can't trick us into focusing the wrong editor.
-    const editorView = getActiveEditorView()
+    const editorView = editorViewFromActiveContexts(activeContexts)
 
     // Action handlers expect ActionTrigger = KeyboardEvent | CustomEvent.
     // None of the actions wired to this toolbar consult the trigger,
@@ -240,36 +192,35 @@ export function MobileKeyboardToolbar() {
     // misrepresent a click as a keyboard event.
     const trigger = new CustomEvent('mobile-toolbar-action', {detail: {actionId}})
 
-    // Some actions reorder the focused block's DOM node, and the
-    // reparenting drops native focus from the contenteditable. The
-    // editor's onBlur then schedules a raf that exits edit mode
-    // because document.activeElement is no longer inside any
-    // .cm-editor. The blur fires whenever React eventually commits
-    // the post-mutation render — that's *after* this handler returns,
-    // and the timing is variable (PowerSync subscription → React
-    // batched render → DOM diff/commit → blur). Stacked requestAnimation
-    // Frames aren't enough; the blur regularly lands several frames
-    // later still. Acquire a hold for a window that covers the worst-
-    // case render delay (~150ms in playwright) plus headroom; the
-    // BlockEditor's onBlur honors the hold by re-focusing instead of
-    // dropping out of edit mode. The Done button is the *one* path
-    // that genuinely wants edit mode off — leave its blur alone.
-    const releaseHold = actionId === EXIT_EDIT_ACTION_ID
-      ? null
-      : acquireBlurExitSuppression()
-    try {
-      await runAction(actionId, trigger)
-    } catch (error) {
-      console.error(`[MobileKeyboardToolbar] Failed to run ${actionId}`, error)
+    const run = async () => {
+      try {
+        await runAction(actionId, trigger)
+      } catch (error) {
+        console.error(`[MobileKeyboardToolbar] Failed to run ${actionId}`, error)
+      }
     }
-    if (releaseHold) {
-      window.setTimeout(releaseHold, 400)
-      // Snap focus back immediately for the common case where the editor
-      // is already remounted under the new DOM position. If it isn't yet,
-      // the suppressed blur won't tear us out of edit mode and the next
-      // edit-driven focus effect catches up.
-      requestAnimationFrame(() => editorView?.focus())
+
+    // The Done button is the *one* path that genuinely wants edit mode off —
+    // run it with no keepalive so its blur tears edit mode down.
+    if (actionId === EXIT_EDIT_ACTION_ID) {
+      await run()
+      return
     }
+
+    // Some actions reorder the focused block's DOM node, and the reparenting
+    // drops native focus from the contenteditable. The editor's onBlur then
+    // schedules a raf that exits edit mode because document.activeElement is no
+    // longer inside any .cm-editor — and that blur lands AFTER this handler
+    // returns, several frames late and variably (PowerSync → React render → DOM
+    // commit → blur). Hold a 'refocus' keepalive across the action and past its
+    // resolution (withEditModeKeepalive owns the timed release) so the late blur
+    // re-focuses instead of dropping out of edit mode.
+    await withEditModeKeepalive('refocus', run)
+    // Snap focus back immediately for the common case where the editor is
+    // already remounted under the new DOM position. If it isn't yet, the
+    // suppressed blur won't tear us out of edit mode and the next edit-driven
+    // focus effect catches up.
+    requestAnimationFrame(() => editorView?.focus())
   }
 
   return (
@@ -284,19 +235,25 @@ export function MobileKeyboardToolbar() {
       style={{bottom: keyboardInset}}
       data-block-interaction="ignore"
     >
-      {TOOLBAR_ACTIONS.map(action => (
-        <button
-          key={action.id}
-          type="button"
-          aria-label={action.label}
-          title={action.label}
-          onMouseDown={handleMouseDown}
-          onClick={handleClick(action.actionId)}
-          className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
-        >
-          <ToolbarButtonContent action={action}/>
-        </button>
-      ))}
+      {resolved.map(({item, action}) => {
+        // A button with no resolved icon is skipped (its plugin may be disabled,
+        // or the action lacks an icon) — same contract as the bottom nav.
+        if (!action?.icon) return null
+        const Icon = action.icon
+        return (
+          <button
+            key={item.id}
+            type="button"
+            aria-label={action.description}
+            title={action.description}
+            onMouseDown={handleMouseDown}
+            onClick={handleClick(item.actionId)}
+            className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
+          >
+            <Icon className="h-5 w-5"/>
+          </button>
+        )
+      })}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { ChevronsDownUp, ClipboardCopy, Copy, Link, Link2, SlidersHorizontal, Text, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronsDownUp, ClipboardCopy, Copy, IndentDecrease, IndentIncrease, Link, Link2, SlidersHorizontal, Text, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
@@ -193,6 +193,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const indentBlock: BlockAction = {
     id: 'indent_block',
     description: 'Indent block',
+    icon: IndentIncrease,
     handler: async (deps: BlockShortcutDependencies) => {
       // No-op on a scope root: indenting it would reparent the visible
       // root under a sibling that lives outside the surface. The
@@ -213,6 +214,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const outdentBlock: BlockAction = {
     id: 'outdent_block',
     description: 'Outdent block',
+    icon: IndentDecrease,
     handler: async ({block, uiStateBlock, scopeRootId}: BlockShortcutDependencies) => {
       if (!scopeRootId) return
 
@@ -235,6 +237,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const moveBlockUp: BlockAction = {
     id: 'move_block_up',
     description: 'Move block up',
+    icon: ArrowUp,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
@@ -252,6 +255,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
   const moveBlockDown: BlockAction = {
     id: 'move_block_down',
     description: 'Move block down',
+    icon: ArrowDown,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return

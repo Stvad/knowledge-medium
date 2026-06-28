@@ -1,25 +1,13 @@
 import { dedupById, defineFacet } from '@/facets/facet.js'
-import type { ActionContextType } from '@/shortcuts/types.js'
+import {
+  isActionRefContribution,
+  type ActionRefContribution,
+} from '@/shortcuts/actionRefItems.js'
 
-export interface MobileBottomNavItemContribution {
-  id: string
-  actionId: string
-  /** Disambiguates action lookup when the same `actionId` is registered
-   *  in multiple contexts (e.g. `undo` is registered both globally and
-   *  in `normal-mode`). Defaults to GLOBAL. */
-  context?: ActionContextType
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null
-
-export const isMobileBottomNavItemContribution = (
-  value: unknown,
-): value is MobileBottomNavItemContribution =>
-  isRecord(value) &&
-  typeof value.id === 'string' &&
-  typeof value.actionId === 'string' &&
-  (value.context === undefined || typeof value.context === 'string')
+/** A bottom-nav button — a reference to an action; its icon + label are read
+ *  from the resolved action. Shared shape with the keyboard toolbar
+ *  ({@link ActionRefContribution}). */
+export type MobileBottomNavItemContribution = ActionRefContribution
 
 // Nav items render once per contribution keyed by `id` (MobileBottomNav.tsx)
 // — dedup by `id` (last-wins). Keyed by `id`, NOT `actionId`: the same
@@ -31,5 +19,5 @@ export const mobileBottomNavItemsFacet = defineFacet<
 >({
   id: 'mobile-bottom-nav.items',
   combine: dedupById('mobile-bottom-nav.items'),
-  validate: isMobileBottomNavItemContribution,
+  validate: isActionRefContribution,
 })
