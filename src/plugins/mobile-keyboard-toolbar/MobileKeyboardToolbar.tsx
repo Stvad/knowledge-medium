@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
 import { useIsMobile } from '@/utils/react.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
+import { useActiveContextsState, editorViewFromActiveContexts } from '@/shortcuts/ActiveContexts.js'
 import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
-import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
 import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts'
@@ -177,12 +177,7 @@ export function MobileKeyboardToolbar() {
     event.preventDefault()
   }
 
-  const getActiveEditorView = () => {
-    const editDeps = activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as
-      | CodeMirrorEditModeDependencies
-      | undefined
-    return editDeps?.editorView
-  }
+  const getActiveEditorView = () => editorViewFromActiveContexts(activeContexts)
 
   const handleClick = (actionId: string) => async (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()

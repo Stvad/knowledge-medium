@@ -11,11 +11,23 @@ import {
 import { actionContextsFacet } from '@/extensions/core.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
+  ActionContextTypes,
   ActionContextType,
   BaseShortcutDependencies,
+  type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types.js'
 
 export type ActiveContextsMap = ReadonlyMap<ActionContextType, BaseShortcutDependencies>
+
+/** The live CodeMirror editor view from the active EDIT_MODE_CM context, or
+ *  undefined when nothing is in edit mode. Centralizes the EDIT_MODE_CM-deps
+ *  cast shared by the command palette and the mobile keyboard toolbar (the map
+ *  values are the generic `BaseShortcutDependencies`, so each reader otherwise
+ *  hand-rolls the same narrowing). */
+export const editorViewFromActiveContexts = (
+  contexts: ActiveContextsMap,
+): CodeMirrorEditModeDependencies['editorView'] | undefined =>
+  (contexts.get(ActionContextTypes.EDIT_MODE_CM) as CodeMirrorEditModeDependencies | undefined)?.editorView
 
 export interface ActiveContextsDispatch {
   /**

@@ -9,14 +9,12 @@ import {
 } from '@/components/ui/command'
 import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
+import { useActiveContextsState, editorViewFromActiveContexts } from '@/shortcuts/ActiveContexts.js'
 import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import {
-  ActionContextTypes,
   type ActionConfig,
   type ShortcutBinding,
   type ActionContextType,
-  type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types.js'
 import { Kbd } from '@/components/ui/kbd'
 import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
@@ -64,10 +62,7 @@ export function CommandPalette() {
   // layout effect so it lands before the blur's deferred rAF decision fires.
   useLayoutEffect(() => {
     if (!open) return
-    const editDeps = activeRef.current.get(ActionContextTypes.EDIT_MODE_CM) as
-      | CodeMirrorEditModeDependencies
-      | undefined
-    const editorView = editDeps?.editorView
+    const editorView = editorViewFromActiveContexts(activeRef.current)
     if (!editorView) return // opened from normal mode / not editing — nothing to keep alive
     const release = acquireEditModeKeepalive('yield-focus')
     return () => {
@@ -76,11 +71,7 @@ export function CommandPalette() {
       // run from the palette may have moved focus to another block or unmounted
       // this editor; refocusing a stale view would steal focus from the command,
       // and focus() on a torn-down view can throw (no `destroyed` guard in CM).
-      const liveView = (
-        activeRef.current.get(ActionContextTypes.EDIT_MODE_CM) as
-          | CodeMirrorEditModeDependencies
-          | undefined
-      )?.editorView
+      const liveView = editorViewFromActiveContexts(activeRef.current)
       if (liveView === editorView && editorView.dom.isConnected) editorView.focus()
       release()
     }
