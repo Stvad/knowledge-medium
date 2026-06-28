@@ -6,14 +6,28 @@ import { ChangeScope } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { insertReferencesAtCaret } from './insertImage.js'
+import { insertReferences } from './insertImage.js'
 
-// A disconnected editor forces insertReferencesAtCaret down its direct-write
-// fallback (the path taken when the editor unmounted while the OS picker was
-// open). `dom.isConnected` is the only field that branch reads, so a tiny stub
-// is enough — the live-editor branch needs a real CodeMirror view we don't build
-// here and isn't what these tests cover.
+// A disconnected editor (dom.isConnected === false) drives insertReferences down
+// its editor-unmounted fallback, which appends to the block. The live-editor
+// branch instead reads the view's current selection — see liveEditorAt below.
 const disconnectedEditor = { dom: { isConnected: false } } as unknown as EditorView
+
+// Minimal live-editor stub: records dispatched changes and reports a selection.
+// insertReferences' live branch reads only `state.selection.main`, `dispatch`,
+// and `focus`, so this is enough to assert WHERE the insert lands.
+const liveEditorAt = (pos: number) => {
+  const dispatched: Array<{ changes: { from: number; to: number; insert: string } }> = []
+  const view = {
+    dom: { isConnected: true },
+    state: { selection: { main: { from: pos, to: pos } } },
+    dispatch: (spec: { changes: { from: number; to: number; insert: string } }) => {
+      dispatched.push(spec)
+    },
+    focus: () => {},
+  } as unknown as EditorView
+  return { view, dispatched }
+}
 
 let sharedDb: TestDb
 let repo: Repo
@@ -36,32 +50,47 @@ beforeEach(async () => {
   }))
 })
 
-describe('insertReferencesAtCaret — editor-unmounted fallback', () => {
-  it('writes references at the caret into a still-live block', async () => {
-    await repo.tx(
-      tx => tx.create({ id: 'b1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'hello' }),
-      { scope: ChangeScope.BlockDefault, description: 'create' },
-    )
-    const block = repo.block('b1')
+const makeBlock = async (id: string, content?: string) => {
+  await repo.tx(
+    tx => tx.create({ id, workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content }),
+    { scope: ChangeScope.BlockDefault, description: 'create' },
+  )
+  return repo.block(id)
+}
 
-    await insertReferencesAtCaret(disconnectedEditor, block, { from: 5, to: 5 }, ['((a))'])
-
-    expect((await block.load())?.content).toBe('hello((a))')
+describe('insertReferences — editor-unmounted fallback (appends)', () => {
+  it('appends references on a new line after existing content', async () => {
+    const block = await makeBlock('b1', 'hello')
+    await insertReferences(disconnectedEditor, block, ['((a))'])
+    expect((await block.load())?.content).toBe('hello\n((a))')
   })
 
-  it('does NOT resurrect a deleted block (no image-only overwrite)', async () => {
-    await repo.tx(
-      tx => tx.create({ id: 'b2', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'keep' }),
-      { scope: ChangeScope.BlockDefault, description: 'create' },
-    )
-    const block = repo.block('b2')
+  it('writes just the references into an empty block (no leading newline)', async () => {
+    const block = await makeBlock('b2', '')
+    await insertReferences(disconnectedEditor, block, ['((a))', '((b))'])
+    expect((await block.load())?.content).toBe('((a))\n((b))')
+  })
+
+  it('does NOT write to a deleted block (guard bails before deref)', async () => {
+    const block = await makeBlock('b3', 'keep')
     await block.delete()
 
-    await insertReferencesAtCaret(disconnectedEditor, block, { from: 0, to: 4 }, ['((a))'])
-
-    // The guard bailed: the tombstone stays gone instead of coming back carrying
-    // only the image reference. (Before the guard, the `?? ''` overwrite wrote
-    // '((a))' into the deleted row, resurrecting it.)
+    // Without the `if (!data) return` guard, `data.content` would throw on the
+    // deleted row (load() resolves null); with it, this is a clean no-op and the
+    // block stays deleted.
+    await expect(insertReferences(disconnectedEditor, block, ['((a))'])).resolves.toBeUndefined()
     expect(await block.load()).toBeNull()
+  })
+})
+
+describe('insertReferences — live editor (inserts at the current selection)', () => {
+  it('inserts at the editor live selection, not a stale pre-picker offset', async () => {
+    const block = await makeBlock('b4', 'abcdef')
+    // The doc/selection moved while the picker was open; insertReferences must
+    // read the editor's CURRENT caret (7), not any earlier snapshot.
+    const { view, dispatched } = liveEditorAt(7)
+    await insertReferences(view, block, ['((a))'])
+    expect(dispatched).toHaveLength(1)
+    expect(dispatched[0].changes).toMatchObject({ from: 7, to: 7, insert: '((a))' })
   })
 })

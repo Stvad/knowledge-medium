@@ -177,8 +177,6 @@ export function MobileKeyboardToolbar() {
     event.preventDefault()
   }
 
-  const getActiveEditorView = () => editorViewFromActiveContexts(activeContexts)
-
   const handleClick = (actionId: string) => async (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
     event.stopPropagation()
@@ -186,7 +184,7 @@ export function MobileKeyboardToolbar() {
     // Snapshot the editor view from the EDIT_MODE_CM dependencies
     // BEFORE the action runs, so a structural action that swaps panels
     // mid-flight can't trick us into focusing the wrong editor.
-    const editorView = getActiveEditorView()
+    const editorView = editorViewFromActiveContexts(activeContexts)
 
     // Action handlers expect ActionTrigger = KeyboardEvent | CustomEvent.
     // None of the actions wired to this toolbar consult the trigger,

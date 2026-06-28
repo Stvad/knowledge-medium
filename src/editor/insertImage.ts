@@ -82,25 +82,43 @@ function pickImageFiles(): Promise<File[]> {
   })
 }
 
-/** Insert reference text at a caret, preferring the live editor (caret lands
- *  after the insert, change rides the editor's normal commit path); falls back
- *  to writing block content directly if the editor unmounted while the picker
- *  was open. Exported for the fallback-branch tests (the deleted-block guard). */
-export async function insertReferencesAtCaret(
+/** Append reference text to a block's content on its own line(s), guarding a
+ *  not-resident or deleted block: `peek()` is `undefined` (not loaded) or `null`
+ *  (deleted/missing), and a bare `?? ''` would overwrite real content — or write
+ *  into a tombstone. (The soft-delete model means such a write can't actually
+ *  "resurrect" a deleted block — `load()` filters `deleted = 0` — but bailing
+ *  still avoids a pointless tombstone write and reads the right content on the
+ *  live-row path.) References are one-per-line, matching the paste path's
+ *  separator (src/paste/operations.ts) so a multi-image insert reads the same
+ *  however it arrived. Shared by the normal-mode append and the edit-mode
+ *  editor-unmounted fallback. */
+async function appendReferencesToBlock(block: Block, references: readonly string[]): Promise<void> {
+  const data = block.peek() ?? await block.load()
+  if (!data) return
+  const refsText = references.join('\n')
+  // Trim trailing whitespace so the append doesn't open a blank line (or strand
+  // a whitespace-only block before the image).
+  const base = (data.content ?? '').replace(/\s+$/, '')
+  await block.setContent(base ? `${base}\n${refsText}` : refsText)
+}
+
+/** Insert the captured references for an edit-mode pick. With a live editor,
+ *  insert at the editor's CURRENT selection — read NOW, not from a stale
+ *  pre-picker snapshot: the doc can change while the picker is open (a remote
+ *  edit, or the editor's own late commit), and CodeMirror has already remapped
+ *  its selection through that change. Inserting at a stale offset could land
+ *  mid-word or *inside* an existing `((ref))` and corrupt it. If the editor
+ *  unmounted while the picker was open there's no trustworthy caret left, so
+ *  append to the block rather than splice at a stale position. Exported for
+ *  tests. */
+export async function insertReferences(
   editorView: EditorView,
   block: Block,
-  caret: { from: number; to: number },
   references: readonly string[],
 ): Promise<void> {
-  // One reference per captured file, each on its own line — matches the paste
-  // path's separator (src/paste/operations.ts), so a multi-image insert reads
-  // the same whether it came from paste or this picker.
-  const insertText = references.join('\n')
-
   if (editorView.dom.isConnected) {
-    const docLength = editorView.state.doc.length
-    const from = Math.min(caret.from, docLength)
-    const to = Math.min(caret.to, docLength)
+    const insertText = references.join('\n')
+    const { from, to } = editorView.state.selection.main
     editorView.dispatch({
       changes: { from, to, insert: insertText },
       selection: EditorSelection.cursor(from + insertText.length),
@@ -108,18 +126,7 @@ export async function insertReferencesAtCaret(
     editorView.focus()
     return
   }
-
-  // Editor unmounted mid-pick — write the block content directly, but only if
-  // the row still exists. `peek()`/`load()` is `null` for a deleted block, and
-  // the old `?? ''` here turned this into a write of JUST the references,
-  // resurrecting a tombstoned block with image-only content (the same overwrite
-  // hazard the append path guards against). Bail instead of resurrecting.
-  const data = block.peek() ?? await block.load()
-  if (!data) return
-  const content = data.content ?? ''
-  const from = Math.min(caret.from, content.length)
-  const to = Math.min(caret.to, content.length)
-  await block.setContent(content.slice(0, from) + insertText + content.slice(to))
+  await appendReferencesToBlock(block, references)
 }
 
 /** Capture already-read files into `((assetBlockId))` reference strings via the
@@ -156,8 +163,6 @@ async function captureFilesToReferences(block: Block, files: readonly File[]): P
 export async function pickAndInsertImages(
   { editorView, block }: { editorView: EditorView; block: Block },
 ): Promise<void> {
-  const { from, to } = editorView.state.selection.main
-  const caret = { from, to }
   try {
     // Keep edit mode alive across the picker: it blurs the editor, and the
     // deferred exit-on-blur would otherwise see focus on the file input (or, on
@@ -169,7 +174,7 @@ export async function pickAndInsertImages(
       if (files.length === 0) return
       const references = await captureFilesToReferences(block, files)
       if (references.length === 0) return
-      await insertReferencesAtCaret(editorView, block, caret, references)
+      await insertReferences(editorView, block, references)
     })
   } finally {
     requestAnimationFrame(() => {
@@ -195,14 +200,5 @@ export async function pickImagesIntoBlock(block: Block): Promise<void> {
   if (files.length === 0) return
   const references = await captureFilesToReferences(block, files)
   if (references.length === 0) return
-  // Ensure the row is loaded before deriving new content — `peek()` is
-  // `undefined` for a not-yet-resident block, and `?? ''` would turn the append
-  // into a full overwrite that drops the real content.
-  const data = block.peek() ?? await block.load()
-  if (!data) return
-  const refsText = references.join('\n')
-  // Trim trailing whitespace/newlines so the append doesn't open a blank line
-  // (or strand a whitespace-only block before the image).
-  const base = (data.content ?? '').replace(/\s+$/, '')
-  await block.setContent(base ? `${base}\n${refsText}` : refsText)
+  await appendReferencesToBlock(block, references)
 }
