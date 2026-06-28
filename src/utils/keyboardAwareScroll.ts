@@ -44,9 +44,16 @@ export const keyboardAwareScroll = (): Extension => [
     // computed "visible bottom" above the caret, so CM treats the caret as
     // off-screen and parks the popup at top:-10000 — i.e. the autocomplete
     // dropdown silently vanishes whenever the editing toolbar/keyboard is up
-    // (all of mobile). The inset only matters to keep the caret above that
-    // chrome while scrolling/typing, not while the user is reading the
-    // popup, so drop it for the duration of an active completion.
+    // (all of mobile). CM reuses scrollMargins AS the tooltip's clip rect,
+    // so the inset can't be kept for the popup's sake (tooltipSpace / a body
+    // parent don't help — the clip is scrollDOM−margins regardless) and a
+    // single-line block can't carry an inset that clears the toolbar without
+    // tripping the hide-test. We pick popup visibility. Tradeoff: the inset
+    // also feeds the caret-into-view scroll, so it's dropped there too while
+    // a completion is open — if you filter deep in a block at the viewport
+    // bottom the caret can sit under the toolbar until the popup closes
+    // (narrow: edit-entry already lifted the block clear, single-line
+    // filtering doesn't move the caret down, and the popup stays visible).
     if (completionStatus(view.state) === 'active') return null
     const inset = getBottomEditingInset()
     return inset > 0 ? {bottom: inset} : null
