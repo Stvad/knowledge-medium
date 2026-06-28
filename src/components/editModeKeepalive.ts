@@ -77,7 +77,15 @@ const KEEPALIVE_RELEASE_DELAY_MS = 400
  *
  *  NOT for lifecycle-bound holds: the command palette holds across its whole
  *  open lifetime and releases in an effect cleanup, which doesn't map to a single
- *  async call — it acquires/releases directly. */
+ *  async call — it acquires/releases directly.
+ *
+ *  Contract: `fn` MUST eventually settle (resolve or reject). The release is
+ *  scheduled off `fn`'s settlement, so a never-settling promise pins the hold
+ *  (and edit mode) until reload — there's deliberately no internal timeout here,
+ *  since a generous one risks pre-empting a legitimately slow action's hold. Both
+ *  callers satisfy this: the picker's `pickImageFiles` has its own absolute
+ *  backstop, and `runAction` settles. A new caller that can hang must carry its
+ *  own backstop (as the picker does). */
 export const withEditModeKeepalive = async <T>(
   mode: EditModeKeepaliveMode,
   fn: () => T | Promise<T>,

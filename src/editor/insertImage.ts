@@ -85,13 +85,13 @@ function pickImageFiles(): Promise<File[]> {
 /** Insert reference text at a caret, preferring the live editor (caret lands
  *  after the insert, change rides the editor's normal commit path); falls back
  *  to writing block content directly if the editor unmounted while the picker
- *  was open. */
-function insertReferencesAtCaret(
+ *  was open. Exported for the fallback-branch tests (the deleted-block guard). */
+export async function insertReferencesAtCaret(
   editorView: EditorView,
   block: Block,
   caret: { from: number; to: number },
   references: readonly string[],
-): void {
+): Promise<void> {
   // One reference per captured file, each on its own line — matches the paste
   // path's separator (src/paste/operations.ts), so a multi-image insert reads
   // the same whether it came from paste or this picker.
@@ -109,16 +109,28 @@ function insertReferencesAtCaret(
     return
   }
 
-  const content = block.peek()?.content ?? ''
+  // Editor unmounted mid-pick — write the block content directly, but only if
+  // the row still exists. `peek()`/`load()` is `null` for a deleted block, and
+  // the old `?? ''` here turned this into a write of JUST the references,
+  // resurrecting a tombstoned block with image-only content (the same overwrite
+  // hazard the append path guards against). Bail instead of resurrecting.
+  const data = block.peek() ?? await block.load()
+  if (!data) return
+  const content = data.content ?? ''
   const from = Math.min(caret.from, content.length)
   const to = Math.min(caret.to, content.length)
-  void block.setContent(content.slice(0, from) + insertText + content.slice(to))
+  await block.setContent(content.slice(0, from) + insertText + content.slice(to))
 }
 
 /** Capture already-read files into `((assetBlockId))` reference strings via the
  *  shared media seam, deriving repo/runtime/workspace from the target block.
- *  Returns [] when there's nothing to insert (no runtime/workspace, or capture
- *  failed — failures are toasted by the verb impl). */
+ *  Returns [] when there's nothing to insert (no runtime/workspace) or when
+ *  capture failed. Per-file failures the impl anticipates (oversize, locked
+ *  workspace) come back as a resolved outcome and are toasted there — but
+ *  `captureMediaVerb` is `onError: 'rethrow'`, so an UNEXPECTED throw (e.g. a
+ *  file the OS revoked between pick and read) would otherwise surface nowhere:
+ *  both callers only `console.error` a rejection. Catch it here and toast, so a
+ *  failed capture never silently swallows the user's pick. */
 async function captureFilesToReferences(block: Block, files: readonly File[]): Promise<string[]> {
   const repo = block.repo
   const runtime = repo.facetRuntime
@@ -128,8 +140,14 @@ async function captureFilesToReferences(block: Block, files: readonly File[]): P
     showError('Open a workspace to attach images.')
     return []
   }
-  const { references } = await captureMediaVerb.run(runtime, { repo, workspaceId, files: [...files] })
-  return [...references]
+  try {
+    const { references } = await captureMediaVerb.run(runtime, { repo, workspaceId, files: [...files] })
+    return [...references]
+  } catch (error) {
+    console.warn('[insertImage] media capture failed', error)
+    showError('Could not attach the image.')
+    return []
+  }
 }
 
 /** Pick image file(s) and insert their captured references at the editor's
@@ -151,7 +169,7 @@ export async function pickAndInsertImages(
       if (files.length === 0) return
       const references = await captureFilesToReferences(block, files)
       if (references.length === 0) return
-      insertReferencesAtCaret(editorView, block, caret, references)
+      await insertReferencesAtCaret(editorView, block, caret, references)
     })
   } finally {
     requestAnimationFrame(() => {

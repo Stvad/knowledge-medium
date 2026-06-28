@@ -39,8 +39,11 @@ export const insertImageAction: ActionConfig<typeof ActionContextTypes.EDIT_MODE
 }
 
 /** Normal-mode variant — a focused-but-not-editing block has no caret, so this
- *  appends the image to the block's content. Surfaces in the palette / other
- *  normal-mode surfaces (and, for vim users, normal mode itself). */
+ *  appends the image to the block's content. NORMAL_MODE is activated only by the
+ *  vim plugin (off by default) and the palette lists only active-context actions,
+ *  so this is reachable only for vim users (its normal-mode surfaces) — there's
+ *  no default-config surface for it, by design: it's the "active in normal mode"
+ *  counterpart to the EDIT_MODE_CM action above. */
 export const insertImageNormalModeAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: INSERT_IMAGE_NORMAL_MODE_ACTION_ID,
   description: 'Insert image',
@@ -53,9 +56,8 @@ export const insertImageNormalModeAction: ActionConfig<typeof ActionContextTypes
 }
 
 /** The image button on the mobile keyboard toolbar — a reference to the
- *  EDIT_MODE_CM action (its glyph/label come from the action). Registered with
- *  precedence 50 (see attachmentsPlugin), placing it between the reference
- *  triggers and the move buttons. */
+ *  EDIT_MODE_CM action (its glyph/label come from the action). Its toolbar
+ *  precedence is set where it's registered (see attachmentsPlugin). */
 export const insertImageToolbarItem: MobileKeyboardToolbarItem = {
   id: 'insert-image',
   actionId: INSERT_IMAGE_ACTION_ID,

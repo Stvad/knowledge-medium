@@ -45,6 +45,13 @@ export interface ResolvedActionRef {
  * changes — NOT on every focus/edit transition (the surfaces also subscribe to
  * active-contexts and would otherwise rebuild the whole action pipeline per
  * render). Shared by the mobile bottom nav + keyboard toolbar.
+ *
+ * Invariant: items should reference STATICALLY-registered actions. The memo keys
+ * on `runtime` identity, which does NOT change when an action is added/removed in
+ * place via `setRuntimeContributions` (the theme + keybinding-override writers do
+ * this) — so an item pointing at such a runtime-added action wouldn't resolve
+ * until the next runtime swap. Every current contribution references a static
+ * action, so this holds; revisit (subscribe to the actions facet) if that breaks.
  */
 export function useActionRefItems(
   facet: Facet<ActionRefContribution, readonly ActionRefContribution[]>,
