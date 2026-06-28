@@ -29,10 +29,10 @@
  * bytes makes the security-critical core fully unit-testable without the DOM.
  */
 
-import { decodeBytes } from '../sync/byteTransform.js'
-import { deriveContentKey } from '../sync/crypto/contentKey.js'
-import { verifyContentHash } from '../sync/crypto/contentHash.js'
-import { materializabilityToMode, type GetCek, type GetMaterializability } from '../sync/transform.js'
+import { decodeBytes } from '@/sync/byteTransform.js'
+import { deriveContentKey } from '@/sync/crypto/contentKey.js'
+import { verifyContentHash } from '@/sync/crypto/contentHash.js'
+import { materializabilityToMode, type GetCek, type GetMaterializability } from '@/sync/transform.js'
 import type { BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
 

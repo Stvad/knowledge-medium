@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it, vi } from 'vitest'
-import { BINARY_ENVELOPE_MAGIC, BINARY_ENVELOPE_MIN_BYTES } from '../../sync/crypto/binaryEnvelope.js'
+import { BINARY_ENVELOPE_MAGIC, BINARY_ENVELOPE_MIN_BYTES } from '@/sync/crypto/binaryEnvelope.js'
 import { createSupabaseAuditIO } from './supabaseAuditIO.js'
 
 const URL = 'https://proj.supabase.co'

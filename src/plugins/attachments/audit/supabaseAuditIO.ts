@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { BINARY_ENVELOPE_MIN_BYTES, hasBinaryEnvelopeMagic } from '../../sync/crypto/binaryEnvelope.js'
+import { BINARY_ENVELOPE_MIN_BYTES, hasBinaryEnvelopeMagic } from '@/sync/crypto/binaryEnvelope.js'
 import { authenticatedObjectUrl } from '../storagePaths.js'
 import { collectPaged } from './paginate.js'
 import type { AuditIO, ObjectEntry, ObjectVerdict } from './types.js'

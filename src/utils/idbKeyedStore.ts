@@ -10,7 +10,7 @@
  * copy or they silently diverged. This module is the single copy. Consumers:
  *   - `src/extensions/compiledModuleCache.ts` (approved/compiled extensions)
  *   - `src/sync/keys/keyStore.ts` (per-device workspace keys — browser-only path)
- *   - `src/attachments/uploadStore.ts` (the byte-upload staging queue)
+ *   - `src/plugins/attachments/uploadStore.ts` (the byte-upload staging queue)
  *
  * Records are stored under an opaque string key; {@link idbRecordId} builds a
  * collision-free `(owner, id)` composite for the stores that namespace records

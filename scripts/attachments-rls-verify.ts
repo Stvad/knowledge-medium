@@ -18,7 +18,7 @@
  * `yarn run check` — it needs a live stack.
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { isAlreadyExists } from '@/attachments/blobStore'
+import { isAlreadyExists } from '@/plugins/attachments/blobStore'
 
 const url = process.env.SUPABASE_URL
 const anon = process.env.ANON_KEY
