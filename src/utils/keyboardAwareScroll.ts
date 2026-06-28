@@ -1,5 +1,6 @@
 import { EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
+import { completionStatus } from '@codemirror/autocomplete'
 import {
   getBottomEditingInset,
   getEditingToolbarHeight,
@@ -35,7 +36,18 @@ const MIN_KEYBOARD_OVERLAP = 60
  *  Inert on desktop: with no keyboard the inset is 0, so the margin is
  *  null and the re-assert is gated out. */
 export const keyboardAwareScroll = (): Extension => [
-  EditorView.scrollMargins.of(() => {
+  EditorView.scrollMargins.of((view) => {
+    // While a completion popup is open, contribute NO bottom inset.
+    // CodeMirror positions tooltips against the editor's own scroll rect
+    // MINUS these margins; because each block is its own (usually
+    // single-line) editor, a bottom inset taller than the block pushes the
+    // computed "visible bottom" above the caret, so CM treats the caret as
+    // off-screen and parks the popup at top:-10000 — i.e. the autocomplete
+    // dropdown silently vanishes whenever the editing toolbar/keyboard is up
+    // (all of mobile). The inset only matters to keep the caret above that
+    // chrome while scrolling/typing, not while the user is reading the
+    // popup, so drop it for the duration of an active completion.
+    if (completionStatus(view.state) === 'active') return null
     const inset = getBottomEditingInset()
     return inset > 0 ? {bottom: inset} : null
   }),
