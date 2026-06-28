@@ -49,9 +49,9 @@
  * block-exists-before-PUT" note; correctness-equivalent given immutable objects.)
  */
 
-import { decodeBytes, encodeBytes } from '../sync/byteTransform.js'
-import { verifyContentHash } from '../sync/crypto/contentHash.js'
-import { materializabilityToMode, type GetCek, type GetMaterializability, type SyncMode } from '../sync/transform.js'
+import { decodeBytes, encodeBytes } from '@/sync/byteTransform.js'
+import { verifyContentHash } from '@/sync/crypto/contentHash.js'
+import { materializabilityToMode, type GetCek, type GetMaterializability, type SyncMode } from '@/sync/transform.js'
 import { BlobPutError, type BlobStore } from './blobStore.js'
 import type { ByteStore } from './byteStore.js'
 import type { ByteUploadRecord, ByteUploadStore } from './uploadStore.js'

@@ -6,7 +6,7 @@
  * bucket is an `encb:v1:` ciphertext envelope — the tripwire for an honest-client
  * plaintext regression. ALL the logic — the scan and the report shape (exit code,
  * NOT-ARMED handling, per-path redaction) — lives in tested modules under
- * `src/attachments/audit/`; this is the thin I/O shell (env → run → print).
+ * `src/plugins/attachments/audit/`; this is the thin I/O shell (env → run → print).
  *
  * Privilege/posture: uses a privileged key (reads every workspace's objects,
  * bypassing RLS) but range-reads only the envelope head (the ≤36-byte magic +
@@ -15,9 +15,9 @@
  */
 import { createHash } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
-import { runCiphertextAudit } from '@/attachments/audit/audit'
-import { buildReport, type AuditOutcome } from '@/attachments/audit/report'
-import { createSupabaseAuditIO } from '@/attachments/audit/supabaseAuditIO'
+import { runCiphertextAudit } from '@/plugins/attachments/audit/audit'
+import { buildReport, type AuditOutcome } from '@/plugins/attachments/audit/report'
+import { createSupabaseAuditIO } from '@/plugins/attachments/audit/supabaseAuditIO'
 
 const url = process.env.SUPABASE_URL
 // The privileged key: a modern `sb_secret_…` secret key (preferred — independently

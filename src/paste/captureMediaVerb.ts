@@ -5,7 +5,7 @@
  * via `pasteDecisionVerb`) and ACT (turn the files into content-addressed media
  * blocks). This verb is the ACT phase, factored out of the renderers so:
  *   - core declares the extension point here; the **attachments plugin** supplies the
- *     impl (see `src/attachments/pasteCapture.ts`), so the renderers no longer import
+ *     impl (see `src/plugins/attachments/pasteCapture.ts`), so the renderers no longer import
  *     attachments code, and disabling the plugin makes capture a no-op (`defaultImpl`);
  *   - it's trigger-agnostic — paste, drop, and the file-picker all run THIS verb, so
  *     the capture path lives in exactly one place;
