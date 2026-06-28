@@ -76,12 +76,13 @@ export type AssetResolveResult =
   | { readonly ok: false; readonly reason: AssetFailReason }
 
 /** The fail-closed reasons that arise BEFORE any network fetch (the `prepare` stage:
- *  signed-out, locked, missing K_id, malformed hash). They cost NO egress, so the
- *  down-lane's fetch budget must not charge them — else a locked / no-key workspace's
- *  blocks would exhaust the budget on free failures and starve the genuinely-absent
- *  tail behind them. The fetch-stage reasons (`fetch-failed` / `decode-failed` /
- *  `hash-mismatch`) DID hit the network and rightly consume budget; `error` is treated
- *  as egress (conservative — it may have thrown after the fetch). */
+ *  signed-out, locked, missing K_id, malformed hash) — as opposed to the fetch-stage
+ *  reasons (`fetch-failed` / `decode-failed` / `hash-mismatch`, and `error`) that can
+ *  only arise after hitting the network. The down-lane uses this split purely for its
+ *  summary tally: pre-fetch failures are reported `unavailable` (no point retrying
+ *  without a key / unlock), fetch-stage ones `failed` (transient, retried next pass).
+ *  Neither consumes the down-lane budget — only a successful download does (see
+ *  downLane.ts), so a stable-ordered failing prefix never starves the healthy tail. */
 export const PRE_FETCH_FAIL_REASONS: ReadonlySet<AssetFailReason> = new Set([
   'deferred',
   'no-content-key',
