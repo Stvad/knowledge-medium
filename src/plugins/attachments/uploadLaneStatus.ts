@@ -16,10 +16,11 @@
  * the status chip via `useSyncExternalStore`.
  */
 import type { DiagnosticSnapshot, DiagnosticSourceContribution } from '@/plugins/diagnostics/facet.js'
+import { CallbackSet } from '@/utils/callbackSet.js'
 import type { ByteUploadStore } from './uploadStore.js'
 
 let failedCount = 0
-const listeners = new Set<() => void>()
+const listeners = new CallbackSet('upload-lane-status')
 
 /** Re-read the FAILED-record count for `userId` and publish if it changed. Called by
  *  the drain after each pass and by the boot reconciler. A null user (signed out)
@@ -31,7 +32,7 @@ export const refreshUploadLaneStatus = async (
   const next = userId ? await store.countByStatus(userId, 'failed') : 0
   if (next === failedCount) return
   failedCount = next
-  for (const listener of listeners) listener()
+  listeners.notify()
 }
 
 // Ref-stable snapshot cache (feeds useSyncExternalStore): rebuilt ONLY when the count
@@ -42,10 +43,7 @@ let cachedSnapshot: DiagnosticSnapshot | null = null
 export const uploadLaneDiagnosticSource: DiagnosticSourceContribution = {
   id: 'attachments.uploads',
   label: 'Media uploads',
-  subscribe: (listener) => {
-    listeners.add(listener)
-    return () => listeners.delete(listener)
-  },
+  subscribe: (listener) => listeners.add(listener),
   getSnapshot: () => {
     if (failedCount !== cachedCount) {
       cachedCount = failedCount

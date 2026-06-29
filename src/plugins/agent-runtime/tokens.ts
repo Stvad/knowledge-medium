@@ -8,6 +8,7 @@
  *  browser's same-origin model + the bridge listening on
  *  127.0.0.1. Anyone who can read this localStorage already has the
  *  user's session and can do anything from the running app. */
+import { hex } from '@scure/base'
 import { ClientLocalSettings, clientLocalSettings } from '@/utils/ClientLocalSettings.js'
 
 export interface AgentToken {
@@ -35,7 +36,7 @@ const generateSecret = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
     const bytes = new Uint8Array(32)
     crypto.getRandomValues(bytes)
-    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+    return hex.encode(bytes)
   }
   // Fallback for non-browser environments (tests). 32 bytes of randomness
   // from Math.random is weak but the agentTokens module is never run

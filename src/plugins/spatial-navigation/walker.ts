@@ -1,3 +1,4 @@
+import { clamp } from 'lodash-es'
 import { isElementProperlyVisible } from '@/utils/dom.js'
 import {
   type FocusedBlockLocation,
@@ -145,8 +146,6 @@ const orderedColumns = (root: ParentNode = document): HTMLElement[] =>
 const panelsInColumn = (column: HTMLElement): HTMLElement[] =>
   Array.from(column.querySelectorAll<HTMLElement>(PANEL_SELECTOR))
 
-const clamp = (n: number, lo: number, hi: number): number =>
-  Math.max(lo, Math.min(hi, n))
 
 /**
  * Walk up from `instanceEl` to find the closest block nav item

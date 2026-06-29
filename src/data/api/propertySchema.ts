@@ -60,6 +60,15 @@ export interface PropertyEditorProps<T> {
   block: unknown
 }
 
+/** Canonical narrowing of `PropertyEditorProps.block` (an opaque `unknown`)
+ *  to "is this block's repo read-only?". Several config editors otherwise
+ *  re-derive this identical guard. */
+export const isReadOnlyBlock = (block: unknown): boolean => {
+  if (!block || typeof block !== 'object') return false
+  const repo = (block as { repo?: { isReadOnly?: unknown } }).repo
+  return repo?.isReadOnly === true
+}
+
 export type PropertyEditor<T> = (props: PropertyEditorProps<T>) => JSX.Element
 
 /** Plugin-augmentable type registry for property schemas — mirrors

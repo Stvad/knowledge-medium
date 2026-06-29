@@ -1,15 +1,9 @@
 import { KeyboardEvent, useMemo, useState } from 'react'
 import { Plus, X } from 'lucide-react'
-import { type PropertyEditorProps } from '@/data/api'
+import { isReadOnlyBlock, type PropertyEditorProps } from '@/data/api'
 import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { isValidTagName, normalizeBlockTagsConfig } from './config.ts'
-
-const isReadOnlyBlock = (block: unknown): boolean => {
-  if (!block || typeof block !== 'object') return false
-  const repo = (block as { repo?: { isReadOnly?: unknown } }).repo
-  return repo?.isReadOnly === true
-}
 
 export const BlockTagsConfigEditor = ({
   value,

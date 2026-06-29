@@ -1,3 +1,4 @@
+import { isEqual } from 'lodash-es'
 import type { BlockData } from '@/types'
 import { CallbackSet } from '@/utils/callbackSet'
 
@@ -10,9 +11,6 @@ const deepFreeze = <T>(value: T): T => {
   }
   return value
 }
-
-const blockFingerprint = (blockData: BlockData | undefined) =>
-  blockData ? JSON.stringify(blockData) : ''
 
 /** Caller classification for `applyIfNewer` — separates PowerSync
  *  sync-tail arrivals from query-path / `repo.load` re-reads. The LWW
@@ -124,12 +122,19 @@ export class BlockCache {
   /** Unconditional snapshot write. Used by the local commit pipeline,
    *  whose write IS the latest authoritative state for the row. Returns
    *  true if listeners were notified (i.e. the snapshot actually
-   *  changed by fingerprint). */
+   *  changed by value). */
   setSnapshot(snapshot: BlockData): boolean {
     this.metrics.setSnapshotCalls++
     const existing = this.snapshots.get(snapshot.id)
 
-    if (existing && blockFingerprint(existing) === blockFingerprint(snapshot)) {
+    // Deep-equal (not JSON.stringify): short-circuits on the first differing
+    // field instead of serializing the whole block, and is insensitive to
+    // property key order, so a reorder-only write is correctly a no-op. It can
+    // diverge from string-equality both ways — a key reorder dedups where
+    // stringify would notify, an explicit `undefined`-valued key notifies where
+    // stringify would dedup — but neither can DROP a notify for a real change,
+    // which is the only unsafe direction.
+    if (existing && isEqual(existing, snapshot)) {
       this.metrics.setSnapshotDedupHits++
       return false
     }
@@ -164,7 +169,8 @@ export class BlockCache {
    *  earlier-but-equal-ms content — `<` would accept it and clobber
    *  the cache with stale content. `<=` rejects equal-ms snapshots;
    *  same-`updatedAt`-same-content rounds to a no-op anyway via
-   *  fingerprint dedup, so this only blocks the harmful clobber.
+   *  the deep-equal dedup in `setSnapshot`, so this only blocks the
+   *  harmful clobber.
    *
    *  The `source` argument is telemetry-only — it routes the call/
    *  reject counts into separate metric buckets so a rejection-rate

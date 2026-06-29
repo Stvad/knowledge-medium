@@ -103,6 +103,28 @@ describe('markdown formatting CodeMirror commands', () => {
     expect(runCommand(toggleMarkdownInlineCode, 'word', 0, 4).doc).toBe('`word`')
     expect(runCommand(toggleMarkdownStrikethrough, 'word', 0, 4).doc).toBe('~~word~~')
   })
+
+  it('strips an empty marker pair surrounding the cursor (inverse of insert)', () => {
+    expect(runCommand(toggleMarkdownBold, '****', 2, 2)).toEqual({
+      doc: '',
+      from: 0,
+      to: 0,
+      head: 0,
+    })
+  })
+
+  // Nested same-char markers: selecting the inner `*a*` of `**a**` and toggling
+  // italic satisfies BOTH "selection contains markers" and "markers surround the
+  // selection". The wrapped-selection branch must win (unwrap the inner pair),
+  // otherwise the outer pair would be stripped and the selection would differ.
+  it('unwraps the inner pair when a nested same-char selection is ambiguous', () => {
+    expect(runCommand(toggleMarkdownItalic, '**a**', 1, 4)).toEqual({
+      doc: '*a*',
+      from: 1,
+      to: 2,
+      head: 2,
+    })
+  })
 })
 
 describe('minimal markdown CodeMirror config', () => {

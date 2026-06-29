@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { defineQuery, type QueryCtx, type Schema } from '@/data/api'
+import { backlinksFilterSchema, defineQuery, type QueryCtx, type Schema } from '@/data/api'
 import {
   buildQualifiedBlockColumnsSql,
   type BlockRow,
@@ -70,23 +70,6 @@ interface TypeCandidateRow {
 const groupedBacklinksSchema: Schema<GroupedBacklinksResult> = {
   parse: (input) => input as GroupedBacklinksResult,
 }
-
-const referenceFilterSchema = z.object({
-  id: z.string(),
-  sourceField: z.string().optional(),
-})
-
-const blockPredicateSchema = z.object({
-  scope: z.enum(['self', 'ancestor']).optional(),
-  id: z.string().optional(),
-  where: z.record(z.string(), z.unknown()).optional(),
-  referencedBy: referenceFilterSchema.optional(),
-})
-
-const backlinksFilterSchema = z.object({
-  include: z.array(blockPredicateSchema).optional(),
-  exclude: z.array(blockPredicateSchema).optional(),
-}).optional()
 
 const groupedBacklinksConfigSchema = z.object({
   highPriorityTags: z.array(z.string()).optional(),
@@ -304,7 +287,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
   argsSchema: z.object({
     workspaceId: z.string(),
     id: z.string(),
-    filter: backlinksFilterSchema,
+    filter: backlinksFilterSchema.optional(),
     groupingConfig: groupedBacklinksConfigSchema,
   }),
   resultSchema: groupedBacklinksSchema,
@@ -483,7 +466,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       const groupId = `type:${row.type_name}`
       const groupLabel = typeLabelById.get(row.type_name) ?? row.type_name
       for (const sourceId of sources) {
-        const key = `${sourceId} ${groupId}`
+        const key = `${sourceId}\x00${groupId}`
         if (emittedTypeCandidates.has(key)) continue
         emittedTypeCandidates.add(key)
         candidates.push({

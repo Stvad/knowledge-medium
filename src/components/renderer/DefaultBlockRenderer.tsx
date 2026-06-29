@@ -1,4 +1,5 @@
 import { BlockRendererProps, BlockRenderer } from '@/types.js'
+import { cn } from '@/lib/utils'
 import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
@@ -221,7 +222,7 @@ const ExpandButton = ({block}: { block: Block }) => {
         e.stopPropagation()
         toggle()
       }}
-      className={`expand-collapse-button p-0 hover:bg-none transition-opacity duration-200 ${visibilityClass} ${isMobile ? 'h-8 w-8' : 'h-6 w-3'}`}
+      className={cn('expand-collapse-button p-0 hover:bg-none transition-opacity duration-200', visibilityClass, isMobile ? 'h-8 w-8' : 'h-6 w-3')}
     >
       <span className="text-lg text-muted-foreground">
         {isCollapsed ? '▸' : '▾'}

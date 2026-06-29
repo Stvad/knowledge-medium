@@ -7,7 +7,9 @@ import {
   useState,
 } from 'react'
 import { Plus, X } from 'lucide-react'
+import { truncate } from '@/utils/string'
 import {
+  isReadOnlyBlock,
   type PropertyEditorProps,
 } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
@@ -19,6 +21,7 @@ import {
   searchLinkTargetValueCandidates,
   type LinkTargetValueCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
+import { uniqueStrings } from '@/utils/array'
 import {
   normalizeGroupedBacklinksConfig,
   type GroupedBacklinksConfig,
@@ -28,18 +31,6 @@ const SEARCH_LIMIT = 6
 const DEBOUNCE_MS = 80
 
 type TagTone = 'high' | 'low' | 'excluded'
-
-const truncate = (text: string, max = 72): string =>
-  text.length > max ? `${text.slice(0, max - 3)}...` : text
-
-const uniqueStrings = (values: readonly string[]): string[] =>
-  Array.from(new Set(values.map(value => value.trim()).filter(Boolean)))
-
-const isReadOnlyBlock = (block: unknown): boolean => {
-  if (!block || typeof block !== 'object') return false
-  const repo = (block as { repo?: { isReadOnly?: unknown } }).repo
-  return repo?.isReadOnly === true
-}
 
 const toneClass = (tone: TagTone): string => {
   switch (tone) {
@@ -264,7 +255,7 @@ const ConfigTagInput = ({
               >
                 <span className="truncate font-medium">{result.label}</span>
                 {result.detail && result.detail !== result.label && (
-                  <span className="truncate text-muted-foreground">{truncate(result.detail)}</span>
+                  <span className="truncate text-muted-foreground">{truncate(result.detail, 72)}</span>
                 )}
               </button>
             ))}

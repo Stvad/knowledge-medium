@@ -5,6 +5,7 @@ import {
   UpdateType,
   type CrudTransaction,
 } from '@powersync/common'
+import { chunk } from 'lodash-es'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
 import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
@@ -311,14 +312,6 @@ const orderedBlockUpserts = (rows: readonly BlockUploadPayload[]): BlockUploadPa
   return ordered
 }
 
-const chunked = <T,>(items: readonly T[], size: number): T[][] => {
-  const chunks: T[][] = []
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size))
-  }
-  return chunks
-}
-
 /** Ships every PATCH in the compacted batch as a single
  *  `apply_block_patches` RPC call. The server-side function loops the
  *  patches array and runs one column-narrow UPDATE per element, with the
@@ -341,9 +334,9 @@ const applyBlockPatchesRpc = async (
 
   // Chunk so one RPC never runs more than MAX_PATCHES_PER_SUPABASE_RPC
   // server-side UPDATEs in a single statement (see the constant for why).
-  for (const chunk of chunked(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
-    console.debug('[powersync] PATCH batch', chunk.length)
-    const payload = chunk.map(patch => ({id: patch.id, ...patch.payload}))
+  for (const batch of chunk(patches, MAX_PATCHES_PER_SUPABASE_RPC)) {
+    console.debug('[powersync] PATCH batch', batch.length)
+    const payload = batch.map(patch => ({id: patch.id, ...patch.payload}))
     const {error, status} = await client.rpc('apply_block_patches', {patches: payload})
 
     if (error) {
@@ -375,11 +368,11 @@ const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
   if (rows.length === 0) return
   const client = assertSupabase()
 
-  for (const chunk of chunked(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
-    console.debug('[powersync] CREATE batch', chunk.length)
+  for (const batch of chunk(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
+    console.debug('[powersync] CREATE batch', batch.length)
     const {error, status} = await client
       .from('blocks')
-      .upsert(chunk, {onConflict: 'id', ignoreDuplicates: true})
+      .upsert(batch, {onConflict: 'id', ignoreDuplicates: true})
 
     if (error) {
       throwWithHttpStatus(error, status)

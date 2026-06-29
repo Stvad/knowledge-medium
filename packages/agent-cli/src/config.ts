@@ -36,7 +36,9 @@ interface ResolvedBridgeConfig {
   createdAt: number
 }
 
-const isErrnoException = (error: unknown): error is NodeJS.ErrnoException =>
+// Narrow a thrown `unknown` to NodeJS fs/HTTP errors so we can check
+// `.code === 'ENOENT'` etc without sprinkling `as any` everywhere.
+export const isErrnoException = (error: unknown): error is NodeJS.ErrnoException =>
   error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string'
 
 const normalizeBridgeConfig = (value: unknown): BridgeConfig => {

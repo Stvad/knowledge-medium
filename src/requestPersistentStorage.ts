@@ -51,6 +51,8 @@
  *   newly granted both resolve `true`).
  */
 
+import { CallbackSet } from './utils/callbackSet'
+
 // Origin-wide retry marker (localStorage — shared across tabs and PWA windows,
 // unlike per-tab sessionStorage) with an *expiry*. Origin-wide so a dismissed
 // Firefox prompt isn't repeated in a second tab; expiring so it isn't permanent
@@ -100,18 +102,14 @@ const queryPersistPermission = async (): Promise<PermissionState | undefined> =>
 // fire-and-forget; on Firefox its grant can land *after* the chip first read
 // "not protected" (persist() stays pending while the prompt is open), so the
 // reminder needs this push to clear.
-const changeListeners = new Set<() => void>()
+const changeListeners = new CallbackSet('persistence-change')
 
 /** Subscribe to persistence-state changes from a settled persist() request.
  *  Returns an unsubscribe. */
-export const subscribePersistenceChange = (listener: () => void): (() => void) => {
+export const subscribePersistenceChange = (listener: () => void): (() => void) =>
   changeListeners.add(listener)
-  return () => changeListeners.delete(listener)
-}
 
-const notifyPersistenceChange = (): void => {
-  for (const listener of changeListeners) listener()
-}
+const notifyPersistenceChange = (): void => changeListeners.notify()
 
 export interface PersistenceState {
   /** Whether this engine exposes the StorageManager persist/persisted API. */
