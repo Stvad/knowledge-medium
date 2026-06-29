@@ -265,7 +265,7 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
   }
 
   const coalescedResolve = (request: AssetResolveRequest): Promise<ResolveOutcome> => {
-    // Coalesce CONCURRENT resolves of the same (workspace, contentHash): the same
+    // Coalesce CONCURRENT resolves of the same (user, workspace, contentHash): the same
     // asset embedded N times mounts N components that each resolve in the same tick;
     // share ONE OPFS-read + decrypt + verify instead of N. NOT a persistent cache —
     // the entry is dropped the moment the resolve settles, so verified plaintext is
@@ -274,7 +274,19 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     // one shared promise is safe to hand to every concurrent caller — including the
     // backlog `replicate` lane, so a demand render and a backlog fetch of the same
     // asset ride ONE download (§8).
-    const key = `${request.workspaceId}\n${request.contentHash}`
+    //
+    // The key INCLUDES the active user (read synchronously, so the get→set below stays
+    // atomic and same-epoch callers still coalesce): the demand + backlog lanes share
+    // this map, so a background `replicate()` fetched under account A must NEVER be handed
+    // to a `resolve()` that runs after an account switch to B — B would skip its own
+    // `prepare()` + byte-store scope and receive A's plaintext. Different principal →
+    // different key → its own fetch. (Same-user key-state changes — lock / rotate — need
+    // no epoch in the key: the bytes are content-addressed + hash-verified, so identical
+    // regardless of key epoch, and lock doesn't scrub already-authorized in-flight work
+    // any more than it scrubs the stored byte / `blocks` table. Keying by the post-prepare
+    // `contentKey` would instead force an `await prepare()` before this dedup, reopening a
+    // get→set race that double-fetches.)
+    const key = `${getUserId() ?? ''}\n${request.workspaceId}\n${request.contentHash}`
     const existing = inFlight.get(key)
     if (existing) return existing
     const pending = resolveImpl(request).finally(() => inFlight.delete(key))

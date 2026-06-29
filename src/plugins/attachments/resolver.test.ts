@@ -432,4 +432,41 @@ describe('createAssetResolver — concurrency', () => {
     await resolver.resolve({ workspaceId: WS, contentHash })
     expect(blobGet).not.toHaveBeenCalled()
   })
+
+  it('does NOT coalesce across an account switch — A’s in-flight fetch is never handed to B', async () => {
+    // The demand + backlog lanes share ONE in-flight map; a fetch started under account A
+    // must not be reused by a resolve under B after a switch (B would receive A's plaintext
+    // without its own prepare / user-scoped byte store). Keying the map by the active user
+    // closes it: different principal → different key → its own fetch.
+    const plain = bytes(3, 1, 4, 1, 5)
+    const contentHash = await hashOf(plain)
+    const served = await seal('none', plain, contentHash)
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const blobGet = vi.fn(async () => {
+      await gate // hold the fetch in-flight so both calls overlap
+      return served
+    })
+    let activeUser = 'user-A'
+    const resolver = createAssetResolver({
+      getUserId: () => activeUser,
+      byteStore: new InMemoryByteStore(),
+      blobStore: { get: blobGet, put: vi.fn(), delete: vi.fn() } as unknown as BlobStore,
+      getMaterializability: mat('copy'),
+      getCek,
+      getContentKeyHmac: async () => kid,
+    })
+
+    const pA = resolver.replicate({ workspaceId: WS, contentHash }) // in-flight under A
+    await vi.waitFor(() => expect(blobGet).toHaveBeenCalledTimes(1)) // A is into the gated fetch
+
+    activeUser = 'user-B' // account switch before A settles
+    const pB = resolver.resolve({ workspaceId: WS, contentHash })
+    await vi.waitFor(() => expect(blobGet).toHaveBeenCalledTimes(2)) // B started its OWN fetch, no reuse
+
+    release()
+    await Promise.all([pA, pB])
+  })
 })
