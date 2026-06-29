@@ -49,6 +49,19 @@ describe('reconcileDownLane', () => {
     expect(replicate).toHaveBeenCalledTimes(2)
   })
 
+  it('a budget of 0 replicates NOTHING — the whole list is skipped, nothing is even probed', async () => {
+    // The cap is checked before each request, so a 0 budget does no work at all (no
+    // off-by-one fetch-then-stop). `?? DEFAULT` preserves an explicit 0, so this is the
+    // real meaning of budget 0, not a fallback to the default.
+    const hashes = ['a', 'b', 'c']
+    const { resolver, replicate } = fakeResolver(Object.fromEntries(hashes.map((h) => [h, replicated])))
+
+    const summary = await reconcileDownLane(hashes.map(req), { resolver, budget: 0 })
+
+    expect(summary).toEqual({ present: 0, replicated: 0, failed: 0, unavailable: 0, skipped: 3 })
+    expect(replicate).not.toHaveBeenCalled() // budget spent before any work — zero egress
+  })
+
   it('present blocks are FREE — they do not consume the download budget', async () => {
     // [present, present, absent, absent, absent], budget 2: the two presents cost
     // nothing, so BOTH downloads still happen past them; only the 5th is skipped.

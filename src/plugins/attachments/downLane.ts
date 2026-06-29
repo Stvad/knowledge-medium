@@ -48,8 +48,8 @@ export interface DownLaneDeps {
   /** The §8 backlog lane — see {@link AssetResolver.replicate}. Only `replicate` is
    *  used; typed as a slice so tests need not build a whole resolver. */
   readonly resolver: { replicate(request: AssetResolveRequest): Promise<AssetReplicateResult> }
-  /** Max SUCCESSFUL downloads this pass; present probes + failures are free. Defaults
-   *  to {@link DEFAULT_DOWN_LANE_BUDGET}. */
+  /** Max SUCCESSFUL downloads this pass (0 = replicate nothing); present probes +
+   *  failures are free. Defaults to {@link DEFAULT_DOWN_LANE_BUDGET} when omitted. */
   readonly budget?: number
 }
 
@@ -80,6 +80,12 @@ export const reconcileDownLane = async (
   let unavailable = 0
 
   for (let i = 0; i < requests.length; i++) {
+    // Stop BEFORE doing any work once the success budget is spent. Checking at the top
+    // (rather than after incrementing on a download) is what makes a budget of 0 fetch
+    // NOTHING; the unattempted tail is simply the rest of the list from `i`.
+    if (replicated >= budget) {
+      return { present, replicated, failed, unavailable, skipped: requests.length - i }
+    }
     const r = await deps.resolver.replicate(requests[i])
     if (r.ok) {
       // An already-present block is FREE — a has() probe, no fetch — so the steady
@@ -88,13 +94,11 @@ export const reconcileDownLane = async (
         present += 1
         continue
       }
-      // A successful download is the ONLY outcome that consumes the budget (it's the
-      // only one that does real byte egress). At the cap, stop — the tail waits for the
-      // next pass, where these now-present blocks are free and the walk reaches further.
+      // A successful download is the ONLY outcome that consumes the budget (the only one
+      // that does real byte egress); the next iteration's top-of-loop check stops the
+      // walk at the cap, leaving the tail for the next pass (where these now-present
+      // blocks are free and the walk reaches further).
       replicated += 1
-      if (replicated >= budget) {
-        return { present, replicated, failed, unavailable, skipped: requests.length - 1 - i }
-      }
       continue
     }
     // A FAILURE is FREE and NEVER halts the walk — charging it would let a stable-
