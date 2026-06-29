@@ -20,11 +20,11 @@
 
 import { useEffect } from 'react'
 import { useRepo } from '@/context/repo.js'
-import { onFirstSync } from '@/data/internals/firstSync.js'
-import { getActiveUserId, getPowerSyncDb } from '@/data/repoProvider.js'
+import { getActiveUserId } from '@/data/repoProvider.js'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
 import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { DOWN_LANE_SWEEP_INTERVAL_MS, runDownLaneReconcile } from './assetDownLane.js'
+import { armSharedLaneTriggers } from './laneArming.js'
 
 export const MediaDownLaneReplicator = (): null => {
   const repo = useRepo()
@@ -40,21 +40,17 @@ export const MediaDownLaneReplicator = (): null => {
       )
     }
 
-    // Initial pass off the cold-start window (genuine idle, force-run by the fallback),
-    // and again once initial sync settles so just-arrived blocks get walked.
+    // Initial pass off the cold-start window (genuine idle, force-run by the fallback).
     scheduleDeepIdle(pass, CATCHUP_DEEP_IDLE)
-    const userId = getActiveUserId()
-    const disposeFirstSync = userId ? onFirstSync(getPowerSyncDb(userId), pass) : () => {}
-
-    // Reconnect retries offline misses; the slow sweep heals the §9 backstop (a late
-    // origin upload) + advances the budget tail.
-    window.addEventListener('online', pass)
+    // Shared lane triggers: re-run once initial sync settles (just-arrived blocks get
+    // walked) and on reconnect (retry offline misses).
+    const disposeShared = armSharedLaneTriggers(getActiveUserId(), pass, pass)
+    // The slow sweep heals the §9 backstop (a late origin upload) + advances the budget tail.
     const sweep = setInterval(pass, DOWN_LANE_SWEEP_INTERVAL_MS)
 
     return () => {
       cancelled = true
-      disposeFirstSync()
-      window.removeEventListener('online', pass)
+      disposeShared()
       clearInterval(sweep)
     }
   }, [repo, workspaceId])
