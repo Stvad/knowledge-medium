@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { clamp } from 'lodash-es'
 import { cn } from '@/lib/utils.js'
 
 interface FloatingListboxPlacementOptions {
@@ -26,9 +27,6 @@ const DEFAULT_MIN_HEIGHT = 96
 const DEFAULT_MAX_HEIGHT = 224
 const DEFAULT_VIEWPORT_MARGIN = 8
 const DEFAULT_GAP = 4
-
-const clamp = (value: number, min: number, max: number): number =>
-  Math.min(Math.max(value, min), max)
 
 const placementStyle = (
   anchor: HTMLElement,
