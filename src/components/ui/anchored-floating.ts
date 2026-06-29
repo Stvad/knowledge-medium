@@ -118,9 +118,12 @@ export const useAnchoredFloating = ({
               const upper = Math.min(maxWidth ?? availableWidth, availableWidth)
               style.width = `${clamp(rects.reference.width, lower, upper)}px`
             }
-            // Cap at `maxHeight`, but keep a `minHeight` floor so the list
-            // still has room to scroll rather than collapsing when the
-            // gap is tight (matches the original FloatingListbox).
+            // Cap at `maxHeight`, floored at `minHeight` so a gap tighter
+            // than `minHeight` keeps a scrollable minimum (overflowing the
+            // gap) rather than collapsing — like the original FloatingListbox.
+            // (The original additionally capped at the viewport height; that
+            // only diverges on viewports under ~`minHeight` tall, so it's
+            // dropped here.)
             const cap = Math.min(maxHeight ?? availableHeight, Math.max(availableHeight, minHeight))
             style.maxHeight = `${Math.max(0, cap)}px`
           } else {
