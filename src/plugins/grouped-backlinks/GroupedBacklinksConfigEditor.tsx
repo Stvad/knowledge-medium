@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { Plus, X } from 'lucide-react'
 import {
+  isReadOnlyBlock,
   type PropertyEditorProps,
 } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
@@ -32,12 +33,6 @@ type TagTone = 'high' | 'low' | 'excluded'
 
 const truncate = (text: string, max = 72): string =>
   text.length > max ? `${text.slice(0, max - 3)}...` : text
-
-const isReadOnlyBlock = (block: unknown): boolean => {
-  if (!block || typeof block !== 'object') return false
-  const repo = (block as { repo?: { isReadOnly?: unknown } }).repo
-  return repo?.isReadOnly === true
-}
 
 const toneClass = (tone: TagTone): string => {
   switch (tone) {
