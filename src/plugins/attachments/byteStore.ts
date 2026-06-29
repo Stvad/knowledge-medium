@@ -98,6 +98,14 @@ export class InMemoryByteStore implements ByteStore {
     return assetPathSegments(userId, workspaceId, contentKey).join('/')
   }
 
+  /** The `assets/<user>/<ws>/` key prefix shared by the workspace-wide scans
+   *  (`listWorkspaceKeys` enumerate, `purgeWorkspace` reap) — one source of truth so
+   *  the two can't drift. The remainder after it is the {@link encodeSegment}-escaped
+   *  content-key. */
+  private wsPrefix(userId: string, workspaceId: string): string {
+    return `${ASSETS_ROOT}/${encodeSegment(userId)}/${encodeSegment(workspaceId)}/`
+  }
+
   async get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null> {
     const hit = this.blobs.get(this.key(userId, workspaceId, contentKey))
     return hit ? new Uint8Array(hit) : null
@@ -112,7 +120,7 @@ export class InMemoryByteStore implements ByteStore {
   }
 
   async listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>> {
-    const prefix = `${ASSETS_ROOT}/${encodeSegment(userId)}/${encodeSegment(workspaceId)}/`
+    const prefix = this.wsPrefix(userId, workspaceId)
     const out = new Set<string>()
     for (const k of this.blobs.keys()) {
       if (k.startsWith(prefix)) out.add(decodeSegment(k.slice(prefix.length)))
@@ -125,7 +133,7 @@ export class InMemoryByteStore implements ByteStore {
   }
 
   async purgeWorkspace(userId: string, workspaceId: string): Promise<void> {
-    const prefix = `${ASSETS_ROOT}/${encodeSegment(userId)}/${encodeSegment(workspaceId)}/`
+    const prefix = this.wsPrefix(userId, workspaceId)
     for (const k of [...this.blobs.keys()]) {
       if (k.startsWith(prefix)) this.blobs.delete(k)
     }
@@ -266,6 +274,11 @@ export class OpfsByteStore implements ByteStore {
   }
 
   async purgeWorkspace(userId: string, workspaceId: string): Promise<void> {
+    // COORDINATION CAVEAT for the deferred §16 reference-GC job (the only intended caller —
+    // there is none today): a purge that races a concurrent down-lane `put` for the same
+    // workspace can lose, because `put`'s retry re-creates the ws dir from a fresh resolve
+    // after this `removeEntry`. The GC job must run with the workspace quiescent — hold the
+    // per-(user,workspace) down-lane lock (laneLock.runSingleOwner) so no `put` is in flight.
     this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId)) // the cached handle is about to go stale
     try {
       // Walk to the USER dir, then remove the workspace subtree from it.
