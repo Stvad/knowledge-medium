@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
 import type { Block } from '@/data/block'
 import { PropertyPicker } from './PropertyPicker.tsx'
@@ -52,14 +52,17 @@ describe('PropertyPicker', () => {
     fireEvent.keyDown(input, {key: 'ArrowDown'})
     expect(activeText()).toContain('apricot') // index 1
 
-    // Commit it (Enter) → submit() → onAdd → reset().
+    // Commit it (Enter) → submit() → onAdd → reset(). Wait for reset to settle
+    // (input cleared) before reopening, so focus can't race the async close that
+    // reset() performs — otherwise a late reset() would re-close the list.
     await act(async () => { fireEvent.keyDown(input, {key: 'Enter'}) })
     expect(onAdd).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(''))
 
     // Reopen WITHOUT typing — onFocus does not reset the index, so this only
     // passes if reset() already cleared it. Highlight must be back at the top.
     fireEvent.focus(input)
-    expect(activeText()).toContain('apple')
+    await waitFor(() => expect(activeText()).toContain('apple'))
     expect(activeText()).not.toContain('apricot')
   })
 })
