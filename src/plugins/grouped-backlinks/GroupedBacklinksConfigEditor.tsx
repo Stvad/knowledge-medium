@@ -128,7 +128,12 @@ const ConfigTagInput = ({
     })
 
   useEffect(() => {
-    if (!workspaceId || !debouncedQuery) return
+    // Only search once the debounce has settled (`trimmed === debouncedQuery`),
+    // but keep raw `trimmed` in the deps so every keystroke re-runs the effect
+    // and its cleanup cancels any in-flight search immediately. Without that, a
+    // late result for the previous tag text could repopulate `results` for the
+    // new/cleared input and Enter/the "+" button would commit a stale value.
+    if (!workspaceId || !debouncedQuery || trimmed !== debouncedQuery) return
 
     let cancelled = false
     void searchLinkTargetValueCandidates(repo, {
@@ -145,7 +150,7 @@ const ConfigTagInput = ({
     return () => {
       cancelled = true
     }
-  }, [currentValueSet, debouncedQuery, repo, setActiveIndex, workspaceId])
+  }, [currentValueSet, debouncedQuery, trimmed, repo, setActiveIndex, workspaceId])
 
   const remove = (value: string) => {
     if (readOnly) return

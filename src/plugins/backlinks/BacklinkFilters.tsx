@@ -218,7 +218,12 @@ const RefPredicateInput = ({
     })
 
   useEffect(() => {
-    if (!workspaceId || !debouncedQuery) return
+    // Only search once the debounce has settled (`trimmed === debouncedQuery`),
+    // but keep raw `trimmed` in the deps so every keystroke re-runs the effect
+    // and its cleanup cancels any in-flight search immediately. Without that, a
+    // late result for the previous text could repopulate `results` for the
+    // new/cleared input and Enter/the "+" button would commit a stale block.
+    if (!workspaceId || !debouncedQuery || trimmed !== debouncedQuery) return
 
     let cancelled = false
     void searchLinkTargetIdCandidates(repo, {
@@ -235,7 +240,7 @@ const RefPredicateInput = ({
     return () => {
       cancelled = true
     }
-  }, [excludeIds, repo, debouncedQuery, setActiveIndex, workspaceId])
+  }, [excludeIds, repo, debouncedQuery, trimmed, setActiveIndex, workspaceId])
 
   // Submit (the "+" button / Enter without an open list) adds the first
   // match, falling back to an exact alias lookup for a typed-but-unlisted
