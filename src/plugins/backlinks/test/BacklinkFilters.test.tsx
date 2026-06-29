@@ -239,4 +239,76 @@ describe('BacklinkFilters', () => {
       exclude: [],
     })
   })
+
+  it('keyboard Enter ignores mid-debounce stale results and honors the typed text', async () => {
+    vi.useFakeTimers()
+    schemaStore.searchById.set('ab', [{id: 'block-ab', label: 'ab match', detail: '', key: 'block-ab'}])
+    schemaStore.aliasLookupResult = {id: 'alias-abc'}
+    const onChange = vi.fn()
+
+    render(<BacklinkFilters workspaceId="ws-1" filter={{}} onChange={onChange} />)
+    const input = screen.getByPlaceholderText('Include reference')
+    fireEvent.focus(input)
+    fireEvent.change(input, {target: {value: 'ab'}})
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) }) // settle → results for 'ab'
+
+    fireEvent.change(input, {target: {value: 'abc'}}) // type ahead; results still 'ab'
+    await act(async () => {
+      fireEvent.keyDown(input, {key: 'Enter'})
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(onChange).toHaveBeenCalledWith({
+      include: [{scope: 'ancestor', referencedBy: {id: 'alias-abc'}}],
+      exclude: [],
+    })
+  })
+
+  it('keyboard Enter adopts the highlighted result when fresh', async () => {
+    vi.useFakeTimers()
+    schemaStore.searchById.set('ab', [{id: 'block-ab', label: 'ab match', detail: '', key: 'block-ab'}])
+    schemaStore.aliasLookupResult = {id: 'alias-unused'}
+    const onChange = vi.fn()
+
+    render(<BacklinkFilters workspaceId="ws-1" filter={{}} onChange={onChange} />)
+    const input = screen.getByPlaceholderText('Include reference')
+    fireEvent.focus(input)
+    fireEvent.change(input, {target: {value: 'ab'}})
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+
+    await act(async () => {
+      fireEvent.keyDown(input, {key: 'Enter'})
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(onChange).toHaveBeenCalledWith({
+      include: [{scope: 'ancestor', referencedBy: {id: 'block-ab'}}],
+      exclude: [],
+    })
+  })
+
+  it('clicking a visible suggestion commits that row even mid-debounce', async () => {
+    vi.useFakeTimers()
+    schemaStore.searchById.set('ab', [{id: 'block-ab', label: 'ab match', detail: '', key: 'block-ab'}])
+    schemaStore.aliasLookupResult = {id: 'alias-abc'}
+    const onChange = vi.fn()
+
+    render(<BacklinkFilters workspaceId="ws-1" filter={{}} onChange={onChange} />)
+    const input = screen.getByPlaceholderText('Include reference')
+    fireEvent.focus(input)
+    fireEvent.change(input, {target: {value: 'ab'}})
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+
+    fireEvent.change(input, {target: {value: 'abc'}}) // stale: dropdown still shows 'ab match'
+    await act(async () => {
+      fireEvent.click(screen.getByText('ab match'))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // The clicked row wins regardless of staleness — click commits what's seen.
+    expect(onChange).toHaveBeenCalledWith({
+      include: [{scope: 'ancestor', referencedBy: {id: 'block-ab'}}],
+      exclude: [],
+    })
+  })
 })

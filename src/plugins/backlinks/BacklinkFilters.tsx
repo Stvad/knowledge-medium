@@ -217,6 +217,15 @@ const RefPredicateInput = ({
     resetResults()
   }
 
+  // Resolve the typed text to a block via exact alias lookup. Shared by the
+  // submit button and the keyboard-commit path when the listbox results are
+  // mid-debounce stale, so neither adds a leftover previous-query block.
+  const commitTyped = async () => {
+    if (readOnly || !trimmed) return
+    const exact = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
+    if (exact) commitId(exact.id)
+  }
+
   const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
     useAutocompleteListbox({
       itemCount: results.length,
@@ -246,8 +255,7 @@ const RefPredicateInput = ({
       commitId(fallbackId)
       return
     }
-    const exact = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
-    if (exact) commitId(exact.id)
+    await commitTyped()
   }
 
   return (
@@ -280,6 +288,14 @@ const RefPredicateInput = ({
           if (event.key === 'Escape') {
             setQuery('')
             resetResults()
+            return
+          }
+          // Mid-debounce the visible results still belong to the previous text;
+          // commit the typed name (exact lookup) rather than letting the listbox
+          // adopt a stale highlight. A click still commits the row it hit.
+          if (event.key === 'Enter' && resultsQuery !== trimmed) {
+            event.preventDefault()
+            void commitTyped()
             return
           }
           onKeyDown(event)

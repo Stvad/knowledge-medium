@@ -188,6 +188,14 @@ const ConfigTagInput = ({
                 resetResults()
                 return
               }
+              // Mid-debounce the visible results still belong to the previous
+              // text; commit the typed tag rather than letting the listbox adopt
+              // a stale highlight. A click still commits the row it hit.
+              if (event.key === 'Enter' && resultsQuery !== trimmed) {
+                event.preventDefault()
+                commitValue(trimmed)
+                return
+              }
               onKeyDown(event)
             }}
             placeholder={placeholder}

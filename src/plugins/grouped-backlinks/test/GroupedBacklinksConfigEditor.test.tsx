@@ -89,4 +89,43 @@ describe('GroupedBacklinksConfigEditor / ConfigTagInput submit guard', () => {
       expect.objectContaining({highPriorityTags: ['second']}),
     )
   })
+
+  it('keyboard Enter ignores stale results and commits the typed tag', async () => {
+    vi.useFakeTimers()
+    store.searchByValue.set('ab', [cand('ab-tag')])
+    const {onChange, input} = renderEditor()
+
+    fireEvent.focus(input)
+    fireEvent.change(input, {target: {value: 'ab'}})
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) }) // settle → results for 'ab'
+
+    fireEvent.change(input, {target: {value: 'abc'}}) // type ahead; results still 'ab'
+    await act(async () => {
+      fireEvent.keyDown(input, {key: 'Enter'})
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({highPriorityTags: ['abc']}),
+    )
+  })
+
+  it('keyboard Enter adopts the highlighted tag when fresh', async () => {
+    vi.useFakeTimers()
+    store.searchByValue.set('ab', [cand('ab-tag')])
+    const {onChange, input} = renderEditor()
+
+    fireEvent.focus(input)
+    fireEvent.change(input, {target: {value: 'ab'}})
+    await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+
+    await act(async () => {
+      fireEvent.keyDown(input, {key: 'Enter'})
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({highPriorityTags: ['ab-tag']}),
+    )
+  })
 })
