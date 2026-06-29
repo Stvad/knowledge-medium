@@ -41,6 +41,16 @@ const encodeSegment = (s: string): string => {
   return e
 }
 
+/** Inverse of {@link encodeSegment}: reverse the three sentinels, else
+ *  `decodeURIComponent`. Maps an OPFS filename back to the content-key it encodes,
+ *  for enumerating a workspace's stored objects ({@link ByteStore.listWorkspaceKeys}). */
+const decodeSegment = (s: string): string => {
+  if (s === '%2Eempty') return ''
+  if (s === '%2Edot') return '.'
+  if (s === '%2Edotdot') return '..'
+  return decodeURIComponent(s)
+}
+
 export interface ByteStore {
   /** The stored plaintext bytes, or `null` on a miss. */
   get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null>
@@ -48,6 +58,10 @@ export interface ByteStore {
   put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>
   /** Is the object present locally? (the §6 down-lane's "already replicated?" probe). */
   has(userId: string, workspaceId: string, contentKey: string): Promise<boolean>
+  /** Every stored object's content-key for one (user, workspace) — the down-lane's
+   *  ONE-SHOT presence scan (§8): a single directory enumeration in place of a `has()`
+   *  per block. Empty when nothing is stored. */
+  listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>>
   /** Drop a single object's bytes — the §9 reconciler's orphan reap (a never-
    *  committed capture's bytes). A no-op when absent. */
   delete(userId: string, workspaceId: string, contentKey: string): Promise<void>
@@ -97,6 +111,15 @@ export class InMemoryByteStore implements ByteStore {
     return this.blobs.has(this.key(userId, workspaceId, contentKey))
   }
 
+  async listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>> {
+    const prefix = `${ASSETS_ROOT}/${encodeSegment(userId)}/${encodeSegment(workspaceId)}/`
+    const out = new Set<string>()
+    for (const k of this.blobs.keys()) {
+      if (k.startsWith(prefix)) out.add(decodeSegment(k.slice(prefix.length)))
+    }
+    return out
+  }
+
   async delete(userId: string, workspaceId: string, contentKey: string): Promise<void> {
     this.blobs.delete(this.key(userId, workspaceId, contentKey))
   }
@@ -121,25 +144,53 @@ export interface OpfsByteStoreDeps {
  */
 export class OpfsByteStore implements ByteStore {
   private readonly getRoot: () => Promise<FileSystemDirectoryHandle>
+  /** Cached OPFS root + per-(user,ws) dir handles, so repeated ops (the down-lane's
+   *  probes, capture/demand reads+writes) skip re-walking the 3-level chain from the
+   *  root each call. Only SUCCESSFUL resolutions are cached. Invalidated on
+   *  `purgeWorkspace`; a handle left stale by external eviction is handled per-op
+   *  (reads → NotFound miss; `put` invalidates + retries). */
+  private rootCache?: Promise<FileSystemDirectoryHandle>
+  private readonly wsDirCache = new Map<string, Promise<FileSystemDirectoryHandle>>()
 
   constructor(deps: OpfsByteStoreDeps = {}) {
     this.getRoot = deps.getRoot ?? (() => navigator.storage.getDirectory())
   }
 
-  /** Walk a chain of (already-encoded) directory names from the OPFS root.
+  private root(): Promise<FileSystemDirectoryHandle> {
+    return (this.rootCache ??= this.getRoot())
+  }
+
+  /** Walk a chain of (already-encoded) directory names from the cached OPFS root.
    *  `create: false` throws `NotFoundError` at the first missing dir (a read
    *  miss); `create: true` makes them (a write). */
   private async walk(names: string[], create: boolean): Promise<FileSystemDirectoryHandle> {
-    let dir = await this.getRoot()
+    let dir = await this.root()
     for (const name of names) {
       dir = await dir.getDirectoryHandle(name, { create })
     }
     return dir
   }
 
-  /** The `assets/<user>/<ws>` directory holding one workspace's object files. */
+  private wsCacheKey(userId: string, workspaceId: string): string {
+    return `${encodeSegment(userId)}/${encodeSegment(workspaceId)}`
+  }
+
+  /** The `assets/<user>/<ws>` directory holding one workspace's object files, memoized
+   *  (see {@link wsDirCache}). When cached the `create` flag is moot — the dir exists. */
   private workspaceDir(userId: string, workspaceId: string, create: boolean): Promise<FileSystemDirectoryHandle> {
-    return this.walk([ASSETS_ROOT, encodeSegment(userId), encodeSegment(workspaceId)], create)
+    const cacheKey = this.wsCacheKey(userId, workspaceId)
+    const cached = this.wsDirCache.get(cacheKey)
+    if (cached) return cached
+    // Don't cache a FAILED resolve (e.g. a create:false miss on a not-yet-created dir),
+    // so a later put() with create:true still gets to make it.
+    const pending = this.walk([ASSETS_ROOT, encodeSegment(userId), encodeSegment(workspaceId)], create).catch(
+      (err) => {
+        this.wsDirCache.delete(cacheKey)
+        throw err
+      },
+    )
+    this.wsDirCache.set(cacheKey, pending)
+    return pending
   }
 
   async get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null> {
@@ -155,6 +206,22 @@ export class OpfsByteStore implements ByteStore {
   }
 
   async put(userId: string, workspaceId: string, contentKey: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+    try {
+      await this.writeFile(userId, workspaceId, contentKey, bytes)
+    } catch {
+      // A cached ws-dir handle may be stale (the dir was removed by a purge or evicted
+      // out-of-band): drop it and retry once from a fresh resolve, which re-creates the chain.
+      this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId))
+      await this.writeFile(userId, workspaceId, contentKey, bytes)
+    }
+  }
+
+  private async writeFile(
+    userId: string,
+    workspaceId: string,
+    contentKey: string,
+    bytes: Uint8Array<ArrayBuffer>,
+  ): Promise<void> {
     const dir = await this.workspaceDir(userId, workspaceId, true)
     const fileHandle = await dir.getFileHandle(encodeSegment(contentKey), { create: true })
     const writable = await fileHandle.createWritable()
@@ -176,6 +243,18 @@ export class OpfsByteStore implements ByteStore {
     }
   }
 
+  async listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>> {
+    try {
+      const dir = await this.workspaceDir(userId, workspaceId, false)
+      const keys = new Set<string>()
+      for await (const name of dir.keys()) keys.add(decodeSegment(name))
+      return keys
+    } catch (err) {
+      if (isNotFound(err)) return new Set() // no objects stored for this (user, workspace) yet
+      throw err
+    }
+  }
+
   async delete(userId: string, workspaceId: string, contentKey: string): Promise<void> {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
@@ -187,6 +266,7 @@ export class OpfsByteStore implements ByteStore {
   }
 
   async purgeWorkspace(userId: string, workspaceId: string): Promise<void> {
+    this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId)) // the cached handle is about to go stale
     try {
       // Walk to the USER dir, then remove the workspace subtree from it.
       const userDir = await this.walk([ASSETS_ROOT, encodeSegment(userId)], false)

@@ -123,11 +123,14 @@ export interface AssetResolverDeps {
 export interface AssetResolver {
   resolve(request: AssetResolveRequest): Promise<AssetResolveResult>
   /** The §8/§9 background backlog lane: ensure the asset's verified plaintext is in
-   *  the local byte store. CHEAP when already present (a `has()` probe — no byte
-   *  read, no remote egress); on a miss it runs the SAME coalesced fetch primitive
-   *  `resolve` uses (so a backlog item and a concurrent demand render share one
-   *  download, §8) and discards the bytes. Never throws — fails closed to a verdict. */
-  replicate(request: AssetResolveRequest): Promise<AssetReplicateResult>
+   *  the local byte store. CHEAP when already present (an in-memory check against
+   *  `present` if given, else a `has()` probe — no byte read, no remote egress); on a
+   *  miss it runs the SAME coalesced fetch primitive `resolve` uses (so a backlog item
+   *  and a concurrent demand render share one download, §8) and discards the bytes.
+   *  `present` is an optional one-shot enumeration of the workspace's stored content-keys
+   *  (see {@link ByteStore.listWorkspaceKeys}) so a whole down-lane pass costs ONE dir
+   *  scan instead of a has() per block. Never throws — fails closed to a verdict. */
+  replicate(request: AssetResolveRequest, present?: ReadonlySet<string>): Promise<AssetReplicateResult>
 }
 
 /** The shared fail-closed verdict. Typed as just the failure shape (not the whole
@@ -301,7 +304,10 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     return r.ok ? { ok: true, bytes: r.bytes } : r
   }
 
-  const replicate = async (request: AssetResolveRequest): Promise<AssetReplicateResult> => {
+  const replicate = async (
+    request: AssetResolveRequest,
+    present?: ReadonlySet<string>,
+  ): Promise<AssetReplicateResult> => {
     try {
       // Same (1)+(2) the demand lane runs — fail-closed reasons pass straight through
       // (a locked / signed-out / legacy workspace can't replicate, exactly as it can't
@@ -309,18 +315,26 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
       const prep = await prepare(request)
       if (!prep.ok) return { ok: false, reason: prep.reason }
 
-      // CHEAP presence probe — no byte read, no fetch. The whole point of the down-lane
-      // walking every media block is that the steady state (already replicated) costs
-      // one has() per block, not a full read. A transient has() error is treated as
-      // UNKNOWN (not a failure): fall through to the coalesced fetch, which re-checks
-      // local via get() anyway.
-      try {
-        if (await byteStore.has(prep.userId, request.workspaceId, prep.contentKey)) {
-          return { ok: true, status: 'present' }
+      // CHEAP presence check — no byte read, no fetch. The down-lane walks every media
+      // block, so the steady state (already replicated) must cost ~nothing per block.
+      // `present` is a one-shot enumeration of the workspace's stored content-keys the
+      // caller (the down-lane) passes so the WHOLE pass is one dir scan, not a has() per
+      // block; absent the hint, probe has() directly. A transient has() error is treated
+      // as UNKNOWN (not a failure): fall through to the coalesced fetch, which re-checks
+      // local via get() anyway. (A `present` snapshot-miss that's actually present — stored
+      // mid-pass by a concurrent demand resolve — also falls through and is caught by that
+      // get() local hit, so the hint can only ever cost a redundant get(), never a leak.)
+      let isPresent = false
+      if (present) {
+        isPresent = present.has(prep.contentKey)
+      } else {
+        try {
+          isPresent = await byteStore.has(prep.userId, request.workspaceId, prep.contentKey)
+        } catch (err) {
+          console.warn(`[assetResolver] has() probe failed for ${request.workspaceId}; fetching`, err)
         }
-      } catch (err) {
-        console.warn(`[assetResolver] has() probe failed for ${request.workspaceId}; fetching`, err)
       }
+      if (isPresent) return { ok: true, status: 'present' }
 
       // Miss → run the SAME coalesced fetch primitive the demand lane uses (a demand
       // render and a backlog fetch of the same asset ride ONE download, §8), discarding

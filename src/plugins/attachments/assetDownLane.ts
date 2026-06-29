@@ -20,6 +20,7 @@
 import { getActiveUserId, isRemoteSyncActive } from '@/data/repoProvider.js'
 import type { Repo } from '@/data/repo.js'
 import { getAssetResolver } from './assetResolver.js'
+import { getByteStore } from './byteStore.js'
 import { reconcileDownLane } from './downLane.js'
 import { runSingleOwner } from './laneLock.js'
 import { MEDIA_TYPE, mediaHashProp } from './mediaBlock.js'
@@ -84,6 +85,15 @@ export const runDownLaneReconcile = async (repo: Repo, workspaceId: string): Pro
   await runSingleOwner(downLaneLockName(userId, workspaceId), async () => {
     const requests = await collectReplicationRequests(repo, workspaceId)
     if (requests.length === 0) return
-    await reconcileDownLane(requests, { resolver: getAssetResolver() })
+    // ONE enumeration of what's already on disk, so the steady-state pass costs a single
+    // directory scan instead of a has() probe per block (§8). On a read error, leave it
+    // undefined → replicate falls back to a per-block has() (correct, just slower).
+    let present: ReadonlySet<string> | undefined
+    try {
+      present = await getByteStore().listWorkspaceKeys(userId, workspaceId)
+    } catch (err) {
+      console.warn(`[media] down-lane presence scan failed for ${workspaceId}; probing per-block`, err)
+    }
+    await reconcileDownLane(requests, { resolver: getAssetResolver(), present })
   })
 }

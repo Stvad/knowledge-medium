@@ -63,6 +63,12 @@ class FakeDirHandle {
     if (this.dirs.delete(name) || this.files.delete(name)) return
     throw new DOMException(`no entry ${name}`, 'NotFoundError')
   }
+
+  // The FileSystemDirectoryHandle async-iterable surface listWorkspaceKeys walks.
+  async *keys(): AsyncGenerator<string> {
+    for (const name of this.files.keys()) yield name
+    for (const name of this.dirs.keys()) yield name
+  }
 }
 
 const opfsWithRoot = () => {
@@ -131,6 +137,23 @@ describe.each([
     expect(await store.get(U, WS, 'other-key')).toEqual(bytes(2)) // sibling survives
 
     await expect(store.delete(U, WS, 'never-stored')).resolves.toBeUndefined() // no-op
+  })
+
+  it('listWorkspaceKeys returns the stored content-keys for one (user, workspace), scoped', async () => {
+    const store = make()
+    await store.put(U, WS, 'aaaa', bytes(1))
+    await store.put(U, WS, 'bbbb', bytes(2))
+    await store.put(U, 'ws-B', 'cccc', bytes(3)) // a sibling workspace
+    await store.put('other-user', WS, 'dddd', bytes(4)) // another account
+
+    expect(await store.listWorkspaceKeys(U, WS)).toEqual(new Set(['aaaa', 'bbbb']))
+    expect(await store.listWorkspaceKeys(U, 'empty-ws')).toEqual(new Set()) // nothing stored
+  })
+
+  it('listWorkspaceKeys decodes filenames back to keys (round-trips a reserved char)', async () => {
+    const store = make()
+    await store.put(U, WS, 'a/b', bytes(1)) // '/' is escaped on disk, must decode back
+    expect(await store.listWorkspaceKeys(U, WS)).toEqual(new Set(['a/b']))
   })
 })
 

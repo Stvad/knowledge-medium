@@ -152,8 +152,10 @@ describe('runDownLaneReconcile — gating', () => {
     await runDownLaneReconcile(repo, WS)
 
     expect(h.replicate).toHaveBeenCalledTimes(2)
-    expect(h.replicate).toHaveBeenCalledWith({ workspaceId: WS, contentHash: 'sha256:aaaa' })
-    expect(h.replicate).toHaveBeenCalledWith({ workspaceId: WS, contentHash: 'sha256:bbbb' })
+    // Each replicate gets the request + the one-shot presence set (a single dir scan up
+    // front; empty here since the in-memory byte store holds nothing).
+    expect(h.replicate).toHaveBeenCalledWith({ workspaceId: WS, contentHash: 'sha256:aaaa' }, expect.any(Set))
+    expect(h.replicate).toHaveBeenCalledWith({ workspaceId: WS, contentHash: 'sha256:bbbb' }, expect.any(Set))
   })
 
   it('is a no-op in local-only mode (nothing to fetch from) — never walks or replicates', async () => {

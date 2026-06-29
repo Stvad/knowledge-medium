@@ -377,6 +377,40 @@ describe('createAssetResolver — replicate (the §8/§9 down-lane backlog lane)
     expect(blobGet).toHaveBeenCalledTimes(1)
   })
 
+  it('a pre-enumerated present set short-circuits to "present" — no has() probe, no fetch', async () => {
+    // The down-lane passes ONE workspace enumeration; replicate checks it in memory
+    // instead of a has() per block.
+    const plain = bytes(1, 2, 3)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    const hasSpy = vi.spyOn(byteStore, 'has')
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+    const present = new Set([await contentKeyFor('none', contentHash)])
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }, present)).toEqual({
+      ok: true,
+      status: 'present',
+    })
+    expect(hasSpy).not.toHaveBeenCalled() // used the in-memory set, not a per-block has()
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('a present set that LACKS the key falls through to a fetch (replicates)', async () => {
+    const plain = bytes(4, 5, 6)
+    const contentHash = await hashOf(plain)
+    const { resolver, byteStore, blobGet } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }, new Set())).toEqual({
+      ok: true,
+      status: 'replicated',
+    })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, await contentKeyFor('none', contentHash))).toEqual(plain)
+  })
+
   it('a LOCAL hit reached via a flaky has() probe is "present", NOT "replicated" (never charges the budget)', async () => {
     // has() throws (transient), so replicate falls through to the coalesced resolve — but
     // the asset IS local, so it's served from a get() hit, no download. That is presence,

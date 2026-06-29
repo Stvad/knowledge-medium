@@ -154,4 +154,14 @@ describe('reconcileDownLane', () => {
     })
     expect(replicate).not.toHaveBeenCalled()
   })
+
+  it('forwards the one-shot present set to every replicate (one dir scan, not a has() per block)', async () => {
+    const { resolver, replicate } = fakeResolver({ a: replicated, b: replicated })
+    const present = new Set(['some-content-key'])
+
+    await reconcileDownLane([req('a'), req('b')], { resolver, present })
+
+    expect(replicate).toHaveBeenCalledWith(req('a'), present)
+    expect(replicate).toHaveBeenCalledWith(req('b'), present)
+  })
 })

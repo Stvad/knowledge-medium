@@ -50,10 +50,17 @@ export const DEFAULT_DOWN_LANE_BUDGET = 32
 export interface DownLaneDeps {
   /** The §8 backlog lane — see {@link AssetResolver.replicate}. Only `replicate` is
    *  used; typed as a slice so tests need not build a whole resolver. */
-  readonly resolver: { replicate(request: AssetResolveRequest): Promise<AssetReplicateResult> }
+  readonly resolver: {
+    replicate(request: AssetResolveRequest, present?: ReadonlySet<string>): Promise<AssetReplicateResult>
+  }
   /** Max SUCCESSFUL downloads this pass (0 = replicate nothing); present probes +
    *  failures are free. Defaults to {@link DEFAULT_DOWN_LANE_BUDGET} when omitted. */
   readonly budget?: number
+  /** One-shot enumeration of the workspace's already-stored content-keys (the caller does
+   *  ONE {@link ByteStore.listWorkspaceKeys} scan up front), forwarded to each `replicate`
+   *  so presence is an in-memory check, not a `has()` per block. Omit → replicate probes
+   *  has() itself. */
+  readonly present?: ReadonlySet<string>
 }
 
 export interface DownLaneSummary {
@@ -89,7 +96,7 @@ export const reconcileDownLane = async (
     if (replicated >= budget) {
       return { present, replicated, failed, unavailable, skipped: requests.length - i }
     }
-    const r = await deps.resolver.replicate(requests[i])
+    const r = await deps.resolver.replicate(requests[i], deps.present)
     if (r.ok) {
       // An already-present block is FREE — a has() probe, no fetch — so the steady
       // state walks the whole workspace for nothing.
