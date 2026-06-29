@@ -129,8 +129,11 @@ export class BlockCache {
 
     // Deep-equal (not JSON.stringify): short-circuits on the first differing
     // field instead of serializing the whole block, and is insensitive to
-    // property key order, so a reorder-only write is correctly a no-op. Both
-    // differences only ever yield MORE dedup hits, never a missed notify.
+    // property key order, so a reorder-only write is correctly a no-op. It can
+    // diverge from string-equality both ways — a key reorder dedups where
+    // stringify would notify, an explicit `undefined`-valued key notifies where
+    // stringify would dedup — but neither can DROP a notify for a real change,
+    // which is the only unsafe direction.
     if (existing && isEqual(existing, snapshot)) {
       this.metrics.setSnapshotDedupHits++
       return false

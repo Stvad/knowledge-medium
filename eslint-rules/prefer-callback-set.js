@@ -14,8 +14,11 @@
  * registry (a teardown/cleanup stack, say). Silence those per-site with
  * `// eslint-disable-next-line callback-set/prefer-callback-set -- <why>`.
  *
- * Only inline function-type element types match, so CallbackSet's own internal
- * `new Set<Listener<TArgs>>()` (a type *reference*) doesn't self-flag.
+ * Only a DIRECT inline function-type element matches, so CallbackSet's own
+ * internal `new Set<Listener<TArgs>>()` (a type *reference*) doesn't self-flag.
+ * It deliberately doesn't chase function types nested inside a union etc.
+ * (`Set<(() => void) | null>`) — no one writes a listener registry that way,
+ * and this is a soft nudge, not an exhaustive guard.
  */
 
 // @typescript-eslint exposes generic args as `typeArguments` (current) and
