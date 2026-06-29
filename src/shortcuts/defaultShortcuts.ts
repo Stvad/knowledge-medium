@@ -972,6 +972,87 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         keys: 'Backspace',
       },
     },
+    {
+      id: 'merge_next_block_cm',
+      description: 'Delete at block end: merge the next block into this one (CodeMirror)',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+        const {block, editorView, uiStateBlock, scopeRootId} = deps
+        if (!block || !uiStateBlock || !editorView) return
+
+        // Mirror of delete_empty_block_cm in the down direction: Backspace
+        // at a block's start folds it into the previous visible block;
+        // Delete at a block's end folds the next visible block into this
+        // one. Both collapse the same boundary at the same join point.
+
+        // Only act when the cursor is at the very end with no selection;
+        // otherwise codemirror's default forward-delete handles it.
+        const sel = editorView.state.selection.main
+        if (!(sel.empty && sel.to === editorView.state.doc.length)) return
+
+        if (!scopeRootId) return
+
+        // Backspace refuses to merge *into* the scope root (the page/view
+        // header). Delete pulls the next block up *into* this one, so the
+        // mirror refusal is: don't absorb a child up into the scope root.
+        if (block.id === scopeRootId) return
+
+        // The next visible block is the one that folds away — the same block
+        // Backspace would merge upward if the caret sat at its start
+        // (previousVisibleBlock and nextVisibleBlock are inverses over the
+        // visible-order list, so this stays at the same boundary).
+        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
+        if (!nextVisible) return
+
+        // Roam rule (mirror of Backspace): refuse when both blocks have
+        // independent children — reconciling two child lists isn't what the
+        // user asked for. When `next` is this block's only child there is no
+        // independent target subtree: next's children take next's slot.
+        await Promise.all([block.load(), nextVisible.load()])
+        const intoChildIds = await block.childIds.load()
+        const fromChildIds = await nextVisible.childIds.load()
+        const intoHasIndependentChildren = intoChildIds.some(childId => childId !== nextVisible.id)
+        if (fromChildIds.length > 0 && intoHasIndependentChildren) return
+
+        // CodeMirror's forward-delete at doc end is a no-op, but stop the
+        // event anyway to avoid any chance of double-handling.
+        trigger.preventDefault()
+
+        // Live content from the editor — SQL may lag (pushChange is debounced).
+        const liveContent = editorView.state.doc.toString()
+        const joinOffset = liveContent.length
+        const fromContent = nextVisible.peek()?.content ?? ''
+        const fromId = nextVisible.id
+
+        // Re-arm the editor synchronously with the merged text (caret parked
+        // at the join) so its debounced pushChange carries the post-merge
+        // content. Unlike Backspace — which hands focus to the previous
+        // block's editor — Delete keeps the caret in *this* editor, so a
+        // pending flush of the pre-merge text would otherwise clobber the
+        // fold core.merge wrote to SQL. Same precaution as
+        // splitCodeMirrorBlockAtCursor.
+        editorView.dispatch({
+          changes: {from: 0, to: editorView.state.doc.length, insert: liveContent + fromContent},
+          selection: EditorSelection.cursor(joinOffset),
+        })
+
+        // Single tx: flush the editor's live content into `into` first so
+        // core.merge concatenates the latest text, then fold `next` in.
+        await repo.tx(async tx => {
+          await tx.update(block.id, {content: liveContent})
+          await tx.run(mergeMutator, {intoId: block.id, fromId})
+        }, {scope: ChangeScope.BlockDefault, description: 'merge next block into current'})
+
+        await uiStateBlock.set(editorSelection, {
+          blockId: block.id,
+          start: joinOffset,
+        })
+        await focusBlock(uiStateBlock, block.id, {edit: true, renderScopeId: deps.renderScopeId})
+      },
+      defaultBinding: {
+        keys: 'Delete',
+      },
+    },
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, indentBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, outdentBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomInBlock, {idPrefix: 'edit.cm'}),
