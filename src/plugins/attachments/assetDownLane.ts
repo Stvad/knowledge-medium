@@ -1,6 +1,7 @@
 /**
  * The app-wired down-lane (design §8/§9) — assembles the pure {@link reconcileDownLane}
- * with the real app deps and runs it SINGLE-OWNER across tabs.
+ * with the real app deps and runs it single-owner per (user, workspace) across tabs (so
+ * two tabs on different workspaces replicate concurrently, not serialized).
  *
  * One pass walks the ACTIVE workspace's `media` blocks (the §8 "scoped to active /
  * opened workspaces" rule — never cold workspaces, the sync-flood lesson) and hands
@@ -30,7 +31,13 @@ import type { AssetResolveRequest } from './resolver.js'
  *  but there's no point hammering it. */
 export const DOWN_LANE_SWEEP_INTERVAL_MS = 10 * 60 * 1000 // 10 minutes
 
-const downLaneLockName = (userId: string) => `km-asset-down-lane:${userId}`
+/** The down-lane lock is scoped per (user, WORKSPACE), not per user: a pass replicates
+ *  ONE workspace's bytes, so two tabs on DIFFERENT workspaces do disjoint work and must
+ *  run concurrently — a per-user lock would skip whichever tab lost the race, starving
+ *  its workspace until the next sweep/reconnect. Same (user, workspace) in two tabs IS
+ *  duplicate work and still dedups (one owner; the other skips). */
+const downLaneLockName = (userId: string, workspaceId: string) =>
+  `km-asset-down-lane:${userId}:${workspaceId}`
 
 /** The active workspace's media blocks → distinct replication requests. Skips a block
  *  with no hash yet (the empty `media:hash` default — capture hasn't populated it, or a
@@ -65,15 +72,16 @@ export const collectReplicationRequests = async (
   return out
 }
 
-/** Run ONE down-lane pass for `workspaceId`, single-owner across tabs. A no-op when:
- *  remote sync is off (local-only — nothing to fetch from), signed out, or another tab
- *  already owns the lane this tick (`runSingleOwner` skips rather than queues). The DB
+/** Run ONE down-lane pass for `workspaceId`, single-owner per (user, workspace) across
+ *  tabs. A no-op when: remote sync is off (local-only — nothing to fetch from), signed
+ *  out, or another tab already owns THIS workspace's lane this tick (`runSingleOwner`
+ *  skips rather than queues; a tab on a DIFFERENT workspace runs concurrently). The DB
  *  walk runs INSIDE the lock, so a non-owner tab does zero work. */
 export const runDownLaneReconcile = async (repo: Repo, workspaceId: string): Promise<void> => {
   if (!isRemoteSyncActive()) return // local-only: no remote object store to replicate from
   const userId = getActiveUserId()
   if (!userId) return
-  await runSingleOwner(downLaneLockName(userId), async () => {
+  await runSingleOwner(downLaneLockName(userId, workspaceId), async () => {
     const requests = await collectReplicationRequests(repo, workspaceId)
     if (requests.length === 0) return
     await reconcileDownLane(requests, { resolver: getAssetResolver() })

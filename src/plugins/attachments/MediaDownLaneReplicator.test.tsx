@@ -53,13 +53,28 @@ describe('MediaDownLaneReplicator', () => {
     expect(h.runDownLaneReconcile).toHaveBeenCalledWith(h.repo, 'ws-1')
   })
 
-  it('re-runs the pass once initial sync settles', async () => {
+  it('re-runs once initial sync settles — but OFF the hot path (idle-deferred, not synchronous)', async () => {
     render(<MediaDownLaneReplicator />)
+    await flushIdle() // drain the initial catch-up pass
     expect(h.settleCallback).toBeTypeOf('function') // registered with onFirstSync
-
     h.runDownLaneReconcile.mockClear()
+
+    // onFirstSync fires the settle callback SYNCHRONOUSLY when already synced (e.g. a
+    // workspace switch); the pass must NOT run inline on that navigation path.
     act(() => h.settleCallback?.())
+    expect(h.runDownLaneReconcile).not.toHaveBeenCalled()
+
+    await flushIdle()
     expect(h.runDownLaneReconcile).toHaveBeenCalledWith(h.repo, 'ws-1')
+  })
+
+  it('coalesces overlapping triggers into ONE pass (no double-walk on a workspace switch)', async () => {
+    // The switch arms the initial catch-up AND onFirstSync fires the settle synchronously
+    // before either idle window runs — both must collapse to a single pass.
+    render(<MediaDownLaneReplicator />)
+    act(() => h.settleCallback?.())
+    await flushIdle()
+    expect(h.runDownLaneReconcile).toHaveBeenCalledTimes(1)
   })
 
   it('does NOT run a pass without an active workspace', async () => {
