@@ -483,7 +483,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       const groupId = `type:${row.type_name}`
       const groupLabel = typeLabelById.get(row.type_name) ?? row.type_name
       for (const sourceId of sources) {
-        const key = `${sourceId} ${groupId}`
+        const key = `${sourceId}\x00${groupId}`
         if (emittedTypeCandidates.has(key)) continue
         emittedTypeCandidates.add(key)
         candidates.push({
