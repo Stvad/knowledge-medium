@@ -104,7 +104,6 @@ const partitionProperties = (
   return {visibleProperties, hiddenProperties}
 }
 
-
 const resolveModelRow = (
   row: PropertyPanelRow,
   args: {

@@ -213,9 +213,7 @@ const planPastePlacement = async (
   target: BlockData,
   parsedBlocks: readonly ParsedBlock[],
   absorbedRootId: string | undefined,
-  rootParentId: string,
-  rootInsertion: ExistingParentInsertion,
-  targetChildren: BlockData[],
+  {rootParentId, rootInsertion, targetChildren}: RootDestination,
 ): Promise<PastePlacementPlan> => {
   const blocksToCreate = parsedBlocks.filter(block => block.id !== absorbedRootId)
   const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
@@ -323,7 +321,7 @@ export async function pasteMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
-    const {rootParentId, rootInsertion, targetChildren} = await resolveRootDestination(tx, target, {
+    const destination = await resolveRootDestination(tx, target, {
       position,
       scopeRootId,
       placement,
@@ -336,7 +334,7 @@ export async function pasteMultilineText(
     }
 
     const {blocksToCreate, finalParentId, orderKeysByParsedId} = await planPastePlacement(
-      tx, target, parsed, absorbedRoot?.id, rootParentId, rootInsertion, targetChildren,
+      tx, target, parsed, absorbedRoot?.id, destination,
     )
 
     for (const block of blocksToCreate) {
@@ -369,7 +367,7 @@ export async function pasteEditModeMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
-    const {rootParentId, rootInsertion, targetChildren} = await resolveRootDestination(tx, target, {
+    const destination = await resolveRootDestination(tx, target, {
       position: 'after',
       scopeRootId: options.scopeRootId,
       placement: 'sibling',
@@ -379,7 +377,7 @@ export async function pasteEditModeMultilineText(
     rootBlocks.push(repo.block(target.id))
 
     const {blocksToCreate, finalParentId, orderKeysByParsedId} = await planPastePlacement(
-      tx, target, plan.parsed, plan.absorbedRoot.id, rootParentId, rootInsertion, targetChildren,
+      tx, target, plan.parsed, plan.absorbedRoot.id, destination,
     )
 
     const lastCreatedBlock = blocksToCreate.at(-1)

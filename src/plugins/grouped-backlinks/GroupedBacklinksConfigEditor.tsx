@@ -21,7 +21,7 @@ import {
   searchLinkTargetValueCandidates,
   type LinkTargetValueCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
-import { uniqueStrings } from '@/utils/array.js'
+import { uniqueStrings } from '@/utils/array'
 import {
   normalizeGroupedBacklinksConfig,
   type GroupedBacklinksConfig,
