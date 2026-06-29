@@ -633,13 +633,16 @@ amount of wiping addresses.
   <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
     The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
     its prefix is purged — fired off the <em>same membership change</em> that makes PowerSync drop the
-    workspace's block rows from the local DB. (Concretely: the purge is a <em>new subscriber</em> the feature
-    wires — there is no existing membership-change callback to reuse; the clean reactive fact to hook is the
-    user's own <code>workspace_members</code> row leaving the local DB, the same change that causes PowerSync
-    to claw back the workspace's <code>blocks</code> rows. The bytes live out-of-band in OPFS, so they don't
-    ride that row claw-back and need their own one-shot purge; offline, the purge fires on reconnect, exactly
-    as the rows fall out on the next sync.) That purge — not a per-render membership recheck — is the
-    claw-back, so
+    workspace's block rows from the local DB. (Concretely: the purge is a dedicated subscriber —
+    <code>MediaRevocationPurger</code>, wired in Phase 6 — since there is no existing membership-change
+    callback to reuse; the clean reactive fact it hooks is the user's own <code>workspace_members</code> row
+    leaving the local DB (<code>useMyWorkspaceRoles</code>), the same change that causes PowerSync to claw back
+    the workspace's <code>blocks</code> rows. The bytes live out-of-band in OPFS, so they don't ride that row
+    claw-back and need their own one-shot <code>purgeWorkspace</code>; offline, the purge fires on reconnect,
+    exactly as the rows fall out on the next sync. <strong>Edge still open:</strong> a workspace removed while
+    the app is fully <em>closed</em> has no baseline entry to diff at next mount — closing it wants an
+    enumeration-based reopen reconcile, deferred with §8 eviction.) That purge — not a per-render membership
+    recheck — is the claw-back, so
     media revocation is handled <em>exactly</em> like note text: a revoked member's local <code>blocks</code>
     are dropped and gets no per-render re-authorization either, and an already-synced member who keeps a copy
     is the same accepted exposure for bytes as for text (§8). WK-absence gates the <em>decode of new
