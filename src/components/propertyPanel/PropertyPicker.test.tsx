@@ -21,7 +21,12 @@ vi.mock('./usePropertyEditingActivation', () => ({
 }))
 
 const schema = (name: string) => ({name, codec: {type: 'string'}})
-const activeText = () => screen.queryByRole('option', {selected: true})?.textContent ?? ''
+// Read the highlighted option from the input's aria-activedescendant rather than
+// the rendered listbox: the input attribute updates synchronously with state,
+// whereas FloatingListbox mounts its options asynchronously (floating-ui
+// computePosition), which is racy to assert on directly.
+const activeOption = () =>
+  screen.getByPlaceholderText('Field').getAttribute('aria-activedescendant') ?? ''
 
 beforeEach(() => {
   store.schemas = new Map([['apple', schema('apple')], ['apricot', schema('apricot')]])
@@ -48,9 +53,9 @@ describe('PropertyPicker', () => {
 
     // Open suggestions and arrow down to the 2nd row.
     fireEvent.change(input, {target: {value: 'ap'}})
-    expect(activeText()).toContain('apple') // index 0
+    expect(activeOption()).toMatch(/-option-0$/) // apple, index 0
     fireEvent.keyDown(input, {key: 'ArrowDown'})
-    expect(activeText()).toContain('apricot') // index 1
+    expect(activeOption()).toMatch(/-option-1$/) // apricot, index 1
 
     // Commit it (Enter) → submit() → onAdd → reset(). Wait for reset to settle
     // (input cleared) before reopening, so focus can't race the async close that
@@ -62,7 +67,6 @@ describe('PropertyPicker', () => {
     // Reopen WITHOUT typing — onFocus does not reset the index, so this only
     // passes if reset() already cleared it. Highlight must be back at the top.
     fireEvent.focus(input)
-    await waitFor(() => expect(activeText()).toContain('apple'))
-    expect(activeText()).not.toContain('apricot')
+    expect(activeOption()).toMatch(/-option-0$/)
   })
 })
