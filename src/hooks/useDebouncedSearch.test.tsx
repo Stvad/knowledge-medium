@@ -64,9 +64,30 @@ describe('useDebouncedSearch', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(DELAY) }) // settles → search('ab') → d2
     expect(search).toHaveBeenLastCalledWith('ab')
 
-    // The stale 'a' result resolves AFTER the input moved on — it must be dropped.
-    await act(async () => { d1.resolve(['STALE-A']); d2.resolve(['AB']); await d2.promise })
+    // Resolve the FRESH 'ab' request first, then the stale 'a' one LAST — the
+    // dangerous interleaving (a slow previous request finishing after the new
+    // one). Cancellation, not resolve order, must keep the 'ab' results.
+    await act(async () => {
+      d2.resolve(['AB']); await d2.promise
+      d1.resolve(['STALE-A']); await d1.promise
+    })
     expect(result.current.results).toEqual(['AB'])
+    expect(result.current.resultsQuery).toBe('ab')
+  })
+
+  it('reset() drops an in-flight search so a late result cannot repopulate', async () => {
+    const d = deferred<string[]>()
+    const search = vi.fn(() => d.promise)
+    const { result, rerender } = setup({ query: '', search })
+    rerender({ query: 'a', delayMs: DELAY, search })
+    await act(async () => { await vi.advanceTimersByTimeAsync(DELAY) }) // fires search('a') → d (pending)
+
+    act(() => result.current.reset())
+    // The in-flight 'a' resolves AFTER reset — it must not land (reset cancels
+    // it on its own, without the caller also having to change the query).
+    await act(async () => { d.resolve(['A']); await d.promise })
+    expect(result.current.results).toEqual([])
+    expect(result.current.resultsQuery).toBe('')
   })
 
   it('re-runs the search when a revalidateOn dep changes', async () => {

@@ -27,11 +27,11 @@ export interface DebouncedSearchOptions<T> {
  *
  *  Pairs with `useAutocompleteListbox` (which owns the active-index/keyboard
  *  interaction) — this hook owns only the query→results half: trim, debounce,
- *  fire once the debounce settles, and cancel any in-flight request the moment
- *  the input changes. The cancellation is what keeps a late result for the
- *  previous (or cleared) text from repopulating `results` and letting a commit
- *  add a stale entry; centralizing it here means each consumer can't re-break
- *  that race independently. */
+ *  fire once the debounce settles, and drop any in-flight request the moment
+ *  the input changes OR `reset()` is called. That cancellation is what keeps a
+ *  late result for the previous (or cleared) text from repopulating `results`
+ *  and letting a commit add a stale entry; centralizing it here — `reset()`
+ *  included — means each consumer can't re-break that race independently. */
 export function useDebouncedSearch<T>({
   query,
   delayMs,
@@ -60,20 +60,27 @@ export function useDebouncedSearch<T>({
     onResultsRef.current = onResults
   })
 
+  // Monotonic id of the in-flight search. Bumped when the effect re-runs
+  // (supersede), when it tears down (keystroke/unmount), and by reset() — so a
+  // late resolve whose id is no longer current is dropped. Routing reset()
+  // through the same id is what lets it cancel in-flight work on its own,
+  // rather than only when the caller also happens to change `query`.
+  const requestIdRef = useRef(0)
+
   useEffect(() => {
     // Only search once the debounce has settled (`trimmed === debounced`);
     // `trimmed` stays in the deps so every keystroke re-runs the effect and
-    // its cleanup cancels any in-flight search immediately.
+    // supersedes any in-flight search immediately.
     if (!enabled || !debounced || trimmed !== debounced) return
-    let cancelled = false
+    const requestId = ++requestIdRef.current
     void searchRef.current(debounced).then(next => {
-      if (cancelled) return
+      if (requestId !== requestIdRef.current) return
       setResults(next)
       setResultsQuery(debounced)
       onResultsRef.current?.(next)
     })
     return () => {
-      cancelled = true
+      requestIdRef.current++
     }
     // search/onResults are intentionally read through refs (non-reactive);
     // revalidateOn carries the caller's real re-search triggers.
@@ -81,6 +88,7 @@ export function useDebouncedSearch<T>({
   }, [enabled, debounced, trimmed, ...revalidateOn])
 
   const reset = useCallback(() => {
+    requestIdRef.current++
     setResults([])
     setResultsQuery('')
   }, [])
