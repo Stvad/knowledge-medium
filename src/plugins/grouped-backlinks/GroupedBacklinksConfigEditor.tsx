@@ -1,6 +1,5 @@
 import {
   FormEvent,
-  KeyboardEvent,
   useEffect,
   useId,
   useMemo,
@@ -8,6 +7,8 @@ import {
 } from 'react'
 import { Plus, X } from 'lucide-react'
 import { truncate } from '@/utils/string'
+import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue.js'
 import {
   isReadOnlyBlock,
   type PropertyEditorProps,
@@ -97,45 +98,54 @@ const ConfigTagInput = ({
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
   const [results, setResults] = useState<LinkTargetValueCandidate[]>([])
-  const [activeIndex, setActiveIndex] = useState(-1)
   const currentValues = useMemo(() => uniqueStrings(values), [values])
   const currentValueSet = useMemo(() => new Set(currentValues), [currentValues])
   const trimmed = query.trim()
+  const debouncedQuery = useDebouncedValue(trimmed, DEBOUNCE_MS)
   const popupOpen = focused && trimmed.length > 0 && results.length > 0
-  const activeCandidate = activeIndex >= 0 ? results[activeIndex] : undefined
+
+  const commitValue = (value: string) => {
+    if (readOnly) return
+    const next = value.trim()
+    if (!next) return
+    onChange(uniqueStrings([...currentValues, next]))
+    setQuery('')
+    setResults([])
+  }
+
+  const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
+    useAutocompleteListbox({
+      itemCount: results.length,
+      setOpen: setFocused,
+      wrap: true,
+      listboxId,
+      onCommit: index => {
+        const candidate = results[index]
+        if (!candidate) return false
+        commitValue(candidate.value)
+        return true
+      },
+    })
 
   useEffect(() => {
-    if (!workspaceId || !trimmed) return
+    if (!workspaceId || !debouncedQuery) return
 
     let cancelled = false
-    const timer = setTimeout(async () => {
-      const nextResults = await searchLinkTargetValueCandidates(repo, {
-        workspaceId,
-        query: trimmed,
-        limit: SEARCH_LIMIT,
-        excludeValues: currentValueSet,
-      })
+    void searchLinkTargetValueCandidates(repo, {
+      workspaceId,
+      query: debouncedQuery,
+      limit: SEARCH_LIMIT,
+      excludeValues: currentValueSet,
+    }).then(nextResults => {
       if (cancelled) return
-
       setResults(nextResults)
-      setActiveIndex(nextResults.length > 0 ? 0 : -1)
-    }, DEBOUNCE_MS)
+      setActiveIndex(0)
+    })
 
     return () => {
       cancelled = true
-      clearTimeout(timer)
     }
-  }, [currentValueSet, repo, trimmed, workspaceId])
-
-  const add = (value?: string) => {
-    if (readOnly) return
-    const nextValue = (value ?? activeCandidate?.value ?? trimmed).trim()
-    if (!nextValue) return
-    onChange(uniqueStrings([...currentValues, nextValue]))
-    setQuery('')
-    setResults([])
-    setActiveIndex(-1)
-  }
+  }, [currentValueSet, debouncedQuery, repo, setActiveIndex, workspaceId])
 
   const remove = (value: string) => {
     if (readOnly) return
@@ -144,36 +154,7 @@ const ConfigTagInput = ({
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
-    add()
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'ArrowDown' && results.length > 0) {
-      event.preventDefault()
-      setFocused(true)
-      setActiveIndex(index => (
-        index < 0 ? 0 : (index + 1) % results.length
-      ))
-      return
-    }
-    if (event.key === 'ArrowUp' && results.length > 0) {
-      event.preventDefault()
-      setFocused(true)
-      setActiveIndex(index => (
-        index <= 0 ? results.length - 1 : index - 1
-      ))
-      return
-    }
-    if (event.key === 'Enter' && popupOpen && activeCandidate) {
-      event.preventDefault()
-      add(activeCandidate.value)
-      return
-    }
-    if (event.key === 'Escape') {
-      setQuery('')
-      setResults([])
-      setActiveIndex(-1)
-    }
+    commitValue(results[activeIndex]?.value ?? trimmed)
   }
 
   return (
@@ -199,23 +180,25 @@ const ConfigTagInput = ({
             onChange={event => {
               const next = event.target.value
               setQuery(next)
-              if (!next.trim()) {
-                setResults([])
-                setActiveIndex(-1)
-              }
+              if (!next.trim()) setResults([])
             }}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            onKeyDown={handleKeyDown}
+            onKeyDown={event => {
+              if (event.key === 'Escape') {
+                setQuery('')
+                setResults([])
+                return
+              }
+              onKeyDown(event)
+            }}
             placeholder={placeholder}
             className="h-8 min-w-0 text-xs"
             role="combobox"
             aria-autocomplete="list"
             aria-expanded={Boolean(popupOpen)}
             aria-controls={popupOpen ? listboxId : undefined}
-            aria-activedescendant={
-              popupOpen && activeCandidate ? `${listboxId}-option-${activeIndex}` : undefined
-            }
+            aria-activedescendant={popupOpen ? activeDescendantId : undefined}
           />
           <Button
             type="submit"
@@ -240,14 +223,7 @@ const ConfigTagInput = ({
               <button
                 type="button"
                 key={result.key}
-                id={`${listboxId}-option-${index}`}
-                role="option"
-                aria-selected={index === activeIndex}
-                onMouseEnter={() => setActiveIndex(index)}
-                onMouseDown={event => {
-                  event.preventDefault()
-                  add(result.value)
-                }}
+                {...getOptionProps(index)}
                 className={cn(
                   'flex w-full min-w-0 flex-col rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
                   index === activeIndex ? 'bg-accent' : '',

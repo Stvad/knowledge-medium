@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { Plus, Search, X } from 'lucide-react'
 import {
   isRefCodec,
@@ -19,6 +19,7 @@ import {
   type LinkTargetIdCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
+import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 
 const SEARCH_LIMIT = 12
 const EMPTY_REFS: readonly string[] = Object.freeze([])
@@ -204,9 +205,26 @@ export function ReferenceSearch({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [activeIndex, setActiveIndex] = useState(0)
   const [candidates, setCandidates] = useState<LinkTargetIdCandidate[]>([])
   const normalizedExcludeIds = useMemo(() => normalizeIds(excludeIds), [excludeIds])
+
+  const pick = (candidate: LinkTargetIdCandidate) => {
+    onPick(candidate.id)
+    setQuery('')
+    setOpen(false)
+  }
+
+  const { activeIndex, setActiveIndex, onKeyDown, getOptionProps } = useAutocompleteListbox({
+    itemCount: candidates.length,
+    setOpen,
+    commitOnTab: true,
+    onCommit: index => {
+      const candidate = candidates[index]
+      if (!candidate) return false
+      pick(candidate)
+      return true
+    },
+  })
 
   useEffect(() => {
     if (!open) return
@@ -236,44 +254,7 @@ export function ReferenceSearch({
     return () => {
       cancelled = true
     }
-  }, [normalizedExcludeIds, open, owner.repo, query, targetTypes, workspaceId])
-
-  const pick = (candidate: LinkTargetIdCandidate) => {
-    onPick(candidate.id)
-    setQuery('')
-    setOpen(false)
-  }
-
-  const commitActive = (): boolean => {
-    const candidate = candidates[activeIndex] ?? candidates[0]
-    if (!candidate) return false
-    pick(candidate)
-    return true
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setOpen(true)
-      setActiveIndex(index => Math.min(index + 1, Math.max(candidates.length - 1, 0)))
-      return
-    }
-
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setActiveIndex(index => Math.max(index - 1, 0))
-      return
-    }
-
-    if (event.key === 'Enter' || event.key === 'Tab') {
-      if (commitActive()) event.preventDefault()
-      return
-    }
-
-    if (event.key === 'Escape') {
-      setOpen(false)
-    }
-  }
+  }, [normalizedExcludeIds, open, owner.repo, query, setActiveIndex, targetTypes, workspaceId])
 
   return (
     <div
@@ -301,7 +282,13 @@ export function ReferenceSearch({
             setQuery(event.target.value)
             setOpen(true)
           }}
-          onKeyDown={handleKeyDown}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              setOpen(false)
+              return
+            }
+            onKeyDown(event)
+          }}
         />
       </div>
 
@@ -319,14 +306,10 @@ export function ReferenceSearch({
             <button
               key={`${candidate.id}:${candidate.label}`}
               type="button"
-              role="option"
-              aria-selected={index === activeIndex}
+              {...getOptionProps(index)}
               className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left ${
                 index === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'
               }`}
-              onMouseDown={event => event.preventDefault()}
-              onMouseEnter={() => setActiveIndex(index)}
-              onClick={() => pick(candidate)}
             >
               {selectionMode === 'multiple' && (
                 <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />

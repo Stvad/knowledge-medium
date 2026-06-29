@@ -27,6 +27,7 @@ import type {
   AnyValuePreset,
 } from '@/data/api'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
+import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
 import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
 import { usePropertyEditingActivation } from './usePropertyEditingActivation'
@@ -140,7 +141,6 @@ export function PropertyPicker({
   const [propertyName, setPropertyName] = useState(initialName)
   const [presetId, setPresetId] = useState<string>(initialPresetId)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
-  const [activeSuggestion, setActiveSuggestion] = useState(0)
   const [submitting, setSubmitting] = useState(false)
   const localInputRef = useRef<HTMLInputElement | null>(null)
   const [nameInputEl, setNameInputEl] = useState<HTMLInputElement | null>(null)
@@ -175,7 +175,6 @@ export function PropertyPicker({
     setPropertyName('')
     setPresetId(initialPresetId)
     setSuggestionsOpen(false)
-    setActiveSuggestion(0)
   }, [initialPresetId])
 
   const submit = useCallback(async (adopted?: AnyPropertySchema) => {
@@ -207,6 +206,22 @@ export function PropertyPicker({
 
   const showSuggestions = suggestionsOpen && suggestions.length > 0
 
+  const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
+    useAutocompleteListbox({
+      itemCount: suggestions.length,
+      setOpen: setSuggestionsOpen,
+      commitOnTab: true,
+      listboxId,
+      onCommit: index => {
+        // With no visible suggestions, Enter/Tab materializes the typed
+        // name as a new field (submit(undefined)); otherwise it adopts the
+        // chosen suggestion.
+        const picked = showSuggestions ? suggestions[index] : undefined
+        void submit(picked?.schema)
+        return true
+      },
+    })
+
   return (
     <>
       <PropertyShapeButton
@@ -227,7 +242,7 @@ export function PropertyPicker({
           onChange={(event) => {
             setPropertyName(event.target.value)
             setSuggestionsOpen(true)
-            setActiveSuggestion(0)
+            setActiveIndex(0)
           }}
           onFocus={(event) => {
             propertyEditingFocus.onFocus(event)
@@ -238,32 +253,16 @@ export function PropertyPicker({
             setTimeout(() => setSuggestionsOpen(false), 100)
           }}
           aria-controls={showSuggestions ? listboxId : undefined}
-          aria-activedescendant={
-            showSuggestions ? `${listboxId}-${activeSuggestion}` : undefined
-          }
+          aria-activedescendant={showSuggestions ? activeDescendantId : undefined}
           className={inputClassName ?? 'h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none placeholder:text-muted-foreground/60 focus-visible:border-transparent focus-visible:ring-0'}
           onKeyDown={(event) => {
-            if (event.key === 'ArrowDown' && showSuggestions) {
-              event.preventDefault()
-              setActiveSuggestion(i => Math.min(suggestions.length - 1, i + 1))
-              return
-            }
-            if (event.key === 'ArrowUp' && showSuggestions) {
-              event.preventDefault()
-              setActiveSuggestion(i => Math.max(0, i - 1))
-              return
-            }
-            if ((event.key === 'Enter' || event.key === 'Tab')) {
-              event.preventDefault()
-              const picked = showSuggestions ? suggestions[activeSuggestion] : undefined
-              void submit(picked?.schema)
-              return
-            }
             if (event.key === 'Escape') {
               event.preventDefault()
               if (suggestionsOpen) { setSuggestionsOpen(false); return }
               onEscape?.()
+              return
             }
+            onKeyDown(event)
           }}
         />
         <FloatingListbox
@@ -276,13 +275,9 @@ export function PropertyPicker({
             <button
               key={s.schema.name}
               type="button"
-              role="option"
-              id={`${listboxId}-${i}`}
-              aria-selected={i === activeSuggestion}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => { void submit(s.schema) }}
+              {...getOptionProps(i)}
               className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-muted ${
-                i === activeSuggestion ? 'bg-muted' : ''
+                i === activeIndex ? 'bg-muted' : ''
               }`}
             >
               <PropertyShapeGlyph

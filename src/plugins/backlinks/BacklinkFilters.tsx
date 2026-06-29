@@ -1,6 +1,5 @@
 import {
   FormEvent,
-  KeyboardEvent,
   MouseEvent,
   ReactElement,
   useEffect,
@@ -10,6 +9,8 @@ import {
 } from 'react'
 import { FilterX, Plus, Settings2, X } from 'lucide-react'
 import { truncate } from '@/utils/string'
+import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
+import { useDebouncedValue } from '@/hooks/useDebouncedValue.js'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
@@ -191,81 +192,65 @@ const RefPredicateInput = ({
   const [kind, setKind] = useState<RefPredicateKind>('refs')
   const [focused, setFocused] = useState(false)
   const [results, setResults] = useState<LinkTargetIdCandidate[]>([])
-  const [activeIndex, setActiveIndex] = useState(-1)
   const trimmed = query.trim()
+  const debouncedQuery = useDebouncedValue(trimmed, DEBOUNCE_MS)
   const popupOpen = focused && trimmed.length > 0 && results.length > 0
-  const activeCandidate = activeIndex >= 0 ? results[activeIndex] : undefined
+
+  const commitId = (id: string) => {
+    if (readOnly) return
+    onAdd(kind, id)
+    setQuery('')
+    setResults([])
+  }
+
+  const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
+    useAutocompleteListbox({
+      itemCount: results.length,
+      setOpen: setFocused,
+      wrap: true,
+      listboxId,
+      onCommit: index => {
+        const candidate = results[index]
+        if (!candidate) return false
+        commitId(candidate.id)
+        return true
+      },
+    })
 
   useEffect(() => {
-    if (!workspaceId || !trimmed) return
+    if (!workspaceId || !debouncedQuery) return
 
     let cancelled = false
-    const timer = setTimeout(async () => {
-      const nextResults = await searchLinkTargetIdCandidates(repo, {
-        workspaceId,
-        query: trimmed,
-        limit: SEARCH_LIMIT,
-        excludeIds,
-      })
+    void searchLinkTargetIdCandidates(repo, {
+      workspaceId,
+      query: debouncedQuery,
+      limit: SEARCH_LIMIT,
+      excludeIds,
+    }).then(nextResults => {
       if (cancelled) return
-
       setResults(nextResults)
-      setActiveIndex(nextResults.length > 0 ? 0 : -1)
-    }, DEBOUNCE_MS)
+      setActiveIndex(0)
+    })
 
     return () => {
       cancelled = true
-      clearTimeout(timer)
     }
-  }, [excludeIds, repo, trimmed, workspaceId])
+  }, [excludeIds, repo, debouncedQuery, setActiveIndex, workspaceId])
 
-  const add = async (id?: string) => {
+  // Submit (the "+" button / Enter without an open list) adds the first
+  // match, falling back to an exact alias lookup for a typed-but-unlisted
+  // name.
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault()
     if (readOnly) return
-    const nextId = id ?? results[0]?.id
-    if (nextId) {
-      onAdd(kind, nextId)
-      setQuery('')
-      setResults([])
-      setActiveIndex(-1)
+    const fallbackId = results[0]?.id
+    if (fallbackId) {
+      commitId(fallbackId)
       return
     }
     if (!trimmed) return
     const exact = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
-    if (!exact) return
-    onAdd(kind, exact.id)
-    setQuery('')
-    setResults([])
-    setActiveIndex(-1)
-  }
-
-  const handleSubmit = (event: FormEvent) => {
-    event.preventDefault()
-    void add()
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'ArrowDown' && results.length > 0) {
-      event.preventDefault()
-      setFocused(true)
-      setActiveIndex(index => (index < 0 ? 0 : (index + 1) % results.length))
-      return
-    }
-    if (event.key === 'ArrowUp' && results.length > 0) {
-      event.preventDefault()
-      setFocused(true)
-      setActiveIndex(index => (index <= 0 ? results.length - 1 : index - 1))
-      return
-    }
-    if (event.key === 'Enter' && popupOpen && activeCandidate) {
-      event.preventDefault()
-      void add(activeCandidate.id)
-      return
-    }
-    if (event.key === 'Escape') {
-      setQuery('')
-      setResults([])
-      setActiveIndex(-1)
-    }
+    if (exact) commitId(exact.id)
   }
 
   return (
@@ -290,14 +275,18 @@ const RefPredicateInput = ({
         onChange={event => {
           const next = event.target.value
           setQuery(next)
-          if (!next.trim()) {
-            setResults([])
-            setActiveIndex(-1)
-          }
+          if (!next.trim()) setResults([])
         }}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        onKeyDown={handleKeyDown}
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            setQuery('')
+            setResults([])
+            return
+          }
+          onKeyDown(event)
+        }}
         placeholder={mode === 'include' ? 'Include reference' : 'Exclude reference'}
         className="h-8 min-w-0 text-xs"
         disabled={readOnly}
@@ -305,9 +294,7 @@ const RefPredicateInput = ({
         aria-autocomplete="list"
         aria-expanded={Boolean(popupOpen)}
         aria-controls={popupOpen ? listboxId : undefined}
-        aria-activedescendant={
-          popupOpen && activeCandidate ? `${listboxId}-option-${activeIndex}` : undefined
-        }
+        aria-activedescendant={popupOpen ? activeDescendantId : undefined}
       />
       <Button
         type="submit"
@@ -332,14 +319,7 @@ const RefPredicateInput = ({
           <button
             type="button"
             key={result.id}
-            id={`${listboxId}-option-${index}`}
-            role="option"
-            aria-selected={index === activeIndex}
-            onMouseEnter={() => setActiveIndex(index)}
-            onMouseDown={event => {
-              event.preventDefault()
-              void add(result.id)
-            }}
+            {...getOptionProps(index)}
             className={cn(
               'flex w-full min-w-0 flex-col rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
               index === activeIndex ? 'bg-accent' : '',
