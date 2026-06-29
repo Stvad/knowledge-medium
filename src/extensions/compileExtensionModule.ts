@@ -1,3 +1,4 @@
+import { hex } from '@scure/base'
 import {
   getCompiledModuleCache,
   type CompiledModuleCache,
@@ -114,9 +115,6 @@ export function __resetCompileCacheForTest(): void {
   defaultCache.byBlock.clear()
 }
 
-const hexEncoder = (bytes: Uint8Array) =>
-  Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-
 /** Pure SHA-256 of the source. The compiler version is intentionally NOT
  *  mixed in here — see {@link COMPILER_VERSION}. This is the hash the
  *  device-local approval pins, and what the loader compares against
@@ -124,7 +122,7 @@ const hexEncoder = (bytes: Uint8Array) =>
 export async function hashExtensionSource(content: string): Promise<string> {
   const data = new TextEncoder().encode(content)
   const digest = await crypto.subtle.digest('SHA-256', data)
-  return hexEncoder(new Uint8Array(digest))
+  return hex.encode(new Uint8Array(digest))
 }
 
 /** Transpile TS/JSX source to JS. Babel is loaded with a dynamic
