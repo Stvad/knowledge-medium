@@ -14,6 +14,7 @@
  * and replaces the current user's .db from that staging file.
  */
 
+import { v4 as uuidv4 } from 'uuid'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/repoProvider'
 
@@ -290,11 +291,4 @@ const removeEntryIfExists = async (
 }
 
 const tempOpfsFilename = (dbFilename: string, purpose: string): string =>
-  `.${dbFilename}.${purpose}-${Date.now()}-${randomId()}.tmp`
-
-const randomId = (): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  return Math.random().toString(36).slice(2)
-}
+  `.${dbFilename}.${purpose}-${Date.now()}-${uuidv4()}.tmp`
