@@ -119,6 +119,23 @@ describe('collectReplicationRequests', () => {
     ])
   })
 
+  it('skips a block whose media:hash is an explicit empty string, not just an omitted default', async () => {
+    // Distinct from the omitted-hash case above (m4: property never set → `encoded ===
+    // undefined`): here the property IS present but decodes to '' (a cleared / half-
+    // captured value). The `!contentHash` guard must still skip it — without it the block
+    // would emit `{contentHash:''}`, wasted work the resolver only fails closed on
+    // (`invalid-hash`). The good blocks on either side must still be collected.
+    await addMediaBlock('m1', 'a0', 'sha256:aaaa')
+    await addMediaBlock('m-empty', 'a1', '') // property set, but to the empty string
+    await addMediaBlock('m2', 'a2', 'sha256:bbbb')
+
+    const requests = await collectReplicationRequests(repo, WS)
+    expect(requests).toEqual([
+      { workspaceId: WS, contentHash: 'sha256:aaaa' },
+      { workspaceId: WS, contentHash: 'sha256:bbbb' },
+    ])
+  })
+
   it('skips a malformed (non-string) media:hash instead of throwing and stalling the walk', async () => {
     await addMediaBlock('m1', 'a0', 'sha256:aaaa')
     await addMediaBlockRawHash('m-bad', 'a1', 12345) // a number where a string is expected
