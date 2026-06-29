@@ -60,27 +60,28 @@ export function useDebouncedSearch<T>({
     onResultsRef.current = onResults
   })
 
-  // Monotonic id of the in-flight search. Bumped when the effect re-runs
-  // (supersede), when it tears down (keystroke/unmount), and by reset() — so a
-  // late resolve whose id is no longer current is dropped. Routing reset()
-  // through the same id is what lets it cancel in-flight work on its own,
-  // rather than only when the caller also happens to change `query`.
-  const requestIdRef = useRef(0)
+  // Bumped only by reset(): a search captures the token when it fires, and a
+  // late resolve whose token no longer matches is dropped — so reset() cancels
+  // in-flight work on its own, not only when the caller also changes `query`.
+  const resetTokenRef = useRef(0)
 
   useEffect(() => {
     // Only search once the debounce has settled (`trimmed === debounced`);
     // `trimmed` stays in the deps so every keystroke re-runs the effect and
     // supersedes any in-flight search immediately.
     if (!enabled || !debounced || trimmed !== debounced) return
-    const requestId = ++requestIdRef.current
+    // `cancelled` covers supersede + unmount (a fresh effect run / teardown);
+    // the reset token covers an imperative reset() while this run is in flight.
+    let cancelled = false
+    const resetToken = resetTokenRef.current
     void searchRef.current(debounced).then(next => {
-      if (requestId !== requestIdRef.current) return
+      if (cancelled || resetToken !== resetTokenRef.current) return
       setResults(next)
       setResultsQuery(debounced)
       onResultsRef.current?.(next)
     })
     return () => {
-      requestIdRef.current++
+      cancelled = true
     }
     // search/onResults are intentionally read through refs (non-reactive);
     // revalidateOn carries the caller's real re-search triggers.
@@ -88,7 +89,7 @@ export function useDebouncedSearch<T>({
   }, [enabled, debounced, trimmed, ...revalidateOn])
 
   const reset = useCallback(() => {
-    requestIdRef.current++
+    resetTokenRef.current++
     setResults([])
     setResultsQuery('')
   }, [])
