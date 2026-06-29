@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isEqual } from 'lodash-es'
 import {
   defineQuery,
   backlinksFilterSchema,
@@ -46,8 +47,7 @@ export const normalizeBacklinksFilter = (
   exclude: stripEmpty(filter?.exclude),
 })
 
-const samePredicate = (a: BlockPredicate, b: BlockPredicate): boolean =>
-  JSON.stringify(a) === JSON.stringify(b)
+const samePredicate = (a: BlockPredicate, b: BlockPredicate): boolean => isEqual(a, b)
 
 /** Page-local filter overrides workspace defaults. The merge rules:
  *   - everything the page added (include or exclude) wins outright
