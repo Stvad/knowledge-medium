@@ -23,7 +23,7 @@ export const buildPropertyPanelSections = (args: {
   schemas: ReadonlyMap<string, AnyPropertySchema>
   syntheticRows?: readonly PropertyPanelRow[]
 }): readonly PropertyPanelSection[] => {
-  const hasProperty = (name: string) => Object.prototype.hasOwnProperty.call(args.properties, name)
+  const hasProperty = (name: string) => Object.hasOwn(args.properties, name)
   const assigned = new Set<string>()
   const sections: PropertyPanelSection[] = []
 

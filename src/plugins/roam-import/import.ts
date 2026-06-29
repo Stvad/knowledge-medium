@@ -1284,11 +1284,6 @@ const appendRoamMemoExistingConflicts = (
   )
 }
 
-const hasOwn = (
-  obj: Record<string, unknown>,
-  key: string,
-): boolean => Object.prototype.hasOwnProperty.call(obj, key)
-
 const mergeImportedProperties = (
   existing: Record<string, unknown>,
   planned: Record<string, unknown>,
@@ -1315,8 +1310,8 @@ const mergeImportedProperties = (
   const next: Record<string, unknown> = {}
 
   for (const key of keys) {
-    const existingHas = hasOwn(existing, key)
-    const plannedHas = hasOwn(planned, key)
+    const existingHas = Object.hasOwn(existing, key)
+    const plannedHas = Object.hasOwn(planned, key)
 
     if (appOwned.has(key)) {
       if (existingHas) next[key] = existing[key]
