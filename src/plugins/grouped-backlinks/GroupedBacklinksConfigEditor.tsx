@@ -1,6 +1,5 @@
 import {
   FormEvent,
-  useEffect,
   useId,
   useMemo,
   useState,
@@ -8,7 +7,7 @@ import {
 import { Plus, X } from 'lucide-react'
 import { truncate } from '@/utils/string'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
-import { useDebouncedValue } from '@/hooks/useDebouncedValue.js'
+import { useDebouncedSearch } from '@/hooks/useDebouncedSearch.js'
 import {
   isReadOnlyBlock,
   type PropertyEditorProps,
@@ -97,11 +96,26 @@ const ConfigTagInput = ({
   const workspaceId = repo.activeWorkspaceId ?? ''
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
-  const [results, setResults] = useState<LinkTargetValueCandidate[]>([])
   const currentValues = useMemo(() => uniqueStrings(values), [values])
   const currentValueSet = useMemo(() => new Set(currentValues), [currentValues])
   const trimmed = query.trim()
-  const debouncedQuery = useDebouncedValue(trimmed, DEBOUNCE_MS)
+
+  const { results, reset: resetResults } = useDebouncedSearch<LinkTargetValueCandidate>({
+    query,
+    delayMs: DEBOUNCE_MS,
+    enabled: Boolean(workspaceId),
+    search: q => searchLinkTargetValueCandidates(repo, {
+      workspaceId,
+      query: q,
+      limit: SEARCH_LIMIT,
+      excludeValues: currentValueSet,
+    }),
+    // `setActiveIndex` is the listbox's stable setter, declared just below;
+    // onResults only runs async once results land, so the forward reference
+    // is safe.
+    onResults: () => setActiveIndex(0),
+    revalidateOn: [workspaceId, currentValueSet],
+  })
   const popupOpen = focused && trimmed.length > 0 && results.length > 0
 
   const commitValue = (value: string) => {
@@ -110,7 +124,7 @@ const ConfigTagInput = ({
     if (!next) return
     onChange(uniqueStrings([...currentValues, next]))
     setQuery('')
-    setResults([])
+    resetResults()
   }
 
   const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
@@ -126,31 +140,6 @@ const ConfigTagInput = ({
         return true
       },
     })
-
-  useEffect(() => {
-    // Only search once the debounce has settled (`trimmed === debouncedQuery`),
-    // but keep raw `trimmed` in the deps so every keystroke re-runs the effect
-    // and its cleanup cancels any in-flight search immediately. Without that, a
-    // late result for the previous tag text could repopulate `results` for the
-    // new/cleared input and Enter/the "+" button would commit a stale value.
-    if (!workspaceId || !debouncedQuery || trimmed !== debouncedQuery) return
-
-    let cancelled = false
-    void searchLinkTargetValueCandidates(repo, {
-      workspaceId,
-      query: debouncedQuery,
-      limit: SEARCH_LIMIT,
-      excludeValues: currentValueSet,
-    }).then(nextResults => {
-      if (cancelled) return
-      setResults(nextResults)
-      setActiveIndex(0)
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [currentValueSet, debouncedQuery, trimmed, repo, setActiveIndex, workspaceId])
 
   const remove = (value: string) => {
     if (readOnly) return
@@ -185,14 +174,14 @@ const ConfigTagInput = ({
             onChange={event => {
               const next = event.target.value
               setQuery(next)
-              if (!next.trim()) setResults([])
+              if (!next.trim()) resetResults()
             }}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             onKeyDown={event => {
               if (event.key === 'Escape') {
                 setQuery('')
-                setResults([])
+                resetResults()
                 return
               }
               onKeyDown(event)

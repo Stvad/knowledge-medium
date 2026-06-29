@@ -2,7 +2,6 @@ import {
   FormEvent,
   MouseEvent,
   ReactElement,
-  useEffect,
   useId,
   useMemo,
   useState,
@@ -10,7 +9,7 @@ import {
 import { FilterX, Plus, Settings2, X } from 'lucide-react'
 import { truncate } from '@/utils/string'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
-import { useDebouncedValue } from '@/hooks/useDebouncedValue.js'
+import { useDebouncedSearch } from '@/hooks/useDebouncedSearch.js'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
@@ -191,16 +190,31 @@ const RefPredicateInput = ({
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<RefPredicateKind>('refs')
   const [focused, setFocused] = useState(false)
-  const [results, setResults] = useState<LinkTargetIdCandidate[]>([])
   const trimmed = query.trim()
-  const debouncedQuery = useDebouncedValue(trimmed, DEBOUNCE_MS)
+
+  const { results, reset: resetResults } = useDebouncedSearch<LinkTargetIdCandidate>({
+    query,
+    delayMs: DEBOUNCE_MS,
+    enabled: Boolean(workspaceId),
+    search: q => searchLinkTargetIdCandidates(repo, {
+      workspaceId,
+      query: q,
+      limit: SEARCH_LIMIT,
+      excludeIds,
+    }),
+    // `setActiveIndex` is the listbox's stable setter, declared just below;
+    // onResults only runs async once results land, so the forward reference
+    // is safe.
+    onResults: () => setActiveIndex(0),
+    revalidateOn: [workspaceId, excludeIds],
+  })
   const popupOpen = focused && trimmed.length > 0 && results.length > 0
 
   const commitId = (id: string) => {
     if (readOnly) return
     onAdd(kind, id)
     setQuery('')
-    setResults([])
+    resetResults()
   }
 
   const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
@@ -216,31 +230,6 @@ const RefPredicateInput = ({
         return true
       },
     })
-
-  useEffect(() => {
-    // Only search once the debounce has settled (`trimmed === debouncedQuery`),
-    // but keep raw `trimmed` in the deps so every keystroke re-runs the effect
-    // and its cleanup cancels any in-flight search immediately. Without that, a
-    // late result for the previous text could repopulate `results` for the
-    // new/cleared input and Enter/the "+" button would commit a stale block.
-    if (!workspaceId || !debouncedQuery || trimmed !== debouncedQuery) return
-
-    let cancelled = false
-    void searchLinkTargetIdCandidates(repo, {
-      workspaceId,
-      query: debouncedQuery,
-      limit: SEARCH_LIMIT,
-      excludeIds,
-    }).then(nextResults => {
-      if (cancelled) return
-      setResults(nextResults)
-      setActiveIndex(0)
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [excludeIds, repo, debouncedQuery, trimmed, setActiveIndex, workspaceId])
 
   // Submit (the "+" button / Enter without an open list) adds the first
   // match, falling back to an exact alias lookup for a typed-but-unlisted
@@ -281,14 +270,14 @@ const RefPredicateInput = ({
         onChange={event => {
           const next = event.target.value
           setQuery(next)
-          if (!next.trim()) setResults([])
+          if (!next.trim()) resetResults()
         }}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onKeyDown={event => {
           if (event.key === 'Escape') {
             setQuery('')
-            setResults([])
+            resetResults()
             return
           }
           onKeyDown(event)
