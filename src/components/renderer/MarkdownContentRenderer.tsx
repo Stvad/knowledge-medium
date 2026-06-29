@@ -5,7 +5,7 @@ import type { Components } from 'react-markdown'
 import { useBlockContext } from '@/context/block.js'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { markdownExtensionsFacet } from '@/markdown/extensions.js'
+import { markdownExtensionsFacet, type MarkdownRenderData } from '@/markdown/extensions.js'
 
 const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-clip overflow-y-visible max-w-full'
 
@@ -32,7 +32,10 @@ export function MarkdownContentRenderer({
   containerElement,
 }: MarkdownContentRendererProps) {
   const renderData = useHandle(block, {
-    selector: doc => doc
+    // Return type pinned to MarkdownRenderData so this selector and the
+    // context field it feeds can't drift apart — add a field there and TS
+    // flags this site.
+    selector: (doc): MarkdownRenderData | undefined => doc
       ? {
         content: doc.content,
         references: doc.references,

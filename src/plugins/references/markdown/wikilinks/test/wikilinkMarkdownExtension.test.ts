@@ -56,4 +56,21 @@ describe('wikilinkMarkdownExtension', () => {
     if (!config) throw new Error('expected a markdown config')
     expect(resolvedBlockId('[[Target]]', config.remarkPlugins ?? [])).toBe('target-id')
   })
+
+  it('does not resolve a block-ref entry (alias === id) as a page wikilink', () => {
+    // Block refs store alias === id; the refMap filters them out so a stray
+    // `[[uuid]]` can't silently resolve via a block-ref reference. The node is
+    // still emitted, but with an empty blockId (a miss), not the uuid.
+    const config = wikilinkMarkdownExtension({
+      block: staleBlock([]),
+      blockContext: {} as BlockContextType,
+      data: {
+        content: '[[abc-id]]',
+        references: [{ id: 'abc-id', alias: 'abc-id' }],
+        workspaceId: 'ws-1',
+      },
+    })
+    if (!config) throw new Error('expected a markdown config')
+    expect(resolvedBlockId('[[abc-id]]', config.remarkPlugins ?? [])).toBe('')
+  })
 })
