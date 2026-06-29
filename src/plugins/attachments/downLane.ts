@@ -31,10 +31,13 @@
  *     than re-spending the budget on it.
  *
  * SCOPE is the caller's job: it walks ONLY active/opened workspaces (the "don't
- * touch unopened workspaces" sync-flood lesson — §8). Failures don't halt the walk:
- * one poisoned / offline block doesn't stop the rest from replicating. The down-lane
- * keeps NO persisted state — a miss simply reappears on the next pass (the §9
- * "synced block can outlive its bytes" backstop self-heals when the origin uploads).
+ * touch unopened workspaces" sync-flood lesson — §8). ASSET-SPECIFIC failures don't
+ * halt the walk: one poisoned / offline block doesn't stop the rest from replicating.
+ * The one exception is a STORAGE-WIDE write failure (`store-failed` — quota / OPFS):
+ * since every later put would fail too, it stops the pass rather than re-fetch the tail
+ * for bytes that can't land. The down-lane keeps NO persisted state — a miss simply
+ * reappears on the next pass (the §9 "synced block can outlive its bytes" backstop
+ * self-heals when the origin uploads, or when storage frees).
  */
 
 import { PRE_FETCH_FAIL_REASONS, type AssetReplicateResult, type AssetResolveRequest } from './resolver.js'
@@ -101,7 +104,15 @@ export const reconcileDownLane = async (
       replicated += 1
       continue
     }
-    // A FAILURE is FREE and NEVER halts the walk — charging it would let a stable-
+    // A store-stage failure (quota / OPFS write) is storage-WIDE, not asset-specific:
+    // every later put this pass would fail the same way. Stop NOW rather than re-fetch
+    // the whole tail (full egress) for bytes that can't land — the next sweep retries
+    // when storage may have room. (The fetch failures below are asset-specific, so they
+    // are free + non-halting instead.)
+    if (r.reason === 'store-failed') {
+      return { present, replicated, failed: failed + 1, unavailable, skipped: requests.length - 1 - i }
+    }
+    // A FETCH FAILURE is FREE and NEVER halts the walk — charging it would let a stable-
     // ordered failing prefix shadow the healthier tail forever (it never becomes
     // present, so it'd eat the budget every sweep). Re-attempting absent blocks each
     // pass is the §9 backstop self-heal (a cheap GET, not byte egress).

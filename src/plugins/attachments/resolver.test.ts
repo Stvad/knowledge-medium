@@ -305,6 +305,24 @@ describe('createAssetResolver — replicate (the §8/§9 down-lane backlog lane)
     expect(await byteStore.get(USER, WS, await contentKeyFor('none', contentHash))).toEqual(plain)
   })
 
+  it('a byte-store WRITE failure (quota) → store-failed, NOT "replicated" (no durable copy landed)', async () => {
+    // The demand lane serves these verified bytes uncached (a render is never denied),
+    // but the backlog lane must NOT claim replication when nothing persisted — else the
+    // down-lane spends its budget + skips the tail on assets that stay absent and
+    // re-download every sweep. (See the matching demand-lane test in "happy paths".)
+    const plain = bytes(1, 1)
+    const contentHash = await hashOf(plain)
+    const failingPut = new InMemoryByteStore()
+    vi.spyOn(failingPut, 'put').mockRejectedValue(new Error('QuotaExceededError'))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore: failingPut,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'store-failed' })
+    expect(blobGet).toHaveBeenCalledTimes(1) // it DID fetch — the failure is the store, not the fetch
+  })
+
   it('fails closed on a poisoned object (hash-mismatch) — never stored', async () => {
     const real = bytes(1, 1, 1, 1)
     const contentHash = await hashOf(real)

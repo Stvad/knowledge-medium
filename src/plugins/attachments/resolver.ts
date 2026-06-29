@@ -66,6 +66,12 @@ export type AssetFailReason =
   /** Decoded bytes don't match the block's `hash` — an untrusted-server replay
    *  or poison (§5.1). The discarded-and-never-served case. */
   | 'hash-mismatch'
+  /** BACKLOG-LANE ONLY: bytes were fetched + verified but the local byte-store
+   *  WRITE failed (quota / OPFS), so no durable copy exists. The demand lane never
+   *  returns this — it serves the verified bytes uncached (step 7); only `replicate`
+   *  cares that the copy didn't land, so it must NOT report `replicated`. Treated as
+   *  storage-WIDE (the down-lane stops the pass — see downLane.ts). */
+  | 'store-failed'
   /** An unexpected internal error (a misbehaving injected policy dep, an OPFS
    *  error outside the guarded reads). The fail-closed safety net — `resolve`
    *  returns a verdict, never a thrown promise (§7.3). */
@@ -124,7 +130,13 @@ export interface AssetResolver {
   replicate(request: AssetResolveRequest): Promise<AssetReplicateResult>
 }
 
-const fail = (reason: AssetFailReason): AssetResolveResult => ({ ok: false, reason })
+/** The shared fail-closed verdict. Typed as just the failure shape (not the whole
+ *  `AssetResolveResult` union) so it's assignable to every result type that carries it
+ *  — `AssetResolveResult`, the internal `ResolveOutcome`, and `AssetReplicateResult`. */
+const fail = (reason: AssetFailReason): { readonly ok: false; readonly reason: AssetFailReason } => ({
+  ok: false,
+  reason,
+})
 
 /** The fail-closed verdict or the derived identity shared by `resolve` (demand) and
  *  `replicate` (backlog) — steps (1)+(2) of the §7.3 flow: signed-in, three-valued
@@ -135,10 +147,20 @@ type PreparedResolve =
   | { readonly ok: true; readonly userId: string; readonly mode: SyncMode; readonly contentKey: string }
   | { readonly ok: false; readonly reason: AssetFailReason }
 
+/** `resolveImpl`'s outcome, carrying the backlog-only `stored` bit that the public
+ *  {@link AssetResolveResult} hides. `stored` = the verified bytes durably landed in
+ *  the byte store this resolve; `false` when the cache write failed (quota / OPFS). The
+ *  demand lane drops it (a render is served from `bytes` regardless); the backlog lane
+ *  reads it to tell a real replication from a fetch-that-couldn't-persist — definitively,
+ *  without a second `has()` probe (which a flaky store would make unreliable). */
+type ResolveOutcome =
+  | { readonly ok: true; readonly bytes: Uint8Array<ArrayBuffer>; readonly stored: boolean }
+  | { readonly ok: false; readonly reason: AssetFailReason }
+
 export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
   const { getUserId, byteStore, blobStore, getMaterializability, getCek, getContentKeyHmac } = deps
-  // Coalesce concurrent identical resolves (see the returned `resolve` below).
-  const inFlight = new Map<string, Promise<AssetResolveResult>>()
+  // Coalesce concurrent identical resolves (see `coalescedResolve` below).
+  const inFlight = new Map<string, Promise<ResolveOutcome>>()
 
   /** Steps (1)+(2): signed-in check, three-valued decode decision (§7.3), and the
    *  §10 content-key. Any rejection bubbles to the caller's outer safety net (→
@@ -175,7 +197,7 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     }
   }
 
-  const resolveImpl = async ({ workspaceId, contentHash }: AssetResolveRequest): Promise<AssetResolveResult> => {
+  const resolveImpl = async ({ workspaceId, contentHash }: AssetResolveRequest): Promise<ResolveOutcome> => {
     // Outer safety net: ANY unexpected throw (a misbehaving injected policy dep, an
     // OPFS error the inner guards don't anticipate) returns a verdict, never a thrown
     // promise — the renderer always gets a placeholder, never an unhandled rejection
@@ -195,7 +217,7 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
       } catch (err) {
         console.warn(`[assetResolver] local byte-store read failed for ${workspaceId}; re-fetching`, err)
       }
-      if (local) return { ok: true, bytes: local }
+      if (local) return { ok: true, bytes: local, stored: true } // already durable (§8)
 
       // (4) Miss → fetch the ciphertext (direct RLS-gated GET, §10.1).
       let blob: Uint8Array<ArrayBuffer>
@@ -220,19 +242,23 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
 
       // (7) Cache the verified bytes, then serve. A cache-write failure (quota) must
       // NOT deny the render — serve these verified bytes; the next render re-fetches.
+      // `stored` records whether the copy actually landed: the demand lane ignores it
+      // (serves either way), the backlog lane needs it to not claim a phantom replication.
+      let stored = false
       try {
         await byteStore.put(userId, workspaceId, contentKey, plaintext)
+        stored = true
       } catch (err) {
         console.warn(`[assetResolver] byte-store write failed for ${workspaceId}; serving uncached`, err)
       }
-      return { ok: true, bytes: plaintext }
+      return { ok: true, bytes: plaintext, stored }
     } catch (err) {
       console.warn(`[assetResolver] unexpected error resolving ${workspaceId}; failing closed`, err)
       return fail('error')
     }
   }
 
-  const resolve = (request: AssetResolveRequest): Promise<AssetResolveResult> => {
+  const coalescedResolve = (request: AssetResolveRequest): Promise<ResolveOutcome> => {
     // Coalesce CONCURRENT resolves of the same (workspace, contentHash): the same
     // asset embedded N times mounts N components that each resolve in the same tick;
     // share ONE OPFS-read + decrypt + verify instead of N. NOT a persistent cache —
@@ -248,6 +274,13 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
     const pending = resolveImpl(request).finally(() => inFlight.delete(key))
     inFlight.set(key, pending)
     return pending
+  }
+
+  // The public demand lane: just the verdict + bytes. The internal `stored` bit is for
+  // the backlog lane only, so it's dropped here (callers render from `bytes` regardless).
+  const resolve = async (request: AssetResolveRequest): Promise<AssetResolveResult> => {
+    const r = await coalescedResolve(request)
+    return r.ok ? { ok: true, bytes: r.bytes } : r
   }
 
   const replicate = async (request: AssetResolveRequest): Promise<AssetReplicateResult> => {
@@ -271,12 +304,21 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
         console.warn(`[assetResolver] has() probe failed for ${request.workspaceId}; fetching`, err)
       }
 
-      // Miss → run the SAME coalesced fetch primitive the demand lane uses, discarding
-      // the bytes (we only need them durable in the store). resolve() re-derives via
-      // prepare(); that re-derivation is cheap next to the network fetch and keeps the
-      // single fetch path / single in-flight map.
-      const r = await resolve(request)
-      return r.ok ? { ok: true, status: 'replicated' } : { ok: false, reason: r.reason }
+      // Miss → run the SAME coalesced fetch primitive the demand lane uses (a demand
+      // render and a backlog fetch of the same asset ride ONE download, §8), discarding
+      // the bytes — we only need them durable in the store. It re-derives via prepare(),
+      // cheap next to the network fetch.
+      const r = await coalescedResolve(request)
+      if (!r.ok) return { ok: false, reason: r.reason }
+
+      // A resolve is `ok` even when the byte-store WRITE failed (quota / OPFS) — it
+      // serves the demand render uncached (step 7). For the BACKLOG lane that is NOT
+      // replication: only report `replicated` when the bytes actually landed (`stored`).
+      // Counting an un-stored fetch as replicated would spend the down-lane's success
+      // budget and skip the tail while the asset stays absent + re-downloads (full
+      // egress) every sweep — so report `store-failed` instead. (Read the durability bit
+      // resolveImpl recorded, NOT a second has() probe, so a flaky store can't masquerade.)
+      return r.stored ? { ok: true, status: 'replicated' } : { ok: false, reason: 'store-failed' }
     } catch (err) {
       console.warn(`[assetResolver] unexpected error replicating ${request.workspaceId}; failing closed`, err)
       return { ok: false, reason: 'error' }

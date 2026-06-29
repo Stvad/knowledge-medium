@@ -98,6 +98,23 @@ describe('reconcileDownLane', () => {
     expect(replicate).toHaveBeenCalledTimes(5) // walked PAST all 3 failures to the healthy tail
   })
 
+  it('a store-failed (quota / storage-wide) HALTS the pass — the tail is skipped, not re-fetched', async () => {
+    // Unlike a per-asset fetch failure, a byte-store write failure is storage-wide: every
+    // later put would fail the same way. Stop the pass rather than re-download the tail
+    // for bytes that can't land; the next sweep retries when storage may have room.
+    const { resolver, replicate } = fakeResolver({
+      a: replicated,
+      b: { ok: false, reason: 'store-failed' },
+      c: replicated,
+      d: replicated,
+    })
+
+    const summary = await reconcileDownLane(['a', 'b', 'c', 'd'].map(req), { resolver, budget: 10 })
+
+    expect(summary).toEqual({ present: 0, replicated: 1, failed: 1, unavailable: 0, skipped: 2 })
+    expect(replicate).toHaveBeenCalledTimes(2) // stopped at the store failure; c, d not attempted
+  })
+
   it('a fail-closed block (hash-mismatch) is counted failed but does NOT halt the walk', async () => {
     const { resolver } = fakeResolver({
       a: { ok: false, reason: 'hash-mismatch' },
