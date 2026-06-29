@@ -632,23 +632,24 @@ amount of wiping addresses.
     never served or stored.</li>
   <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
     The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
-    its prefix is purged — fired off the <em>same membership change</em> that makes PowerSync drop the
-    workspace's block rows from the local DB. (Concretely: the purge is a dedicated subscriber —
-    <code>MediaRevocationPurger</code>, wired in Phase 6 — since there is no existing membership-change
-    callback to reuse; the clean reactive fact it hooks is the user's own <code>workspace_members</code> row
-    leaving the local DB (<code>useMyWorkspaceRoles</code>), the same change that causes PowerSync to claw back
-    the workspace's <code>blocks</code> rows. The bytes live out-of-band in OPFS, so they don't ride that row
-    claw-back and need their own one-shot <code>purgeWorkspace</code>; offline, the purge fires on reconnect,
-    exactly as the rows fall out on the next sync. <strong>Edge still open:</strong> a workspace removed while
-    the app is fully <em>closed</em> has no baseline entry to diff at next mount — closing it wants an
-    enumeration-based reopen reconcile, deferred with §8 eviction.) That purge — not a per-render membership
-    recheck — is the claw-back, so
-    media revocation is handled <em>exactly</em> like note text: a revoked member's local <code>blocks</code>
-    are dropped and gets no per-render re-authorization either, and an already-synced member who keeps a copy
-    is the same accepted exposure for bytes as for text (§8). WK-absence gates the <em>decode of new
-    downloads</em> (fail-closed, above), <em>not</em> the serving of already-stored, already-verified bytes —
-    lock doesn't scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code> table
-    (§8).</li>
+    PowerSync drops the workspace's block rows from the local DB, and the out-of-band OPFS bytes need their
+    own claw-back to follow. <strong>That claw-back is DEFERRED to a future reference-GC cleanup job, not an
+    eager per-membership-change deleter</strong> (§16). The job is the natural home: it deletes byte-store
+    entries whose content hash is no longer referenced by any local <code>media</code> block, after a grace
+    period — which subsumes <em>revoke/leave</em> (the workspace's blocks are clawed back → its bytes go
+    unreferenced), <em>media replacement / deletion</em> (the old object becomes unreferenced), and quota
+    eviction, under one reference-counted sweep run when the lanes are quiescent. (History: an eager reactive
+    purger — a <code>workspace_members</code>-removal subscriber calling <code>byteStore.purgeWorkspace</code>
+    — was prototyped on the down-lane PR and removed. It deleted user media on a transient membership signal
+    that can glitch, and to be correct it needed retry-on-failure plus cancel/epoch coordination with
+    in-flight down-lane <code>put</code>s — too much machinery, and too eager a deletion, for what this very
+    bullet calls an accepted exposure. <code>purgeWorkspace</code> remains in <code>byteStore</code> as the
+    primitive the cleanup job will call.) So media revocation is handled like note text with a lag: a revoked
+    member's local <code>blocks</code> are dropped and the bytes are reclaimed on the next GC sweep, and an
+    already-synced member who keeps a copy in the meantime is the same accepted exposure for bytes as for text
+    (§8) — RLS still blocks any <em>new</em> fetch. WK-absence gates the <em>decode of new downloads</em>
+    (fail-closed, above), <em>not</em> the serving of already-stored, already-verified bytes — lock doesn't
+    scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code> table (§8).</li>
 </ul>
 
 <div class="decision">

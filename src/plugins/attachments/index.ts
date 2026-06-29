@@ -18,7 +18,6 @@ import { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'
 import { mobileKeyboardToolbarItemsFacet } from '@/plugins/mobile-keyboard-toolbar/facet.js'
 import { MediaBlockRenderer } from './MediaBlockRenderer.js'
 import { MediaDownLaneReplicator } from './MediaDownLaneReplicator.js'
-import { MediaRevocationPurger } from './MediaRevocationPurger.js'
 import { MediaUploadReconciler } from './MediaUploadReconciler.js'
 import { captureMediaContribution, mediaPasteDecisionContribution } from './pasteCapture.js'
 import {
@@ -59,9 +58,6 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),
   // Background replication of the active workspace's bytes to the local store (§8/§9).
   appMountsFacet.of({ id: 'attachments.down-lane-replicator', component: MediaDownLaneReplicator }, { source: 'attachments' }),
-  // The §8 byte claw-back: purge a workspace's stored plaintext when its membership drops
-  // (leave / revoke), matching how PowerSync claws back its block rows.
-  appMountsFacet.of({ id: 'attachments.revocation-purger', component: MediaRevocationPurger }, { source: 'attachments' }),
   // Surface background upload FAILURES in the status indicator (a failed drain is
   // otherwise silent — off the paste hot-path).
   diagnosticsFacet.of(uploadLaneDiagnosticSource, { source: 'attachments' }),
