@@ -13,7 +13,7 @@
  * `Shift`) so the same physical chord always serialises identically.
  */
 
-const isMacPlatform = (): boolean =>
+export const isMacPlatform = (): boolean =>
   typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)
 
 /** Map raw `KeyboardEvent.key` values to tinykeys' canonical names. */

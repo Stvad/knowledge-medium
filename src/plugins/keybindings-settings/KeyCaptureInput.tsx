@@ -12,7 +12,7 @@
 import {useCallback, useEffect, useRef} from 'react'
 import {Button} from '@/components/ui/button.js'
 import {Kbd} from '@/components/ui/kbd.js'
-import {chordFromEvent, formatChord, isModifierOnly} from './keyCapture.ts'
+import {chordFromEvent, formatChord, isMacPlatform, isModifierOnly} from './keyCapture.ts'
 
 export interface KeyCaptureInputProps {
   /** Chord string currently displayed while the user holds a partial
@@ -48,7 +48,7 @@ export const KeyCaptureInput = ({pending, onCapture, onPartial, onCancel}: KeyCa
       // Partial: show ⌘… style preview while modifiers are pressed.
       // Mirrors `chordFromEvent`'s $mod/Control/Meta normalisation so
       // the preview glyphs match what'll be captured on commit.
-      const onMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform)
+      const onMac = isMacPlatform()
       const primary = onMac ? native.metaKey : native.ctrlKey
       const secondary = onMac ? native.ctrlKey : native.metaKey
       const previewParts: string[] = []
