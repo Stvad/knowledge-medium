@@ -31,40 +31,29 @@ export const wrapRangeWithPair = (
 const markdownInlineFormatCommand = (open: string, close = open): StateCommand =>
   ({state, dispatch}) => {
     const transaction = state.changeByRange(range => {
-      if (range.empty) {
-        const isBetweenMarkers =
-          range.from >= open.length &&
-          range.to + close.length <= state.doc.length &&
-          state.sliceDoc(range.from - open.length, range.from) === open &&
-          state.sliceDoc(range.to, range.to + close.length) === close
+      // A non-empty selection that itself contains the markers (e.g. the whole
+      // `**bold**` is selected) — unwrap the inner pair. Checked before the
+      // surrounded-by-markers case below so that selecting the inner `*a*` of a
+      // nested `**a**` unwraps the inner pair rather than stripping the outer.
+      if (!range.empty) {
+        const selectedText = state.sliceDoc(range.from, range.to)
+        const isWrappedSelection =
+          selectedText.startsWith(open) &&
+          selectedText.endsWith(close) &&
+          selectedText.length >= open.length + close.length
 
-        if (isBetweenMarkers) {
+        if (isWrappedSelection) {
+          const unwrappedText = selectedText.slice(open.length, selectedText.length - close.length)
           return {
-            changes: [
-              {from: range.from - open.length, to: range.from},
-              {from: range.to, to: range.to + close.length},
-            ],
-            range: EditorSelection.cursor(range.from - open.length),
+            changes: {from: range.from, to: range.to, insert: unwrappedText},
+            range: EditorSelection.range(range.from, range.from + unwrappedText.length),
           }
         }
-
-        return wrapRangeWithPair(state, range, open, close)
       }
 
-      const selectedText = state.sliceDoc(range.from, range.to)
-      const isWrappedSelection =
-        selectedText.startsWith(open) &&
-        selectedText.endsWith(close) &&
-        selectedText.length >= open.length + close.length
-
-      if (isWrappedSelection) {
-        const unwrappedText = selectedText.slice(open.length, selectedText.length - close.length)
-        return {
-          changes: {from: range.from, to: range.to, insert: unwrappedText},
-          range: EditorSelection.range(range.from, range.from + unwrappedText.length),
-        }
-      }
-
+      // Markers sit immediately OUTSIDE the range — strip them. Handles both the
+      // empty cursor-between-markers case and the non-empty surrounded case: for
+      // an empty range `EditorSelection.range(x, x)` collapses to a cursor at x.
       const beforeSelection = range.from - open.length
       const afterSelection = range.to + close.length
       const isSurroundedByMarkers =
