@@ -147,14 +147,20 @@ type PreparedResolve =
   | { readonly ok: true; readonly userId: string; readonly mode: SyncMode; readonly contentKey: string }
   | { readonly ok: false; readonly reason: AssetFailReason }
 
-/** `resolveImpl`'s outcome, carrying the backlog-only `stored` bit that the public
- *  {@link AssetResolveResult} hides. `stored` = the verified bytes durably landed in
- *  the byte store this resolve; `false` when the cache write failed (quota / OPFS). The
- *  demand lane drops it (a render is served from `bytes` regardless); the backlog lane
- *  reads it to tell a real replication from a fetch-that-couldn't-persist — definitively,
- *  without a second `has()` probe (which a flaky store would make unreliable). */
+/** Where the verified bytes came from this resolve — the backlog-only provenance the
+ *  public {@link AssetResolveResult} hides. The demand lane drops it (a render is served
+ *  from `bytes` regardless); the backlog lane maps it to a replicate status so it never
+ *  mistakes a hit for a download:
+ *    - `local`      — already in the byte store (a hit, step 3) → `present` (free).
+ *    - `downloaded` — freshly fetched + verified + STORED (step 7) → `replicated`.
+ *    - `unstored`   — freshly fetched + verified but the store write FAILED (quota /
+ *                     OPFS) → `store-failed`.
+ *  Read directly from the outcome, NOT a second `has()` probe (which a flaky store would
+ *  make unreliable) — and crucially distinct from a local hit, so a hit reached via a
+ *  flaky `has()` fallthrough isn't charged against the down-lane budget as a download. */
+type ResolveSource = 'local' | 'downloaded' | 'unstored'
 type ResolveOutcome =
-  | { readonly ok: true; readonly bytes: Uint8Array<ArrayBuffer>; readonly stored: boolean }
+  | { readonly ok: true; readonly bytes: Uint8Array<ArrayBuffer>; readonly source: ResolveSource }
   | { readonly ok: false; readonly reason: AssetFailReason }
 
 export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
@@ -217,7 +223,7 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
       } catch (err) {
         console.warn(`[assetResolver] local byte-store read failed for ${workspaceId}; re-fetching`, err)
       }
-      if (local) return { ok: true, bytes: local, stored: true } // already durable (§8)
+      if (local) return { ok: true, bytes: local, source: 'local' } // already durable (§8) — a hit, not a download
 
       // (4) Miss → fetch the ciphertext (direct RLS-gated GET, §10.1).
       let blob: Uint8Array<ArrayBuffer>
@@ -242,7 +248,7 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
 
       // (7) Cache the verified bytes, then serve. A cache-write failure (quota) must
       // NOT deny the render — serve these verified bytes; the next render re-fetches.
-      // `stored` records whether the copy actually landed: the demand lane ignores it
+      // `source` records whether the copy actually landed: the demand lane ignores it
       // (serves either way), the backlog lane needs it to not claim a phantom replication.
       let stored = false
       try {
@@ -251,7 +257,7 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
       } catch (err) {
         console.warn(`[assetResolver] byte-store write failed for ${workspaceId}; serving uncached`, err)
       }
-      return { ok: true, bytes: plaintext, stored }
+      return { ok: true, bytes: plaintext, source: stored ? 'downloaded' : 'unstored' }
     } catch (err) {
       console.warn(`[assetResolver] unexpected error resolving ${workspaceId}; failing closed`, err)
       return fail('error')
@@ -311,14 +317,19 @@ export const createAssetResolver = (deps: AssetResolverDeps): AssetResolver => {
       const r = await coalescedResolve(request)
       if (!r.ok) return { ok: false, reason: r.reason }
 
-      // A resolve is `ok` even when the byte-store WRITE failed (quota / OPFS) — it
-      // serves the demand render uncached (step 7). For the BACKLOG lane that is NOT
-      // replication: only report `replicated` when the bytes actually landed (`stored`).
-      // Counting an un-stored fetch as replicated would spend the down-lane's success
-      // budget and skip the tail while the asset stays absent + re-downloads (full
-      // egress) every sweep — so report `store-failed` instead. (Read the durability bit
-      // resolveImpl recorded, NOT a second has() probe, so a flaky store can't masquerade.)
-      return r.stored ? { ok: true, status: 'replicated' } : { ok: false, reason: 'store-failed' }
+      // Map the resolve's provenance to a replicate status — NOT just `ok`, which a
+      // resolve also returns for a LOCAL HIT and for a fetch whose store WRITE failed
+      // (quota; it serves the demand render uncached, step 7). The down-lane charges only
+      // `replicated` against its budget, so we must report:
+      //   - `present` for a `local` hit — including one reached because the has() probe
+      //     above threw (transient) and we fell through to a get()-served hit. Charging
+      //     it would let a flaky-has() prefix of present assets burn the budget every
+      //     sweep and skip the absent tail.
+      //   - `store-failed` for an `unstored` fetch — nothing durable landed, so claiming
+      //     `replicated` would spend the budget while the asset stays absent + re-downloads
+      //     (full egress) every sweep.
+      if (r.source === 'unstored') return { ok: false, reason: 'store-failed' }
+      return { ok: true, status: r.source === 'local' ? 'present' : 'replicated' }
     } catch (err) {
       console.warn(`[assetResolver] unexpected error replicating ${request.workspaceId}; failing closed`, err)
       return { ok: false, reason: 'error' }

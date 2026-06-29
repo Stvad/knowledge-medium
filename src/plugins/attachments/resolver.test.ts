@@ -377,6 +377,22 @@ describe('createAssetResolver — replicate (the §8/§9 down-lane backlog lane)
     expect(blobGet).toHaveBeenCalledTimes(1)
   })
 
+  it('a LOCAL hit reached via a flaky has() probe is "present", NOT "replicated" (never charges the budget)', async () => {
+    // has() throws (transient), so replicate falls through to the coalesced resolve — but
+    // the asset IS local, so it's served from a get() hit, no download. That is presence,
+    // not replication: reporting "replicated" would charge the down-lane budget for a
+    // steady-state asset every sweep (Codex P2 — local hits must not be charged).
+    const plain = bytes(4, 4)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    vi.spyOn(byteStore, 'has').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'present' })
+    expect(blobGet).not.toHaveBeenCalled() // local hit — no remote egress despite the flaky probe
+  })
+
   it('treats a transient has() probe error as unknown → fetches (never fails the pass on it)', async () => {
     const plain = bytes(7, 7)
     const contentHash = await hashOf(plain)
