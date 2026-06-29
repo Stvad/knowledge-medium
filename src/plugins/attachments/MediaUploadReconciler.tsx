@@ -20,9 +20,9 @@
 
 import { useEffect } from 'react'
 import { useRepo } from '@/context/repo.js'
-import { onFirstSync } from '@/data/internals/firstSync.js'
-import { getActiveUserId, getPowerSyncDb } from '@/data/repoProvider.js'
+import { getActiveUserId } from '@/data/repoProvider.js'
 import { armUploadDrain, runUploadReconcile } from './assetUpload.js'
+import { armSharedLaneTriggers } from './laneArming.js'
 
 export const MediaUploadReconciler = (): null => {
   const repo = useRepo()
@@ -39,10 +39,6 @@ export const MediaUploadReconciler = (): null => {
     // promotes locally-present `staged` records and drains a prior session's
     // `pending` uploads. Idempotent + lane-locked, so it's safe to re-run.
     reconcile()
-    // Opportunistic re-run once initial sync settles, so `staged` records whose
-    // blocks only just arrived via that sync also promote this boot (a miss merely
-    // defers to the next boot — never destructive, since the reconciler doesn't reap).
-    const disposeFirstSync = onFirstSync(getPowerSyncDb(userId), reconcile)
 
     // In-session retry sweep — single-owner drain on reconnect / refocus. Reads
     // the CURRENT active user at fire time (not the effect-time `userId`), so a
@@ -55,11 +51,13 @@ export const MediaUploadReconciler = (): null => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') sweep()
     }
-    window.addEventListener('online', sweep)
+    // Shared lane triggers: re-run the full reconcile once initial sync settles (promote
+    // `staged` blocks that just arrived — a miss merely defers to the next boot, never
+    // destructive since the reconciler doesn't reap), and drain on reconnect.
+    const disposeShared = armSharedLaneTriggers(userId, reconcile, sweep)
     document.addEventListener('visibilitychange', onVisible)
     return () => {
-      disposeFirstSync()
-      window.removeEventListener('online', sweep)
+      disposeShared()
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [repo])

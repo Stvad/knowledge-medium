@@ -278,6 +278,170 @@ describe('createAssetResolver — never throws out of resolve (the §7.3 fail-cl
   })
 })
 
+describe('createAssetResolver — replicate (the §8/§9 down-lane backlog lane)', () => {
+  it('present locally → "present", via a has() probe only — NO fetch, NO full byte read', async () => {
+    const plain = bytes(1, 2, 3)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const getSpy = vi.spyOn(byteStore, 'get')
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'present' })
+    expect(blobGet).not.toHaveBeenCalled() // no remote egress for an already-replicated asset
+    expect(getSpy).not.toHaveBeenCalled() // the politeness win: probe with has(), never read the bytes
+  })
+
+  it('absent → fetches, verifies, STORES, and reports "replicated" (a later render is a local hit)', async () => {
+    const plain = bytes(5, 6, 7, 8)
+    const contentHash = await hashOf(plain)
+    const { resolver, byteStore, blobGet } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'replicated' })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, await contentKeyFor('none', contentHash))).toEqual(plain)
+  })
+
+  it('a byte-store WRITE failure (quota) → store-failed, NOT "replicated" (no durable copy landed)', async () => {
+    // The demand lane serves these verified bytes uncached (a render is never denied),
+    // but the backlog lane must NOT claim replication when nothing persisted — else the
+    // down-lane spends its budget + skips the tail on assets that stay absent and
+    // re-download every sweep. (See the matching demand-lane test in "happy paths".)
+    const plain = bytes(1, 1)
+    const contentHash = await hashOf(plain)
+    const failingPut = new InMemoryByteStore()
+    vi.spyOn(failingPut, 'put').mockRejectedValue(new Error('QuotaExceededError'))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore: failingPut,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'store-failed' })
+    expect(blobGet).toHaveBeenCalledTimes(1) // it DID fetch — the failure is the store, not the fetch
+  })
+
+  it('fails closed on a poisoned object (hash-mismatch) — never stored', async () => {
+    const real = bytes(1, 1, 1, 1)
+    const contentHash = await hashOf(real)
+    const { resolver, byteStore } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => bytes(9, 9, 9), // not what contentHash names
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'hash-mismatch' })
+    expect(await byteStore.has(USER, WS, await contentKeyFor('none', contentHash))).toBe(false)
+  })
+
+  it('a locked e2ee workspace (no K_id) → no-content-key, with NO fetch', async () => {
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('decrypt'),
+      getContentKeyHmac: async () => null,
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'no-content-key',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('an offline / absent miss → fetch-failed (the down-lane retries it next pass), nothing stored', async () => {
+    const plain = bytes(3)
+    const contentHash = await hashOf(plain)
+    const { resolver } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => {
+        throw new Error('offline')
+      },
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
+  })
+
+  it('coalesces a backlog replicate with a concurrent demand resolve into ONE fetch', async () => {
+    const plain = bytes(2, 4, 6)
+    const contentHash = await hashOf(plain)
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    // Demand (render) and backlog (down-lane) hit the SAME asset in the same tick:
+    // they ride one in-flight fetch, not two (§8 "same primitive, one in-flight map").
+    const [res, rep] = await Promise.all([
+      resolver.resolve({ workspaceId: WS, contentHash }),
+      resolver.replicate({ workspaceId: WS, contentHash }),
+    ])
+    expect(res).toEqual({ ok: true, bytes: plain })
+    expect(rep).toEqual({ ok: true, status: 'replicated' })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+  })
+
+  it('a pre-enumerated present set short-circuits to "present" — no has() probe, no fetch', async () => {
+    // The down-lane passes ONE workspace enumeration; replicate checks it in memory
+    // instead of a has() per block.
+    const plain = bytes(1, 2, 3)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    const hasSpy = vi.spyOn(byteStore, 'has')
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+    const present = new Set([await contentKeyFor('none', contentHash)])
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }, present)).toEqual({
+      ok: true,
+      status: 'present',
+    })
+    expect(hasSpy).not.toHaveBeenCalled() // used the in-memory set, not a per-block has()
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('a present set that LACKS the key falls through to a fetch (replicates)', async () => {
+    const plain = bytes(4, 5, 6)
+    const contentHash = await hashOf(plain)
+    const { resolver, byteStore, blobGet } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }, new Set())).toEqual({
+      ok: true,
+      status: 'replicated',
+    })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, await contentKeyFor('none', contentHash))).toEqual(plain)
+  })
+
+  it('a LOCAL hit reached via a flaky has() probe is "present", NOT "replicated" (never charges the budget)', async () => {
+    // has() throws (transient), so replicate falls through to the coalesced resolve — but
+    // the asset IS local, so it's served from a get() hit, no download. That is presence,
+    // not replication: reporting "replicated" would charge the down-lane budget for a
+    // steady-state asset every sweep (Codex P2 — local hits must not be charged).
+    const plain = bytes(4, 4)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    vi.spyOn(byteStore, 'has').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'present' })
+    expect(blobGet).not.toHaveBeenCalled() // local hit — no remote egress despite the flaky probe
+  })
+
+  it('treats a transient has() probe error as unknown → fetches (never fails the pass on it)', async () => {
+    const plain = bytes(7, 7)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    vi.spyOn(byteStore, 'has').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'replicated' })
+    expect(blobGet).toHaveBeenCalled() // fell through to the network rather than failing
+  })
+})
+
 describe('createAssetResolver — concurrency', () => {
   it('coalesces concurrent resolves of the same asset into ONE fetch', async () => {
     const plain = bytes(9, 8, 7)
@@ -301,5 +465,42 @@ describe('createAssetResolver — concurrency', () => {
     blobGet.mockClear()
     await resolver.resolve({ workspaceId: WS, contentHash })
     expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('does NOT coalesce across an account switch — A’s in-flight fetch is never handed to B', async () => {
+    // The demand + backlog lanes share ONE in-flight map; a fetch started under account A
+    // must not be reused by a resolve under B after a switch (B would receive A's plaintext
+    // without its own prepare / user-scoped byte store). Keying the map by the active user
+    // closes it: different principal → different key → its own fetch.
+    const plain = bytes(3, 1, 4, 1, 5)
+    const contentHash = await hashOf(plain)
+    const served = await seal('none', plain, contentHash)
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const blobGet = vi.fn(async () => {
+      await gate // hold the fetch in-flight so both calls overlap
+      return served
+    })
+    let activeUser = 'user-A'
+    const resolver = createAssetResolver({
+      getUserId: () => activeUser,
+      byteStore: new InMemoryByteStore(),
+      blobStore: { get: blobGet, put: vi.fn(), delete: vi.fn() } as unknown as BlobStore,
+      getMaterializability: mat('copy'),
+      getCek,
+      getContentKeyHmac: async () => kid,
+    })
+
+    const pA = resolver.replicate({ workspaceId: WS, contentHash }) // in-flight under A
+    await vi.waitFor(() => expect(blobGet).toHaveBeenCalledTimes(1)) // A is into the gated fetch
+
+    activeUser = 'user-B' // account switch before A settles
+    const pB = resolver.resolve({ workspaceId: WS, contentHash })
+    await vi.waitFor(() => expect(blobGet).toHaveBeenCalledTimes(2)) // B started its OWN fetch, no reuse
+
+    release()
+    await Promise.all([pA, pB])
   })
 })

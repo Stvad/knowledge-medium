@@ -26,6 +26,7 @@ import { showError } from '@/utils/toast.js'
 import { remoteSyncGated } from './assetResolver.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
+import { withLock } from './laneLock.js'
 import { resolveCaptureMime } from './mediaBlock.js'
 import { refreshUploadLaneStatus } from './uploadLaneStatus.js'
 import {
@@ -88,13 +89,6 @@ const drainDepsFor = (blobStore: BlobStore, resolver: SyncResolver | null) => ({
   blobStore,
   ...laneKeyDeps(resolver),
 })
-
-/** Run `work` holding a named lock — falls back to running directly where
- *  `navigator.locks` is absent. */
-const withLock = async <T>(name: string, work: () => Promise<T>): Promise<T> => {
-  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-  return locks?.request ? locks.request(name, work) : work()
-}
 
 // One per-user lock: the LANE lock makes the SLOW drain (uploads) single-owner
 // across tabs, so N tabs don't multiply egress. Capture and the boot reconciler
