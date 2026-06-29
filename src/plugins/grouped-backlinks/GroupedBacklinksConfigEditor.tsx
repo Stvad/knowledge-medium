@@ -100,7 +100,7 @@ const ConfigTagInput = ({
   const currentValueSet = useMemo(() => new Set(currentValues), [currentValues])
   const trimmed = query.trim()
 
-  const { results, reset: resetResults } = useDebouncedSearch<LinkTargetValueCandidate>({
+  const { results, resultsQuery, reset: resetResults } = useDebouncedSearch<LinkTargetValueCandidate>({
     query,
     delayMs: DEBOUNCE_MS,
     enabled: Boolean(workspaceId),
@@ -148,7 +148,11 @@ const ConfigTagInput = ({
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
-    commitValue(results[activeIndex]?.value ?? trimmed)
+    // Only adopt the active result when it was fetched for what's currently
+    // typed; mid-debounce it may still reflect the previous text, so fall back
+    // to the typed value instead of committing a stale suggestion.
+    const fresh = resultsQuery === trimmed ? results[activeIndex]?.value : undefined
+    commitValue(fresh ?? trimmed)
   }
 
   return (

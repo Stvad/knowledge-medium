@@ -93,6 +93,41 @@ describe('useDebouncedSearch', () => {
     expect(result.current.results).toEqual([])
   })
 
+  it('tracks the query its results were fetched for and clears it on reset', async () => {
+    const search = vi.fn(() => Promise.resolve(['A']))
+    const { result, rerender } = setup({ query: 'a', search })
+    rerender({ query: 'a', delayMs: DELAY, search })
+    await act(async () => { await vi.advanceTimersByTimeAsync(DELAY) })
+    expect(result.current.resultsQuery).toBe('a')
+
+    act(() => result.current.reset())
+    expect(result.current.resultsQuery).toBe('')
+  })
+
+  it('leaves resultsQuery on the previous query until the new search resolves (staleness signal)', async () => {
+    const d1 = deferred<string[]>()
+    const d2 = deferred<string[]>()
+    const search = vi.fn<DebouncedSearchOptions<string>['search']>()
+      .mockReturnValueOnce(d1.promise)
+      .mockReturnValueOnce(d2.promise)
+    const { result, rerender } = setup({ query: '', search })
+
+    rerender({ query: 'a', delayMs: DELAY, search })
+    await act(async () => { await vi.advanceTimersByTimeAsync(DELAY) })
+    await act(async () => { d1.resolve(['A']); await d1.promise })
+    expect(result.current.resultsQuery).toBe('a')
+
+    // Type ahead to 'ab'. Until the new search resolves, resultsQuery stays 'a'
+    // — so a consumer comparing it to the live trimmed text ('ab') can tell the
+    // results are stale and decline to commit one of them.
+    rerender({ query: 'ab', delayMs: DELAY, search })
+    await act(async () => { await vi.advanceTimersByTimeAsync(DELAY) })
+    expect(result.current.resultsQuery).toBe('a')
+
+    await act(async () => { d2.resolve(['AB']); await d2.promise })
+    expect(result.current.resultsQuery).toBe('ab')
+  })
+
   it('does NOT refetch-loop when a fresh search closure is passed every render', async () => {
     // The footgun: if `search` were an effect dependency, a new closure each
     // render (the un-memoized / compiler-bailout case) would re-run the effect,

@@ -192,7 +192,7 @@ const RefPredicateInput = ({
   const [focused, setFocused] = useState(false)
   const trimmed = query.trim()
 
-  const { results, reset: resetResults } = useDebouncedSearch<LinkTargetIdCandidate>({
+  const { results, resultsQuery, reset: resetResults } = useDebouncedSearch<LinkTargetIdCandidate>({
     query,
     delayMs: DEBOUNCE_MS,
     enabled: Boolean(workspaceId),
@@ -237,9 +237,11 @@ const RefPredicateInput = ({
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
     if (readOnly || !trimmed) return
-    // Guard on `trimmed` first so an emptied box never commits a leftover
-    // `results[0]`; then prefer the top match, else an exact alias lookup.
-    const fallbackId = results[0]?.id
+    // Prefer the top match, else an exact alias lookup. Only trust `results`
+    // when they were fetched for what's currently typed — during the debounce
+    // window they may still reflect the previous text, so submitting then
+    // should honor the typed name, not a stale top result.
+    const fallbackId = resultsQuery === trimmed ? results[0]?.id : undefined
     if (fallbackId) {
       commitId(fallbackId)
       return

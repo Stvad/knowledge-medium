@@ -39,8 +39,13 @@ export function useDebouncedSearch<T>({
   search,
   onResults,
   revalidateOn = [],
-}: DebouncedSearchOptions<T>): { results: T[]; reset: () => void } {
+}: DebouncedSearchOptions<T>): { results: T[]; resultsQuery: string; reset: () => void } {
   const [results, setResults] = useState<T[]>([])
+  // The (trimmed) query the current `results` were fetched for. During the
+  // debounce window this lags the live input, so a consumer's submit path can
+  // compare it against the current trimmed text to avoid committing a result
+  // that belongs to the previous query.
+  const [resultsQuery, setResultsQuery] = useState('')
   const trimmed = query.trim()
   const debounced = useDebouncedValue(trimmed, delayMs)
 
@@ -64,6 +69,7 @@ export function useDebouncedSearch<T>({
     void searchRef.current(debounced).then(next => {
       if (cancelled) return
       setResults(next)
+      setResultsQuery(debounced)
       onResultsRef.current?.(next)
     })
     return () => {
@@ -74,7 +80,10 @@ export function useDebouncedSearch<T>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, debounced, trimmed, ...revalidateOn])
 
-  const reset = useCallback(() => setResults([]), [])
+  const reset = useCallback(() => {
+    setResults([])
+    setResultsQuery('')
+  }, [])
 
-  return { results, reset }
+  return { results, resultsQuery, reset }
 }
