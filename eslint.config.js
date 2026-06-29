@@ -4,6 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import blockSubscriptions from './eslint-rules/block-subscriptions.js'
+import preferCallbackSet from './eslint-rules/prefer-callback-set.js'
 
 export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
@@ -29,6 +30,7 @@ export default tseslint.config(
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
       block: blockSubscriptions,
+      'callback-set': preferCallbackSet,
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
@@ -71,14 +73,22 @@ export default tseslint.config(
         message:
           'Opening/toggling UI via window.dispatchEvent(new CustomEvent(...)) is the retired plugin-bus pattern (audit B3). Use openDialog for dialogs/pickers, and a useSyncExternalStore toggle store (createToggleStore) flipped from an action for toggle/open intents. For a genuine broadcast, add `// eslint-disable-next-line no-restricted-syntax -- genuine broadcast: <why>`.',
       }],
+      // Warn (not error) when a Set of function callbacks reinvents the
+      // listener add/notify/unsubscribe loop CallbackSet provides. Soft nudge:
+      // new code keeps re-rolling `new Set<() => void>()` because nothing points
+      // to the shared util. Silence genuine non-listener function-Sets per-site.
+      'callback-set/prefer-callback-set': 'warn',
     },
   },
   {
     // Tests legitimately dispatch synthetic CustomEvents to drive
-    // components, so the B3 guard above doesn't apply to them.
+    // components, so the B3 guard above doesn't apply to them. Tests also
+    // build throwaway function-Sets for mocks/fakes, so the CallbackSet
+    // nudge is off there too.
     files: ['**/test/**/*.{ts,tsx}', '**/*.test.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': 'off',
+      'callback-set/prefer-callback-set': 'off',
     },
   },
 )
