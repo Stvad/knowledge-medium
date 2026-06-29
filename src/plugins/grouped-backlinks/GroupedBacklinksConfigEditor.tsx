@@ -19,6 +19,7 @@ import {
   searchLinkTargetValueCandidates,
   type LinkTargetValueCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
+import { uniqueStrings } from '@/utils/array.js'
 import {
   normalizeGroupedBacklinksConfig,
   type GroupedBacklinksConfig,
@@ -31,9 +32,6 @@ type TagTone = 'high' | 'low' | 'excluded'
 
 const truncate = (text: string, max = 72): string =>
   text.length > max ? `${text.slice(0, max - 3)}...` : text
-
-const uniqueStrings = (values: readonly string[]): string[] =>
-  Array.from(new Set(values.map(value => value.trim()).filter(Boolean)))
 
 const isReadOnlyBlock = (block: unknown): boolean => {
   if (!block || typeof block !== 'object') return false

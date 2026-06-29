@@ -21,9 +21,9 @@ import {
   ROAM_TIMESTAMP_PROP,
   ROAM_URL_PROP,
   uniqueExactStrings,
-  uniqueStrings,
 } from './properties'
 import { computePromotedFromChildren } from './promotion'
+import { uniqueStrings } from '@/utils/array'
 import {
   collectRoamMemoEntries,
   propertiesFromRoamMemo,
