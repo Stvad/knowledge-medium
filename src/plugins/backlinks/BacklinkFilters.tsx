@@ -1,15 +1,15 @@
 import {
   FormEvent,
-  KeyboardEvent,
   MouseEvent,
   ReactElement,
-  useEffect,
   useId,
   useMemo,
   useState,
 } from 'react'
 import { FilterX, Plus, Settings2, X } from 'lucide-react'
 import { truncate } from '@/utils/string'
+import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
+import { useDebouncedSearch } from '@/hooks/useDebouncedSearch.js'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
@@ -190,82 +190,72 @@ const RefPredicateInput = ({
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<RefPredicateKind>('refs')
   const [focused, setFocused] = useState(false)
-  const [results, setResults] = useState<LinkTargetIdCandidate[]>([])
-  const [activeIndex, setActiveIndex] = useState(-1)
   const trimmed = query.trim()
+
+  const { results, resultsQuery, reset: resetResults } = useDebouncedSearch<LinkTargetIdCandidate>({
+    query,
+    delayMs: DEBOUNCE_MS,
+    enabled: Boolean(workspaceId),
+    search: q => searchLinkTargetIdCandidates(repo, {
+      workspaceId,
+      query: q,
+      limit: SEARCH_LIMIT,
+      excludeIds,
+    }),
+    // `setActiveIndex` is the listbox's stable setter, declared just below;
+    // onResults only runs async once results land, so the forward reference
+    // is safe.
+    onResults: () => setActiveIndex(0),
+    revalidateOn: [workspaceId, excludeIds],
+  })
   const popupOpen = focused && trimmed.length > 0 && results.length > 0
-  const activeCandidate = activeIndex >= 0 ? results[activeIndex] : undefined
 
-  useEffect(() => {
-    if (!workspaceId || !trimmed) return
-
-    let cancelled = false
-    const timer = setTimeout(async () => {
-      const nextResults = await searchLinkTargetIdCandidates(repo, {
-        workspaceId,
-        query: trimmed,
-        limit: SEARCH_LIMIT,
-        excludeIds,
-      })
-      if (cancelled) return
-
-      setResults(nextResults)
-      setActiveIndex(nextResults.length > 0 ? 0 : -1)
-    }, DEBOUNCE_MS)
-
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [excludeIds, repo, trimmed, workspaceId])
-
-  const add = async (id?: string) => {
+  const commitId = (id: string) => {
     if (readOnly) return
-    const nextId = id ?? results[0]?.id
-    if (nextId) {
-      onAdd(kind, nextId)
-      setQuery('')
-      setResults([])
-      setActiveIndex(-1)
-      return
-    }
-    if (!trimmed) return
-    const exact = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
-    if (!exact) return
-    onAdd(kind, exact.id)
+    onAdd(kind, id)
     setQuery('')
-    setResults([])
-    setActiveIndex(-1)
+    resetResults()
   }
 
-  const handleSubmit = (event: FormEvent) => {
+  // Resolve the typed text to a block via exact alias lookup. Shared by the
+  // submit button and the keyboard-commit path when the listbox results are
+  // mid-debounce stale, so neither adds a leftover previous-query block.
+  const commitTyped = async () => {
+    if (readOnly || !trimmed) return
+    const exact = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
+    if (exact) commitId(exact.id)
+  }
+
+  const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
+    useAutocompleteListbox({
+      itemCount: results.length,
+      setOpen: setFocused,
+      wrap: true,
+      listboxId,
+      onCommit: index => {
+        const candidate = results[index]
+        if (!candidate) return false
+        commitId(candidate.id)
+        return true
+      },
+    })
+
+  // Submit (the "+" button / Enter without an open list) adds the first
+  // match, falling back to an exact alias lookup for a typed-but-unlisted
+  // name.
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
-    void add()
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'ArrowDown' && results.length > 0) {
-      event.preventDefault()
-      setFocused(true)
-      setActiveIndex(index => (index < 0 ? 0 : (index + 1) % results.length))
+    if (readOnly || !trimmed) return
+    // Prefer the top match, else an exact alias lookup. Only trust `results`
+    // when they were fetched for what's currently typed — during the debounce
+    // window they may still reflect the previous text, so submitting then
+    // should honor the typed name, not a stale top result.
+    const fallbackId = resultsQuery === trimmed ? results[0]?.id : undefined
+    if (fallbackId) {
+      commitId(fallbackId)
       return
     }
-    if (event.key === 'ArrowUp' && results.length > 0) {
-      event.preventDefault()
-      setFocused(true)
-      setActiveIndex(index => (index <= 0 ? results.length - 1 : index - 1))
-      return
-    }
-    if (event.key === 'Enter' && popupOpen && activeCandidate) {
-      event.preventDefault()
-      void add(activeCandidate.id)
-      return
-    }
-    if (event.key === 'Escape') {
-      setQuery('')
-      setResults([])
-      setActiveIndex(-1)
-    }
+    await commitTyped()
   }
 
   return (
@@ -290,14 +280,26 @@ const RefPredicateInput = ({
         onChange={event => {
           const next = event.target.value
           setQuery(next)
-          if (!next.trim()) {
-            setResults([])
-            setActiveIndex(-1)
-          }
+          if (!next.trim()) resetResults()
         }}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        onKeyDown={handleKeyDown}
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            setQuery('')
+            resetResults()
+            return
+          }
+          // Mid-debounce the visible results still belong to the previous text;
+          // commit the typed name (exact lookup) rather than letting the listbox
+          // adopt a stale highlight. A click still commits the row it hit.
+          if (event.key === 'Enter' && resultsQuery !== trimmed) {
+            event.preventDefault()
+            void commitTyped()
+            return
+          }
+          onKeyDown(event)
+        }}
         placeholder={mode === 'include' ? 'Include reference' : 'Exclude reference'}
         className="h-8 min-w-0 text-xs"
         disabled={readOnly}
@@ -305,9 +307,7 @@ const RefPredicateInput = ({
         aria-autocomplete="list"
         aria-expanded={Boolean(popupOpen)}
         aria-controls={popupOpen ? listboxId : undefined}
-        aria-activedescendant={
-          popupOpen && activeCandidate ? `${listboxId}-option-${activeIndex}` : undefined
-        }
+        aria-activedescendant={popupOpen ? activeDescendantId : undefined}
       />
       <Button
         type="submit"
@@ -332,14 +332,7 @@ const RefPredicateInput = ({
           <button
             type="button"
             key={result.id}
-            id={`${listboxId}-option-${index}`}
-            role="option"
-            aria-selected={index === activeIndex}
-            onMouseEnter={() => setActiveIndex(index)}
-            onMouseDown={event => {
-              event.preventDefault()
-              void add(result.id)
-            }}
+            {...getOptionProps(index)}
             className={cn(
               'flex w-full min-w-0 flex-col rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
               index === activeIndex ? 'bg-accent' : '',
