@@ -145,6 +145,9 @@ export function PropertyPicker({
   const localInputRef = useRef<HTMLInputElement | null>(null)
   const [nameInputEl, setNameInputEl] = useState<HTMLInputElement | null>(null)
   const listboxId = useId()
+  // reset() (declared above the listbox hook) clears the highlighted suggestion
+  // through this ref, kept pointed at the hook's stable setter below.
+  const resetActiveIndexRef = useRef<() => void>(() => {})
 
   const excludedNamesSet = useMemo(
     () => new Set(excludedNames ?? []),
@@ -175,6 +178,11 @@ export function PropertyPicker({
     setPropertyName('')
     setPresetId(initialPresetId)
     setSuggestionsOpen(false)
+    // Clear the highlighted suggestion too. This picker stays mounted after
+    // submit() (e.g. in BlockTypeBlockRenderer), so a leftover activeIndex
+    // would make the next property's Enter/arrow start from a stale row.
+    // Routed through a ref because the listbox setter is declared below.
+    resetActiveIndexRef.current()
   }, [initialPresetId])
 
   const submit = useCallback(async (adopted?: AnyPropertySchema) => {
@@ -221,6 +229,10 @@ export function PropertyPicker({
         return true
       },
     })
+
+  useEffect(() => {
+    resetActiveIndexRef.current = () => setActiveIndex(0)
+  })
 
   return (
     <>
