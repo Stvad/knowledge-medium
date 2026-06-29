@@ -1,7 +1,6 @@
 import type { Block } from '@/data/block'
 import {
   ActionConfig,
-  Action,
   ActionContextType,
   ActionContextTypes,
   ActionIcon,
@@ -95,10 +94,6 @@ export const withRecoveredLetterKey = (event: KeyboardEvent): KeyboardEvent => {
     },
   })
 }
-
-export const createAction = <T extends ActionContextType>(config: ActionConfig<T>): Action<T> => ({
-  ...config,
-})
 
 /**
  * Creates a multi-select version of an action that applies the original action to each selected block.
