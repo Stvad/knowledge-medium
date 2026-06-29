@@ -96,7 +96,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // Onboarding seeds first-run content via its own higher-precedence
   // landing resolver, then defers the landing target to daily-notes
   // above. Depends on daily-notes (get-or-create of today's note).
-  onboardingPlugin,
+  onboardingPlugin({repo}),
   leftSidebarPlugin,
   workspaceHeaderPlugin,
   commandPalettePlugin,
