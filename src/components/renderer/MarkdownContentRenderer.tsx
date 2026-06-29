@@ -57,7 +57,11 @@ export function MarkdownContentRenderer({
   const className = containerClassName ?? (inline ? '' : DEFAULT_CONTAINER_CLASS)
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
-  const markdownConfig = resolveMarkdownConfig({block, blockContext})
+  // Pass the reactive `renderData` as `data` so the (React-Compiler-memoized)
+  // resolver recomputes when the snapshot changes. Reading mutable state via
+  // `block.peek()` inside an extension would be captured once and never
+  // refreshed — see the `data` doc on MarkdownRenderContext.
+  const markdownConfig = resolveMarkdownConfig({block, blockContext, data: renderData})
   const components = inline
     ? {...markdownConfig.components, ...inlineComponents}
     : markdownConfig.components

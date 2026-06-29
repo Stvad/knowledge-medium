@@ -9,6 +9,7 @@ import { gfmMarkdownExtension, isExternalHref } from '@/markdown/defaultMarkdown
 const markdownConfig = gfmMarkdownExtension({
   block: {} as Block,
   blockContext: {},
+  data: {content: '', references: [], workspaceId: ''},
 })
 
 const renderMarkdown = (content: string) => {
