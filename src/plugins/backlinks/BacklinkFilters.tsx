@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react'
 import { FilterX, Plus, Settings2, X } from 'lucide-react'
+import { truncate } from '@/utils/string'
 import { useRepo } from '@/context/repo.js'
 import { useHandle } from '@/hooks/block.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
@@ -52,8 +53,6 @@ interface BacklinkFiltersProps {
   readOnly?: boolean
 }
 
-const truncate = (text: string, max = 72): string =>
-  text.length > max ? `${text.slice(0, max - 1)}…` : text
 
 const predicateKey = (p: BlockPredicate): string => JSON.stringify(p)
 
@@ -348,7 +347,7 @@ const RefPredicateInput = ({
           >
             <span className="truncate font-medium">{result.label}</span>
             {result.detail && result.detail !== result.label && (
-              <span className="truncate text-muted-foreground">{truncate(result.detail)}</span>
+              <span className="truncate text-muted-foreground">{truncate(result.detail, 72)}</span>
             )}
           </button>
         ))}
