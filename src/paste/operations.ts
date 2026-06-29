@@ -191,6 +191,65 @@ const resolveRootDestination = async (
   return {rootParentId, rootInsertion, targetChildren}
 }
 
+interface PastePlacementPlan {
+  /** Parsed blocks to create — the absorbed root (if any) is excluded. */
+  blocksToCreate: ParsedBlock[]
+  /** A parsed block's final parentId: absorbed-root children reparent onto
+   *  `target`, parentless blocks go to the resolved root parent. */
+  finalParentId: (block: ParsedBlock) => string
+  /** Order key to assign each created block, by parsed id. Blocks landing
+   *  among a parent's existing children get fresh keys between neighbours;
+   *  blocks whose parent is itself being created keep their parsed orderKey. */
+  orderKeysByParsedId: Map<string, string>
+}
+
+/** Shared placement math for both multiline-paste paths: which blocks to
+ *  create, where each lands, and the order keys for blocks inserted among an
+ *  existing parent's children. The ordering invariants live in the
+ *  keysBetween / insertionForFirstChild primitives this delegates to — this
+ *  only groups blocks by destination parent and assigns the returned keys. */
+const planPastePlacement = async (
+  tx: Tx,
+  target: BlockData,
+  parsedBlocks: readonly ParsedBlock[],
+  absorbedRootId: string | undefined,
+  rootParentId: string,
+  rootInsertion: ExistingParentInsertion,
+  targetChildren: BlockData[],
+): Promise<PastePlacementPlan> => {
+  const blocksToCreate = parsedBlocks.filter(block => block.id !== absorbedRootId)
+  const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
+  const finalParentId = (block: ParsedBlock): string => {
+    if (!block.parentId) return rootParentId
+    if (block.parentId === absorbedRootId) return target.id
+    return block.parentId
+  }
+
+  const existingParentGroups = new Map<string, ParsedBlock[]>()
+  for (const block of blocksToCreate) {
+    const parentId = finalParentId(block)
+    if (createdParsedIds.has(parentId)) continue
+    const group = existingParentGroups.get(parentId) ?? []
+    group.push(block)
+    existingParentGroups.set(parentId, group)
+  }
+
+  const orderKeysByParsedId = new Map<string, string>()
+  for (const [parentId, blocks] of existingParentGroups) {
+    const insertion = parentId === rootParentId
+      ? rootInsertion
+      : insertionForFirstChild(
+        parentId === target.id
+          ? targetChildren[0]?.orderKey
+          : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
+      )
+    const keys = await insertion.keys(blocks.length)
+    blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
+  }
+
+  return {blocksToCreate, finalParentId, orderKeysByParsedId}
+}
+
 export const planEditModeMultilinePaste = (
   pastedText: string,
   currentContent: string,
@@ -276,35 +335,9 @@ export async function pasteMultilineText(
       rootBlocks.push(repo.block(target.id))
     }
 
-    const blocksToCreate = parsed.filter(block => block.id !== absorbedRoot?.id)
-    const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
-    const finalParentId = (block: ParsedBlock): string => {
-      if (!block.parentId) return rootParentId
-      if (block.parentId === absorbedRoot?.id) return target.id
-      return block.parentId
-    }
-
-    const existingParentGroups = new Map<string, ParsedBlock[]>()
-    for (const block of blocksToCreate) {
-      const parentId = finalParentId(block)
-      if (createdParsedIds.has(parentId)) continue
-      const group = existingParentGroups.get(parentId) ?? []
-      group.push(block)
-      existingParentGroups.set(parentId, group)
-    }
-
-    const orderKeysByParsedId = new Map<string, string>()
-    for (const [parentId, blocks] of existingParentGroups) {
-      const insertion = parentId === rootParentId
-        ? rootInsertion
-        : insertionForFirstChild(
-          parentId === target.id
-            ? targetChildren[0]?.orderKey
-            : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
-        )
-      const keys = await insertion.keys(blocks.length)
-      blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
-    }
+    const {blocksToCreate, finalParentId, orderKeysByParsedId} = await planPastePlacement(
+      tx, target, parsed, absorbedRoot?.id, rootParentId, rootInsertion, targetChildren,
+    )
 
     for (const block of blocksToCreate) {
       const parentId = finalParentId(block)
@@ -345,35 +378,9 @@ export async function pasteEditModeMultilineText(
     await tx.update(target.id, {content: plan.targetContent})
     rootBlocks.push(repo.block(target.id))
 
-    const blocksToCreate = plan.parsed.filter(block => block.id !== plan.absorbedRoot.id)
-    const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
-    const finalParentId = (block: ParsedBlock): string => {
-      if (!block.parentId) return rootParentId
-      if (block.parentId === plan.absorbedRoot.id) return target.id
-      return block.parentId
-    }
-
-    const existingParentGroups = new Map<string, ParsedBlock[]>()
-    for (const block of blocksToCreate) {
-      const parentId = finalParentId(block)
-      if (createdParsedIds.has(parentId)) continue
-      const group = existingParentGroups.get(parentId) ?? []
-      group.push(block)
-      existingParentGroups.set(parentId, group)
-    }
-
-    const orderKeysByParsedId = new Map<string, string>()
-    for (const [parentId, blocks] of existingParentGroups) {
-      const insertion = parentId === rootParentId
-        ? rootInsertion
-        : insertionForFirstChild(
-          parentId === target.id
-            ? targetChildren[0]?.orderKey
-            : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
-        )
-      const keys = await insertion.keys(blocks.length)
-      blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
-    }
+    const {blocksToCreate, finalParentId, orderKeysByParsedId} = await planPastePlacement(
+      tx, target, plan.parsed, plan.absorbedRoot.id, rootParentId, rootInsertion, targetChildren,
+    )
 
     const lastCreatedBlock = blocksToCreate.at(-1)
     for (const block of blocksToCreate) {
