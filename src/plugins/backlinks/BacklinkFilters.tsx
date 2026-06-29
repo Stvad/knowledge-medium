@@ -247,13 +247,14 @@ const RefPredicateInput = ({
   // name.
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
-    if (readOnly) return
+    if (readOnly || !trimmed) return
+    // Guard on `trimmed` first so an emptied box never commits a leftover
+    // `results[0]`; then prefer the top match, else an exact alias lookup.
     const fallbackId = results[0]?.id
     if (fallbackId) {
       commitId(fallbackId)
       return
     }
-    if (!trimmed) return
     const exact = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
     if (exact) commitId(exact.id)
   }
