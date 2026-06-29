@@ -22,6 +22,8 @@
  *  margins on layout-positioned content the formula above is uniform
  *  across browsers, so the two can't share an implementation. */
 
+import { CallbackSet } from './callbackSet'
+
 const computeOverlap = (): number => {
   if (typeof window === 'undefined') return 0
   const vv = window.visualViewport
@@ -33,14 +35,10 @@ const computeOverlap = (): number => {
  *  CodeMirror scrollMargins facet on every scroll computation. */
 export const getKeyboardOverlap = (): number => computeOverlap()
 
-type Listener = () => void
-
-const listeners = new Set<Listener>()
+const listeners = new CallbackSet('keyboard-viewport')
 let attached = false
 
-const notify = () => {
-  for (const listener of listeners) listener()
-}
+const notify = (): void => listeners.notify()
 
 const attach = () => {
   if (attached || typeof window === 'undefined') return
@@ -65,11 +63,11 @@ const detach = () => {
  *  Listeners are attached lazily on the first subscription and torn down
  *  once the last one leaves, so an app with no active editors carries no
  *  global listeners. */
-export const subscribeKeyboardViewport = (listener: Listener): (() => void) => {
-  listeners.add(listener)
+export const subscribeKeyboardViewport = (listener: () => void): (() => void) => {
+  const off = listeners.add(listener)
   attach()
   return () => {
-    listeners.delete(listener)
+    off()
     if (listeners.size === 0) detach()
   }
 }
