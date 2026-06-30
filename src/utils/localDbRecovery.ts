@@ -7,7 +7,7 @@
  * never automatic — silently wiping the local DB would lose un-uploaded edits
  * and local history. Always let the user download the old DB first.
  */
-import { deleteLocalSqliteDb, downloadBlob, getRawSqliteDbBlob } from './exportSqliteDb'
+import { deleteLocalSqliteDb, downloadBlob, getRawSqliteDbBackup } from './exportSqliteDb'
 import { closePowerSyncDbIfOpen } from '@/data/repoProvider'
 
 export {
@@ -17,12 +17,15 @@ export {
 } from './localDbCorruption'
 
 /**
- * Download a copy of the user's local `.db` (the corrupt file included) so they
- * can keep it / recover it offline (`sqlite3 .recover`) BEFORE any reset.
+ * Download a copy of the user's local database (the corrupt files included) so
+ * they can keep it / recover it offline (`sqlite3 .recover`) BEFORE any reset.
+ * When crash-recovery siblings (hot journal / WAL) exist, they're bundled with
+ * the `.db` into one `.zip` so the reset doesn't delete anything the backup is
+ * missing; otherwise it's a plain `.db`.
  *
  * Releases any held OPFS sync access handle first (the failed corruption open
  * may still hold one — OPFSCoopSyncVFS releases cooperatively but not on a
- * guaranteed schedule), then reads the raw file directly. Returns the download
+ * guaranteed schedule), then reads the raw files directly. Returns the download
  * filename + byte size.
  */
 export const downloadLocalDbBackup = async (
@@ -37,8 +40,8 @@ export const downloadLocalDbBackup = async (
   } catch (err) {
     console.warn('[db-recovery] closing the connection before backup failed (continuing):', err)
   }
-  const { blob, filename } = await getRawSqliteDbBlob(userId)
-  downloadBlob(blob, filename)
+  const { blob, filename, cleanup } = await getRawSqliteDbBackup(userId)
+  downloadBlob(blob, filename, cleanup)
   return { filename, size: blob.size }
 }
 

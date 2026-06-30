@@ -1,13 +1,36 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { unzipSync } from 'fflate'
 import type { Repo } from '@/data/repo'
 import {
   deleteLocalSqliteDb,
   exportRawSqliteDb,
+  getRawSqliteDbBackup,
   getRawSqliteDbBlob,
   importRawSqliteDb,
 } from './exportSqliteDb'
+
+// Minimal File stand-ins: jsdom's Blob.stream()/arrayBuffer() are unreliable, so
+// the fakes carry their own, letting us drive the real streaming-zip code.
+const fakeFile = (bytes: Uint8Array) => ({
+  size: bytes.byteLength,
+  stream: () => new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes)
+      controller.close()
+    },
+  }),
+})
+const concatChunks = (chunks: Uint8Array[]): Uint8Array => {
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0))
+  let offset = 0
+  for (const c of chunks) {
+    out.set(c, offset)
+    offset += c.byteLength
+  }
+  return out
+}
 
 const originalStorage = navigator.storage
 
@@ -287,6 +310,72 @@ describe('getRawSqliteDbBlob', () => {
     })
 
     await expect(getRawSqliteDbBlob('user-1')).rejects.toThrow(/empty/)
+  })
+})
+
+describe('getRawSqliteDbBackup', () => {
+  it('returns a plain .db when there are no journal siblings', async () => {
+    const dbFile = fakeFile(new Uint8Array([1, 2, 3, 4]))
+    const getFileHandle = vi.fn(async (name: string) => {
+      if (name === 'kmp-v6-user-1.db') return { getFile: async () => dbFile }
+      throw new DOMException('not found', 'NotFoundError') // siblings absent
+    })
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: async () => ({ getFileHandle }) },
+    })
+
+    const result = await getRawSqliteDbBackup('user-1')
+
+    expect(result.contents).toEqual(['kmp-v6-user-1.db'])
+    expect(result.filename).toMatch(/^kmp-v6-user-1-export-\d+\.db$/)
+    expect(result.blob).toBe(dbFile)
+    expect(result.cleanup).toBeUndefined()
+  })
+
+  it('bundles the .db plus existing journal siblings into a .zip with original names', async () => {
+    const dbBytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])
+    const journalBytes = new Uint8Array([9, 9, 9])
+    const files: Record<string, Uint8Array> = {
+      'kmp-v6-user-1.db': dbBytes,
+      'kmp-v6-user-1.db-journal': journalBytes,
+    }
+    const written: Uint8Array[] = []
+    const removeEntry = vi.fn(async () => {})
+    const getFileHandle = vi.fn(async (name: string, opts?: { create?: boolean }) => {
+      if (opts?.create) {
+        // The OPFS temp zip target: capture the streamed bytes, hand them back.
+        return {
+          createWritable: async () => ({
+            write: async (chunk: Uint8Array) => { written.push(chunk.slice()) },
+            close: async () => {},
+          }),
+          getFile: async () => ({ arrayBuffer: async () => concatChunks(written).buffer }),
+        }
+      }
+      if (name in files) return { getFile: async () => fakeFile(files[name]) }
+      throw new DOMException('not found', 'NotFoundError') // -wal / -shm absent
+    })
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {
+        getDirectory: async () => ({ getFileHandle, removeEntry }),
+        estimate: async () => ({ quota: 1e9, usage: 0 }),
+      },
+    })
+
+    const result = await getRawSqliteDbBackup('user-1')
+
+    expect(result.filename).toMatch(/^kmp-v6-user-1-recovery-\d+\.zip$/)
+    expect(result.contents).toEqual(['kmp-v6-user-1.db', 'kmp-v6-user-1.db-journal'])
+    // The bundle is a real, valid zip — round-trip it and check the bytes.
+    const unzipped = unzipSync(new Uint8Array(await result.blob.arrayBuffer()))
+    expect(Object.keys(unzipped).sort()).toEqual([
+      'kmp-v6-user-1.db',
+      'kmp-v6-user-1.db-journal',
+    ])
+    expect(unzipped['kmp-v6-user-1.db']).toEqual(dbBytes)
+    expect(unzipped['kmp-v6-user-1.db-journal']).toEqual(journalBytes)
   })
 })
 

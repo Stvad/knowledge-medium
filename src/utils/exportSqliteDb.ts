@@ -15,6 +15,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
+import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/repoProvider'
 
@@ -22,6 +23,12 @@ export interface RawSqliteDbBlobExport {
   blob: Blob
   filename: string
   cleanup?: () => Promise<void>
+}
+
+export interface RawSqliteDbBackup extends RawSqliteDbBlobExport {
+  /** OPFS names of the files included in the backup (the `.db`, plus any
+   *  crash-recovery siblings). One entry → a plain `.db`; more → a `.zip`. */
+  contents: string[]
 }
 
 export interface RawSqliteDbFileExport {
@@ -48,6 +55,11 @@ type WindowWithSaveFilePicker = typeof globalThis & {
 export function rawSqliteDbExportFilenameForUser(userId: string, now = Date.now()): string {
   const dbFilename = dbFilenameForUser(userId)
   return `${dbFilename.replace(/\.db$/, '')}-export-${now}.db`
+}
+
+export function rawSqliteDbRecoveryZipFilenameForUser(userId: string, now = Date.now()): string {
+  const dbFilename = dbFilenameForUser(userId)
+  return `${dbFilename.replace(/\.db$/, '')}-recovery-${now}.zip`
 }
 
 export function rawSqliteDbExportFilename(repo: Repo, now = Date.now()): string {
@@ -152,6 +164,58 @@ export async function getRawSqliteDbBlob(userId: string): Promise<RawSqliteDbBlo
     throw new Error('The local database file is empty — there is nothing to back up.')
   }
   return { blob, filename: rawSqliteDbExportFilenameForUser(userId) }
+}
+
+/**
+ * Build the recovery backup: the raw `.db` PLUS any crash-recovery siblings that
+ * exist (`-journal` hot rollback journal / `-wal` / `-shm`). The reset path
+ * deletes those siblings, and a hot journal can be exactly what SQLite needs to
+ * roll a corrupt DB back to a recoverable state — so dropping them from the
+ * backup would leave the user's retained copy unrecoverable in that case.
+ *
+ * Common case (incl. the original iPad incident): no siblings → a plain `.db`
+ * the user can hand straight to `sqlite3 .recover`, no unzip step. When siblings
+ * DO exist we bundle the whole fileset into one `.zip` — a single download is
+ * the only reliable way to deliver multiple files on iOS — keeping the original
+ * OPFS names inside the archive so SQLite re-pairs the journal on extract.
+ */
+export async function getRawSqliteDbBackup(userId: string): Promise<RawSqliteDbBackup> {
+  const { blob: dbFile } = await getRawSqliteDbBlob(userId)
+  const dbFilename = dbFilenameForUser(userId)
+  const root = await navigator.storage.getDirectory()
+
+  const siblings: Array<{ name: string; file: File }> = []
+  for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
+    const name = dbFilename + suffix
+    const file = await readOpfsFileIfExists(root, name)
+    if (file && file.size > 0) siblings.push({ name, file })
+  }
+
+  if (siblings.length === 0) {
+    return {
+      blob: dbFile,
+      filename: rawSqliteDbExportFilenameForUser(userId),
+      contents: [dbFilename],
+    }
+  }
+
+  const entries = [{ name: dbFilename, file: dbFile as File }, ...siblings]
+  // Stored (uncompressed) zip ≈ the sum of the inputs; fail fast with sizes
+  // rather than a bare QuotaExceededError mid-stream.
+  const totalBytes = entries.reduce((sum, e) => sum + e.file.size, 0)
+  const freeBytes = await estimateFreeOpfsBytes()
+  if (freeBytes !== undefined && freeBytes < totalBytes) {
+    throw new Error(insufficientOpfsSpaceMessage(totalBytes, freeBytes))
+  }
+
+  const tempName = tempOpfsFilename(dbFilename, 'recovery-zip')
+  const tempHandle = await streamStoredZipToOpfs(root, entries, tempName)
+  return {
+    blob: await tempHandle.getFile(),
+    filename: rawSqliteDbRecoveryZipFilenameForUser(userId),
+    cleanup: () => removeEntryIfExists(root, tempName),
+    contents: entries.map(e => e.name),
+  }
 }
 
 /**
@@ -353,6 +417,72 @@ const removeEntryIfExists = async (
       throw err
     }
   }
+}
+
+const readOpfsFileIfExists = async (
+  root: FileSystemDirectoryHandle,
+  name: string,
+): Promise<File | null> => {
+  try {
+    const handle = await root.getFileHandle(name)
+    return await handle.getFile()
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'NotFoundError') return null
+    throw err
+  }
+}
+
+/**
+ * Stream a STORED (uncompressed) zip of the given OPFS files into a new OPFS
+ * temp file, returning its handle. Streamed (not `zipSync`) because the `.db`
+ * can be gigabytes: each file is piped disk → zip → disk with backpressure, so
+ * we never hold the whole archive in memory. Store mode keeps it CPU-light —
+ * compressing an already-dense SQLite file buys almost nothing. On any failure
+ * the partial temp file is removed before the error propagates.
+ */
+const streamStoredZipToOpfs = async (
+  root: FileSystemDirectoryHandle,
+  entries: Array<{ name: string; file: File }>,
+  tempName: string,
+): Promise<FileSystemFileHandle> => {
+  const tempHandle = await root.getFileHandle(tempName, { create: true })
+  const writable = await tempHandle.createWritable({ keepExistingData: false })
+
+  let writeChain: Promise<void> = Promise.resolve()
+  let zipError: unknown = null
+  const zip = new Zip((err, chunk) => {
+    if (err) {
+      zipError = err
+      return
+    }
+    writeChain = writeChain.then(() => writable.write(chunk))
+  })
+
+  try {
+    for (const { name, file } of entries) {
+      const passthrough = new ZipPassThrough(name)
+      zip.add(passthrough)
+      const reader = file.stream().getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        passthrough.push(value, false)
+        // Backpressure: wait for queued writes so memory stays ~one chunk.
+        await writeChain
+        if (zipError) throw zipError
+      }
+      passthrough.push(new Uint8Array(0), true)
+    }
+    zip.end()
+    await writeChain
+    if (zipError) throw zipError
+    await writable.close()
+  } catch (err) {
+    await writable.abort?.().catch(() => {})
+    await removeEntryIfExists(root, tempName)
+    throw err
+  }
+  return tempHandle
 }
 
 const tempOpfsFilename = (dbFilename: string, purpose: string): string =>

@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   closePowerSyncDbIfOpen: vi.fn(async () => {}),
   deleteLocalSqliteDb: vi.fn(async () => {}),
   downloadBlob: vi.fn(),
-  getRawSqliteDbBlob: vi.fn(),
+  getRawSqliteDbBackup: vi.fn(),
 }))
 
 vi.mock('@/data/repoProvider', () => ({
@@ -13,7 +13,7 @@ vi.mock('@/data/repoProvider', () => ({
 vi.mock('./exportSqliteDb', () => ({
   deleteLocalSqliteDb: mocks.deleteLocalSqliteDb,
   downloadBlob: mocks.downloadBlob,
-  getRawSqliteDbBlob: mocks.getRawSqliteDbBlob,
+  getRawSqliteDbBackup: mocks.getRawSqliteDbBackup,
 }))
 
 import { downloadLocalDbBackup, resetLocalDatabase } from './localDbRecovery'
@@ -22,9 +22,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.closePowerSyncDbIfOpen.mockResolvedValue(undefined)
   mocks.deleteLocalSqliteDb.mockResolvedValue(undefined)
-  mocks.getRawSqliteDbBlob.mockResolvedValue({
+  mocks.getRawSqliteDbBackup.mockResolvedValue({
     blob: new Blob(['x'.repeat(10)]),
     filename: 'kmp-v6-u-export-1.db',
+    contents: ['kmp-v6-u.db'],
   })
 })
 
@@ -56,23 +57,37 @@ describe('resetLocalDatabase', () => {
 })
 
 describe('downloadLocalDbBackup', () => {
-  it('releases the handle, then reads the raw OPFS db and reports filename + size', async () => {
+  it('releases the handle, then builds the backup and reports filename + size', async () => {
     const order: string[] = []
     mocks.closePowerSyncDbIfOpen.mockImplementationOnce(async () => void order.push('close'))
-    mocks.getRawSqliteDbBlob.mockImplementationOnce(async () => {
+    mocks.getRawSqliteDbBackup.mockImplementationOnce(async () => {
       order.push('read')
-      return { blob: new Blob(['x'.repeat(10)]), filename: 'kmp-v6-u-export-1.db' }
+      return { blob: new Blob(['x'.repeat(10)]), filename: 'kmp-v6-u-export-1.db', contents: ['kmp-v6-u.db'] }
     })
 
     const result = await downloadLocalDbBackup('u1')
 
     expect(order).toEqual(['close', 'read'])
     expect(mocks.closePowerSyncDbIfOpen).toHaveBeenCalledWith('u1')
-    expect(mocks.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'kmp-v6-u-export-1.db')
+    expect(mocks.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'kmp-v6-u-export-1.db', undefined)
     expect(result).toEqual({ filename: 'kmp-v6-u-export-1.db', size: 10 })
   })
 
-  it('still reads + downloads the backup when closing the connection fails', async () => {
+  it('passes the temp-zip cleanup through to downloadBlob when bundling siblings', async () => {
+    const cleanup = vi.fn(async () => {})
+    mocks.getRawSqliteDbBackup.mockResolvedValueOnce({
+      blob: new Blob(['zipbytes']),
+      filename: 'kmp-v6-u-recovery-1.zip',
+      cleanup,
+      contents: ['kmp-v6-u.db', 'kmp-v6-u.db-journal'],
+    })
+
+    await downloadLocalDbBackup('u1')
+
+    expect(mocks.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'kmp-v6-u-recovery-1.zip', cleanup)
+  })
+
+  it('still builds the backup when closing the connection fails', async () => {
     // A corrupt connection's close() re-awaits its own rejected init promise and
     // throws; the read-only getFile() does not need the handle released, so the
     // user must still get their bytes (do not deny the backup on a close error).
@@ -80,8 +95,8 @@ describe('downloadLocalDbBackup', () => {
 
     const result = await downloadLocalDbBackup('u1')
 
-    expect(mocks.getRawSqliteDbBlob).toHaveBeenCalledWith('u1')
-    expect(mocks.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'kmp-v6-u-export-1.db')
+    expect(mocks.getRawSqliteDbBackup).toHaveBeenCalledWith('u1')
+    expect(mocks.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'kmp-v6-u-export-1.db', undefined)
     expect(result).toEqual({ filename: 'kmp-v6-u-export-1.db', size: 10 })
   })
 })
