@@ -59,6 +59,7 @@ ios_webkit_debug_proxy -c null:9221,:9222-9322 -F
 Confirm: `curl -s localhost:9221/json` lists the device; `node ios.mjs pages` lists its Safari tabs.
 
 ### Use it
+[`ios.mjs`](ios.mjs) needs **Node ≥22** (uses global `WebSocket` + `fetch` + top-level await).
 ```bash
 node ios.mjs eval '<expr or async IIFE>'   # returns the value (JSON for objects)
 node ios.mjs console <seconds>             # stream console while you reproduce
@@ -91,7 +92,7 @@ Override the tab match (default `ts.net`) with `MATCH=<substr>`.
 
 ## Teardown
 ```bash
-tailscale serve --https=443 off
+tailscale serve reset                  # tears down the serve config (no `off` keyword in current Tailscale)
 pkill -f ios_webkit_debug_proxy
 git checkout vite.config.ts            # drop the temporary allowedHosts tweak
 ```

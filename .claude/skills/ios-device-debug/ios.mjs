@@ -9,6 +9,9 @@
 const LIST = process.env.IWDP || 'http://localhost:9221'
 const MATCH = process.env.MATCH || 'ts.net'
 
+// Fail loud, not with a stack trace: proxy down, no device, etc. all land here.
+process.on('unhandledRejection', e => { console.error('ios.mjs:', e?.message || e); process.exit(1) })
+
 async function findPage() {
   const dev = (await (await fetch(LIST + '/json')).json())[0]
   if (!dev) throw new Error('no device (is the proxy up / iPad connected?)')
@@ -42,15 +45,26 @@ function session(wsUrl) {
   const send = async (method, params = {}) => {
     await targetReady
     const id = ++innerId
-    const p = new Promise(res => innerPending.set(id, res))
-    ws.send(JSON.stringify({
-      id: ++outerId, method: 'Target.sendMessageToTarget',
-      params: { targetId: target.targetId, message: JSON.stringify({ id, method, params }) },
-    }))
-    return p
+    const inner = await new Promise(res => {
+      innerPending.set(id, res)
+      ws.send(JSON.stringify({
+        id: ++outerId, method: 'Target.sendMessageToTarget',
+        params: { targetId: target.targetId, message: JSON.stringify({ id, method, params }) },
+      }))
+    })
+    // Protocol-level failures (bad params, "domain not found", …) come back as
+    // {id, error} with no result — surface them instead of silently returning {}.
+    if (inner.error) { console.error(`PROTOCOL ERROR (${method}):`, JSON.stringify(inner.error)); process.exit(2) }
+    return inner
   }
-  // fall back to the frame target if no page target shows up quickly
-  open.then(() => setTimeout(() => target && resolveTarget(target), 1500))
+  open.then(() => {
+    // Resolve with whatever target arrived (frame if no page target showed up).
+    setTimeout(() => target && resolveTarget(target), 1500)
+    // If NONE arrived, the tab is backgrounded/asleep — fail loud, don't hang.
+    setTimeout(() => {
+      if (!target) { console.error('no inspector target announced — is the app tab foreground and the device awake?'); process.exit(1) }
+    }, 6000)
+  })
   return { ws, open, send, onInner: l => innerListeners.push(l), targetReady }
 }
 
