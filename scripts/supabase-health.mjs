@@ -398,8 +398,25 @@ async function runDbChecks(client) {
   }
 }
 
-const SEV_RANK = { pass: 0, warn: 1, error: 1, fail: 2 }
+const SEV_RANK = { pass: 0, skip: 0, warn: 1, error: 1, fail: 2 }
 const maxStatus = (a, b) => (SEV_RANK[b] > SEV_RANK[a] ? b : a)
+
+// Shared detector wrapper: run fn(), record its result under container.detectors[name]
+// and roll its status into container.status. An error degrades just that detector to
+// `error` + a warn — it never aborts siblings and never reads as clean. `prefix`
+// namespaces the warn channel (integrity.* / attachments.*).
+const makeDetector = (container, prefix) => async (name, fn) => {
+  try {
+    const out = await fn()
+    container.detectors[name] = out
+    container.status = maxStatus(container.status, out.status)
+  } catch (e) {
+    container.detectors[name] = { status: 'error', error: String(e?.message ?? e) }
+    container.status = maxStatus(container.status, 'error')
+    // An errored detector must not read as clean — surface it (warn, no email).
+    warn(`${prefix}.${name}`, `detector errored: ${e?.message ?? e}`)
+  }
+}
 
 // Decide a status for one (actor, workspace) group count and record it on the
 // shared result. STRICT promotes a WARN to a FAIL (and thus to the email
@@ -429,18 +446,7 @@ async function runDataIntegrityChecks(client) {
   result.checks.data_integrity = integrity
   const win = [INTEGRITY_WINDOW_MIN]
 
-  const detector = async (name, fn) => {
-    try {
-      const out = await fn()
-      integrity.detectors[name] = out
-      integrity.status = maxStatus(integrity.status, out.status)
-    } catch (e) {
-      integrity.detectors[name] = { status: 'error', error: String(e?.message ?? e) }
-      integrity.status = maxStatus(integrity.status, 'error')
-      // An errored detector must not read as clean — surface it (warn, no email).
-      warn(`integrity.${name}`, `detector errored: ${e?.message ?? e}`)
-    }
-  }
+  const detector = makeDetector(integrity, 'integrity')
 
   // (1) Mass references-only strip — U events that emptied a non-empty ref set
   // to `[]`, keyed on the count that is STILL empty at window end (durable), so
@@ -610,26 +616,39 @@ async function runAttachmentChecks(client) {
   const attachments = { status: 'pass', window_min: ATTACHMENT_RATE_WINDOW_MIN, detectors: {} }
   result.checks.attachments = attachments
 
-  if ((await client.query(`select to_regclass('storage.objects') as t`)).rows[0].t == null) {
-    attachments.status = 'skip'
-    attachments.reason = 'storage.objects not present (Storage not initialised)'
+  // Init — wrapped so a storage-specific failure degrades to an attributed warn
+  // rather than rejecting Promise.all into the top-level `connection` FAIL (which
+  // would page AND abandon the sibling checks still in flight). Confirms the table
+  // exists, then that this role actually SEES its rows: storage.objects is
+  // RLS-enabled and owned by supabase_storage_admin, and the probe relies on
+  // bypassing RLS (as the L5 detectors do for public tables). If the role is
+  // instead SUBJECT to RLS, both queries below return ZERO rows with no error — a
+  // silently-green check. row_security_active() is true exactly when RLS would
+  // filter the current role, so it turns that blind spot into a loud warn.
+  try {
+    if ((await client.query(`select to_regclass('storage.objects') as t`)).rows[0].t == null) {
+      attachments.status = 'skip'
+      attachments.reason = 'storage.objects not present (Storage not initialised)'
+      return
+    }
+    if ((await client.query(`select row_security_active('storage.objects') as rls`)).rows[0].rls === true) {
+      attachments.status = 'warn'
+      attachments.rls_filtered = true
+      warn('attachments.visibility', 'probe role is subject to RLS on storage.objects — upload volume is under-reported (queries would see 0 rows)')
+      return
+    }
+  } catch (e) {
+    attachments.status = 'error'
+    attachments.detectors._init = { status: 'error', error: String(e?.message ?? e) }
+    warn('attachments._init', `storage.objects probe init failed: ${e?.message ?? e}`)
     return
   }
 
-  const detector = async (name, fn) => {
-    try {
-      const out = await fn()
-      attachments.detectors[name] = out
-      attachments.status = maxStatus(attachments.status, out.status)
-    } catch (e) {
-      attachments.detectors[name] = { status: 'error', error: String(e?.message ?? e) }
-      attachments.status = maxStatus(attachments.status, 'error')
-      // An errored detector must not read as clean — surface it (warn, no email).
-      warn(`attachments.${name}`, `detector errored: ${e?.message ?? e}`)
-    }
-  }
+  const detector = makeDetector(attachments, 'attachments')
 
   // MB WARN/FAIL for one per-user group; pushes the alert and returns the status.
+  // Unlike integrityThreshold this intentionally does NOT honor DATA_INTEGRITY_STRICT:
+  // that toggle is a data-integrity migration-window control, orthogonal to upload volume.
   const mbThreshold = (check, label, mb, { warnAt, failAt }) => {
     if (failAt != null && mb >= failAt) {
       fail(`attachments.${check}`, `${label}: ${round2(mb)} MB >= ${failAt} MB`)
