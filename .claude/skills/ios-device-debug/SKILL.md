@@ -42,7 +42,7 @@ Then in the Tailscale **admin console** (login.tailscale.com/admin/dns) enable *
 tailscale serve --bg http://localhost:5173
 ```
 - Target the **`localhost` hostname, not `127.0.0.1`.** Vite dev binds `[::1]:5173` (IPv6-only); serve's IPv4 default → `502`, and a bracketed `[::1]` literal → serve mangles it (`unknown proxy destination`). `localhost` resolves to `::1` and works.
-- Add `server.allowedHosts: ['.ts.net']` to `vite.config.ts` or the tunnel host gets **"Blocked request"** (Vite's DNS-rebinding guard). **Dev-only — don't commit it.**
+- Run the dev server with **`VITE_TUNNEL=1 yarn dev`** — that flips on the committed, env-gated `server.allowedHosts: ['.ts.net']` in `vite.config.ts`. Without it the tunnel host gets **"Blocked request"** (Vite's DNS-rebinding guard). It's off by default, so a normal `yarn dev` is unaffected.
 - Sanity-check from the Mac (Homebrew `tailscaled` doesn't wire MagicDNS into the macOS resolver, so force-resolve):
   ```bash
   curl -s --resolve <your-machine>.<tailnet>.ts.net:443:$(tailscale ip -4 | head -1) \
@@ -94,8 +94,8 @@ Override the tab match (default `ts.net`) with `MATCH=<substr>`.
 ```bash
 tailscale serve reset                  # tears down the serve config (no `off` keyword in current Tailscale)
 pkill -f ios_webkit_debug_proxy
-git checkout vite.config.ts            # drop the temporary allowedHosts tweak
 ```
+(Nothing to revert in `vite.config.ts` — the `allowedHosts` allowance is committed and gated behind `VITE_TUNNEL`, off unless you set it.)
 
 ---
 
