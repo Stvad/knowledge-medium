@@ -2,7 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Repo } from '@/data/repo'
-import { exportRawSqliteDb, importRawSqliteDb } from './exportSqliteDb'
+import {
+  deleteLocalSqliteDb,
+  exportRawSqliteDb,
+  getRawSqliteDbBlob,
+  importRawSqliteDb,
+} from './exportSqliteDb'
 
 const originalStorage = navigator.storage
 
@@ -256,3 +261,55 @@ const fileWithStream = (parts: BlobPart[], name: string): File => {
   })
   return file
 }
+
+describe('getRawSqliteDbBlob', () => {
+  it('reads the raw OPFS .db directly (no read lock) into a blob', async () => {
+    const dbFile = new File(['raw-db-bytes'], 'kmp-v6-user-1.db')
+    const getFileHandle = vi.fn(async () => ({ getFile: vi.fn(async () => dbFile) }))
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: vi.fn(async () => ({ getFileHandle })) },
+    })
+
+    const result = await getRawSqliteDbBlob('user-1')
+
+    expect(getFileHandle).toHaveBeenCalledWith('kmp-v6-user-1.db')
+    expect(result.blob).toBe(dbFile)
+    expect(result.filename).toMatch(/^kmp-v6-user-1-export-\d+\.db$/)
+  })
+})
+
+describe('deleteLocalSqliteDb', () => {
+  it('removes the .db plus its -journal/-wal/-shm siblings, nothing else', async () => {
+    const removeEntry = vi.fn<(name: string) => Promise<void>>(async () => {})
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: vi.fn(async () => ({ removeEntry })) },
+    })
+
+    await deleteLocalSqliteDb('user-1')
+
+    const removed = removeEntry.mock.calls.map(c => c[0])
+    expect(removed).toEqual([
+      'kmp-v6-user-1.db',
+      'kmp-v6-user-1.db-journal',
+      'kmp-v6-user-1.db-wal',
+      'kmp-v6-user-1.db-shm',
+    ])
+  })
+
+  it('tolerates a missing file (NotFoundError) and keeps deleting the rest', async () => {
+    const removeEntry = vi.fn(async (name: string) => {
+      if (name.endsWith('.db')) {
+        throw new DOMException('not found', 'NotFoundError')
+      }
+    })
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: vi.fn(async () => ({ removeEntry })) },
+    })
+
+    await expect(deleteLocalSqliteDb('user-1')).resolves.toBeUndefined()
+    expect(removeEntry).toHaveBeenCalledTimes(4) // .db threw NotFound, siblings still attempted
+  })
+})

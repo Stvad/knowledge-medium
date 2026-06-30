@@ -45,9 +45,13 @@ type WindowWithSaveFilePicker = typeof globalThis & {
   showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>
 }
 
-export function rawSqliteDbExportFilename(repo: Repo, now = Date.now()): string {
-  const dbFilename = dbFilenameForUser(repo.user.id)
+export function rawSqliteDbExportFilenameForUser(userId: string, now = Date.now()): string {
+  const dbFilename = dbFilenameForUser(userId)
   return `${dbFilename.replace(/\.db$/, '')}-export-${now}.db`
+}
+
+export function rawSqliteDbExportFilename(repo: Repo, now = Date.now()): string {
+  return rawSqliteDbExportFilenameForUser(repo.user.id, now)
 }
 
 export async function chooseRawSqliteExportFile(
@@ -126,6 +130,41 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
     blob,
     filename,
     cleanup: () => removeEntryIfExists(root, snapshotName),
+  }
+}
+
+/**
+ * Read the user's raw OPFS `.db` directly into a Blob, WITHOUT a PowerSync read
+ * lock. Use only when there is no live connection to lock — the
+ * corruption-recovery path, where the DB failed to open so nothing is writing
+ * the file. For a live DB use `exportRawSqliteDb`, which snapshots under the
+ * adapter lock.
+ */
+export async function getRawSqliteDbBlob(userId: string): Promise<RawSqliteDbBlobExport> {
+  const dbFilename = dbFilenameForUser(userId)
+  const root = await navigator.storage.getDirectory()
+  const handle = await root.getFileHandle(dbFilename)
+  const blob = await handle.getFile()
+  return { blob, filename: rawSqliteDbExportFilenameForUser(userId) }
+}
+
+/**
+ * Delete the user's local SQLite files from OPFS — the `.db` plus its
+ * `-journal` / `-wal` / `-shm` siblings. Leaves everything else intact:
+ * IndexedDB (e2ee workspace keys), the auth session, and the OPFS `assets/`
+ * media tree. The OPFSCoopSyncVFS `.ahp-*` access-handle pools are left for the
+ * next VFS init to reclaim (its initialize step drops stale pools whose lock is
+ * free), so a fresh PowerSync init re-creates an empty DB and re-syncs.
+ *
+ * The caller MUST close the PowerSync connection first (release the OPFS sync
+ * access handle) — otherwise `removeEntry` can throw on the locked `.db`.
+ */
+export async function deleteLocalSqliteDb(userId: string): Promise<void> {
+  const dbFilename = dbFilenameForUser(userId)
+  const root = await navigator.storage.getDirectory()
+  await removeEntryIfExists(root, dbFilename)
+  for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
+    await removeEntryIfExists(root, dbFilename + suffix)
   }
 }
 

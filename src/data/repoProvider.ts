@@ -59,6 +59,7 @@ import {
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
@@ -229,7 +230,15 @@ export const ensurePowerSyncReady = async (
     initPromise = initializePowerSyncDb(db)
     initPromises.set(userId, initPromise)
   }
-  await initPromise
+  try {
+    await initPromise
+  } catch (error) {
+    // A corrupt local `.db` surfaces here (e.g. "database disk image is
+    // malformed"). Re-throw as a typed, recoverable error carrying the userId
+    // so the bootstrap error boundary can offer Export + Reset. Any other
+    // failure passes through unchanged.
+    throw toLocalDbOpenError(error, userId)
+  }
 
   // The local DB is now mounted for this user — record it as the active account in
   // BOTH modes. The asset byte path (§7.3) + media capture key off getActiveUserId,

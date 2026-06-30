@@ -1,6 +1,8 @@
 import { Button } from '@/components/ui/button'
 import { useSignOut } from '@/components/Login.js'
 import type { FallbackProps } from 'react-error-boundary'
+import { corruptErrorUserId } from '@/utils/localDbCorruption.js'
+import { LocalDbCorruptionFallback } from '@/components/util/LocalDbCorruptionFallback.js'
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
@@ -21,6 +23,18 @@ export function FallbackComponent({error}: FallbackProps) {
 // and PowerSync removes rows the user lost access to, so localStorage is
 // almost always self-healing.
 export function BootstrapErrorFallback({error}: FallbackProps) {
+  // A corrupt local SQLite DB gets its own recovery UI (Export + Reset) — the
+  // generic Reload/Sign out below can't fix a malformed file. See
+  // localDbCorruption.ts for how the error is tagged at the DB-open boundary.
+  const corruptUserId = corruptErrorUserId(error)
+  if (corruptUserId !== null) {
+    return <LocalDbCorruptionFallback userId={corruptUserId} detail={errorMessage(error)} />
+  }
+
+  return <GenericBootstrapErrorFallback error={error} />
+}
+
+function GenericBootstrapErrorFallback({error}: {error: unknown}) {
   const signOut = useSignOut()
 
   const handleSignOut = async () => {
