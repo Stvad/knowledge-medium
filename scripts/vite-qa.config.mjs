@@ -39,6 +39,16 @@ while (
 ) {
   depsRoot = path.dirname(depsRoot)
 }
+// Fail CLOSED. If no ancestor has node_modules/vite, the loop above exits with
+// depsRoot at the filesystem root — allow-listing `/` would re-open the very
+// arbitrary-file-read hole this config exists to prevent. Refuse to start.
+if (!existsSync(path.join(depsRoot, 'node_modules', 'vite'))) {
+  throw new Error(
+    `vite-qa.config: no ancestor of ${worktreeRoot} has node_modules/vite — ` +
+      `refusing to start rather than allow-list the filesystem root. ` +
+      `Run from a worktree nested under an installed checkout.`,
+  )
+}
 
 export default defineConfig(async (env) => {
   const resolved = typeof base === 'function' ? await base(env) : base
