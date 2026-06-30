@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  getBottomEditingInset,
   getKeyboardOverlap,
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
@@ -105,21 +104,5 @@ describe('subscribeKeyboardViewport', () => {
     expect(seen).toHaveBeenCalledTimes(1)
 
     unsub()
-  })
-})
-
-describe('getBottomEditingInset', () => {
-  it('adds the editing toolbar height on top of the keyboard overlap', () => {
-    vi.stubGlobal('innerHeight', 800)
-    installViewport({height: 500}) // 300px keyboard overlap
-    setEditingToolbarHeight(48)
-    expect(getBottomEditingInset()).toBe(348)
-  })
-
-  it('is just the toolbar height when there is no keyboard', () => {
-    vi.stubGlobal('innerHeight', 500)
-    installViewport({height: 500}) // 0px overlap
-    setEditingToolbarHeight(48)
-    expect(getBottomEditingInset()).toBe(48)
   })
 })

@@ -31,8 +31,9 @@ const computeOverlap = (): number => {
   return Math.max(0, Math.round(window.innerHeight - (vv.height + vv.offsetTop)))
 }
 
-/** Current keyboard overlap, recomputed live. Cheap enough to read from a
- *  CodeMirror scrollMargins facet on every scroll computation. */
+/** Current keyboard overlap, recomputed live. Used only to detect whether a
+ *  real on-screen keyboard is up (see keyboardAwareScroll's re-assert gate) —
+ *  NOT as a scroll amount: the keyboard itself is the browser's job. */
 export const getKeyboardOverlap = (): number => computeOverlap()
 
 const listeners = new CallbackSet('keyboard-viewport')
@@ -92,9 +93,3 @@ export const setEditingToolbarHeight = (height: number): void => {
   editingToolbarHeight = next
   notify()
 }
-
-/** Total height obscured at the bottom of the editing surface — the
- *  on-screen keyboard plus the editing toolbar floating above it. This is
- *  the bottom scroll margin needed to land the caret in the clear. */
-export const getBottomEditingInset = (): number =>
-  getKeyboardOverlap() + editingToolbarHeight
