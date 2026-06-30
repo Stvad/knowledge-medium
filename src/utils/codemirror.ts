@@ -153,6 +153,18 @@ export const createMinimalMarkdownConfig = (
         fontSize: "inherit",
         color: "inherit",
         lineHeight: "inherit",
+        // Each block is its own auto-height editor that must never scroll
+        // internally — the surrounding page is the only scroll container.
+        // CodeMirror's base theme makes `.cm-scroller` `overflow: auto`, and
+        // the selection layer reports a few px of phantom scrollHeight beyond
+        // the content (the touch selection handles past the last line). On iOS
+        // WebKit, dragging a multi-line selection through the last line fires a
+        // native scroll-to-selection that scrolls the editor into that phantom
+        // gap and leaves `scrollTop` stuck > 0 — the whole block's text appears
+        // to shift up by those few px. `clip` makes the scroller a non-scroll
+        // container (so scroll-to-selection can't move it) and clips the
+        // overhang. Verified on-device (iPad, iOS 26): the shift is gone.
+        overflow: "clip",
       },
       '.cm-editor': {outline: 'none'},
       '.cm-focused': {outline: 'none'},
