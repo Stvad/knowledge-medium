@@ -2,6 +2,7 @@ import { EditorSelection, type EditorState, type Extension, type SelectionRange,
 import { EditorView, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
+import { insertNewline } from '@codemirror/commands'
 
 /** Produce the change/range spec for one selection range that either
  *  inserts an empty `open`/`close` pair at the cursor or wraps the
@@ -104,23 +105,21 @@ const mdNoQuoteClose = markdownLanguage.data.of({
   }
 });
 
-// Shift+Enter inserts a single soft line break inside the block. We disable
-// CM's defaultKeymap and bind no Enter/Shift-Enter handler, so the break is
-// produced by the native `insertLineBreak` beforeinput. iOS WebKit applies
-// that native break TWICE inside a contentEditable (CM then observes "\n\n"),
-// while desktop applies it once — the source of the iPad double-newline bug.
-// Take the input over: insert exactly one line break and preventDefault so no
-// engine can double it. preventDefault on `beforeinput` IS honoured on iOS
-// (unlike on keydown), verified on-device. Plain Enter (block split) arrives
-// as `insertParagraph` and is owned by the Enter shortcut, so we don't touch it.
+// Shift+Enter inserts a single soft line break inside the block. The block
+// editor (CodeMirrorContentRenderer) disables CM's defaultKeymap and binds no
+// Enter/Shift-Enter handler, so the break is produced by the native
+// `insertLineBreak` beforeinput. iOS WebKit applies that native break TWICE
+// inside a contentEditable (CM then observes "\n\n"), while desktop applies it
+// once — the source of the iPad double-newline bug. Take the input over: insert
+// exactly one line break and preventDefault so no engine can double it.
+// preventDefault on `beforeinput` IS honoured on iOS (unlike on keydown),
+// verified on-device. Plain Enter (block split) arrives as `insertParagraph`
+// and is owned by the Enter shortcut, so we don't touch it.
 export const softLineBreakOnBeforeInput = EditorView.domEventHandlers({
   beforeinput(event, view) {
     if (event.inputType !== 'insertLineBreak') return false
-    if (view.state.readOnly) return false
-    view.dispatch(
-      view.state.replaceSelection(view.state.lineBreak),
-      {scrollIntoView: true, userEvent: 'input'},
-    )
+    if (view.state.readOnly) return false // insertNewline has no read-only guard of its own
+    insertNewline(view)
     event.preventDefault()
     return true
   },
