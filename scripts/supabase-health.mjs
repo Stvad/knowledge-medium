@@ -86,14 +86,27 @@ const DATA_INTEGRITY_STRICT = process.env.DATA_INTEGRITY_STRICT === '1'
 // so re-uploads 409, making created_at a true upload timestamp), and
 // `metadata->>'size'` (the stored byte length — CIPHERTEXT size for e2ee, and the
 // ONLY server-readable size: the media block's `media:size` property is encrypted
-// at rest in e2ee workspaces). We watch two things per user:
-//   * total — cumulative bytes a user has stored (storage-cost backstop)
-//   * rate  — bytes a user uploaded in the rolling window (burst / abuse / the
-//             documented member storage-DoS lever)
+// at rest in e2ee workspaces). We watch two things per user, both over LIVE
+// objects (storage.objects holds only currently-present rows; deletes remove them):
+//   * total — cumulative bytes a user has stored right now (storage-cost backstop)
+//   * rate  — bytes of NEW live objects a user created in the rolling window
+//             (burst / runaway / the documented member storage-DoS lever)
 // WARN-by-default like the L5 detectors; FAIL is the abuse/runaway page. Reads
 // the privileged pooler role, which sees all rows (same cross-tenant assumption
 // the L5 blocks_history detectors already rely on); if RLS ever hid rows the
 // query would return empty, not error — a blind spot shared with L5.
+//
+// BLIND SPOT — upload-churn that self-cleans before the probe. Both detectors
+// read live objects, so a user who uploads a burst and DELETES the keys (writers
+// may delete — see the RLS migration) before the hourly cron leaves no rows and
+// trips nothing. This is by design, not a gap to plug here: what these guard is
+// durable storage cost, and bytes deleted before the probe cost no durable
+// storage — there is nothing to alert on. What it does NOT catch is pure
+// upload-bandwidth churn (repeated upload+delete). The only append-only source
+// is blocks_history (media-block inserts), but the byte size lives in `media:size`
+// inside the encrypted properties_json, so for e2ee workspaces that yields a
+// per-window media-creation COUNT, not bytes — a separate detector with its own
+// thresholds, deliberately not built here.
 //
 // STARTER thresholds — NOT yet baselined against live fleet upload volume (the
 // L5 thresholds were calibrated against 48h of cron runs; do the same here).
@@ -655,9 +668,12 @@ async function runAttachmentChecks(client) {
     `)).rows, 'total_per_user', 'total stored',
       { warnAt: ATTACH_TOTAL_WARN_MB, failAt: ATTACH_TOTAL_FAIL_MB }))
 
-  // (2) Per-user upload RATE over the window — the burst / abuse / storage-DoS
-  // signal. Window is 90m so consecutive hourly runs overlap and never miss a
-  // burst between probes (same reason the L5 window is 90m, not 60m).
+  // (2) Per-user RATE over the window — bytes of NEW live objects created in the
+  // last 90m: the burst / runaway / storage-DoS signal. Window is 90m so
+  // consecutive hourly runs overlap and never miss a burst between probes (same
+  // reason the L5 window is 90m, not 60m). Counts only objects still live at
+  // probe time (see BLIND SPOT above: upload+delete-before-cron self-cleans and
+  // is intentionally not caught — deleted bytes cost no durable storage).
   await detector('rate_per_user', async () =>
     byUser((await client.query(`
       SELECT coalesce(o.owner_id, o.owner::text) AS owner,
