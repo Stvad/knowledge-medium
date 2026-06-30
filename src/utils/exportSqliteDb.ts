@@ -134,17 +134,23 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
 }
 
 /**
- * Read the user's raw OPFS `.db` directly into a Blob, WITHOUT a PowerSync read
- * lock. Use only when there is no live connection to lock — the
- * corruption-recovery path, where the DB failed to open so nothing is writing
- * the file. For a live DB use `exportRawSqliteDb`, which snapshots under the
- * adapter lock.
+ * Read the user's raw OPFS `.db` directly into a Blob (the corrupt bytes
+ * included), WITHOUT a PowerSync read lock. Use only on the corruption-recovery
+ * path, where the caller has already released the connection
+ * (`closePowerSyncDbIfOpen`) so nothing holds the OPFS sync access handle. For a
+ * live DB use `exportRawSqliteDb`, which snapshots under the adapter lock.
+ *
+ * Throws if the file is empty: a zero-byte "backup" is not a backup, and
+ * surfacing it lets the recovery UI warn instead of reporting a false success.
  */
 export async function getRawSqliteDbBlob(userId: string): Promise<RawSqliteDbBlobExport> {
   const dbFilename = dbFilenameForUser(userId)
   const root = await navigator.storage.getDirectory()
   const handle = await root.getFileHandle(dbFilename)
   const blob = await handle.getFile()
+  if (blob.size === 0) {
+    throw new Error('The local database file is empty — there is nothing to back up.')
+  }
   return { blob, filename: rawSqliteDbExportFilenameForUser(userId) }
 }
 
@@ -158,14 +164,34 @@ export async function getRawSqliteDbBlob(userId: string): Promise<RawSqliteDbBlo
  *
  * The caller MUST close the PowerSync connection first (release the OPFS sync
  * access handle) — otherwise `removeEntry` can throw on the locked `.db`.
+ *
+ * Deletes the journal/WAL siblings BEFORE the main `.db`, and if any sibling
+ * can't be removed it throws WITHOUT touching the `.db`. Rationale: a fresh
+ * empty `.db` recreated on the next boot next to a leftover `-wal`/`-journal`
+ * would replay the stale journal and silently re-corrupt (see
+ * `importRawSqliteDb`). A surviving corrupt `.db` is recoverable (retry); a
+ * journal replay onto a fresh DB is not.
  */
 export async function deleteLocalSqliteDb(userId: string): Promise<void> {
   const dbFilename = dbFilenameForUser(userId)
   const root = await navigator.storage.getDirectory()
-  await removeEntryIfExists(root, dbFilename)
-  for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
-    await removeEntryIfExists(root, dbFilename + suffix)
+
+  // Attempt every sibling even if one fails, so a single locked file doesn't
+  // mask the others — then bail before the `.db` if any did fail.
+  const siblingResults = await Promise.allSettled(
+    DB_FILE_SIBLING_SUFFIXES.map(suffix => removeEntryIfExists(root, dbFilename + suffix)),
+  )
+  const siblingFailure = siblingResults.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+  if (siblingFailure) {
+    throw new Error(
+      'Could not delete all local database files — a journal file may be locked by ' +
+      'another open tab of this app. The main database was left in place to avoid ' +
+      're-corruption; close other tabs and try again.',
+      {cause: siblingFailure.reason},
+    )
   }
+
+  await removeEntryIfExists(root, dbFilename)
 }
 
 const BYTES_PER_MIB = 1024 * 1024

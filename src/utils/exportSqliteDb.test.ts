@@ -277,10 +277,21 @@ describe('getRawSqliteDbBlob', () => {
     expect(result.blob).toBe(dbFile)
     expect(result.filename).toMatch(/^kmp-v6-user-1-export-\d+\.db$/)
   })
+
+  it('throws on a 0-byte file instead of reporting a false success', async () => {
+    const emptyFile = new File([], 'kmp-v6-user-1.db')
+    const getFileHandle = vi.fn(async () => ({ getFile: vi.fn(async () => emptyFile) }))
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: vi.fn(async () => ({ getFileHandle })) },
+    })
+
+    await expect(getRawSqliteDbBlob('user-1')).rejects.toThrow(/empty/)
+  })
 })
 
 describe('deleteLocalSqliteDb', () => {
-  it('removes the .db plus its -journal/-wal/-shm siblings, nothing else', async () => {
+  it('removes the -journal/-wal/-shm siblings BEFORE the .db, nothing else', async () => {
     const removeEntry = vi.fn<(name: string) => Promise<void>>(async () => {})
     Object.defineProperty(navigator, 'storage', {
       configurable: true,
@@ -289,20 +300,20 @@ describe('deleteLocalSqliteDb', () => {
 
     await deleteLocalSqliteDb('user-1')
 
+    // Siblings first so the .db is only removed once they're gone — a fresh boot
+    // can never find the .db missing next to a replayable -wal/-journal.
     const removed = removeEntry.mock.calls.map(c => c[0])
     expect(removed).toEqual([
-      'kmp-v6-user-1.db',
       'kmp-v6-user-1.db-journal',
       'kmp-v6-user-1.db-wal',
       'kmp-v6-user-1.db-shm',
+      'kmp-v6-user-1.db',
     ])
   })
 
-  it('tolerates a missing file (NotFoundError) and keeps deleting the rest', async () => {
-    const removeEntry = vi.fn(async (name: string) => {
-      if (name.endsWith('.db')) {
-        throw new DOMException('not found', 'NotFoundError')
-      }
+  it('tolerates missing files (NotFoundError) on siblings and the .db', async () => {
+    const removeEntry = vi.fn<(name: string) => Promise<void>>(async () => {
+      throw new DOMException('not found', 'NotFoundError')
     })
     Object.defineProperty(navigator, 'storage', {
       configurable: true,
@@ -310,6 +321,23 @@ describe('deleteLocalSqliteDb', () => {
     })
 
     await expect(deleteLocalSqliteDb('user-1')).resolves.toBeUndefined()
-    expect(removeEntry).toHaveBeenCalledTimes(4) // .db threw NotFound, siblings still attempted
+    expect(removeEntry).toHaveBeenCalledTimes(4)
+  })
+
+  it('leaves the .db in place (and throws) when a journal sibling cannot be deleted', async () => {
+    const removeEntry = vi.fn<(name: string) => Promise<void>>(async (name) => {
+      if (name.endsWith('-wal')) {
+        throw new DOMException('locked', 'NoModificationAllowedError')
+      }
+    })
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: vi.fn(async () => ({ removeEntry })) },
+    })
+
+    await expect(deleteLocalSqliteDb('user-1')).rejects.toThrow(/locked by another open tab/)
+    // Critical: the main .db must NOT be deleted, or a fresh boot would replay -wal.
+    const removed = removeEntry.mock.calls.map(c => c[0])
+    expect(removed).not.toContain('kmp-v6-user-1.db')
   })
 })

@@ -212,6 +212,24 @@ export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   return db
 }
 
+/**
+ * Close the user's PowerSync connection IF one was already constructed (release
+ * the OPFS sync access handle) and forget it. Unlike `getPowerSyncDb`, this NEVER
+ * constructs a connection — the recovery path is about to delete the `.db`, and
+ * opening a fresh connection to it would re-acquire the very handle we need
+ * released (and re-fail on the corrupt file). No-op when nothing is open.
+ *
+ * Best-effort: a half-opened connection from a failed init may throw on close;
+ * we still drop it from the maps so a later reload re-inits cleanly.
+ */
+export const closePowerSyncDbIfOpen = async (userId: string): Promise<void> => {
+  const existing = dbsByUser.get(userId)
+  dbsByUser.delete(userId)
+  initPromises.delete(userId)
+  if (!existing) return
+  await existing.close()
+}
+
 // `useRemoteSync` is the runtime gate (defaults to the build-time
 // `hasRemoteSyncConfig`). Callers pass `false` when the user opted into
 // local-only mode at login — in that case we still init the local DB +

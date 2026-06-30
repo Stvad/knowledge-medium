@@ -31,6 +31,29 @@ describe('isLocalDbCorruptionError', () => {
     }
   })
 
+  it('does NOT match a benign "malformed X" that is not SQLite corruption', () => {
+    // The substring list must be the specific SQLite phrasings, not a bare
+    // `malformed` — otherwise a malformed-URL/JSON/UTF-8 error surfacing during
+    // init would route the user to a DESTRUCTIVE reset for a healthy DB.
+    for (const msg of [
+      'Failed to construct URL: malformed input',
+      'SyntaxError: malformed JSON response',
+      'malformed UTF-8 data',
+    ]) {
+      expect(isLocalDbCorruptionError(new Error(msg)), msg).toBe(false)
+    }
+  })
+
+  it('walks the cause chain so corruption wrapped behind a generic message still matches', () => {
+    const wrapped = new Error('Failed to initialize database', {
+      cause: new Error('database disk image is malformed'),
+    })
+    expect(isLocalDbCorruptionError(wrapped)).toBe(true)
+    // ...but a generic error with a benign cause still does not match.
+    const benign = new Error('boot failed', { cause: new Error('network down') })
+    expect(isLocalDbCorruptionError(benign)).toBe(false)
+  })
+
   it('handles non-Error values', () => {
     expect(isLocalDbCorruptionError('database disk image is malformed')).toBe(true)
     expect(isLocalDbCorruptionError(null)).toBe(false)
@@ -72,5 +95,12 @@ describe('corruptErrorUserId', () => {
   it('returns null for unrelated errors', () => {
     expect(corruptErrorUserId(new Error('boom'))).toBeNull()
     expect(corruptErrorUserId(null)).toBeNull()
+  })
+
+  it('rejects an empty userId (would resolve the wrong OPFS file)', () => {
+    expect(corruptErrorUserId(new LocalDatabaseCorruptError(''))).toBeNull()
+    expect(
+      corruptErrorUserId({ name: 'LocalDatabaseCorruptError', userId: '', message: 'x' }),
+    ).toBeNull()
   })
 })

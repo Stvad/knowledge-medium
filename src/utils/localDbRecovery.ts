@@ -8,7 +8,7 @@
  * and local history. Always let the user download the old DB first.
  */
 import { deleteLocalSqliteDb, downloadBlob, getRawSqliteDbBlob } from './exportSqliteDb'
-import { getPowerSyncDb } from '@/data/repoProvider'
+import { closePowerSyncDbIfOpen } from '@/data/repoProvider'
 
 export {
   LocalDatabaseCorruptError,
@@ -18,13 +18,17 @@ export {
 
 /**
  * Download a copy of the user's local `.db` (the corrupt file included) so they
- * can keep it / recover it offline (`sqlite3 .recover`) BEFORE any reset. Reads
- * the raw OPFS file directly — no read lock, since the corruption path has no
- * working connection. Returns the download filename + byte size.
+ * can keep it / recover it offline (`sqlite3 .recover`) BEFORE any reset.
+ *
+ * Releases any held OPFS sync access handle first (the failed corruption open
+ * may still hold one — OPFSCoopSyncVFS releases cooperatively but not on a
+ * guaranteed schedule), then reads the raw file directly. Returns the download
+ * filename + byte size.
  */
 export const downloadLocalDbBackup = async (
   userId: string,
 ): Promise<{ filename: string; size: number }> => {
+  await closePowerSyncDbIfOpen(userId)
   const { blob, filename } = await getRawSqliteDbBlob(userId)
   downloadBlob(blob, filename)
   return { filename, size: blob.size }
@@ -34,15 +38,20 @@ export const downloadLocalDbBackup = async (
  * Reset the local database: close the (possibly failed) PowerSync connection to
  * release the OPFS sync access handle, then delete only the local SQLite files.
  * The caller reloads afterwards so a fresh PowerSync init opens an empty DB and
- * re-syncs from the server.
+ * (for a remote-sync session) re-syncs from the server.
+ *
+ * If the delete can't fully complete (e.g. another tab still holds the OPFS
+ * handle), `deleteLocalSqliteDb` throws WITHOUT removing the main `.db` — the
+ * caller surfaces that and does NOT reload, so we never boot onto a half-deleted
+ * DB.
  */
 export const resetLocalDatabase = async (userId: string): Promise<void> => {
-  // Best-effort close — mirrors importRawSqliteDb: without releasing the sync
-  // access handle, deleting the .db can throw NoModificationAllowedError.
-  // Tolerate a failed/absent connection (the corruption path may never have
-  // finished opening) and delete anyway.
+  // Release the handle WITHOUT constructing a new connection to the file we're
+  // about to delete (that would re-acquire the handle and re-fail on the corrupt
+  // bytes). Tolerate a failed/absent connection — the corruption path may never
+  // have finished opening.
   try {
-    await getPowerSyncDb(userId).close()
+    await closePowerSyncDbIfOpen(userId)
   } catch (err) {
     console.warn('[db-recovery] closing the connection before reset failed (continuing):', err)
   }

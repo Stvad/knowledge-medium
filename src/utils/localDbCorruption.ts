@@ -14,10 +14,14 @@
 // Substrings SQLite/PowerSync surface when the `.db` bytes can't be opened
 // because they're structurally invalid — NOT transient (busy/locked) and NOT
 // access-denied (private-browsing OPFS block, handled separately). Matched
-// case-insensitively against the error message. Kept narrow on purpose: this
-// only runs at the DB-open boundary, where every error is database-related.
+// case-insensitively. Each entry is the SPECIFIC SQLite phrasing, not a bare
+// token: a routing decision here can lead the user to a DESTRUCTIVE reset, so a
+// benign "malformed URL" / "malformed JSON" surfacing during init must NOT match
+// (the bare token `malformed` would). These two are the only "malformed" emits
+// from SQLite (`SQLITE_CORRUPT`).
 const CORRUPTION_SUBSTRINGS = [
-  'malformed', // "database disk image is malformed", "malformed database schema"
+  'disk image is malformed', // "database disk image is malformed"
+  'malformed database schema', // "malformed database schema (...)"
   'not a database', // SQLITE_NOTADB: "file is not a database" / "...or is not a database"
   'database corruption',
   'sqlite_corrupt',
@@ -27,9 +31,24 @@ const CORRUPTION_SUBSTRINGS = [
 const messageOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
 
+// The SQLite corruption text doesn't always reach us on the top-level `.message`
+// — PowerSync/app layers can rethrow with a generic outer message and the real
+// error on `.cause` (e.g. `new Error('boot failed', { cause: sqliteError })`).
+// Concatenate the whole cause chain (bounded) so substring-matching sees it.
+const messageChainOf = (error: unknown, depth = 5): string => {
+  if (depth <= 0 || error === null || error === undefined) return ''
+  if (error instanceof Error) {
+    const cause = (error as { cause?: unknown }).cause
+    return cause === undefined
+      ? error.message
+      : `${error.message}\n${messageChainOf(cause, depth - 1)}`
+  }
+  return String(error)
+}
+
 /** True when `error` reads like an unrecoverable SQLite-corruption open failure. */
 export const isLocalDbCorruptionError = (error: unknown): boolean => {
-  const msg = messageOf(error).toLowerCase()
+  const msg = messageChainOf(error).toLowerCase()
   return CORRUPTION_SUBSTRINGS.some(s => msg.includes(s))
 }
 
@@ -55,12 +74,18 @@ export class LocalDatabaseCorruptError extends Error {
  * userId, or `null` if `error` isn't a wrapped corruption error.
  */
 export const corruptErrorUserId = (error: unknown): string | null => {
-  if (error instanceof LocalDatabaseCorruptError) return error.userId
+  // A non-empty userId is required: downstream resolves the OPFS `.db` from it
+  // (`dbFilenameForUser('')` → `kmp-v6-.db`), so an empty id would back up /
+  // delete the wrong file. Fall through to the generic boundary instead.
+  if (error instanceof LocalDatabaseCorruptError) {
+    return error.userId.length > 0 ? error.userId : null
+  }
   if (
     typeof error === 'object' &&
     error !== null &&
     (error as { name?: unknown }).name === 'LocalDatabaseCorruptError' &&
-    typeof (error as { userId?: unknown }).userId === 'string'
+    typeof (error as { userId?: unknown }).userId === 'string' &&
+    (error as { userId: string }).userId.length > 0
   ) {
     return (error as { userId: string }).userId
   }
