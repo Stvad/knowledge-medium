@@ -11,6 +11,7 @@ import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
 import { useActiveContextsState, editorViewFromActiveContexts } from '@/shortcuts/ActiveContexts.js'
 import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { actionRuntimeKey } from '@/shortcuts/effectiveActions.js'
 import {
   type ActionConfig,
   type ShortcutBinding,
@@ -130,17 +131,20 @@ export function CommandPalette() {
               {actionsInGroup.map((action: ActionConfig) => {
                 const bindings = bindingsFor(action)
                 const shortcutKeys = formatShortcutKeys(bindings)
+                // cmdk tracks selection by `value`, so it MUST be unique across
+                // the whole list, and a bare `action.id` is not: a description
+                // can be shared (ArrowUp/ArrowLeft "move to previous block" CM
+                // nav), and an id can be shared by distinct actions live in
+                // different contexts at once (global `undo`/`redo` + vim
+                // normal-mode `undo`/`redo`). A duplicate value makes cmdk
+                // highlight both rows and loop arrow-nav between them, so key on
+                // the context-qualified runtime key. `keywords` keeps the human
+                // group/description text searchable; onSelect runs the bare id.
+                const itemKey = actionRuntimeKey(action)
                 return (
                   <CommandItem
-                    key={action.id}
-                    // cmdk tracks selection by `value`, so it MUST be unique —
-                    // two actions can share a description (e.g. the ArrowUp vs
-                    // ArrowLeft "move to previous block" CM-nav pair), and a
-                    // shared value makes cmdk highlight both at once and loop
-                    // arrow-nav between them. Key on the unique action id and
-                    // hand the human text to `keywords` so search still matches
-                    // the group/description.
-                    value={action.id}
+                    key={itemKey}
+                    value={itemKey}
                     keywords={[groupHeading, action.description]}
                     onSelect={() => runCommand(action.id)}
                     className="flex justify-between items-center"
