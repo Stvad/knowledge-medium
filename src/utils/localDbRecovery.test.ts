@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   closePowerSyncDbIfOpen: vi.fn(async () => {}),
   deleteLocalSqliteDb: vi.fn(async () => {}),
+  removeRecoveryBackupTemps: vi.fn(async () => {}),
   downloadBlob: vi.fn(),
   getRawSqliteDbBackup: vi.fn(),
 }))
@@ -12,6 +13,7 @@ vi.mock('@/data/repoProvider', () => ({
 }))
 vi.mock('./exportSqliteDb', () => ({
   deleteLocalSqliteDb: mocks.deleteLocalSqliteDb,
+  removeRecoveryBackupTemps: mocks.removeRecoveryBackupTemps,
   downloadBlob: mocks.downloadBlob,
   getRawSqliteDbBackup: mocks.getRawSqliteDbBackup,
 }))
@@ -22,6 +24,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.closePowerSyncDbIfOpen.mockResolvedValue(undefined)
   mocks.deleteLocalSqliteDb.mockResolvedValue(undefined)
+  mocks.removeRecoveryBackupTemps.mockResolvedValue(undefined)
   mocks.getRawSqliteDbBackup.mockResolvedValue({
     blob: new Blob(['x'.repeat(10)]),
     filename: 'kmp-v6-u-export-1.db',
@@ -53,6 +56,17 @@ describe('resetLocalDatabase', () => {
   it('propagates a delete failure (caller must not reload onto a half-deleted DB)', async () => {
     mocks.deleteLocalSqliteDb.mockRejectedValueOnce(new Error('a journal file may be locked'))
     await expect(resetLocalDatabase('u1')).rejects.toThrow(/journal file may be locked/)
+  })
+
+  it('clears leftover recovery-backup temp files (the reload would orphan them)', async () => {
+    await resetLocalDatabase('u1')
+    expect(mocks.removeRecoveryBackupTemps).toHaveBeenCalledWith('u1')
+  })
+
+  it('still deletes the DB when clearing temp files fails', async () => {
+    mocks.removeRecoveryBackupTemps.mockRejectedValueOnce(new Error('list failed'))
+    await expect(resetLocalDatabase('u1')).resolves.toBeUndefined()
+    expect(mocks.deleteLocalSqliteDb).toHaveBeenCalledWith('u1')
   })
 })
 

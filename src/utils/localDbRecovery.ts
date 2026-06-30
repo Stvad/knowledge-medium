@@ -7,7 +7,12 @@
  * never automatic — silently wiping the local DB would lose un-uploaded edits
  * and local history. Always let the user download the old DB first.
  */
-import { deleteLocalSqliteDb, downloadBlob, getRawSqliteDbBackup } from './exportSqliteDb'
+import {
+  deleteLocalSqliteDb,
+  downloadBlob,
+  getRawSqliteDbBackup,
+  removeRecoveryBackupTemps,
+} from './exportSqliteDb'
 import { closePowerSyncDbIfOpen } from '@/data/repoProvider'
 
 export {
@@ -65,6 +70,14 @@ export const resetLocalDatabase = async (userId: string): Promise<void> => {
     await closePowerSyncDbIfOpen(userId)
   } catch (err) {
     console.warn('[db-recovery] closing the connection before reset failed (continuing):', err)
+  }
+  // Reclaim any recovery-backup `.zip` temp BEFORE the caller reloads — the
+  // reload cancels downloadBlob's delayed cleanup timer, which would leak a
+  // full-size temp. Best-effort; never block the reset on a cleanup failure.
+  try {
+    await removeRecoveryBackupTemps(userId)
+  } catch (err) {
+    console.warn('[db-recovery] clearing recovery temp files failed (continuing):', err)
   }
   await deleteLocalSqliteDb(userId)
 }

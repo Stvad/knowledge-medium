@@ -258,6 +258,25 @@ export async function deleteLocalSqliteDb(userId: string): Promise<void> {
   await removeEntryIfExists(root, dbFilename)
 }
 
+/**
+ * Remove any leftover recovery-backup `.zip` temp files for this user. The
+ * recovery backup streams a full-size zip into an OPFS temp and relies on
+ * `downloadBlob`'s delayed cleanup timer — but the reset path reloads the page,
+ * which cancels that timer and would otherwise leak gigabytes of OPFS quota. The
+ * reset calls this before reloading; it's safe to drop the temp because the
+ * recovery UI only unlocks reset after the user confirmed the download saved.
+ * Best-effort and idempotent.
+ */
+export async function removeRecoveryBackupTemps(userId: string): Promise<void> {
+  const prefix = `.${dbFilenameForUser(userId)}.recovery-zip-`
+  const root = await navigator.storage.getDirectory()
+  const stale: string[] = []
+  for await (const name of root.keys()) {
+    if (name.startsWith(prefix) && name.endsWith('.tmp')) stale.push(name)
+  }
+  await Promise.all(stale.map(name => removeEntryIfExists(root, name)))
+}
+
 const BYTES_PER_MIB = 1024 * 1024
 
 const estimateFreeOpfsBytes = async (): Promise<number | undefined> => {

@@ -9,6 +9,7 @@ import {
   getRawSqliteDbBackup,
   getRawSqliteDbBlob,
   importRawSqliteDb,
+  removeRecoveryBackupTemps,
 } from './exportSqliteDb'
 
 // Minimal File stand-ins: jsdom's Blob.stream()/arrayBuffer() are unreliable, so
@@ -376,6 +377,36 @@ describe('getRawSqliteDbBackup', () => {
     ])
     expect(unzipped['kmp-v6-user-1.db']).toEqual(dbBytes)
     expect(unzipped['kmp-v6-user-1.db-journal']).toEqual(journalBytes)
+  })
+})
+
+describe('removeRecoveryBackupTemps', () => {
+  it('removes only this user\'s recovery-zip temp files, nothing else', async () => {
+    const names = [
+      '.kmp-v6-user-1.db.recovery-zip-123-abc.tmp', // match
+      '.kmp-v6-user-1.db.recovery-zip-456-def.tmp', // match
+      '.kmp-v6-user-1.db.export-snapshot-1-x.tmp', // different purpose → keep
+      '.kmp-v6-user-2.db.recovery-zip-1-y.tmp', // other user → keep
+      'kmp-v6-user-1.db', // the db itself → keep
+    ]
+    const removed: string[] = []
+    const removeEntry = vi.fn(async (n: string) => { removed.push(n) })
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {
+        getDirectory: async () => ({
+          keys: async function* () { for (const n of names) yield n },
+          removeEntry,
+        }),
+      },
+    })
+
+    await removeRecoveryBackupTemps('user-1')
+
+    expect(removed.sort()).toEqual([
+      '.kmp-v6-user-1.db.recovery-zip-123-abc.tmp',
+      '.kmp-v6-user-1.db.recovery-zip-456-def.tmp',
+    ])
   })
 })
 
