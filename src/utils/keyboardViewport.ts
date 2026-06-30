@@ -36,6 +36,12 @@ const computeOverlap = (): number => {
  *  NOT as a scroll amount: the keyboard itself is the browser's job. */
 export const getKeyboardOverlap = (): number => computeOverlap()
 
+/** The visual viewport's current height in CSS px (0 when unavailable). The
+ *  geometry signal keyboardAwareScroll compares to tell a keyboard open/close
+ *  (height changed) apart from a pure scroll (offset moved, height same). */
+export const getVisualViewportHeight = (): number =>
+  typeof window === 'undefined' ? 0 : Math.round(window.visualViewport?.height ?? 0)
+
 const listeners = new CallbackSet('keyboard-viewport')
 let attached = false
 

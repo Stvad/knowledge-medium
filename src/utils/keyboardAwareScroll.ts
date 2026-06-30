@@ -4,6 +4,7 @@ import { completionStatus } from '@codemirror/autocomplete'
 import {
   getEditingToolbarHeight,
   getKeyboardOverlap,
+  getVisualViewportHeight,
   subscribeKeyboardViewport,
 } from './keyboardViewport.js'
 
@@ -29,7 +30,16 @@ const MIN_KEYBOARD_OVERLAP = 60
  *  2. There must actually be something to clear — a real keyboard
  *     (overlap ≥ MIN) or a mounted toolbar. The toolbar height is only nonzero
  *     while the toolbar is rendered, so it's a reliable signal even on Chrome
- *     Android's resizes-content path where the keyboard overlap stays 0. */
+ *     Android's resizes-content path where the keyboard overlap stays 0.
+ *     (`keyboardOverlap` is derived from `window.innerHeight`, which iOS can
+ *     under-report in Stage Manager + scroll — but the toolbar arm carries the
+ *     gate whenever editing on mobile, so a corrupt overlap can't disable it.)
+ *
+ *  Accepted edge: the keyboard opening always fires a resize (geometry change),
+ *  so the caret is lifted; but if the browser's FINAL settle nudge arrives as a
+ *  trailing pure `scroll` (height already stable), it's ignored — the preceding
+ *  resize already cleared the caret, so this is a deliberate trade, not a miss.
+ *  Do NOT "fix" it by re-asserting on scroll: that resurrects the 60fps loop. */
 export const shouldReassertCaret = (
   prev: {vvHeight: number; toolbarHeight: number},
   cur: {vvHeight: number; toolbarHeight: number; keyboardOverlap: number},
@@ -44,16 +54,24 @@ export const shouldReassertCaret = (
  *  know about while editing on a touch device.
  *
  *  Division of labor with the browser:
- *  - The on-screen KEYBOARD is the browser's job. Every mobile browser
- *    natively scrolls a focused editable above the keyboard (iOS pans the
- *    visual viewport; Chrome/Android shrinks the layout viewport). We do NOT
- *    re-do that. Earlier this extension fed the keyboard *overlap* into
+ *  - The on-screen KEYBOARD is the browser's job. Mobile browsers natively
+ *    scroll a focused editable above the keyboard (iOS pans the visual
+ *    viewport; Chrome/Android resizes-content shrinks the layout viewport). We
+ *    do NOT re-do that. Earlier this extension fed the keyboard *overlap* into
  *    CodeMirror's scrollMargins, but on iOS that overlap is measured against
  *    a full-height layout viewport while the visible region is the panned
  *    visual viewport — and scrolling the document to satisfy it itself moves
  *    the pan, so CM chased a moving target and the block jittered / scrolled
  *    out of view on every keystroke. Letting the browser own the keyboard
  *    avoids that coordinate fight entirely.
+ *    CAVEAT: verified on iOS (device) and desktop (inert). On *layout-anchored*
+ *    Android browsers (Edge / Samsung Internet) the layout viewport stays full
+ *    and the keyboard overlays — if such a browser also does NOT native-scroll
+ *    the focused editable, the caret could sit behind the keyboard (the bug
+ *    this code originally fixed for those browsers by reserving the overlap).
+ *    Unverified there, and not our fleet; if it ever regresses, reintroduce the
+ *    overlap margin gated to a RELIABLE "does the visual viewport pan?" probe
+ *    (NOT the MobileKeyboardToolbar sentinel, which misdetects on iOS).
  *  - The editing TOOLBAR is OUR job. The mobile keyboard toolbar floats
  *    (`position: fixed`) just above the keyboard, so the browser's native
  *    scroll — which only clears the keyboard — leaves the caret behind it.
@@ -133,12 +151,12 @@ export const keyboardAwareScroll = (): Extension => [
         // Seed the geometry baseline with the *current* values so a stream of
         // pure-scroll notifications (no keyboard/toolbar change) can't trigger
         // a spurious first re-assert.
-        this.lastVvHeight = Math.round(window.visualViewport?.height ?? 0)
+        this.lastVvHeight = getVisualViewportHeight()
         this.lastToolbarHeight = getEditingToolbarHeight()
         this.unsubscribe = subscribeKeyboardViewport(() => {
           if (!view.hasFocus) return
           const cur = {
-            vvHeight: Math.round(window.visualViewport?.height ?? 0),
+            vvHeight: getVisualViewportHeight(),
             toolbarHeight: getEditingToolbarHeight(),
             keyboardOverlap: getKeyboardOverlap(),
           }
