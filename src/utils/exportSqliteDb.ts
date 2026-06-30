@@ -15,6 +15,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
+import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/repoProvider'
 
@@ -22,6 +23,12 @@ export interface RawSqliteDbBlobExport {
   blob: Blob
   filename: string
   cleanup?: () => Promise<void>
+}
+
+export interface RawSqliteDbBackup extends RawSqliteDbBlobExport {
+  /** OPFS names of the files included in the backup (the `.db`, plus any
+   *  crash-recovery siblings). One entry → a plain `.db`; more → a `.zip`. */
+  contents: string[]
 }
 
 export interface RawSqliteDbFileExport {
@@ -45,9 +52,18 @@ type WindowWithSaveFilePicker = typeof globalThis & {
   showSaveFilePicker?: (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandle>
 }
 
-export function rawSqliteDbExportFilename(repo: Repo, now = Date.now()): string {
-  const dbFilename = dbFilenameForUser(repo.user.id)
+export function rawSqliteDbExportFilenameForUser(userId: string, now = Date.now()): string {
+  const dbFilename = dbFilenameForUser(userId)
   return `${dbFilename.replace(/\.db$/, '')}-export-${now}.db`
+}
+
+export function rawSqliteDbRecoveryZipFilenameForUser(userId: string, now = Date.now()): string {
+  const dbFilename = dbFilenameForUser(userId)
+  return `${dbFilename.replace(/\.db$/, '')}-recovery-${now}.zip`
+}
+
+export function rawSqliteDbExportFilename(repo: Repo, now = Date.now()): string {
+  return rawSqliteDbExportFilenameForUser(repo.user.id, now)
 }
 
 export async function chooseRawSqliteExportFile(
@@ -127,6 +143,135 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
     filename,
     cleanup: () => removeEntryIfExists(root, snapshotName),
   }
+}
+
+/**
+ * Build the recovery backup (the corrupt bytes included), WITHOUT a PowerSync
+ * read lock — use only on the corruption path, where the caller already released
+ * the connection (`closePowerSyncDbIfOpen`) so nothing holds the OPFS handle. For
+ * a live DB use `exportRawSqliteDb`, which snapshots under the adapter lock.
+ *
+ * Includes the raw `.db` PLUS any crash-recovery siblings that have bytes
+ * (`-journal` hot rollback journal / `-wal` / `-shm`). The reset path deletes
+ * those siblings, and a hot journal can be exactly what SQLite needs to roll a
+ * corrupt DB back to a recoverable state — so dropping them from the backup
+ * would leave the user's retained copy unrecoverable in that case. We weigh the
+ * `.db` and the siblings TOGETHER: a 0-byte `.db` next to a non-empty journal
+ * must still back up the journal, not reject as "nothing to back up".
+ *
+ * Single non-empty file (`.db` alone — incl. the original iPad incident) → a
+ * plain `.db` the user can hand straight to `sqlite3 .recover`, no unzip step.
+ * More than one → bundle the fileset into one `.zip` (a single download is the
+ * only reliable way to deliver multiple files on iOS), keeping the original OPFS
+ * names so SQLite re-pairs the journal on extract. Rejects only when there is
+ * genuinely nothing with bytes anywhere.
+ */
+export async function getRawSqliteDbBackup(userId: string): Promise<RawSqliteDbBackup> {
+  const dbFilename = dbFilenameForUser(userId)
+  const root = await navigator.storage.getDirectory()
+
+  const dbFile = await readOpfsFileIfExists(root, dbFilename)
+  const dbEntry = dbFile && dbFile.size > 0 ? { name: dbFilename, file: dbFile } : null
+
+  const siblings: Array<{ name: string; file: File }> = []
+  for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
+    const name = dbFilename + suffix
+    const file = await readOpfsFileIfExists(root, name)
+    if (file && file.size > 0) siblings.push({ name, file })
+  }
+
+  // A zero-byte "backup" is not a backup — but only reject if NOTHING (the `.db`
+  // and every sibling) has bytes, so the recovery UI can warn instead of
+  // reporting a false success.
+  if (!dbEntry && siblings.length === 0) {
+    throw new Error('The local database files are empty — there is nothing to back up.')
+  }
+
+  // Just the `.db` → plain download, no unzip step.
+  if (dbEntry && siblings.length === 0) {
+    return {
+      blob: dbEntry.file,
+      filename: rawSqliteDbExportFilenameForUser(userId),
+      contents: [dbEntry.name],
+    }
+  }
+
+  const entries = [...(dbEntry ? [dbEntry] : []), ...siblings]
+  // Stored (uncompressed) zip ≈ the sum of the inputs; fail fast with sizes
+  // rather than a bare QuotaExceededError mid-stream.
+  const totalBytes = entries.reduce((sum, e) => sum + e.file.size, 0)
+  const freeBytes = await estimateFreeOpfsBytes()
+  if (freeBytes !== undefined && freeBytes < totalBytes) {
+    throw new Error(insufficientOpfsSpaceMessage(totalBytes, freeBytes))
+  }
+
+  const tempName = tempOpfsFilename(dbFilename, 'recovery-zip')
+  const tempHandle = await streamStoredZipToOpfs(root, entries, tempName)
+  return {
+    blob: await tempHandle.getFile(),
+    filename: rawSqliteDbRecoveryZipFilenameForUser(userId),
+    cleanup: () => removeEntryIfExists(root, tempName),
+    contents: entries.map(e => e.name),
+  }
+}
+
+/**
+ * Delete the user's local SQLite files from OPFS — the `.db` plus its
+ * `-journal` / `-wal` / `-shm` siblings. Leaves everything else intact:
+ * IndexedDB (e2ee workspace keys), the auth session, and the OPFS `assets/`
+ * media tree. The OPFSCoopSyncVFS `.ahp-*` access-handle pools are left for the
+ * next VFS init to reclaim (its initialize step drops stale pools whose lock is
+ * free), so a fresh PowerSync init re-creates an empty DB and re-syncs.
+ *
+ * The caller MUST close the PowerSync connection first (release the OPFS sync
+ * access handle) — otherwise `removeEntry` can throw on the locked `.db`.
+ *
+ * Deletes the journal/WAL siblings BEFORE the main `.db`, and if any sibling
+ * can't be removed it throws WITHOUT touching the `.db`. Rationale: a fresh
+ * empty `.db` recreated on the next boot next to a leftover `-wal`/`-journal`
+ * would replay the stale journal and silently re-corrupt (see
+ * `importRawSqliteDb`). A surviving corrupt `.db` is recoverable (retry); a
+ * journal replay onto a fresh DB is not.
+ */
+export async function deleteLocalSqliteDb(userId: string): Promise<void> {
+  const dbFilename = dbFilenameForUser(userId)
+  const root = await navigator.storage.getDirectory()
+
+  // Attempt every sibling even if one fails, so a single locked file doesn't
+  // mask the others — then bail before the `.db` if any did fail.
+  const siblingResults = await Promise.allSettled(
+    DB_FILE_SIBLING_SUFFIXES.map(suffix => removeEntryIfExists(root, dbFilename + suffix)),
+  )
+  const siblingFailure = siblingResults.find((r): r is PromiseRejectedResult => r.status === 'rejected')
+  if (siblingFailure) {
+    throw new Error(
+      'Could not delete all local database files — a journal file may be locked by ' +
+      'another open tab of this app. The main database was left in place to avoid ' +
+      're-corruption; close other tabs and try again.',
+      {cause: siblingFailure.reason},
+    )
+  }
+
+  await removeEntryIfExists(root, dbFilename)
+}
+
+/**
+ * Remove any leftover recovery-backup `.zip` temp files for this user. The
+ * recovery backup streams a full-size zip into an OPFS temp and relies on
+ * `downloadBlob`'s delayed cleanup timer — but the reset path reloads the page,
+ * which cancels that timer and would otherwise leak gigabytes of OPFS quota. The
+ * reset calls this before reloading; it's safe to drop the temp because the
+ * recovery UI only unlocks reset after the user confirmed the download saved.
+ * Best-effort and idempotent.
+ */
+export async function removeRecoveryBackupTemps(userId: string): Promise<void> {
+  const prefix = `.${dbFilenameForUser(userId)}.recovery-zip-`
+  const root = await navigator.storage.getDirectory()
+  const stale: string[] = []
+  for await (const name of root.keys()) {
+    if (name.startsWith(prefix) && name.endsWith('.tmp')) stale.push(name)
+  }
+  await Promise.all(stale.map(name => removeEntryIfExists(root, name)))
 }
 
 const BYTES_PER_MIB = 1024 * 1024
@@ -288,6 +433,72 @@ const removeEntryIfExists = async (
       throw err
     }
   }
+}
+
+const readOpfsFileIfExists = async (
+  root: FileSystemDirectoryHandle,
+  name: string,
+): Promise<File | null> => {
+  try {
+    const handle = await root.getFileHandle(name)
+    return await handle.getFile()
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'NotFoundError') return null
+    throw err
+  }
+}
+
+/**
+ * Stream a STORED (uncompressed) zip of the given OPFS files into a new OPFS
+ * temp file, returning its handle. Streamed (not `zipSync`) because the `.db`
+ * can be gigabytes: each file is piped disk → zip → disk with backpressure, so
+ * we never hold the whole archive in memory. Store mode keeps it CPU-light —
+ * compressing an already-dense SQLite file buys almost nothing. On any failure
+ * the partial temp file is removed before the error propagates.
+ */
+const streamStoredZipToOpfs = async (
+  root: FileSystemDirectoryHandle,
+  entries: Array<{ name: string; file: File }>,
+  tempName: string,
+): Promise<FileSystemFileHandle> => {
+  const tempHandle = await root.getFileHandle(tempName, { create: true })
+  const writable = await tempHandle.createWritable({ keepExistingData: false })
+
+  let writeChain: Promise<void> = Promise.resolve()
+  let zipError: unknown = null
+  const zip = new Zip((err, chunk) => {
+    if (err) {
+      zipError = err
+      return
+    }
+    writeChain = writeChain.then(() => writable.write(chunk))
+  })
+
+  try {
+    for (const { name, file } of entries) {
+      const passthrough = new ZipPassThrough(name)
+      zip.add(passthrough)
+      const reader = file.stream().getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        passthrough.push(value, false)
+        // Backpressure: wait for queued writes so memory stays ~one chunk.
+        await writeChain
+        if (zipError) throw zipError
+      }
+      passthrough.push(new Uint8Array(0), true)
+    }
+    zip.end()
+    await writeChain
+    if (zipError) throw zipError
+    await writable.close()
+  } catch (err) {
+    await writable.abort?.().catch(() => {})
+    await removeEntryIfExists(root, tempName)
+    throw err
+  }
+  return tempHandle
 }
 
 const tempOpfsFilename = (dbFilename: string, purpose: string): string =>

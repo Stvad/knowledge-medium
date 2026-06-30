@@ -59,6 +59,8 @@ import {
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
+import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
+import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
@@ -211,6 +213,26 @@ export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   return db
 }
 
+/**
+ * Close the user's PowerSync connection IF one was already constructed (release
+ * the OPFS sync access handle) and forget it. Unlike `getPowerSyncDb`, this NEVER
+ * constructs a connection — the recovery path is about to delete the `.db`, and
+ * opening a fresh connection to it would re-acquire the very handle we need
+ * released (and re-fail on the corrupt file). No-op when nothing is open.
+ *
+ * A failed-init connection (corrupt DB) needs the adapter released directly —
+ * its high-level close() re-throws the rejected init before freeing the OPFS
+ * handle — so we go through `releasePowerSyncConnection`. We still drop it from
+ * the maps so a later reload re-inits cleanly.
+ */
+export const closePowerSyncDbIfOpen = async (userId: string): Promise<void> => {
+  const existing = dbsByUser.get(userId)
+  dbsByUser.delete(userId)
+  initPromises.delete(userId)
+  if (!existing) return
+  await releasePowerSyncConnection(existing)
+}
+
 // `useRemoteSync` is the runtime gate (defaults to the build-time
 // `hasRemoteSyncConfig`). Callers pass `false` when the user opted into
 // local-only mode at login — in that case we still init the local DB +
@@ -229,7 +251,15 @@ export const ensurePowerSyncReady = async (
     initPromise = initializePowerSyncDb(db)
     initPromises.set(userId, initPromise)
   }
-  await initPromise
+  try {
+    await initPromise
+  } catch (error) {
+    // A corrupt local `.db` surfaces here (e.g. "database disk image is
+    // malformed"). Re-throw as a typed, recoverable error carrying the userId
+    // so the bootstrap error boundary can offer Export + Reset. Any other
+    // failure passes through unchanged.
+    throw toLocalDbOpenError(error, userId)
+  }
 
   // The local DB is now mounted for this user — record it as the active account in
   // BOTH modes. The asset byte path (§7.3) + media capture key off getActiveUserId,
