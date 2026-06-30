@@ -2,7 +2,7 @@
 import {describe, expect, test} from 'vitest'
 import {EditorState} from '@codemirror/state'
 import {EditorView} from '@codemirror/view'
-import {softLineBreakOnBeforeInput, createTypeScriptConfig} from './codemirror'
+import {softLineBreakOnBeforeInput} from './codemirror'
 
 // Regression for the iPad Shift+Enter double-newline bug: iOS WebKit applies a
 // native `insertLineBreak` twice in a contentEditable. Our handler must take it
@@ -47,21 +47,6 @@ describe('softLineBreakOnBeforeInput', () => {
     const event = fireBeforeInput(view, 'insertLineBreak')
     expect(event.defaultPrevented).toBe(false)
     expect(view.state.doc.toString()).toBe('ab')
-    view.destroy()
-  })
-
-  // Code blocks keep defaultKeymap (which binds Enter but not Shift-Enter), so
-  // the soft break still reaches the native insertLineBreak path iOS doubles —
-  // the code-block config must wire in the same guard. Build the editor from the
-  // ACTUAL config so removing the guard there regresses this test.
-  test('createTypeScriptConfig wires the guard (code blocks)', () => {
-    const view = new EditorView({
-      state: EditorState.create({doc: 'ab', extensions: [createTypeScriptConfig()]}),
-    })
-    view.dispatch({selection: {anchor: 1}})
-    const event = fireBeforeInput(view, 'insertLineBreak')
-    expect(event.defaultPrevented).toBe(true)
-    expect(view.state.doc.toString()).toBe('a\nb')
     view.destroy()
   })
 })

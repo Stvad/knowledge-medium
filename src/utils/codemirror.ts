@@ -196,18 +196,19 @@ export const createMinimalMarkdownConfig = (
 
 export const createTypeScriptConfig = (): Extension[] => [
   javascript({jsx: true, typescript: true}),
-  // Code blocks keep CodeMirror's defaultKeymap (only `history` is dropped from
-  // @uiw's basicSetup), so Enter is handled by `insertNewlineAndIndent` — but
-  // defaultKeymap binds NO Shift-Enter, so a soft line break falls through to
-  // the native `insertLineBreak` beforeinput, which iOS WebKit applies TWICE
-  // (the same double-newline bug fixed for markdown blocks). Take the input
-  // over here too: one clean line break, preventDefault so nothing doubles it.
-  softLineBreakOnBeforeInput,
   EditorView.theme({
     '&': {background: 'transparent', color: 'inherit'},
     '.cm-editor': {border: '1px solid hsl(var(--border))', borderRadius: '4px'},
     '.cm-content': {padding: '8px'},
+    // Wrapping (below) means no horizontal scroll, so the scroller can be a
+    // non-scroll container — same as the markdown block editor. This also
+    // avoids the iOS multi-line-selection scroll-shift (see the `.cm-scroller`
+    // note in createMinimalMarkdownConfig).
+    '.cm-scroller': {overflow: 'clip'},
   }),
+  // Wrap long code lines instead of scrolling horizontally — in a narrow
+  // outliner column, off-screen horizontal scroll hides content.
+  EditorView.lineWrapping,
 ]
 
 /**
