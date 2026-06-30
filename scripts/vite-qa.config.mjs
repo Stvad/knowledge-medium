@@ -21,10 +21,15 @@ import base from '../vite.config.ts'
 // Kept as plain .mjs (like webkit-qa.mjs) so `tsc -b` doesn't typecheck it
 // against the app's vite config types.
 //
-//   node node_modules/vite/bin/vite.js \
-//     --config scripts/vite-qa.config.mjs --port 5199 --strictPort
+// Run from the worktree root, pointing node DIRECTLY at the installed Vite
+// binary. The worktree has no node_modules/vite of its own (so the bare
+// `node node_modules/vite/bin/vite.js` exits with MODULE_NOT_FOUND), and Vite's
+// package `exports` don't expose the bin to require.resolve — so derive the
+// checkout that holds it from git. This form works from a worktree or a normal
+// checkout regardless of nesting depth:
 //
-// (run from the worktree root; node resolves vite up to the main checkout.)
+//   node "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/node_modules/vite/bin/vite.js" \
+//     --config scripts/vite-qa.config.mjs --port 5199 --strictPort
 const worktreeRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 // Walk up to the nearest ancestor whose node_modules holds REAL packages (the
 // main checkout, when run from a worktree; the worktree itself for a normal
