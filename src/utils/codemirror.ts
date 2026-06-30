@@ -104,12 +104,35 @@ const mdNoQuoteClose = markdownLanguage.data.of({
   }
 });
 
+// Shift+Enter inserts a single soft line break inside the block. We disable
+// CM's defaultKeymap and bind no Enter/Shift-Enter handler, so the break is
+// produced by the native `insertLineBreak` beforeinput. iOS WebKit applies
+// that native break TWICE inside a contentEditable (CM then observes "\n\n"),
+// while desktop applies it once — the source of the iPad double-newline bug.
+// Take the input over: insert exactly one line break and preventDefault so no
+// engine can double it. preventDefault on `beforeinput` IS honoured on iOS
+// (unlike on keydown), verified on-device. Plain Enter (block split) arrives
+// as `insertParagraph` and is owned by the Enter shortcut, so we don't touch it.
+export const softLineBreakOnBeforeInput = EditorView.domEventHandlers({
+  beforeinput(event, view) {
+    if (event.inputType !== 'insertLineBreak') return false
+    if (view.state.readOnly) return false
+    view.dispatch(
+      view.state.replaceSelection(view.state.lineBreak),
+      {scrollIntoView: true, userEvent: 'input'},
+    )
+    event.preventDefault()
+    return true
+  },
+})
+
 export const createMinimalMarkdownConfig = (
   pluginExtensions: readonly Extension[] = [],
 ): Extension[] => {
   const extensions = [
     markdown({addKeymap: false, base: markdownLanguage}),
     keymap.of(markdownFormattingKeymap),
+    softLineBreakOnBeforeInput,
     mdNoQuoteClose,
     EditorView.theme({
       '&': {
