@@ -146,43 +146,32 @@ export async function exportRawSqliteDb(repo: Repo): Promise<RawSqliteDbBlobExpo
 }
 
 /**
- * Read the user's raw OPFS `.db` directly into a Blob (the corrupt bytes
- * included), WITHOUT a PowerSync read lock. Use only on the corruption-recovery
- * path, where the caller has already released the connection
- * (`closePowerSyncDbIfOpen`) so nothing holds the OPFS sync access handle. For a
- * live DB use `exportRawSqliteDb`, which snapshots under the adapter lock.
+ * Build the recovery backup (the corrupt bytes included), WITHOUT a PowerSync
+ * read lock — use only on the corruption path, where the caller already released
+ * the connection (`closePowerSyncDbIfOpen`) so nothing holds the OPFS handle. For
+ * a live DB use `exportRawSqliteDb`, which snapshots under the adapter lock.
  *
- * Throws if the file is empty: a zero-byte "backup" is not a backup, and
- * surfacing it lets the recovery UI warn instead of reporting a false success.
- */
-export async function getRawSqliteDbBlob(userId: string): Promise<RawSqliteDbBlobExport> {
-  const dbFilename = dbFilenameForUser(userId)
-  const root = await navigator.storage.getDirectory()
-  const handle = await root.getFileHandle(dbFilename)
-  const blob = await handle.getFile()
-  if (blob.size === 0) {
-    throw new Error('The local database file is empty — there is nothing to back up.')
-  }
-  return { blob, filename: rawSqliteDbExportFilenameForUser(userId) }
-}
-
-/**
- * Build the recovery backup: the raw `.db` PLUS any crash-recovery siblings that
- * exist (`-journal` hot rollback journal / `-wal` / `-shm`). The reset path
- * deletes those siblings, and a hot journal can be exactly what SQLite needs to
- * roll a corrupt DB back to a recoverable state — so dropping them from the
- * backup would leave the user's retained copy unrecoverable in that case.
+ * Includes the raw `.db` PLUS any crash-recovery siblings that have bytes
+ * (`-journal` hot rollback journal / `-wal` / `-shm`). The reset path deletes
+ * those siblings, and a hot journal can be exactly what SQLite needs to roll a
+ * corrupt DB back to a recoverable state — so dropping them from the backup
+ * would leave the user's retained copy unrecoverable in that case. We weigh the
+ * `.db` and the siblings TOGETHER: a 0-byte `.db` next to a non-empty journal
+ * must still back up the journal, not reject as "nothing to back up".
  *
- * Common case (incl. the original iPad incident): no siblings → a plain `.db`
- * the user can hand straight to `sqlite3 .recover`, no unzip step. When siblings
- * DO exist we bundle the whole fileset into one `.zip` — a single download is
- * the only reliable way to deliver multiple files on iOS — keeping the original
- * OPFS names inside the archive so SQLite re-pairs the journal on extract.
+ * Single non-empty file (`.db` alone — incl. the original iPad incident) → a
+ * plain `.db` the user can hand straight to `sqlite3 .recover`, no unzip step.
+ * More than one → bundle the fileset into one `.zip` (a single download is the
+ * only reliable way to deliver multiple files on iOS), keeping the original OPFS
+ * names so SQLite re-pairs the journal on extract. Rejects only when there is
+ * genuinely nothing with bytes anywhere.
  */
 export async function getRawSqliteDbBackup(userId: string): Promise<RawSqliteDbBackup> {
-  const { blob: dbFile } = await getRawSqliteDbBlob(userId)
   const dbFilename = dbFilenameForUser(userId)
   const root = await navigator.storage.getDirectory()
+
+  const dbFile = await readOpfsFileIfExists(root, dbFilename)
+  const dbEntry = dbFile && dbFile.size > 0 ? { name: dbFilename, file: dbFile } : null
 
   const siblings: Array<{ name: string; file: File }> = []
   for (const suffix of DB_FILE_SIBLING_SUFFIXES) {
@@ -191,15 +180,23 @@ export async function getRawSqliteDbBackup(userId: string): Promise<RawSqliteDbB
     if (file && file.size > 0) siblings.push({ name, file })
   }
 
-  if (siblings.length === 0) {
+  // A zero-byte "backup" is not a backup — but only reject if NOTHING (the `.db`
+  // and every sibling) has bytes, so the recovery UI can warn instead of
+  // reporting a false success.
+  if (!dbEntry && siblings.length === 0) {
+    throw new Error('The local database files are empty — there is nothing to back up.')
+  }
+
+  // Just the `.db` → plain download, no unzip step.
+  if (dbEntry && siblings.length === 0) {
     return {
-      blob: dbFile,
+      blob: dbEntry.file,
       filename: rawSqliteDbExportFilenameForUser(userId),
-      contents: [dbFilename],
+      contents: [dbEntry.name],
     }
   }
 
-  const entries = [{ name: dbFilename, file: dbFile as File }, ...siblings]
+  const entries = [...(dbEntry ? [dbEntry] : []), ...siblings]
   // Stored (uncompressed) zip ≈ the sum of the inputs; fail fast with sizes
   // rather than a bare QuotaExceededError mid-stream.
   const totalBytes = entries.reduce((sum, e) => sum + e.file.size, 0)

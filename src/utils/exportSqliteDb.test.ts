@@ -7,7 +7,6 @@ import {
   deleteLocalSqliteDb,
   exportRawSqliteDb,
   getRawSqliteDbBackup,
-  getRawSqliteDbBlob,
   importRawSqliteDb,
   removeRecoveryBackupTemps,
 } from './exportSqliteDb'
@@ -286,34 +285,6 @@ const fileWithStream = (parts: BlobPart[], name: string): File => {
   return file
 }
 
-describe('getRawSqliteDbBlob', () => {
-  it('reads the raw OPFS .db directly (no read lock) into a blob', async () => {
-    const dbFile = new File(['raw-db-bytes'], 'kmp-v6-user-1.db')
-    const getFileHandle = vi.fn(async () => ({ getFile: vi.fn(async () => dbFile) }))
-    Object.defineProperty(navigator, 'storage', {
-      configurable: true,
-      value: { getDirectory: vi.fn(async () => ({ getFileHandle })) },
-    })
-
-    const result = await getRawSqliteDbBlob('user-1')
-
-    expect(getFileHandle).toHaveBeenCalledWith('kmp-v6-user-1.db')
-    expect(result.blob).toBe(dbFile)
-    expect(result.filename).toMatch(/^kmp-v6-user-1-export-\d+\.db$/)
-  })
-
-  it('throws on a 0-byte file instead of reporting a false success', async () => {
-    const emptyFile = new File([], 'kmp-v6-user-1.db')
-    const getFileHandle = vi.fn(async () => ({ getFile: vi.fn(async () => emptyFile) }))
-    Object.defineProperty(navigator, 'storage', {
-      configurable: true,
-      value: { getDirectory: vi.fn(async () => ({ getFileHandle })) },
-    })
-
-    await expect(getRawSqliteDbBlob('user-1')).rejects.toThrow(/empty/)
-  })
-})
-
 describe('getRawSqliteDbBackup', () => {
   it('returns a plain .db when there are no journal siblings', async () => {
     const dbFile = fakeFile(new Uint8Array([1, 2, 3, 4]))
@@ -376,6 +347,55 @@ describe('getRawSqliteDbBackup', () => {
       'kmp-v6-user-1.db-journal',
     ])
     expect(unzipped['kmp-v6-user-1.db']).toEqual(dbBytes)
+    expect(unzipped['kmp-v6-user-1.db-journal']).toEqual(journalBytes)
+  })
+
+  it('throws only when the .db AND every sibling are empty', async () => {
+    const getFileHandle = vi.fn(async (name: string) => {
+      if (name === 'kmp-v6-user-1.db') return { getFile: async () => fakeFile(new Uint8Array(0)) }
+      throw new DOMException('not found', 'NotFoundError') // siblings absent
+    })
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: { getDirectory: async () => ({ getFileHandle }) },
+    })
+
+    await expect(getRawSqliteDbBackup('user-1')).rejects.toThrow(/empty/)
+  })
+
+  it('still backs up a non-empty journal when the main .db is 0 bytes', async () => {
+    // The reset deletes the siblings, so an empty .db next to a journal with
+    // recoverable pages must NOT reject — bundle the journal (the .db is omitted).
+    const journalBytes = new Uint8Array([7, 7, 7, 7])
+    const written: Uint8Array[] = []
+    const getFileHandle = vi.fn(async (name: string, opts?: { create?: boolean }) => {
+      if (opts?.create) {
+        return {
+          createWritable: async () => ({
+            write: async (chunk: Uint8Array) => { written.push(chunk.slice()) },
+            close: async () => {},
+          }),
+          getFile: async () => ({ arrayBuffer: async () => concatChunks(written).buffer }),
+        }
+      }
+      if (name === 'kmp-v6-user-1.db') return { getFile: async () => fakeFile(new Uint8Array(0)) }
+      if (name === 'kmp-v6-user-1.db-journal') return { getFile: async () => fakeFile(journalBytes) }
+      throw new DOMException('not found', 'NotFoundError') // -wal / -shm absent
+    })
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {
+        getDirectory: async () => ({ getFileHandle, removeEntry: vi.fn(async () => {}) }),
+        estimate: async () => ({ quota: 1e9, usage: 0 }),
+      },
+    })
+
+    const result = await getRawSqliteDbBackup('user-1')
+
+    expect(result.filename).toMatch(/\.zip$/)
+    expect(result.contents).toEqual(['kmp-v6-user-1.db-journal']) // empty .db excluded
+    const unzipped = unzipSync(new Uint8Array(await result.blob.arrayBuffer()))
+    expect(Object.keys(unzipped)).toEqual(['kmp-v6-user-1.db-journal'])
     expect(unzipped['kmp-v6-user-1.db-journal']).toEqual(journalBytes)
   })
 })
