@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Edit Provenance on the Server — Design</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #171717;
+      --muted: #5f6368;
+      --line: #d6d9de;
+      --code: #f5f6f8;
+      --accent: #0f766e;
+      --accent-soft: #d1faf2;
+      --warn: #b45309;
+      --warn-soft: #fef3c7;
+      --reject: #9f1239;
+      --reject-soft: #ffe4e6;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e8eaed;
+        --muted: #a8adb4;
+        --line: #343941;
+        --code: #20242a;
+        --accent: #5eead4;
+        --accent-soft: #134e4a;
+        --warn: #fbbf24;
+        --warn-soft: #422006;
+        --reject: #fda4af;
+        --reject-soft: #4c0519;
+      }
+    }
+
+    body {
+      margin: 0;
+      color: var(--fg);
+      background: Canvas;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 2rem;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 36px 0 8px;
+      font-size: 1.3rem;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 4px;
+    }
+
+    h3 {
+      margin: 24px 0 6px;
+      font-size: 1.05rem;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    ul, ol {
+      margin: 0 0 16px 20px;
+      padding: 0;
+    }
+
+    li {
+      margin-bottom: 4px;
+    }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 0.08rem 0.25rem;
+      border-radius: 4px;
+      background: var(--code);
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+      font-size: 0.88em;
+      line-height: 1.5;
+    }
+
+    pre code {
+      padding: 0;
+      background: transparent;
+    }
+
+    .lede {
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .decision {
+      border-left: 3px solid var(--accent);
+      padding: 10px 14px;
+      background: var(--accent-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    .decision strong {
+      color: var(--accent);
+    }
+
+    .warn {
+      border-left: 3px solid var(--warn);
+      padding: 10px 14px;
+      background: var(--warn-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    .reject {
+      border-left: 3px solid var(--reject);
+      padding: 10px 14px;
+      background: var(--reject-soft);
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0 18px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px;
+      font-size: 0.95em;
+    }
+
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.85em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .toc {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 22px;
+      background: var(--code);
+      margin: 20px 0 28px;
+    }
+
+    .toc ol {
+      margin: 6px 0 0 18px;
+    }
+
+    .toc li {
+      margin-bottom: 2px;
+    }
+
+    .toc a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .toc a:hover {
+      text-decoration: underline;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.9em;
+      margin: -4px 0 24px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Edit Provenance on the Server</h1>
+    <p class="meta">Status: proposal / discussion artifact — not yet committed to. No code in this PR.</p>
+    <p class="lede">
+      Edit provenance — <em>why</em> a block changed, via what command — lives only on the client
+      today. The question is how to get it off-device. This doc frames that as <strong>one
+      decision</strong> (does the server sequence the log, or not?) with three coherent answers, and
+      recommends <strong>server-as-log</strong>: ship every event through a cheap append path, let
+      the server assign the order, and keep the collapsed block-state upload exactly as is. That
+      reconciles canonical event sourcing with the upload performance the 300K-row Roam import was
+      tuned for — and dissolves the cluster of problems an earlier "client uploads its own ordered
+      log" sketch kept generating.
+    </p>
+
+    <div class="toc">
+      <strong>Contents</strong>
+      <ol>
+        <li><a href="#problem">The problem</a></li>
+        <li><a href="#today">What exists today</a></li>
+        <li><a href="#crux">The crux: a sequencer orders only what it receives</a></li>
+        <li><a href="#transport">Batching ≠ collapsing — the transport-cost split</a></li>
+        <li><a href="#models">Three coherent models</a></li>
+        <li><a href="#proposal">Recommended: server-as-log, full human fidelity</a></li>
+        <li><a href="#compaction">Fidelity vs. volume: run-compaction by class</a></li>
+        <li><a href="#priorart">How the field solves these</a></li>
+        <li><a href="#stalegate">Lessons from the stale-gate saga</a></li>
+        <li><a href="#history">Relationship to <code>blocks_history</code></a></li>
+        <li><a href="#costs">Residual costs &amp; open questions</a></li>
+        <li><a href="#rejected">Rejected / deferred alternatives</a></li>
+        <li><a href="#scope">What this PR is (and isn't)</a></li>
+      </ol>
+    </div>
+
+    <h2 id="problem">1. The problem</h2>
+    <p>
+      The motivating note: <em>"I need to promote the edit provenance command events to the server
+      somehow. We only know things on the client, but they do not know things on the server."</em>
+    </p>
+    <p>
+      When a block changes, the client knows the <em>command</em> behind it — a <code>roam import</code>,
+      a <code>migrate roam:location ref</code> machine op, a genuine content edit, a <code>move</code>,
+      an <code>undo:*</code>. The server knows none of it; it sees only the resulting block row. The
+      Roam timestamp backfill made the gap concrete: to tell a genuine user edit from a machine op it
+      had to join <code>row_events ⋈ command_events</code> against a <em>client replica</em>, because
+      the server had no provenance to query (<code>scripts/roam-ts-backfill/README.md</code>).
+    </p>
+    <p>
+      Goal: fairly <strong>granular</strong> provenance available off-device — durable against device
+      loss, visible to other devices, and (where the workspace is not encrypted) queryable
+      server-side. We do <em>not</em> want to lose machine-edit fidelity wholesale; machine edits are
+      edits.
+    </p>
+
+    <h2 id="today">2. What exists today</h2>
+    <ul>
+      <li>
+        <code>command_events</code> (client-only) — <strong>one row per <code>repo.tx</code></strong>:
+        <code>tx_id</code>, <code>scope</code>, <code>description</code>, <code>mutator_calls</code>,
+        <code>user_id</code>, <code>workspace_id</code> (nullable — NULL on zero-write txs),
+        <code>source</code> (uniformly <code>'user'</code>), <code>created_at</code>. Local
+        <code>repo.tx</code> only — sync-applied writes never go through <code>repo.tx</code>.
+      </li>
+      <li>
+        <code>row_events</code> (client-only) — <strong>N rows per command</strong>, one per block
+        change, with full <code>before_json</code> / <code>after_json</code> and the same
+        <code>tx_id</code>. Fires for both local and sync-applied writes; <code>source</code>
+        (<code>'user'</code> vs <code>'sync'</code>) distinguishes them, and sync-applied rows carry
+        <code>tx_id = NULL</code>.
+      </li>
+      <li>
+        <code>blocks_history</code> (server, migration <code>20260522062437</code>) — a Postgres
+        AFTER-trigger log of every block write that lands, at sync-checkpoint resolution, with
+        <code>semantic_op</code> + <code>changed_columns</code> + <code>actor</code> + before/after
+        diffs, but <strong>no command-level provenance</strong>.
+      </li>
+    </ul>
+    <p>
+      <code>command_events (1) ⋈ row_events (N)</code> on <code>tx_id</code> is already the
+      "one command, a series of block edits, each edit with its own diff" model — an event-sourcing
+      substrate that simply never leaves the device.
+    </p>
+
+    <h2 id="crux">3. The crux: a sequencer orders only what it receives</h2>
+    <p>
+      Canonical event sourcing leans on a <strong>sequencer</strong> — a single authority that assigns
+      each event a global order and identity (Kafka offsets, EventStoreDB's <code>$all</code>,
+      Replicache's server-assigned version). That is the property that makes ordering, identity, and
+      idempotency easy.
+    </p>
+    <p>
+      A first sketch of this doc had the <em>client</em> own the order: upload <code>command_events</code>
+      + <code>row_events</code> keyed by a client-assigned <code>(install_id, seq)</code>, with the
+      server as dumb storage. That shape generated a long tail of problems — colliding ids across
+      resets, no sortable order, wrong cross-install replay, clock-skew inversions, append/authz/atomicity
+      gaps. Every one traces to a single mistake: <strong>asking N peer clients to jointly own a global
+      log without a sequencer.</strong> That's the "incoherent middle" — it takes on the peer model's
+      hard problems (identity, ordering, completeness) <em>and</em> the server model's (atomicity,
+      authz) at once, and solves neither the canonical way.
+    </p>
+    <p>
+      The honest objection to "just make the server the sequencer" is: <strong>the server can only
+      order what it receives, and we deliberately collapse writes before upload</strong> (built for the
+      300K-import performance). If the client merges 50 edits into one block PATCH, the server never
+      sees the other 49 to sequence them. §4 shows why that objection is narrower than it looks.
+    </p>
+
+    <h2 id="transport">4. Batching ≠ collapsing — the transport-cost split</h2>
+    <p>
+      Two independent things the current upload path
+      (<code>compactBlockCrudEntries</code> + <code>apply_block_patches</code>,
+      <code>src/services/powersync.ts</code>) does together:
+    </p>
+    <table>
+      <tr><th>Step</th><th>What it does</th><th>Property</th></tr>
+      <tr><td><strong>Batching</strong></td><td>Many ops in one round trip (the RPC takes an array)</td><td>Performance — <strong>lossless</strong></td></tr>
+      <tr><td><strong>Collapsing</strong></td><td>Merge 50 edits to one row into one PATCH</td><td>Discards intermediate edits — <strong>lossy</strong></td></tr>
+    </table>
+    <p>
+      Collapsing was built for <strong>upload throughput</strong> (the import was slow), and its cost
+      target is <em>block-table op-count and per-row <code>UPDATE</code> amplification</em>. Critically,
+      "we don't ship every change" is a property of the <strong>block-state transport</strong>, not a
+      law about events:
+    </p>
+    <ul>
+      <li>
+        <strong>Block state is expensive un-collapsed</strong> — each version = a server
+        <code>UPDATE</code> (row rewrite, index churn, history-trigger fire). Keep collapsing it;
+        the live row only needs its final value.
+      </li>
+      <li>
+        <strong>Events are cheap in full</strong> — each = an immutable <code>INSERT</code>. A bulk
+        append of N rows is one statement: no row rewrite, no hot-row contention, batchable into a
+        few round trips. The amplification collapse protects against <em>isn't incurred by appends.</em>
+      </li>
+    </ul>
+    <div class="decision">
+      <strong>So you can ship every change — just not as block <code>UPDATE</code>s.</strong> Send the
+      full event stream via the cheap append path and let the <em>server</em> assign the order on
+      receipt. Now the server genuinely is the sequencer for the fine-grained stream (canonical
+      ordering/identity/atomicity return), <em>and</em> the import stays fast because block state is
+      still collapsed. The two streams diverge exactly where their costs diverge. The only residual
+      cost is <strong>storage/volume</strong>, not latency — addressed in §7.
+    </div>
+
+    <h2 id="models">5. Three coherent models</h2>
+    <p>
+      The design space has three internally-consistent points. The decision reduces to: <em>do you want
+      fine-grained provenance server-side, and will you pay storage for it?</em>
+    </p>
+    <table>
+      <tr><th>Model</th><th>Who sequences</th><th>Solves cheaply</th><th>Gives up</th></tr>
+      <tr>
+        <td><strong>A. Server-as-log</strong> (recommended)</td>
+        <td>Server, on receipt</td>
+        <td>Ordering, identity, idempotency, atomicity, authz</td>
+        <td>Storage cost; needs the append/demux path built</td>
+      </tr>
+      <tr>
+        <td><strong>B. Server-captured checkpoints</strong></td>
+        <td>Server, but only sees collapsed state</td>
+        <td>Everything in A <em>plus</em> zero new transport — stamp a descriptor on the block PATCH; <code>blocks_history</code> records it</td>
+        <td>Per-commit fidelity (checkpoint-grain only — the lossy option)</td>
+      </tr>
+      <tr>
+        <td><strong>C. Peer CRDT</strong></td>
+        <td>No one — logical clocks (HLC/Lamport) at edit time</td>
+        <td>Offline-first, no central authority</td>
+        <td>Server-queryability + complete server history; needs full CRDT machinery (a big philosophical shift from today's LWW)</td>
+      </tr>
+    </table>
+    <p>
+      The earlier sketch was none of these — it was A's transport with the client (not server)
+      sequencing. This doc recommends <strong>A</strong>: our stack already runs server-authoritative
+      Postgres (PowerSync) + a server-trigger log (<code>blocks_history</code>), so A is a small step;
+      C is a large one. B is the fallback if "just enough to classify edits" turns out to be the real
+      requirement.
+    </p>
+
+    <h2 id="proposal">6. Recommended: server-as-log, full human fidelity</h2>
+    <p>
+      Ship every event through a cheap, append-only path, <strong>additive</strong> to the existing
+      collapsed block-state upload. Each stream does the job it is cheap at: block state collapses for
+      fast convergent state; events append for lossless granular history. The defining properties:
+    </p>
+    <ol>
+      <li>
+        <strong>The server sequences — but the cursor must be commit-ordered, not raw
+        <code>BIGSERIAL</code>.</strong> On receipt the server assigns the authoritative global order
+        for replay/pagination. The naive choice — a <code>BIGSERIAL</code> read order — is
+        <em>unsafe as a tail cursor</em>: serial values are allocated <em>before</em> the inserting
+        transaction commits, so under concurrent appends a higher seq can become visible before a
+        lower one commits, and a reader tailing <code>commit_seq &gt; cursor</code> advances past the
+        gap and never sees the late-committing lower seq (the classic CDC visibility gap). So the
+        frontier must be <strong>commit-ordered</strong>: a commit timestamp
+        (<code>track_commit_timestamp</code>), a logical-replication LSN, or appends serialized through
+        a sequence assigned <em>at commit</em> — or a watermark cursor that refuses to advance past a
+        non-contiguous (uncommitted) gap. The client's <code>(install_id, seq)</code> is carried only
+        for <em>idempotent dedup</em> (<code>INSERT … ON CONFLICT DO NOTHING</code>), never as the
+        global order. This is the line between "client log dumped into a table" and server-as-log.
+      </li>
+      <li>
+        <strong>Ordering primitive: monotonic, not wall-clock — and not <code>user_updated_at</code>.</strong>
+        <code>seq</code> (the client <code>row_events.id</code>) totally orders one install's events —
+        so per-install replay is exact, including repeated writes to one block in a tx. The global /
+        cross-install order is the server's commit-ordered frontier (above). Do <strong>not</strong>
+        reach for the <code>updated_at</code>/<code>user_updated_at</code> pair as an ordering key:
+        only <code>updated_at</code> is monotonic (and it's a per-<em>row-version</em> value, not
+        per-event), while <code>user_updated_at</code> is display/provenance time that is
+        <em>intentionally non-monotonic</em> — <code>sourceTimestamps</code> imports historical Roam
+        edit times and <code>{skipMetadata}</code> leaves it untouched, so import/restore/bookkeeping
+        events would sort wrong (§9). If a client-side causal hint is ever wanted beyond
+        <code>seq</code> + server commit-order, it must be a <strong>dedicated monotonic event
+        stamp</strong> (a logical clock), not a reused row column. Genuinely concurrent cross-device
+        edits remain concurrent — no key invents a true order for them.
+      </li>
+      <li>
+        <strong>Upload only locally-originated events</strong> (<code>source ≠ 'sync'</code> /
+        <code>tx_id IS NOT NULL</code>). Otherwise every client re-uploads edits it merely
+        <em>received</em> via sync and the server double-counts. Each client owns exactly its own
+        events; the union is the server log.
+      </li>
+      <li>
+        <strong>Atomicity: append after block success.</strong> Events ride a separate route from the
+        block apply, so gate the event append on the corresponding block upload succeeding for that tx
+        (or a combined boundary). Then the only possible divergence is "block landed, events missing"
+        — a gap <code>blocks_history</code> still covers — never a false record of a change that never
+        landed.
+      </li>
+      <li>
+        <strong>Authorization at the append endpoint.</strong> The append RPC runs
+        <code>SECURITY DEFINER</code> (the table is default-deny, like <code>blocks_history</code>) and
+        must verify, per appended row, that <code>auth.uid()</code> is a <strong>writer</strong> of
+        that row's <code>workspace_id</code> via <code>private.is_workspace_writer</code> (owner/editor)
+        — <em>not</em> <code>is_workspace_member</code>, which would let a read-only viewer append
+        forged provenance. <code>set search_path = ''</code> + schema-qualified names, matching the
+        existing definer functions.
+      </li>
+      <li>
+        <strong>Encrypt content, keep identifiers clear.</strong> <code>before_json</code> /
+        <code>after_json</code> / <code>description</code> / <code>mutator_calls</code> carry workspace
+        content, so on E2EE workspaces they ship as <code>enc:v1:</code>. Routing/RLS identifiers
+        (<code>install_id</code>, <code>seq</code>, <code>tx_id</code>, <code>block_id</code>,
+        <code>workspace_id</code>, <code>kind</code>, stamps) stay plaintext — RLS filters on a clear
+        <code>workspace_id</code>. Note the existing <code>enc:v1:</code> primitive is <em>per-column</em>
+        AEAD with AAD bound to <code>(blockId, workspaceId, columnName)</code>; an opaque event blob
+        needs its AAD defined fresh (it cannot reuse that binding, and a hard-delete event references a
+        <code>block_id</code> whose block is gone).
+      </li>
+    </ol>
+
+    <h3>Shape sketch (illustrative)</h3>
+    <p>
+      Two server tables, not synced down (read via RPC like <code>blocks_history</code> — syncing every
+      event to every device would balloon buckets). <code>command_events_log</code> carries one row per
+      command; <code>row_events_log</code> one per edit, linked by <code>tx_id</code>. The server adds
+      its own commit-ordered <code>commit_seq</code> (not a pre-commit serial — see §6).
+    </p>
+    <pre><code>command_events_log (
+  install_id   text not null,  -- per-install nonce, regenerated on wipe (NOT a durable device id)
+  tx_id        text not null,
+  workspace_id text,           -- nullable: zero-write/no-op txs pin no workspace
+  user_id      text not null,
+  scope        text not null,
+  machine_origin text,         -- explicit processor/import marker (NOT source/scope); gates compaction (§7)
+  description   text,          -- enc:v1: on e2ee workspaces
+  mutator_calls text,          -- enc:v1: on e2ee workspaces
+  commit_seq   bigint,         -- server commit-ordered frontier for cursors (LSN / commit-ts; NOT bigserial)
+  primary key (install_id, tx_id)
+)
+
+row_events_log (
+  install_id   text not null,  -- with seq, the reset-proof idempotency key
+  seq          bigint not null,-- client row_events.id: exact per-install append order (sortable)
+  tx_id        text not null,  -- links to command_events_log
+  block_id     text not null,
+  workspace_id text not null,
+  kind         text not null,  -- create | update | soft-delete | delete
+  before_json  text,           -- enc:v1: on e2ee workspaces
+  after_json   text,           -- enc:v1: on e2ee workspaces
+  commit_seq   bigint,         -- server commit-ordered frontier for cursors (see §6/§8; NOT bigserial)
+  primary key (install_id, seq)
+)
+
+-- public schema: default-deny RLS + revoke (repo rule); writes only via the
+-- SECURITY DEFINER append RPC, which checks private.is_workspace_writer per row.
+alter table … enable row level security;
+revoke all on … from anon, authenticated;
+grant select on … to authenticated;
+create policy …_read on … for select
+  using (private.is_workspace_member(workspace_id, (auth.uid())::text));</code></pre>
+    <p>
+      <strong>Identity is reset-proof by construction:</strong> <code>install_id</code> is a per-install
+      UUID nonce regenerated on every wipe/reinstall (a fresh DB restarts the
+      <code>row_events.id</code> autoincrement at 1, so the id alone is not stable). Post-wipe events
+      carry a new <code>install_id</code>, so they can never collide with already-uploaded ids — no
+      silent <code>ON CONFLICT</code> drop. <code>install_id</code> is a per-<em>install</em> dedup
+      nonce; a durable per-<em>device</em> identity, if ever wanted for "originating device" grouping,
+      is a separate concern and is not required here.
+    </p>
+
+    <h2 id="compaction">7. Fidelity vs. volume: run-compaction by class</h2>
+    <p>
+      Volume is the one real cost of shipping every event: the 300K import wrote ~304K
+      <code>row_events</code> ≈ 262&nbsp;MB locally (<code>docs/follow-ups.md</code>), and on E2EE the
+      blobs can't be GC'd by content. But "machine edits are edits" — we don't want to drop them by
+      actor. The resolution is <strong>compaction by class via snapshots</strong>, not deletion:
+    </p>
+    <div class="warn">
+      <strong>Eligibility needs an explicit marker — <code>source</code>/<code>scope</code> can't carry it.</strong>
+      <code>command_events.source</code> is uniformly <code>'user'</code> for every <code>repo.tx</code>
+      (§2), and machine migrations such as <code>scripts/migrate-roam-location-refs.mjs</code> run under
+      <code>ChangeScope.BlockDefault</code> — the <em>same</em> scope as ordinary edits. So a policy keyed
+      on those fields would either compact human edits or miss noisy machine runs. Compaction must be
+      gated on a <strong>dedicated, explicit machine/processor marker</strong> recorded at commit time
+      (the <code>machine_origin</code> field in the sketch — e.g. processor id, agent-runtime, or import),
+      added as part of this work. Until a command carries that marker, its events are never compacted.
+    </div>
+    <ul>
+      <li>
+        <strong>Run-compaction (lossless on the facts).</strong> Collapse a <em>contiguous run</em> of
+        events on the <em>same block</em> that share a <code>machine_origin</code> marker into one
+        span-event: <code>before</code> = the run's first before-state, <code>after</code> = the run's
+        last after-state, plus the list/count of contributing commands. You keep <em>that</em> it
+        happened, <em>what</em> it net-did, and <em>which</em> commands — you lose only the intermediate
+        snapshots. This is exactly the snapshot+truncate move from event sourcing, and what
+        <code>compactBlockCrudEntries</code> already does for block state, applied per-marker to the log.
+      </li>
+      <li>
+        <strong>Per-operation summary (lossy — reserved for uniform bulk).</strong> A 300K-block
+        <code>roam import</code> is uniform; collapse it to one record ("imported N blocks under marker
+        X") with no per-block events. This is the only place per-block detail is dropped, and it
+        aligns with the <code>follow-ups.md</code> plan to skip events for import.
+      </li>
+      <li>
+        <strong>Human edits are never eligible</strong> — they simply carry no <code>machine_origin</code>
+        marker, so they are untouched by construction.
+      </li>
+    </ul>
+    <p>
+      Compaction is a <strong>policy on a derived view</strong>: keep the fine-grained events locally
+      (in <code>row_events</code>) as long as you like, and compact only what you <em>ship/retain</em>
+      server-side. Default conservative — keep everything, compact only known-noisy machine runs.
+      Retention beyond that (a TTL/cap below a snapshot) is the standard log-compaction story; the open
+      knob is whether <code>command_events_log</code> outlives <code>row_events_log</code>.
+    </p>
+
+    <h2 id="priorart">8. How the field solves these</h2>
+    <p>Every problem here is canonical. The point of this section is that the recommended design picks
+       the field's standard answer for each rather than improvising.</p>
+    <table>
+      <tr><th>Problem</th><th>Standard solution</th><th>Here</th></tr>
+      <tr>
+        <td>Ordering</td>
+        <td>Commit-ordered sequencer (Kafka offset, Postgres LSN/commit-ts — <em>not</em> a pre-commit serial); logical clocks (Lamport/HLC) for causality; per-aggregate version usually suffices</td>
+        <td>Server commit-ordered <code>commit_seq</code> (LSN/commit-ts) for the cursor + per-install <code>seq</code>; per-block is the aggregate</td>
+      </tr>
+      <tr>
+        <td>Identity / idempotency</td>
+        <td><code>(replicaId, counter)</code> with a fresh replicaId on reset (Yjs, Automerge, Replicache <code>(clientID, mutationID)</code>)</td>
+        <td><code>(install_id, seq)</code>, install_id regenerated on wipe</td>
+      </tr>
+      <tr>
+        <td>Atomicity (state vs events)</td>
+        <td>Transactional outbox, or single log + projections (no dual-write)</td>
+        <td>Append-after-block-success; block state stays a projection of what landed</td>
+      </tr>
+      <tr>
+        <td>Completeness / catch-up</td>
+        <td>Snapshot + log: read snapshot, tail log; full history needs a central retained log</td>
+        <td>Snapshot = the <code>blocks</code> table; central log = these server tables</td>
+      </tr>
+      <tr>
+        <td>Command → N events</td>
+        <td>Correlation / causation ids on self-describing events</td>
+        <td><code>tx_id</code> as correlation id; events carry their own diff</td>
+      </tr>
+      <tr>
+        <td>Retention</td>
+        <td>Log compaction + snapshots; accept a history horizon</td>
+        <td>Run-compaction by class (§7)</td>
+      </tr>
+    </table>
+    <p>
+      The honest limit no one escapes: a sequencer's order is <strong>receipt order, not causal edit
+      order</strong> (an offline device's week-old edits sequence "now"), and genuinely concurrent
+      cross-device edits to one block have <em>no</em> ground-truth order. Logical clocks capture
+      causality where it exists; concurrency is stated as concurrency, not forced into a false line.
+    </p>
+
+    <h2 id="stalegate">9. Lessons from the stale-gate saga</h2>
+    <p>
+      The hydration/stale-gate work (which landed the always-increasing <code>updated_at</code> and the
+      monotonic <code>user_updated_at</code> clamp) is the same family of problem — convergence ordering
+      under LWW with untrustworthy clocks — and it carries three lessons straight into this design:
+    </p>
+    <ul>
+      <li>
+        <strong>The clock-goes-backward bug is already solved — but borrow the <em>principle</em>, not
+        the wrong column.</strong> The saga replaced unreliable wall-clock comparison with a
+        <em>monotonic, always-increasing</em> version. Ordering events by raw <code>created_at</code>
+        reintroduces exactly that inversion. The lesson is "monotonic, not wall-clock" — but be precise
+        about <em>which</em> stamp: <code>updated_at</code> is the monotonic row-version (per row-version,
+        not per-event), whereas <code>user_updated_at</code> is display/provenance time and is
+        <em>deliberately non-monotonic</em> (<code>sourceTimestamps</code> imports historical Roam times;
+        <code>{skipMetadata}</code> leaves it untouched). So <code>user_updated_at</code> is <em>not</em>
+        an ordering key, and the pair must not be treated as one. Event order comes from per-install
+        <code>seq</code> + the server's commit-ordered frontier (§6); if a cross-install causal hint is
+        ever needed, it's a <strong>dedicated monotonic event stamp / logical clock</strong>, reusing the
+        saga's principle without overloading a row column whose semantics don't fit.
+      </li>
+      <li>
+        <strong>Provenance must never feed convergence.</strong> The gate deliberately stopped reading
+        author/provenance and became a plain version comparison, because entangling "who/why" with
+        "which state wins" was complex and buggy. Hard constraint for us: the event log is strictly
+        <strong>additive and read-only w.r.t. convergence</strong> — it records what happened, it never
+        gates which row wins. (So this design has <em>no</em> impact on the stale gate, by intent.)
+      </li>
+      <li>
+        <strong>The <code>updated_at</code> / <code>user_updated_at</code> split is the seam we widen.</strong>
+        One is the convergence version, the other the human/provenance timestamp. The "state vs
+        provenance" separation we keep rediscovering is already in the schema; the event log
+        generalizes <code>user_updated_at</code>'s role while <code>updated_at</code> stays the
+        convergence version, untouched.
+      </li>
+    </ul>
+    <p>
+      The tempting direction the saga rules in only <em>eventually</em>: a complete, server-sequenced
+      log could resolve conflicts by replay/merge instead of LWW-on-<code>updated_at</code> — a more
+      principled convergence. That is "events as the source of truth," the big rewrite deferred below.
+    </p>
+
+    <h2 id="history">10. Relationship to <code>blocks_history</code></h2>
+    <p>
+      <strong>The event log complements <code>blocks_history</code>; it does not replace it.</strong>
+      Different trust models:
+    </p>
+    <table>
+      <tr><th></th><th><code>blocks_history</code></th><th>event log</th></tr>
+      <tr><td>Who writes it</td><td>Server trigger, from the write that lands</td><td>Client-originated, server-sequenced on receipt</td></tr>
+      <tr><td>Resolution</td><td>Sync-checkpoint (post-collapse)</td><td>Per-commit (run-compacted per §7)</td></tr>
+      <tr><td>Provenance</td><td>None (semantic_op + changed_columns)</td><td>Rich (command, scope, mutators)</td></tr>
+      <tr><td>Completeness</td><td>Anything landing in <code>blocks</code> after the trigger shipped, client-independent</td><td>As complete as clients upload + retention keeps</td></tr>
+    </table>
+    <p>
+      The load-bearing row is the last. <code>blocks_history</code> is server-triggered from
+      authoritative landed state — atomic with the write, client-independent, and the declared PITR
+      substrate — so it is the backstop on exactly the failure modes the log is best-effort about
+      (origin device dies / is wiped / its upload is quarantined). <strong>Even on E2EE, do not
+      trim it:</strong> readability is only one of its advantages; server-triggered + atomic +
+      client-independent survive encryption, so on an encrypted workspace it remains the only record
+      that a write happened even when its diff is opaque. The event log <em>adds</em> richer
+      (encrypted) provenance; it never substitutes for the backstop.
+    </p>
+    <div class="warn">
+      <strong><code>blocks_history</code> is not retroactive.</strong> Migration
+      <code>20260522062437</code> creates the table/trigger but does <em>not</em> backfill existing
+      <code>blocks</code>, and maintenance jobs can disable the trigger for bulk work. So blocks
+      written before the trigger (or while it was disabled) have no history — the "complete backstop"
+      guarantee holds only for writes recorded after the trigger. Closing that gap needs a one-time
+      backfill/anchor (seed a synthetic <code>create</code> from current row state); out of scope, but
+      not to be assumed away.
+    </div>
+
+    <h2 id="costs">11. Residual costs &amp; open questions</h2>
+    <p>Under server-as-log, the identity/atomicity/authz problems are answered. What genuinely
+       remains:</p>
+    <ul>
+      <li>
+        <strong>The cursor needs a commit-order frontier.</strong> A pre-commit <code>BIGSERIAL</code>
+        is not a safe tail cursor (§6): a serial allocated by an earlier-but-later-committing tx can be
+        skipped by a reader that already advanced. The frontier must be commit-ordered (commit
+        timestamp / LSN / commit-time-assigned sequence), or the cursor must be a watermark that won't
+        advance past an uncommitted gap. This is a real mechanism to choose, not a free property.
+      </li>
+      <li>
+        <strong>Compaction needs an explicit machine marker.</strong> <code>source</code>/<code>scope</code>
+        don't distinguish machine from human (§7), so a <code>machine_origin</code> field must be added
+        and populated at commit before any run-compaction is safe.
+      </li>
+      <li>
+        <strong>Volume / retention.</strong> Mitigated by run-compaction (§7) but not eliminated.
+        Open: keep-forever vs. cap/TTL; whether <code>command_events_log</code> outlives
+        <code>row_events_log</code>.
+      </li>
+      <li>
+        <strong>Server stays blind on E2EE.</strong> Encrypted events are opaque server-side; only
+        devices benefit. Plaintext workspaces get full server-side queryability. Accepted — matches
+        the E2EE posture.
+      </li>
+      <li>
+        <strong>Completeness has structural holes.</strong> A member who <em>joins</em> later gets
+        current state (the snapshot) but not pre-join event detail unless an originator's log still
+        covers it; pre-feature blocks and trimmed/compacted runs are gaps. The log is an overlay;
+        <code>blocks_history</code> + the <code>blocks</code> snapshot are the complete-state floor.
+      </li>
+      <li>
+        <strong>Connector demux.</strong> The new event <code>type</code> must be partitioned out
+        <em>before</em> <code>compactBlockCrudEntries</code> (which throws on non-<code>blocks</code>
+        tables) and routed down the append+encrypt path. "Additive" is true at the design level; the
+        shared connector is genuinely restructured, so a bug there can regress the block path.
+      </li>
+      <li>
+        <strong>Skipped deterministic creates.</strong> <code>applyBlockCreates</code> is insert-or-skip
+        (<code>ignoreDuplicates</code>) for deterministic-id bootstrap; a skipped create must not leave
+        a <code>kind='create'</code> event claiming a row the server already had. The append-after-block-
+        success rule (§6) plus filtering creates whose block upload was a no-op handles this.
+      </li>
+    </ul>
+
+    <h2 id="rejected">12. Rejected / deferred alternatives</h2>
+    <div class="reject">
+      <strong>Client-authored global order (the incoherent middle).</strong> Upload a client-sequenced
+      <code>(install_id, seq)</code> log to a dumb server table. This was the original sketch; it is the
+      source of the ordering/identity/atomicity/authz problem cascade (§3). Superseded by server
+      sequencing.
+    </div>
+    <div class="reject">
+      <strong>Un-collapse the blocks upload itself.</strong> Replays 50 <code>UPDATE</code>s on the hot
+      row to manufacture history — maximal write/index/trigger amplification for a row that ends in one
+      state. Appends get the same granularity far cheaper (§4).
+    </div>
+    <div class="reject">
+      <strong>Sync the event log down to every device.</strong> Balloons bucket sizes for data almost
+      no device queries. Read via RPC, like <code>blocks_history</code>.
+    </div>
+    <div class="reject">
+      <strong>Replace <code>blocks_history</code> with the event log.</strong> Loses the
+      server-guaranteed, client-independent backstop and the plaintext PITR substrate (§10).
+    </div>
+    <div class="warn">
+      <strong>Deferred: events as the sole source of truth</strong> (server materializes
+      <code>blocks</code> from events; convergence by replay/merge). The principled end state (§9), but a
+      much larger rewrite. This proposal is deliberately additive: <code>blocks</code> stays the
+      convergent state path; the log layers on top.
+    </div>
+
+    <h2 id="scope">13. What this PR is (and isn't)</h2>
+    <p>
+      This PR adds <strong>only this design document</strong>. No schema, migration, connector, or
+      encryption changes. What gates an implementation:
+    </p>
+    <ol>
+      <li><strong>Pick the model (§5).</strong> Server-as-log (recommended) vs. server-captured
+        checkpoints (if "enough to classify edits" is the real bar) vs. peer CRDT (if no-central-authority
+        ever becomes a goal).</li>
+      <li><strong>Compaction + retention policy (§7).</strong> An explicit <code>machine_origin</code>
+        marker (source/scope don't distinguish machine from human); which markers are run-compactable;
+        bulk-import summary; keep-forever vs. cap.</li>
+      <li><strong>Prerequisites (§6).</strong> A per-install <code>install_id</code> nonce (mint + persist
+        in <code>client_schema_state</code>, regenerate on wipe); a <strong>commit-ordered</strong> cursor
+        frontier (LSN / commit-ts / watermark — not a pre-commit <code>BIGSERIAL</code>); per-install
+        <code>seq</code> for exact intra-install order (and a dedicated logical clock only if a
+        cross-install causal hint is needed — <em>not</em> <code>user_updated_at</code>); the append RPC's
+        definer + <code>is_workspace_writer</code> contract; the AAD for an opaque event blob.</li>
+    </ol>
+    <p>
+      The direction (append-only log, server-sequenced, additive to collapsed state, complementing
+      <code>blocks_history</code>, run-compacted for machine bulk) is what the design discussion
+      converged on. The earlier client-sequenced sketch is retained above only as the rejected baseline
+      that motivates it.
+    </p>
+  </main>
+</body>
+</html>
