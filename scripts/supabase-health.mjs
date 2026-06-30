@@ -78,6 +78,35 @@ const BULK_BUMP_WARN = 50
 const AT_REST_PROPREF_WARN = 25
 const DATA_INTEGRITY_STRICT = process.env.DATA_INTEGRITY_STRICT === '1'
 
+// --- Attachment upload volume (storage.objects) ----------------------------
+// Attachment bytes live in the `attachments` Storage bucket (supabase/migrations/
+// 20260625000000_add_attachments_storage.sql), NOT in a synced table. Each
+// object is <workspace_id>/<content-key>; storage.objects carries `owner`/
+// `owner_id` (the uploading user), `created_at` (immutable — UPDATE is RLS-denied
+// so re-uploads 409, making created_at a true upload timestamp), and
+// `metadata->>'size'` (the stored byte length — CIPHERTEXT size for e2ee, and the
+// ONLY server-readable size: the media block's `media:size` property is encrypted
+// at rest in e2ee workspaces). We watch two things per user:
+//   * total — cumulative bytes a user has stored (storage-cost backstop)
+//   * rate  — bytes a user uploaded in the rolling window (burst / abuse / the
+//             documented member storage-DoS lever)
+// WARN-by-default like the L5 detectors; FAIL is the abuse/runaway page. Reads
+// the privileged pooler role, which sees all rows (same cross-tenant assumption
+// the L5 blocks_history detectors already rely on); if RLS ever hid rows the
+// query would return empty, not error — a blind spot shared with L5.
+//
+// STARTER thresholds — NOT yet baselined against live fleet upload volume (the
+// L5 thresholds were calibrated against 48h of cron runs; do the same here).
+// Each run's JSON snapshot reports per-user MB, so watch a few runs and tune so
+// normal heavy editing stays green. Sized for a small fleet on Supabase Pro
+// (100 GB storage included); attachments live in S3, separate from the DB-disk
+// backstop (db_size) — so these are an independent budget.
+const ATTACHMENT_RATE_WINDOW_MIN = 90
+const ATTACH_TOTAL_WARN_MB = 1000
+const ATTACH_TOTAL_FAIL_MB = 5000
+const ATTACH_RATE_WARN_MB = 200
+const ATTACH_RATE_FAIL_MB = 1000
+
 const uri = process.env.SUPABASE_POOLER_URI
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY
@@ -558,13 +587,99 @@ async function runDataIntegrityChecks(client) {
   })
 }
 
+// Attachment upload volume — per-user cumulative total + per-user rolling-window
+// rate over the `attachments` Storage bucket. storage.objects is metadata only
+// (the bytes are in S3), readable by the privileged pooler role. Skips cleanly
+// when the bucket table is absent (Storage not initialised on this stack — e.g.
+// a local `supabase start` before the Storage container boots). PII (owner,
+// workspace) is redacted: the snapshot lands in a PUBLIC Actions log.
+async function runAttachmentChecks(client) {
+  const attachments = { status: 'pass', window_min: ATTACHMENT_RATE_WINDOW_MIN, detectors: {} }
+  result.checks.attachments = attachments
+
+  if ((await client.query(`select to_regclass('storage.objects') as t`)).rows[0].t == null) {
+    attachments.status = 'skip'
+    attachments.reason = 'storage.objects not present (Storage not initialised)'
+    return
+  }
+
+  const detector = async (name, fn) => {
+    try {
+      const out = await fn()
+      attachments.detectors[name] = out
+      attachments.status = maxStatus(attachments.status, out.status)
+    } catch (e) {
+      attachments.detectors[name] = { status: 'error', error: String(e?.message ?? e) }
+      attachments.status = maxStatus(attachments.status, 'error')
+      // An errored detector must not read as clean — surface it (warn, no email).
+      warn(`attachments.${name}`, `detector errored: ${e?.message ?? e}`)
+    }
+  }
+
+  // MB WARN/FAIL for one per-user group; pushes the alert and returns the status.
+  const mbThreshold = (check, label, mb, { warnAt, failAt }) => {
+    if (failAt != null && mb >= failAt) {
+      fail(`attachments.${check}`, `${label}: ${round2(mb)} MB >= ${failAt} MB`)
+      return 'fail'
+    }
+    if (warnAt != null && mb >= warnAt) {
+      warn(`attachments.${check}`, `${label}: ${round2(mb)} MB >= ${warnAt} MB`)
+      return 'warn'
+    }
+    return 'pass'
+  }
+
+  const byUser = (rows, check, label, thresholds) => {
+    let status = 'pass'
+    const groups = rows.map((r) => {
+      const mb = Number(r.bytes) / 1024 / 1024
+      status = maxStatus(status, mbThreshold(check,
+        `owner=${redactId(r.owner) ?? 'null'} ${label}`, mb, thresholds))
+      return { owner: redactId(r.owner), objects: r.objects, size_mb: round2(mb) }
+    })
+    return { status, groups }
+  }
+
+  // (1) Per-user TOTAL stored bytes — cumulative footprint across all objects the
+  // user owns. Reclaimed objects (§16 GC) drop out, so this tracks the live
+  // storage cost a user is responsible for, not lifetime upload.
+  await detector('total_per_user', async () =>
+    byUser((await client.query(`
+      SELECT coalesce(o.owner_id, o.owner::text) AS owner,
+             count(*)::int AS objects,
+             coalesce(sum((o.metadata->>'size')::bigint), 0)::bigint AS bytes
+      FROM storage.objects o
+      WHERE o.bucket_id = 'attachments'
+      GROUP BY 1
+      ORDER BY bytes DESC
+    `)).rows, 'total_per_user', 'total stored',
+      { warnAt: ATTACH_TOTAL_WARN_MB, failAt: ATTACH_TOTAL_FAIL_MB }))
+
+  // (2) Per-user upload RATE over the window — the burst / abuse / storage-DoS
+  // signal. Window is 90m so consecutive hourly runs overlap and never miss a
+  // burst between probes (same reason the L5 window is 90m, not 60m).
+  await detector('rate_per_user', async () =>
+    byUser((await client.query(`
+      SELECT coalesce(o.owner_id, o.owner::text) AS owner,
+             count(*)::int AS objects,
+             coalesce(sum((o.metadata->>'size')::bigint), 0)::bigint AS bytes
+      FROM storage.objects o
+      WHERE o.bucket_id = 'attachments'
+        AND o.created_at >= now() - ($1::int * interval '1 minute')
+      GROUP BY 1
+      ORDER BY bytes DESC
+    `, [ATTACHMENT_RATE_WINDOW_MIN])).rows, 'rate_per_user',
+      `uploaded in ${ATTACHMENT_RATE_WINDOW_MIN}m`,
+      { warnAt: ATTACH_RATE_WARN_MB, failAt: ATTACH_RATE_FAIL_MB }))
+}
+
 function round2(n) { return Math.round(n * 100) / 100 }
 
 const client = new pg.Client({ connectionString: uri, ssl: { rejectUnauthorized: false } })
 
 try {
   await client.connect()
-  await Promise.all([runDbChecks(client), runDataIntegrityChecks(client), checkServiceEndpoints()])
+  await Promise.all([runDbChecks(client), runDataIntegrityChecks(client), runAttachmentChecks(client), checkServiceEndpoints()])
 } catch (e) {
   result.failures.push({ check: 'connection', msg: e.message })
 } finally {
