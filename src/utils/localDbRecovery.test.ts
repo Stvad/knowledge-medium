@@ -71,4 +71,17 @@ describe('downloadLocalDbBackup', () => {
     expect(mocks.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'kmp-v6-u-export-1.db')
     expect(result).toEqual({ filename: 'kmp-v6-u-export-1.db', size: 10 })
   })
+
+  it('still reads + downloads the backup when closing the connection fails', async () => {
+    // A corrupt connection's close() re-awaits its own rejected init promise and
+    // throws; the read-only getFile() does not need the handle released, so the
+    // user must still get their bytes (do not deny the backup on a close error).
+    mocks.closePowerSyncDbIfOpen.mockRejectedValueOnce(new Error('waitForReady rejected'))
+
+    const result = await downloadLocalDbBackup('u1')
+
+    expect(mocks.getRawSqliteDbBlob).toHaveBeenCalledWith('u1')
+    expect(mocks.downloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'kmp-v6-u-export-1.db')
+    expect(result).toEqual({ filename: 'kmp-v6-u-export-1.db', size: 10 })
+  })
 })

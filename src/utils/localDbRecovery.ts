@@ -28,7 +28,15 @@ export {
 export const downloadLocalDbBackup = async (
   userId: string,
 ): Promise<{ filename: string; size: number }> => {
-  await closePowerSyncDbIfOpen(userId)
+  // Best-effort close (mirrors resetLocalDatabase). A corrupt connection's
+  // close() re-awaits its own rejected init promise and throws — but the backup
+  // is a READ-ONLY getFile() that doesn't need the OPFS handle released, so a
+  // failed close must NOT deny the user their bytes.
+  try {
+    await closePowerSyncDbIfOpen(userId)
+  } catch (err) {
+    console.warn('[db-recovery] closing the connection before backup failed (continuing):', err)
+  }
   const { blob, filename } = await getRawSqliteDbBlob(userId)
   downloadBlob(blob, filename)
   return { filename, size: blob.size }

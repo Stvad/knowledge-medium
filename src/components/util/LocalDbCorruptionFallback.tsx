@@ -34,15 +34,19 @@ export function LocalDbCorruptionFallback({
   const signOut = useSignOut()
   const localOnly = useIsLocalOnly()
   const [confirming, setConfirming] = useState(false)
+  const [downloadStarted, setDownloadStarted] = useState(false)
   const [downloaded, setDownloaded] = useState(false)
   const [backupFailed, setBackupFailed] = useState(false)
   const [busy, setBusy] = useState<null | 'export' | 'reset'>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  // Reset is gated until the user has either saved a backup OR tried and the
-  // export failed (the corrupt file may be unreadable — don't trap them). This
-  // enforces "always give them the old db file when they choose to reset".
+  // Reset is gated until the user has CONFIRMED they have a backup OR an export
+  // attempt genuinely failed (the corrupt file may be unreadable — don't trap
+  // them). `downloaded` means "user confirmed the file saved", NOT merely
+  // "download fired": an <a download> click has no completion/cancel signal, so
+  // we can't treat a started download as a saved backup. This enforces "always
+  // give them the old db file when they choose to reset".
   const resetUnlocked = downloaded || backupFailed
 
   const handleExport = async () => {
@@ -52,8 +56,11 @@ export function LocalDbCorruptionFallback({
     setStatus('Preparing download…')
     try {
       const { filename, size } = await downloadLocalDbBackup(userId)
-      setDownloaded(true)
-      setStatus(`Saved ${filename} (${formatMiB(size)}).`)
+      setDownloadStarted(true)
+      setStatus(
+        `Download started for ${filename} (${formatMiB(size)}). ` +
+        `Check it saved to your device, then confirm you have it below.`,
+      )
     } catch (err) {
       setStatus(null)
       setBackupFailed(true)
@@ -61,6 +68,12 @@ export function LocalDbCorruptionFallback({
     } finally {
       setBusy(null)
     }
+  }
+
+  const confirmBackupSaved = () => {
+    setDownloaded(true)
+    setActionError(null)
+    setStatus('Backup confirmed — you can reset now.')
   }
 
   const handleReset = async () => {
@@ -131,7 +144,7 @@ export function LocalDbCorruptionFallback({
                 disabled={busy !== null}
                 className="flex-1"
               >
-                Reset &amp; re-sync…
+                {localOnly ? 'Reset (delete local data)…' : 'Reset & re-sync…'}
               </Button>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
@@ -170,9 +183,17 @@ export function LocalDbCorruptionFallback({
                 stay on this device.
               </p>
             )}
-            {!downloaded && !backupFailed && (
+            {!downloadStarted && !backupFailed && (
               <p className="text-sm text-muted-foreground">
-                Download a backup first — the delete button stays disabled until you do.
+                Download a backup first — the delete button stays disabled until you confirm
+                you have it.
+              </p>
+            )}
+            {downloadStarted && !downloaded && (
+              <p className="text-sm text-muted-foreground">
+                A download was started, but the browser can&apos;t tell us if it actually
+                saved. Make sure the file is on your device, then confirm — only then does
+                reset unlock.
               </p>
             )}
             {backupFailed && !downloaded && (
@@ -181,9 +202,19 @@ export function LocalDbCorruptionFallback({
                 anything only on this device will be lost.
               </p>
             )}
+            {downloadStarted && !downloaded && (
+              <Button
+                onClick={confirmBackupSaved}
+                disabled={busy !== null}
+                className="w-full"
+              >
+                I&apos;ve saved the backup file
+              </Button>
+            )}
             <div className="flex flex-col gap-2 sm:flex-row">
               {!downloaded && (
                 <Button
+                  variant="outline"
                   onClick={() => void handleExport()}
                   disabled={busy !== null}
                   className="flex-1"
@@ -192,7 +223,9 @@ export function LocalDbCorruptionFallback({
                     ? 'Downloading…'
                     : backupFailed
                       ? 'Try backup again'
-                      : 'Download backup first'}
+                      : downloadStarted
+                        ? 'Download again'
+                        : 'Download backup first'}
                 </Button>
               )}
               <Button
