@@ -133,7 +133,15 @@ export function CommandPalette() {
                 return (
                   <CommandItem
                     key={action.id}
-                    value={`${groupHeading} ${action.description}`}
+                    // cmdk tracks selection by `value`, so it MUST be unique —
+                    // two actions can share a description (e.g. the ArrowUp vs
+                    // ArrowLeft "move to previous block" CM-nav pair), and a
+                    // shared value makes cmdk highlight both at once and loop
+                    // arrow-nav between them. Key on the unique action id and
+                    // hand the human text to `keywords` so search still matches
+                    // the group/description.
+                    value={action.id}
+                    keywords={[groupHeading, action.description]}
                     onSelect={() => runCommand(action.id)}
                     className="flex justify-between items-center"
                   >
