@@ -60,6 +60,7 @@ import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
+import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
@@ -219,15 +220,17 @@ export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
  * opening a fresh connection to it would re-acquire the very handle we need
  * released (and re-fail on the corrupt file). No-op when nothing is open.
  *
- * Best-effort: a half-opened connection from a failed init may throw on close;
- * we still drop it from the maps so a later reload re-inits cleanly.
+ * A failed-init connection (corrupt DB) needs the adapter released directly —
+ * its high-level close() re-throws the rejected init before freeing the OPFS
+ * handle — so we go through `releasePowerSyncConnection`. We still drop it from
+ * the maps so a later reload re-inits cleanly.
  */
 export const closePowerSyncDbIfOpen = async (userId: string): Promise<void> => {
   const existing = dbsByUser.get(userId)
   dbsByUser.delete(userId)
   initPromises.delete(userId)
   if (!existing) return
-  await existing.close()
+  await releasePowerSyncConnection(existing)
 }
 
 // `useRemoteSync` is the runtime gate (defaults to the build-time
