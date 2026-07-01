@@ -18,7 +18,6 @@
     --good-bg: #e3f3e8;
     --warn: #8a5a00;
     --warn-bg: #fbf1d8;
-    --ghost: #b3aea0;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --serif: ui-serif, Georgia, "Times New Roman", serif;
     --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
@@ -37,7 +36,6 @@
       --good-bg: #1d3225;
       --warn: #e6c068;
       --warn-bg: #322a16;
-      --ghost: #6a655a;
     }
   }
   html { font-size: 16px; }
@@ -146,15 +144,10 @@
   }
   .tree .row.indent-1 { padding-left: 1.5rem; }
   .tree .row.indent-2 { padding-left: 3.0rem; }
-  .tree .row.indent-3 { padding-left: 4.5rem; }
-  .tree .row.indent-4 { padding-left: 6.0rem; }
   .tree .bullet { color: var(--fg-faint); }
   .tree .ref { color: var(--accent); }
   .tree .schema-ref { color: var(--accent); font-weight: 600; }
-  .tree .ghost { color: var(--ghost); font-style: italic; }
   .tree .label-real { background: var(--accent-bg); color: var(--fg); padding: 0 0.4em; border-radius: 3px; font-size: 0.78em; margin-left: 0.5em; }
-  .tree .label-ghost { background: transparent; color: var(--ghost); padding: 0 0.4em; border: 1px dashed var(--ghost); border-radius: 3px; font-size: 0.78em; margin-left: 0.5em; }
-  .tree .label-note { color: var(--fg-faint); margin-left: 0.6em; font-style: italic; font-size: 0.85em; font-family: var(--sans); }
   .tree .value { color: var(--good); }
   .tree .props {
     color: var(--fg-dim);
@@ -296,7 +289,27 @@
   <strong>Last verified against code:</strong> 2026-07-01.
 </aside>
 
-<h2>1. Why move</h2>
+<div class="callout">
+  <strong>Decisions made in this doc</strong> (each argued in its section):
+  <ul>
+    <li>Child-backing is a per-schema <code>childBacked</code> flag — user schemas on,
+      kernel/plugin off unless opted in (durably), UiState never (<a href="#s6">§6</a>).</li>
+    <li>Field-row shape: <code>[[Schema Name]]</code> content + derived synced
+      <code>reference_target_id</code>, as the spike built it (<a href="#s7">§7</a>).</li>
+    <li><code>setProperty</code> dual-writes children and cell in one tx; the
+      processor pair is permanent convergence machinery (<a href="#s5">§5</a>).</li>
+    <li>The catch-up must also converge <em>deletions</em> and dedup at parents — the
+      spike's set-only pass is not enough (<a href="#s5">§5</a>, slice C).</li>
+    <li>E2EE workspaces stay cell-only until the derive-locally path lands
+      (<a href="#s8">§8</a>).</li>
+    <li>Field rows sort first among children; render-only ghosts replace the spike's
+      materialized empty slots (<a href="#s9">§9</a>).</li>
+    <li>Ship as master-first slices extracted from the spike; dormant-flag landing is
+      the fallback; PR #285 is the reference implementation (<a href="#s11">§11</a>).</li>
+  </ul>
+</div>
+
+<h2 id="s1">1. Why move</h2>
 
 <p>
 Property <em>schemas</em> are blocks (<code>'property-schema'</code> type, projected into
@@ -336,7 +349,7 @@ children of the block, rendered with structure" — that's what every Tana-style
 does. We've been emulating it with a sidecar panel because the data model said no.
 </p>
 
-<h2>2. The target shape</h2>
+<h2 id="s2">2. The target shape</h2>
 
 <p>
 A property on a block becomes a <strong>field row</strong> (rev 1 called this a
@@ -407,12 +420,14 @@ are themselves block references. Same primitive everywhere.
   </li>
 </ul>
 
-<h2>3. What changed under rev 1 — the re-grounding</h2>
+<h2 id="s3">3. What changed under rev 1 — the re-grounding</h2>
 
 <p>
 Rev 1 was written against May's data layer. Master rewrote most of the subsystems the
 plan touches, and the spike (PR #285) already implements a large portion of the plan on
-top of the new subsystems. Anyone reading rev 1: these claims are dead —
+top of the new subsystems. Anyone reading rev 1: these claims are dead. (Implementing a
+slice and never read rev 1? Skip this section — the as-built spec starts at
+<a href="#s5">§5</a>.)
 </p>
 
 <table>
@@ -496,19 +511,17 @@ top of the new subsystems. Anyone reading rev 1: these claims are dead —
     </tr>
     <tr>
       <td>Backfill = "one-shot job per workspace"</td>
-      <td>The spike built a production-grade <em>runtime</em> backfill: per-workspace/schema
-        completion markers in <code>client_schema_state</code>, candidate scan via
-        <code>json_each</code> + NOT EXISTS against a partial index, bulk inserts batched
-        to ~190 rows/tx, storage-error retry with batch splitting, ETA logging,
-        undo-free system writes, schema-readiness gating, and row-targeted sync catch-up
-        that bypasses the markers.</td>
+      <td>The spike built a production-grade <em>runtime</em> backfill (per-workspace/schema
+        completion markers, indexed candidate scan, batched bulk inserts, storage-error
+        retry, schema-readiness gating, row-targeted sync catch-up) — see PR #285 for
+        the machinery; constants and internals will shift in extraction.</td>
       <td>Keep it. Client-side backfill is also the only option compatible with e2ee
         (the server can't decode the cell) and with client-resident codecs.</td>
     </tr>
   </tbody>
 </table>
 
-<h2>4. Why this shape, not another</h2>
+<h2 id="s4">4. Why this shape, not another</h2>
 
 <p>Alternatives, re-scored against the current pipeline:</p>
 
@@ -575,7 +588,7 @@ The same-tx processor registry this relies on
 seam rev 1 hoped for.
 </p>
 
-<h2>5. Mechanism — as built in the spike</h2>
+<h2 id="s5">5. Mechanism — as built in the spike</h2>
 
 <p>
 Three same-tx processors plus a dual-writing <code>tx.setProperty</code>. All of this
@@ -690,7 +703,7 @@ convergence.
   property write. Backfill of a large workspace is a real upload burst (§11, slice C).
 </div>
 
-<h2>6. The scope decision: which schemas get children</h2>
+<h2 id="s6">6. The scope decision: which schemas get children</h2>
 
 <p>
 This is the fork in the road, and the spike and the standing docs disagree.
@@ -791,7 +804,7 @@ If types-as-children is ever wanted (type tags as referenceable rows), that's it
 design with its own doc; don't get it as a side effect of this migration.
 </p>
 
-<h2>7. Field-row content: <code>[[name]]</code> + derived column</h2>
+<h2 id="s7">7. Field-row content: <code>[[name]]</code> + derived column</h2>
 
 <p>
 Rev 1 specified field-row content as <code>((schema-id))</code>. The spike ships
@@ -826,7 +839,7 @@ shape:
     (implemented in <code>referenceBlock.ts</code>).</li>
 </ul>
 
-<h2>8. E2EE workspaces — new constraint</h2>
+<h2 id="s8">8. E2EE workspaces — new constraint</h2>
 
 <p>
 E2EE workspaces (May 29) encrypt <code>content</code>, <code>properties_json</code>, and
@@ -894,7 +907,7 @@ spike-introduced Supabase migration</strong> — both <code>20260527123000</code
 skill while at it.
 </p>
 
-<h2>9. Detection rules and edge cases — as implemented, with divergences</h2>
+<h2 id="s9">9. Detection rules and edge cases — as implemented, with divergences</h2>
 
 <dl>
   <dt><strong>Field-row recognition.</strong></dt>
@@ -1005,7 +1018,7 @@ skill while at it.
     consistency of field order), add explicit cleanup on type removal.</dd>
 </dl>
 
-<h2>10. UI: in-tree rendering exists; the panel is not sunset</h2>
+<h2 id="s10">10. UI: in-tree rendering exists; the panel is not sunset</h2>
 
 <p>
 The spike ships <code>FieldBlockRenderer</code> (field-row line: shape glyph + label
@@ -1020,7 +1033,7 @@ survives (value presets, schema registry, <code>resolvePropertyDisplay</code>,
 <code>PropertySchemaBlockRenderer</code>) matches what the spike actually reuses.
 </p>
 
-<h2>11. Shipping plan — extract slices from the spike, don't land the merge</h2>
+<h2 id="s11">11. Shipping plan — extract slices from the spike, don't land the merge</h2>
 
 <p>
 PR #285 proved the design end-to-end, and the branch is actively maintained — it
@@ -1234,7 +1247,7 @@ keep it open until its content is fully accounted for.
 
 </div>
 
-<h2>12. Risks to monitor</h2>
+<h2 id="s12">12. Risks to monitor</h2>
 
 <ul>
   <li>
