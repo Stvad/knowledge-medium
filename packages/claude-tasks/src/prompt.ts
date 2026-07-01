@@ -43,6 +43,25 @@ New rows (JSON):
 
 Use the km MCP tools to inspect the referenced blocks if needed, then act per the watcher's intent.`
 
+/** Channel-delivery variant: the ambient session must close the task
+ *  lifecycle itself (the daemon only claims and delivers). */
+export const DEFAULT_MENTION_CHANNEL_PROMPT = `New mention in the user's Knowledge Medium notes (watcher: {{watcherName}}).
+
+The block that mentioned you (id {{blockId}}):
+{{content}}
+
+Its full subtree:
+{{subtree}}
+
+Path from the page root (nearest last):
+{{ancestors}}
+
+Handle it now, then close the task out yourself:
+1. Do the work, using the km tools (search, get_block, subtree, backlinks; create_block/update_block for edits).
+2. Post your answer with create_block: parentId {{blockId}}, your reply as content, and properties {"claude:reply": true}.
+3. Mark the task finished with update_block on {{blockId}}: properties {"claude:status": "done"} (or "error" plus {"claude:error": "<why>"} if you could not complete it).
+Never write the literal token [[claude]] (or any watcher-target wikilink) anywhere — it re-triggers the watcher.`
+
 const renderTemplate = (template: string, values: Record<string, string>): string =>
   template.replace(/\{\{(\w+)\}\}/g, (match, key: string) =>
     Object.hasOwn(values, key) ? values[key] : match)

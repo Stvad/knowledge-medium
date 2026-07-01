@@ -118,9 +118,27 @@ Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql
 - Spawned runs get **no Bash and no filesystem tools by default**; graph MCP tools only. Watchers that operate on code repos must opt in via `allowedTools` + `cwd`, which is a deliberate, per-watcher decision.
 - No `--dangerously-skip-permissions` anywhere; print mode denies anything outside the allowlist.
 
-## Ambient mode / channels (future hook)
+## Ambient mode via channels (EXPERIMENTAL)
 
-Claude Code's `channels` primitive (research preview) can push events into a *persistent* session via an MCP server emitting `notifications/claude/channel`. The km MCP server is the natural emitter once that contract stabilizes — the daemon would hand watcher events to it instead of spawning per-task runs. Per-task spawning stays the default: it gives one-session-per-thread isolation that a single ambient session can't.
+Claude Code's channels primitive (research preview, v2.1.80+) can push watcher events into one *persistent* session instead of spawning a run per task — the Claude-Tag "always listening" feel. The km MCP server implements the emitter; it's off unless all three pieces are opted in:
+
+1. Register km in the project's `.mcp.json` with the channel port:
+
+   ```json
+   {"mcpServers": {"km": {"command": "node", "args": ["<repo>/packages/claude-tasks/dist/mcp.js"], "env": {"AGENT_RUNTIME_PROFILE": "claude-tasks", "KM_MCP_CHANNEL_PORT": "8790"}}}}
+   ```
+
+2. Run the ambient session (custom channels aren't on the preview allowlist, hence the dev flag):
+
+   ```bash
+   claude --dangerously-load-development-channels server:km
+   ```
+
+3. Mark watchers `"delivery": "channel"` in the daemon config.
+
+The daemon then claims the task (`claude:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `claude:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 30 min. If the listener is down, the task is marked `error`.
+
+Caveats, honestly: research preview (flag syntax/protocol may change — nothing load-bearing depends on it here); one shared context across all events vs per-thread isolation (no `--resume` threading in this mode); events only arrive while the session is open. Per-task spawn remains the default and the recommendation.
 
 ## Troubleshooting
 

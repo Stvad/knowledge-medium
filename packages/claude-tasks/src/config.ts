@@ -42,6 +42,12 @@ const watcherBase = {
   model: z.string().optional(),
   /** Kill the claude run after this long. */
   timeoutMs: z.number().int().positive().default(10 * 60_000),
+  /** 'spawn' (default): one claude -p run per task, full lifecycle
+   *  handled by the daemon. 'channel' (EXPERIMENTAL, research-preview
+   *  Claude Code channels): push the event into a persistent ambient
+   *  session via the km MCP channel port; that session completes the
+   *  lifecycle itself using the graph tools. */
+  delivery: z.enum(['spawn', 'channel']).default('spawn'),
 }
 
 export const backlinksWatcherSchema = z.object({
@@ -78,6 +84,9 @@ export const configSchema = z.object({
   pollIntervalMs: z.number().int().positive().default(5_000),
   claudeBin: z.string().default('claude'),
   maxConcurrent: z.number().int().positive().default(2),
+  /** Loopback port the km MCP server's channel listener binds when the
+   *  ambient session runs (watchers with delivery: 'channel' post here). */
+  channelPort: z.number().int().positive().default(8790),
   /** State file for query-watcher cursors (backlink watchers keep
    *  their state as block properties in the graph itself). */
   statePath: z.string().optional(),

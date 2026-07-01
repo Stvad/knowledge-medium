@@ -13,14 +13,22 @@
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
  * - KM_MCP_BLOCKED_WIKILINKS: comma-separated aliases the write tools
  *   refuse to link (watcher re-trigger guard, set by the daemon)
+ * - KM_MCP_CHANNEL_PORT (EXPERIMENTAL): when set, the server also
+ *   declares the Claude Code `claude/channel` capability (research
+ *   preview) and binds a loopback HTTP listener on this port; POSTed
+ *   {content, meta?} bodies are pushed into the hosting session as
+ *   `notifications/claude/channel` events. Only meaningful when the
+ *   session was started with
+ *   `claude --dangerously-load-development-channels server:km`.
  */
+import http from 'node:http'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { createBridgeClient } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import { createGraph } from './graph.js'
-import { BLOCKED_WIKILINKS_ENV, MCP_SERVER_NAME } from './mcpShared.js'
+import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, MCP_SERVER_NAME } from './mcpShared.js'
 
 const client = createBridgeClient({
   profile: process.env.AGENT_RUNTIME_PROFILE,
@@ -56,7 +64,20 @@ const text = (value: string) => ({
   content: [{type: 'text' as const, text: value}],
 })
 
-const server = new McpServer({name: MCP_SERVER_NAME, version: '0.1.0'})
+const channelPort = Number(process.env[CHANNEL_PORT_ENV] ?? '') || null
+
+const server = new McpServer(
+  {name: MCP_SERVER_NAME, version: '0.1.0'},
+  channelPort
+    ? {
+        capabilities: {experimental: {'claude/channel': {}}, tools: {}},
+        instructions:
+          'Events from the km channel arrive as <channel source="km" ...> — tasks from the user\'s '
+          + 'Knowledge Medium notes. Each event says how to close its task out (reply block + status '
+          + 'properties) using the km tools in this server.',
+      }
+    : undefined,
+)
 
 server.registerTool('get_block', {
   description: 'Fetch a single block (content, properties, parentId, childIds) by id.',
@@ -124,3 +145,40 @@ server.registerTool('update_block', {
 })
 
 await server.connect(new StdioServerTransport())
+
+// ----- experimental channel listener ---------------------------------
+// Loopback-only, mirrors the bridge's posture. The daemon (or curl)
+// POSTs {content, meta?}; each becomes a channel event in the hosting
+// session. Notifications are fire-and-forget per the channels contract.
+if (channelPort) {
+  const listener = http.createServer((request, response) => {
+    if (request.method !== 'POST') {
+      response.writeHead(405).end()
+      return
+    }
+    let body = ''
+    request.on('data', chunk => { body += chunk })
+    request.on('end', () => {
+      void (async () => {
+        try {
+          const parsed = JSON.parse(body) as {content?: unknown, meta?: unknown}
+          const content = typeof parsed.content === 'string' ? parsed.content : body
+          const meta = parsed.meta && typeof parsed.meta === 'object'
+            ? Object.fromEntries(
+                Object.entries(parsed.meta as Record<string, unknown>)
+                  .filter(([, value]) => typeof value === 'string'),
+              ) as Record<string, string>
+            : undefined
+          await server.server.notification({
+            method: 'notifications/claude/channel',
+            params: {content, ...(meta ? {meta} : {})},
+          })
+          response.writeHead(200).end('ok')
+        } catch {
+          response.writeHead(400).end('expected JSON {content, meta?}')
+        }
+      })()
+    })
+  })
+  listener.listen(channelPort, '127.0.0.1')
+}

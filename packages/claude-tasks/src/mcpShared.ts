@@ -28,3 +28,8 @@ export const KM_MCP_ALLOWED_TOOLS = KM_MCP_TOOL_NAMES.map(
  *  page aliases whose wikilinks the MCP write tools must refuse to
  *  create (defense-in-depth against watcher re-trigger loops). */
 export const BLOCKED_WIKILINKS_ENV = 'KM_MCP_BLOCKED_WIKILINKS'
+
+/** EXPERIMENTAL (Claude Code channels research preview): when set, the
+ *  km MCP server declares the channel capability and binds a loopback
+ *  HTTP listener on this port for event injection. */
+export const CHANNEL_PORT_ENV = 'KM_MCP_CHANNEL_PORT'

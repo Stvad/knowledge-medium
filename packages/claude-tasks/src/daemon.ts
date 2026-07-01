@@ -18,7 +18,7 @@ import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
 import { createEngine } from './engine.js'
 import { runClaude } from './runner.js'
-import { BLOCKED_WIKILINKS_ENV, MCP_SERVER_NAME } from './mcpShared.js'
+import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, MCP_SERVER_NAME } from './mcpShared.js'
 
 const log = (message: string) =>
   process.stdout.write(`${new Date().toISOString()} ${message}\n`)
@@ -89,6 +89,16 @@ const main = async () => {
     graph: createGraph(client),
     state: createStateStore(config.statePath ?? defaultStatePath()),
     runTask: options => runClaude(options),
+    deliverToChannel: async event => {
+      const response = await fetch(`http://127.0.0.1:${config.channelPort}/`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(event),
+      })
+      if (!response.ok) {
+        throw new Error(`channel listener replied ${response.status} — is the ambient session running? (claude --dangerously-load-development-channels server:km, ${CHANNEL_PORT_ENV}=${config.channelPort})`)
+      }
+    },
     mcpConfigPath,
     log,
   })

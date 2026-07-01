@@ -11,14 +11,22 @@ import type { Graph } from './graph.js'
 import type { ClaudeRunOptions, ClaudeRunResult } from './runner.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession } from './watchers.js'
-import { renderMentionPrompt, renderQueryPrompt } from './prompt.js'
+import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { KM_MCP_ALLOWED_TOOLS } from './mcpShared.js'
+
+export interface ChannelEvent {
+  content: string
+  meta: Record<string, string>
+}
 
 export interface EngineDeps {
   config: DaemonConfig
   graph: Graph
   state: StateStore
   runTask: (options: ClaudeRunOptions) => Promise<ClaudeRunResult>
+  /** EXPERIMENTAL: push an event into the ambient channel session
+   *  (delivery: 'channel' watchers). Throws if unreachable. */
+  deliverToChannel: (event: ChannelEvent) => Promise<void>
   /** Generated --mcp-config path; null disables graph tools for runs. */
   mcpConfigPath: string | null
   log: (message: string) => void
@@ -29,7 +37,7 @@ const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
 export const createEngine = (deps: EngineDeps) => {
-  const {config, graph, state, runTask, mcpConfigPath, log} = deps
+  const {config, graph, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
   const now = deps.now ?? Date.now
 
   /** Block ids (mention tasks) / watcher names (query batches) with a
@@ -77,7 +85,8 @@ export const createEngine = (deps: EngineDeps) => {
 
     try {
       const subtreeRows = await graph.getSubtree(sourceId)
-      const prompt = renderMentionPrompt(watcher.prompt, {
+      const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
+      const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
         content: block.content ?? '',
         subtree: renderSubtreeOutline(subtreeRows as SubtreeOutlineRow[]),
         // graph.ancestors is nearest-first; the prompt reads root→leaf.
@@ -86,8 +95,20 @@ export const createEngine = (deps: EngineDeps) => {
         deepLink,
         watcherName: watcher.name,
       })
-      const session = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
 
+      if (watcher.delivery === 'channel') {
+        // Ambient mode: deliver and step back — the channel session owns
+        // the rest of the lifecycle (reply block + done/error props). If
+        // it never does, the stale-running sweep re-delivers in 30 min.
+        await deliverToChannel({
+          content: prompt,
+          meta: {watcher: watcher.name, block_id: sourceId},
+        })
+        log(`[${watcher.name}] delivered ${sourceId} to the ambient channel session`)
+        return
+      }
+
+      const session = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
       const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined))
 
       if (result.ok) {
@@ -160,6 +181,12 @@ export const createEngine = (deps: EngineDeps) => {
     // prompt can't re-fire (and re-bill) every tick. Failures are logged.
     await state.setCursor(watcher.name, diff.seenIds)
     const prompt = renderQueryPrompt(watcher.prompt, {newRows: diff.newRows, watcherName: watcher.name})
+
+    if (watcher.delivery === 'channel') {
+      await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
+      log(`[${watcher.name}] delivered ${diff.newRows.length} new row(s) to the ambient channel session`)
+      return
+    }
 
     log(`[${watcher.name}] firing for ${diff.newRows.length} new row(s)`)
     launch(key, async () => {

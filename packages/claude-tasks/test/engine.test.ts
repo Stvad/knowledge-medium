@@ -98,6 +98,7 @@ const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
     config: mentionConfig(),
     state: memoryState(),
     runTask: vi.fn(async () => okRun()),
+    deliverToChannel: vi.fn(async () => {}),
     mcpConfigPath: '/tmp/mcp.json',
     log: () => {},
     now: () => NOW,
@@ -230,6 +231,51 @@ describe('mention lifecycle', () => {
     const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
     expect(tools).toContain('mcp__km__get_block')
     expect(tools).toContain('Bash(git:*)')
+  })
+})
+
+describe('channel delivery (experimental)', () => {
+  const channelConfig = () => parseConfig({
+    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', delivery: 'channel'}],
+  })
+
+  it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const deliverToChannel = vi.fn(async () => {})
+    const engine = engineWith({graph, runTask, deliverToChannel, config: channelConfig()})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).not.toHaveBeenCalled()
+    expect(deliverToChannel).toHaveBeenCalledTimes(1)
+    const event = deliverToChannel.mock.calls[0][0] as {content: string, meta: Record<string, string>}
+    expect(event.meta).toEqual({watcher: 'mentions', block_id: 'b-1'})
+    expect(event.content).toContain('close the task out yourself')
+    // Daemon only claims; the ambient session finishes the lifecycle.
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
+    expect(replies).toHaveLength(0)
+  })
+
+  it('marks the task error when the channel listener is unreachable', async () => {
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ambient task'}},
+    })
+    const engine = engineWith({
+      graph,
+      deliverToChannel: vi.fn(async () => { throw new Error('connection refused') }),
+      config: channelConfig(),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
   })
 })
 
