@@ -550,7 +550,13 @@ export class TxImpl implements Tx {
     workspaceId?: string,
     options?: {includePropertyChildren?: boolean},
   ): Promise<BlockData[]> {
-    const includePropertyChildren = options?.includePropertyChildren !== false
+    // Default EXCLUDES property-field rows: the vast majority of callers are
+    // structural/outline operations (sibling lists, moves, paste, panel layout)
+    // that must see only visible children — a materialized hidden field (e.g.
+    // `types`) sorted before the content children would otherwise corrupt
+    // sibling-position math and navigation. The property-children machinery
+    // (materialization, backfill, delete-cascade, merge) opts IN explicitly.
+    const includePropertyChildren = options?.includePropertyChildren === true
     const parseRows = (rows: BlockRow[]): BlockData[] => {
       const data = rows.map(parseBlockRow)
       if (includePropertyChildren) return data
