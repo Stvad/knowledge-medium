@@ -15,12 +15,15 @@
  *    itself shrinks with the keyboard → overlap == 0. The scroller
  *    already shrank, so no extra margin is needed.
  *
- *  NB: this is deliberately a *different* quantity from the mobile
- *  toolbar's `useKeyboardInset`. That one answers "where do I pin a
- *  position:fixed element?", which depends on how the browser anchors
- *  fixed elements (and needs a sentinel probe to detect). For scroll
- *  margins on layout-positioned content the formula above is uniform
- *  across browsers, so the two can't share an implementation. */
+ *  NB: `getLayoutViewportKeyboardOverlap` (below) is the SIBLING quantity for
+ *  the mobile editing toolbar's `position:fixed` bottom inset — the same
+ *  arithmetic, but it reads `documentElement.clientHeight` for the
+ *  layout-viewport height instead of `window.innerHeight`. innerHeight is fine
+ *  here (only fed to a ≥60 "is a keyboard up" check, where its iOS
+ *  Stage-Manager under-reporting is tolerable) but WRONG for positioning a
+ *  layout-anchored fixed element, which needs the reliable clientHeight. They
+ *  stay two readers, not one parameterized helper — the height-source
+ *  difference is load-bearing. */
 
 import { CallbackSet } from './callbackSet'
 
@@ -35,6 +38,32 @@ const computeOverlap = (): number => {
  *  real on-screen keyboard is up (see keyboardAwareScroll's re-assert gate) —
  *  NOT as a scroll amount: the keyboard itself is the browser's job. */
 export const getKeyboardOverlap = (): number => computeOverlap()
+
+/** Pure: the CSS px of the *layout* viewport hidden below the visible (visual)
+ *  viewport — i.e. the bottom inset that lifts a layout-anchored
+ *  `position: fixed; bottom: 0` element (the mobile editing toolbar) to just
+ *  above the on-screen keyboard. Clamped ≥ 0. Subtracting the visual viewport's
+ *  offsetTop tracks the iOS pan as the page scrolls with the keyboard up. */
+export const layoutViewportKeyboardOverlap = (
+  layoutHeight: number,
+  visualViewportHeight: number,
+  visualViewportOffsetTop: number,
+): number =>
+  Math.max(0, Math.round(layoutHeight - visualViewportHeight - visualViewportOffsetTop))
+
+/** Live {@link layoutViewportKeyboardOverlap} read from the DOM — the mobile
+ *  editing toolbar's `bottom` inset. Uses `documentElement.clientHeight` (NOT
+ *  `window.innerHeight`, which under-reports on iOS Stage Manager + scroll) for
+ *  the layout-viewport height, since a fixed element is positioned against the
+ *  layout viewport. On Chromium/Firefox (interactive-widget=resizes-content)
+ *  clientHeight and vv.height shrink together with no pan, so this is ~0 and
+ *  bottom:0 already clears the keyboard. */
+export const getLayoutViewportKeyboardOverlap = (): number => {
+  if (typeof document === 'undefined') return 0
+  const layoutH = document.documentElement.clientHeight
+  const vv = typeof window === 'undefined' ? undefined : window.visualViewport
+  return layoutViewportKeyboardOverlap(layoutH, vv?.height ?? layoutH, vv?.offsetTop ?? 0)
+}
 
 /** The visual viewport's current height in CSS px (0 when unavailable). The
  *  geometry signal keyboardAwareScroll compares to tell a keyboard open/close

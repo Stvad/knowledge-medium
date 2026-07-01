@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   getKeyboardOverlap,
+  layoutViewportKeyboardOverlap,
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
 } from '@/utils/keyboardViewport'
@@ -60,6 +61,38 @@ describe('getKeyboardOverlap', () => {
     vi.stubGlobal('innerHeight', 500)
     installViewport({height: 760})
     expect(getKeyboardOverlap()).toBe(0)
+  })
+})
+
+describe('layoutViewportKeyboardOverlap', () => {
+  // The mobile editing toolbar's `position:fixed; bottom` inset. Layout height
+  // is documentElement.clientHeight (stays full on iOS while the keyboard is
+  // up); the load-bearing term is subtracting the visual viewport's offsetTop
+  // (the iOS pan), which the pre-fix formula omitted and so over-lifted the bar
+  // after any scroll.
+  it('lifts the toolbar by the keyboard height when unscrolled (iOS, no pan)', () => {
+    // Real iPad: clientHeight 650, keyboard shrinks vv to 314, not scrolled.
+    expect(layoutViewportKeyboardOverlap(650, 314, 0)).toBe(336)
+  })
+
+  it('shrinks the inset by the pan as the page scrolls with the keyboard up', () => {
+    // Same iPad, scrolled so iOS pans the visual viewport down by 277 — the
+    // device-verified case (rendered style.bottom was 59px). Dropping offsetTop
+    // would wrongly yield 336 and fling the bar toward the top.
+    expect(layoutViewportKeyboardOverlap(650, 314, 277)).toBe(59)
+  })
+
+  it('is 0 with no keyboard (visual viewport fills the layout viewport)', () => {
+    expect(layoutViewportKeyboardOverlap(650, 650, 0)).toBe(0)
+  })
+
+  it('is ~0 when the layout viewport shrinks with the keyboard (Chromium resizes-content)', () => {
+    // clientHeight and vv.height shrink together, no pan → bottom:0 already clears.
+    expect(layoutViewportKeyboardOverlap(433, 434, 0)).toBe(0)
+  })
+
+  it('never goes negative', () => {
+    expect(layoutViewportKeyboardOverlap(500, 760, 0)).toBe(0)
   })
 })
 

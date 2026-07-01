@@ -5,64 +5,42 @@ import { useActiveContextsState, editorViewFromActiveContexts } from '@/shortcut
 import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
-import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
+import {
+  getLayoutViewportKeyboardOverlap,
+  setEditingToolbarHeight,
+  subscribeKeyboardViewport,
+} from '@/utils/keyboardViewport.js'
 import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts'
 
-/** Reserves the on-screen keyboard's intrusion as the toolbar's `bottom`, so
- *  the `position: fixed` toolbar sits just above the keyboard.
- *
- *  The toolbar's `bottom` is measured from the LAYOUT viewport's bottom. On
- *  iOS Safari the layout viewport stays full-height while the keyboard is up
- *  (the keyboard overlays it and *pans* the visual viewport), so `bottom: 0`
- *  would sit behind the keyboard. The inset lifts the toolbar by however much
- *  of the layout viewport is hidden below the visible (visual) viewport:
- *
- *    inset = documentElement.clientHeight − visualViewport.height − visualViewport.offsetTop
- *
- *  Two subtleties, both learned on-device (real iPad, Stage Manager):
- *  - Use `documentElement.clientHeight`, not `window.innerHeight`, for the
- *    layout-viewport height: innerHeight under-reports on iOS while the
- *    keyboard is up and the page is scrolled, but the fixed toolbar is
- *    positioned against the layout viewport, which clientHeight reports
- *    reliably.
- *  - Subtracting `visualViewport.offsetTop` (the pan) is the load-bearing
- *    term. iOS pans the visual viewport as you scroll with the keyboard up,
- *    shrinking the keyboard's intrusion by exactly that amount. The earlier
- *    version reserved `baseline − vv.height` and ignored the pan, so after any
- *    scroll it over-lifted the toolbar toward the top of the screen — the drift
- *    this fixes. Recomputed on visualViewport `resize` (open/close) AND
- *    `scroll` (the pan); moving a fixed toolbar doesn't itself scroll anything,
- *    so unlike re-scrolling the caret (keyboardAwareScroll) this can't loop.
- *
- *  Browser-uniform: on Chromium/Firefox `index.html`'s
- *  `interactive-widget=resizes-content` shrinks the layout viewport with the
- *  keyboard, so clientHeight and vv.height shrink together (no pan) and the
- *  inset computes to ~0 — `bottom: 0` already clears the keyboard there. Same
- *  formula, no per-browser branch, no anchoring sentinel. */
+/** The mobile editing toolbar's `bottom` inset — lifts the `position: fixed`
+ *  toolbar just above the on-screen keyboard while editing. The value is the
+ *  layout-viewport keyboard overlap (see `getLayoutViewportKeyboardOverlap` for
+ *  the formula and the iOS clientHeight-vs-innerHeight + pan rationale); this
+ *  hook tracks it live while the toolbar is active (`isMobile && isEditing`)
+ *  and re-renders on change. */
 const useKeyboardInset = (active: boolean): number => {
   const [inset, setInset] = useState(0)
 
   useEffect(() => {
     if (!active || typeof window === 'undefined') return
-    const vv = window.visualViewport
-
+    // Recompute on every viewport change (keyboard open/close, the iOS pan on
+    // scroll, rotation) via the shared subscription — the same listener set
+    // keyboardAwareScroll uses. Its extra fire on toolbar-height changes is a
+    // no-op here: the inset doesn't depend on that, and the equality guard
+    // drops the redundant recompute.
+    //
+    // Accepted transient: during a rapid keyboard open/close iOS emits a burst
+    // of events while clientHeight / vv.height / offsetTop settle
+    // independently, so the inset can be briefly off for a frame; the next
+    // event recomputes it correctly. Not rAF-coalesced — that would add a frame
+    // of latency to the common smooth-scroll case for a rare, self-correcting
+    // blip.
     const update = () => {
-      const layoutH = document.documentElement.clientHeight
-      const vvHeight = vv?.height ?? layoutH
-      const vvTop = vv?.offsetTop ?? 0
-      const next = Math.max(0, Math.round(layoutH - vvHeight - vvTop))
+      const next = getLayoutViewportKeyboardOverlap()
       setInset(prev => (prev === next ? prev : next))
     }
-
     update()
-    vv?.addEventListener('resize', update)
-    vv?.addEventListener('scroll', update)
-    window.addEventListener('resize', update)
-    return () => {
-      vv?.removeEventListener('resize', update)
-      vv?.removeEventListener('scroll', update)
-      window.removeEventListener('resize', update)
-    }
+    return subscribeKeyboardViewport(update)
   }, [active])
 
   return inset
