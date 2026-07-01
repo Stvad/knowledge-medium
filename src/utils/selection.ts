@@ -46,7 +46,7 @@ export const nextVisibleBlock = async (
 
   // Step into the first child if expanded.
   if (isExpanded(current, scopeRootId, scopeRootForcesOpen)) {
-    const childIds = await current.childIds.load()
+    const childIds = await current.renderChildIds.load()
     if (childIds.length > 0) return repo.block(childIds[0])
   }
 
@@ -58,7 +58,7 @@ export const nextVisibleBlock = async (
     const parentId = data.parentId
     const parent = repo.block(parentId)
     await parent.load()
-    const siblingIds = await parent.childIds.load()
+    const siblingIds = await parent.renderChildIds.load()
     const idx = siblingIds.indexOf(walker.id)
     if (idx !== -1 && idx + 1 < siblingIds.length) {
       return repo.block(siblingIds[idx + 1])
@@ -87,7 +87,7 @@ export const previousVisibleBlock = async (
 
   const parent = repo.block(parentId)
   await parent.load()
-  const siblingIds = await parent.childIds.load()
+  const siblingIds = await parent.renderChildIds.load()
   const idx = siblingIds.indexOf(current.id)
 
   if (idx > 0) {
@@ -131,7 +131,7 @@ export const blockAfterSubtreeRemoval = async (
 
   const parent = repo.block(data.parentId)
   await parent.load()
-  const siblingIds = await parent.childIds.load()
+  const siblingIds = await parent.renderChildIds.load()
   const idx = siblingIds.indexOf(current.id)
   if (idx === -1) return parent
 
@@ -167,7 +167,7 @@ export const getLastVisibleDescendant = async (
     const isScopeRoot = current.id === scopeRootId && scopeRootForcesOpen
     const collapsed = current.peekProperty(isCollapsedProp) ?? false
     if (collapsed && !isScopeRoot) return current
-    const childIds = await current.childIds.load()
+    const childIds = await current.renderChildIds.load()
     if (childIds.length === 0) return current
     current = repo.block(childIds[childIds.length - 1])
     await current.load()

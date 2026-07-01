@@ -185,30 +185,51 @@ export const instrumentDb = (db: PowerSyncDb): {db: PowerSyncDb; counters: DbCou
       state.writeTransaction = 0
     },
   }
-  // Instrument the inner LockContext on writeTransaction too — calls
-  // inside `tx.execute` / `tx.getAll` count for "roundtrips inside this
-  // mutation."
-  type AnyFn = (...args: unknown[]) => unknown
-  const wrapTxDb = <T extends {execute: AnyFn; getAll: AnyFn; getOptional: AnyFn; get: AnyFn}>(txDb: T): T => ({
-    ...txDb,
-    execute: ((sql: string, params?: unknown[]) => { state.execute++; return txDb.execute(sql, params) }) as T['execute'],
-    getAll: ((sql: string, params?: unknown[]) => { state.getAll++; return txDb.getAll(sql, params) }) as T['getAll'],
-    getOptional: ((sql: string, params?: unknown[]) => { state.getOptional++; return txDb.getOptional(sql, params) }) as T['getOptional'],
-    get: ((sql: string, params?: unknown[]) => { state.get++; return txDb.get(sql, params) }) as T['get'],
-  })
+  // Count the four read/exec methods on any LockContext-shaped object
+  // (the top-level db AND the inner tx handed to writeTransaction), so
+  // roundtrips inside a mutation count too. A Proxy is used rather than a
+  // spread because `@powersync/node`'s db/tx are class instances whose
+  // methods live on the prototype — a spread would drop every method the
+  // override doesn't explicitly re-list (e.g. `close`), crashing Repo.
+  // Mirrors `wrapDbWithMetrics` in `@/data/internals/timingMetrics`.
+  const countedReadExec = (
+    target: object,
+    overrides: Record<string, unknown>,
+  ): object =>
+    new Proxy(target, {
+      get(t, prop, receiver) {
+        if (typeof prop === 'string' && prop in overrides) return overrides[prop]
+        const value = Reflect.get(t, prop, receiver)
+        return typeof value === 'function' ? value.bind(t) : value
+      },
+    })
 
-  const wrapped: PowerSyncDb = {
-    execute: (sql, params) => { state.execute++; return db.execute(sql, params) },
-    getAll: (sql, params) => { state.getAll++; return db.getAll(sql, params) },
-    getOptional: (sql, params) => { state.getOptional++; return db.getOptional(sql, params) },
-    get: (sql, params) => { state.get++; return db.get(sql, params) },
-    writeTransaction: (fn) => {
+  const wrapTxDb = (txDb: object): object =>
+    countedReadExec(txDb, {
+      execute: (sql: string, params?: unknown[]) => { state.execute++; return (txDb as TimedReadExec).execute(sql, params) },
+      getAll: (sql: string, params?: unknown[]) => { state.getAll++; return (txDb as TimedReadExec).getAll(sql, params) },
+      getOptional: (sql: string, params?: unknown[]) => { state.getOptional++; return (txDb as TimedReadExec).getOptional(sql, params) },
+      get: (sql: string, params?: unknown[]) => { state.get++; return (txDb as TimedReadExec).get(sql, params) },
+    })
+
+  const wrapped = countedReadExec(db as object, {
+    execute: (sql: string, params?: unknown[]) => { state.execute++; return db.execute(sql, params) },
+    getAll: (sql: string, params?: unknown[]) => { state.getAll++; return db.getAll(sql, params) },
+    getOptional: (sql: string, params?: unknown[]) => { state.getOptional++; return db.getOptional(sql, params) },
+    get: (sql: string, params?: unknown[]) => { state.get++; return db.get(sql, params) },
+    writeTransaction: (fn: (tx: object) => Promise<unknown>) => {
       state.writeTransaction++
-      return db.writeTransaction((txDb) => fn(wrapTxDb(txDb)))
+      return db.writeTransaction((txDb) => fn(wrapTxDb(txDb as object)))
     },
-    onChange: (h, opts) => db.onChange(h, opts),
-  }
+  }) as PowerSyncDb
   return {db: wrapped, counters}
+}
+
+interface TimedReadExec {
+  execute(sql: string, params?: unknown[]): Promise<unknown>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  get<T>(sql: string, params?: unknown[]): Promise<T>
 }
 
 /** Pretty-print a row of bench results as a markdown row. */

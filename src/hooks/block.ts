@@ -303,7 +303,7 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *  pop in block-by-block. The lean variant on `repo.childIds` is for
  *  non-rendering callers (counting / id-only scans). */
 export const useChildIds = (block: Block): string[] =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
+  useHandle(block.renderChildIds, {
     selector: ids => ids ?? EMPTY_STRING_ARRAY,
   }) as string[]
 

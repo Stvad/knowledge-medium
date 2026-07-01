@@ -7,13 +7,13 @@
     "types": ["node"]
   },
   "include": ["scripts"],
-  // scripts/bench/* is quarantined dead code: it predates the Layout B sync
-  // redesign (raw-maps `blocks` instead of `blocks_synced`, drives the removed
-  // row-events tail, imports the relocated `@/data/internals/repo`) so it
-  // neither compiles nor runs against the current data layer. Its `bench` npm
-  // script has been removed so there's no live entry point to broken code;
-  // it's kept (not deleted) only as a base for a future harness resurrection
-  // against `createTestDb`'s Layout B setup. Everything else under scripts/ is
-  // part of the `tsc -b` gate.
+  // scripts/bench/* was resurrected against the Layout B data layer (setup.ts
+  // builds on @/data/test/createTestDb; the dead row-events-tail suite was
+  // removed) and runs via `yarn bench [suite…]` (vite-node). It stays OUT of
+  // the `tsc -b` gate on purpose: the bench imports the app's module graph
+  // (createTestDb → staticDataExtensions → plugins), which is Vite-typed
+  // (`import.meta.env`) and meant to be checked by the app project — not by
+  // this Node-typed (`types: ["node"]`) scripts project, where it fails to
+  // resolve. vite-node strips types and supplies import.meta.env at runtime.
   "exclude": ["scripts/bench"]
 }
