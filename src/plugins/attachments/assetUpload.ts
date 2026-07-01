@@ -26,7 +26,7 @@ import { showError } from '@/utils/toast.js'
 import { remoteSyncGated } from './assetResolver.js'
 import { createSupabaseBlobStore, type BlobStore } from './blobStore.js'
 import { getByteStore } from './byteStore.js'
-import { withLock } from './laneLock.js'
+import { runSingleOwner, withLock } from './laneLock.js'
 import { resolveCaptureMime } from './mediaBlock.js'
 import { refreshUploadLaneStatus } from './uploadLaneStatus.js'
 import {
@@ -148,28 +148,46 @@ export const RECOVERY_SWEEP_INTERVAL_MS = 3 * 60 * 60 * 1000 // 3 hours
  *  poisoned one), then drain the requeued records — ALL single-owner under ONE lane-lock
  *  acquisition, so recovery + its drain are a single critical section (never a re-entrant
  *  lock request, which would deadlock). A no-op when Supabase isn't configured / the
- *  session is local-only (nothing to probe). `force` (an explicit user retry) bypasses the
- *  per-record re-drive bound. Bound to `userId` (not the active account) end-to-end, like
- *  the drain, so an account switch mid-recovery can't act under the wrong session/keys. */
-export const runUploadRecovery = (userId: string, opts: { force?: boolean } = {}): void => {
+ *  session is local-only (nothing to probe). Bound to `userId` (not the active account)
+ *  end-to-end, like the drain, so an account switch mid-recovery can't act under the wrong
+ *  session/keys.
+ *
+ *  Two per-trigger knobs (see {@link MediaUploadReconciler}):
+ *   - `bypassBound` — re-drive a freed path even past the per-record bound (the slow sweep
+ *     + explicit user retry, which must auto-heal a fixed client / raised limit); left off
+ *     for the frequent triggers (boot / reconnect) so a shape-rejected body can't re-PUT
+ *     on every reconnect.
+ *   - `coalesce` — use the NON-blocking lane lock (skip if another tab already owns the
+ *     lane) instead of queuing behind it. Set by the repeatable AUTOMATIC triggers
+ *     (reconnect / periodic sweep) so N open tabs don't each run a full probe sweep in
+ *     series (N× Storage egress); left off for boot + explicit Retry, which must actually
+ *     run (a skip there would drop a real heal, not a redundant one). */
+export const runUploadRecovery = (
+  userId: string,
+  opts: { bypassBound?: boolean; coalesce?: boolean } = {},
+): void => {
   const blobStore = getBlobStore()
   if (!blobStore) return
   const resolver = syncResolverForUser(userId)
   const isActiveUser = () => getActiveUserId() === userId
-  void withLock(laneLockName(userId), async () => {
+  const pass = async (): Promise<void> => {
     await recoverFailedUploads(userId, {
       store: getByteUploadStore(),
       blobStore,
       ...laneKeyDeps(resolver),
       isActiveUser,
-      force: opts.force,
+      bypassBound: opts.bypassBound,
     })
     // Upload whatever the probe re-queued (a freed path → pending). Same user-bound deps
     // as every other drain, so a mid-recovery switch can't drain under the wrong session.
     await drainUploads(userId, { ...drainDepsFor(blobStore, resolver), isActiveUser })
     // Publish the post-recovery FAILED count (recovery may have cleared / requeued some).
     await refreshUploadLaneStatus(getByteUploadStore(), userId)
-  }).catch((err) => console.warn('[assetUpload] recovery failed', err))
+  }
+  const lane = opts.coalesce
+    ? runSingleOwner(laneLockName(userId), pass) // skip if another tab owns the lane
+    : withLock(laneLockName(userId), pass) // queue behind it — this pass must run
+  void lane.catch((err) => console.warn('[assetUpload] recovery failed', err))
 }
 
 const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({

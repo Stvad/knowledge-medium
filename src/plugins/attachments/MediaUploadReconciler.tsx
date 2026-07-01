@@ -19,6 +19,11 @@
  *     freed path / clear an already-uploaded one / keep a poisoned one. Refocus stays
  *     drain-only (cheap): recovery is the sparser, probe-driven trigger set. (The fourth
  *     recovery trigger, explicit user-retry, is the diagnostics warning's Retry button.)
+ *     Per-trigger: the frequent ones (boot / reconnect) keep the per-record re-drive bound
+ *     (a shape-rejected body can't re-PUT on every reconnect); the slow sweep + Retry
+ *     `bypassBound` so a freed path / fixed client still auto-heals. And the repeatable
+ *     AUTOMATIC ones (reconnect / sweep) `coalesce` (skip if another tab owns the lane) so
+ *     N tabs don't each run a full probe sweep; boot must actually run, so it queues.
  *
  * Renders nothing. The happy path doesn't need this (capture arms the drain right
  * after commit); this is crash/close recovery + the in-session retry/recovery sweeps.
@@ -42,18 +47,20 @@ export const MediaUploadReconciler = (): null => {
       )
 
     // The §9 failed-upload recovery pass (probe → 3-way → drive the requeued via the
-    // drain). Reads the CURRENT active user at fire time (like `sweep`), so it always
-    // targets whoever is signed in now, independent of any account-switch remount.
-    const recover = () => {
+    // drain), per-trigger opts (see runUploadRecovery). Reads the CURRENT active user at
+    // fire time (like `sweep`), so it always targets whoever is signed in now, independent
+    // of any account-switch remount.
+    const recover = (opts?: { bypassBound?: boolean; coalesce?: boolean }) => {
       const active = getActiveUserId()
-      if (active) runUploadRecovery(active)
+      if (active) runUploadRecovery(active, opts)
     }
 
     // Required work — runs even with NO initial sync (offline / never-synced):
     // promotes locally-present `staged` records and drains a prior session's
     // `pending` uploads. Idempotent + lane-locked, so it's safe to re-run.
     reconcile()
-    // App-start recovery: un-stick any `failed` records left by a prior session.
+    // App-start recovery: un-stick any `failed` records left by a prior session. Bounded +
+    // must-run (queues rather than skipping — a prior session's failures deserve one pass).
     recover()
 
     // In-session retry sweep — single-owner drain on refocus. Reads the CURRENT active
@@ -70,11 +77,17 @@ export const MediaUploadReconciler = (): null => {
     // `staged` blocks that just arrived — a miss merely defers to the next boot, never
     // destructive since the reconciler doesn't reap), and run RECOVERY on reconnect (it
     // drains the requeued records too, so it subsumes the old reconnect drain-sweep).
-    const disposeShared = armSharedLaneTriggers(userId, reconcile, recover)
+    // Reconnect coalesces (skip if another tab owns the lane) — an `online` flap mustn't
+    // queue N probe sweeps — and keeps the bound (a flap can't re-PUT a bad body each time).
+    const disposeShared = armSharedLaneTriggers(userId, reconcile, () => recover({ coalesce: true }))
     document.addEventListener('visibilitychange', onVisible)
     // The slow periodic §9 sweep: a long-lived online tab still heals once a poisoned /
-    // occupied path frees, rather than waiting on a restart it may never get.
-    const recoverySweep = setInterval(recover, RECOVERY_SWEEP_INTERVAL_MS)
+    // occupied path frees, rather than waiting on a restart it may never get. It BYPASSES
+    // the re-drive bound (so a freed path / fixed client auto-heals per §9) and coalesces.
+    const recoverySweep = setInterval(
+      () => recover({ coalesce: true, bypassBound: true }),
+      RECOVERY_SWEEP_INTERVAL_MS,
+    )
     return () => {
       disposeShared()
       document.removeEventListener('visibilitychange', onVisible)

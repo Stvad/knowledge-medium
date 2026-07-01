@@ -117,8 +117,12 @@ retained (never reaped). <strong>The §9 failed-upload recovery actor HAS landed
 recoverable only by re-paste — an opportunistic pass on app-start / reconnect / a slow periodic sweep /
 explicit user retry does a cheap content-path <code>probe()</code> and 3-ways it (absent → <code>requeue</code>
 failed→pending for the drain; present + hash-verifies → delete the record, no re-upload; present + mismatch →
-stay <code>failed</code>, §17), bounded by a per-record <code>recoveryAttempts</code> counter so a persistent
-poisoner / shape-reject body can't re-drive forever, with a Retry affordance on the diagnostics warning.
+stay <code>failed</code>, §17). A persistent poisoner is always <code>present+mismatch</code> → a bodiless GET
+only, never a re-drive. The one branch that costs a PUT (a freed path whose re-upload keeps permanently failing —
+a shape-rejected body / misconfig) is bounded by a per-record <code>recoveryAttempts</code> counter on the
+FREQUENT triggers (boot / reconnect, so a flapping reconnect can't re-PUT a bad body each time); the slow sweep
+and explicit Retry <em>bypass</em> that bound, so a freed path / fixed client still auto-heals per §9 ("heals
+once the path frees"). A Retry affordance sits on the diagnostics warning.
 Last verified against code 2026-07-01. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
 solid; §16 GC is the remaining recovery edge still on the spec.

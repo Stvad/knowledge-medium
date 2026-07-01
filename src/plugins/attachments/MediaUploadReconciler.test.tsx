@@ -50,7 +50,10 @@ describe('MediaUploadReconciler', () => {
   it('runs the §9 failed-upload recovery at boot (un-sticks a prior session’s failed uploads)', () => {
     render(<MediaUploadReconciler />)
     expect(h.runUploadRecovery).toHaveBeenCalledTimes(1)
-    expect(h.runUploadRecovery).toHaveBeenCalledWith('u1')
+    // Boot recovery targets the active user and is must-run + bounded (no coalesce, no
+    // bypassBound) — a prior session's failures deserve one guaranteed pass.
+    expect(h.runUploadRecovery.mock.calls[0][0]).toBe('u1')
+    expect(h.runUploadRecovery.mock.calls[0][1]).toBeUndefined()
   })
 
   it('does nothing when no user is active', () => {

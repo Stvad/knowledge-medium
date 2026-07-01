@@ -147,8 +147,9 @@ const NOT_FOUND_STORAGE_CODES = new Set(['NoSuchKey', 'NotFound', 'KeyNotFound']
  *  `.status: 400` is still caught) AND the symbolic word-code shape — the same
  *  dual-shape robustness {@link isAlreadyExists} needs. Anything NOT matched here stays
  *  a throw the probe treats as transient (offline / 5xx / RLS-denied) — recovery must
- *  not read an ambiguous error as "path free". */
-export const isObjectNotFound = (err: { status?: number; statusCode?: string | number }): boolean => {
+ *  not read an ambiguous error as "path free". Module-private — only `probe` consumes it
+ *  (unlike `isAlreadyExists`, which the off-path RLS verifier also uses). */
+const isObjectNotFound = (err: { status?: number; statusCode?: string | number }): boolean => {
   const sc = err.statusCode != null ? String(err.statusCode) : undefined
   return httpStatusOf(err) === 404 || (sc != null && NOT_FOUND_STORAGE_CODES.has(sc))
 }

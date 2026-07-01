@@ -213,16 +213,19 @@ describe('recoverFailedUploads (§9 failed-upload recovery actor)', () => {
       expect(await store.get(USER, BLOCK)).toBeNull()
     })
 
-    it('an explicit user retry (force) BYPASSES the bound and re-drives anyway', async () => {
+    it('bypassBound (the slow sweep / explicit retry) re-drives a freed path past the bound', async () => {
+      // The auto-heal path: a shape-rejected body exhausted the bound, then the obstruction
+      // lifts (limit raised / client fixed). The sweep + Retry pass bypassBound so it heals,
+      // rather than sitting failed forever (the frequent triggers would stay 'exhausted').
       await stageFailed(store)
       for (let i = 0; i < 5; i++) {
         await store.requeue(USER, BLOCK)
         await store.markFailed(USER, BLOCK)
       }
       expect((await store.get(USER, BLOCK))?.recoveryAttempts).toBe(5)
-      blobStore.probeResult = null
+      blobStore.probeResult = null // path is now free
 
-      const summary = await recoverFailedUploads(USER, deps({ maxRecoveryAttempts: 3, force: true }))
+      const summary = await recoverFailedUploads(USER, deps({ maxRecoveryAttempts: 3, bypassBound: true }))
 
       expect(summary).toMatchObject({ requeued: 1, exhausted: 0 })
       expect((await store.get(USER, BLOCK))?.status).toBe('pending')

@@ -35,13 +35,22 @@
  * a `failed` record's bytes are PRESENT locally, so the down-lane never visits it. This
  * re-attempt sweep is the up-lane's own (design §9).
  *
- * BOUND (so a persistent poisoner / shape-reject bug can't re-drive forever): the ONLY
- * expensive branch (absent → requeue → PUT) is gated by the record's
- * {@link ByteUploadRecord.recoveryAttempts} counter (bumped by `requeue`). Past
- * `maxRecoveryAttempts` the cheap probe still runs (it still heals the "uploaded
- * elsewhere" case) but no longer re-drives — the record stays surfaced-for-discard. An
- * explicit USER retry (`force`) bypasses the bound: the user asked, like redo treating
- * `failed` as a fresh trigger (§9).
+ * BOUND vs AUTO-HEAL — the subtle part. The `recoveryAttempts` counter (bumped by
+ * `requeue`) gates the ONE expensive branch (absent → requeue → PUT). Note WHICH case it
+ * actually bounds: a persistent POISONER is `present+mismatch` → `poisoned`, which never
+ * requeues and never increments — it already costs only a bodiless GET per trigger,
+ * bounded by trigger sparsity, no counter needed. The counter therefore only ever accrues
+ * on `absent + the re-drive PUT permanently fails` — i.e. a shape-rejected body (413 /
+ * over-limit / a buggy client), OR a misconfig (bucket missing). That is EXACTLY the case
+ * §9 says must auto-heal once the obstruction lifts (limit raised, client upgraded, bucket
+ * created): "a long-lived online tab still heals once the path frees." So a hard forever-
+ * bound would silently drop that guarantee. The resolution: the bound throttles only the
+ * FREQUENT triggers (boot / reconnect — so a flapping reconnect can't re-PUT a known-bad
+ * body on every event); the SLOW periodic sweep and the explicit USER retry pass
+ * `bypassBound` and DO re-drive past it, so a freed path / fixed client still auto-heals
+ * (within one sweep interval, or instantly on Retry). Past the bound on a frequent trigger
+ * the cheap probe still runs (it still heals the "uploaded elsewhere" case) — only the PUT
+ * is withheld.
  *
  * PURE: like {@link import('./uploadReconcile.js').reconcileUploads} /
  * {@link import('./uploadDrain.js').drainUploads}, this only reads the queue + probes /
@@ -78,9 +87,12 @@ export interface UploadRecoveryDeps {
    *  must not verify/re-drive userA's record under userB. Defaults to always-active. */
   readonly isActiveUser?: () => boolean
   readonly maxRecoveryAttempts?: number
-  /** Explicit user retry: bypass the per-record re-drive bound (the user asked — §9,
-   *  like redo treating `failed` as a fresh trigger). */
-  readonly force?: boolean
+  /** Bypass the per-record re-drive bound. Set by the SPARSE triggers that must still
+   *  auto-heal past the bound — the explicit user retry (the user asked) AND the slow
+   *  periodic sweep (§9: a freed path / fixed client heals "once the path frees"). Left
+   *  false for the frequent triggers (boot / reconnect), where the bound stops a
+   *  shape-rejected body from re-PUTting on every event. */
+  readonly bypassBound?: boolean
 }
 
 export interface RecoverySummary {
@@ -105,7 +117,7 @@ interface RecoverOneCtx {
   readonly getCek: GetCek
   readonly isActiveUser: () => boolean
   readonly maxRecoveryAttempts: number
-  readonly force: boolean
+  readonly bypassBound: boolean
 }
 
 const recoverOne = async (
@@ -133,10 +145,12 @@ const recoverOne = async (
   }
 
   // (3a) ABSENT → the path is free. Re-drive via the drain (requeue failed→pending)
-  //      UNLESS the bound is spent (and this isn't an explicit user retry). The `requeue`
-  //      CAS on `stagedAt` drops the write if a re-paste re-armed the record mid-probe.
+  //      UNLESS the bound is spent on a frequent trigger (`bypassBound` is set by the
+  //      slow sweep + explicit retry, which must still auto-heal — see the BOUND note).
+  //      The `requeue` CAS on `stagedAt` drops the write if a re-paste re-armed the
+  //      record mid-probe.
   if (stored === null) {
-    if (!ctx.force && (rec.recoveryAttempts ?? 0) >= ctx.maxRecoveryAttempts) return 'exhausted'
+    if (!ctx.bypassBound && (rec.recoveryAttempts ?? 0) >= ctx.maxRecoveryAttempts) return 'exhausted'
     await ctx.store.requeue(userId, rec.assetBlockId, rec.stagedAt)
     return 'requeued'
   }
@@ -155,6 +169,13 @@ const recoverOne = async (
   if (await verifyContentHash(decoded, rec.contentHash)) {
     // Already materialized on another device — clear the record, DON'T re-upload. The
     // local bytes stay (now eviction-eligible like any replicated byte, §9 tradeoff).
+    // `delete` intentionally skips the `stagedAt` CAS the requeue/markFailed writes use:
+    // a re-paste that re-armed this record mid-probe carries the SAME content (assetBlockId
+    // is a UUIDv5 of workspace+contentKey, which derives from the hash), and we just
+    // hash-verified that content is durably on the server — so deleting the re-armed
+    // record is correct (nothing left to upload; a later `promote` no-ops). Mirrors the
+    // drain's own un-CAS'd dedup-delete (uploadDrain.ts). Content-addressed ids are the
+    // load-bearing invariant here — revisit if id derivation ever changes.
     await ctx.store.delete(userId, rec.assetBlockId)
     return 'cleared'
   }
@@ -175,7 +196,7 @@ export const recoverFailedUploads = async (
     getCek: deps.getCek,
     isActiveUser: deps.isActiveUser ?? (() => true),
     maxRecoveryAttempts: deps.maxRecoveryAttempts ?? DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    force: deps.force ?? false,
+    bypassBound: deps.bypassBound ?? false,
   }
 
   const failed = await deps.store.listByStatus(userId, 'failed')
