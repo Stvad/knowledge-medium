@@ -112,11 +112,21 @@ the walk, so a stable-ordered failing prefix can't shadow the healthier tail), a
 reconnect / a slow sweep. Durable origin storage (§8) is the boot-time origin-wide
 <code>requestPersistentStorage</code>, not a per-store call. <strong>§16 reference-permanent GC remains
 deferred</strong> — until it lands, a never-promoted <code>staged</code> orphan and its OPFS bytes are
-retained (never reaped), and a <code>failed</code> upload record is recoverable only by re-paste (no §9
-recovery actor yet).
-Last verified against code 2026-06-26. Treat as current intent. The least-settled part is the byte-lane
+retained (never reaped). <strong>The §9 failed-upload recovery actor HAS landed</strong>
+(<code>src/plugins/attachments/uploadRecovery.ts</code>): a <code>failed</code> record is no longer
+recoverable only by re-paste — an opportunistic pass on app-start / reconnect / a slow periodic sweep /
+explicit user retry does a cheap content-path <code>probe()</code> and 3-ways it (absent → <code>requeue</code>
+failed→pending for the drain; present + hash-verifies → delete the record, no re-upload; present + mismatch →
+stay <code>failed</code>, §17). A persistent poisoner is always <code>present+mismatch</code> → a bodiless GET
+only, never a re-drive. The one branch that costs a PUT (a freed path whose re-upload keeps permanently failing —
+a shape-rejected body / misconfig) is bounded by a per-record <code>recoveryAttempts</code> cap <em>tiered
+per trigger</em>: LOW on the frequent triggers (boot / reconnect, so a flapping reconnect can't re-PUT a bad
+body each time), HIGH on the slow sweep (a weeks-wide auto-heal window per §9 "heals once the path frees", then
+it stops — the cap counter is IndexedDB-shared, so it bounds TOTAL re-drives across tabs, not per-tab), and
+uncapped on the explicit Retry affordance (on the diagnostics warning).
+Last verified against code 2026-07-01. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
-solid; the recovery edges are where the spec is still hardening.
+solid; §16 GC is the remaining recovery edge still on the spec.
 </aside>
 
 <div class="info">
@@ -875,9 +885,15 @@ so it can't strip a co-referencing block's bytes or strand its route to the serv
   never a silent loss); <strong>present but hash-mismatches</strong> → still poisoned → stays
   <code>failed</code>. This
   covers both causes without conflating them — a <em>poisoned</em> path heals when the probe finds it free or
-  materialized; a <em>shape-rejected</em> body (a stale / buggy client) heals only once the client is fixed,
-  whose post-upgrade re-attempt re-encodes correctly, so until then it stays surfaced-for-discard rather than
-  re-PUTting the same bad bytes. Only <em>permanent</em> rejections land in <code>failed</code>; transient
+  materialized; a <em>shape-rejected</em> body (a stale / buggy client) heals once the client is fixed, whose
+  post-upgrade re-attempt re-encodes correctly. The absent-path re-drive is the one branch that costs a PUT
+  (the client can't tell a <em>temporarily</em>-rejected body — a limit about to be raised, a client about to be
+  fixed — from a <em>permanently</em>-rejected one without actually attempting the upload), so it is bounded by a
+  per-record attempt cap <strong>tiered per trigger</strong>: a <em>low</em> cap on the frequent triggers
+  (boot / reconnect, so a flapping reconnect can't re-PUT a bad body on every event), a <em>high</em> cap on the
+  slow sweep (a wide auto-heal window — weeks of sweeps — after which it stops re-PUTting a forever-broken body;
+  the cap counter is shared across tabs, so it bounds <em>total</em> re-drives, not per-tab), and <em>no</em> cap
+  on an explicit user retry. Only <em>permanent</em> rejections land in <code>failed</code>; transient
   failures stay <code>pending</code> and retry with backoff (below). &quot;Upload in progress&quot; is an
   <em>in-memory</em> single-flight guard, not a
   persisted state — a crash mid-PUT leaves the record <code>pending</code> and the single-owner drain (§8)
