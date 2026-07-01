@@ -38,6 +38,7 @@ import {
   type MediaSource,
 } from './mediaCapture.js'
 import { drainUploads } from './uploadDrain.js'
+import { recoverFailedUploads } from './uploadRecovery.js'
 import { reconcileUploads } from './uploadReconcile.js'
 import { getByteUploadStore } from './uploadStore.js'
 
@@ -134,6 +135,41 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
     isBlockPresent: async (_ws, id) => (await repo.load(id)) != null,
   })
   armUploadDrain(userId)
+}
+
+/** How often a long-lived tab re-probes its `failed` records (design §9 "slow periodic
+ *  sweep — a bodiless GET every few hours"), so a poisoned / occupied content path that
+ *  frees still heals without waiting on a restart the tab may never get. Slow on purpose:
+ *  each pass is only cheap GET probes over the (small) failed set. */
+export const RECOVERY_SWEEP_INTERVAL_MS = 3 * 60 * 60 * 1000 // 3 hours
+
+/** §9 failed-upload recovery: probe each `failed` record's content path and 3-way it
+ *  (requeue a freed path → the drain re-uploads; clear an already-uploaded one; keep a
+ *  poisoned one), then drain the requeued records — ALL single-owner under ONE lane-lock
+ *  acquisition, so recovery + its drain are a single critical section (never a re-entrant
+ *  lock request, which would deadlock). A no-op when Supabase isn't configured / the
+ *  session is local-only (nothing to probe). `force` (an explicit user retry) bypasses the
+ *  per-record re-drive bound. Bound to `userId` (not the active account) end-to-end, like
+ *  the drain, so an account switch mid-recovery can't act under the wrong session/keys. */
+export const runUploadRecovery = (userId: string, opts: { force?: boolean } = {}): void => {
+  const blobStore = getBlobStore()
+  if (!blobStore) return
+  const resolver = syncResolverForUser(userId)
+  const isActiveUser = () => getActiveUserId() === userId
+  void withLock(laneLockName(userId), async () => {
+    await recoverFailedUploads(userId, {
+      store: getByteUploadStore(),
+      blobStore,
+      ...laneKeyDeps(resolver),
+      isActiveUser,
+      force: opts.force,
+    })
+    // Upload whatever the probe re-queued (a freed path → pending). Same user-bound deps
+    // as every other drain, so a mid-recovery switch can't drain under the wrong session.
+    await drainUploads(userId, { ...drainDepsFor(blobStore, resolver), isActiveUser })
+    // Publish the post-recovery FAILED count (recovery may have cleared / requeued some).
+    await refreshUploadLaneStatus(getByteUploadStore(), userId)
+  }).catch((err) => console.warn('[assetUpload] recovery failed', err))
 }
 
 const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({

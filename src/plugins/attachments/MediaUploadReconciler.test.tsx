@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const h = vi.hoisted(() => ({
   runUploadReconcile: vi.fn(async () => {}),
   armUploadDrain: vi.fn(),
+  runUploadRecovery: vi.fn(),
   activeUserId: 'u1' as string | null,
   db: { currentStatus: { hasSynced: false }, registerListener: () => () => {} } as unknown,
 }))
@@ -21,6 +22,8 @@ vi.mock('@/data/repoProvider.js', () => ({
 vi.mock('./assetUpload.js', () => ({
   runUploadReconcile: h.runUploadReconcile,
   armUploadDrain: h.armUploadDrain,
+  runUploadRecovery: h.runUploadRecovery,
+  RECOVERY_SWEEP_INTERVAL_MS: 3 * 60 * 60 * 1000,
 }))
 
 const { MediaUploadReconciler } = await import('./MediaUploadReconciler.js')
@@ -29,6 +32,7 @@ afterEach(cleanup)
 beforeEach(() => {
   h.runUploadReconcile.mockClear()
   h.armUploadDrain.mockClear()
+  h.runUploadRecovery.mockClear()
   h.activeUserId = 'u1'
   h.db = { currentStatus: { hasSynced: false }, registerListener: () => () => {} }
 })
@@ -43,9 +47,16 @@ describe('MediaUploadReconciler', () => {
     expect(h.runUploadReconcile).toHaveBeenCalledWith('u1', expect.anything())
   })
 
+  it('runs the §9 failed-upload recovery at boot (un-sticks a prior session’s failed uploads)', () => {
+    render(<MediaUploadReconciler />)
+    expect(h.runUploadRecovery).toHaveBeenCalledTimes(1)
+    expect(h.runUploadRecovery).toHaveBeenCalledWith('u1')
+  })
+
   it('does nothing when no user is active', () => {
     h.activeUserId = null
     render(<MediaUploadReconciler />)
     expect(h.runUploadReconcile).not.toHaveBeenCalled()
+    expect(h.runUploadRecovery).not.toHaveBeenCalled()
   })
 })

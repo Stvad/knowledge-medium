@@ -112,11 +112,16 @@ the walk, so a stable-ordered failing prefix can't shadow the healthier tail), a
 reconnect / a slow sweep. Durable origin storage (§8) is the boot-time origin-wide
 <code>requestPersistentStorage</code>, not a per-store call. <strong>§16 reference-permanent GC remains
 deferred</strong> — until it lands, a never-promoted <code>staged</code> orphan and its OPFS bytes are
-retained (never reaped), and a <code>failed</code> upload record is recoverable only by re-paste (no §9
-recovery actor yet).
-Last verified against code 2026-06-26. Treat as current intent. The least-settled part is the byte-lane
+retained (never reaped). <strong>The §9 failed-upload recovery actor HAS landed</strong>
+(<code>src/plugins/attachments/uploadRecovery.ts</code>): a <code>failed</code> record is no longer
+recoverable only by re-paste — an opportunistic pass on app-start / reconnect / a slow periodic sweep /
+explicit user retry does a cheap content-path <code>probe()</code> and 3-ways it (absent → <code>requeue</code>
+failed→pending for the drain; present + hash-verifies → delete the record, no re-upload; present + mismatch →
+stay <code>failed</code>, §17), bounded by a per-record <code>recoveryAttempts</code> counter so a persistent
+poisoner / shape-reject body can't re-drive forever, with a Retry affordance on the diagnostics warning.
+Last verified against code 2026-07-01. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
-solid; the recovery edges are where the spec is still hardening.
+solid; §16 GC is the remaining recovery edge still on the spec.
 </aside>
 
 <div class="info">
