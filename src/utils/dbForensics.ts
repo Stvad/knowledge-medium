@@ -45,7 +45,9 @@ export interface ForensicSessionRecord {
    *  unclean + `visible` = killed while foreground-active (the rarer, more
    *  suspicious fingerprint). */
   cleanShutdown: boolean
-  /** Visibility at the last recorded transition — the discriminator above. */
+  /** Visibility as of session start or the last `visibilitychange` — the
+   *  discriminator above. (Not refreshed by pagehide/resume, but a
+   *  `visibilitychange:hidden` reliably precedes those, so it's the right value.) */
   lastVisibilityState: string | null
   userId: string
   userAgent: string

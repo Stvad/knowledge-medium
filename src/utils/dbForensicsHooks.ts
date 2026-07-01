@@ -143,6 +143,10 @@ export const installDbForensicsLifecycle = (forensics: DbForensics = dbForensics
   })
   window.addEventListener('freeze', () => void forensics.recordLifecycleEvent('freeze'))
   window.addEventListener('pagehide', () => void forensics.markCleanShutdown())
+  // pageshow/resume: the session is live again, so un-mark clean. This can also
+  // fire after a clean nav-away+freeze without a bfcache restore, logging a
+  // benign `unclean` — but only ever while hidden, so it lands in the benign
+  // `unclean+hidden` bucket, not the suspicious `unclean+visible` one we watch.
   window.addEventListener('pageshow', () => void forensics.clearCleanShutdown())
   window.addEventListener('resume', () => void forensics.clearCleanShutdown())
 
