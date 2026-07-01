@@ -5,12 +5,13 @@
  * dependency, so the whole flow is testable with in-memory fakes.
  */
 import os from 'node:os'
+import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import type { Graph } from './graph.js'
 import type { ClaudeRunOptions, ClaudeRunResult } from './runner.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { KM_MCP_ALLOWED_TOOLS } from './mcpShared.js'
 
@@ -40,23 +41,32 @@ export const createEngine = (deps: EngineDeps) => {
   const {config, graph, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
   const now = deps.now ?? Date.now
 
-  /** Block ids (mention tasks) / watcher names (query batches) with a
-   *  live run. Guards double-claim across overlapping ticks. */
-  const inFlight = new Set<string>()
-  const running = new Set<Promise<void>>()
+  /** Live work, keyed by block id / query-watcher key / thread session.
+   *  One structure serves the double-claim guard, the capacity gate,
+   *  and drain(). */
+  const running = new Map<string, Promise<void>>()
   const pageIdCache = new Map<string, string>()
+  /** Launch timestamps within the rolling hour — the global spend
+   *  circuit-breaker. Every hole elsewhere becomes a bounded bill. */
+  const launchTimes: number[] = []
 
-  const capacityLeft = () => config.maxConcurrent - inFlight.size
+  const capacityLeft = () => config.maxConcurrent - running.size
 
-  const launch = (key: string, work: () => Promise<void>) => {
-    inFlight.add(key)
+  const spendBudgetLeft = (): boolean => {
+    const cutoff = now() - 60 * 60_000
+    while (launchTimes.length > 0 && launchTimes[0] < cutoff) launchTimes.shift()
+    return launchTimes.length < config.runsPerHour
+  }
+
+  const recordLaunch = () => launchTimes.push(now())
+
+  const launch = (keys: string[], work: () => Promise<void>) => {
     const promise = work()
-      .catch(error => log(`[${key}] run crashed: ${error instanceof Error ? error.message : String(error)}`))
+      .catch(error => log(`[${keys[0]}] run crashed: ${errorMessage(error)}`))
       .finally(() => {
-        inFlight.delete(key)
-        running.delete(promise)
+        for (const key of keys) running.delete(key)
       })
-    running.add(promise)
+    for (const key of keys) running.set(key, promise)
   }
 
   const runOptionsFor = (watcher: Watcher, prompt: string, resumeSessionId?: string): ClaudeRunOptions => ({
@@ -73,17 +83,47 @@ export const createEngine = (deps: EngineDeps) => {
     timeoutMs: watcher.timeoutMs,
   })
 
+  /** Park a task that exhausted its retries — one terminal write so the
+   *  pre-filter skips it forever after. */
+  const parkExhausted = async (watcher: BacklinksWatcher, sourceId: string) => {
+    const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
+    await graph.createReply(sourceId, `⚠️ claude-tasks: ${reason}. Delete the claude:* properties to retry.`)
+    await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
+    log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
+  }
+
   const processMention = async (watcher: BacklinksWatcher, sourceId: string, deepLink: string) => {
     const block = await graph.getBlock(sourceId)
     if (!block) return
     const ancestorBlocks = await graph.ancestors(sourceId)
-    const decision = decidePending({source: block, ancestors: ancestorBlocks, nowMs: now()})
+    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs})
     if (!decision.pending) return
 
-    log(`[${watcher.name}] claiming ${sourceId} (${decision.reason})`)
-    await graph.setTaskProps(sourceId, {status: 'running', watcher: watcher.name, nowMs: now()})
+    // Resolve the thread session BEFORE claiming so two follow-ups in
+    // one thread can't run `--resume <same session>` concurrently.
+    const session = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
+    const sessionKey = session ? `session:${session}` : null
+    if (sessionKey && running.has(sessionKey)) return
+    if (sessionKey) running.set(sessionKey, Promise.resolve())
 
     try {
+      const attempt = taskAttempts(block) + 1
+      const claimStamp = now()
+      log(`[${watcher.name}] claiming ${sourceId} (${decision.reason}, attempt ${attempt})`)
+      await graph.setTaskProps(sourceId, {
+        status: 'running', watcher: watcher.name, attempts: attempt, nowMs: claimStamp,
+      })
+
+      // Claim-verify: re-read and confirm OUR claim stuck. A concurrent
+      // daemon (launchd + a manual --once, or another machine racing
+      // within sync latency) that wrote after us wins; we back off.
+      const verified = await graph.getBlock(sourceId)
+      const props = verified?.properties ?? {}
+      if (props['claude:watcher'] !== watcher.name || props['claude:updated-at'] !== claimStamp) {
+        log(`[${watcher.name}] lost claim race on ${sourceId} — backing off`)
+        return
+      }
+
       const subtreeRows = await graph.getSubtree(sourceId)
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
       const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
@@ -99,16 +139,16 @@ export const createEngine = (deps: EngineDeps) => {
       if (watcher.delivery === 'channel') {
         // Ambient mode: deliver and step back — the channel session owns
         // the rest of the lifecycle (reply block + done/error props). If
-        // it never does, the stale-running sweep re-delivers in 30 min.
+        // it never does, the stale-running sweep re-delivers, bounded by
+        // MAX_ATTEMPTS.
         await deliverToChannel({
           content: prompt,
-          meta: {watcher: watcher.name, block_id: sourceId},
+          meta: {watcher: watcher.name, block_id: sourceId, attempt: String(attempt)},
         })
-        log(`[${watcher.name}] delivered ${sourceId} to the ambient channel session`)
+        log(`[${watcher.name}] delivered ${sourceId} to the ambient channel session (attempt ${attempt})`)
         return
       }
 
-      const session = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
       const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined))
 
       if (result.ok) {
@@ -124,9 +164,14 @@ export const createEngine = (deps: EngineDeps) => {
         log(`[${watcher.name}] FAILED ${sourceId}: ${reason}`)
       }
     } catch (error) {
-      const reason = truncate(error instanceof Error ? error.message : String(error))
+      // Infra failure between claim and reply (bridge blip, spawn error,
+      // channel down): leave a visible trace AND status=error props.
+      const reason = truncate(errorMessage(error))
+      await graph.createReply(sourceId, `⚠️ claude-tasks infrastructure error — ${reason}`).catch(() => {})
       await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()}).catch(() => {})
       throw error
+    } finally {
+      if (sessionKey) running.delete(sessionKey)
     }
   }
 
@@ -141,26 +186,38 @@ export const createEngine = (deps: EngineDeps) => {
     if (sources.length === 0) return
 
     // Cheap pre-filter (one batched query): already-processed mentions
-    // must not consume launch slots or per-block round-trips. Source-only
-    // decision here — the ancestor-dependent checks re-run with full
-    // context inside processMention before anything is claimed.
-    const props = await graph.blockProps(sources.map(source => source.id))
+    // must not consume launch slots or per-block round-trips. The same
+    // decision re-runs with a fresh read inside processMention before
+    // any claim is written.
+    const views = await graph.blockViews(sources.map(source => source.id))
     for (const source of sources) {
-      if (capacityLeft() <= 0) return
-      if (inFlight.has(source.id)) continue
-      const preview = decidePending({
-        source: {id: source.id, properties: props.get(source.id) ?? {}},
-        ancestors: [],
-        nowMs: now(),
-      })
+      if (running.has(source.id)) continue
+      const view = views.get(source.id) ?? {id: source.id, properties: {}}
+      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs})
+
+      if (preview.reason === 'attempts-exhausted') {
+        // Terminal write (once) so the pre-filter skips it forever.
+        launch([source.id], () => parkExhausted(watcher, source.id))
+        continue
+      }
       if (!preview.pending) continue
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink))
+      if (capacityLeft() <= 0) return
+      if (!spendBudgetLeft()) {
+        log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${source.id}`)
+        return
+      }
+      // Budget is consumed at the launch DECISION (synchronously) — the
+      // async task body would record too late to gate this same loop.
+      // Conservative direction: a launch that then loses its claim race
+      // still counts against the hour.
+      recordLaunch()
+      launch([source.id], () => processMention(watcher, source.id, source.deepLink))
     }
   }
 
   const tickQueryWatcher = async (watcher: QueryWatcher) => {
     const key = `query:${watcher.name}`
-    if (inFlight.has(key)) return
+    if (running.has(key)) return
 
     const rows = await graph.sqlAll(watcher.sql, watcher.params)
     const prev = await state.getCursor(watcher.name)
@@ -176,20 +233,35 @@ export const createEngine = (deps: EngineDeps) => {
     }
     if (diff.newRows.length === 0) return
     if (capacityLeft() <= 0) return
-
-    // Claim-at-cursor: advance before the run so a persistently failing
-    // prompt can't re-fire (and re-bill) every tick. Failures are logged.
-    await state.setCursor(watcher.name, diff.seenIds)
-    const prompt = renderQueryPrompt(watcher.prompt, {newRows: diff.newRows, watcherName: watcher.name})
-
-    if (watcher.delivery === 'channel') {
-      await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
-      log(`[${watcher.name}] delivered ${diff.newRows.length} new row(s) to the ambient channel session`)
+    if (!spendBudgetLeft()) {
+      log(`[${watcher.name}] runsPerHour budget (${config.runsPerHour}) exhausted — deferring ${diff.newRows.length} new row(s)`)
       return
     }
 
-    log(`[${watcher.name}] firing for ${diff.newRows.length} new row(s)`)
-    launch(key, async () => {
+    const batch = diff.newRows.slice(0, watcher.maxRowsPerFire)
+    const overflow = diff.newRows.length - batch.length
+    const prompt = renderQueryPrompt(watcher.prompt, {
+      newRows: overflow > 0 ? [...batch, {id: '(truncated)', note: `${overflow} more new rows omitted — re-query for the rest`}] : batch,
+      watcherName: watcher.name,
+    })
+
+    if (watcher.delivery === 'channel') {
+      // Deliver FIRST, cursor after: a cheap POST has no re-bill risk,
+      // and advancing the cursor before a failed delivery would lose
+      // these rows permanently (no graph-side state to sweep).
+      recordLaunch()
+      await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
+      await state.setCursor(watcher.name, diff.seenIds)
+      log(`[${watcher.name}] delivered ${batch.length} new row(s) to the ambient channel session`)
+      return
+    }
+
+    // Spawn mode: claim-at-cursor BEFORE the run so a persistently
+    // failing (billed) prompt can't re-fire every tick.
+    await state.setCursor(watcher.name, diff.seenIds)
+    recordLaunch()
+    log(`[${watcher.name}] firing for ${batch.length} new row(s)${overflow > 0 ? ` (+${overflow} truncated)` : ''}`)
+    launch([key], async () => {
       const result = await runTask(runOptionsFor(watcher, prompt))
       if (result.ok) {
         log(`[${watcher.name}] done: ${truncate(result.resultText.trim(), 200)}`)
@@ -205,17 +277,20 @@ export const createEngine = (deps: EngineDeps) => {
         if (watcher.kind === 'backlinks') await tickBacklinksWatcher(watcher)
         else await tickQueryWatcher(watcher)
       } catch (error) {
-        log(`[${watcher.name}] tick failed: ${error instanceof Error ? error.message : String(error)}`)
+        // Drop cached page ids on failure — the page may have been
+        // deleted/recreated; the next tick re-resolves.
+        if (watcher.kind === 'backlinks') pageIdCache.delete(watcher.target)
+        log(`[${watcher.name}] tick failed: ${errorMessage(error)}`)
       }
     }
   }
 
   /** Await all launched runs — shutdown + tests. */
   const drain = async () => {
-    while (running.size > 0) await Promise.allSettled([...running])
+    while (running.size > 0) await Promise.allSettled([...running.values()])
   }
 
-  return {tick, drain, inFlight}
+  return {tick, drain, running}
 }
 
 export type Engine = ReturnType<typeof createEngine>

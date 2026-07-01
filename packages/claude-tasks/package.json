@@ -11,13 +11,6 @@
     "km-claude-daemon": "./dist/daemon.js",
     "km-mcp": "./dist/mcp.js"
   },
-  "exports": {
-    "./config": "./dist/config.js",
-    "./watchers": "./dist/watchers.js",
-    "./runner": "./dist/runner.js",
-    "./graph": "./dist/graph.js",
-    "./prompt": "./dist/prompt.js"
-  },
   "scripts": {
     "build": "tsc -b"
   },

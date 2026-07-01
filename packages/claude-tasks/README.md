@@ -16,7 +16,9 @@ Design notes: task state lives **in the graph** (`claude:*` block properties), s
 
 ## Billing invariant (subscription, not API)
 
-Runs execute via `claude -p` on a machine authenticated with `claude login`. The daemon **scrubs `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from every child environment** — either var would silently flip billing to the API. Nothing here touches the Agent SDK (API-key-only by policy).
+Runs execute via `claude -p` on a machine authenticated with `claude login`. The daemon **scrubs `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and the `CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY` switches from every child environment** — any of them would silently redirect billing. One thing env-scrubbing can't reach: a user-level `settings.json` `apiKeyHelper` — check yours if runs bill unexpectedly. Nothing here touches the Agent SDK (API-key-only by policy).
+
+**Spend circuit-breaker:** `runsPerHour` (default 10) caps launches across all watchers in a rolling hour. Any watcher-loop bug or misconfigured query becomes a bounded bill, not an unbounded one. Additionally each task is attempted at most 3 times (crashed/dropped runs re-queue via the 30-min stale sweep) before being parked as `error` with a visible reply.
 
 ## Setup
 
@@ -76,19 +78,22 @@ Runs execute via `claude -p` on a machine authenticated with `claude login`. The
 
 ## How a mention task runs
 
-1. Watcher sees a new backlink to `target` whose source block has no `claude:status` property (one batched SQL per tick — processed mentions stay cheap forever).
-2. Claim: `claude:status=running` + `claude:watcher` + `claude:updated-at` written to the block.
-3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher).
-4. `claude -p` runs with the **km MCP graph tools only** (fail-closed `--allowedTools`; add e.g. `"Bash(git:*)"` per watcher to opt into more). `cwd` defaults to `$HOME`.
+1. Watcher sees a new backlink to `target` whose source block has no `claude:status` property (one batched SQL per tick — processed mentions stay cheap forever). Blocks edited in the last `quietMs` (default 15 s) wait — the daemon shouldn't claim (and bill) a half-typed request.
+2. Claim: `claude:status=running` + `claude:watcher` + `claude:attempts` + `claude:updated-at` written to the block, then **claim-verified** (re-read; if a competing daemon overwrote it, this one backs off).
+3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped).
+4. `claude -p` runs with the **km MCP graph tools only** (fail-closed `--allowedTools` + `--strict-mcp-config`; add e.g. `"Bash(git:*)"` per watcher to opt into more). `cwd` defaults to `$HOME`.
 5. Reply text lands as a child block (marked `claude:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `claude:session`.
-6. **Threads:** a later `[[claude]]` mention anywhere under that block finds the nearest ancestor `claude:session` and `--resume`s it — one conversation per thread, Claude-Tag-style.
+6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `claude:session` and `--resume`s it (never two concurrent resumes of one session).
 
-Failures reply visibly (`⚠️ claude-tasks run failed — …`) and set `claude:status=error` + `claude:error`. A `running` block older than 30 min is treated as a crashed run and re-queued. To re-run a mention manually, delete its `claude:*` properties.
+Failures reply visibly (`⚠️ …`) and set `claude:status=error` + `claude:error` — including infrastructure failures (bridge blip, spawn error), not just failed runs. A `running` block older than 30 min is treated as a crashed run and re-queued, at most 3 attempts total. To re-run a mention manually, delete its `claude:*` properties.
+
+**One daemon per fleet.** A pidfile prevents two daemons on one machine (launchd + a manual run would double-claim and double-bill). Across machines there is no claim atomicity over LWW sync — install the LaunchAgent on exactly one device.
 
 ### Loop guards
 
-- Replies carry `claude:reply` and are skipped, as is anything nested under one.
-- The default prompt forbids writing `[[claude]]`, and the MCP write tools **refuse** content containing any watcher-target wikilink (`KM_MCP_BLOCKED_WIKILINKS`, set automatically from your config).
+- Replies carry `claude:reply` and are skipped. (User-typed follow-ups *under* a reply are legit and do fire.)
+- The default prompt forbids writing `[[claude]]`, and the MCP write tools **refuse** any reference to a watcher-target page — every alias of the page (`[[any-alias]]`) and its id in every block-ref form (`((id))`, `!((id))`, `[label](((id)))`). The daemon passes the target names (`KM_MCP_BLOCKED_WIKILINKS`); the MCP server resolves each page's full alias set + id itself and refreshes it every 10 min.
+- `runsPerHour` bounds whatever slips past both.
 
 ## Query watchers
 
@@ -110,7 +115,7 @@ The same graph tools work from any MCP client — e.g. Claude Desktop / interact
 }
 ```
 
-Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (read-only, enforced), `create_block`, `update_block`. Deliberately excluded: `eval`, `sql execute`, extension lifecycle.
+Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement and `WITH … UPDATE` forms are rejected), `create_block`, `update_block`. Deliberately excluded: `eval`, `sql execute`, extension lifecycle.
 
 ## Security posture
 
@@ -125,8 +130,10 @@ Claude Code's channels primitive (research preview, v2.1.80+) can push watcher e
 1. Register km in the project's `.mcp.json` with the channel port:
 
    ```json
-   {"mcpServers": {"km": {"command": "node", "args": ["<repo>/packages/claude-tasks/dist/mcp.js"], "env": {"AGENT_RUNTIME_PROFILE": "claude-tasks", "KM_MCP_CHANNEL_PORT": "8790"}}}}
+   {"mcpServers": {"km": {"command": "node", "args": ["<repo>/packages/claude-tasks/dist/mcp.js"], "env": {"AGENT_RUNTIME_PROFILE": "claude-tasks", "KM_MCP_CHANNEL_PORT": "8790", "KM_MCP_BLOCKED_WIKILINKS": "claude"}}}}
    ```
+
+   (`KM_MCP_BLOCKED_WIKILINKS` matters here too — without it the ambient session's write tools would happily write `[[claude]]` and re-trigger the watcher.)
 
 2. Run the ambient session (custom channels aren't on the preview allowlist, hence the dev flag):
 
@@ -136,13 +143,18 @@ Claude Code's channels primitive (research preview, v2.1.80+) can push watcher e
 
 3. Mark watchers `"delivery": "channel"` in the daemon config.
 
-The daemon then claims the task (`claude:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `claude:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 30 min. If the listener is down, the task is marked `error`.
+The daemon then claims the task (`claude:status=running`) and POSTs the rendered event to `127.0.0.1:8790`; it arrives as a `<channel source="km">` event and the ambient session **finishes the lifecycle itself** — reply block + `claude:status=done` via the km tools (the event says exactly how). If the ambient session drops it, the stale-`running` sweep re-delivers after 30 min (3 attempts max, then parked as `error`). If the listener is down, mention tasks are marked `error`; query rows keep their cursor and re-fire when it's back.
+
+**Listener auth:** loopback is not an auth boundary (any local process — or a browser page POSTing at `127.0.0.1` — could otherwise inject prompts into a write-capable session). Requests must carry `x-km-channel-secret` from `~/.config/knowledge-medium/claude-tasks-channel.secret` (0600, auto-generated; the daemon sends it automatically) and be `application/json` with no `Origin` header.
 
 Caveats, honestly: research preview (flag syntax/protocol may change — nothing load-bearing depends on it here); one shared context across all events vs per-thread isolation (no `--resume` threading in this mode); events only arrive while the session is open. Per-task spawn remains the default and the recommendation.
 
 ## Troubleshooting
 
-- `Bridge not reachable or profile not paired` → open the app tab, `yarn agent --profile claude-tasks connect`.
+- Waiting on `bridge/pairing` in the log → the daemon auto-starts the bridge and retries forever (reboot-safe); if it never pairs, run `yarn agent --profile claude-tasks connect` with the app tab open.
+- Config errors exit **0** (clean) so launchd doesn't hot-loop a restart that can't help — fix the config, then `launchctl kickstart -k gui/$(id -u)/org.knowledge-medium.claude-tasks`.
+- `Another km-claude-daemon is already running` → the pidfile guard; stop the launchd instance before running one by hand (`launchctl bootout gui/$(id -u)/org.knowledge-medium.claude-tasks`).
 - `Watcher target page "claude" does not exist` → create the page (type `[[claude]]`, click it).
 - Daemon logs `no app tab connected` → watchers idle until a paired tab appears; they catch up on the next tick.
 - Runs fail instantly with auth errors → check `claude login` state on this machine and that nothing exports `ANTHROPIC_API_KEY` into launchd's environment (the daemon scrubs its children, but `claude` itself must be logged in).
+- Known limitation: if the daemon is SIGKILLed mid-run, the spawned `claude` child survives un-timed; its reply is lost and the task re-queues after the 30-min sweep (bounded by the 3-attempt cap).

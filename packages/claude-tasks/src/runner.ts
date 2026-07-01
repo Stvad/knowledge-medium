@@ -38,9 +38,19 @@ export interface ClaudeRunResult {
   raw: Record<string, unknown> | null
 }
 
-/** Env vars that would silently flip billing away from the
- *  subscription (API key beats OAuth in claude's credential order). */
-export const BILLING_ENV_DENYLIST = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const
+/** Env vars that would redirect billing away from the subscription
+ *  (API key / bearer token beat OAuth in claude's credential order;
+ *  the cloud-provider switches and a proxy base URL reroute entirely).
+ *  NOT airtight: a user-level settings.json apiKeyHelper can still
+ *  flip billing outside env reach — the README says to check that. */
+export const BILLING_ENV_DENYLIST = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+] as const
 
 export const scrubEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
   const scrubbed = {...env}
@@ -48,11 +58,19 @@ export const scrubEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
   return scrubbed
 }
 
+/** The prompt is deliberately NOT an argv element — it goes via stdin
+ *  (claude -p reads stdin when no prompt argument is given). Argv is
+ *  visible to every local process in `ps` and capped by ARG_MAX; note
+ *  content belongs in neither failure mode. */
 export const buildClaudeArgs = (options: ClaudeRunOptions): string[] => {
-  const args = ['-p', options.prompt, '--output-format', 'json']
+  const args = ['-p', '--output-format', 'json']
   if (options.resumeSessionId) args.push('--resume', options.resumeSessionId)
   if (options.model) args.push('--model', options.model)
-  if (options.mcpConfigPath) args.push('--mcp-config', options.mcpConfigPath)
+  if (options.mcpConfigPath) {
+    // strict: spawned runs get OUR mcp config only, not the user's
+    // globally-registered servers.
+    args.push('--mcp-config', options.mcpConfigPath, '--strict-mcp-config')
+  }
   if (options.allowedTools.length > 0) {
     args.push('--allowedTools', options.allowedTools.join(','))
   }
@@ -93,8 +111,13 @@ export const runClaude = async (
   const child = spawnImpl(options.claudeBin, args, {
     cwd: options.cwd,
     env: scrubEnv(options.env ?? process.env),
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
+
+  // Prompt over stdin (see buildClaudeArgs). EPIPE just means the child
+  // died first — the exit path reports that better than a write error.
+  child.stdin?.on('error', () => {})
+  child.stdin?.end(options.prompt)
 
   let stdout = ''
   let stderr = ''

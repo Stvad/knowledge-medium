@@ -50,7 +50,11 @@ export const createStateStore = (filePath: string): StateStore => {
 
   const persist = async (state: StateData): Promise<void> => {
     await fs.mkdir(path.dirname(filePath), {recursive: true})
-    await fs.writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`)
+    // tmp + rename: a crash mid-write must not leave truncated JSON
+    // (which load() would silently treat as "never seen anything").
+    const tmpPath = `${filePath}.tmp`
+    await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`)
+    await fs.rename(tmpPath, filePath)
   }
 
   return {

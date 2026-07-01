@@ -18,11 +18,11 @@ const baseOptions: ClaudeRunOptions = {
 }
 
 describe('buildClaudeArgs', () => {
-  it('builds a print-mode json run', () => {
-    expect(buildClaudeArgs(baseOptions)).toEqual(['-p', 'do the thing', '--output-format', 'json'])
+  it('builds a print-mode json run WITHOUT the prompt in argv (stdin carries it)', () => {
+    expect(buildClaudeArgs(baseOptions)).toEqual(['-p', '--output-format', 'json'])
   })
 
-  it('threads resume/model/mcp/tools through', () => {
+  it('threads resume/model/mcp/tools through, pinning strict mcp config', () => {
     const args = buildClaudeArgs({
       ...baseOptions,
       resumeSessionId: 'sess-1',
@@ -31,11 +31,11 @@ describe('buildClaudeArgs', () => {
       allowedTools: ['mcp__km__get_block', 'mcp__km__search'],
     })
     expect(args).toEqual([
-      '-p', 'do the thing',
+      '-p',
       '--output-format', 'json',
       '--resume', 'sess-1',
       '--model', 'claude-sonnet-5',
-      '--mcp-config', '/tmp/km.json',
+      '--mcp-config', '/tmp/km.json', '--strict-mcp-config',
       '--allowedTools', 'mcp__km__get_block,mcp__km__search',
     ])
   })
@@ -47,6 +47,10 @@ describe('scrubEnv', () => {
       PATH: '/usr/bin',
       ANTHROPIC_API_KEY: 'sk-api',
       ANTHROPIC_AUTH_TOKEN: 'proxy-token',
+      ANTHROPIC_BASE_URL: 'https://proxy.example',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      CLAUDE_CODE_USE_VERTEX: '1',
+      CLAUDE_CODE_USE_FOUNDRY: '1',
       HOME: '/Users/x',
     })
     expect(env).toEqual({PATH: '/usr/bin', HOME: '/Users/x'})
@@ -119,5 +123,20 @@ describe('runClaude', () => {
       ),
     )
     expect(result.resultText).toBe('clean')
+  })
+
+  it('delivers the prompt over stdin, not argv', async () => {
+    const result = await runClaude(
+      {...baseOptions, prompt: 'secret note content'},
+      fakeClaude(
+        `let input = '';
+         process.stdin.on('data', chunk => { input += chunk });
+         process.stdin.on('end', () => {
+           const inArgv = process.argv.join(' ').includes('secret note content')
+           process.stdout.write(JSON.stringify({result: inArgv ? 'LEAKED-TO-ARGV' : input, session_id: 's'}))
+         })`,
+      ),
+    )
+    expect(result.resultText).toBe('secret note content')
   })
 })

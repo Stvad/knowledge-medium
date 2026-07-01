@@ -26,6 +26,19 @@ describe('parseConfig', () => {
     expect(() => parseConfig({watchers: [{kind: 'query', name: 'q'}]})).toThrow()
   })
 
+  it('rejects misspelled keys instead of silently dropping them', () => {
+    expect(() => parseConfig({maxconcurrent: 5, watchers: []})).toThrow()
+    expect(() => parseConfig({
+      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', allowedtools: ['Bash']}],
+    })).toThrow()
+  })
+
+  it('caps timeoutMs below the stale-running sweep window', () => {
+    expect(() => parseConfig({
+      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', timeoutMs: 40 * 60_000}],
+    })).toThrow()
+  })
+
   it('expands ~ in watcher cwd and statePath', () => {
     const config = parseConfig({
       statePath: '~/state.json',

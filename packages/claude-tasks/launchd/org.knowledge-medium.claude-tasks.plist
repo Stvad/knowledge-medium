@@ -19,8 +19,10 @@
   <key>RunAtLoad</key>
   <true/>
 
-  <!-- Restart on crash, but not on clean exit (config errors shouldn't
-       hot-loop; fix the config and kickstart). -->
+  <!-- SuccessfulExit=false: relaunch only when the process exits
+       NON-zero (a crash). The daemon exits 0 on config errors for
+       exactly this reason (restarting won't fix a bad config), and
+       never exits at all while merely waiting for the bridge/tab. -->
   <key>KeepAlive</key>
   <dict>
     <key>SuccessfulExit</key>

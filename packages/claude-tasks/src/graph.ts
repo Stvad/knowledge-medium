@@ -32,7 +32,6 @@ interface PageResult {
 
 export interface BlockData extends BlockView {
   workspaceId?: string
-  childIds?: string[]
 }
 
 const asRecord = (value: unknown, label: string): Record<string, unknown> => {
@@ -40,7 +39,22 @@ const asRecord = (value: unknown, label: string): Record<string, unknown> => {
   return value as Record<string, unknown>
 }
 
+const parseProps = (value: unknown): Record<string, unknown> => {
+  if (typeof value !== 'string') return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
 export const createGraph = (client: BridgeClient) => {
+  const sqlAll = async (sql: string, params: unknown[] = []): Promise<unknown[]> => {
+    const result = await client.runCommand({type: 'sql', mode: 'all', sql, params})
+    return Array.isArray(result) ? result : []
+  }
+
   const resolvePageId = async (alias: string): Promise<string> => {
     const result = await client.runCommand({type: 'page', name: alias}) as PageResult
     if (!result.match) {
@@ -51,6 +65,21 @@ export const createGraph = (client: BridgeClient) => {
     return result.match.id
   }
 
+  /** All aliases of a page block (the `alias` property, list-encoded)
+   *  plus its own id — the full set a wikilink/block-ref guard must
+   *  block to prevent watcher re-trigger loops. */
+  const targetGuardSet = async (alias: string): Promise<{id: string, aliases: string[]}> => {
+    const id = await resolvePageId(alias)
+    const block = await getBlock(id)
+    const raw = block?.properties?.['alias']
+    const decoded = Array.isArray(raw)
+      ? raw.filter((entry): entry is string => typeof entry === 'string')
+      : typeof raw === 'string'
+        ? (() => { try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((entry: unknown): entry is string => typeof entry === 'string') : [] } catch { return [] } })()
+        : []
+    return {id, aliases: [...new Set([alias, ...decoded])]}
+  }
+
   const backlinkSources = async (blockId: string): Promise<BacklinkSource[]> => {
     const result = await client.runCommand({type: 'backlinks', id: blockId}) as BacklinksResult
     return result.backlinks ?? []
@@ -59,21 +88,41 @@ export const createGraph = (client: BridgeClient) => {
   const getBlock = async (id: string): Promise<BlockData | null> => {
     const result = await client.runCommand({type: 'get-block', id})
     if (result === null || result === undefined) return null
-    return asRecord(result, 'get-block') as unknown as BlockData
+    const raw = asRecord(result, 'get-block')
+    const editedAt = raw.userUpdatedAt ?? raw.updatedAt
+    return {
+      ...(raw as unknown as BlockData),
+      editedAtMs: typeof editedAt === 'number' ? editedAt : null,
+    }
   }
 
-  /** Ancestor chain, nearest first. Bounded to keep a corrupt
-   *  parent-cycle from hanging the daemon. */
+  /** Ancestor chain, nearest first — ONE recursive-CTE query instead of
+   *  a bridge round-trip per level (also narrows the pre-claim race
+   *  window). Depth-capped so a corrupt parent cycle can't hang it. */
   const ancestors = async (id: string, maxDepth = 100): Promise<BlockData[]> => {
-    const chain: BlockData[] = []
-    let current = await getBlock(id)
-    while (current?.parentId && chain.length < maxDepth) {
-      const parent = await getBlock(current.parentId)
-      if (!parent) break
-      chain.push(parent)
-      current = parent
-    }
-    return chain
+    const rows = await sqlAll(
+      `WITH RECURSIVE anc(id, parent_id, content, properties_json, depth) AS (
+         SELECT b.id, b.parent_id, b.content, b.properties_json, 0
+           FROM blocks b
+           WHERE b.id = (SELECT parent_id FROM blocks WHERE id = ?)
+         UNION ALL
+         SELECT p.id, p.parent_id, p.content, p.properties_json, anc.depth + 1
+           FROM blocks p JOIN anc ON p.id = anc.parent_id
+           WHERE anc.depth < ?
+       )
+       SELECT id, parent_id, content, properties_json FROM anc ORDER BY depth`,
+      [id, maxDepth],
+    )
+    return rows.flatMap(row => {
+      const {id: rowIdValue, parent_id, content, properties_json} = row as Record<string, unknown>
+      if (typeof rowIdValue !== 'string') return []
+      return [{
+        id: rowIdValue,
+        parentId: typeof parent_id === 'string' ? parent_id : null,
+        content: typeof content === 'string' ? content : '',
+        properties: parseProps(properties_json),
+      }]
+    })
   }
 
   const getSubtree = async (rootId: string): Promise<BlockData[]> => {
@@ -83,7 +132,7 @@ export const createGraph = (client: BridgeClient) => {
 
   const setTaskProps = async (
     id: string,
-    args: {status: TaskStatus, watcher?: string, session?: string | null, error?: string | null, nowMs: number},
+    args: {status: TaskStatus, watcher?: string, session?: string | null, error?: string | null, attempts?: number, nowMs: number},
   ): Promise<void> => {
     const properties: Record<string, unknown> = {
       [PROPS.status]: args.status,
@@ -92,6 +141,7 @@ export const createGraph = (client: BridgeClient) => {
     if (args.watcher !== undefined) properties[PROPS.watcher] = args.watcher
     if (args.session !== undefined && args.session !== null) properties[PROPS.session] = args.session
     if (args.error !== undefined) properties[PROPS.error] = args.error ?? ''
+    if (args.attempts !== undefined) properties[PROPS.attempts] = args.attempts
     await client.runCommand({type: 'update-block', id, properties})
   }
 
@@ -105,39 +155,36 @@ export const createGraph = (client: BridgeClient) => {
     return asRecord(result, 'create-block') as unknown as BlockData
   }
 
-  const sqlAll = async (sql: string, params: unknown[] = []): Promise<unknown[]> => {
-    const result = await client.runCommand({type: 'sql', mode: 'all', sql, params})
-    return Array.isArray(result) ? result : []
-  }
-
-  /** Batched property fetch — ONE query per tick instead of a bridge
-   *  round-trip per backlink source, so processed mentions stay cheap
-   *  to re-scan forever. */
-  const blockProps = async (ids: string[]): Promise<Map<string, Record<string, unknown>>> => {
-    const props = new Map<string, Record<string, unknown>>()
+  /** Batched pending-decision views — ONE query per tick instead of a
+   *  bridge round-trip per backlink source, so processed mentions stay
+   *  cheap to re-scan forever. Includes the last-edit timestamp for the
+   *  quiet-period gate. */
+  const blockViews = async (ids: string[]): Promise<Map<string, BlockView>> => {
+    const views = new Map<string, BlockView>()
     for (let offset = 0; offset < ids.length; offset += 500) {
       const chunk = ids.slice(offset, offset + 500)
       const placeholders = chunk.map(() => '?').join(', ')
       const rows = await sqlAll(
-        `SELECT id, properties_json FROM blocks WHERE id IN (${placeholders})`,
+        `SELECT id, properties_json, coalesce(user_updated_at, updated_at) AS edited_at
+           FROM blocks WHERE id IN (${placeholders})`,
         chunk,
       )
       for (const row of rows) {
-        const {id, properties_json} = row as {id?: unknown, properties_json?: unknown}
-        if (typeof id !== 'string' || typeof properties_json !== 'string') continue
-        try {
-          props.set(id, JSON.parse(properties_json) as Record<string, unknown>)
-        } catch {
-          props.set(id, {})
-        }
+        const {id, properties_json, edited_at} = row as Record<string, unknown>
+        if (typeof id !== 'string') continue
+        views.set(id, {
+          id,
+          properties: parseProps(properties_json),
+          editedAtMs: typeof edited_at === 'number' ? edited_at : null,
+        })
       }
     }
-    return props
+    return views
   }
 
   return {
-    client,
     resolvePageId,
+    targetGuardSet,
     backlinkSources,
     getBlock,
     ancestors,
@@ -145,7 +192,7 @@ export const createGraph = (client: BridgeClient) => {
     setTaskProps,
     createReply,
     sqlAll,
-    blockProps,
+    blockViews,
   }
 }
 

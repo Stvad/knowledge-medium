@@ -4,6 +4,7 @@ import {parseConfig, PROPS} from '../src/config'
 import type {BlockData, Graph} from '../src/graph'
 import type {ClaudeRunResult} from '../src/runner'
 import type {StateStore} from '../src/state'
+import {MAX_ATTEMPTS} from '../src/watchers'
 
 const NOW = 1_800_000_000_000
 
@@ -22,8 +23,8 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const propWrites: Array<{id: string, status: string}> = []
 
   const graph: Graph = {
-    client: null as never,
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
+    targetGuardSet: vi.fn(async () => ({id: seed.pageId ?? 'page-claude', aliases: ['claude']})),
     backlinkSources: vi.fn(async () =>
       (seed.backlinks ?? []).map(({id, deepLink}) => ({
         id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: ['content'],
@@ -41,19 +42,20 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       return chain
     },
     getSubtree: async rootId => [
-      {id: rootId, parentId: null, content: blocks.get(rootId)?.content ?? '', depth: 0} as BlockData,
+      {id: rootId, parentId: null, content: blocks.get(rootId)?.content ?? ''} as BlockData,
     ],
     setTaskProps: async (id, args) => {
-      const block = blocks.get(id) ?? {id, properties: {}}
-      block.properties = {
-        ...block.properties,
+      const target = blocks.get(id) ?? {id, properties: {}}
+      target.properties = {
+        ...target.properties,
         [PROPS.status]: args.status,
         [PROPS.updatedAt]: args.nowMs,
         ...(args.watcher !== undefined ? {[PROPS.watcher]: args.watcher} : {}),
         ...(args.session ? {[PROPS.session]: args.session} : {}),
+        ...(args.attempts !== undefined ? {[PROPS.attempts]: args.attempts} : {}),
         ...(args.error !== undefined ? {[PROPS.error]: args.error ?? ''} : {}),
       }
-      blocks.set(id, block)
+      blocks.set(id, target)
       propWrites.push({id, status: args.status})
     },
     createReply: async (parentId, content) => {
@@ -63,10 +65,10 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       return reply
     },
     sqlAll: vi.fn(async () => []),
-    blockProps: async ids => new Map(
+    blockViews: async ids => new Map(
       ids.flatMap(id => {
-        const block = blocks.get(id)
-        return block ? [[id, block.properties ?? {}] as const] : []
+        const target = blocks.get(id)
+        return target ? [[id, {id, properties: target.properties ?? {}, editedAtMs: target.editedAtMs ?? null}] as const] : []
       }),
     ),
   }
@@ -89,7 +91,7 @@ const okRun = (overrides: Partial<ClaudeRunResult> = {}): ClaudeRunResult => ({
 })
 
 const mentionConfig = (overrides: object = {}) => parseConfig({
-  watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude'}],
+  watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
   ...overrides,
 })
 
@@ -120,6 +122,7 @@ describe('mention lifecycle', () => {
     expect(propWrites.map(write => write.status)).toEqual(['running', 'done'])
     expect(replies).toEqual([{parentId: 'b-1', content: 'Reply text'}])
     expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-1')
+    expect(blocks.get('b-1')?.properties?.[PROPS.attempts]).toBe(1)
 
     const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
     expect(prompt).toContain('[[claude]] summarize inbox')
@@ -142,6 +145,23 @@ describe('mention lifecycle', () => {
     expect(replies).toHaveLength(1)
   })
 
+  it('waits for the quiet period before claiming a just-edited mention', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] half-typed…', editedAtMs: NOW - 2_000}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 15_000}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+  })
+
   it('replies with a failure note and marks error on a failed run', async () => {
     const {graph, blocks, replies} = fakeGraph({
       backlinks: [{id: 'b-1'}],
@@ -158,6 +178,74 @@ describe('mention lifecycle', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
     expect(replies[0].content).toContain('run failed')
     expect(replies[0].content).toContain('credit exhausted')
+  })
+
+  it('leaves a visible reply even when infrastructure fails mid-task', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] infra'}},
+    })
+    graph.getSubtree = vi.fn(async () => { throw new Error('bridge blipped') })
+    const engine = engineWith({graph})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+    expect(replies[0].content).toContain('infrastructure error')
+    expect(replies[0].content).toContain('bridge blipped')
+  })
+
+  it('parks a task after MAX_ATTEMPTS with a terminal error write', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {
+        content: '[[claude]] cursed',
+        properties: {
+          [PROPS.status]: 'running',
+          [PROPS.updatedAt]: NOW - 60 * 60_000,
+          [PROPS.attempts]: MAX_ATTEMPTS,
+        },
+      }},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).not.toHaveBeenCalled()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+    expect(replies[0].content).toContain('gave up after')
+
+    // Terminal: later ticks skip it entirely.
+    await engine.tick()
+    await engine.drain()
+    expect(replies).toHaveLength(1)
+  })
+
+  it('backs off when another daemon wins the claim race', async () => {
+    const {graph, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] contested'}},
+    })
+    // Simulate a competing daemon overwriting the claim between our
+    // write and the verify read.
+    const realSetTaskProps = graph.setTaskProps
+    graph.setTaskProps = async (id, args) => {
+      await realSetTaskProps(id, args)
+      if (args.status === 'running') {
+        await realSetTaskProps(id, {status: 'running', watcher: 'other-daemon', nowMs: NOW + 5})
+      }
+    }
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).not.toHaveBeenCalled()
+    expect(replies).toHaveLength(0)
   })
 
   it('resumes the nearest ancestor session for follow-up mentions', async () => {
@@ -177,7 +265,54 @@ describe('mention lifecycle', () => {
     expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBe('sess-root')
   })
 
-  it('respects maxConcurrent across a tick', async () => {
+  it('fires for a follow-up nested under a daemon reply (thread continuation)', async () => {
+    const {graph, replies} = fakeGraph({
+      backlinks: [{id: 'b-follow'}],
+      blocks: {
+        'reply-block': {content: 'earlier answer', properties: {[PROPS.reply]: true}},
+        'b-follow': {content: '[[claude]] and one more thing', parentId: 'reply-block'},
+      },
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(replies).toHaveLength(1)
+  })
+
+  it('never runs two concurrent --resume of the same session', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-f1'}, {id: 'b-f2'}],
+      blocks: {
+        'b-root': {content: 'root', properties: {[PROPS.session]: 'sess-shared'}},
+        'b-f1': {content: '[[claude]] follow 1', parentId: 'b-root'},
+        'b-f2': {content: '[[claude]] follow 2', parentId: 'b-root'},
+      },
+    })
+    let live = 0
+    let peak = 0
+    const runTask = vi.fn(async () => {
+      live += 1
+      peak = Math.max(peak, live)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      live -= 1
+      return okRun()
+    })
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+    await engine.tick()
+    await engine.drain()
+
+    expect(peak).toBe(1)
+    expect(runTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('respects maxConcurrent across a tick without starving later mentions', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-1'}, {id: 'b-2'}, {id: 'b-3'}],
       blocks: {
@@ -205,10 +340,33 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(peak).toBeLessThanOrEqual(2)
-    // Third mention picked up by a later tick, not lost.
     await engine.tick()
     await engine.drain()
     expect(runTask).toHaveBeenCalledTimes(3)
+  })
+
+  it('stops launching once the runsPerHour budget is exhausted', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}, {id: 'b-2'}, {id: 'b-3'}],
+      blocks: {
+        'b-1': {content: '[[claude]] 1'},
+        'b-2': {content: '[[claude]] 2'},
+        'b-3': {content: '[[claude]] 3'},
+      },
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: mentionConfig({runsPerHour: 2, maxConcurrent: 10}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).toHaveBeenCalledTimes(2)
   })
 
   it('passes the km MCP allowlist plus watcher extras to the run', async () => {
@@ -221,7 +379,7 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', allowedTools: ['Bash(git:*)']}],
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, allowedTools: ['Bash(git:*)']}],
       }),
     })
 
@@ -236,7 +394,7 @@ describe('mention lifecycle', () => {
 
 describe('channel delivery (experimental)', () => {
   const channelConfig = () => parseConfig({
-    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', delivery: 'channel'}],
+    watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, delivery: 'channel'}],
   })
 
   it('claims and delivers to the channel instead of spawning; lifecycle left open', async () => {
@@ -254,7 +412,7 @@ describe('channel delivery (experimental)', () => {
     expect(runTask).not.toHaveBeenCalled()
     expect(deliverToChannel).toHaveBeenCalledTimes(1)
     const event = deliverToChannel.mock.calls[0][0] as {content: string, meta: Record<string, string>}
-    expect(event.meta).toEqual({watcher: 'mentions', block_id: 'b-1'})
+    expect(event.meta).toEqual({watcher: 'mentions', block_id: 'b-1', attempt: '1'})
     expect(event.content).toContain('close the task out yourself')
     // Daemon only claims; the ambient session finishes the lifecycle.
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
@@ -280,8 +438,8 @@ describe('channel delivery (experimental)', () => {
 })
 
 describe('query watcher lifecycle', () => {
-  const queryConfig = () => parseConfig({
-    watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks'}],
+  const queryConfig = (overrides: object = {}) => parseConfig({
+    watchers: [{kind: 'query', name: 'inbox', sql: 'SELECT id FROM blocks', ...overrides}],
   })
 
   it('baselines on first tick without firing, then fires only for new ids', async () => {
@@ -319,5 +477,57 @@ describe('query watcher lifecycle', () => {
     await engine.drain()
 
     expect(runTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('caps rows per firing and notes the overflow in the prompt', async () => {
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => Array.from({length: 5}, (_, index) => ({id: `row-${index}`})))
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, state, config: queryConfig({maxRowsPerFire: 2})})
+
+    await engine.tick()
+    await engine.drain()
+
+    const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
+    expect(prompt).toContain('row-0')
+    expect(prompt).toContain('row-1')
+    expect(prompt).not.toContain('row-2')
+    expect(prompt).toContain('3 more new rows omitted')
+    // Cursor still covers ALL rows — the omitted ones don't re-fire.
+    expect(state.cursors.get('inbox')).toHaveLength(5)
+  })
+
+  it('channel delivery: keeps the cursor when delivery fails so rows re-fire later', async () => {
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => [{id: 'a'}])
+    const state = memoryState()
+    state.cursors.set('inbox', [])
+    const deliverToChannel = vi.fn(async () => { throw new Error('listener down') })
+    const engine = engineWith({
+      graph,
+      deliverToChannel,
+      state,
+      config: queryConfig({delivery: 'channel'}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(state.cursors.get('inbox')).toEqual([])   // NOT advanced
+
+    // Listener comes back: the same row fires now.
+    const delivered: unknown[] = []
+    engine.running.clear()
+    const engine2 = engineWith({
+      graph,
+      deliverToChannel: vi.fn(async event => { delivered.push(event) }),
+      state,
+      config: queryConfig({delivery: 'channel'}),
+    })
+    await engine2.tick()
+    await engine2.drain()
+    expect(delivered).toHaveLength(1)
+    expect(state.cursors.get('inbox')).toEqual(['a'])
   })
 })

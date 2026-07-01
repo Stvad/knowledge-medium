@@ -11,13 +11,18 @@
  *
  * Env:
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
- * - KM_MCP_BLOCKED_WIKILINKS: comma-separated aliases the write tools
- *   refuse to link (watcher re-trigger guard, set by the daemon)
+ * - KM_MCP_BLOCKED_WIKILINKS: comma-separated page aliases the write
+ *   tools refuse to reference (watcher re-trigger guard, set by the
+ *   daemon). Enforced against ALL reference syntaxes: each name is
+ *   resolved to its page, and that page's full alias set plus its id
+ *   ([[any-alias]], ((id)), (((id))) embeds/labels) is blocked.
  * - KM_MCP_CHANNEL_PORT (EXPERIMENTAL): when set, the server also
  *   declares the Claude Code `claude/channel` capability (research
  *   preview) and binds a loopback HTTP listener on this port; POSTed
  *   {content, meta?} bodies are pushed into the hosting session as
- *   `notifications/claude/channel` events. Only meaningful when the
+ *   `notifications/claude/channel` events. Requests must carry the
+ *   shared secret (x-km-channel-secret, from the 0600 secret file) —
+ *   loopback alone is NOT an auth boundary. Only meaningful when the
  *   session was started with
  *   `claude --dangerously-load-development-channels server:km`.
  */
@@ -28,7 +33,8 @@ import { z } from 'zod'
 import { createBridgeClient } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import { createGraph } from './graph.js'
-import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, MCP_SERVER_NAME } from './mcpShared.js'
+import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, findBlockedRef, isReadOnlySql, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
+import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
 const client = createBridgeClient({
   profile: process.env.AGENT_RUNTIME_PROFILE,
@@ -36,26 +42,51 @@ const client = createBridgeClient({
 })
 const graph = createGraph(client)
 
-const blockedWikilinks = (process.env[BLOCKED_WIKILINKS_ENV] ?? '')
+// ----- write guard: watcher re-trigger prevention ---------------------
+
+const blockedNames = (process.env[BLOCKED_WIKILINKS_ENV] ?? '')
   .split(',')
   .map(alias => alias.trim())
   .filter(Boolean)
 
-const assertNoBlockedWikilinks = (content: string | undefined) => {
-  if (!content) return
-  for (const alias of blockedWikilinks) {
-    if (content.toLowerCase().includes(`[[${alias.toLowerCase()}]]`)) {
-      throw new Error(
-        `Refusing to write "[[${alias}]]": that wikilink re-triggers the watcher that spawned this run. Refer to the page without linking it.`,
-      )
+let guardCache: {set: RefGuardSet, fetchedAt: number} | null = null
+const GUARD_TTL_MS = 10 * 60_000
+
+/** Resolve the blocked names to their pages' FULL alias sets + ids via
+ *  the bridge (lazily, cached). A guard that only blocks the literal
+ *  configured string is trivially bypassed with `((page-id))` or any
+ *  other alias of the same page. Falls back to the raw names when a
+ *  page can't be resolved (it may not exist yet). */
+const guardSet = async (): Promise<RefGuardSet> => {
+  if (blockedNames.length === 0) return {aliases: [], ids: []}
+  if (guardCache && Date.now() - guardCache.fetchedAt < GUARD_TTL_MS) return guardCache.set
+
+  const aliases = new Set(blockedNames)
+  const ids = new Set<string>()
+  for (const name of blockedNames) {
+    try {
+      const target = await graph.targetGuardSet(name)
+      ids.add(target.id)
+      for (const alias of target.aliases) aliases.add(alias)
+    } catch {
+      // Page missing / bridge hiccup: keep the raw-name guard for now;
+      // TTL retries the full resolution.
     }
   }
+  const set = {aliases: [...aliases], ids: [...ids]}
+  guardCache = {set, fetchedAt: Date.now()}
+  return set
 }
 
-/** Only statements that cannot mutate. The bridge's sql modes don't
- *  gate writes by themselves (an UPDATE "runs" under mode=all), so the
- *  read-only guarantee is enforced here, textually. */
-const READ_ONLY_SQL = /^\s*(select|with|pragma table_info|explain)\b/i
+const assertNoBlockedRefs = async (content: string | undefined) => {
+  if (!content || blockedNames.length === 0) return
+  const blocked = findBlockedRef(content, await guardSet())
+  if (blocked) {
+    throw new Error(
+      `Refusing to write "${blocked}": it references a watcher-target page and would re-trigger the watcher that spawned this run. Refer to the page without linking it.`,
+    )
+  }
+}
 
 const json = (value: unknown) => ({
   content: [{type: 'text' as const, text: JSON.stringify(value, null, 2)}],
@@ -80,7 +111,7 @@ const server = new McpServer(
 )
 
 server.registerTool('get_block', {
-  description: 'Fetch a single block (content, properties, parentId, childIds) by id.',
+  description: 'Fetch a single block (content, properties, parentId) by id. For its children, use the subtree tool.',
   inputSchema: {id: z.string()},
 }, async ({id}) => json(await graph.getBlock(id)))
 
@@ -111,11 +142,11 @@ server.registerTool('search', {
 }, async ({query, limit}) => json(await client.runCommand({type: 'search', query, limit})))
 
 server.registerTool('sql_query', {
-  description: 'Run a read-only SQL query (SELECT/WITH) against the client database. Key tables: blocks(id, content, properties_json, parent_id, workspace_id).',
+  description: 'Run a read-only SQL query (single SELECT/WITH statement) against the client database. Key tables: blocks(id, content, properties_json, parent_id, workspace_id).',
   inputSchema: {sql: z.string(), params: z.array(z.unknown()).optional()},
 }, async ({sql, params}) => {
-  if (!READ_ONLY_SQL.test(sql)) {
-    throw new Error('sql_query only accepts read-only statements (SELECT / WITH). Use create_block / update_block for writes.')
+  if (!isReadOnlySql(sql)) {
+    throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block for writes.')
   }
   return json(await graph.sqlAll(sql, params ?? []))
 })
@@ -128,7 +159,7 @@ server.registerTool('create_block', {
     properties: z.record(z.string(), z.unknown()).optional(),
   },
 }, async ({parentId, content, properties}) => {
-  assertNoBlockedWikilinks(content)
+  await assertNoBlockedRefs(content)
   return json(await client.runCommand({type: 'create-block', parentId, content, properties}))
 })
 
@@ -140,20 +171,31 @@ server.registerTool('update_block', {
     properties: z.record(z.string(), z.unknown()).optional(),
   },
 }, async ({id, content, properties}) => {
-  assertNoBlockedWikilinks(content)
+  await assertNoBlockedRefs(content)
   return json(await client.runCommand({type: 'update-block', id, content, properties}))
 })
 
 await server.connect(new StdioServerTransport())
 
 // ----- experimental channel listener ---------------------------------
-// Loopback-only, mirrors the bridge's posture. The daemon (or curl)
-// POSTs {content, meta?}; each becomes a channel event in the hosting
-// session. Notifications are fire-and-forget per the channels contract.
+// Loopback + shared-secret auth (the bridge itself is loopback + bearer
+// token; loopback alone stops nothing running on this machine, nor
+// no-preflight browser POSTs). Strict JSON content-type and an empty
+// Origin are additional belts against cross-site injection.
 if (channelPort) {
+  const secret = await loadOrCreateChannelSecret()
+
   const listener = http.createServer((request, response) => {
     if (request.method !== 'POST') {
       response.writeHead(405).end()
+      return
+    }
+    if (request.headers[CHANNEL_SECRET_HEADER] !== secret) {
+      response.writeHead(401).end('missing or wrong x-km-channel-secret')
+      return
+    }
+    if (!request.headers['content-type']?.includes('application/json') || request.headers.origin) {
+      response.writeHead(400).end('expected non-browser application/json request')
       return
     }
     let body = ''
@@ -162,7 +204,7 @@ if (channelPort) {
       void (async () => {
         try {
           const parsed = JSON.parse(body) as {content?: unknown, meta?: unknown}
-          const content = typeof parsed.content === 'string' ? parsed.content : body
+          if (typeof parsed.content !== 'string') throw new Error('content required')
           const meta = parsed.meta && typeof parsed.meta === 'object'
             ? Object.fromEntries(
                 Object.entries(parsed.meta as Record<string, unknown>)
@@ -171,7 +213,7 @@ if (channelPort) {
             : undefined
           await server.server.notification({
             method: 'notifications/claude/channel',
-            params: {content, ...(meta ? {meta} : {})},
+            params: {content: parsed.content, ...(meta ? {meta} : {})},
           })
           response.writeHead(200).end('ok')
         } catch {
@@ -179,6 +221,12 @@ if (channelPort) {
         }
       })()
     })
+  })
+  // EADDRINUSE (e.g. two sessions loading the same .mcp.json) must not
+  // take the graph tools down with it — log and carry on without the
+  // listener.
+  listener.on('error', error => {
+    process.stderr.write(`km channel listener failed: ${error instanceof Error ? error.message : String(error)}\n`)
   })
   listener.listen(channelPort, '127.0.0.1')
 }
