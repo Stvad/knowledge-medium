@@ -894,7 +894,7 @@ independently shippable and reversible.
         the partial index, e2ee gate decision from §8 (recommended: derive skips e2ee
         workspaces for now, column excluded from their upload). Also the standalone
         prerequisite fix: replace the literal NUL bytes in
-        <code>src/data/api/blockData.ts</code> with <code> </code> escapes so git
+        <code>src/data/api/blockData.ts</code> with <code>\u0000</code> escapes so git
         stops treating it as binary (it silently corrupted two auto-merges in the spike
         merge already).
       </p>
