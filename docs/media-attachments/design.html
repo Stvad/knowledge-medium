@@ -1465,8 +1465,15 @@ vNext; the v1 commitment is only the reserved property + audience flag.
     scoping the OPFS byte store by <code>user_id</code> and preserving the keyStore's
     <code>(user_id, workspace_id)</code> keying under an account <em>switch</em>, so account A's cache /
     keys can never serve account B (§7.3).</li>
-  <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
-    error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
+  <li><strong>Max inline size + large-media story (RESOLVED — cap shipped):</strong> the cap is
+    enforced at <strong>50&nbsp;MiB</strong> (<code>DEFAULT_MAX_CAPTURE_BYTES</code>) in three layers:
+    (a) a client, mode-aware reject on the <em>encoded</em> size (plaintext + the e2ee envelope
+    overhead) BEFORE staging in <code>captureMedia</code> (→ <code>too-large</code>, with a user
+    message); (b) a client pre-read <code>file.size</code> fast-path in
+    <code>captureMediaFromFiles</code> so a multi-GB paste is rejected before <code>arrayBuffer()</code>;
+    (c) the bucket's server-side <code>file_size_limit&nbsp;=&nbsp;52428800</code>, with a 413 /
+    <code>EntityTooLarge</code> mapped to a permanent failure. What remains vNext is only the
+    <em>large-media</em> story: no resumable/chunked (tus) upload, so 50&nbsp;MiB is a hard ceiling.</li>
   <li><strong>Asset block deletion → byte GC (must be conservative under content-addressing):</strong>
     because one content-addressed object may back several blocks (§11), deleting a block does <em>not</em>
     delete the object. Object GC is <strong>content-reference-counted</strong>, but the refcount can only
