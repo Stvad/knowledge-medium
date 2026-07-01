@@ -29,6 +29,12 @@
 
 let proxyInput: HTMLInputElement | undefined
 
+/** The single pending failsafe-blur timer. Only ever ONE is outstanding: each
+ *  grab cancels the previous before arming its own, so an earlier tap's timer
+ *  can't fire mid-handoff of a later tap (which re-focuses the same singleton
+ *  proxy) and blur the keyboard the later grab is still holding. */
+let failsafeTimer: ReturnType<typeof setTimeout> | undefined
+
 /** How long the proxy holds focus (and the keyboard) before the failsafe blur.
  *  It must comfortably outlast the async edit-entry → editor-focus handoff, or
  *  the failsafe blurs mid-handoff and drops the keyboard the grab just raised.
@@ -40,13 +46,21 @@ let proxyInput: HTMLInputElement | undefined
 const FOCUS_HANDOFF_TIMEOUT_MS = 3000
 
 /** iOS (iPhone/iPad) WebKit — the only place the deferred-focus keyboard bug
- *  exists. Apple `navigator.vendor` covers every iOS browser (all WebKit),
- *  including iPad's desktop-class UA; `maxTouchPoints > 0` excludes desktop
- *  Safari on the Mac (no touchscreen), which doesn't need the grab. */
-const isIOS = (): boolean =>
-  typeof navigator !== 'undefined' &&
-  /apple/i.test(navigator.vendor ?? '') &&
-  (navigator.maxTouchPoints ?? 0) > 0
+ *  exists. Every iOS browser is WebKit, but `navigator.vendor` reports the
+ *  BRAND, not the engine: Safari (and iPad's desktop-class UA) reports
+ *  `"Apple Computer, Inc."`, while iOS Chrome/Edge report `"Google Inc."` and
+ *  iOS Firefox reports `""`. So vendor alone misses the non-Safari iOS
+ *  browsers — for those we also accept the iOS-exclusive UA tokens
+ *  `CriOS`/`FxiOS`/`EdgiOS` (Chrome-on-Android is `Chrome/`, never `CriOS/`,
+ *  so this can't false-positive off iOS). `maxTouchPoints > 0` is required by
+ *  both arms: it excludes desktop Safari on the Mac (Apple vendor, no
+ *  touchscreen), which doesn't need the grab. */
+const isIOS = (): boolean => {
+  if (typeof navigator === 'undefined') return false
+  if ((navigator.maxTouchPoints ?? 0) === 0) return false
+  return /apple/i.test(navigator.vendor ?? '')
+    || /\b(CriOS|FxiOS|EdgiOS)\//.test(navigator.userAgent ?? '')
+}
 
 /** The singleton hidden proxy, created lazily. Zero-opacity + `position: fixed`
  *  so focusing it neither scrolls the page nor shows anything; sized 1px rather
@@ -86,14 +100,19 @@ const ensureProxy = (): HTMLInputElement => {
  *  still the active element. In the normal path the editor has taken focus long
  *  before then and the blur is skipped. */
 export const grabSoftKeyboard = (): void => {
-  if (!isIOS()) return
+  if (!isIOS() || typeof document === 'undefined') return
   const el = ensureProxy()
   try {
     el.focus({preventScroll: true})
   } catch {
     return
   }
-  window.setTimeout(() => {
+  // Cancel any prior grab's failsafe first: without this, an earlier tap's
+  // timer could fire while this grab's handoff is still in flight (proxy
+  // re-focused, editor not yet focused) and blur the keyboard we just raised.
+  if (failsafeTimer !== undefined) clearTimeout(failsafeTimer)
+  failsafeTimer = setTimeout(() => {
+    failsafeTimer = undefined
     if (document.activeElement === el) el.blur()
   }, FOCUS_HANDOFF_TIMEOUT_MS)
 }

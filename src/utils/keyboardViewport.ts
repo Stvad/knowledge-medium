@@ -85,9 +85,16 @@ export const SOFT_KEYBOARD_MIN_HEIGHT = 150
  *  so it's invariant to the iOS pan — unlike the positioning overlap, this must
  *  stay true while the page scrolls with the keyboard up. On Chromium/Firefox
  *  (interactive-widget=resizes-content) the layout viewport shrinks WITH the
- *  keyboard, so the delta is ~0 and this reads false — fine, because those are
- *  the phones already covered by the width (`useIsMobile`) gate; the delta is
- *  the extra signal for wide iOS where the layout viewport stays full. */
+ *  keyboard, so the delta is ~0 and this reads false; the delta is the extra
+ *  signal for wide iOS, where the layout viewport stays full.
+ *
+ *  Known gap: a Chromium/Firefox device that is BOTH >767px AND has a soft
+ *  keyboard (a landscape Android phone, a wide Android tablet, a Chromebook /
+ *  Windows 2-in-1 in tablet mode) satisfies neither the width gate nor this
+ *  delta, so the toolbar stays hidden while editing. Narrow-width Chromium
+ *  phones are covered by `useIsMobile`; wide iOS is covered here. There's no
+ *  cheap robust Chromium signal for the wide+soft-kb case (the VirtualKeyboard
+ *  overlaysContent API is app-global and was rejected), so it's accepted. */
 export const softKeyboardPresent = (layoutHeight: number, visualViewportHeight: number): boolean =>
   layoutHeight - visualViewportHeight >= SOFT_KEYBOARD_MIN_HEIGHT
 
