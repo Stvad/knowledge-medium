@@ -1,28 +1,13 @@
 /**
  * Wiring between the app boot/lifecycle and the out-of-band {@link dbForensics}
  * recorder. Kept separate from `dbForensics` (pure store) and from
- * `repoProvider` (which just calls these) so the glue — once-guards, the
- * broadened corruption matcher, the lifecycle listeners — lives in one place.
+ * `repoProvider` (which just calls these) so the glue — the per-user watcher,
+ * the lifecycle listeners, the retrieval hook — lives in one place.
  */
 
 import { dbForensics, type DbForensics } from '@/utils/dbForensics.js'
 import { isLocalDbCorruptionError } from '@/utils/localDbCorruption.js'
 import { reportRuntimeLocalDbCorruption } from '@/data/localDbCorruptionSignal.js'
-import { scheduleIdle } from '@/utils/scheduleIdle.js'
-
-/**
- * Broader than `isLocalDbCorruptionError` ON PURPOSE. That function gates a
- * DESTRUCTIVE reset, so it only matches narrow, unambiguous open-time SQLite
- * phrasings. Forensic capture is READ-ONLY (it just records a snapshot), so it
- * should also fire on the RUNTIME sync-apply phrasing the strict matcher omits —
- * `powersync_control: internal SQLite call returned CORRUPT` — which is exactly
- * the class the strict matcher (and the #281 recovery UI) currently misses.
- */
-export const looksLikeDbCorruptionForForensics = (error: unknown): boolean => {
-  if (isLocalDbCorruptionError(error)) return true
-  const msg = error instanceof Error ? error.message : String(error ?? '')
-  return /returned corrupt|powersync_control|sqlite_corrupt/i.test(msg)
-}
 
 // Structural PowerSync status surface (avoids importing PowerSync types; see
 // firstSync.ts for the same approach). `downloadError` lives under
@@ -39,15 +24,25 @@ interface CorruptionWatchDb {
 const downloadErrorOf = (s: DownloadErrorStatus | undefined): unknown =>
   s?.dataFlowStatus?.downloadError ?? s?.downloadError
 
+const messageOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
 let sessionRecorded = false
-let runtimeWatchInstalled = false
-let runtimeCorruptionCaptured = false
 let lifecycleInstalled = false
+// The runtime watcher is bound to a specific user's connection. An in-page
+// account switch (onAuthStateChange → new user.id, no reload) re-runs
+// `ensurePowerSyncReady` for the new user, so we must tear down the previous
+// user's listener and re-arm — else the new user goes unwatched AND the stale
+// listener could report the OLD user's corruption into the new session (routing
+// a reset at the wrong user's `.db`).
+let watchedUserId: string | null = null
+let disposeWatch: (() => void) | null = null
+let runtimeCorruptionCaptured = false
 
 /**
- * Record a new forensic session (unclean-shutdown detection) and schedule an
- * idle zero-page scan. Once per page load — later `ensurePowerSyncReady` calls
- * (re-render / account switch) are no-ops. Best-effort; never throws.
+ * Record a new forensic session (unclean-shutdown detection). Once per page
+ * load — the session is the page-load lifetime, so later `ensurePowerSyncReady`
+ * calls (re-render / in-page account switch) are no-ops. Best-effort; never throws.
  */
 export const recordForensicSessionStart = (
   userId: string,
@@ -56,10 +51,7 @@ export const recordForensicSessionStart = (
 ): void => {
   if (sessionRecorded) return
   sessionRecorded = true
-  void (async () => {
-    await forensics.recordSessionStart({ userId, dbFilename })
-    scheduleIdle(() => void forensics.logScan({ userId, dbFilename }))
-  })()
+  void forensics.recordSessionStart({ userId, dbFilename })
 }
 
 /** Capture a forensic snapshot on a DB-OPEN corruption, before recovery. */
@@ -69,26 +61,25 @@ export const captureDbOpenCorruption = (
   error: unknown,
   forensics: DbForensics = dbForensics,
 ): void => {
-  if (!looksLikeDbCorruptionForForensics(error)) return
+  if (!isLocalDbCorruptionError(error)) return
   void forensics.captureCorruptionSnapshot({
     userId,
     dbFilename,
     reason: 'db-open-corrupt',
-    sql: { message: error instanceof Error ? error.message : String(error) },
+    sql: { message: messageOf(error) },
   })
 }
 
 /**
  * Watch the PowerSync connection for a RUNTIME sync-apply corruption
  * (`downloadError`) — the class the DB-open detector never sees (connect isn't
- * awaited). On the first one it (a) captures a forensic snapshot on the BROAD
- * matcher, and (b) routes to the recovery UI on the STRICT matcher, via
- * `reportRuntimeLocalDbCorruption` → the sentinel → the bootstrap ErrorBoundary.
+ * awaited). On the first corruption it captures a forensic snapshot AND routes
+ * to the recovery UI via `reportRuntimeLocalDbCorruption` → the sentinel → the
+ * bootstrap ErrorBoundary. Both gate on the strict, reset-gating matcher so a
+ * benign sync failure neither consumes the one-shot capture nor shows the UI.
  *
- * Two matchers on purpose: forensic capture is read-only so it fires on the
- * broad `powersync_control` phrasing (maximum context), while routing to the
- * DESTRUCTIVE-adjacent recovery UI is gated on the strict, corruption-specific
- * matcher. Installed once per process.
+ * Re-arms per user: on an in-page account switch it disposes the previous
+ * listener and rebinds to the new user's db.
  */
 export const watchForRuntimeCorruption = (
   db: CorruptionWatchDb,
@@ -96,48 +87,53 @@ export const watchForRuntimeCorruption = (
   dbFilename: string,
   forensics: DbForensics = dbForensics,
 ): void => {
-  if (runtimeWatchInstalled) return
-  runtimeWatchInstalled = true
+  if (watchedUserId === userId) return
+  disposeWatch?.()
+  disposeWatch = null
+  watchedUserId = userId
+  runtimeCorruptionCaptured = false // re-arm the one-shot capture for the new user
+
   const check = (status: DownloadErrorStatus | undefined): void => {
     const err = downloadErrorOf(status)
-    if (err === undefined || err === null) return
-    if (looksLikeDbCorruptionForForensics(err) && !runtimeCorruptionCaptured) {
+    if (err === undefined || err === null || !isLocalDbCorruptionError(err)) return
+    if (!runtimeCorruptionCaptured) {
       runtimeCorruptionCaptured = true
       void forensics.captureCorruptionSnapshot({
         userId,
         dbFilename,
         reason: 'runtime-sync-corrupt',
-        sql: { downloadError: err instanceof Error ? err.message : String(err) },
+        sql: { downloadError: messageOf(err) },
       })
     }
-    // Route to the recovery UI only on the strict, reset-gating matcher (latched
-    // in the signal, so repeated sync-loop failures don't re-fire).
-    if (isLocalDbCorruptionError(err)) {
-      reportRuntimeLocalDbCorruption(userId, err)
-    }
+    // Route to the recovery UI (latched in the signal, so repeated sync-loop
+    // failures don't re-fire).
+    reportRuntimeLocalDbCorruption(userId, err)
   }
+
   check(db.currentStatus)
-  if (typeof db.registerListener === 'function') {
-    db.registerListener({ statusChanged: check })
-  }
+  disposeWatch = typeof db.registerListener === 'function'
+    ? db.registerListener({ statusChanged: check })
+    : null
 }
 
-/** Test-only: reset the once-per-process guards. */
+/** Test-only: reset the once-per-process guards + per-user watcher state. */
 export const __resetDbForensicsHooksForTest = (): void => {
   sessionRecorded = false
-  runtimeWatchInstalled = false
-  runtimeCorruptionCaptured = false
   lifecycleInstalled = false
+  disposeWatch?.()
+  disposeWatch = null
+  watchedUserId = null
+  runtimeCorruptionCaptured = false
 }
 
 /**
- * Register global lifecycle listeners that feed the current session's
- * breadcrumb log + clean-shutdown flag, and expose a retrieval hook on
+ * Register global lifecycle listeners that feed the current session's breadcrumb
+ * log + clean-shutdown flag, and expose a retrieval hook on
  * `window.__omniliner.forensics` (`dump()` / `download()`) so the recorded
- * breadcrumbs + corruption snapshots can be pulled over the remote inspector
- * or downloaded next incident. A `pagehide` marks a clean exit; a still-unclean
- * flag on the next boot means the process was killed (the process-kill
- * fingerprint). Idempotent; call once at app startup.
+ * breadcrumbs + corruption snapshots can be pulled over the remote inspector or
+ * downloaded next incident. `pagehide` marks a clean exit; `pageshow`/`resume`
+ * un-mark it (the session is live again — avoids a bfcache false-negative).
+ * Idempotent; call once at app startup.
  */
 export const installDbForensicsLifecycle = (forensics: DbForensics = dbForensics): void => {
   if (lifecycleInstalled || typeof window === 'undefined') return
@@ -146,8 +142,9 @@ export const installDbForensicsLifecycle = (forensics: DbForensics = dbForensics
     void forensics.recordLifecycleEvent(`visibility:${document.visibilityState}`)
   })
   window.addEventListener('freeze', () => void forensics.recordLifecycleEvent('freeze'))
-  window.addEventListener('resume', () => void forensics.recordLifecycleEvent('resume'))
   window.addEventListener('pagehide', () => void forensics.markCleanShutdown())
+  window.addEventListener('pageshow', () => void forensics.clearCleanShutdown())
+  window.addEventListener('resume', () => void forensics.clearCleanShutdown())
 
   // Retrieval hook, shared with the `__omniliner` namespace (see
   // metricsConsoleHook). Available even in the bootstrap error fallback (no
@@ -163,7 +160,7 @@ export const installDbForensicsLifecycle = (forensics: DbForensics = dbForensics
 }
 
 interface OmnilinerForensicsApi {
-  /** Every forensic record (sessions, scan log, unclean archives, snapshots). */
+  /** Every forensic record (sessions, unclean archives, snapshots). */
   dump: () => Promise<Record<string, unknown>>
   /** Download the dump as `db-forensics.json`. */
   download: () => Promise<void>

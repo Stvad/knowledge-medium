@@ -5,7 +5,7 @@
  * give us a clear END STATE but no record of the SEQUENCE that produced it, so
  * we can't discriminate the candidate mechanisms (non-durable flush on process
  * kill vs a WebKit-OPFS boundary bug vs a coop-lock/handle issue). This module
- * records the breadcrumbs that would tell them apart, and auto-captures a full
+ * records the breadcrumbs that would tell them apart, and captures a full
  * forensic snapshot the moment corruption is detected.
  *
  * Everything here lives in IndexedDB, NOT in the OPFS SQLite file — the thing we
@@ -26,12 +26,10 @@ const FORENSICS_STORE = 'forensics'
 
 const CURRENT_SESSION_KEY = 'session:current'
 const META_KEY = 'meta'
-const SCANLOG_KEY = 'scanlog'
 const UNCLEAN_PREFIX = 'unclean:'
 const SNAPSHOT_PREFIX = 'snapshot:'
 
 const MAX_SESSION_EVENTS = 24
-const MAX_SCANLOG = 20
 const MAX_UNCLEAN_ARCHIVES = 20
 const MAX_SNAPSHOTS = 10
 
@@ -40,21 +38,19 @@ const DB_FILE_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
 export interface ForensicSessionRecord {
   startedAt: number
   lastSeenAt: number
+  /** True only after a graceful `pagehide`. On mobile this is frequently false
+   *  (the OS reaps a backgrounded tab with no unload ceremony) — so DON'T read
+   *  it as "process killed" on its own; pair it with `lastVisibilityState` and
+   *  `events`: unclean + `hidden` = backgrounded-then-reaped (common, benign);
+   *  unclean + `visible` = killed while foreground-active (the rarer, more
+   *  suspicious fingerprint). */
   cleanShutdown: boolean
+  /** Visibility at the last recorded transition — the discriminator above. */
+  lastVisibilityState: string | null
   userId: string
   userAgent: string
   dbSizeAtStart: number | null
   events: Array<{ t: number; type: string }>
-}
-
-export interface ScanLogEntry {
-  at: number
-  dbSize: number | null
-  pageCount: number
-  zeroPageCount: number
-  firstZeroPageByteOffset: number | null
-  elapsedMs: number
-  timedOut: boolean
 }
 
 interface ForensicsMeta {
@@ -82,6 +78,8 @@ export interface CorruptionSnapshot {
   sql?: unknown
 }
 
+const VISIBILITY_PREFIX = 'visibility:'
+
 const warn = (msg: string, err: unknown): void =>
   console.warn(`[db-forensics] ${msg}`, err)
 
@@ -94,6 +92,15 @@ export class DbForensics {
     private readonly store: IdbKeyedStore = new IdbKeyedStore(FORENSICS_DB, FORENSICS_STORE),
   ) {}
 
+  // Serializes the read-modify-write ops on `session:current`. Without this,
+  // back-to-back lifecycle events (e.g. visibilitychange then pagehide) each do
+  // an independent get→put and the later put, built from a pre-clean snapshot,
+  // clobbers `cleanShutdown: true` — turning a clean exit into a false unclean.
+  private sessionMutex: Promise<unknown> = Promise.resolve()
+  // Disambiguates snapshots captured in the same millisecond (the scan-time and
+  // runtime-corruption capturers can fire together) so neither overwrites the other.
+  private snapshotSeq = 0
+
   private get<T>(key: string): Promise<T | undefined> {
     return this.store.tx('readonly', s => s.get(key) as IDBRequest<T | undefined>)
   }
@@ -102,117 +109,117 @@ export class DbForensics {
     await this.store.tx('readwrite', s => s.put(value, key))
   }
 
+  /** Run `op` after all previously-enqueued session mutations complete. `op`
+   *  never rejects (bodies self-catch); the chain still guards against it. */
+  private enqueue<T>(op: () => Promise<T>): Promise<T> {
+    const result = this.sessionMutex.then(op, op)
+    this.sessionMutex = result.then(() => undefined, () => undefined)
+    return result
+  }
+
   /**
-   * Open a new session and detect whether the PREVIOUS one ended uncleanly (the
-   * process was killed before `markCleanShutdown` ran — the process-kill
-   * fingerprint). Returns whether the last session was unclean plus the running
-   * count. Best-effort: on any failure returns a benign default.
+   * Open a new session and detect whether the PREVIOUS one ended uncleanly (no
+   * graceful `pagehide` before the process died). Returns whether the last
+   * session was unclean plus the running count. Best-effort: on any failure
+   * returns a benign default.
    */
-  async recordSessionStart(opts: { userId: string; dbFilename: string }): Promise<{
+  recordSessionStart(opts: { userId: string; dbFilename: string }): Promise<{
     uncleanShutdown: boolean
     uncleanShutdownCount: number
   }> {
-    try {
-      const previous = await this.get<ForensicSessionRecord>(CURRENT_SESSION_KEY)
-      const meta = (await this.get<ForensicsMeta>(META_KEY)) ?? { uncleanShutdownCount: 0 }
-      let uncleanShutdown = false
+    return this.enqueue(async () => {
+      try {
+        const previous = await this.get<ForensicSessionRecord>(CURRENT_SESSION_KEY)
+        const meta = (await this.get<ForensicsMeta>(META_KEY)) ?? { uncleanShutdownCount: 0 }
+        let uncleanShutdown = false
 
-      if (previous && !previous.cleanShutdown) {
-        uncleanShutdown = true
-        meta.uncleanShutdownCount += 1
-        await this.put(`${UNCLEAN_PREFIX}${previous.startedAt}`, previous)
-        await this.trimByPrefix(UNCLEAN_PREFIX, MAX_UNCLEAN_ARCHIVES)
-        await this.put(META_KEY, meta)
-      }
+        if (previous && !previous.cleanShutdown) {
+          uncleanShutdown = true
+          meta.uncleanShutdownCount += 1
+          await this.put(`${UNCLEAN_PREFIX}${previous.startedAt}`, previous)
+          await this.trimByPrefix(UNCLEAN_PREFIX, MAX_UNCLEAN_ARCHIVES)
+          await this.put(META_KEY, meta)
+        }
 
-      const now = Date.now()
-      const session: ForensicSessionRecord = {
-        startedAt: now,
-        lastSeenAt: now,
-        cleanShutdown: false,
-        userId: opts.userId,
-        userAgent: navigator.userAgent,
-        dbSizeAtStart: await safeDbSize(opts.dbFilename),
-        events: [{ t: now, type: 'start' }],
+        const now = Date.now()
+        const session: ForensicSessionRecord = {
+          startedAt: now,
+          lastSeenAt: now,
+          cleanShutdown: false,
+          lastVisibilityState: typeof document !== 'undefined' ? document.visibilityState : null,
+          userId: opts.userId,
+          userAgent: navigator.userAgent,
+          dbSizeAtStart: await safeDbSize(opts.dbFilename),
+          events: [{ t: now, type: 'start' }],
+        }
+        await this.put(CURRENT_SESSION_KEY, session)
+        return { uncleanShutdown, uncleanShutdownCount: meta.uncleanShutdownCount }
+      } catch (err) {
+        warn('recordSessionStart failed', err)
+        return { uncleanShutdown: false, uncleanShutdownCount: 0 }
       }
-      await this.put(CURRENT_SESSION_KEY, session)
-      return { uncleanShutdown, uncleanShutdownCount: meta.uncleanShutdownCount }
-    } catch (err) {
-      warn('recordSessionStart failed', err)
-      return { uncleanShutdown: false, uncleanShutdownCount: 0 }
-    }
+    })
   }
 
   /** Mark the current session as ended cleanly. Call on `pagehide`. */
-  async markCleanShutdown(): Promise<void> {
-    try {
-      const current = await this.get<ForensicSessionRecord>(CURRENT_SESSION_KEY)
-      if (!current) return
-      current.cleanShutdown = true
-      current.lastSeenAt = Date.now()
-      current.events = appendCapped(current.events, { t: current.lastSeenAt, type: 'clean-shutdown' })
-      await this.put(CURRENT_SESSION_KEY, current)
-    } catch (err) {
-      warn('markCleanShutdown failed', err)
-    }
+  markCleanShutdown(): Promise<void> {
+    return this.setCleanShutdown(true, 'clean-shutdown')
+  }
+
+  /** Un-mark clean shutdown — the session is live again (bfcache `pageshow` /
+   *  Page-Lifecycle `resume`). Without this, a `pagehide`→restore→hard-kill
+   *  sequence would read as clean on the next boot (false negative). */
+  clearCleanShutdown(): Promise<void> {
+    return this.setCleanShutdown(false, 'resume')
+  }
+
+  private setCleanShutdown(value: boolean, eventType: string): Promise<void> {
+    return this.enqueue(async () => {
+      try {
+        const current = await this.get<ForensicSessionRecord>(CURRENT_SESSION_KEY)
+        if (!current) return
+        current.cleanShutdown = value
+        current.lastSeenAt = Date.now()
+        current.events = appendCapped(current.events, { t: current.lastSeenAt, type: eventType })
+        await this.put(CURRENT_SESSION_KEY, current)
+      } catch (err) {
+        warn('setCleanShutdown failed', err)
+      }
+    })
   }
 
   /** Append a lifecycle breadcrumb (visibilitychange / freeze / resume …). */
-  async recordLifecycleEvent(type: string): Promise<void> {
-    try {
-      const current = await this.get<ForensicSessionRecord>(CURRENT_SESSION_KEY)
-      if (!current) return
-      const now = Date.now()
-      current.lastSeenAt = now
-      current.events = appendCapped(current.events, { t: now, type })
-      await this.put(CURRENT_SESSION_KEY, current)
-    } catch (err) {
-      warn('recordLifecycleEvent failed', err)
-    }
-  }
-
-  /**
-   * Zero-page scan the OPFS `.db`, append a size/scan sample to the log, and —
-   * if a zeroed page is found — auto-capture a full corruption snapshot. Cheap
-   * (~3s over 1.4 GB); run on idle. Returns the scan result (or null on failure).
-   */
-  async logScan(opts: { userId: string; dbFilename: string }): Promise<OpfsPageScanResult | null> {
-    let scan: OpfsPageScanResult | null = null
-    try {
-      const file = await openOpfsFile(opts.dbFilename)
-      if (!file) return null
-      scan = await scanForZeroPages(file)
-      const entry: ScanLogEntry = {
-        at: Date.now(),
-        dbSize: scan.fileSize,
-        pageCount: scan.pageCount,
-        zeroPageCount: scan.zeroPageCount,
-        firstZeroPageByteOffset: scan.firstZeroPageByteOffset,
-        elapsedMs: scan.elapsedMs,
-        timedOut: scan.timedOut,
+  recordLifecycleEvent(type: string): Promise<void> {
+    return this.enqueue(async () => {
+      try {
+        const current = await this.get<ForensicSessionRecord>(CURRENT_SESSION_KEY)
+        if (!current) return
+        const now = Date.now()
+        current.lastSeenAt = now
+        if (type.startsWith(VISIBILITY_PREFIX)) {
+          current.lastVisibilityState = type.slice(VISIBILITY_PREFIX.length)
+        }
+        current.events = appendCapped(current.events, { t: now, type })
+        await this.put(CURRENT_SESSION_KEY, current)
+      } catch (err) {
+        warn('recordLifecycleEvent failed', err)
       }
-      const log = (await this.get<ScanLogEntry[]>(SCANLOG_KEY)) ?? []
-      await this.put(SCANLOG_KEY, appendCapped(log, entry, MAX_SCANLOG))
-    } catch (err) {
-      warn('logScan failed', err)
-      return scan
-    }
-    if (scan && scan.zeroPageCount > 0) {
-      await this.captureCorruptionSnapshot({
-        userId: opts.userId,
-        dbFilename: opts.dbFilename,
-        reason: 'startup-scan-zero-page',
-        scan,
-      })
-    }
-    return scan
+    })
   }
 
   /**
    * Gather and persist a full forensic snapshot: OPFS inventory + sizes, storage
    * estimate, a zero-page scan (reused if the caller already ran one), the
    * current session + unclean-shutdown count, and any caller-supplied DB-side
-   * context. Call this on `SQLITE_CORRUPT` detection BEFORE any recovery.
+   * context. Call on `SQLITE_CORRUPT` detection.
+   *
+   * NOTE: the byte scan (`safeScan`) reads the live OPFS `.db` unlocked. That's
+   * acceptable here because it only runs on the corruption path, where the sync
+   * worker is already failing to APPLY (not committing writes), so torn reads are
+   * unlikely; and it's best-effort — a throw just yields `{error}` while the
+   * cheap fields (inventory/estimate/session/sql) are still captured. We do NOT
+   * scan on every boot (that unlocked full-file read would contend with the live
+   * writer and could report torn-write false positives).
    */
   async captureCorruptionSnapshot(opts: {
     userId: string
@@ -224,8 +231,9 @@ export class DbForensics {
     try {
       const session = (await this.get<ForensicSessionRecord>(CURRENT_SESSION_KEY)) ?? null
       const meta = (await this.get<ForensicsMeta>(META_KEY)) ?? { uncleanShutdownCount: 0 }
+      const at = Date.now()
       const snapshot: CorruptionSnapshot = {
-        at: Date.now(),
+        at,
         reason: opts.reason,
         userAgent: navigator.userAgent,
         dbFilename: opts.dbFilename,
@@ -236,7 +244,7 @@ export class DbForensics {
         scan: opts.scan ?? (await safeScan(opts.dbFilename)),
         sql: opts.sql,
       }
-      await this.put(`${SNAPSHOT_PREFIX}${snapshot.at}`, snapshot)
+      await this.put(`${SNAPSHOT_PREFIX}${at}-${this.snapshotSeq++}`, snapshot)
       await this.trimByPrefix(SNAPSHOT_PREFIX, MAX_SNAPSHOTS)
       return snapshot
     } catch (err) {
@@ -258,7 +266,7 @@ export class DbForensics {
     return out
   }
 
-  /** Keep only the newest `keep` records under `prefix` (keys are `<prefix><ts>`). */
+  /** Keep only the newest `keep` records under `prefix` (keys are `<prefix><ts>[-seq]`). */
   private async trimByPrefix(prefix: string, keep: number): Promise<void> {
     const keys: string[] = []
     await this.store.scanByPrefix('readonly', prefix, cursor => {
@@ -276,7 +284,13 @@ export class DbForensics {
 /** App singleton. */
 export const dbForensics = new DbForensics()
 
-const tsOf = (key: string, prefix: string): number => Number(key.slice(prefix.length)) || 0
+// Leading-timestamp of a `<prefix><ts>[-seq]` key. `parseInt` stops at the `-`,
+// so a `snapshot:<at>-<seq>` key still sorts by its timestamp; a malformed key
+// coerces to 0 (trimmed first), never deleting a live newer record.
+const tsOf = (key: string, prefix: string): number => {
+  const parsed = parseInt(key.slice(prefix.length), 10)
+  return Number.isNaN(parsed) ? 0 : parsed
+}
 
 const appendCapped = <T>(arr: T[], item: T, cap = MAX_SESSION_EVENTS): T[] => {
   const next = [...arr, item]

@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   __resetDbForensicsHooksForTest,
-  looksLikeDbCorruptionForForensics,
   watchForRuntimeCorruption,
 } from './dbForensicsHooks.js'
-import { isLocalDbCorruptionError } from './localDbCorruption.js'
 import type { DbForensics } from './dbForensics.js'
 import {
   __resetLocalDbCorruptionSignalForTest,
@@ -13,6 +11,20 @@ import {
 
 const stubForensics = () =>
   ({ captureCorruptionSnapshot: vi.fn().mockResolvedValue(null) }) as unknown as DbForensics
+
+// A fake watch-db whose disposer actually detaches the listener, so `emit`
+// after a dispose is a no-op — modelling PowerSync's registerListener contract.
+const makeWatchDb = () => {
+  let listener: ((s: unknown) => void) | null = null
+  const db = {
+    currentStatus: undefined,
+    registerListener: (l: { statusChanged?: (s: unknown) => void }) => {
+      listener = l.statusChanged ?? null
+      return () => { listener = null }
+    },
+  } as unknown as Parameters<typeof watchForRuntimeCorruption>[0]
+  return { db, emit: (s: unknown) => listener?.(s) }
+}
 
 afterEach(() => {
   __resetDbForensicsHooksForTest()
@@ -62,29 +74,32 @@ describe('watchForRuntimeCorruption', () => {
     emit?.({ dataFlowStatus: { downloadError: new Error('database disk image is malformed') } })
     expect(getLocalDbCorruptionSnapshot()?.userId).toBe('user-1')
   })
-})
 
-describe('looksLikeDbCorruptionForForensics', () => {
-  it('matches the open-time phrasings the strict detector matches', () => {
-    expect(looksLikeDbCorruptionForForensics(new Error('database disk image is malformed'))).toBe(true)
-    expect(looksLikeDbCorruptionForForensics(new Error('file is not a database'))).toBe(true)
+  it('does not consume the one-shot capture on a benign powersync_control blip', () => {
+    // A bare (non-CORRUPT) powersync_control sync failure must NOT capture — else
+    // it would consume the one-shot and mask a later real-corruption snapshot.
+    const forensics = stubForensics()
+    const benign = { currentStatus: { dataFlowStatus: { downloadError: new Error('powersync_control: sync iteration failed') } } }
+    watchForRuntimeCorruption(benign, 'user-1', 'kmp-v6-user-1.db', forensics)
+    expect(forensics.captureCorruptionSnapshot).not.toHaveBeenCalled()
+    expect(getLocalDbCorruptionSnapshot()).toBeNull()
   })
 
-  it('matches the runtime sync-apply phrasing, and is broader than the strict detector', () => {
-    const runtime = new Error('powersync_control: internal SQLite call returned CORRUPT')
-    expect(looksLikeDbCorruptionForForensics(runtime)).toBe(true)
+  it('re-arms for a new user after an in-page account switch (disposes the stale listener)', () => {
+    const forensics = stubForensics()
+    const a = makeWatchDb()
+    const b = makeWatchDb()
+    watchForRuntimeCorruption(a.db, 'user-A', 'kmp-v6-user-A.db', forensics)
+    // Switch to user B without reload — must dispose A's listener and rebind to B.
+    watchForRuntimeCorruption(b.db, 'user-B', 'kmp-v6-user-B.db', forensics)
 
-    // Broader on purpose: a bare powersync_control failure (no CORRUPT phrasing)
-    // is worth a forensic snapshot but must NOT trip the strict, reset-gating
-    // detector that routes to the destructive recovery UI.
-    const bare = new Error('powersync_control: sync iteration failed')
-    expect(looksLikeDbCorruptionForForensics(bare)).toBe(true)
-    expect(isLocalDbCorruptionError(bare)).toBe(false)
-  })
+    // A's listener is disposed, so a stale event from user A's (disconnected) DB
+    // never reaches us — user A's corruption can't be routed into user B's session.
+    a.emit({ dataFlowStatus: { downloadError: new Error('database disk image is malformed') } })
+    expect(getLocalDbCorruptionSnapshot()).toBeNull()
 
-  it('does not match benign errors', () => {
-    expect(looksLikeDbCorruptionForForensics(new Error('malformed URL'))).toBe(false)
-    expect(looksLikeDbCorruptionForForensics(new Error('network request failed'))).toBe(false)
-    expect(looksLikeDbCorruptionForForensics(undefined)).toBe(false)
+    // User B's corruption routes, tagged to user B.
+    b.emit({ dataFlowStatus: { downloadError: new Error('database disk image is malformed') } })
+    expect(getLocalDbCorruptionSnapshot()?.userId).toBe('user-B')
   })
 })

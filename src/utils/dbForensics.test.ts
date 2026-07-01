@@ -94,48 +94,42 @@ describe('DbForensics — unclean-shutdown detection', () => {
     expect(result.uncleanShutdownCount).toBe(0)
   })
 
-  it('records lifecycle events on the current session', async () => {
+  it('records lifecycle events + lastVisibilityState on the current session', async () => {
     const f = freshForensics()
     await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
-    await f.recordLifecycleEvent('hidden')
-    await f.recordLifecycleEvent('visible')
+    await f.recordLifecycleEvent('visibility:hidden')
+    await f.recordLifecycleEvent('freeze')
     const all = await f.exportAll()
-    const events = (all['session:current'] as { events: Array<{ type: string }> }).events
-    expect(events.map(e => e.type)).toEqual(['start', 'hidden', 'visible'])
+    const session = all['session:current'] as {
+      events: Array<{ type: string }>
+      lastVisibilityState: string | null
+    }
+    expect(session.events.map(e => e.type)).toEqual(['start', 'visibility:hidden', 'freeze'])
+    expect(session.lastVisibilityState).toBe('hidden')
+  })
+
+  it('clearCleanShutdown flips a clean session back to unclean (bfcache resurrection)', async () => {
+    const f = freshForensics()
+    await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
+    await f.markCleanShutdown()
+    await f.clearCleanShutdown()
+    const result = await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
+    // The resurrected-then-killed session must count as unclean.
+    expect(result.uncleanShutdown).toBe(true)
+  })
+
+  it('serializes session writes so an interleaved event cannot clobber clean-shutdown', async () => {
+    const f = freshForensics()
+    await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
+    // Fire without awaiting between — models visibilitychange + pagehide racing.
+    await Promise.all([f.markCleanShutdown(), f.recordLifecycleEvent('visibility:hidden')])
+    const all = await f.exportAll()
+    expect((all['session:current'] as { cleanShutdown: boolean }).cleanShutdown).toBe(true)
   })
 })
 
-describe('DbForensics — scan + snapshot', () => {
-  it('logs a scan and auto-captures a snapshot when a zero page is found', async () => {
-    installFakeOpfs({ 'kmp-v6-u1.db': buildDb(8, [5]) })
-    const f = freshForensics()
-    await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
-
-    const scan = await f.logScan({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
-    expect(scan?.zeroPageCount).toBe(1)
-    expect(scan?.firstZeroPageByteOffset).toBe(4 * 4096)
-
-    const all = await f.exportAll()
-    const log = all['scanlog'] as Array<{ zeroPageCount: number }>
-    expect(log).toHaveLength(1)
-    expect(log[0].zeroPageCount).toBe(1)
-
-    const snapshots = Object.keys(all).filter(k => k.startsWith('snapshot:'))
-    expect(snapshots).toHaveLength(1)
-    const snap = all[snapshots[0]] as { reason: string; scan: { zeroPageCount: number } }
-    expect(snap.reason).toBe('startup-scan-zero-page')
-    expect(snap.scan.zeroPageCount).toBe(1)
-  })
-
-  it('logs a clean scan without capturing a snapshot', async () => {
-    const f = freshForensics()
-    await f.logScan({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
-    const all = await f.exportAll()
-    expect((all['scanlog'] as unknown[]).length).toBe(1)
-    expect(Object.keys(all).filter(k => k.startsWith('snapshot:'))).toHaveLength(0)
-  })
-
-  it('captureCorruptionSnapshot persists OPFS inventory, estimate, and caller SQL context', async () => {
+describe('DbForensics — corruption snapshot', () => {
+  it('persists OPFS inventory, estimate, scan, and caller SQL context', async () => {
     const f = freshForensics()
     await f.recordSessionStart({ userId: 'u1', dbFilename: 'kmp-v6-u1.db' })
     const snap = await f.captureCorruptionSnapshot({
@@ -150,5 +144,26 @@ describe('DbForensics — scan + snapshot', () => {
     expect(snap?.sql).toEqual({ downloadError: 'powersync_control: internal SQLite call returned CORRUPT' })
     const inventory = snap?.opfs as Array<{ name: string; size: number | null }>
     expect(inventory.some(e => e.name === 'kmp-v6-u1.db' && e.size === 8 * 4096)).toBe(true)
+  })
+
+  it('does not read block content — scan stores only counts/offsets, never page bytes', async () => {
+    installFakeOpfs({ 'kmp-v6-u1.db': buildDb(8, [5]) })
+    const f = freshForensics()
+    const snap = await f.captureCorruptionSnapshot({ userId: 'u1', dbFilename: 'kmp-v6-u1.db', reason: 'x' })
+    const scan = snap?.scan as { zeroPageCount: number; firstZeroPageByteOffset: number }
+    expect(scan.zeroPageCount).toBe(1)
+    expect(scan.firstZeroPageByteOffset).toBe(4 * 4096)
+    expect(Object.keys(scan)).not.toContain('bytes')
+  })
+
+  it('two same-millisecond captures do not overwrite each other', async () => {
+    const f = freshForensics()
+    // Same reason, effectively same ms — distinct keys via the monotonic suffix.
+    await Promise.all([
+      f.captureCorruptionSnapshot({ userId: 'u1', dbFilename: 'kmp-v6-u1.db', reason: 'r' }),
+      f.captureCorruptionSnapshot({ userId: 'u1', dbFilename: 'kmp-v6-u1.db', reason: 'r' }),
+    ])
+    const all = await f.exportAll()
+    expect(Object.keys(all).filter(k => k.startsWith('snapshot:'))).toHaveLength(2)
   })
 })
