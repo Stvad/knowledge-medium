@@ -121,19 +121,13 @@ Two structural observations from the table:
   reliable "active workspace is ready" signal instead of racing the async
   bootstrap.
 
-  **Timing caveat (the choke matters here).** `setActiveWorkspaceId` is the
-  *wrong* place to emit the lifecycle event, even though it's the obvious one:
-  the switcher calls it *before* the hash change (`WorkspaceSwitcher.tsx:57`),
-  and `App.tsx` calls it at line 73 — **before** the read-only resolution, the
-  §6 access gate (which may return `waiting`/`locked` and never bootstrap), and
-  `bootstrapWorkspace` (Phase 3). Emitting `workspace:ready` from there would
-  fire into a possibly-locked, un-bootstrapped workspace whose scoped pages don't
-  exist and whose workspace-scoped effects haven't mounted — i.e. it would
-  *recreate* the race I3 wants to kill. So the design splits it: the lifecycle
-  event (`workspace:ready`) fires from the **end of `bootstrapWorkspace`**
-  (post-gate, post-writes); the early setter, if it emits at all, emits a
-  distinct low-level `workspace:active-changed` pin signal that auto-create
-  handlers must *not* use. `workspace:ready` is the thin slice (§4).
+  **Timing caveat.** Don't emit the lifecycle event from `setActiveWorkspaceId`:
+  the switcher (`WorkspaceSwitcher.tsx:57`) and `App.tsx:73` call it *before* the
+  §6 access gate and `bootstrapWorkspace`, so emitting there fires into a
+  possibly-locked, un-bootstrapped workspace — *recreating* the I3 race. Hence the
+  split: `workspace:ready` from the end of `bootstrapWorkspace` (post-gate,
+  post-writes); the early setter emits only the low-level
+  `workspace:active-changed` pin, which auto-create handlers must not use.
 
 ---
 
@@ -516,14 +510,11 @@ unit, zero existing seam, real demand (I3):
   layoutSessionBlock`; the `{kind:'ready'}` shape is its caller
   `resolveInitialLayout`'s return, `App.tsx:126`) — *not* `setActiveWorkspaceId`,
   so handlers run post-gate/post-bootstrap (the timing caveat in §1).
-- **`workspace:ready` is sticky** (§3.5): the bus retains the last payload and
-  replays it on subscribe. Sticky replay is **mandatory** for the slice — on cold
-  start the emit precedes AppEffect registration, so without it the auto-create
-  effect never sees the event. Ship the workspace gate too (replay only if
-  `payload.workspaceId === repo.activeWorkspaceId`) as **defense-in-depth** for
-  the non-AppEffect subscribe shapes — §3.5 explains why it isn't itself a
-  precondition for the AppEffect path. So Phase 0 = kernel + async delivery +
-  sticky replay (+ the single-slot gate), not bare fan-out.
+- **`workspace:ready` is sticky** (§3.5): retain-and-replay-on-subscribe,
+  **mandatory** here because the cold-start emit precedes AppEffect registration.
+  Ship the single-slot workspace gate too (defense-in-depth for non-AppEffect
+  shapes — §3.5). So Phase 0 = kernel + async delivery + sticky replay + gate,
+  not bare fan-out.
 - `useAppEvent` hook. Tests: emit-on-ready (and *not* on a `locked`/`waiting`
   workspace), handler isolation (a throwing handler doesn't break the others or
   the bootstrap), async-sequential delivery (a slow handler doesn't overlap the
@@ -556,12 +547,8 @@ benefits from the bus contract being settled first.
 
 ### 4.3 Smallest first thin slice
 
-**Phase 0 above _is_ the thin slice:** `workspace:ready`, sticky (§3.5), emitted
-from the end of `bootstrapWorkspace`. It's the one event with no current
-observability, one emit line at a choke that fires with the right semantics (§1
-timing caveat), and it closes I3 directly — proving registry/emit/async-delivery/
-sticky-replay/subscribe/hook/lifecycle end to end. Everything after Phase 0 is
-additive.
+**Phase 0 (§4.2) is the thin slice** — `workspace:ready`, sticky, one emit line,
+closes I3, no other observability today. Everything after it is additive.
 
 ---
 
@@ -570,14 +557,17 @@ additive.
 - **Bus on `Repo` vs a standalone module singleton.** Proposed: Repo (survives
   swaps, owns 3 of the chokes, gives subscribers `AppEffectContext.repo`); a
   module singleton would decouple it from data-layer tests. Either way the
-  singleton's sticky store must be workspace-gated (§3.5). Decide when Phase 0
-  lands.
+  singleton's sticky store should be workspace-gated (defense-in-depth, §3.5).
+  Decide when Phase 0 lands.
 - **Should `block:*` events ever be awaited by the committer?** Proposed no
   (fire-and-forget). If a future use case needs "tx isn't done until observers
   ran," that's a processor, not the bus — keep the line bright.
 - **Sticky opt-in mechanism.** Sticky + the workspace gate are *decided* (§3.5);
   what's open is the *mechanism* — a per-event `sticky: true` flag in the
-  registry vs. a hardcoded set — plus whether `sync:status` should be
-  sticky-per-field. Settle when Phase 2 adds `sync:status`.
+  registry vs. a hardcoded set; whether `sync:status` should be sticky-per-field;
+  and whether a concurrent-emit sticky event (`sync:status`) needs per-event
+  serialization of replay-vs-live so a slow async replay can't land after a fresh
+  emit (§3.5 "Replay ordering" — moot for `workspace:ready`). Settle when Phase 2
+  adds `sync:status`.
 - **Declarative facet vs AppEffect-only.** Start AppEffect-only; add
   `appEventSubscribersFacet` only on demand (see §3.3).
