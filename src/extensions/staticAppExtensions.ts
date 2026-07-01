@@ -55,6 +55,7 @@ import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
+import { presencePlugin } from '@/plugins/presence'
 import type { AppExtension } from '@/facets/facet.js'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -141,6 +142,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   agentRuntimePlugin,
   roamImportPlugin({repo}),
   birthdayPlugin,
+  presencePlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session
   // block via getUIStateBlock + getLayoutSessionBlock and then
   // dispatches any PWA-shortcut / share-target / note-taker intent
