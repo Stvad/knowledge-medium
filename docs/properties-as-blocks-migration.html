@@ -834,7 +834,7 @@ shape:
     reader falls back to <code>defaultValue</code> while the tree still shows the real
     value. Mass silent unset. The rename-reproject pass
     (<code>reprojectPropertyValueChildren</code>, built in the spike, currently
-    untriggered) is therefore part of slice B, not polish — or renames must be blocked
+    untriggered) is therefore part of slice B2, not polish — or renames must be blocked
     until it lands.</li>
   <li><strong>Typing a field by hand works.</strong> A user (or an importer, or an
     agent) can type <code>[[status]]</code> as a child and put a value under it; the
@@ -941,7 +941,7 @@ skill while at it.
   <dd>Divergence from rev 1 ("keep extras, pick lowest orderKey"): the materialize path
     <em>deletes</em> duplicate field rows and duplicate value children (soft-delete, so
     recoverable via history). Projection reads the first field row's first parseable
-    value. Deterministic dedup is the better call under sync races, but slice B must
+    value. Deterministic dedup is the better call under sync races, but slice B3 must
     tighten two things the spike leaves sharp: <strong>(a)</strong> the survivor is
     picked by <code>(order_key, id)</code> — arbitrary relative to content — and
     <code>deleteSubtree</code> recursively removes the loser <em>including any
@@ -949,9 +949,10 @@ skill while at it.
     goes with it). Before deleting: for duplicate <em>value children</em>, relocate the
     loser's non-value sub-children (comments, elaboration) under the survivor; for
     duplicate <em>field rows</em> whose surviving values <em>differ</em>, preserve the
-    losing value visibly (e.g. relocate it under the survivor as an ordinary child) —
-    silently hiding a divergent value behind first-wins is data loss in effect if not
-    in storage. <strong>(b)</strong> the two dedup call sites disagree on deletion
+    losing value visibly — e.g. relocate it under the surviving <em>value child</em>
+    (not directly under the field row, where the value-child dedup would just
+    re-collapse it) — silently hiding a divergent value behind first-wins is data loss
+    in effect if not in storage. <strong>(b)</strong> the two dedup call sites disagree on deletion
     semantics: materialize subtree-deletes, while
     <code>writePropertyValueChild</code> shallow-deletes duplicate value children —
     orphaning their sub-children live under a tombstone. Unify on one (relocate, then
