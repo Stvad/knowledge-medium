@@ -312,13 +312,40 @@ export const materializePropertyFieldSlotsForExistingRow = async (
     const schema = propertySchemas.get(name)
     if (!schema) continue
     if (existingFieldIds.has(schema.fieldId)) continue
-    await tx.create({
+
+    // If the block already holds a value for this property, we MUST materialize
+    // it as the field's value child. A bare (empty) field slot would let the
+    // same-tx reverse projection strip the still-present parent property value
+    // (adding a type that declares an already-set property → silent data loss).
+    const encoded = hasOwn(row.properties, name) ? row.properties[name] : undefined
+    let valueContent: string | undefined
+    if (encoded !== undefined) {
+      try {
+        schema.codec.decode(encoded)
+        valueContent = encodedPropertyValueToChildContent(schema, encoded)
+      } catch {
+        // Undecodable stored value: leave it in properties_json untouched
+        // rather than create an empty slot that would strip it. A later valid
+        // edit re-runs the full materialization.
+        continue
+      }
+    }
+
+    const fieldRowId = await tx.create({
       workspaceId: row.workspaceId,
       parentId: row.id,
       referenceTargetId: schema.fieldId,
       orderKey: keyAtStart(null),
       content: propertyFieldContent(schema),
     })
+    if (valueContent !== undefined) {
+      await tx.create({
+        workspaceId: row.workspaceId,
+        parentId: fieldRowId,
+        orderKey: keyAtStart(null),
+        content: valueContent,
+      })
+    }
     existingFieldIds.add(schema.fieldId)
   }
 }

@@ -132,11 +132,26 @@ export interface BlockSchemaDb {
 }
 
 export const ensureBlockStorageColumns = async (db: BlockSchemaDb): Promise<void> => {
-  const referenceTargetIdColumn = await db.getOptional<{name: string}>(
-    `SELECT name FROM pragma_table_info('blocks') WHERE name = 'reference_target_id'`,
-  )
-  if (!referenceTargetIdColumn) {
-    await db.execute(`ALTER TABLE blocks ADD COLUMN reference_target_id TEXT`)
+  // Add `reference_target_id` to pre-existing tables on upgrading devices:
+  // `CREATE TABLE IF NOT EXISTS` is a no-op once the table exists, so it never
+  // adds the column. BOTH `blocks` and the Layout-B staging `blocks_synced`
+  // need it — the raw-table `INSERT OR REPLACE INTO blocks_synced (…)` and sync
+  // materialization both bind/select `reference_target_id`, so an un-migrated
+  // `blocks_synced` throws `no such column` the moment sync stages a row.
+  // Guarded on table existence so this is safe regardless of call order vs the
+  // `CREATE TABLE` statements (a not-yet-created table is created WITH the
+  // column from `BLOCK_STORAGE_COLUMNS`).
+  for (const table of ['blocks', 'blocks_synced'] as const) {
+    const tableExists = await db.getOptional<{name: string}>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${table}'`,
+    )
+    if (!tableExists) continue
+    const column = await db.getOptional<{name: string}>(
+      `SELECT name FROM pragma_table_info('${table}') WHERE name = 'reference_target_id'`,
+    )
+    if (!column) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN reference_target_id TEXT`)
+    }
   }
 }
 
