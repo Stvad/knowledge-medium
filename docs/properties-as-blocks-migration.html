@@ -1,0 +1,1359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Properties as Blocks — Migration (rev 2)</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --fg-dim: #555;
+    --fg-faint: #8a8a8a;
+    --bg: #fafaf7;
+    --panel: #fff;
+    --rule: #e3e0d8;
+    --accent: #5b3fd6;
+    --accent-bg: #ece8fb;
+    --good: #1f7a3a;
+    --good-bg: #e3f3e8;
+    --warn: #8a5a00;
+    --warn-bg: #fbf1d8;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: ui-serif, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #ececec;
+      --fg-dim: #b6b6b6;
+      --fg-faint: #7d7d7d;
+      --bg: #1a1a1a;
+      --panel: #232323;
+      --rule: #383838;
+      --accent: #b8a8ff;
+      --accent-bg: #2a2540;
+      --good: #7ed29a;
+      --good-bg: #1d3225;
+      --warn: #e6c068;
+      --warn-bg: #322a16;
+    }
+  }
+  html { font-size: 16px; }
+  body {
+    font-family: var(--sans);
+    color: var(--fg);
+    background: var(--bg);
+    margin: 0;
+    padding: 0;
+    line-height: 1.55;
+  }
+  main {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 6rem;
+  }
+  header.doc-header {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 1.25rem;
+    margin-bottom: 2.25rem;
+  }
+  header.doc-header h1 {
+    font-size: 1.85rem;
+    margin: 0 0 0.35rem;
+    letter-spacing: -0.01em;
+  }
+  header.doc-header .subtitle {
+    color: var(--fg-dim);
+    font-size: 1.02rem;
+    margin: 0;
+  }
+  aside.doc-status {
+    margin: 0 0 1.5rem;
+    padding: 0.6rem 0.9rem;
+    border: 1px solid var(--good);
+    border-radius: 6px;
+    background: var(--good-bg);
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  h2 {
+    font-size: 1.32rem;
+    margin: 3rem 0 0.75rem;
+    letter-spacing: -0.005em;
+  }
+  h3 {
+    font-size: 1.06rem;
+    margin: 1.8rem 0 0.5rem;
+    color: var(--fg);
+  }
+  p { margin: 0.6rem 0 1rem; }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.05em 0.3em;
+  }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    line-height: 1.5;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+  }
+
+  figure {
+    margin: 1.5rem 0 1.75rem;
+    padding: 0;
+  }
+  figure .frame {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1.25rem 1.5rem;
+  }
+  figure figcaption {
+    font-size: 0.85rem;
+    color: var(--fg-dim);
+    margin-top: 0.5rem;
+    padding-left: 0.25rem;
+  }
+  figure figcaption .fig-id {
+    font-weight: 600;
+    color: var(--fg);
+    margin-right: 0.4em;
+  }
+
+  /* Tree diagram (HTML-based) */
+  .tree { font-family: var(--mono); font-size: 0.86rem; line-height: 1.55; }
+  .tree .row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+  }
+  .tree .row.indent-1 { padding-left: 1.5rem; }
+  .tree .row.indent-2 { padding-left: 3.0rem; }
+  .tree .bullet { color: var(--fg-faint); }
+  .tree .ref { color: var(--accent); }
+  .tree .schema-ref { color: var(--accent); font-weight: 600; }
+  .tree .label-real { background: var(--accent-bg); color: var(--fg); padding: 0 0.4em; border-radius: 3px; font-size: 0.78em; margin-left: 0.5em; }
+  .tree .value { color: var(--good); }
+  .tree .props {
+    color: var(--fg-dim);
+    background: var(--bg);
+    padding: 0.05em 0.4em;
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    font-size: 0.88em;
+  }
+
+  /* Side-by-side panels */
+  .side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 720px) {
+    .side-by-side { grid-template-columns: 1fr; }
+  }
+  .panel-card {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1rem 1.1rem;
+  }
+  .panel-card h4 {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 0.7rem;
+    color: var(--fg-dim);
+  }
+
+  /* Callouts */
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-bg);
+    padding: 0.7rem 1rem;
+    margin: 1rem 0 1.25rem;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.95rem;
+  }
+  .callout.good { border-color: var(--good); background: var(--good-bg); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout strong { font-weight: 600; }
+
+  /* Table */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.93rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.7rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    background: var(--panel);
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  td.col-yes { color: var(--good); font-weight: 600; }
+  td.col-no { color: var(--fg-faint); }
+  td.col-mid { color: var(--warn); font-weight: 600; }
+
+  /* Phase timeline */
+  .phases { display: flex; flex-direction: column; gap: 0.75rem; }
+  .phase {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr;
+    gap: 1rem;
+    align-items: start;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 0.9rem 1.1rem;
+  }
+  .phase .num {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .phase .body p { margin: 0.2rem 0; }
+  .phase .body .name {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+  .phase .body .deliv {
+    font-size: 0.85rem;
+    color: var(--fg-dim);
+  }
+
+  /* Misc */
+  ul, ol { margin: 0.5rem 0 1rem; padding-left: 1.4rem; }
+  ul li, ol li { margin: 0.3rem 0; }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 3rem 0 0;
+  }
+  .footer-note {
+    font-size: 0.82rem;
+    color: var(--fg-faint);
+    margin-top: 1.25rem;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<header class="doc-header">
+  <h1>Properties as blocks — rev 2</h1>
+  <p class="subtitle">
+    Migrate user-defined property values from the <code>properties_json</code> cell to
+    first-class block children ("field rows" + "value children"), keeping the cell as a
+    derived projection. Re-grounded against the current data layer and the working
+    prototype in PR #285. Supersedes rev 1 (PR #55).
+  </p>
+</header>
+
+<aside class="doc-status">
+  <strong>Status: current (planning).</strong> Rewritten 2026-07-01 against master
+  <code>8a6f22cd</code> and the spike merge in
+  <a href="https://github.com/Stvad/knowledge-medium/pull/285">PR #285</a>
+  (<code>props-as-childrent-spike-merge</code> — mechanism claims verified at
+  <code>d33393a9</code>, branch-state notes updated to <code>f4d0b447</code>; the branch
+  is live, re-verify before extracting).
+  Rev 1 (PR #55, May 29) targeted a pre-Layout-B data layer and is superseded by this
+  document; §3 lists every rev-1 claim that no longer holds. Mechanism descriptions in
+  §5 describe code that exists <em>on the spike branch</em>, not on master.
+  A four-lens adversarial review (2026-07-01) is folded in: §5 "deletion convergence",
+  the §6 durability/collision requirements, and the §11 slice contents carry its
+  findings.
+  <strong>Last verified against code:</strong> 2026-07-01.
+</aside>
+
+<div class="callout">
+  <strong>Decisions made in this doc</strong> (each argued in its section):
+  <ul>
+    <li>Child-backing is a per-schema <code>childBacked</code> flag — user schemas on,
+      kernel/plugin off unless opted in (durably), UiState never (<a href="#s6">§6</a>).</li>
+    <li>Field-row shape: <code>[[Schema Name]]</code> content + derived synced
+      <code>reference_target_id</code>, as the spike built it (<a href="#s7">§7</a>).</li>
+    <li><code>setProperty</code> dual-writes children and cell in one tx; the
+      materialize/project processor pair is permanent convergence machinery
+      (<a href="#s5">§5</a>).</li>
+    <li>The catch-up must also converge <em>deletions</em> and dedup at parents — the
+      spike's set-only pass is not enough (<a href="#s5">§5</a>, slice C).</li>
+    <li>E2EE workspaces stay cell-only until the derive-locally path lands
+      (<a href="#s8">§8</a>).</li>
+    <li>Machinery inserts field rows first among children (orderKey stays user-owned);
+      render-only ghosts replace the spike's materialized empty slots
+      (<a href="#s9">§9</a>).</li>
+    <li>Ship as master-first slices extracted from the spike; dormant-flag landing is
+      the fallback; PR #285 is the reference implementation (<a href="#s11">§11</a>).</li>
+  </ul>
+</div>
+
+<h2 id="s1">1. Why move</h2>
+
+<p>
+Property <em>schemas</em> are blocks (<code>'property-schema'</code> type, projected into
+the schema registry by <code>userSchemasProjector</code>). Property <em>values</em> are
+entries in a JSON cell — the <code>properties_json</code> column on the consuming block,
+read through <code>block.get(schema)</code> and written through
+<code>tx.setProperty</code>. Schemas get the full block treatment — refs, comments,
+history, sync, undo. Values get a row-local property bag with custom plumbing for every
+operation that needs to cross the bag boundary.
+</p>
+
+<p>
+The asymmetry leaks into a half-dozen features. Copy-paste serializes blocks and copies
+the JSON cell separately — round-tripping through markdown loses property data entirely.
+Subtree-sharing has to special-case the cell. The Roam importer writes schemas and values
+through different code paths. Comments on a field value, references to a specific field's
+setting, embedding a single field elsewhere — all require new surface every time.
+</p>
+
+<p>
+Since rev 1, the sync-layer motivation has sharpened. PR #52 made the upload pipeline
+column-narrow (<code>apply_block_patches</code>): a content edit no longer clobbers a
+concurrent property edit. What remains is <strong>per-key last-write-wins inside
+<code>properties_json</code> itself</strong> — client A sets <code>foo</code>, client B
+sets <code>bar</code>, both PATCH the same column, one key silently disappears.
+<code>docs/field-level-sync-merge.md</code> designed a server-side per-key merge for
+exactly this, and put it <em>on hold in favor of this project</em>: each round of review
+surfaced another way per-key merge semantics fight the row-LWW + cache-acceptance +
+invalidation pipeline. Properties-as-children dissolves the problem structurally — each
+field is its own row, and rows already merge per-column. This document is now the only
+live plan for closing that gap.
+</p>
+
+<p>
+The motivating reframe stands: the user-facing properties UX <em>is</em> "fields are
+children of the block, rendered with structure" — that's what every Tana-style editor
+does. We've been emulating it with a sidecar panel because the data model said no.
+</p>
+
+<h2 id="s2">2. The target shape</h2>
+
+<p>
+A property on a block becomes a <strong>field row</strong> (rev 1 called this a
+"carrier"): a regular block whose content is a reference to the property schema, with a
+denormalized <code>reference_target_id</code> column carrying the schema's stable
+<code>fieldId</code>. The field row's children are the property's
+<strong>values</strong> — one for scalars today, many for lists later; ref-typed values
+are themselves block references. Same primitive everywhere.
+</p>
+
+<figure>
+  <div class="frame side-by-side">
+    <div class="panel-card">
+      <h4>Today</h4>
+      <div class="tree">
+        <div class="row"><span class="bullet">●</span><span>Plan Q1 launch</span></div>
+        <div class="row indent-1"><span class="props">properties_json:&nbsp;&#123; priority: 3, assignee: ref(mary), status: "in&nbsp;progress" &#125;</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span>investigate vendor X</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span>draft proposal</span></div>
+      </div>
+    </div>
+    <div class="panel-card">
+      <h4>Target</h4>
+      <div class="tree">
+        <div class="row"><span class="bullet">●</span><span>Plan Q1 launch</span></div>
+        <div class="row indent-1"><span class="props">properties_json kept as derived projection</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">[[priority]]</span><span class="label-real">field row · reference_target_id = schema block id</span></div>
+        <div class="row indent-2"><span class="bullet">●</span><span class="value">3</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">[[assignee]]</span><span class="label-real">field row</span></div>
+        <div class="row indent-2"><span class="bullet">●</span><span class="ref">((mary))</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span class="schema-ref">[[status]]</span><span class="label-real">field row</span></div>
+        <div class="row indent-2"><span class="bullet">●</span><span class="value">in progress</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span>investigate vendor X</span></div>
+        <div class="row indent-1"><span class="bullet">●</span><span>draft proposal</span></div>
+      </div>
+    </div>
+  </div>
+  <figcaption><span class="fig-id">Fig. 1</span>Before and after. The JSON cell stays but becomes a derived projection of the field/value children. Regular content children sit alongside.</figcaption>
+</figure>
+
+<p>Things to notice, updated from rev 1:</p>
+
+<ul>
+  <li>
+    <strong>Field-row content is <code>[[Schema Name]]</code>, not
+    <code>((schema-id))</code>.</strong> The spike made this call and it's the right one —
+    see §7 for the tradeoff. Detection never parses content at read sites; it reads the
+    <code>reference_target_id</code> column, derived in the same transaction by a
+    processor.
+  </li>
+  <li>
+    <strong>Identity is <code>PropertySchema.fieldId</code></strong>: the
+    <code>'property-schema'</code> block's row id for user-defined schemas, a
+    deterministic <code>property:&lt;name&gt;</code> string for kernel/plugin schemas.
+    <code>name</code> stays the display label and the projection key in the cell; renames
+    change <code>name</code> without touching stored children.
+  </li>
+  <li>
+    <strong>Scalar-first.</strong> The prototype projects one primary value child per
+    field row; list values serialize as JSON into that one child for now.
+    Multi-value-as-N-children is a follow-up slice (§11), not part of the first cut. This
+    is a deliberate narrowing from rev 1, which promised list-cardinality-as-children
+    up front.
+  </li>
+  <li>
+    Ref-typed values reuse the block-reference primitive: a value child whose content is
+    <code>((target-id))</code> is the value <em>and</em> the backlink edge in one shape.
+  </li>
+</ul>
+
+<h2 id="s3">3. What changed under rev 1 — the re-grounding</h2>
+
+<p>
+Rev 1 was written against May's data layer. Master rewrote most of the subsystems the
+plan touches, and the spike (PR #285) already implements a large portion of the plan on
+top of the new subsystems. Anyone reading rev 1: these claims are dead. (Implementing a
+slice and never read rev 1? Skip this section — the as-built spec starts at
+<a href="#s5">§5</a>.)
+</p>
+
+<table>
+  <thead>
+    <tr><th>Rev 1 said</th><th>Current reality</th><th>Consequence</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>rowEventsTail.onRowsAccepted</code> hosts the post-sync derivation pass</td>
+      <td><code>rowEventsTail</code> was deleted (D-4). Sync arrival is the Layout-B
+        <code>blocksSyncedObserver</code> (<code>syncObserver/observer.ts</code>):
+        staging table <code>blocks_synced</code> → materialize/decrypt →
+        <code>applySyncInvalidation</code>. The spike added an
+        <code>onRowsAccepted(snapshots)</code> hook there, fired once per drain window.</td>
+      <td>The hook point exists (spike-built); the plan's shape survives with new names.</td>
+    </tr>
+    <tr>
+      <td>Exclude derived writes from upload via a <code>source: 'sync-derive'</code> tx tag</td>
+      <td>No such mechanism exists or can cheaply exist: <code>TxSource</code> has exactly
+        one value (<code>'user'</code>), every <code>repo.tx</code> write to
+        <code>blocks</code> uploads, and raw non-tx writes to synced tables are actively
+        guarded against (<code>syncedTableWriteGuard</code>).</td>
+      <td><strong>Retracted.</strong> With the dual-write model (§5) the derived cell is
+        part of the user's transaction and <em>must</em> upload — peers read the cell.
+        Wire redundancy (~2× for property data) is the accepted cost, same shape as
+        content + <code>references_json</code> today.</td>
+    </tr>
+    <tr>
+      <td>"Sync conflict story: LWW on whole cell"</td>
+      <td>Upload is column-narrow since #52; the residual clobber is per-key
+        <em>inside</em> the cell. <code>field-level-sync-merge.md</code> is on hold
+        contingent on this project.</td>
+      <td>Motivation sharpened, not weakened: this project is the chosen fix.</td>
+    </tr>
+    <tr>
+      <td><code>UserSchemasService.getSchemaForBlockId</code>, stateful registry</td>
+      <td>Schema registry is projector-fed (<code>userSchemasProjector</code> →
+        <code>propertySchemasFacet</code> 'user-data' bucket, started by
+        <code>repo.projectors.startAll()</code> after plugin resolution). Schemas carry
+        <code>fieldId</code> on the spike branch.</td>
+      <td>Derivation must tolerate schema-registry timing: the spike gates the full
+        backfill on <code>markPropertyChildrenBackfillSchemasReady</code> and coalesces
+        rebuild-triggered rescans by generation.</td>
+    </tr>
+    <tr>
+      <td>Shadow column <code>properties_json_v2</code> + diff phase before cutover</td>
+      <td>The spike skipped shadow mode; processors write <code>properties_json</code>
+        directly, and ~880 lines of unit/integration tests cover convergence instead.</td>
+      <td>Accept. A shadow phase bought safety when the mechanism was hypothetical; with
+        the mechanism built and tested, per-schema scoping (§6) is the safety valve —
+        blast radius is "the schemas you flipped", not "all properties".</td>
+    </tr>
+    <tr>
+      <td><code>block.set</code> writes carriers; a processor derives the cell</td>
+      <td>The spike <strong>dual-writes</strong>: <code>tx.setProperty</code> updates the
+        field/value children <em>and</em> the cell in the same transaction. The project
+        processor exists for tree-side edits (a user editing the value child directly).</td>
+      <td>Endorsed — see §5. Readers stay synchronous; the processor handles the
+        long-tail paths instead of the hot path.</td>
+    </tr>
+    <tr>
+      <td>Kernel hot-path properties (<code>types</code>, <code>system:collapsed</code>…)
+        stay in the JSON cell</td>
+      <td>The spike materializes <em>every</em> registered schema, kernel included —
+        it edited <code>properties-model-evolution.md</code> to flip that doc's A+D
+        decision to "A only". 8 of its 10 residual failing tests, the
+        <code>panelLayoutProjection</code> and orphan-alias special cases, and the
+        "hidden fields" UI filter are all fallout of that flip.</td>
+      <td>The central open decision. §6 argues for restoring the scope boundary as a
+        per-schema flag.</td>
+    </tr>
+    <tr>
+      <td>No E2EE constraints considered</td>
+      <td>E2EE workspaces landed (May 29): <code>content</code>,
+        <code>properties_json</code>, <code>references_json</code> are enforced
+        <code>enc:v1</code> envelopes server-side; a plaintext synced
+        <code>reference_target_id</code> crosses the established sensitivity line
+        (reference edges are encrypted today).</td>
+      <td>New section §8. Gate child-backing off for e2ee workspaces until the
+        derive-locally path exists.</td>
+    </tr>
+    <tr>
+      <td>Backfill = "one-shot job per workspace"</td>
+      <td>The spike built a production-grade <em>runtime</em> backfill (per-workspace/schema
+        completion markers, indexed candidate scan, batched bulk inserts, storage-error
+        retry, schema-readiness gating, row-targeted sync catch-up) — see PR #285 for
+        the machinery; constants and internals will shift in extraction.</td>
+      <td>Keep it. Client-side backfill is also the only option compatible with e2ee
+        (the server can't decode the cell) and with client-resident codecs.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="s4">4. Why this shape, not another</h2>
+
+<p>Alternatives, re-scored against the current pipeline:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Approach</th>
+      <th>Refs &amp; comments on fields</th>
+      <th>Per-key conflict story</th>
+      <th>Read-path cost</th>
+      <th>Verdict</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Stay on JSON cell</td>
+      <td class="col-no">no</td>
+      <td class="col-no">per-key LWW clobber</td>
+      <td class="col-yes">unchanged</td>
+      <td>doesn't solve the motivating problems</td>
+    </tr>
+    <tr>
+      <td>Server-side per-key JSON merge (<code>field-level-sync-merge.md</code>)</td>
+      <td class="col-no">no</td>
+      <td class="col-yes">merged</td>
+      <td class="col-yes">unchanged</td>
+      <td>explored in depth; on hold — merge semantics fight row-LWW +
+        cache-acceptance (<code>applyIfNewer</code>) + derived-references staleness;
+        none of the block-y affordances</td>
+    </tr>
+    <tr>
+      <td>CRDT-typed JSON cell (Yjs/Automerge)</td>
+      <td class="col-no">no</td>
+      <td class="col-yes">field-grained</td>
+      <td class="col-yes">unchanged</td>
+      <td>layering nightmare with PowerSync + e2ee envelopes; save Yjs for content</td>
+    </tr>
+    <tr>
+      <td>Children + new projection table</td>
+      <td class="col-yes">yes</td>
+      <td class="col-yes">row-per-field</td>
+      <td class="col-mid">new compiler path</td>
+      <td>more code than needed; queries and hot reads already speak
+        <code>properties_json</code></td>
+    </tr>
+    <tr>
+      <td><strong>Children + cell kept as derived projection</strong></td>
+      <td class="col-yes">yes</td>
+      <td class="col-yes">row-per-field</td>
+      <td class="col-yes">unchanged</td>
+      <td><strong>chosen — and prototyped in PR #285</strong></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+The chosen shape mirrors the existing <code>references[]</code> pattern: the source of
+truth lives where the user writes (children for properties, content markdown for
+references), and same-tx machinery maintains a denormalized cell that downstream
+consumers (typed queries, <code>block.get</code>, panel, search predicates) already read.
+The same-tx processor registry this relies on
+(<code>defineSameTxProcessor</code>, commit-pipeline step 3.5,
+<code>core.normalizeReferences</code> as prior art) exists on master and is exactly the
+seam rev 1 hoped for.
+</p>
+
+<h2 id="s5">5. Mechanism — as built in the spike</h2>
+
+<p>
+Three same-tx processors plus a dual-writing <code>tx.setProperty</code>. All of this
+exists on the spike branch with tests; names below are the real ones.
+</p>
+
+<dl>
+  <dt><strong><code>core.deriveReferenceTarget</code></strong> (permanent)</dt>
+  <dd>
+    Watches <code>content</code>. When a row's content trims to exactly one reference
+    token (<code>((uuid))</code> or <code>[[alias]]</code>), resolves it — schema-name
+    map first, then the tx-aware alias lookup — and writes the target id into
+    <code>reference_target_id</code> in the same transaction
+    (<code>skipMetadata</code>: bumps the sync clock, not "last edited").
+    Detection everywhere downstream is a column read, never a content parse.
+  </dd>
+
+  <dt><strong><code>core.projectPropertyChildren</code></strong> (permanent)</dt>
+  <dd>
+    Watches <code>content / referenceTargetId / parentId / orderKey / deleted</code>.
+    For each changed row, walks up at most two levels to find affected
+    (parent, fieldId) pairs — both <em>before</em> and <em>after</em> sides of a move —
+    and rebuilds that parent's <code>properties_json</code> key from the field row's
+    value children. This is what keeps <em>manual tree edits</em> of field/value rows
+    convergent with the cell.
+  </dd>
+
+  <dt><strong><code>core.materializePropertyChildren</code></strong> (permanent, direction: cell → children)</dt>
+  <dd>
+    Watches <code>properties</code>. For changed keys with a registered schema:
+    find-or-create the field row + primary value child, update stale content, delete
+    children for removed keys, collapse duplicates. This keeps raw cell writes
+    (importers, plugins, old clients' synced rows via the catch-up pass) convergent with
+    the children. Unlike rev 1's plan, this is <em>not</em> deletable scaffolding — it is
+    the permanent convergence path for the cell-write direction.
+  </dd>
+</dl>
+
+<p>
+<strong>Dual-write:</strong> <code>tx.setProperty(id, schema, value)</code> writes the
+field/value children <em>and</em> the cell in one transaction. Rev 1 wanted
+"write children, let a processor derive the cell"; the spike's shape is better on the
+hot path — no processor-ordering dependency for the common write, readers
+(<code>block.get</code>, typed queries, the panel) stay synchronous against the cell,
+and idempotent processors turn the round-trip into no-ops (the callout below states the
+invariants that make that safe).
+</p>
+
+<h3>Sync arrival</h3>
+
+<p>
+Sync-applied rows never pass through <code>repo.tx</code>, so processors don't fire on
+them. The spike hooks the Layout-B observer: <code>onRowsAccepted(snapshots)</code> fires
+once per drain window after <code>applySyncInvalidation</code>, and the repo schedules a
+<em>row-targeted</em> materialize pass (cell → children) for the accepted rows, through
+the serialized backfill queue. Because every current-code writer dual-writes, a remote
+value-child edit always arrives together with its updated cell; the catch-up pass exists
+for rows written by <em>older clients</em> (cell-only writes) and for backfill
+convergence.
+</p>
+
+<div class="callout warn">
+  <strong>Deletion convergence — the gap the spike does not close.</strong> The
+  catch-up pass is <em>set-only</em>: it passes the accepted row's <em>present</em> cell
+  keys into materialize, so it can never reach the delete branch. Two consequences,
+  both must be fixed before slice C ships:
+  <ul>
+    <li><strong>Remote clears resurrect (the old-client window).</strong> Client A — a
+      pre-slice-B client, whose property writes are cell-only — removes key
+      <code>status</code>; the PATCH arrives at client B, whose <code>[[status]]</code>
+      field row is untouched — the catch-up sees no present key to process. B's cell
+      now says unset while B's tree still shows the value; the next time
+      <em>anything</em> touches that field row's subtree, the project processor
+      faithfully writes the stale child value back into the cell and re-uploads it. The
+      user's delete is undone fleet-wide. (A <em>current</em> client's delete converges
+      fine: its own materialize pass soft-deletes the children in the same tx and
+      uploads those deletes.) The catch-up must also <em>diff the accepted cell against
+      the live child-backed field rows</em> and delete field rows whose key is
+      gone.</li>
+    <li><strong>Duplicate field rows from concurrent backfills persist.</strong> Two
+      devices backfilling offline each create their own <code>[[status]]</code> row;
+      after sync, the arrived rows are field/value rows whose <em>own</em> cells are
+      empty, so the row-targeted catch-up no-ops on them and never visits the shared
+      parent — where the dedup lives. The catch-up must walk arrived field rows
+      (recognizable by <code>reference_target_id</code>) up to their parent and dedup
+      there. Until then, duplicate rows persist until some unrelated local edit happens
+      to touch the parent.</li>
+  </ul>
+</div>
+
+<div class="callout good">
+  <strong>Why the processor pair doesn't ping-pong.</strong> Materialize (cell →
+  children) and project (children → cell) watch each other's outputs; convergence rests
+  on two load-bearing properties, currently implicit in the spike: every write is
+  skipped when output already equals input (idempotence), and duplicate resolution is
+  deterministic (<code>ORDER BY order_key, id</code>), so all replicas pick the same
+  survivor. State both in code comments next to the processors; a refactor that breaks
+  either turns the pair into a loop or a divergence engine.
+</div>
+
+<div class="callout good">
+  <strong>Denoted-value rule (unchanged, implemented).</strong> Mutations deep in a value
+  child's subtree — a comment under a long-text value — do <em>not</em> touch the
+  parent's cell. The projection watches field rows and their direct value children only.
+  Without this rule the processor becomes a reactive query engine and write amplification
+  explodes.
+</div>
+
+<div class="callout warn">
+  <strong>Upload reality.</strong> Every write above uploads (column-narrow, but it
+  uploads): field/value child rows are ordinary synced rows; the derived cell write ships
+  the <code>properties_json</code> column. There is no "derived, don't upload" tag and we
+  shouldn't build one for this — peers need both sides. Budget roughly 2 extra rows per
+  (block, property) pair on first materialization plus one cell-column PATCH per
+  property write. Backfill of a large workspace is a real upload burst (§11, slice C).
+</div>
+
+<h2 id="s6">6. The scope decision: which schemas get children</h2>
+
+<p>
+This is the fork in the road, and the spike and the standing docs disagree.
+<code>properties-model-evolution.md</code> (May 8) chose <strong>A + D</strong>: children
+for user-defined fields, cache-only for system fields. The spike flipped it to
+<strong>A only</strong> — every registered schema materializes, including
+<code>types</code>, <code>system:collapsed</code>, <code>alias</code>, and the
+<code>property-schema:*</code> config props on schema blocks themselves — arguing that
+a carve-out "preserves two write models and makes 'properties are children' false in the
+kernel/plugin paths that most need to exercise the invariant."
+</p>
+
+<p>Running the spike surfaced what A-only costs in practice:</p>
+
+<ul>
+  <li><strong>Row and write amplification on hot kernel props.</strong> Collapsing a
+    block writes a <code>[[system:collapsed]]</code> field row + value child (2 synced
+    rows) the first time, and a value-child content update on every toggle after.
+    Type-tagging writes <code>[[types]]</code> rows behind every typed block. These are
+    the highest-frequency property writes in the system, and they gain none of the
+    block-y affordances — nobody comments on their collapse state.</li>
+  <li><strong>Tree pollution as default.</strong> Field rows are ordinary children, so
+    every consumer of tree shape sees them: 8 master tests (across ~5 suites) fail on
+    tree-shape assertions; <code>panelLayoutProjection</code> and the orphan-alias
+    cleanup needed field-row special cases; the outline needs a per-schema
+    <code>hidden</code> UI flag plus a "Show Hidden Fields" toggle just to look normal.
+    (The spike has since also flipped <code>tx.childrenOf</code> to <em>exclude</em>
+    field rows by default — <code>f4d0b447</code> — after hidden field rows corrupted
+    sibling-position math in 20+ structural callers; more evidence that
+    materialize-everything fights the rest of the system.)</li>
+  <li><strong>UiState props live on dedicated state rows</strong> (per-user
+    <code>ui-state</code> children under the user page) — materializing
+    <code>focusedBlockLocation</code> or <code>editorSelection</code> as grandchildren
+    of a state row is pure noise, and their write rate is the highest in the app.</li>
+  <li><strong>Synthetic fieldIds leak.</strong> Kernel schemas' <code>property:&lt;name&gt;</code>
+    pseudo-ids aren't block ids, but the references processor's exact-reference branch
+    happily projects them into <code>references_json</code>, putting non-existent target
+    ids into the backlink index.</li>
+</ul>
+
+<p>
+The counterargument deserves a real answer, though. The spike is right that a hardcoded
+"system fields" set is a smell, and right that kernel paths exercising the invariant is
+worth something. The resolution:
+</p>
+
+<div class="callout">
+  <strong>Recommendation: make child-backing a per-schema property, not a global
+  invariant.</strong> Add <code>childBacked: boolean</code> to
+  <code>PropertySchema</code> (alongside <code>fieldId</code>). Defaults:
+  <code>true</code> for user-defined schemas built from <code>'property-schema'</code>
+  blocks; <code>false</code> for kernel and plugin schemas — any of which can opt in
+  explicitly. <code>ChangeScope.UiState</code> schemas are never child-backed. All
+  read/write machinery (dual-write, three processors, backfill) branches on the flag in
+  exactly one place each; there is still <em>one</em> write model
+  (<code>setProperty</code>), one detection rule, one projection. What varies is data
+  placement per schema — which is a schema property, the same way
+  <code>changeScope</code> already is. (Sourcing the flag <em>durably</em> and migrating
+  data when it flips is separate plumbing — the requirements below.)
+</div>
+
+<p>
+Two hard requirements the flag carries, both from adversarial review:
+</p>
+
+<ul>
+  <li><strong>The flag must be durable where it can vary.</strong> For user schemas it
+    is: it derives from the <code>'property-schema'</code> block, which syncs, so every
+    client agrees. A <em>plugin</em> opt-in expressed only as a code constant is a data
+    fork waiting to happen — two clients on different plugin versions would disagree on
+    whether schema S is child-backed, one maintaining children the other ignores.
+    Plugin opt-ins must persist the decision in synced data (the natural home: the same
+    projector-fed registry mechanism user schemas use), and flipping the flag in either
+    direction is a <em>migration</em> — run a final projection pass, then materialize or
+    delete children under the new regime — never a silent constant change.</li>
+  <li><strong>Name collisions become a hard error.</strong> The registry is a
+    last-wins <code>Map&lt;name, schema&gt;</code> with a <code>console.warn</code>
+    (<code>mergeLiftedSchemas</code>). That was tolerable when a collision meant one
+    codec silently won; under child-backing, <code>name</code> is the cell key but
+    <code>fieldId</code> is the child identity, so a user schema and a plugin schema
+    sharing a name strand the loser's field rows (unrecognized fieldId) while both
+    fight over one cell key — and which side wins can differ per client with load
+    order. Slice B must make cross-source name collisions fail loudly (or namespace
+    them), not warn-and-proceed.</li>
+</ul>
+
+<p>
+This restores master's tree-shape expectations for kernel props (the 8 failing tests
+pass unmodified), keeps collapse/type hot paths at today's write cost, keeps state-row
+subtrees clean, and keeps pseudo-ids out of the references index — while every benefit
+in §1 still lands, because the benefits were always about <em>user-defined</em> fields.
+It also un-blocks the UIState question PR #285 explicitly left open ("should UIState
+props materialize?" — no).
+</p>
+
+<p>
+<code>types</code> is worth a special note: it already has a denormalized local index
+(<code>block_types</code>) and kernel mutator integration (<code>TypeTagger</code>).
+If types-as-children is ever wanted (type tags as referenceable rows), that's its own
+design with its own doc; don't get it as a side effect of this migration.
+</p>
+
+<h2 id="s7">7. Field-row content: <code>[[name]]</code> + derived column</h2>
+
+<p>
+Rev 1 specified field-row content as <code>((schema-id))</code>. The spike ships
+<code>[[Schema Name]]</code> with the resolved <code>fieldId</code> in the synced
+<code>reference_target_id</code> column, derived same-tx from content. Keep the spike's
+shape:
+</p>
+
+<ul>
+  <li><strong>Markdown round-trip is a headline motivation</strong> — and
+    <code>[[priority]]</code> exports as meaningful markdown where
+    <code>((7f3a…))</code> doesn't. Copy-paste into another workspace can resolve by
+    name (§9); a uuid never resolves.</li>
+  <li><strong>Renames don't corrupt stored data — but rename support must land
+    <em>with</em> the write path, not after it.</strong> The column, not the label, is
+    authoritative, so children survive a rename untouched. The cell does not: it's
+    keyed by <code>name</code>, so after a rename every consuming block still carries
+    the old key, the registry no longer knows that key (materialize skips unknown
+    names — it cannot repair a key it no longer recognizes), and every schema-aware
+    reader falls back to <code>defaultValue</code> while the tree still shows the real
+    value. Mass silent unset. The rename-reproject pass
+    (<code>reprojectPropertyValueChildren</code>, built in the spike, currently
+    untriggered) is therefore part of slice B2, not polish — or renames must be blocked
+    until it lands.</li>
+  <li><strong>Typing a field by hand works.</strong> A user (or an importer, or an
+    agent) can type <code>[[status]]</code> as a child and put a value under it; the
+    derive processor resolves the alias to the schema and the project processor folds it
+    into the cell. That's the "it's just blocks" promise made real.</li>
+  <li>The cost: name collisions need a resolution rule (registered schema map wins over
+    generic alias lookup — implemented), and the exact-reference grammar is scoped to
+    whole-block content so prose containing <code>((…))</code> never becomes a field
+    (implemented in <code>referenceBlock.ts</code>).</li>
+</ul>
+
+<h2 id="s8">8. E2EE workspaces — new constraint</h2>
+
+<p>
+E2EE workspaces (May 29) encrypt <code>content</code>, <code>properties_json</code>, and
+<code>references_json</code> into <code>enc:v1</code> envelopes; a server trigger
+rejects plaintext in those columns. Reference <em>edges</em> are therefore part of the
+encrypted surface today. A synced plaintext <code>reference_target_id</code> would leak,
+per row: "this row is a field instance", "of this schema", and for exact block-ref rows
+"this row points at that row" — precisely the edge metadata the current design encrypts.
+</p>
+
+<p>Options, in increasing effort:</p>
+
+<ol>
+  <li><strong>Gate: e2ee workspaces stay cell-only for now.</strong> The
+    <code>childBacked</code> machinery checks the workspace's encryption mode and
+    behaves as if every schema were cell-backed. Zero leak, zero new code beyond the
+    gate. E2EE users keep today's behavior. <em>Recommended for the first ship.</em></li>
+  <li><strong>Derive locally, never upload.</strong> Exclude the column from
+    <code>BLOCK_UPLOAD_COLUMNS</code> for e2ee workspaces and run the derive pass
+    on sync arrival (the observer materializes decrypted plaintext locally, so content
+    is available; <code>onRowsAccepted</code> is the hook). Needs a first-sync full
+    derivation pass per device (marker-gated, same pattern as the backfill). This is the
+    real fix; it's mostly plumbing that reuses existing machinery.</li>
+  <li><strong>Encrypt the column.</strong> Defeats the point — the column exists to be
+    an indexable, queryable detection key on the client; the server never queries it.
+    (2) achieves the same privacy with less ceremony.</li>
+</ol>
+
+<p>
+The gate in option 1 needs its scope stated precisely, because the server cannot
+enforce any of it — the e2ee ciphertext trigger checks only the three envelope columns
+and would happily accept a plaintext <code>reference_target_id</code>:
+</p>
+
+<ul>
+  <li><strong>What the gate disables:</strong> all of it — the dual-write, both
+    property processors, the backfill, <em>and</em> the derive processor's uploads.
+    Disabling only the write path while leaving projection live re-creates the stale
+    children problem (§11 rollback discussion); the gate means "this workspace has no
+    child-backed machinery running, full stop."</li>
+  <li><strong>Cross-workspace moves/copies strip the column.</strong> A field row moved
+    or pasted from a plaintext workspace into an e2ee workspace carries its plaintext
+    <code>reference_target_id</code> with it; the move path must null it (and not
+    re-derive) when the destination is e2ee. (Owner: slice B3's move/merge
+    integration.)</li>
+  <li><strong>Mode transitions are migrations.</strong> Flipping a backfilled plaintext
+    workspace to e2ee means the column values for its rows were <em>already uploaded</em>
+    — the flip must null them server-side (the encryption migration is already a bulk
+    rewrite; add the column to it), run a project-then-freeze pass over existing
+    children locally, and then <em>hide or soft-delete the de-structured rows</em>:
+    with the column nulled, §9 detection fails and every former field row would
+    otherwise render as a plain <code>[[name]]</code> block with its values as loose
+    children, fleet-wide. The cell is authoritative post-flip; the rows must not
+    linger as clutter. Flipping e2ee → plaintext re-enables the machinery; the
+    ordinary backfill covers materialization. (Owner: the workspace-encryption flip
+    flow itself — these requirements gate that feature, not the §11 slices.)</li>
+</ul>
+
+<p>
+Two server-surface items move out of "verify later" into hard slice-A deliverables
+(§11): <strong>extend the <code>apply_block_patches</code> whitelist</strong> — today
+the RPC silently drops unknown keys, so while a fresh field row propagates fine (creates
+go through the PUT/upsert path, which carries all columns), any <em>later</em> change to
+<code>reference_target_id</code> on an existing row ships as a PATCH and is dropped
+server-side, with no client-side re-derive on arrival to compensate; the synced
+detection column would be insert-only over sync. And <strong>re-timestamp every
+spike-introduced Supabase migration</strong> — both <code>20260527123000</code>
+(reference_target_id) and <code>20260530143000</code> (recent-content index) sort
+<em>before</em> already-applied master migrations (<code>20260612…</code>,
+<code>20260625…</code>); wrap them in <code>begin; … commit;</code> per the supabase
+skill while at it.
+</p>
+
+<h2 id="s9">9. Detection rules and edge cases — as implemented, with divergences</h2>
+
+<dl>
+  <dt><strong>Field-row recognition.</strong></dt>
+  <dd>A child of P is a field row iff <code>reference_target_id</code> equals a
+    registered schema's <code>fieldId</code>. Column read, no content parse. Unregistered
+    targets render as plain reference blocks — a pasted field from another workspace
+    degrades to a visible, honest "unknown field" row.</dd>
+
+  <dt><strong>Value decoding.</strong></dt>
+  <dd>Spike: first parseable value child wins (order-key order); unparseable children are
+    skipped. If <em>no</em> child parses, the projection <em>removes</em> the key from
+    the cell. Rev 1 said "log + omit, keep data visible" — the spike keeps the rows (data
+    is never destroyed) but the cell-side key vanishes, which downstream readers see as
+    "unset". Acceptable; document that "field with only-invalid values" reads as unset
+    while remaining visible/fixable in the tree.</dd>
+
+  <dt><strong>Duplicates.</strong></dt>
+  <dd>Divergence from rev 1 ("keep extras, pick lowest orderKey"): the materialize path
+    <em>deletes</em> duplicate field rows and duplicate value children (soft-delete, so
+    recoverable via history). Projection reads the first field row's first parseable
+    value. Deterministic dedup is the better call under sync races, but slice B3 must
+    tighten two things the spike leaves sharp: <strong>(a)</strong> the survivor is
+    picked by <code>(order_key, id)</code> — arbitrary relative to content — and
+    <code>deleteSubtree</code> recursively removes the loser <em>including any
+    user-authored sub-children</em> (a comment thread under the losing value silently
+    goes with it). Before deleting: for duplicate <em>value children</em>, relocate the
+    loser's non-value sub-children (comments, elaboration) under the survivor; for
+    duplicate <em>field rows</em> whose surviving values <em>differ</em>, preserve the
+    losing value visibly — e.g. relocate it under the surviving <em>value child</em>
+    (not directly under the field row, where the value-child dedup would just
+    re-collapse it) — silently hiding a divergent value behind first-wins is data loss
+    in effect if not in storage. <strong>(b)</strong> the two dedup call sites disagree on deletion
+    semantics: materialize subtree-deletes, while
+    <code>writePropertyValueChild</code> shallow-deletes duplicate value children —
+    orphaning their sub-children live under a tombstone. Unify on one (relocate, then
+    subtree-delete). Until multi-value lands, "N children under one field row" stays a
+    reserved shape, not a user affordance.</dd>
+
+  <dt><strong>Default-value vs. unset.</strong></dt>
+  <dd>Unchanged from rev 1: zero value children ⇒ key omitted from the cell ⇒
+    <code>block.get</code> falls back to <code>defaultValue</code>. No reader change.</dd>
+
+  <dt><strong>Codec / preset changes are migrations, not edits.</strong></dt>
+  <dd>§9's "only-invalid values reads as unset" is fine for one malformed child; it is
+    a mass event when a user changes a field's preset or config (text → number): every
+    existing value child becomes unparseable under the new codec, each consuming
+    block's next projection <em>removes the key</em>, and readers see
+    <code>defaultValue</code> everywhere — silent fleet-wide unset presented as
+    default. Worse, until reprojection runs, the cell still holds the old encoding and
+    the <em>new</em> codec decodes it on the read path. A preset/config change must run
+    an explicit re-encode/validate pass over existing values (with a user-visible
+    "N values can't convert" outcome), not lean on the projection's remove-on-invalid
+    behavior. Same machinery as the rename reproject; build them together in slice
+    B.</dd>
+
+  <dt><strong>Field-row ordering (decided).</strong></dt>
+  <dd>Machinery <em>inserts</em> field rows first among children: every creation path
+    uses <code>keyAtStart</code>, which is what the spike ships — so fields cluster
+    above content children as an emergent default, not an enforced invariant. Rev 1's
+    "carriers-then-content with ghosts between" is dropped. Materialization, backfill,
+    and the add-field affordance all follow the insertion rule; <code>orderKey</code>
+    remains authoritative and user-owned, so a field row manually reordered below
+    content children stays where the user put it.</dd>
+
+  <dt><strong>Reparenting a field row = assigning the property (decide in slice D).</strong></dt>
+  <dd>The project processor reprojects both sides of a move, so dragging a
+    <code>[[status]]</code> row under a different block <em>gives that block a status
+    property</em> — and removes it from the old parent. That's a coherent "it's just
+    blocks" semantic, but as a silent side effect of an ordinary indent/drag it's
+    surprising (and works on any host, including schema/system blocks). Slice D must
+    either embrace it as the explicit field-assignment affordance (with UI signal on
+    drop) or guard plain structural moves (e.g. reject, or clear
+    <code>reference_target_id</code> on cross-parent moves that aren't the assignment
+    gesture). Recommendation: embrace with signal — guards that silently strip identity
+    create their own confusion.</dd>
+
+  <dt><strong>Ref-typed values → parent <code>references[]</code>.</strong></dt>
+  <dd>Two paths exist now: (a) the cell-side projection
+    (<code>projectPropertyReferences</code>, <code>sourceField = schema.name</code>)
+    still runs off the bag — unchanged, keeps backlinks-by-field working; (b) field rows
+    and value rows are themselves reference-bearing blocks, so the references plugin
+    indexes them as ordinary rows — meaning a user field's schema block accrues backlinks
+    from every block that uses the field ("where is this field used?" for free). Verify
+    the two paths don't double-count in backlink UIs (dedup key is
+    <code>(sourceField, id)</code>; path (b) rows carry <code>sourceField: ''</code> on
+    their own row — the <em>parent's</em> entry stays single).</dd>
+
+  <dt><strong>Merge, orphan cleanup, panel layout, tree primitives.</strong></dt>
+  <dd>Implemented in the spike: <code>mergeBlocksInTx</code> reparents only non-field
+    children, subtree-deletes <code>from</code>'s field children (fixed at
+    <code>f4d0b447</code> — a bare delete had orphaned value rows), and re-materializes
+    the merged bag; orphan-alias cleanup deletes generated field rows under alias
+    seats; panel-layout projection ignores field rows; and <code>tx.childrenOf</code>
+    now <em>excludes</em> field rows by default (structural callers must see only
+    visible siblings — the machinery opts in with
+    <code>includePropertyChildren</code>). Under the §6 scoping these special cases
+    shrink (kernel props stop generating field rows) but the rules stay — user-field
+    rows must not be reparented as content.</dd>
+
+  <dt><strong>Type-add field slots vs ghosts (decided: render-only ghosts).</strong></dt>
+  <dd>The spike materializes <em>empty field rows</em>
+    ("slots") when a type is added (<code>TypeTagger</code> →
+    <code>materializePropertyFieldSlotsForExistingRow</code>; since
+    <code>03236460</code> a slot whose key already has a cell value materializes the
+    value too — an empty slot had let the reverse projection strip it). Rev 1 argued
+    for render-only <strong>ghost rows</strong> that materialize on first edit — no
+    storage until data exists, nothing to clean up on type removal. The spike still has
+    no slot cleanup on type removal (<code>_removeTypeInTx</code> only rewrites the
+    <code>types</code> array), so removing a type strands empty <code>[[field]]</code>
+    rows. <em>Decision: render-only ghosts; drop the TypeTagger
+    materialization.</em> If empty slots prove necessary (e.g., for cross-device
+    consistency of field order), add explicit cleanup on type removal.</dd>
+</dl>
+
+<h2 id="s10">10. UI: in-tree rendering exists; the panel is not sunset</h2>
+
+<p>
+The spike ships <code>FieldBlockRenderer</code> (field-row line: shape glyph + label
+linking to the schema block; value editing via the preset's editor; empty-value editor
+for slot rows) and <code>PropertyValueBlockRenderer</code>, registered in the default
+renderer chain, plus hidden-field filtering in <code>useChildIds</code> and a
+"Show Hidden Fields" context-menu toggle. The property panel remains fully functional
+alongside — both surfaces read the same cell and write through the same
+<code>setProperty</code>, so they coexist safely during the transition. Panel sunset is
+deliberately last (§11) and follows usage, not a schedule. Rev 1's inventory of what
+survives (value presets, schema registry, <code>resolvePropertyDisplay</code>,
+<code>PropertySchemaBlockRenderer</code>) matches what the spike actually reuses.
+</p>
+
+<h2 id="s11">11. Shipping plan — slices extracted from the spike (dormant-flag landing as fallback)</h2>
+
+<p>
+PR #285 proved the design end-to-end, and the branch is actively maintained — it
+re-merged master again on 2026-07-01 and has been taking review fixes since
+(<code>03236460</code>, <code>f4d0b447</code>). But as a shippable unit it has
+structural problems: it's a merge branch carrying ~35 spike commits (40+ on the PR)
+whose history has already needed two hand-repaired merges against a fast-moving master
+(one merge obstacle is <code>blockData.ts</code> being binary-to-git, which defeats
+line-level auto-merging outright), it bakes in the A-only scope this doc recommends
+reversing (§6), and its test suite disagrees with master's by design (8 tree-shape
+tests).
+</p>
+
+<p>
+Three ways to ship it:
+</p>
+
+<ul>
+  <li><strong>Land the merge as-is, fix forward.</strong> One review of a known-working
+    integrated tree (3667/3677 green at the PR's last stated run, ~880 lines of
+    convergence tests). But it lands the
+    A-only scope and the review-identified gaps (deletion convergence §5, dedup
+    semantics §9, durable flag §6, RPC §8) as production behavior, then re-touches the
+    same code to fix each — and the 8 test failures must be resolved by rewriting
+    master's tests around behavior this doc says to reverse.</li>
+  <li><strong>Land the merge behind a dormant flag.</strong> Add <code>childBacked</code>
+    defaulting <code>false</code> for <em>all</em> schemas first, so the whole mechanism
+    lands inert, master's tests stay green, and scope flips per-schema in follow-ups.
+    Cheapest path to "mechanism on master"; preserves the spike's tested integration;
+    the natural home for the §8 fixes. Its real cost is review quality: one ~4k-line PR
+    whose inert-ness must be trusted, with the §5/§9 convergence gaps still to be fixed
+    in-place afterward.</li>
+  <li><strong>Extract master-first slices</strong> (below), copying spike code verbatim
+    wherever possible — extraction that <em>re-derives</em> the mechanism would add
+    semantic-drift risk for no gain. Each slice lands with its review fixes built in and
+    is reviewed against master's suite.</li>
+</ul>
+
+<p>
+<strong>Recommended: slices, second choice: dormant flag.</strong> The deciding factor
+is that the adversarial review found changes needed <em>inside</em> the core mechanism
+(the deletion-convergence catch-up, dedup semantics, flag durability), not just around
+it — landing first and fixing after means shipping convergence machinery with known
+gaps, and the fix commits churn the same files a reviewer just read. If shipping speed
+dominates, the dormant-flag path is legitimate — but it must fold in the <em>full</em>
+review-fix set, not just the flag: the §5 deletion-convergence catch-up, the §6
+durability/collision rules, the §8 gate + RPC + migration re-timestamps, and the §9
+dedup tightening. A dormant-flag landing that defers those ships the same gaps one
+flag-flip away from production. Either way, treat PR #285 as the <strong>reference
+implementation</strong> and keep it open until its content is fully accounted for.
+</p>
+
+<div class="phases">
+
+  <div class="phase">
+    <div class="num">A</div>
+    <div class="body">
+      <div class="name">Foundations: column + derive processor</div>
+      <p>
+        <code>reference_target_id</code> through all three layers (Supabase migration —
+        re-timestamped and wrapped in <code>begin;…commit;</code> per §8;
+        <code>BLOCK_STORAGE_COLUMNS</code>/parse/upload;
+        <code>BlockData.referenceTargetId</code>; regenerate sync-config),
+        <code>referenceBlock.ts</code> grammar, <code>core.deriveReferenceTarget</code>,
+        the partial index, and the §8 items: the e2ee gate (derive skips e2ee
+        workspaces, column excluded from their upload) and the
+        <code>apply_block_patches</code> whitelist extension. Two hard-won requirements
+        from the spike's own review history: the <strong>existing-install local
+        migration must ALTER both <code>blocks</code> and
+        <code>blocks_synced</code></strong> (copy the spike's
+        <code>ensureBlockStorageColumns</code> as fixed at <code>03236460</code>, run
+        before the sync observer can stage rows — the single-table version broke
+        sync-apply on every upgrading device), and decide
+        <code>BlockData.referenceTargetId</code>'s optionality up front (the spike made
+        it required, which touches every <code>BlockData</code> literal in the test
+        suite; optional-in, normalized-to-null in <code>parseBlockRow</code> avoids
+        that churn).
+      </p>
+      <p>
+        <strong>Deploy ordering is load-bearing:</strong> (1) <code>db push</code> the
+        column, (2) <code>powersync deploy</code> the regenerated sync rule, (3) roll
+        clients. Deploying the sync rule before the Postgres column exists fails the
+        entire blocks stream for everyone; rolling new clients before the rule deploy
+        just reads NULLs (degraded, harmless). Old clients tolerate an extra stream
+        column (raw-table puts bind by name) — that tolerance is what makes the rollout
+        non-atomic-safe; canary one pinned old client before the fleet.
+      </p>
+      <p>
+        Also the standalone prerequisite fix: replace the literal NUL bytes in
+        <code>src/data/api/blockData.ts</code> with <code>\u0000</code> escapes so git
+        stops treating the file as binary and can line-merge it again (its binary-ness
+        defeats auto-merging outright — PR #285's merges had to be repaired by hand
+        around it).
+      </p>
+      <p class="deliv">No behavior change for existing data — the column stays NULL
+        except on exact-reference rows. Behavior is reversible by dropping the
+        processor; the schema/sync surface is effectively one-way (the deployed sync
+        rule and already-uploaded envelopes reference the column) — acceptable for an
+        additive nullable column, but say it out loud.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">B</div>
+    <div class="body">
+      <div class="name">Child-backed write path, scoped — three review units</div>
+      <p>
+        Everything the write path needs, but reviewed as three separable units so B
+        doesn't become the monolith this section argues against.
+        <strong>B1 (core, the only piece slice C waits on):</strong>
+        <code>PropertySchema.fieldId</code> + <code>childBacked</code> (§6 defaults;
+        cross-source name collisions fail loudly), dual-writing
+        <code>setProperty</code>, <code>core.projectPropertyChildren</code> +
+        <code>core.materializePropertyChildren</code> gated on the flag <em>and on the
+        §8 e2ee workspace gate</em> (the write path and both processors are off in e2ee
+        workspaces, not just the derive column), <code>childrenOf</code> option
+        (default-exclude, per <code>f4d0b447</code>), the ref double-count check and
+        the §5 invariant code comments.
+        <strong>B2 (schema-change migrations):</strong> the rename-reproject hook —
+        moved up from the old slice E because renames break silently without it
+        (§7) — and the codec-change re-encode pass (§9); their own subtle machinery,
+        own PR.
+        <strong>B3 (integration):</strong> merge/orphan/panel-layout handling with the
+        §9 dedup tightening, and the roam importer (a user-value writer the spike had
+        to adapt; its import tests changed for child-backed seeds).
+        Plugin-flag <em>persistence</em> is deliberately deferred until the first
+        plugin actually opts in (footer): user schemas get durability for free from
+        their schema blocks, and no plugin opts in during the user-schema-first ship.
+        Because kernel/plugin schemas default to cell-only, master's tree-shape tests
+        pass unmodified — the spike's 8 failing tests don't need porting decisions.
+      </p>
+      <p class="deliv">Every user-defined property write is child-backed. Rollback:
+        flip the user-schema default to cell-only <em>and run the drain</em> — one final
+        children→cell projection pass over affected blocks, then hide or delete the
+        children. "Children stay inert but convergent" is not a coherent state: if the
+        processors are flag-gated off, nothing keeps inert children convergent, and the
+        tree UI would render stale values. Rollback = drain + freeze, not flip and
+        hope.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">C</div>
+    <div class="body">
+      <div class="name">Backfill + sync catch-up</div>
+      <p>
+        The spike's backfill machinery (markers, candidate scan, bulk insert, retry —
+        including its <code>txEngine</code> bulk-insert/undo-free plumbing, a large and
+        subtle surface worth its own review attention) and the observer
+        <code>onRowsAccepted</code> catch-up, scoped to child-backed schemas —
+        <strong>with the two §5 deletion-convergence fixes built in</strong>: the
+        catch-up reconciles <em>removed</em> cell keys (deletes stale field rows), and
+        dedups at the <em>parent</em> of arrived field rows. It must also reconcile the
+        <em>rename race</em> B2's one-shot reproject can't reach: a block edited
+        offline across a schema rename syncs up with a cell key no registry knows;
+        name-keyed materialize skips it forever. The catch-up recognizes that case from
+        the <em>children's</em> side — field rows carry the stable
+        <code>fieldId</code> — and re-projects the cell from them. Two more
+        requirements, not suggestions: the backfill inherits the §8 e2ee gate
+        explicitly (the server trigger won't catch a plaintext-column leak), and the
+        first full backfill on a device is held until the initial sync drain completes
+        (backfilling a partially-synced cell state creates children for stale
+        values).
+      </p>
+      <p>
+        Sequence the first production run deliberately: it's an upload burst of 2 rows
+        per (block, property) — run workspace-by-workspace, watch <code>ps_crud</code>
+        drain. Before flipping it on, size it: run
+        <code>select count(*) from blocks where properties_json != '{}' and deleted = 0</code>
+        (and a key histogram) against production via <code>yarn agent sql</code> /
+        Supabase.
+      </p>
+      <p class="deliv">100% of user-defined property data is child-backed; cell fully
+        derived. Fall-back per block unchanged from rev 1: on backfill failure the cell
+        stays authoritative for that block. The two-client concurrent-backfill test
+        (§12) gates this slice.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">D</div>
+    <div class="body">
+      <div class="name">In-tree UI</div>
+      <p>
+        <code>FieldBlockRenderer</code> / <code>PropertyValueBlockRenderer</code>,
+        hidden-field filtering, ghost rows for type-expected fields (replacing the
+        spike's materialized slots), add-field affordance on the block (slash command →
+        schema autocomplete → field row + value in one tx). Panel stays.
+      </p>
+      <p class="deliv">Users see and edit user-defined properties in the tree. Panel
+        remains the fallback; no flag needed since both surfaces coexist.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">E</div>
+    <div class="body">
+      <div class="name">Residual spike deltas</div>
+      <p>
+        What's left of the spike after A–D: the recent-content index
+        (<code>20260530143000</code> + <code>kernelQueries</code> changes) is unrelated
+        perf work that hitchhiked on the spike — extract it as its own small PR (with a
+        current migration timestamp) or drop it, and fix the brittle query-plan
+        assertion with it. Small unmapped touches (<code>targets.ts</code>,
+        <code>handleStore.ts</code>, bench setup) ride along with whichever slice their
+        caller lands in. Multi-value-as-children and block-valued fields get their own
+        design pass when a concrete UX needs them. (Note when extracting: the raw
+        spike-vs-master diffstat is misleading — thousands of deleted lines are
+        stale-merge noise from subsystems that postdate the spike's base; extract
+        against the feature files, not the diff.)
+      </p>
+      <p class="deliv">The spike branch's content is fully accounted for; PR #285 can
+        close.</p>
+    </div>
+  </div>
+
+  <div class="phase">
+    <div class="num">F</div>
+    <div class="body">
+      <div class="name">Panel sunset (later, usage-driven)</div>
+      <p>
+        When the in-tree surface has clearly won: delete
+        <code>BlockProperties.tsx</code>, <code>propertyPanel/*</code>,
+        <code>AddPropertyForm</code>. E2EE derive-locally path (§8 option 2) lands here
+        or earlier if e2ee users want child-backed fields sooner.
+      </p>
+      <p class="deliv">One rendering surface. The processors stay — they're the
+        convergence machinery, not scaffolding.</p>
+    </div>
+  </div>
+
+</div>
+
+<h2 id="s12">12. Risks to monitor</h2>
+
+<ul>
+  <li>
+    <strong>Write amplification at parents.</strong> Same shape as rev 1, now measurable:
+    the spike added per-processor timing to the commit pipeline
+    (<code>TxTimingDiagnostics.sameTxProcessorRuns</code>). Watch it during slice B.
+  </li>
+  <li>
+    <strong>Backfill upload burst per device.</strong> Completion markers are local
+    (<code>client_schema_state</code>), so every device scans; the NOT-EXISTS candidate
+    filter makes re-materialization a no-op once one device's rows sync down. Two
+    devices racing before convergence duplicate field rows, and — per the §5 finding —
+    the dedup does <em>not</em> fire passively on arrival as the spike stands (the
+    catch-up never visits the shared parent); slice C's parent-dedup fix plus the
+    hold-until-first-sync-drained requirement close this. Gate slice C on a two-client
+    concurrent-backfill test.
+  </li>
+  <li>
+    <strong>Schema-registry timing.</strong> Derivation quality depends on which schemas
+    are registered when a pass runs. The spike's gating (backfill held until projector
+    publish, generation-coalesced rescans, row-targeted catch-up bypassing markers) is
+    the answer; keep its tests.
+  </li>
+  <li>
+    <strong><code>findSchemaByFieldId</code> is O(schemas) per lookup</strong> and sits
+    in child-filtering paths that run per rendered row. Fine at today's schema counts;
+    add a fieldId-keyed map alongside the facet if profiles say otherwise.
+  </li>
+  <li>
+    <strong>Old-client interop during rollout.</strong> A device on pre-slice-B code
+    writes cell-only; current devices converge <em>sets and updates</em> via the sync
+    catch-up pass (last-writer-wins per key, children follow). <em>Clears do not
+    converge</em> until slice C's deletion-reconciling catch-up lands (§5) — an old
+    client's property delete leaves stale children on peers, and a later touch of that
+    subtree resurrects the value. Coordinated upgrade (small fleet) shrinks the window;
+    the §5 fix closes it.
+  </li>
+  <li>
+    <strong>Undo/replay.</strong> Same-tx processors are skipped on undo/redo replay by
+    design (snapshot restoration is authoritative). Backfill writes are system-scoped
+    and undo-free (tested in the spike). Verify undo of a <em>value-child edit</em>
+    restores both the child and the projected cell (they're one tx, so snapshots cover
+    both — the existing test should assert it explicitly).
+  </li>
+  <li>
+    <strong>Doc drift.</strong> <code>properties-model-evolution.md</code>'s Thread-2
+    decision section is superseded by §6 here (the spike edited it to "A only"; this
+    doc re-opens that to per-schema scoping). Re-stamp it when slices land.
+    (<code>field-level-sync-merge.md</code>'s stale pointer to the never-merged
+    <code>properties-as-children.html</code> was fixed alongside this doc.)
+  </li>
+</ul>
+
+<hr>
+
+<p class="footer-note">
+Open questions for the slice PRs: whether ghost rows need a per-type declared order;
+the add-field slash-command UX; where plugin <code>childBacked</code> opt-ins persist
+(§6 requires durable — pick the mechanism); whether <code>types</code> ever becomes
+child-backed (out of scope here, §6); and when to run the e2ee derive-locally path
+(§8 option 2).
+Reference implementation: PR #285 (<code>props-as-childrent-spike-merge</code> — a
+moving branch; this doc's mechanism claims were verified at <code>d33393a9</code> and
+branch-state notes at <code>f4d0b447</code>).
+Prior art and lineage: <code>docs/properties-model-evolution.md</code> (Thread 2),
+<code>docs/field-level-sync-merge.md</code> (the on-hold alternative),
+PR #55 (rev 1 of this document).
+</p>
+
+</main>
+</body>
+</html>
