@@ -112,9 +112,12 @@ export const watchForRuntimeCorruption = (
 
 /**
  * Register global lifecycle listeners that feed the current session's
- * breadcrumb log + clean-shutdown flag. A `pagehide` marks a clean exit; a
- * still-unclean flag on the next boot means the process was killed (the
- * process-kill fingerprint). Idempotent; call once at app startup.
+ * breadcrumb log + clean-shutdown flag, and expose a retrieval hook on
+ * `window.__omniliner.forensics` (`dump()` / `download()`) so the recorded
+ * breadcrumbs + corruption snapshots can be pulled over the remote inspector
+ * or downloaded next incident. A `pagehide` marks a clean exit; a still-unclean
+ * flag on the next boot means the process was killed (the process-kill
+ * fingerprint). Idempotent; call once at app startup.
  */
 export const installDbForensicsLifecycle = (forensics: DbForensics = dbForensics): void => {
   if (lifecycleInstalled || typeof window === 'undefined') return
@@ -125,4 +128,38 @@ export const installDbForensicsLifecycle = (forensics: DbForensics = dbForensics
   window.addEventListener('freeze', () => void forensics.recordLifecycleEvent('freeze'))
   window.addEventListener('resume', () => void forensics.recordLifecycleEvent('resume'))
   window.addEventListener('pagehide', () => void forensics.markCleanShutdown())
+
+  // Retrieval hook, shared with the `__omniliner` namespace (see
+  // metricsConsoleHook). Available even in the bootstrap error fallback (no
+  // Repo), so a corrupt-DB session can still hand over its forensics.
+  const ns = (window.__omniliner ?? {}) as Record<string, unknown> & {
+    forensics?: OmnilinerForensicsApi
+  }
+  ns.forensics = {
+    dump: () => forensics.exportAll(),
+    download: async () => downloadJson('db-forensics.json', await forensics.exportAll()),
+  }
+  window.__omniliner = ns as Window['__omniliner']
+}
+
+interface OmnilinerForensicsApi {
+  /** Every forensic record (sessions, scan log, unclean archives, snapshots). */
+  dump: () => Promise<Record<string, unknown>>
+  /** Download the dump as `db-forensics.json`. */
+  download: () => Promise<void>
+}
+
+const downloadJson = (filename: string, data: unknown): void => {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
 }
