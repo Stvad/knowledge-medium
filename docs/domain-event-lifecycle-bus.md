@@ -11,6 +11,13 @@ and `extensibility-axes.md` (the algebra vocabulary). Grounded in the post-B3
 typed-channel discipline (`architecture-audit-2026-06.md` §B3, `AGENTS.md`
 "ui event channels").
 
+**Recommendation in one breath.** Build a small **typed, observe-only event bus**
+on `repo.events` (a declaration-merged `AppEventRegistry`, `emit`/`on`, a
+`useAppEvent` hook); **don't** widen the post-commit processor system; **bridge**
+data events into the bus from the existing commit choke. Ship **`workspace:ready`**
+(sticky replay) as the first thin slice — it closes gap I3 with one emit line and
+has no other observability today. Everything below §1 is the supporting evidence.
+
 ## The gap, precisely
 
 The only general "react to something that happened" seam a plugin has today is
@@ -544,45 +551,28 @@ benefits from the bus contract being settled first.
 
 ### 4.3 Smallest first thin slice
 
-**`workspace:ready`, emitted from the end of `bootstrapWorkspace`.** It is the
-single event with *no* current observability, it is one emit line at one choke
-*that fires with the right semantics* (past the access gate and bootstrap
-writes — see the §1 timing caveat for why the obvious `setActiveWorkspaceId`
-choke is wrong), and it directly closes gap I3's correctness hole ("plugins that
-auto-create blocks need a reliable active-workspace-is-ready signal rather than
-racing the async bootstrap"). It does require the **workspace-gated sticky-replay**
-mechanism in the same slice (the cold-start emit precedes AppEffect registration,
-and the singleton bus must not replay a stale workspace's value — §3.5/§4.2), so
-Phase 0 is "bus kernel + workspace-gated sticky + one event," not the bare
-fan-out. Shipping just this proves the registry/emit/async-delivery/sticky-replay/
-subscribe/hook/lifecycle end to end with minimal blast radius, and every later
-event is additive.
+**Phase 0 above _is_ the thin slice:** `workspace:ready`, sticky (§3.5), emitted
+from the end of `bootstrapWorkspace`. It's the one event with no current
+observability, one emit line at a choke that fires with the right semantics (§1
+timing caveat), and it closes I3 directly — proving registry/emit/async-delivery/
+sticky-replay/subscribe/hook/lifecycle end to end. Everything after Phase 0 is
+additive.
 
 ---
 
 ## Open questions
 
-- **Bus on `Repo` vs on the runtime.** Proposed: Repo (survives swaps + owns 3
-  of the chokes). Alternative: a standalone module singleton like the toggle
-  stores. Repo wins because subscriber lifecycle wants `AppEffectContext.repo`
-  and because workspace/data/sync emit points already hold the repo — but a
-  module singleton would decouple the bus from data-layer tests. **Caveat either
-  way:** the bus is a per-user singleton reused across workspace switches, so its
-  sticky store for workspace-scoped events must be workspace-gated/evicted on
-  switch (§3.5) — the same hazard `ProjectorRuntime.dispose` guards. Decide when
-  Phase 0 lands.
+- **Bus on `Repo` vs a standalone module singleton.** Proposed: Repo (survives
+  swaps, owns 3 of the chokes, gives subscribers `AppEffectContext.repo`); a
+  module singleton would decouple it from data-layer tests. Either way the
+  singleton's sticky store must be workspace-gated (§3.5). Decide when Phase 0
+  lands.
 - **Should `block:*` events ever be awaited by the committer?** Proposed no
   (fire-and-forget). If a future use case needs "tx isn't done until observers
   ran," that's a processor, not the bus — keep the line bright.
-- **Replay / late-subscribe for current-state events.** *Decided* (§3.5):
-  current-state events (`workspace:ready`, `app:booted`, latest `sync:status`)
-  are **sticky** — the bus retains the last value and replays it on subscribe —
-  because the cold-start emit precedes AppEffect registration, so plain fan-out
-  would drop it. For *workspace-scoped* sticky events the replay is **gated on
-  the active workspace** so a switch can't replay a stale workspace's payload
-  (§3.5). `workspace:ready` brings both into Phase 0. Still open: the exact opt-in
-  API (a per-event `sticky: true` flag in the registry vs. a hardcoded set) and
-  whether `sync:status` should be sticky-per-field; settle when Phase 2 adds it.
+- **Sticky opt-in mechanism.** Sticky + the workspace gate are *decided* (§3.5);
+  what's open is the *mechanism* — a per-event `sticky: true` flag in the
+  registry vs. a hardcoded set — plus whether `sync:status` should be
+  sticky-per-field. Settle when Phase 2 adds `sync:status`.
 - **Declarative facet vs AppEffect-only.** Start AppEffect-only; add
-  `appEventSubscribersFacet` only on demand, and if added, dedup-by-id +
-  live-handle re-subscribe like the projector services.
+  `appEventSubscribersFacet` only on demand (see §3.3).
