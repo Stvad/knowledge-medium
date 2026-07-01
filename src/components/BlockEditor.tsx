@@ -3,6 +3,7 @@ import { Block } from '../data/block'
 import {
   editorSelection,
   editorFocusRequestProp,
+  exitEditModeForBlock,
   isFocusedBlock,
   type EditorSelectionState,
 } from '@/data/properties.js'
@@ -34,7 +35,7 @@ export const BlockEditor = ({
   const cm = useRef<ReactCodeMirrorRef>(null)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
-  const [isEditing, setIsEditing] = useIsEditing()
+  const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
@@ -289,7 +290,11 @@ export const BlockEditor = ({
             return
           }
           if (keepalive === 'yield') return
-          setIsEditing(false)
+          // Clear edit mode only if THIS block still owns it. A block→block
+          // tap may have already handed edit mode to the tapped block; an
+          // unconditional clear would race that handoff and drop it (the
+          // "keyboard hides / needs a second tap" bug). See exitEditModeForBlock.
+          void exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
         })
       }}
       extensions={mergedExtensions}
