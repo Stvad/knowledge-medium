@@ -1,5 +1,6 @@
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { enterEditModeForBlock } from '@/extensions/blockInteraction.js'
+import { grabSoftKeyboard } from '@/utils/softKeyboardGrab.js'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -30,6 +31,12 @@ export const enterBlockEditModeOnClickAction: ActionConfig<typeof ActionContextT
   context: ActionContextTypes.BLOCK_POINTER,
   pointerBinding: {kind: 'mouse', mods: [], phase: 'click'},
   handler: ({block, uiStateBlock, renderScopeId}, trigger: ActionTrigger) => {
+    // Surface the soft keyboard NOW, synchronously inside the tap gesture: the
+    // editor's own focus lands a frame later (async edit-mode entry + rAF),
+    // outside the gesture, and iOS won't raise the keyboard for it — so without
+    // this the block enters edit mode but needs a second tap for a keyboard.
+    // The editor's later focus transfers seamlessly. See grabSoftKeyboard.
+    grabSoftKeyboard()
     const event = trigger as ReactMouseEvent<HTMLElement>
     void enterEditModeForBlock(block, uiStateBlock, renderScopeId, {
       x: event.clientX,
