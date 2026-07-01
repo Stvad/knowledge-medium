@@ -73,7 +73,7 @@ already runs for that event.
 | `navigation:requested` (pre) | `{input}` | `navigationVerb.before` — **already exists** | optional; most demand is for `completed`. Fires *before* resolution for every gesture, so it does **not** imply the navigation will land (it may be vetoed/`null`) — purely an "about to attempt" hook. |
 | `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`workspaceBootstrap.ts`, after the page/ui-state writes, just before `return layoutSessionBlock` — equivalently the `{kind:'ready'}` branch of its caller `resolveInitialLayout`, `App.tsx:126`; `bootstrapWorkspace` itself returns a `Block`, not the layout union) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **Not** `setActiveWorkspaceId` — see the caveat below. **No `previousId`:** by this choke `setActiveWorkspaceId(new)` (early, `App.tsx:73`) has already overwritten the pin, so the prior id is gone; it belongs on `workspace:active-changed`, whose choke *is* the setter (both ids in hand). |
 | `workspace:active-changed` (low-level pin) | `{previousId, workspaceId}` | `Repo.setActiveWorkspaceId` (`repo.ts:951`) — **fires nothing today** | optional/secondary: reflects the *pin*, fires early (pre-gate, pre-bootstrap). For UI that just tracks "which workspace is selected", not for auto-create handlers. |
-| `workspace:created` | `{workspaceId}` | gate on `freshlyCreated` at the `bootstrapWorkspace` choke (fires per switch, but `freshlyCreated` is only true on actual creation) — **one** path | don't *also* emit from `CreateWorkspaceDialog.onCreated` (double-emit). `workspace:ready` already carries `freshlyCreated:true`, so this may be redundant — keep only if a "created but not yet landed-on" signal is genuinely needed. |
+| `workspace:created` | `{workspaceId}` | the actual **insert** sites — `ensurePersonalWorkspace`/`ensureLocalPersonalWorkspace` when `inserted` (`resolveWorkspace.ts:98/113`) **and** the dialog create path (`CreateWorkspaceDialog`); dedupe by id | ⚠️ **not** `freshlyCreated` at bootstrap: that flag is only true for the auto-created *personal* workspace. A **dialog-created** workspace is primed locally then navigated to, so `resolveWorkspace` returns it via the existing-local fast path with `freshlyCreated:false` (`resolveWorkspace.ts:40-44`) — gating on `freshlyCreated` would silently miss every user-created workspace. `workspace:ready` fires for *all* opens, so `workspace:created` is only worth it if a distinct "born now" signal matters. |
 | `sync:status` (online/offline/synced) | `{connected, hasSynced, uploading, downloading, …}` | PowerSync status listener — already consumed by `system-status` (`SyncIndicatorInput`) | the chip already derives this; the bus would expose the *transitions* to plugins. |
 | `app:booted` | `{repo}` — **no `workspaceId`** (session-global; see the emit-choke contract) | a **once-per-Repo/session latch** (or an app-mount/initial-ready point) — **not** the raw end of `bootstrapWorkspace` | one-shot per session. `resolveInitialLayout` re-runs `bootstrapWorkspace` on *every* workspace switch, so emitting from there would fire per-switch; gate behind a session latch on the Repo and leave per-workspace readiness to `workspace:ready`. Carrying a `workspaceId` here would be a scope bug — a late/replayed subscriber would get the *initial* workspace's id. |
 | `runtime:swapped` | `{}` | **after** the new runtime is installed — `AppRuntimeProvider` post `repo.setFacetRuntime(next)` (`AppRuntimeProvider.tsx:172`) + `EffectReconciler.reconcile` (`:194`) | **Not** `refreshAppRuntime` (`facets/runtimeEvents.ts`): that fires *refresh-requested* — it bumps the `useOverrides` generation *before* the async `resolveAppRuntime`, and fires even if that resolve fails — so a handler emitting there would still read the **old** facets/effects. Emit only once `next` is live. |
@@ -431,12 +431,17 @@ export interface AppEventBus {
   single-slot gate is the Phase-0 form. `app:booted` (session-global) and
   `sync:status` (connection-global) carry no `workspaceId`, so they don't need
   the gate at all.
-- **Replay timing.** For a sticky event the replay runs synchronously inside
-  `on()` (before it returns), so it can never be reordered behind a future live
-  emit, and a throwing replayed handler is isolated the same way a live one is
-  (logged, not propagated to the `on()` caller / the AppEffect `start`). Benign
-  for `workspace:ready` (no concurrent live emit at subscribe), but pin it so an
-  implementer doesn't make replay a deferred microtask and reintroduce a race.
+- **Replay ordering.** Replay *invokes* the handler synchronously inside `on()`
+  (before it returns), so its invocation precedes any later live emit's. But a
+  handler may return a promise, so its *completion* isn't synchronous — for a
+  high-frequency sticky event (`sync:status`), a live emit right after subscribe
+  can complete before a slow replay, delivering stale-after-fresh. `workspace:ready`
+  is immune (no concurrent live emit at subscribe), so Phase 0 is fine; but a
+  concurrent-emit sticky event needs replay and live emits to share a **per-event
+  serialization** (replay enqueued ahead of live emits for that subscriber) —
+  folded into the sticky-mechanism open question. Isolation holds regardless: a
+  throwing replayed handler is logged, not propagated to `on()` / the AppEffect
+  `start`.
 - **Idempotency is necessary but NOT sufficient.** Because a sticky handler can
   receive the replayed value *and* a later live emit, sticky-event handlers must
   be **idempotent** (auto-create handlers already are — they check existence
