@@ -54,10 +54,15 @@ import {
   projectedRefsForField,
   refCodecKind,
 } from './internals/refProjection'
-import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { runTx, type PowerSyncDb, type TxTimingDiagnostics } from './internals/commitPipeline'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
 import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
+import {
+  createPropertyChildrenMaterializationStats,
+  materializePropertyChildrenForExistingRow,
+  type PropertyChildrenMaterializationStats,
+} from './internals/propertyChildrenProcessor'
 import { kernelDataExtension } from './kernelDataExtension'
 import {
   systemPagesFacet,
@@ -84,12 +89,15 @@ import {
   type BlocksSyncedObserver,
   type BlocksSyncedObserverArgs,
 } from '@/data/internals/syncObserver/observer'
-import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize'
+import type { MaterializeDeps, SyncSnapshot } from '@/data/internals/syncObserver/materialize'
 import type { Materializability } from '@/sync/transform'
 import {
   CLEAR_REPROJECT_REF_MARKER_SQL,
+  PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX,
   RECORD_REPROJECT_REF_MARKER_SQL,
+  RECORD_PROPERTY_CHILDREN_BACKFILL_MARKER_SQL,
   REPROJECT_REF_MARKER_PREFIX,
+  SELECT_PROPERTY_CHILDREN_BACKFILL_MARKERS_SQL,
   SELECT_REPROJECT_REF_MARKERS_SQL,
   RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
@@ -115,6 +123,13 @@ import {
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
 import { KERNEL_PROPERTY_SCHEMAS } from './properties'
+import {
+  propertiesEqual,
+  encodedPropertyValueToChildContent,
+  propertyChildContentToEncodedValue,
+  propertyFieldContent,
+} from './propertyChildren'
+import { keyAtStart } from './orderKey'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -182,11 +197,234 @@ export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => L
 
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
 const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
+const NO_SAME_TX_PROCESSORS: ReadonlyMap<string, AnySameTxProcessor> = new Map()
 
 /** Bounded ring of recent tx entries surfaced via `repo.metrics().txLog`.
  *  Sized to comfortably cover a cold-start window (a few dozen txs) so
  *  diagnostic dumps right after page load don't lose entries. */
 const TX_LOG_CAPACITY = 64
+
+const PROPERTY_CHILDREN_BACKFILL_TARGET_INSERT_ROWS = 190
+const PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY = 2
+const PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_BATCH_SIZE = 5
+const PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_DELAY_MS = 25
+
+const perSecond = (count: number, ms: number): number =>
+  ms <= 0 ? count * 1000 : Math.round((count / ms) * 1000)
+
+const isRetriableStorageWriteError = (err: unknown): boolean =>
+  err instanceof Error && /(short write|disk i\/o error)/i.test(err.message)
+
+const errorForLog = (err: unknown): {name: string; message: string} | string =>
+  err instanceof Error
+    ? {name: err.name, message: err.message}
+    : String(err)
+
+interface StorageEstimateLog {
+  usage?: number
+  quota?: number
+  usageRatio?: number
+  error?: string
+}
+
+const browserStorageEstimateForLog = async (): Promise<StorageEstimateLog | null> => {
+  if (typeof navigator === 'undefined' || typeof navigator.storage?.estimate !== 'function') {
+    return null
+  }
+  try {
+    const estimate = await navigator.storage.estimate()
+    const out: StorageEstimateLog = {}
+    if (typeof estimate.usage === 'number') out.usage = estimate.usage
+    if (typeof estimate.quota === 'number') out.quota = estimate.quota
+    if (
+      typeof estimate.usage === 'number' &&
+      typeof estimate.quota === 'number' &&
+      estimate.quota > 0
+    ) {
+      out.usageRatio = Number((estimate.usage / estimate.quota).toFixed(4))
+    }
+    return out
+  } catch (err) {
+    const error = errorForLog(err)
+    return {error: typeof error === 'string' ? error : error.message}
+  }
+}
+
+const chunkArray = <T,>(items: readonly T[], size: number): T[][] => {
+  const out: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    out.push(items.slice(index, index + size))
+  }
+  return out
+}
+
+const delay = (ms: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, ms))
+
+const countCandidateRefProperties = (
+  candidates: readonly PropertyChildrenBackfillCandidateRef[],
+): number => candidates.reduce((sum, candidate) => sum + candidate.propertyCount, 0)
+
+const propertyChildrenBackfillSchemaClauses = (schemas: readonly AnyPropertySchema[]): string[] =>
+  schemas.map(() => `
+    (
+      prop.key = ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM blocks field
+        WHERE field.workspace_id = b.workspace_id
+          AND field.parent_id = b.id
+          AND field.deleted = 0
+          AND field.reference_target_id = ?
+          AND EXISTS (
+            SELECT 1
+            FROM blocks value
+            WHERE value.workspace_id = field.workspace_id
+              AND value.parent_id = field.id
+              AND value.deleted = 0
+          )
+      )
+    )
+  `)
+
+const propertyChildrenBackfillSchemaParams = (
+  schemas: readonly AnyPropertySchema[],
+): unknown[] => schemas.flatMap(schema => [schema.name, schema.fieldId])
+
+type DbMetricName = 'getAll' | 'getOptional' | 'get' | 'execute' | 'writeTransaction'
+type DbMetricsSnapshot = Readonly<Record<DbMetricName, ReturnType<DbMetrics['snapshot']>[string]>>
+
+interface DbMetricDelta {
+  readonly calls: number
+  readonly ms: number
+}
+
+type DbMetricsDelta = Record<DbMetricName, DbMetricDelta>
+
+interface PropertyChildrenBackfillWriteDiagnostics {
+  readonly stats: PropertyChildrenMaterializationStats
+  readonly dbDelta: DbMetricsDelta
+  readonly txTiming: Readonly<TxTimingDiagnostics> | null
+}
+
+interface RunAndDispatchControls {
+  readonly sameTxProcessors?: ReadonlyMap<string, AnySameTxProcessor>
+}
+
+interface PropertyChildrenFallbackParent {
+  readonly parent: BlockData
+  readonly names: readonly string[]
+}
+
+interface PropertyChildrenBackfillCandidateRef {
+  readonly id: string
+  readonly propertyCount: number
+}
+
+const metricDelta = (
+  before: DbMetricsSnapshot,
+  after: DbMetricsSnapshot,
+  key: DbMetricName,
+): DbMetricDelta => ({
+  calls: after[key].calls - before[key].calls,
+  ms: after[key].totalMs - before[key].totalMs,
+})
+
+const dbMetricsDelta = (
+  before: DbMetricsSnapshot,
+  after: DbMetricsSnapshot,
+): DbMetricsDelta => ({
+  getAll: metricDelta(before, after, 'getAll'),
+  getOptional: metricDelta(before, after, 'getOptional'),
+  get: metricDelta(before, after, 'get'),
+  execute: metricDelta(before, after, 'execute'),
+  writeTransaction: metricDelta(before, after, 'writeTransaction'),
+})
+
+const formatDbMetricDelta = (delta: DbMetricsDelta): string => {
+  const order: DbMetricName[] = ['getAll', 'getOptional', 'get', 'execute', 'writeTransaction']
+  return order
+    .map(name => `${name}:${delta[name].calls}/${Math.round(delta[name].ms)}ms`)
+    .join(',')
+}
+
+const formatSameTxProcessorTimings = (
+  timing: Readonly<TxTimingDiagnostics> | null,
+): string => {
+  if (timing === null || timing.sameTxProcessorRuns.length === 0) return 'none'
+  return timing.sameTxProcessorRuns
+    .map(run => `${run.name}:${run.changedRows}/${Math.round(run.collectMs)}ms/${Math.round(run.applyMs)}ms`)
+    .join('|')
+}
+
+const addMaterializationStats = (
+  target: PropertyChildrenMaterializationStats,
+  source: PropertyChildrenMaterializationStats,
+): void => {
+  for (const key of Object.keys(target) as Array<keyof PropertyChildrenMaterializationStats>) {
+    target[key] += source[key]
+  }
+}
+
+const addDbMetricsDelta = (
+  target: DbMetricsDelta,
+  source: DbMetricsDelta,
+): DbMetricsDelta => {
+  for (const key of Object.keys(target) as DbMetricName[]) {
+    target[key] = {
+      calls: target[key].calls + source[key].calls,
+      ms: target[key].ms + source[key].ms,
+    }
+  }
+  return target
+}
+
+const emptyDbMetricsDelta = (): DbMetricsDelta => ({
+  getAll: {calls: 0, ms: 0},
+  getOptional: {calls: 0, ms: 0},
+  get: {calls: 0, ms: 0},
+  execute: {calls: 0, ms: 0},
+  writeTransaction: {calls: 0, ms: 0},
+})
+
+interface PropertyChildrenBackfillFailureLogArgs {
+  err: unknown
+  workspaceId: string
+  scope: ChangeScope
+  batchCount: number
+  parentBatchSize: number | null
+  targetInsertRows: number
+  retryBatchSize: number | null
+  retryIndex?: number
+  retryCount?: number
+  blocks: number
+  properties: number
+  estimatedInsertRows: number
+  processed: number
+  firstId: string | null
+  lastId: string | null
+  scanMs: number
+  writeMs: number
+  elapsedMs: number
+}
+
+const schemasByScope = (
+  schemas: Iterable<AnyPropertySchema>,
+): Map<ChangeScope, AnyPropertySchema[]> => {
+  const out = new Map<ChangeScope, AnyPropertySchema[]>()
+  for (const schema of schemas) {
+    const bucket = out.get(schema.changeScope) ?? []
+    bucket.push(schema)
+    out.set(schema.changeScope, bucket)
+  }
+  return out
+}
+
+const propertyChildrenBackfillMarkerKey = (
+  workspaceId: string,
+  schema: AnyPropertySchema,
+): string =>
+  `${PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX}${workspaceId}:${schema.fieldId}:${schema.name}`
 
 /** Registry key for the per-workspace undo manager when no workspace is
  *  active (issue #186). Workspace ids are UUIDs, so this sentinel can
@@ -402,6 +640,11 @@ export class Repo {
    *  Tests / migrations that wipe the table call
    *  `__resetReprojectionMarkerCache` to force a reload. */
   private readonly reprojectionMarkers: MarkerStore
+  /** Local completion markers for full `properties_json` ->
+   *  field/value child backfills. Kept separate from sync catch-up:
+   *  accepted sync rows are rechecked by id even when a schema's full
+   *  workspace scan is marked complete. */
+  private propertyChildrenBackfillMarkers: Set<string> | null = null
   /** In-flight reprojection runs whose deferral timer has already fired.
    *  `scheduleReprojection` is fire-and-forget (the cold-start path must
    *  not block on it); `awaitReprojections()` drains this for
@@ -450,6 +693,22 @@ export class Repo {
    *  so the data-integrity plugin's audit runner can reuse the same resolver for
    *  the divergence decrypt-compare (undefined in tests ⇒ cleartext-only). */
   readonly syncObserverDeps?: MaterializeDeps
+  /** Serializes schema-aware `properties_json` → field/value child
+   *  backfills. Startup, runtime schema refresh, and sync arrivals can
+   *  all request catch-up; a single chain prevents duplicate write
+   *  transactions from racing each other. */
+  private propertyChildrenBackfillChain: Promise<void> = Promise.resolve()
+  /** Latest full-workspace property-child backfill request. Runtime
+   *  schema contributions can rebuild several times during cold start;
+   *  only the newest full scan should run after any active work drains.
+   *  Row-targeted sync catch-up bypasses this generation and still
+   *  processes every accepted row set. */
+  private propertyChildrenFullBackfillGeneration = 0
+  /** Workspace whose kernel/plugin/user schema bootstrap has completed.
+   *  Full workspace property-child migrations are intentionally held
+   *  until AppRuntimeProvider has resolved plugins and UserSchemasService
+   *  has published its first user-data bucket. */
+  private propertyChildrenBackfillReadyWorkspaceId: string | null = null
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -647,6 +906,12 @@ export class Repo {
       applyTypesAndSchemas: (types, propertySchemas) => {
         this._types = types
         this._propertySchemas = propertySchemas
+        // Schema set just rebuilt — schedule the property-children backfill
+        // so newly-known schemas migrate `properties_json` into field/value
+        // children. Gated on a ready active workspace inside the schedule.
+        if (this._activeWorkspaceId !== null) {
+          this.schedulePropertyChildrenBackfill(this._activeWorkspaceId)
+        }
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresets: (presets) => { this._valuePresets = presets },
@@ -716,6 +981,13 @@ export class Repo {
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
       onError: options?.onError,
+      // Derived local catch-up: schedule the property-children backfill for
+      // rows that just landed from sync. Relocated from rowEventsTail's
+      // `onRowsAccepted` (D-4 cleanup deleted that machinery); the observer
+      // now fires this once per drain window after `applySyncInvalidation`.
+      onRowsAccepted: snapshots => {
+        this.handleRowsAcceptedForPropertyBackfill(snapshots)
+      },
     })
     return this.syncObserver
   }
@@ -742,6 +1014,11 @@ export class Repo {
    *  if the observer isn't running. */
   async drainSyncWorkspace(workspaceId: string): Promise<void> {
     if (this.syncObserver) await this.syncObserver.drainWorkspace(workspaceId)
+  }
+
+  /** Test-only: wait for queued schema-aware property-child migration work. */
+  async __drainPropertyChildrenBackfillForTesting(): Promise<void> {
+    await this.propertyChildrenBackfillChain
   }
 
   /** Frozen snapshot of internal data-layer counters + timings
@@ -949,7 +1226,30 @@ export class Repo {
   }
 
   setActiveWorkspaceId(workspaceId: string | null): void {
+    if (workspaceId !== this._activeWorkspaceId) {
+      this.propertyChildrenBackfillReadyWorkspaceId = null
+      this.propertyChildrenFullBackfillGeneration += 1
+    }
     this._activeWorkspaceId = workspaceId
+  }
+
+  /** Release the full workspace `properties_json` -> property children
+   *  backfill after the app has resolved kernel/static/dynamic plugin
+   *  schemas and UserSchemasService has published the workspace's
+   *  initial user-data schema bucket. */
+  markPropertyChildrenBackfillSchemasReady(workspaceId: string): void {
+    if (workspaceId !== this._activeWorkspaceId) return
+    this.propertyChildrenBackfillReadyWorkspaceId = workspaceId
+    this.schedulePropertyChildrenBackfill(workspaceId)
+  }
+
+  /** Hold full property-child backfills while the app rebuilds its
+   *  schema sources. The next ready mark will schedule one full scan
+   *  against the then-current merged schema map. */
+  markPropertyChildrenBackfillSchemasLoading(workspaceId: string): void {
+    if (workspaceId !== this._activeWorkspaceId) return
+    this.propertyChildrenBackfillReadyWorkspaceId = null
+    this.propertyChildrenFullBackfillGeneration += 1
   }
 
   /** The active workspace's undo / redo manager — what cmd-Z and the
@@ -989,6 +1289,9 @@ export class Repo {
    *  `References` writes are rejected. */
   setReadOnly(value: boolean): void {
     this.isReadOnly = value
+    if (!value && this._activeWorkspaceId !== null) {
+      this.schedulePropertyChildrenBackfill(this._activeWorkspaceId)
+    }
   }
 
   /** Run a transactional session. Spec §3, §10. */
@@ -1099,6 +1402,7 @@ export class Repo {
   private async _runAndDispatch<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
+    controls: RunAndDispatchControls = {},
     isReplay = false,
   ) {
     const txT0 = performance.now()
@@ -1117,7 +1421,7 @@ export class Repo {
         now: this.now,
         mutators: this.mutators,
         processors: this.processors,
-        sameTxProcessors: this.sameTxProcessors,
+        sameTxProcessors: controls.sameTxProcessors ?? this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact
@@ -1202,7 +1506,7 @@ export class Repo {
       for (const [id, snap] of entry.snapshots) {
         await txImpl.applyRaw(id, snap[direction])
       }
-    }, {scope: entry.scope, description}, true)
+    }, {scope: entry.scope, description}, {}, true)
   }
 
   /** Dynamic dispatch — used by runtime-loaded plugins where the
@@ -1307,6 +1611,631 @@ export class Repo {
       [wsId, jsonPathForProperty(name)],
     )
     return row?.count ?? 0
+  }
+
+  private async propertyChildrenBackfillCandidateRefs(
+    workspaceId: string,
+    schemas: readonly AnyPropertySchema[],
+  ): Promise<PropertyChildrenBackfillCandidateRef[]> {
+    if (schemas.length === 0) return []
+    const clauses = propertyChildrenBackfillSchemaClauses(schemas)
+    const params = propertyChildrenBackfillSchemaParams(schemas)
+    const rows = await this.db.getAll<{id: string; property_count: number}>(
+      `
+        SELECT b.id, COUNT(*) AS property_count
+        FROM blocks b, json_each(b.properties_json) prop
+        WHERE b.workspace_id = ?
+          AND b.deleted = 0
+          AND b.properties_json <> '{}'
+          AND (${clauses.join(' OR ')})
+        GROUP BY b.id
+        ORDER BY b.id
+      `,
+      [workspaceId, ...params],
+    )
+    return rows.map(row => ({id: row.id, propertyCount: row.property_count}))
+  }
+
+  private propertyChildrenBackfillCandidateBatch(args: {
+    candidates: readonly PropertyChildrenBackfillCandidateRef[]
+    startIndex: number
+    parentBatchSize: number | null
+    targetInsertRows: number
+  }): {batch: PropertyChildrenBackfillCandidateRef[]; nextIndex: number} {
+    if (args.parentBatchSize !== null) {
+      const nextIndex = Math.min(args.candidates.length, args.startIndex + args.parentBatchSize)
+      return {
+        batch: args.candidates.slice(args.startIndex, nextIndex),
+        nextIndex,
+      }
+    }
+
+    const out: PropertyChildrenBackfillCandidateRef[] = []
+    let estimatedRows = 0
+    let nextIndex = args.startIndex
+    while (nextIndex < args.candidates.length) {
+      const candidate = args.candidates[nextIndex]!
+      const candidateRows = candidate.propertyCount * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY
+      if (out.length > 0 && estimatedRows + candidateRows > args.targetInsertRows) {
+        break
+      }
+      out.push(candidate)
+      estimatedRows += candidateRows
+      nextIndex += 1
+      if (estimatedRows >= args.targetInsertRows) break
+    }
+    return {batch: out, nextIndex}
+  }
+
+  private buildBulkPropertyChildrenForBackfill(
+    parent: BlockData,
+    names: readonly string[],
+    schemas: ReadonlyMap<string, AnyPropertySchema>,
+    stats: PropertyChildrenMaterializationStats,
+  ): BlockData[] {
+    stats.rowsVisited += 1
+    if (parent.deleted) {
+      stats.rowsSkippedDeleted += 1
+      return []
+    }
+    if (names.length === 0) {
+      stats.rowsWithoutCandidateProperties += 1
+      return []
+    }
+
+    const out: BlockData[] = []
+    for (const name of names) {
+      stats.propertiesConsidered += 1
+      const schema = schemas.get(name)
+      if (!schema) {
+        stats.propertiesSkippedMissingSchema += 1
+        continue
+      }
+      const encoded = Object.prototype.hasOwnProperty.call(parent.properties, name)
+        ? parent.properties[name]
+        : undefined
+      if (encoded === undefined) {
+        stats.propertiesRemoved += 1
+        continue
+      }
+      try {
+        schema.codec.decode(encoded)
+      } catch {
+        stats.propertiesSkippedInvalidValue += 1
+        continue
+      }
+
+      const now = this.now()
+      const fieldRowId = this.newId()
+      const valueRowId = this.newId()
+      const base = {
+        workspaceId: parent.workspaceId,
+        orderKey: keyAtStart(null),
+        properties: {},
+        references: [],
+        createdAt: now,
+        updatedAt: now,
+        userUpdatedAt: now,
+        createdBy: this.user.id,
+        updatedBy: this.user.id,
+        deleted: false,
+      } satisfies Omit<BlockData, 'id' | 'parentId' | 'referenceTargetId' | 'content'>
+
+      out.push({
+        ...base,
+        id: fieldRowId,
+        parentId: parent.id,
+        referenceTargetId: schema.fieldId,
+        content: propertyFieldContent(schema),
+      })
+      out.push({
+        ...base,
+        id: valueRowId,
+        parentId: fieldRowId,
+        referenceTargetId: null,
+        content: encodedPropertyValueToChildContent(schema, encoded),
+      })
+      stats.propertiesMaterialized += 1
+      stats.fieldRowsCreated += 1
+      stats.valueRowsCreated += 1
+    }
+    if (out.length > 0) {
+      stats.bulkParents += 1
+      stats.bulkRowsInserted += out.length
+    }
+    return out
+  }
+
+  private async logPropertyChildrenBackfillWriteFailure(
+    args: PropertyChildrenBackfillFailureLogArgs,
+  ): Promise<void> {
+    const dbMetrics = this.dbMetrics.snapshot()
+    console.warn('[Repo] property children migration write failed', {
+      workspaceId: args.workspaceId,
+      scope: args.scope,
+      batch: args.batchCount,
+      configuredParentBatchSize: args.parentBatchSize,
+      targetInsertRows: args.targetInsertRows,
+      retryBatchSize: args.retryBatchSize,
+      retryIndex: args.retryIndex,
+      retryCount: args.retryCount,
+      blocks: args.blocks,
+      properties: args.properties,
+      estimatedInsertRows: args.estimatedInsertRows,
+      processedIncludingFailedBatch: args.processed,
+      firstId: args.firstId,
+      lastId: args.lastId,
+      scanMs: Math.round(args.scanMs),
+      writeMs: Math.round(args.writeMs),
+      elapsedMs: Math.round(args.elapsedMs),
+      error: errorForLog(args.err),
+      storageEstimate: await browserStorageEstimateForLog(),
+      db: {
+        get: dbMetrics.get,
+        getAll: dbMetrics.getAll,
+        execute: dbMetrics.execute,
+        writeTransaction: dbMetrics.writeTransaction,
+      },
+      slowestTx: this.slowestTx,
+      txLogTail: this.txLog.slice(-5),
+    })
+  }
+
+  /** Materialize field/value child rows for historical rows that still
+   *  only have registered values in `properties_json`. This is the
+   *  migration path for data from before Tana-style fields: the JSON
+   *  projection remains intact, and the child-backed source rows are
+   *  added using the same codec-aware materializer that raw property
+   *  writes use inside normal transactions. */
+  async backfillPropertyChildrenFromProperties(args: {
+    workspaceId?: string
+    propertySchemas?: ReadonlyMap<string, AnyPropertySchema>
+    targetInsertRows?: number
+    batchSize?: number
+    blockIds?: Iterable<string>
+    respectCompletionMarkers?: boolean
+    logProgress?: boolean
+  } = {}): Promise<number> {
+    if (this.isReadOnly) return 0
+    const workspaceId = args.workspaceId ?? this.activeWorkspaceId
+    if (!workspaceId) return 0
+    const propertySchemas = args.propertySchemas ?? this._propertySchemas
+    const blockIds = args.blockIds === undefined
+      ? null
+      : Array.from(new Set(args.blockIds)).filter(id => id.length > 0)
+    if (blockIds !== null) {
+      return this.backfillPropertyChildrenForRows({workspaceId, propertySchemas, blockIds})
+    }
+    const parentBatchSize = args.batchSize === undefined ? null : Math.max(1, args.batchSize)
+    const targetInsertRows = Math.max(
+      1,
+      args.targetInsertRows ?? PROPERTY_CHILDREN_BACKFILL_TARGET_INSERT_ROWS,
+    )
+    const respectCompletionMarkers = args.respectCompletionMarkers ?? true
+    const logProgress = args.logProgress === true
+    const startedAt = performance.now()
+    let loggedStart = false
+    let batchCount = 0
+    let processed = 0
+    let processedProperties = 0
+    let materializedProperties = 0
+
+    const scopePlans: Array<{
+      scope: ChangeScope
+      schemasToScan: AnyPropertySchema[]
+      candidates: PropertyChildrenBackfillCandidateRef[]
+      pendingProperties: number
+      stagingMs: number
+    }> = []
+    for (const [scope, scopeSchemas] of schemasByScope(propertySchemas.values())) {
+      const schemasToScan = respectCompletionMarkers
+        ? await this.schemasPendingPropertyChildrenBackfill(workspaceId, scopeSchemas)
+        : scopeSchemas
+      if (schemasToScan.length === 0) continue
+      const stagingStartedAt = performance.now()
+      const candidates = await this.propertyChildrenBackfillCandidateRefs(
+        workspaceId,
+        schemasToScan,
+      )
+      const stagingMs = performance.now() - stagingStartedAt
+      const pendingProperties = countCandidateRefProperties(candidates)
+      scopePlans.push({scope, schemasToScan, candidates, pendingProperties, stagingMs})
+    }
+    const totalPendingProperties = scopePlans.reduce(
+      (sum, plan) => sum + plan.pendingProperties,
+      0,
+    )
+    const totalStagedCandidates = scopePlans.reduce(
+      (sum, plan) => sum + plan.candidates.length,
+      0,
+    )
+    const totalStagingMs = scopePlans.reduce(
+      (sum, plan) => sum + plan.stagingMs,
+      0,
+    )
+
+    const logStart = () => {
+      if (!logProgress || loggedStart) return
+      loggedStart = true
+      console.info(
+        `[Repo] property children migration started workspace=${workspaceId} ` +
+        `schemas=${propertySchemas.size} parentBatchSize=${parentBatchSize ?? 'row-target'} ` +
+        `targetInsertRows=${targetInsertRows} candidateSource=memory ` +
+        `stagedCandidates=${totalStagedCandidates} pendingProperties=${totalPendingProperties} ` +
+        `stagingMs=${Math.round(totalStagingMs)} transactionPerBatch=true`,
+      )
+    }
+
+    for (const {
+      scope,
+      schemasToScan,
+      candidates: stagedCandidates,
+      pendingProperties: scopePendingProperties,
+    } of scopePlans) {
+      const scopeSchemaMap = new Map(schemasToScan.map(schema => [schema.name, schema]))
+      const writeCandidates = async (
+        batchCandidates: readonly PropertyChildrenBackfillCandidateRef[],
+      ): Promise<PropertyChildrenBackfillWriteDiagnostics> => {
+        const stats = createPropertyChildrenMaterializationStats()
+        const dbBefore = this.dbMetrics.snapshot() as DbMetricsSnapshot
+        const txResult = await this._runAndDispatch(async tx => {
+          const txImpl = tx as TxImpl
+          const candidateIds = batchCandidates.map(candidate => candidate.id)
+          stats.liveParentBatchReads += candidateIds.length > 0 ? 1 : 0
+          const liveParents = await txImpl.liveRowsForKnownIds(workspaceId, candidateIds)
+          const fieldIds = Array.from(new Set(liveParents.flatMap(parent =>
+            Object.keys(parent.properties)
+              .map(name => scopeSchemaMap.get(name)?.fieldId)
+              .filter((fieldId): fieldId is string => fieldId !== undefined),
+          )))
+          stats.existingFieldBatchReads += liveParents.length > 0 && fieldIds.length > 0 ? 1 : 0
+          const existingFieldRows = await txImpl.livePropertyFieldRowsForKnownParents(
+            workspaceId,
+            liveParents.map(parent => parent.id),
+            fieldIds,
+          )
+          const existingTargetsByParent = new Map<string, Set<string>>()
+          for (const fieldRow of existingFieldRows) {
+            if (fieldRow.parentId === null || fieldRow.referenceTargetId === null) continue
+            let targets = existingTargetsByParent.get(fieldRow.parentId)
+            if (!targets) {
+              targets = new Set()
+              existingTargetsByParent.set(fieldRow.parentId, targets)
+            }
+            targets.add(fieldRow.referenceTargetId)
+          }
+
+          const bulkRows: BlockData[] = []
+          const fallbackParents: PropertyChildrenFallbackParent[] = []
+          for (const parent of liveParents) {
+            const names = Object.keys(parent.properties).filter(name => scopeSchemaMap.has(name))
+            const existingTargets = existingTargetsByParent.get(parent.id)
+            const needsFallback = existingTargets !== undefined && names.some(name => {
+              const schema = scopeSchemaMap.get(name)
+              return schema !== undefined && existingTargets.has(schema.fieldId)
+            })
+            if (needsFallback) {
+              stats.fallbackParents += 1
+              fallbackParents.push({parent, names})
+            } else {
+              bulkRows.push(...this.buildBulkPropertyChildrenForBackfill(parent, names, scopeSchemaMap, stats))
+            }
+          }
+
+          if (bulkRows.length > 0) {
+            stats.bulkInsertStatements += await txImpl.insertKnownValidRowsForBackfill(bulkRows)
+          }
+          for (const fallback of fallbackParents) {
+            await materializePropertyChildrenForExistingRow(
+              tx,
+              fallback.parent,
+              scopeSchemaMap,
+              fallback.names,
+              stats,
+            )
+          }
+        }, {
+          scope,
+          description: 'backfill property children from properties_json',
+        }, {
+          sameTxProcessors: NO_SAME_TX_PROCESSORS,
+        })
+        const dbAfter = this.dbMetrics.snapshot() as DbMetricsSnapshot
+        return {
+          stats,
+          dbDelta: dbMetricsDelta(dbBefore, dbAfter),
+          txTiming: txResult.timing,
+        }
+      }
+      const writeRetryChunks = async (
+        retryCandidates: readonly PropertyChildrenBackfillCandidateRef[],
+        retryBatchSize: number,
+        scanMsForBatch: number,
+        retryPath: readonly number[] = [],
+      ): Promise<PropertyChildrenBackfillWriteDiagnostics> => {
+        const retryChunks = chunkArray(retryCandidates, retryBatchSize)
+        const retryStats = createPropertyChildrenMaterializationStats()
+        const retryDbDelta = emptyDbMetricsDelta()
+        let retryTxTiming: Readonly<TxTimingDiagnostics> | null = null
+        for (let retryIndex = 0; retryIndex < retryChunks.length; retryIndex += 1) {
+          const chunk = retryChunks[retryIndex]!
+          const retryStartedAt = performance.now()
+          try {
+            const chunkDiagnostics = await writeCandidates(chunk)
+            addMaterializationStats(retryStats, chunkDiagnostics.stats)
+            addDbMetricsDelta(retryDbDelta, chunkDiagnostics.dbDelta)
+            retryTxTiming = chunkDiagnostics.txTiming
+            if (logProgress) {
+              const retryLabel = [batchCount, ...retryPath, retryIndex + 1].join('.')
+              console.info(
+                `[Repo] property children migration retry ${retryLabel}/${retryChunks.length} ` +
+                `workspace=${workspaceId} scope=${scope} blocks=${chunk.length} ` +
+                `properties=${countCandidateRefProperties(chunk)} ` +
+                `writeMs=${Math.round(performance.now() - retryStartedAt)}`,
+              )
+            }
+          } catch (retryErr) {
+            const nextRetryBatchSize = Math.max(
+              1,
+              Math.min(PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_BATCH_SIZE, Math.floor(chunk.length / 2)),
+            )
+            const shouldRetryChunk =
+              isRetriableStorageWriteError(retryErr) &&
+              nextRetryBatchSize < chunk.length
+            const retryPropertyCount = countCandidateRefProperties(chunk)
+            await this.logPropertyChildrenBackfillWriteFailure({
+              err: retryErr,
+              workspaceId,
+              scope,
+              batchCount,
+              parentBatchSize,
+              targetInsertRows,
+              retryBatchSize: shouldRetryChunk ? nextRetryBatchSize : null,
+              retryIndex: retryIndex + 1,
+              retryCount: retryChunks.length,
+              blocks: chunk.length,
+              properties: retryPropertyCount,
+              estimatedInsertRows: retryPropertyCount * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY,
+              processed,
+              firstId: chunk[0]?.id ?? null,
+              lastId: chunk[chunk.length - 1]?.id ?? null,
+              scanMs: scanMsForBatch,
+              writeMs: performance.now() - retryStartedAt,
+              elapsedMs: performance.now() - startedAt,
+            })
+            if (!shouldRetryChunk) throw retryErr
+            await delay(PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_DELAY_MS)
+            const nestedDiagnostics = await writeRetryChunks(
+              chunk,
+              nextRetryBatchSize,
+              scanMsForBatch,
+              [...retryPath, retryIndex + 1],
+            )
+            addMaterializationStats(retryStats, nestedDiagnostics.stats)
+            addDbMetricsDelta(retryDbDelta, nestedDiagnostics.dbDelta)
+            retryTxTiming = nestedDiagnostics.txTiming
+          }
+        }
+        return {
+          stats: retryStats,
+          dbDelta: retryDbDelta,
+          txTiming: retryTxTiming,
+        }
+      }
+      let candidateIndex = 0
+      for (;;) {
+        const scanStartedAt = performance.now()
+        const {
+          batch: candidates,
+          nextIndex,
+        } = this.propertyChildrenBackfillCandidateBatch({
+          candidates: stagedCandidates,
+          startIndex: candidateIndex,
+          parentBatchSize,
+          targetInsertRows,
+        })
+        const scanMs = performance.now() - scanStartedAt
+        if (candidates.length === 0) break
+        candidateIndex = nextIndex
+        const lastId = candidates[candidates.length - 1]!.id
+        processed += candidates.length
+        batchCount += 1
+        logStart()
+
+        const propertyCount = countCandidateRefProperties(candidates)
+        const estimatedInsertRows = propertyCount * PROPERTY_CHILDREN_BACKFILL_ROWS_PER_PROPERTY
+        const writeStartedAt = performance.now()
+        let writeMode = 'single'
+        let writeDiagnostics: PropertyChildrenBackfillWriteDiagnostics
+        try {
+          writeDiagnostics = await writeCandidates(candidates)
+        } catch (err) {
+          const writeMs = performance.now() - writeStartedAt
+          const retryBatchSize = Math.max(
+            1,
+            Math.min(PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_BATCH_SIZE, Math.floor(candidates.length / 2)),
+          )
+          const shouldRetryStorageWrite = isRetriableStorageWriteError(err) && retryBatchSize < candidates.length
+          await this.logPropertyChildrenBackfillWriteFailure({
+            err,
+            workspaceId,
+            scope,
+            batchCount,
+            parentBatchSize,
+            targetInsertRows,
+            retryBatchSize: shouldRetryStorageWrite ? retryBatchSize : null,
+            blocks: candidates.length,
+            properties: propertyCount,
+            estimatedInsertRows,
+            processed,
+            firstId: candidates[0]?.id ?? null,
+            lastId,
+            scanMs,
+            writeMs,
+            elapsedMs: performance.now() - startedAt,
+          })
+          if (!shouldRetryStorageWrite) throw err
+
+          writeMode = 'storage-write-retry'
+          await delay(PROPERTY_CHILDREN_STORAGE_WRITE_RETRY_DELAY_MS)
+          writeDiagnostics = await writeRetryChunks(candidates, retryBatchSize, scanMs)
+        }
+        const writeMs = performance.now() - writeStartedAt
+        const batchMs = performance.now() - scanStartedAt
+        processedProperties += propertyCount
+        materializedProperties += writeDiagnostics.stats.propertiesMaterialized
+        const elapsedMs = performance.now() - startedAt
+        const remainingProperties = Math.max(0, totalPendingProperties - processedProperties)
+        const cumulativePropertiesPerSecond = perSecond(processedProperties, elapsedMs)
+        const etaMs = cumulativePropertiesPerSecond > 0
+          ? Math.round((remainingProperties / cumulativePropertiesPerSecond) * 1000)
+          : null
+        if (logProgress) {
+          const stats = writeDiagnostics.stats
+          const dbDelta = writeDiagnostics.dbDelta
+          const txTiming = writeDiagnostics.txTiming
+          console.info(
+            `[Repo] property children migration batch ${batchCount} ` +
+            `workspace=${workspaceId} scope=${scope} blocks=${candidates.length} ` +
+            `properties=${propertyCount} estimatedInsertRows=${estimatedInsertRows} writeMode=${writeMode} ` +
+            `bulkParents=${stats.bulkParents} fallbackParents=${stats.fallbackParents} ` +
+            `createdFieldRows=${stats.fieldRowsCreated} createdValueRows=${stats.valueRowsCreated} ` +
+            `existingFieldRows=${stats.existingFieldRows} existingValueRows=${stats.existingValueRows} ` +
+            `liveParentBatchReads=${stats.liveParentBatchReads} existingFieldBatchReads=${stats.existingFieldBatchReads} ` +
+            `parentChildrenReads=${stats.parentChildrenReads} valueChildrenReads=${stats.valueChildrenReads} ` +
+            `bulkRowsInserted=${stats.bulkRowsInserted} bulkInsertStatements=${stats.bulkInsertStatements} ` +
+            `deletedRows=${stats.rowsDeleted} skippedInvalid=${stats.propertiesSkippedInvalidValue} ` +
+            `txUserFnMs=${Math.round(txTiming?.userFnMs ?? 0)} txSameTxMs=${Math.round(txTiming?.sameTxMs ?? 0)} ` +
+            `txSameTxRows=${txTiming?.sameTxChangedRows ?? 0} txSnapshots=${txTiming?.snapshotCount ?? 0} ` +
+            `sameTxProcessors=${formatSameTxProcessorTimings(txTiming)} ` +
+            `dbDelta=${formatDbMetricDelta(dbDelta)} ` +
+            `processed=${processed} lastId=${lastId} ` +
+            `processedProperties=${processedProperties} materializedProperties=${materializedProperties} ` +
+            `pendingProperties=${totalPendingProperties} scopePendingProperties=${scopePendingProperties} ` +
+            `remainingProperties=${remainingProperties} elapsedMs=${Math.round(elapsedMs)} ` +
+            `cumulativePropertiesPerSecond=${cumulativePropertiesPerSecond} etaMs=${etaMs ?? 'unknown'} ` +
+            `scanMs=${Math.round(scanMs)} writeMs=${Math.round(writeMs)} ` +
+            `batchMs=${Math.round(batchMs)} candidatesPerSecond=${perSecond(candidates.length, batchMs)} ` +
+            `propertiesPerSecond=${perSecond(propertyCount, batchMs)}`,
+          )
+        }
+      }
+      if (respectCompletionMarkers) {
+        await this.markCompletedPropertyChildrenBackfills(workspaceId, schemasToScan)
+      }
+    }
+    if (logProgress && loggedStart) {
+      const totalMs = performance.now() - startedAt
+      console.info(
+        `[Repo] property children migration complete workspace=${workspaceId} ` +
+        `processed=${processed} processedProperties=${processedProperties} ` +
+        `materializedProperties=${materializedProperties} pendingProperties=${totalPendingProperties} ` +
+        `batches=${batchCount} ms=${Math.round(totalMs)} ` +
+        `candidatesPerSecond=${perSecond(processed, totalMs)} ` +
+        `cumulativePropertiesPerSecond=${perSecond(processedProperties, totalMs)}`,
+      )
+    }
+    return processed
+  }
+
+  private async backfillPropertyChildrenForRows(args: {
+    workspaceId: string
+    propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+    blockIds: readonly string[]
+  }): Promise<number> {
+    if (args.blockIds.length === 0) return 0
+    let processed = 0
+    for (const [scope, scopeSchemas] of schemasByScope(args.propertySchemas.values())) {
+      const scopeSchemaMap = new Map(scopeSchemas.map(schema => [schema.name, schema]))
+      await this.tx(async tx => {
+        for (const id of args.blockIds) {
+          const live = await tx.get(id)
+          if (live === null || live.deleted || live.workspaceId !== args.workspaceId) continue
+          const names = Object.keys(live.properties).filter(name => scopeSchemaMap.has(name))
+          if (names.length === 0) continue
+          await materializePropertyChildrenForExistingRow(tx, live, scopeSchemaMap, names)
+          processed += 1
+        }
+      }, {
+        scope,
+        description: 'backfill property children for synced rows',
+      })
+    }
+    return processed
+  }
+
+  /** Rebuild parent `properties_json` projections for children tagged
+   *  with a stable field id. Used when a field schema is renamed/reloaded:
+   *  child rows keep stable identity, while the parent cache key follows
+   *  the schema's current `name`. */
+  async reprojectPropertyValueChildren(args: {
+    fieldId: string
+    schema: AnyPropertySchema
+    oldName?: string
+    workspaceId?: string
+  }): Promise<void> {
+    if (this.isReadOnly) return
+    const workspaceId = args.workspaceId ?? this.activeWorkspaceId
+    if (!workspaceId) return
+    const rows = await this.db.getAll<{id: string}>(
+      `
+        SELECT DISTINCT parent.id AS id
+        FROM blocks child
+        JOIN blocks parent ON parent.id = child.parent_id
+        WHERE child.workspace_id = ?
+          AND parent.workspace_id = child.workspace_id
+          AND child.deleted = 0
+          AND parent.deleted = 0
+          AND child.reference_target_id = ?
+      `,
+      [workspaceId, args.fieldId],
+    )
+    if (rows.length === 0) return
+
+    await this.tx(async tx => {
+      for (const row of rows) {
+        const parent = await tx.get(row.id)
+        if (parent === null || parent.deleted) continue
+        const children = await tx.childrenOf(parent.id, undefined, {includePropertyChildren: true})
+        let projected: unknown = undefined
+        let hasProjection = false
+        for (const child of children) {
+          if (child.referenceTargetId !== args.fieldId) continue
+          try {
+            const values = await tx.childrenOf(child.id, undefined, {includePropertyChildren: true})
+            for (const value of values) {
+              try {
+                projected = propertyChildContentToEncodedValue(args.schema, value.content)
+                hasProjection = true
+                break
+              } catch {
+                // Try the next value child below.
+              }
+            }
+            if (hasProjection) break
+          } catch {
+            // If all children for this field are currently invalid, the
+            // cache projection below is removed instead of leaving stale
+            // data under the old field name.
+          }
+        }
+
+        const nextProperties = {...parent.properties}
+        if (args.oldName && args.oldName !== args.schema.name) {
+          delete nextProperties[args.oldName]
+        }
+        if (hasProjection) {
+          nextProperties[args.schema.name] = projected
+        } else {
+          delete nextProperties[args.schema.name]
+        }
+        if (propertiesEqual(parent.properties, nextProperties)) continue
+        await tx.update(parent.id, {properties: nextProperties}, {skipMetadata: true})
+      }
+    }, {
+      scope: ChangeScope.BlockDefault,
+      description: `reproject property children for ${args.schema.name}`,
+    })
   }
 
   /** Read-only handle on the currently-installed FacetRuntime. Used by
@@ -1682,6 +2611,131 @@ export class Repo {
       this.reprojectRefTypedProperties(names, schemas, workspaceId),
     )
   }
+
+  private schedulePropertyChildrenBackfill(workspaceId: string): void {
+    if (this.isReadOnly || this._propertySchemas.size === 0) return
+    if (this.propertyChildrenBackfillReadyWorkspaceId !== workspaceId) {
+      return
+    }
+    const fullGeneration = ++this.propertyChildrenFullBackfillGeneration
+    this.enqueuePropertyChildrenBackfill({
+      workspaceId,
+      getPropertySchemas: () => this._propertySchemas,
+      fullGeneration,
+      logProgress: true,
+      warningPrefix: '[Repo] property children migration failed',
+    })
+  }
+
+  private schedulePropertyChildrenBackfillForRows(
+    workspaceId: string,
+    rowIds: readonly string[],
+  ): void {
+    if (this.isReadOnly || this._propertySchemas.size === 0 || rowIds.length === 0) return
+    this.enqueuePropertyChildrenBackfill({
+      workspaceId,
+      propertySchemas: this._propertySchemas,
+      blockIds: rowIds,
+      warningPrefix: '[Repo] property children sync backfill failed',
+    })
+  }
+
+  private enqueuePropertyChildrenBackfill(args: {
+    workspaceId: string
+    propertySchemas?: ReadonlyMap<string, AnyPropertySchema>
+    getPropertySchemas?: () => ReadonlyMap<string, AnyPropertySchema>
+    fullGeneration?: number
+    blockIds?: readonly string[]
+    logProgress?: boolean
+    warningPrefix: string
+  }): void {
+    const next = this.propertyChildrenBackfillChain
+      .catch(() => {})
+      .then(async () => {
+        if (
+          args.fullGeneration !== undefined &&
+          args.fullGeneration !== this.propertyChildrenFullBackfillGeneration
+        ) {
+          if (args.logProgress === true) {
+            console.info(
+              `[Repo] property children migration skipped stale request ` +
+              `workspace=${args.workspaceId} generation=${args.fullGeneration} ` +
+              `latestGeneration=${this.propertyChildrenFullBackfillGeneration}`,
+            )
+          }
+          return
+        }
+        const propertySchemas = args.getPropertySchemas?.() ?? args.propertySchemas
+        if (propertySchemas === undefined || propertySchemas.size === 0) return
+        await this.backfillPropertyChildrenFromProperties({
+          workspaceId: args.workspaceId,
+          propertySchemas,
+          logProgress: args.logProgress,
+          ...(args.blockIds ? {blockIds: args.blockIds} : {}),
+        })
+      })
+    this.propertyChildrenBackfillChain = next
+    void next.catch(err => {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.warn(`${args.warningPrefix}: ${reason}`)
+    })
+  }
+
+  private handleRowsAcceptedForPropertyBackfill(
+    snapshots: ReadonlyMap<string, SyncSnapshot>,
+  ): void {
+    // Derived local catch-up after a sync drain window (relocated from
+    // rowEventsTail's onRowsAccepted). `snapshots` carries the applied
+    // (after set) and deleted (after null) rows; backfill only the rows
+    // that landed. The backfill query is workspace-scoped, so passing the
+    // full id list per workspace is safe even across a mixed window.
+    const workspaceIds = new Set<string>()
+    const rowIds: string[] = []
+    for (const [id, snap] of snapshots) {
+      if (!snap.after) continue
+      rowIds.push(id)
+      workspaceIds.add(snap.after.workspaceId)
+    }
+    if (rowIds.length === 0) return
+    for (const workspaceId of workspaceIds) {
+      this.schedulePropertyChildrenBackfillForRows(workspaceId, rowIds)
+    }
+  }
+
+  private async loadPropertyChildrenBackfillMarkers(): Promise<Set<string>> {
+    if (this.propertyChildrenBackfillMarkers !== null) {
+      return this.propertyChildrenBackfillMarkers
+    }
+    const rows = await this.db.getAll<{key: string}>(SELECT_PROPERTY_CHILDREN_BACKFILL_MARKERS_SQL)
+    const set = new Set(rows.map(row => row.key))
+    this.propertyChildrenBackfillMarkers = set
+    return set
+  }
+
+  private async schemasPendingPropertyChildrenBackfill(
+    workspaceId: string,
+    schemas: readonly AnyPropertySchema[],
+  ): Promise<AnyPropertySchema[]> {
+    const markers = await this.loadPropertyChildrenBackfillMarkers()
+    return schemas.filter(schema => !markers.has(propertyChildrenBackfillMarkerKey(workspaceId, schema)))
+  }
+
+  private async setPropertyChildrenBackfillMarker(key: string): Promise<void> {
+    await this.db.execute(RECORD_PROPERTY_CHILDREN_BACKFILL_MARKER_SQL, [key])
+    this.propertyChildrenBackfillMarkers?.add(key)
+  }
+
+  private async markCompletedPropertyChildrenBackfills(
+    workspaceId: string,
+    schemas: readonly AnyPropertySchema[],
+  ): Promise<void> {
+    for (const schema of schemas) {
+      const [candidate] = await this.propertyChildrenBackfillCandidateRefs(workspaceId, [schema])
+      if (candidate !== undefined) continue
+      await this.setPropertyChildrenBackfillMarker(propertyChildrenBackfillMarkerKey(workspaceId, schema))
+    }
+  }
+
 
   /** Test escape hatch — drop the in-memory marker mirror so the next
    *  reprojection re-reads from `client_schema_state`. Used by tests

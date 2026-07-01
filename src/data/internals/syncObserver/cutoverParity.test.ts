@@ -40,6 +40,7 @@ const richBlock = (overrides: Partial<BlockData> = {}): BlockData => ({
   id: 'b1',
   workspaceId: 'ws-plain',
   parentId: 'parent-1',
+  referenceTargetId: null,
   orderKey: 'a0',
   content: 'searchable content',
   properties: { alias: ['Foo', 'Bar'], types: ['note', 'task'] },

@@ -122,8 +122,9 @@ export interface Tx {
 
   // ──── Data-field updates (non-structural) ────
 
-  /** Update non-structural data fields only (`content` / `references` /
-   *  `properties`). Structural mutations have their own primitives. The
+  /** Update non-structural data fields only (`content` /
+   *  `referenceTargetId` / `references` / `properties`). Structural
+   *  mutations have their own primitives. The
    *  patch type excludes `parentId`, `orderKey`, `workspaceId`, `deleted`,
    *  and metadata fields at the type level. */
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): Promise<void>
@@ -169,7 +170,10 @@ export interface Tx {
   // ──── Within-tx tree primitives ────
 
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
-   *  `deleted = 0`. Reads SQL via the writeTransaction.
+   *  `deleted = 0`. Property-value children are ordinary children on
+   *  this surface by default. Callers with a domain-specific "content
+   *  children only" contract can pass `{includePropertyChildren:false}`.
+   *  Reads SQL via the writeTransaction.
    *  Pass `null` to enumerate workspace-root rows (rows with
    *  `parent_id IS NULL`); the result is scoped to a workspace by
    *  one of three sources, in priority order:
@@ -182,7 +186,11 @@ export interface Tx {
    *       computation.
    *  When `parentId !== null`, `workspaceId` is ignored — the parent
    *  row already constrains the query. */
-  childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
+  childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    options?: {includePropertyChildren?: boolean},
+  ): Promise<BlockData[]>
 
   /** Existence probe: does `parentId` have any child row? Live-only by
    *  default (`SELECT 1 … WHERE parent_id = ? AND deleted = 0 LIMIT 1`,

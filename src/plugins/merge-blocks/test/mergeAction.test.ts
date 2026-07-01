@@ -19,7 +19,7 @@ import type { BlockShortcutDependencies } from '@/shortcuts/types.js'
 const openDialogMock = vi.mocked(openDialog)
 
 const blockData = (o: Partial<BlockData> = {}): BlockData => ({
-  id: 'src', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: '',
+  id: 'src', workspaceId: 'ws-1', parentId: null, referenceTargetId: null, orderKey: 'a0', content: '',
   properties: {}, references: [], createdAt: 1, updatedAt: 1, userUpdatedAt: 1, createdBy: 'u',
   updatedBy: 'u', deleted: false, ...o,
 })

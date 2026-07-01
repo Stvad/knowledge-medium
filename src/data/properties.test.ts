@@ -14,6 +14,7 @@ const blockData = (types: readonly string[]): BlockData => ({
   id: 'b1',
   workspaceId: 'ws-1',
   parentId: null,
+  referenceTargetId: null,
   orderKey: 'b1',
   content: '',
   properties: {[typesProp.name]: typesProp.codec.encode(types)},

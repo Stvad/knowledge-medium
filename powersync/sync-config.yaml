@@ -61,6 +61,7 @@ streams:
           blocks_synced.id,
           blocks_synced.workspace_id,
           blocks_synced.parent_id,
+          blocks_synced.reference_target_id,
           blocks_synced.order_key,
           blocks_synced.content,
           blocks_synced.properties_json,

@@ -231,6 +231,7 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     id: 'b1',
     workspaceId: WS,
     parentId: null,
+    referenceTargetId: null,
     orderKey: 'a0',
     content: 'hello',
     properties: {},
@@ -262,10 +263,13 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     meta: BlockData,
     wire: { content: string; properties_json: string; references_json: string },
   ): Promise<void> => {
+    // Derive indices from BLOCK_STORAGE_COLUMNS so an added column (e.g.
+    // reference_target_id) can't misalign the per-column ciphertext overlay.
+    const colIndex = (name: string) => BLOCK_STORAGE_COLUMNS.findIndex(c => c.name === name)
     const params = blockToRowParams(meta)
-    params[4] = wire.content
-    params[5] = wire.properties_json
-    params[6] = wire.references_json
+    params[colIndex('content')] = wire.content
+    params[colIndex('properties_json')] = wire.properties_json
+    params[colIndex('references_json')] = wire.references_json
     await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params)
   }
 
@@ -442,6 +446,7 @@ describe('runConsistencyAudit — full (on-demand) deep checks', () => {
     id: 'b',
     workspaceId: WS,
     parentId: null,
+    referenceTargetId: null,
     orderKey: 'a0',
     content: '',
     properties: {},

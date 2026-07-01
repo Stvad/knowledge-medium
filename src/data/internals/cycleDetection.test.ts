@@ -76,6 +76,7 @@ const stage = (o: {
     id: o.id,
     workspaceId: o.workspaceId ?? 'ws-1',
     parentId: o.parentId ?? null,
+    referenceTargetId: null,
     orderKey: o.orderKey ?? 'a0',
     content: o.content ?? '',
     properties: {},

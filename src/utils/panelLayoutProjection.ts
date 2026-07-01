@@ -39,20 +39,30 @@ interface ReconciliationPlan {
 export const isPanelStackRow = (row: Pick<BlockData, 'properties'>): boolean =>
   hasBlockType(row, PANEL_STACK_TYPE)
 
-export const panelBlockId = (row: BlockData): string | undefined => {
+export const panelBlockId = (row: Pick<BlockData, 'properties'>): string | undefined => {
   const stored = row.properties[topLevelBlockIdProp.name]
   if (stored === undefined) return undefined
   return topLevelBlockIdProp.codec.decode(stored)
 }
 
+export const isPanelLayoutStorageRow = (
+  row: Pick<BlockData, 'referenceTargetId' | 'properties'>,
+): boolean =>
+  (row.referenceTargetId === null || row.referenceTargetId === undefined) &&
+  (isPanelStackRow(row) || panelBlockId(row) !== undefined)
+
 export const panelBlockIds = (rows: readonly BlockData[]): string[] =>
-  rows.map(panelBlockId).filter((id): id is string => Boolean(id))
+  rows
+    .filter(isPanelLayoutStorageRow)
+    .map(panelBlockId)
+    .filter((id): id is string => Boolean(id))
 
 /** Group rows by `parentId`, preserving row order within each parent.
  *  Rows without a parent are skipped (we never want an `undefined` bucket). */
 const buildChildrenByParent = (rows: readonly BlockData[]): Map<string, BlockData[]> => {
   const childrenByParent = new Map<string, BlockData[]>()
   for (const row of rows) {
+    if (!isPanelLayoutStorageRow(row)) continue
     if (!row.parentId) continue
     const children = childrenByParent.get(row.parentId) ?? []
     children.push(row)
@@ -128,6 +138,22 @@ const loadSubtreeRowsInTx = async (
   }
   await visit(root.id)
   return rows
+}
+
+const deleteLayoutRowSubtreeInTx = async (
+  tx: Tx,
+  row: BlockData,
+): Promise<void> => {
+  const stack = [row.id]
+  const seen = new Set<string>()
+  while (stack.length > 0) {
+    const id = stack.pop()!
+    if (seen.has(id)) continue
+    seen.add(id)
+    const children = await tx.childrenOf(id, row.workspaceId)
+    for (const child of children) stack.push(child.id)
+    await tx.delete(id)
+  }
 }
 
 const lcsMatches = (
@@ -258,7 +284,7 @@ export const insertPanelRow = async (
     const parent = await tx.get(layoutSessionBlock.id)
     if (!parent) throw new Error(`insertPanelRow: layout session block ${layoutSessionBlock.id} not found`)
 
-    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {includePropertyChildren: false})
     const sourceIndex = options.afterPanelId
       ? siblings.findIndex(row => row.id === options.afterPanelId)
       : -1
@@ -289,7 +315,7 @@ const insertPanelAtStartOfStackInTx = async (
     blockId: string
   },
 ): Promise<string> => {
-  const children = await tx.childrenOf(args.stackId, args.workspaceId)
+  const children = await tx.childrenOf(args.stackId, args.workspaceId, {includePropertyChildren: false})
   const orderKey = keyBetween(null, children[0]?.orderKey ?? null)
   return createPanelRowInTx(repo, tx, {
     workspaceId: args.workspaceId,
@@ -323,7 +349,7 @@ export const insertSidebarStackedPanel = async (
       }
 
       if (source?.parentId === layoutSessionBlock.id) {
-        const topLevelSiblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+        const topLevelSiblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {includePropertyChildren: false})
         const sourceIndex = topLevelSiblings.findIndex(row => row.id === source.id)
         const rightSibling = sourceIndex >= 0 ? topLevelSiblings[sourceIndex + 1] : undefined
         if (rightSibling && isPanelStackRow(rightSibling)) {
@@ -358,7 +384,7 @@ export const insertSidebarStackedPanel = async (
       }
     }
 
-    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId, {includePropertyChildren: false})
     const previous = siblings.at(-1)
     const stackId = await createPanelStackRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,
@@ -388,11 +414,11 @@ export const deletePanelRow = async (
       : row.parentId
     const layoutSession = layoutSessionId ? await tx.get(layoutSessionId) : null
     const stackSiblingCount = parent && isPanelStackRow(parent)
-      ? (await tx.childrenOf(parent.id, parent.workspaceId)).length
+      ? (await tx.childrenOf(parent.id, parent.workspaceId, {includePropertyChildren: false})).length
       : 0
-    await tx.delete(panelId)
+    await deleteLayoutRowSubtreeInTx(tx, row)
     if (parent && isPanelStackRow(parent) && stackSiblingCount <= 1) {
-      await tx.delete(parent.id)
+      await deleteLayoutRowSubtreeInTx(tx, parent)
     }
     if (layoutSession?.properties[activePanelIdProp.name] === panelId) {
       const rows = await loadSubtreeRowsInTx(tx, layoutSession)
@@ -421,16 +447,16 @@ export const reconcilePanelRows = async (
     if (sameLayoutSlots(currentLayoutSlots, targetSlots)) return
 
     const currentSlots = currentRows
-      .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
+      .filter(row => row.id !== layoutSessionBlock.id && isPanelLayoutStorageRow(row) && !isPanelStackRow(row))
       .map(row => ({row, blockId: panelBlockId(row)}))
     const stackRowsToDelete = currentRows
-      .filter(row => row.id !== layoutSessionBlock.id && isPanelStackRow(row))
+      .filter(row => row.id !== layoutSessionBlock.id && isPanelLayoutStorageRow(row) && isPanelStackRow(row))
 
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
 
     for (const slot of rowsToDelete) {
       panelHistory.clear(slot.row.id)
-      await tx.delete(slot.row.id)
+      await deleteLayoutRowSubtreeInTx(tx, slot.row)
     }
 
     let targetLeafIndex = 0
@@ -481,7 +507,7 @@ export const reconcilePanelRows = async (
     await materializeSlots(targetSlots, layoutSessionBlock.id)
 
     for (const stackRow of stackRowsToDelete) {
-      await tx.delete(stackRow.id)
+      await deleteLayoutRowSubtreeInTx(tx, stackRow)
     }
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 }

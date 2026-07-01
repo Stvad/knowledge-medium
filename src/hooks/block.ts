@@ -33,9 +33,20 @@ import {
   useRef,
   useSyncExternalStore,
 } from 'react'
-import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
+import type {
+  AnyPropertyEditorOverride,
+  AnyPropertySchema,
+  BlockData,
+  Handle,
+  PropertySchema,
+  TypedBlockQuery,
+} from '@/data/api'
 import { Block } from '../data/block'
 import { useRepo } from '@/context/repo.js'
+import { propertyEditorOverridesFacet } from '@/data/facets'
+import { findSchemaByFieldId, getPropertyFieldTargetId } from '@/data/propertyChildren'
+import { useAppRuntime } from '@/extensions/runtimeContext'
+import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
@@ -286,15 +297,35 @@ export const usePropertyValue = useProperty
 
 const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
 
+export interface UseChildIdsOptions {
+  /** Hidden property children are omitted by default as a presentation
+   *  policy. Pass true for tooling/debug views that want the full
+   *  storage tree. */
+  includeHiddenPropertyChildren?: boolean
+}
+
+const isHiddenPropertyChild = (
+  data: BlockData | undefined,
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
+): boolean => {
+  const fieldId = getPropertyFieldTargetId(data)
+  if (!fieldId) return false
+  const schema = findSchemaByFieldId(schemas, fieldId)
+  if (!schema) return false
+  return uis.get(schema.name)?.hidden === true
+}
+
 /** Reactive child-id list (in `(orderKey, id)` order). Returns `[]`
- *  while the handle is loading or for a leaf block.
+ *  while the handle is loading or for a leaf block. Field rows are
+ *  included as normal children except for property fields whose UI
+ *  declaration opts into `hidden: true`.
  *
  *  Backed by `repo.childIds(id)` rather than `repo.children(id)` —
  *  declares only a `parent-edge` dep, so unrelated child mutations
- *  (focus moves on a UI-state child, content edits, etc.) don't
- *  invalidate the handle at all. The list-shape consumers
- *  (`BlockChildren`, `LayoutRenderer`'s panel iteration) are the hot
- *  path that motivated the split.
+ *  (content edits, focus moves, etc.) don't invalidate the handle at
+ *  all. UI-hidden field filtering reads the child snapshots that the
+ *  hydrating query already primed into the cache.
  *
  *  Opts into `{hydrate: true}` so the loader runs the full
  *  CHILDREN_SQL and hydrates each child row into the cache. Without
@@ -302,24 +333,44 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *  pay its own `block.load()` round-trip and the page would visibly
  *  pop in block-by-block. The lean variant on `repo.childIds` is for
  *  non-rendering callers (counting / id-only scans). */
-export const useChildIds = (block: Block): string[] =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
-    selector: ids => ids ?? EMPTY_STRING_ARRAY,
-  }) as string[]
+export const useChildIds = (
+  block: Block,
+  options: UseChildIdsOptions = {},
+): string[] => {
+  const runtime = useAppRuntime()
+  const schemas = usePropertySchemas()
+  const uis = runtime.read(propertyEditorOverridesFacet)
+  const includeHiddenPropertyChildren = options.includeHiddenPropertyChildren === true
 
-/** Reactive child Block facades. Same structural-equality bail-out
- *  story as `useChildIds` — `repo.block(id)` is identity-stable, so the
- *  Block[] returned compares equal across re-fires when the id list is
- *  unchanged, and `useHandle` hands back the previously-committed
- *  reference. Critical for callers like `LayoutRenderer` whose JSX
- *  builds context-provider overrides per panel; without ref stability
- *  here, every UI-state child mutation would propagate a fresh context
- *  value to the entire block subtree. */
+  return useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
+    selector: ids => {
+      if (!ids) return EMPTY_STRING_ARRAY
+      if (includeHiddenPropertyChildren) return ids
+      const visible = ids.filter(id => !isHiddenPropertyChild(
+        block.repo.cache.getSnapshot(id),
+        schemas,
+        uis,
+      ))
+      return visible.length === ids.length ? ids : visible
+    },
+  }) as string[]
+}
+
+/** Reactive visible child Block facades. `repo.block(id)` is identity-
+ *  stable, and this is memoized from the visible id list so callers get
+ *  a stable Block[] reference when the list shape is unchanged. */
 export const useChildren = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.query.children({id: block.id}), {
-    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
-  })
+  const childIds = useChildIds(block)
+  return useMemo(() => childIds.map(id => repo.block(id)), [childIds, repo])
+}
+
+/** Full child facade list, including hidden property children. Intended
+ *  for tooling/debug surfaces rather than the normal outline. */
+export const useAllChildren = (block: Block): Block[] => {
+  const repo = block.repo
+  const childIds = useChildIds(block, {includeHiddenPropertyChildren: true})
+  return useMemo(() => childIds.map(id => repo.block(id)), [childIds, repo])
 }
 
 /** Whether the block has children. Backed by `repo.childIds` so child
@@ -334,9 +385,7 @@ export const useChildren = (block: Block): Block[] => {
  *  children (BlockChildren), so the two hooks subscribe to the same
  *  parent in lockstep and there's nothing to gain by splitting them. */
 export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
-    selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
-  })
+  useChildIds(block).length > 0
 
 /** Reactive parent chain (root → … → immediate parent), excluding
  *  `block` itself. `repo.ancestors()` walks leaf-to-root, so reverse

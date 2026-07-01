@@ -31,6 +31,8 @@ import {
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
   CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
@@ -97,6 +99,7 @@ interface BlockInsert {
   id: string
   workspace_id: string
   parent_id: string | null
+  reference_target_id: string | null
   order_key: string
   content: string
   properties_json: string
@@ -113,6 +116,7 @@ const defaultBlock: BlockInsert = {
   id: 'b1',
   workspace_id: 'ws1',
   parent_id: null,
+  reference_target_id: null,
   order_key: 'a0',
   content: '',
   properties_json: '{}',
@@ -152,6 +156,8 @@ const setupDb = (): TestDb => {
   db.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  db.exec(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
+  db.exec(CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL)
 
   // workspace_members is a sibling table; created here so tests can
   // seed membership rows. Production builds the same schema from

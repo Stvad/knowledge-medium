@@ -25,6 +25,7 @@ import type {
 } from '@/data/api'
 import { BlockNotFoundForTypeError, ChangeScope } from '@/data/api'
 import { getBlockTypes, typesProp } from './properties'
+import { materializePropertyFieldSlotsForExistingRow } from './internals/propertyChildrenProcessor'
 
 /** The slice of `Repo` the tagger needs: a tx primitive, the live type +
  *  schema registries, and a snapshot accessor for the own-tx entry
@@ -95,6 +96,18 @@ export class TypeTagger {
 
     if (propsChanged) {
       await tx.update(blockId, {properties: next})
+    }
+
+    // Newly-typed block: materialize the field-slot child rows for the
+    // type's property schemas (properties-as-children). Relocated from the
+    // spike's `Repo._addTypeInTx` when type-tagging moved into TypeTagger.
+    if (wasNew) {
+      await materializePropertyFieldSlotsForExistingRow(
+        tx,
+        {...block, properties: next},
+        propertySchemas,
+        (contribution.properties ?? []).map(schema => schema.name),
+      )
     }
   }
 

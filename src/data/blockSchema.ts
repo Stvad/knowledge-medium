@@ -9,6 +9,7 @@ export interface BlockRow {
   id: string
   workspace_id: string
   parent_id: string | null
+  reference_target_id: string | null
   order_key: string
   content: string
   properties_json: string
@@ -41,6 +42,7 @@ export const BLOCK_STORAGE_COLUMNS = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
   {name: 'workspace_id', definition: 'workspace_id TEXT NOT NULL'},
   {name: 'parent_id', definition: 'parent_id TEXT'},
+  {name: 'reference_target_id', definition: 'reference_target_id TEXT'},
   {name: 'order_key', definition: 'order_key TEXT NOT NULL'},
   {name: 'content', definition: "content TEXT NOT NULL DEFAULT ''"},
   {name: 'properties_json', definition: "properties_json TEXT NOT NULL DEFAULT '{}'"},
@@ -100,11 +102,58 @@ export const CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL = `
   WHERE deleted = 0
 `
 
+export const CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_reference_target_parent
+  ON blocks (workspace_id, reference_target_id, parent_id)
+  WHERE deleted = 0 AND reference_target_id IS NOT NULL
+`
+
 export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_active
   ON blocks (workspace_id)
   WHERE deleted = 0
 `
+
+export const CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_nonempty_properties
+  ON blocks (workspace_id, id)
+  WHERE deleted = 0 AND properties_json <> '{}'
+`
+
+export const CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_recent_content
+  ON blocks (workspace_id, updated_at DESC, id ASC)
+  WHERE deleted = 0 AND content != ''
+`
+
+export interface BlockSchemaDb {
+  execute(sql: string): Promise<unknown>
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+}
+
+export const ensureBlockStorageColumns = async (db: BlockSchemaDb): Promise<void> => {
+  // Add `reference_target_id` to pre-existing tables on upgrading devices:
+  // `CREATE TABLE IF NOT EXISTS` is a no-op once the table exists, so it never
+  // adds the column. BOTH `blocks` and the Layout-B staging `blocks_synced`
+  // need it — the raw-table `INSERT OR REPLACE INTO blocks_synced (…)` and sync
+  // materialization both bind/select `reference_target_id`, so an un-migrated
+  // `blocks_synced` throws `no such column` the moment sync stages a row.
+  // Guarded on table existence so this is safe regardless of call order vs the
+  // `CREATE TABLE` statements (a not-yet-created table is created WITH the
+  // column from `BLOCK_STORAGE_COLUMNS`).
+  for (const table of ['blocks', 'blocks_synced'] as const) {
+    const tableExists = await db.getOptional<{name: string}>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${table}'`,
+    )
+    if (!tableExists) continue
+    const column = await db.getOptional<{name: string}>(
+      `SELECT name FROM pragma_table_info('${table}') WHERE name = 'reference_target_id'`,
+    )
+    if (!column) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN reference_target_id TEXT`)
+    }
+  }
+}
 
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
@@ -139,6 +188,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'id', sqlExpression: rowRef => `${rowRef}.id`},
   {key: 'workspaceId', sqlExpression: rowRef => `${rowRef}.workspace_id`},
   {key: 'parentId', sqlExpression: rowRef => `${rowRef}.parent_id`},
+  {key: 'referenceTargetId', sqlExpression: rowRef => `${rowRef}.reference_target_id`},
   {key: 'orderKey', sqlExpression: rowRef => `${rowRef}.order_key`},
   {key: 'content', sqlExpression: rowRef => `${rowRef}.content`},
   {key: 'properties', sqlExpression: rowRef => `json(${rowRef}.properties_json)`},
@@ -175,6 +225,7 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,
   workspaceId: row.workspace_id,
   parentId: row.parent_id,
+  referenceTargetId: row.reference_target_id ?? null,
   orderKey: row.order_key,
   content: row.content,
   properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}),
@@ -193,6 +244,7 @@ type BlockRowParams = [
   id: string,
   workspaceId: string,
   parentId: string | null,
+  referenceTargetId: string | null,
   orderKey: string,
   content: string,
   propertiesJson: string,
@@ -209,6 +261,7 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.id,
   blockData.workspaceId,
   blockData.parentId,
+  blockData.referenceTargetId ?? null,
   blockData.orderKey,
   blockData.content,
   JSON.stringify(blockData.properties ?? {}),

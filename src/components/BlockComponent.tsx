@@ -44,13 +44,20 @@ export function BlockComponent({blockId}: BlockComponentProps) {
  *
  * youtube context seems more immediately meaningful/actionable
  */
-export const BlockChildren = ({block}: { block: Block }) => {
+export const BlockChildren = ({
+  block,
+  includeHiddenPropertyChildren = false,
+}: {
+  block: Block
+  includeHiddenPropertyChildren?: boolean
+}) => {
+  const childIds = useChildIds(block, {includeHiddenPropertyChildren})
   // LazyBlockComponent renders an empty placeholder until the block is
   // about to enter the viewport, then mounts the real BlockComponent.
   // For trees of thousands of blocks this drops initial-mount cost from
   // O(N) to O(visible-window) without flattening the tree.
   return <>
-    {useChildIds(block).map((childId) => (
+    {childIds.map((childId) => (
       <LazyBlockComponent
         key={childId}
         blockId={childId}

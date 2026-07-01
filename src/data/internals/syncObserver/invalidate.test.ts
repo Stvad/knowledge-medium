@@ -19,6 +19,7 @@ const block = (overrides: Partial<BlockData> = {}): BlockData => ({
   id: 'b1',
   workspaceId: 'ws-1',
   parentId: null,
+  referenceTargetId: null,
   orderKey: 'a0',
   content: 'hello',
   properties: {},

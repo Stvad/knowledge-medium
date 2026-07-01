@@ -13,7 +13,7 @@ import {
 } from '@/data/properties.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.js'
-import { useRef, useMemo } from 'react'
+import { useRef, useMemo, useState } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -66,6 +66,7 @@ import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
+  LayoutRenderer?: BlockLayout;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -111,7 +112,15 @@ export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicat
   )
 }
 
-const BlockBullet = ({block}: { block: Block }) => {
+const BlockBullet = ({
+  block,
+  showHiddenPropertyChildren,
+  setShowHiddenPropertyChildren,
+}: {
+  block: Block
+  showHiddenPropertyChildren: boolean
+  setShowHiddenPropertyChildren: (value: boolean) => void
+}) => {
   const repo = useRepo()
   const {panelId} = useBlockContext()
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
@@ -169,6 +178,12 @@ const BlockBullet = ({block}: { block: Block }) => {
             onSelect={() => setShowProperties(!showProperties)}
           >
             {showProperties ? 'Hide' : 'Show'} Properties
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+            onSelect={() => setShowHiddenPropertyChildren(!showHiddenPropertyChildren)}
+          >
+            {showHiddenPropertyChildren ? 'Hide' : 'Show'} Hidden Fields
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenuPortal>
@@ -459,6 +474,7 @@ export function DefaultBlockRenderer(
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
+    LayoutRenderer,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -471,6 +487,7 @@ export function DefaultBlockRenderer(
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
+  const [showHiddenPropertyChildren, setShowHiddenPropertyChildren] = useState(false)
   const isTopLevel = useIsFocalRender(block)
 
   // The block's READ content, bare: the per-type read renderer in an error
@@ -549,8 +566,8 @@ export function DefaultBlockRenderer(
   // Last-wins on the variant facet. `DefaultBlockLayout` is the no-contribution
   // fallback.
   const Layout = useMemo(
-    () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
-    [resolveContext, resolveBlockLayout],
+    () => LayoutRenderer ?? resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
+    [resolveContext, resolveBlockLayout, LayoutRenderer],
   )
 
   // Content slot: the editable content surface — gesture ref + surface props +
@@ -608,9 +625,14 @@ export function DefaultBlockRenderer(
 
   const ChildrenSlot = useMemo<ComponentType>(() => {
     return function BlockChildrenSlot() {
-      return <BlockChildren block={block}/>
+      return (
+        <BlockChildren
+          block={block}
+          includeHiddenPropertyChildren={showHiddenPropertyChildren}
+        />
+      )
     }
-  }, [block])
+  }, [block, showHiddenPropertyChildren])
 
   const FooterSlot = useMemo<ComponentType>(() => {
     return function BlockFooterSlot() {
@@ -647,7 +669,11 @@ export function DefaultBlockRenderer(
         <>
           <div className="block-controls flex items-center">
             {!isMobile && <ExpandButton block={block}/>}
-            <BlockBullet block={block}/>
+            <BlockBullet
+              block={block}
+              showHiddenPropertyChildren={showHiddenPropertyChildren}
+              setShowHiddenPropertyChildren={setShowHiddenPropertyChildren}
+            />
           </div>
           {isMobile && hasChildren && (
             <div className="absolute right-0 top-0 z-10 flex h-6 items-center">
@@ -657,7 +683,7 @@ export function DefaultBlockRenderer(
         </>
       )
     }
-  }, [block])
+  }, [block, showHiddenPropertyChildren])
 
   const HeaderSlot = useMemo<ComponentType>(() => {
     return function BlockHeaderSlot() {

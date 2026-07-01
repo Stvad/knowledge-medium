@@ -81,6 +81,7 @@ export function AppRuntimeProvider({
   [baseExtensions, overrides, safeMode, runtimeContext])
 
   const [runtime, setRuntime] = useState(baseRuntime)
+  const [runtimeBootstrapped, setRuntimeBootstrapped] = useState(false)
 
   // App-effect lifecycle (audit B1(4)). The reconciler keeps unchanged
   // effects running across a runtime swap (re-pointing them at the fresh
@@ -115,11 +116,16 @@ export function AppRuntimeProvider({
     if (!effectReconciler.isColdFor(repo, workspaceId, safeMode)) return // warm reload: hold current; async swaps once
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync-state-from-prop: held runtime follows baseRuntime on cold start
     setRuntime(baseRuntime)
+    setRuntimeBootstrapped(false)
+    if (workspaceId) repo.markPropertyChildrenBackfillSchemasLoading(workspaceId)
     repo.setFacetRuntime(baseRuntime)
   }, [baseRuntime, effectReconciler, repo, workspaceId, safeMode])
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRuntimeBootstrapped(false)
+    if (workspaceId) repo.markPropertyChildrenBackfillSchemasLoading(workspaceId)
     // Wipe stale errors + trust statuses from the previous resolution; the
     // loader will re-report any that still apply.
     errorStore.reset()
@@ -170,9 +176,11 @@ export function AppRuntimeProvider({
           // the FacetRuntime to UI consumers, never reaching the data
           // layer's dispatch / processor surfaces.
           repo.setFacetRuntime(nextRuntime)
+          setRuntimeBootstrapped(true)
         }
       } catch (error) {
         console.error('Failed to resolve app runtime', error)
+        if (!cancelled) setRuntimeBootstrapped(true)
       }
     })()
 
@@ -211,10 +219,16 @@ export function AppRuntimeProvider({
   // sites use — e.g. addSchema on AddPropertyForm submit — read the
   // resulting in-memory state through this runtime.
   useEffect(() => {
-    if (!workspaceId) return
+    // Gate projector start on `runtimeBootstrapped` (plugins resolved) so
+    // user-defined schema/type blocks resolve their presets. Once started,
+    // release the held property-children full backfill for this workspace —
+    // the schedule itself re-fires (gated) as the user-schemas projector
+    // publishes through the FacetBridge schema rebuild.
+    if (!workspaceId || !runtimeBootstrapped) return
     const dispose = repo.projectors.startAll()
+    repo.markPropertyChildrenBackfillSchemasReady(workspaceId)
     return () => dispose()
-  }, [repo, workspaceId])
+  }, [repo, runtimeBootstrapped, workspaceId])
 
   return (
     <AppRuntimeContextProvider value={runtime}>
