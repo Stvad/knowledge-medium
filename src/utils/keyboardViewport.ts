@@ -19,7 +19,8 @@
  *  the mobile editing toolbar's `position:fixed` bottom inset — the same
  *  arithmetic, but it reads `documentElement.clientHeight` for the
  *  layout-viewport height instead of `window.innerHeight`. innerHeight is fine
- *  here (only fed to a ≥60 "is a keyboard up" check, where its iOS
+ *  here (fed only as ONE input to a keyboard-up gate — the ≥60 overlap arm,
+ *  OR-ed with and backstopped by the editing-toolbar sentinel — where its iOS
  *  Stage-Manager under-reporting is tolerable) but WRONG for positioning a
  *  layout-anchored fixed element, which needs the reliable clientHeight. They
  *  stay two readers, not one parameterized helper — the height-source

@@ -94,6 +94,14 @@ describe('layoutViewportKeyboardOverlap', () => {
   it('never goes negative', () => {
     expect(layoutViewportKeyboardOverlap(500, 760, 0)).toBe(0)
   })
+
+  it('rounds fractional sub-pixel viewport metrics to a whole px', () => {
+    // Real devices report fractional vv.height / offsetTop (sub-pixel DPR),
+    // and the inset feeds a CSS px `bottom`. 650 - 313.7 - 0.4 = 335.9, so a
+    // proper round yields 336; dropping Math.round (335.9) or swapping it for
+    // floor/trunc (335) would diverge — this pins the rounding.
+    expect(layoutViewportKeyboardOverlap(650, 313.7, 0.4)).toBe(336)
+  })
 })
 
 describe('subscribeKeyboardViewport', () => {
