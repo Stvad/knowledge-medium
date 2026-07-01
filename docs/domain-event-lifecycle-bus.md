@@ -1,8 +1,13 @@
 # Typed domain-event / lifecycle bus — design investigation (2026-06-23)
 
-Status: **investigation / proposal**. No code. Companion to
-`extension-seam-gaps.md` (gap I3 "workspace lifecycle hooks", §6) and
-`extensibility-axes.md` (the algebra vocabulary). Grounded in the post-B3
+> **Status:** proposal / investigation — no code written yet.
+> **Last verified against code:** 2026-06-23 (master `8a6f22c`) — every
+> `file:line` and mechanism claim was checked against the tree by an adversarial
+> review pass. Line numbers drift as the tree moves, so trust the named symbol
+> over the number.
+
+Companion to `extension-seam-gaps.md` (gap I3 "workspace lifecycle hooks", §6)
+and `extensibility-axes.md` (the algebra vocabulary). Grounded in the post-B3
 typed-channel discipline (`architecture-audit-2026-06.md` §B3, `AGENTS.md`
 "ui event channels").
 
@@ -53,17 +58,17 @@ already runs for that event.
 
 | Event | Payload (sketch) | Existing choke to emit from | Notes |
 |---|---|---|---|
-| `block:created` | `{block, types, workspaceId, txId}` | `Repo._runAndDispatch` post-commit, line ~1166 (`processorRunner.dispatch`) — the snapshots walk already classifies before/after | `!liveBefore && liveAfter` (insert *or* un-delete). `types` via `getBlockTypes(after)` — a block carries a **`types` list**, not a single type (`properties.ts:119`). |
+| `block:created` | `{block, types, workspaceId, txId}` | `Repo._runAndDispatch` post-commit, `processorRunner.dispatch` (~`repo.ts:1174`) — the snapshots walk already classifies before/after | `!liveBefore && liveAfter` (insert *or* un-delete). `types` via `getBlockTypes(after)` — a block carries a **`types` list**, not a single type (`properties.ts:119`). |
 | `block:updated` | `{id, before, after, changedFields, types, addedTypes, removedTypes, workspaceId, txId}` | same | `liveBefore && liveAfter && content changed`. `changedFields` via `fieldChanged` (`processorRunner.ts`); membership deltas via the `getBlockTypes`-diff helpers (`properties.ts:260+`). |
 | `block:deleted` | `{id, before, types, workspaceId, txId}` | same | `liveBefore && !liveAfter`. Covers **soft-delete** (`tx.delete` flips `deleted=true` on the existing row, `txEngine.ts:306` — `before`/`after` both present) *and* hard-delete (`after===null`). `types` via `getBlockTypes(before)`. |
 | `block:synced` (down-sync applied) | `{workspaceId, ids}` — **one emit per workspace** present in the window | `startBlocksSyncedObserver` → `applyOutcome` (`syncObserver/observer.ts:167`) — walks materialized snapshots | distinct from local-write `block:*`: these are *remote* rows landing. A drain window is **seq-ordered, not workspace-scoped** (`drainQueueOnce` reads `blocks_synced_changes ORDER BY seq`, `observer.ts:193`), so its `MaterializeOutcome.snapshots` can span workspaces — the bridge must **group by `after/before.workspaceId`** and emit one event per workspace, exactly as the observer already does for cycle scans (`cycleScanCandidatesByWorkspace`, `observer.ts:114`). A single `{ids, workspaceId}` payload would mislabel cross-workspace batches. Pairs with `invalidationRules`. |
-| `navigation:completed` | `{result: NavigationResult, input, origin}` | `navigationVerb.after` (`utils/navigation.ts:289`) — **already exists** as a Sum observer slot | bridge, don't re-emit: an internal `after` observer forwards onto the bus. But `after` fires for **every** outcome (`VerbOutcome<NavigationResult \| null>` — success, veto/`null`, throw), so emit `navigation:completed` **only when `outcome.ok && outcome.result !== null`**. A veto/`null`/failure becomes a separate `navigation:cancelled` (or is dropped) — never a `completed` carrying a missing/null result. |
+| `navigation:completed` | `{result: NavigationResult, input, origin}` | `navigationVerb.after` (`utils/navigation.ts:294`) — **already exists** as a Sum observer slot | bridge, don't re-emit: an internal `after` observer forwards onto the bus. But `after` fires for **every** outcome (`VerbOutcome<NavigationResult \| null>` — success, veto/`null`, throw), so emit `navigation:completed` **only when `outcome.ok && outcome.result !== null`**. A veto/`null`/failure becomes a separate `navigation:cancelled` (or is dropped) — never a `completed` carrying a missing/null result. |
 | `navigation:requested` (pre) | `{input}` | `navigationVerb.before` — **already exists** | optional; most demand is for `completed`. Fires *before* resolution for every gesture, so it does **not** imply the navigation will land (it may be vetoed/`null`) — purely an "about to attempt" hook. |
-| `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{previousId, workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`workspaceBootstrap.ts`, after the page/ui-state writes, just before `return layoutSessionBlock` — equivalently the `{kind:'ready'}` branch of its caller `resolveInitialLayout`, `App.tsx:123`; `bootstrapWorkspace` itself returns a `Block`, not the layout union) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **Not** `setActiveWorkspaceId` — see the caveat below. |
-| `workspace:active-changed` (low-level pin) | `{previousId, workspaceId}` | `Repo.setActiveWorkspaceId` (`repo.ts:943`) — **fires nothing today** | optional/secondary: reflects the *pin*, fires early (pre-gate, pre-bootstrap). For UI that just tracks "which workspace is selected", not for auto-create handlers. |
+| `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`workspaceBootstrap.ts`, after the page/ui-state writes, just before `return layoutSessionBlock` — equivalently the `{kind:'ready'}` branch of its caller `resolveInitialLayout`, `App.tsx:126`; `bootstrapWorkspace` itself returns a `Block`, not the layout union) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **Not** `setActiveWorkspaceId` — see the caveat below. **No `previousId`:** by this choke `setActiveWorkspaceId(new)` (early, `App.tsx:73`) has already overwritten the pin, so the prior id is gone; it belongs on `workspace:active-changed`, whose choke *is* the setter (both ids in hand). |
+| `workspace:active-changed` (low-level pin) | `{previousId, workspaceId}` | `Repo.setActiveWorkspaceId` (`repo.ts:951`) — **fires nothing today** | optional/secondary: reflects the *pin*, fires early (pre-gate, pre-bootstrap). For UI that just tracks "which workspace is selected", not for auto-create handlers. |
 | `workspace:created` | `{workspaceId}` | gate on `freshlyCreated` at the `bootstrapWorkspace` choke (fires per switch, but `freshlyCreated` is only true on actual creation) — **one** path | don't *also* emit from `CreateWorkspaceDialog.onCreated` (double-emit). `workspace:ready` already carries `freshlyCreated:true`, so this may be redundant — keep only if a "created but not yet landed-on" signal is genuinely needed. |
 | `sync:status` (online/offline/synced) | `{connected, hasSynced, uploading, downloading, …}` | PowerSync status listener — already consumed by `system-status` (`SyncIndicatorInput`) | the chip already derives this; the bus would expose the *transitions* to plugins. |
-| `app:booted` | `{repo, workspaceId}` | a **once-per-Repo/session latch** (or an app-mount/initial-ready point) — **not** the raw end of `bootstrapWorkspace` | one-shot per session. `resolveInitialLayout` re-runs `bootstrapWorkspace` on *every* workspace switch, so emitting from there would fire per-switch; gate behind a session latch on the Repo and leave per-workspace readiness to `workspace:ready`. |
+| `app:booted` | `{repo}` — **no `workspaceId`** (session-global; see the emit-choke contract) | a **once-per-Repo/session latch** (or an app-mount/initial-ready point) — **not** the raw end of `bootstrapWorkspace` | one-shot per session. `resolveInitialLayout` re-runs `bootstrapWorkspace` on *every* workspace switch, so emitting from there would fire per-switch; gate behind a session latch on the Repo and leave per-workspace readiness to `workspace:ready`. Carrying a `workspaceId` here would be a scope bug — a late/replayed subscriber would get the *initial* workspace's id. |
 | `runtime:swapped` | `{}` | **after** the new runtime is installed — `AppRuntimeProvider` post `repo.setFacetRuntime(next)` (`AppRuntimeProvider.tsx:172`) + `EffectReconciler.reconcile` (`:194`) | **Not** `refreshAppRuntime` (`facets/runtimeEvents.ts`): that fires *refresh-requested* — it bumps the `useOverrides` generation *before* the async `resolveAppRuntime`, and fires even if that resolve fails — so a handler emitting there would still read the **old** facets/effects. Emit only once `next` is live. |
 
 **The three `block:*` events are mutually exclusive** — define `live ≡ present &&
@@ -111,8 +116,8 @@ Two structural observations from the table:
 
   **Timing caveat (the choke matters here).** `setActiveWorkspaceId` is the
   *wrong* place to emit the lifecycle event, even though it's the obvious one:
-  the switcher calls it *before* the hash change (`WorkspaceSwitcher.tsx:60`),
-  and `App.tsx` calls it at line 72 — **before** the read-only resolution, the
+  the switcher calls it *before* the hash change (`WorkspaceSwitcher.tsx:57`),
+  and `App.tsx` calls it at line 73 — **before** the read-only resolution, the
   §6 access gate (which may return `waiting`/`locked` and never bootstrap), and
   `bootstrapWorkspace` (Phase 3). Emitting `workspace:ready` from there would
   fire into a possibly-locked, un-bootstrapped workspace whose scoped pages don't
@@ -159,7 +164,7 @@ single-purpose streams. The gap is that none of them is a general
 ### 2c. Invalidation rules (`invalidationRulesFacet`)
 - **Shape:** `{id, collectFromSnapshots(snapshots, emit)}` → `emit(channel, key)`
   feeds the handleStore loader so query handles re-resolve. Runs both on local
-  commit (`repo.ts:1158`) and on sync-down (`applySyncInvalidation`).
+  commit (`repo.ts:1166`) and on sync-down (`applySyncInvalidation`).
 - **Covers:** *reactivity* — making `repo.query.*` handles (and thus React via
   `useHandle`) re-run when relevant rows change.
 - **Misses:** it is a cache-invalidation channel, not an observer API. A plugin
@@ -232,7 +237,7 @@ export interface AppEventRegistry { /* augmented per event */ }
 //   plugins/owners declare-merge their events:
 //   declare module '@/events/registry' {
 //     interface AppEventRegistry {
-//       'workspace:ready': { previousId: string | null; workspaceId: string; freshlyCreated: boolean }
+//       'workspace:ready': { workspaceId: string; freshlyCreated: boolean }
 //       'block:created': { id: string; types: readonly string[]; workspaceId: string; txId: string }
 //     }
 //   }
@@ -275,7 +280,7 @@ export interface AppEventBus {
   (`void | Promise<void>` handlers, awaited + sequential + isolated) needs a
   dedicated async fan-out loop instead: `for (const h of handlers) { try { await
   h(payload) } catch (e) { log(e) } }` — the same loop `verbFacet` uses for its
-  before/after observers (`verbFacet.ts:197`). So: reuse the `Set` for storage,
+  before/after observers (`verbFacet.ts:305`). So: reuse the `Set` for storage,
   write the await-loop for delivery.
 - **`emit` is fire-and-forget for the emitter.** It kicks off that async
   delivery loop and returns `void` (the loop's promise is tracked internally, not
@@ -290,7 +295,12 @@ export interface AppEventBus {
    ```ts
    const myEffect: AppEffect = {
      id: 'my-plugin/watch-switch',
-     start: ({ repo }) => repo.events.on('workspace:ready', ({ workspaceId }) => {
+     start: ({ repo }) => repo.events.on('workspace:ready', async ({ workspaceId }) => {
+       // §3.4 handler contract: bail if the active workspace moved. The write
+       // below is async, and the sticky gate only covers subscribe-time — not
+       // the window between here and the tx commit — so a writing handler must
+       // re-check itself.
+       if (workspaceId !== repo.activeWorkspaceId) return
        // ensure my plugin's per-workspace block exists, etc. (safe: fired
        // post-bootstrap, so scoped pages exist and the workspace is unlocked)
      }),   // the unsubscribe IS the cleanup
@@ -390,23 +400,36 @@ export interface AppEventBus {
   `navigation:*`, `workspace:active-changed`) are **not** sticky — replaying a
   past block-create to a late subscriber would be wrong.
 
-  **Sticky for a workspace-scoped event MUST be workspace-correct, not a single
-  global slot.** This is the subtle trap, and it's the same one
-  `ProjectorRuntime.dispose` exists to prevent: the bus lives on the *per-user
-  singleton* `Repo` (reused across workspace switches), so a naïve "retain the
-  one last `workspace:ready`" slot can replay **workspace A's** payload to a
-  subscriber that comes online while the app is switching to **B** — and since
-  §3.4 put the workspace *in the payload*, an auto-create handler keyed off
-  `payload.workspaceId` would then act on the wrong workspace. (The pure
-  Suspense-driven AppEffect path happens to be safe — A's effect unmounts, B's
-  resubscribes after B's emit — but a `useAppEvent` consumer above the
-  per-workspace boundary, or a module-singleton consumer, is not.) So sticky
-  replay for a workspace-scoped event must be **gated on the active workspace**:
-  replay the retained value only if `payload.workspaceId ===
-  repo.activeWorkspaceId` (equivalently, key the sticky store by workspace and
-  evict on switch — the projector's dispose-clears lesson applied to sticky
-  storage). `app:booted` is session-global and `sync:status` is connection-global
-  (§ note below), so only the *workspace-scoped* sticky events need this gate.
+  **Sticky for a workspace-scoped event should be workspace-gated, not a single
+  global slot** — the same hazard `ProjectorRuntime.dispose` guards against. The
+  bus lives on the *per-user singleton* `Repo` (reused across switches), so a
+  naïve "retain the one last `workspace:ready`" slot can replay **workspace A's**
+  payload to a subscriber that comes online while the app is switching to **B**,
+  and since §3.4 put the workspace *in the payload*, an auto-create handler keyed
+  off `payload.workspaceId` would act on the wrong workspace. The gate: replay the
+  retained value only if `payload.workspaceId === repo.activeWorkspaceId`.
+
+  How load-bearing is the gate? It's **defense-in-depth, not a precondition for
+  the thin slice.** The Phase-0 I3 consumer is an *AppEffect* (§3.3), and that
+  path is safe even ungated: on a switch A→B the effect unmounts and resubscribes
+  *after* B's emit, so the retained slot already holds `{B}` at replay. The gate
+  matters for the *other* subscribe shapes — a `useAppEvent` consumer mounted
+  above the per-workspace Suspense boundary, or a module-singleton consumer —
+  which can read the slot mid-transition while it still holds `{A}`. It's cheap
+  and correct, so ship it; just don't call it mandatory for the AppEffect slice.
+  Note the two impl variants are **not** interchangeable for Phase 0: the
+  single-slot "compare at subscribe" gate needs no switch hook and cannot leak,
+  whereas "key by workspace + evict on switch" needs an eviction trigger Phase 0
+  doesn't wire (`workspace:active-changed` is Phase 1+/optional) — so the
+  single-slot gate is the Phase-0 form. `app:booted` (session-global) and
+  `sync:status` (connection-global) carry no `workspaceId`, so they don't need
+  the gate at all.
+- **Replay timing.** For a sticky event the replay runs synchronously inside
+  `on()` (before it returns), so it can never be reordered behind a future live
+  emit, and a throwing replayed handler is isolated the same way a live one is
+  (logged, not propagated to the `on()` caller / the AppEffect `start`). Benign
+  for `workspace:ready` (no concurrent live emit at subscribe), but pin it so an
+  implementer doesn't make replay a deferred microtask and reintroduce a race.
 - **Idempotency is necessary but NOT sufficient.** Because a sticky handler can
   receive the replayed value *and* a later live emit, sticky-event handlers must
   be **idempotent** (auto-create handlers already are — they check existence
@@ -414,8 +437,9 @@ export interface AppEventBus {
   delivery is **replay-only** (the live emit fires before any subscriber exists),
   so the replay path is the primary case to get right, not the double-fire.
   Idempotency does **not** rescue a replayed payload that names the *wrong*
-  workspace — that's why the active-workspace gate above is mandatory, not
-  optional.
+  workspace — that's the job of the workspace gate above (for the non-AppEffect
+  subscribe shapes) plus the in-handler bail-if-moved check (§3.4), not of
+  idempotency.
 - **`workspace:ready` does not imply the workspace's bootstrap `block:*` events
   were delivered.** Those fire from a *different* choke (the post-commit bridge)
   on the unordered stream above, and `bootstrapWorkspace`'s page/tutorial/ui-state
@@ -455,7 +479,7 @@ Do **not** widen `postCommitProcessorsFacet` into the general bus. Three reasons
    is a layering inversion (data importing navigation/app concepts).
 3. **The house already has the right *patterns* to follow** — the
    declaration-merged registry (from `PostCommitProcessorRegistry` /
-   `SameTxEventRegistry`), the verb-observer delivery loop (`verbFacet.ts:197`),
+   `SameTxEventRegistry`), the verb-observer delivery loop (`verbFacet.ts:305`),
    the AppEffect lifecycle, and `CallbackSet`'s `Set` add/remove for storage. To
    be honest about cost: only the `Set` *storage* is reused — the load-bearing
    parts (the async sequential await-loop, the workspace-gated sticky
@@ -475,19 +499,19 @@ processor just to watch `block:created`.
 unit, zero existing seam, real demand (I3):
 - `AppEventBus` (`Map<name, Set<handler>>` storage + the async await-loop for
   delivery — §3.2), `repo.events`, typed `AppEventRegistry`.
-- One event declared: `workspace:ready`. One emit line at the **end of
-  `bootstrapWorkspace`** (before `return layoutSessionBlock`; the `{kind:'ready'}`
-  shape is its caller `resolveInitialLayout`'s return, `App.tsx:123`) — *not*
-  `setActiveWorkspaceId`, so handlers run post-gate/post-bootstrap (the timing
-  caveat in §1).
-- **`workspace:ready` is sticky AND workspace-gated** (§3.5): the bus retains the
-  last payload and replays it on subscribe, but replays only when
-  `payload.workspaceId === repo.activeWorkspaceId` so a switch can't hand a new
-  subscriber the previous workspace's payload. This is mandatory for the slice to
-  work — on cold start the emit happens *before* `AppRuntimeProvider` registers
-  AppEffects, so without sticky replay the auto-create effect would never see it;
-  without the workspace gate the replay can be stale. Phase 0 must include the
-  workspace-gated sticky-replay mechanism, not just plain fan-out.
+- One event declared: `workspace:ready`, payload `{workspaceId, freshlyCreated}`.
+  One emit line at the **end of `bootstrapWorkspace`** (before `return
+  layoutSessionBlock`; the `{kind:'ready'}` shape is its caller
+  `resolveInitialLayout`'s return, `App.tsx:126`) — *not* `setActiveWorkspaceId`,
+  so handlers run post-gate/post-bootstrap (the timing caveat in §1).
+- **`workspace:ready` is sticky** (§3.5): the bus retains the last payload and
+  replays it on subscribe. Sticky replay is **mandatory** for the slice — on cold
+  start the emit precedes AppEffect registration, so without it the auto-create
+  effect never sees the event. Ship the workspace gate too (replay only if
+  `payload.workspaceId === repo.activeWorkspaceId`) as **defense-in-depth** for
+  the non-AppEffect subscribe shapes — §3.5 explains why it isn't itself a
+  precondition for the AppEffect path. So Phase 0 = kernel + async delivery +
+  sticky replay (+ the single-slot gate), not bare fan-out.
 - `useAppEvent` hook. Tests: emit-on-ready (and *not* on a `locked`/`waiting`
   workspace), handler isolation (a throwing handler doesn't break the others or
   the bootstrap), async-sequential delivery (a slow handler doesn't overlap the
