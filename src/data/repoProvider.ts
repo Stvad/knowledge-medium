@@ -60,6 +60,11 @@ import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
+import {
+  captureDbOpenCorruption,
+  recordForensicSessionStart,
+  watchForRuntimeCorruption,
+} from '@/utils/dbForensicsHooks.js'
 import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
   applyLocalSchemaContributions,
@@ -245,6 +250,7 @@ export const ensurePowerSyncReady = async (
   await assertOpfsAvailable()
 
   const db = getPowerSyncDb(userId)
+  const dbFilename = dbFilenameForUser(userId)
 
   let initPromise = initPromises.get(userId)
   if (!initPromise) {
@@ -255,11 +261,20 @@ export const ensurePowerSyncReady = async (
     await initPromise
   } catch (error) {
     // A corrupt local `.db` surfaces here (e.g. "database disk image is
-    // malformed"). Re-throw as a typed, recoverable error carrying the userId
-    // so the bootstrap error boundary can offer Export + Reset. Any other
+    // malformed"). Record a forensic snapshot (issue #284) BEFORE anything
+    // touches the file, then re-throw as a typed, recoverable error carrying the
+    // userId so the bootstrap error boundary can offer Export + Reset. Any other
     // failure passes through unchanged.
+    captureDbOpenCorruption(userId, dbFilename, error)
     throw toLocalDbOpenError(error, userId)
   }
+
+  // Out-of-band forensic instrumentation (issue #284): record the session (with
+  // unclean-shutdown detection), schedule an idle zero-page scan, and watch for
+  // a RUNTIME sync-apply corruption the DB-open detector never sees. All
+  // best-effort — guarded to run once per process, never throws into boot.
+  recordForensicSessionStart(userId, dbFilename)
+  watchForRuntimeCorruption(db, userId, dbFilename)
 
   // The local DB is now mounted for this user — record it as the active account in
   // BOTH modes. The asset byte path (§7.3) + media capture key off getActiveUserId,

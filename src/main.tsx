@@ -12,10 +12,16 @@ import { registerServiceWorker } from '@/registerServiceWorker.js'
 import { requestPersistentStorage } from '@/requestPersistentStorage.js'
 import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { startStartupObservers } from '@/utils/startupTimeline.js'
+import { installDbForensicsLifecycle } from '@/utils/dbForensicsHooks.js'
 
 // Begin tracking main-thread long tasks immediately, so the startup-metrics
 // plugin can later find when boot contention stopped (time to interactivity).
 startStartupObservers()
+
+// Out-of-band local-DB corruption instrumentation (issue #284): lifecycle
+// breadcrumbs + a clean-shutdown flag, so the next OPFS corruption is
+// self-diagnosing (a still-unclean flag on boot ⇒ the process was killed).
+installDbForensicsLifecycle()
 
 // L2 data-integrity invariant assertions: on in dev builds, compiled-away to a
 // constant false in prod (import.meta.env.DEV is statically replaced by Vite).
