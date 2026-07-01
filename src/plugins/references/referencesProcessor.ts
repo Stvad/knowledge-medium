@@ -48,7 +48,6 @@ import {
   derivedRefKey,
   normalizeReferences,
   reconcileDerived,
-  type AnyPropertySchema,
   type BlockData,
   type BlockReference,
   type AnyPostCommitProcessor,
@@ -62,7 +61,7 @@ import {
   parseBlockRefs,
 } from './referenceParser.ts'
 import { parseExactReferenceBlockContent } from '@/data/referenceBlock'
-import { projectPropertyReferences } from './referenceProjection.ts'
+import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -103,31 +102,6 @@ interface SourcePlan {
    *  the row — used to skip a no-op write that would re-fire the
    *  field-watcher and produce a useless row_events / ps_crud entry. */
   referencesChanged: boolean
-}
-
-/** A prior property-derived ref the parse must RETAIN rather than recompute
- *  (the retain-on-source half of the add-only contract). True iff:
- *   - it's property-derived (`sourceField` set), AND
- *   - its schema is currently ABSENT from the registry — the owning plugin is
- *     toggled off / not yet loaded, so we *can't* re-derive it — AND
- *   - the field still holds a value (the relationship is still encoded), AND
- *   - this write did NOT change that field's own value.
- *  The last clause is the one exception to retention: if THIS write changed the
- *  field's value, a retained ref would contradict the new value and we can't
- *  re-derive it without the schema, so it's allowed to drop. A *present* schema
- *  (ref or non-ref) is handled by `projectPropertyReferences` upstream — it
- *  re-derives, or correctly drops a redefined-to-non-ref field's stale refs. */
-const isRetainableAbsentRef = (
-  ref: BlockReference,
-  source: BlockData,
-  before: BlockData | null,
-  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-): boolean => {
-  if (!ref.sourceField) return false
-  if (propertySchemas.has(ref.sourceField)) return false
-  const afterValue = source.properties[ref.sourceField]
-  if (afterValue === undefined) return false
-  return JSON.stringify(before?.properties[ref.sourceField]) === JSON.stringify(afterValue)
 }
 
 /** Read phase: parse refs, resolve existing alias targets via committed-

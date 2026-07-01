@@ -2,8 +2,6 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import {
   activePanelIdProp,
@@ -13,8 +11,8 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   __resetLayoutSessionIdForTesting,
   getLayoutSessionId,
@@ -44,17 +42,11 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  let id = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
-    newId: () => `gen-${++id}`,
+    extensions: [dailyNotesDataExtension],
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-  ]))
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
@@ -73,7 +65,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers()
-  env.repo.stopSyncObserver()
 })
 
 const contentChildIds = async (parentId: string): Promise<string[]> =>

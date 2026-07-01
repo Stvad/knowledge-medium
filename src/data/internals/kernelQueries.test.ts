@@ -10,7 +10,7 @@
  * loop works for non-kernel contributions.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
@@ -22,6 +22,7 @@ import {
 import { aliasesProp, typesProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { queriesFacet } from '../facets'
 import { Repo } from '../repo'
@@ -44,17 +45,11 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  // Keep the processor registry empty; these query tests seed
+  // `references` directly and should not depend on plugin processors.
+  const {repo, cache} = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    // Keep the processor registry empty; these query tests seed
-    // `references` directly and should not depend on plugin processors.
   })
   return {h, cache, repo}
 }
@@ -64,9 +59,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's default sync observer so its db.onChange
-// subscription doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (args: {
   id: string
@@ -174,6 +166,17 @@ describe('repo.query.subtree', () => {
     await create({id: 'gc', parentId: 'c1', orderKey: 'a0'})
     const out = asBlocks(await env.repo.query.subtree({id: 'r'}).load())
     expect(out.map(b => b.id)).toEqual(['r', 'c1', 'gc', 'c2'])
+  })
+
+  it('carries each row depth relative to the root, dropping back across branches', async () => {
+    await create({id: 'r'})
+    await create({id: 'c1', parentId: 'r', orderKey: 'a0'})
+    await create({id: 'gc', parentId: 'c1', orderKey: 'a0'})
+    await create({id: 'c2', parentId: 'r', orderKey: 'a1'})
+    // Pre-order is [r, c1, gc, c2]; depth must drop from 2 (gc) back to 1
+    // (c2) — the shape where an out[i]↔rows[i] off-by-one would surface.
+    const out = await env.repo.query.subtree({id: 'r'}).load()
+    expect(out.map(b => [b.id, b.depth])).toEqual([['r', 0], ['c1', 1], ['gc', 2], ['c2', 1]])
   })
 
   it('excludes soft-deleted descendants', async () => {
@@ -574,6 +577,26 @@ describe('repo.query.aliasesInWorkspace', () => {
     expect(out).toEqual(['Inbox'])
   })
 
+  it('matches LIKE metacharacters in the filter literally, not as wildcards', async () => {
+    await create({id: 'underscore', aliases: ['a_b']})
+    await create({id: 'single-char', aliases: ['axb']}) // `_`-as-wildcard would match this
+    await create({id: 'percent', aliases: ['50%done']})
+    await create({id: 'plain', aliases: ['anything']}) // a bare `%` would match this if unescaped
+    await create({id: 'backslash', aliases: ['a\\b']}) // contains a literal backslash
+
+    // `_` must match a literal underscore, not any single char.
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a_b'}).load())
+      .toEqual(['a_b'])
+    // A bare `%` must match only aliases containing a literal percent, not every row.
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: '%'}).load())
+      .toEqual(['50%done'])
+    // The escape char itself (`\`) must be escaped, so a backslash in the
+    // filter matches literally instead of corrupting the LIKE pattern
+    // (an unescaped `\b` would be read as escaped-`b` → pattern `%ab%`).
+    expect(await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'a\\b'}).load())
+      .toEqual(['a\\b'])
+  })
+
   it('orders exact aliases before prefix and substring matches', async () => {
     await create({id: 'exact', aliases: ['i']})
     await create({id: 'prefix', aliases: ['Inbox']})
@@ -619,6 +642,13 @@ describe('repo.query.aliasMatches', () => {
 
     expect(out.map(row => row.alias)).toEqual(['Dating', 'Dating pool', 'Online Dating'])
   })
+
+  it('matches LIKE metacharacters in the filter literally, not as wildcards', async () => {
+    await create({id: 'lit', content: 'c', aliases: ['a_b']})
+    await create({id: 'wild', content: 'c', aliases: ['axb']}) // `_`-as-wildcard would match this
+    const out = await env.repo.query.aliasMatches({workspaceId: WS, filter: 'a_b'}).load()
+    expect(out.map(row => row.alias)).toEqual(['a_b'])
+  })
 })
 
 describe('repo.query.aliasMatchesFuzzy', () => {
@@ -645,6 +675,18 @@ describe('repo.query.aliasMatchesFuzzy', () => {
       prefixes: ['pr', 'rev'],
     }).load()
     expect(out.map(row => row.blockId).sort()).toEqual(['match'])
+  })
+
+  it('matches LIKE metacharacters in a prefix literally, not as wildcards', async () => {
+    // Prefixes are literal token substrings, not patterns — a typed `_`
+    // must not act as a single-char wildcard in the pre-filter.
+    await create({id: 'lit', aliases: ['a_b']})
+    await create({id: 'wild', aliases: ['axb']}) // `_`-as-wildcard would match this
+    const out = await env.repo.query.aliasMatchesFuzzy({
+      workspaceId: WS,
+      prefixes: ['a_b'],
+    }).load()
+    expect(out.map(row => row.blockId)).toEqual(['lit'])
   })
 
   it('returns workspace-wide rows when prefixes is empty', async () => {

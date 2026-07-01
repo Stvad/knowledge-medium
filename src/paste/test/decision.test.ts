@@ -13,13 +13,15 @@ import {
 // `editor` requests carry a caret (union invariant); tests that don't care
 // about position get a default first-line caret so cases stay terse.
 const request = (
-  over: {text?: string; intent?: PasteChordIntent; surface?: PasteSurface; caret?: PasteCaret} = {},
+  over: {text?: string; intent?: PasteChordIntent; surface?: PasteSurface; caret?: PasteCaret; files?: readonly File[]} = {},
 ): PasteRequest => {
-  const {text = '', intent = 'split', surface = 'editor', caret} = over
+  const {text = '', intent = 'split', surface = 'editor', caret, files} = over
   return surface === 'shell'
-    ? {text, intent, surface}
-    : {text, intent, surface, caret: caret ?? {line: 1, lineCount: 1, from: 0, to: 0}}
+    ? {text, intent, surface, files}
+    : {text, intent, surface, files, caret: caret ?? {line: 1, lineCount: 1, from: 0, to: 0}}
 }
+
+const pngFile = () => new File([new Uint8Array([1, 2, 3])], 'cat.png', {type: 'image/png'})
 
 describe('defaultPasteDecision', () => {
   it('drops a single-block chord into the current block verbatim', () => {
@@ -51,6 +53,14 @@ describe('defaultPasteDecision', () => {
     // (historical behavior) instead of a verbatim single-block insert.
     expect(defaultPasteDecision(request({text: '- task', surface: 'shell'})))
       .toEqual({kind: 'split'})
+  })
+
+  it('is text-only — IGNORES files (the "files → media" rule is the attachments decorator, not core)', () => {
+    // Moved out of core so it's gated on the attachments plugin's toggle; the core
+    // default never produces `media`, so a file paste here decides on its text.
+    expect(defaultPasteDecision(request({files: [pngFile()], text: 'a\nb'}))).toEqual({kind: 'split'})
+    expect(defaultPasteDecision(request({files: [pngFile()], text: 'x', surface: 'editor'})))
+      .toEqual({kind: 'single-block'})
   })
 })
 
@@ -145,5 +155,13 @@ describe('pasteDecisionVerb', () => {
     const runtime = resolveFacetRuntimeSync([])
     expect(pasteDecisionVerb.runSync(runtime, request({intent: 'single-block', text: 'x'})))
       .toEqual({kind: 'single-block'})
+  })
+
+  it('without a media contributor, a file paste is text-only (media capture is plugin-gated)', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    // Core alone never produces `media`; the attachments decorator (tested in
+    // pasteCapture.test.ts) is what turns a file paste into a media capture.
+    expect(pasteDecisionVerb.runSync(runtime, request({files: [pngFile()], text: 'a\nb'})))
+      .toEqual({kind: 'split'})
   })
 })

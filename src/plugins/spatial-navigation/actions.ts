@@ -2,6 +2,10 @@ import {
   actionTransformsFacet,
   actionsFacet,
 } from '@/extensions/core.js'
+import {
+  actionDispatchWrap,
+  type ActionDispatchDecorator,
+} from '@/shortcuts/actionDispatch.js'
 import { EXTEND_BLOCK_SELECTION_ACTION_ID } from '@/extensions/blockSelectionAction.js'
 import type { AppExtension } from '@/facets/facet.js'
 import {
@@ -34,6 +38,7 @@ import {
 import {
   horizontalNeighborPanel,
   locationOf,
+  panelById,
   panelOf,
   panelInstances,
   resolveCurrentAnchor,
@@ -124,6 +129,15 @@ const extendSelectionVertical = async (
   const currentLocation = locationOf(current)
   if (!currentLocation) return false
   if (!sameFocusedBlockLocation(currentLocation, focusedLocation)) {
+    await extendSelectionToSpatialTarget(deps, current)
+    return true
+  }
+
+  // Roam-style: the first press (no active selection yet) selects just the
+  // focused block; only once a selection exists do further presses extend to
+  // the neighbour. Mirrors the structural extendSelectionDown/Up path.
+  const hasSelection = (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
+  if (!hasSelection) {
     await extendSelectionToSpatialTarget(deps, current)
     return true
   }
@@ -272,6 +286,35 @@ const crossPanelFocus = async (
   }, {scope: ChangeScope.UiState, description: 'spatial-navigation cross-panel focus'})
 }
 
+/**
+ * Jump focus to the first / last navigable instance in the panel, in
+ * visible DOM order. This is the `gg` / `Shift+G` counterpart to
+ * `moveVertical`: since spatial nav steps `j`/`k` through the rendered
+ * DOM (outline bullets *and* trailing surfaces like backlinks/embeds),
+ * the edges must bound that same sequence — otherwise `Shift+G` would
+ * stop at the last data-tree descendant and skip the backlinks the user
+ * can still `j` into. Same return contract as `moveVertical`: `false`
+ * means "no live panel DOM — fall through to vim's data-model handler"
+ * (SSR/headless, or the panel hasn't mounted); `true` means handled.
+ */
+const jumpToPanelEdge = async (
+  deps: BlockShortcutDependencies,
+  edge: 'first' | 'last',
+): Promise<boolean> => {
+  const {uiStateBlock} = deps
+  if (!uiStateBlock) return false
+  if (typeof document === 'undefined') return false
+  const panel = panelById(uiStateBlock.id)
+  if (!panel) return false
+  const instances = panelInstances(panel)
+  if (instances.length === 0) return false
+  const target = edge === 'first' ? instances[0] : instances[instances.length - 1]
+  const location = locationOf(target)
+  if (!location) return false
+  await focusBlock(uiStateBlock, location.blockId, {renderScopeId: location.renderScopeId})
+  return true
+}
+
 export function getSpatialNavigationActions(): ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] {
   const bindNormal = (action: BlockAction) =>
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, action)
@@ -296,46 +339,68 @@ export function getSpatialNavigationActions(): ActionConfig<typeof ActionContext
   ]
 }
 
-const verticalDecorator = (
+// The vertical-move actions get a label (description) from spatial nav — that's
+// presentational METADATA, so it stays on the definition-transform seam. The
+// movement BEHAVIOUR is the dispatch decorator below; the old combined
+// `verticalDecorator` (which changed both at once) is split along that line.
+const verticalDescriptionTransform = (
   actionId: 'move_down' | 'move_up',
-  direction: 'down' | 'up',
   description: string,
 ): ActionTransform => ({
   actionId,
   context: ActionContextTypes.NORMAL_MODE,
-  apply: action => ({
-    ...action,
-    description,
-    handler: async (deps, trigger, dispatch) => {
-      if (await moveVertical(deps as BlockShortcutDependencies, direction)) return
-      await action.handler(deps, trigger, dispatch)
-    },
-  }),
+  apply: action => ({...action, description}),
 })
 
-const selectionVerticalDecorator = (
+// Each wrap below does `await next(...)` rather than `return next(...)`: an
+// async wrap can't propagate the inner sync `false` decline sentinel
+// (`ActionHandlerResult` forbids `Promise<false>`), so awaiting discards it and
+// the wrap resolves to `Promise<void>` — exactly what the old transform's
+// `await action.handler(...)` did, so the candidate still counts as handled.
+const verticalDispatchDecorator = (
+  actionId: 'move_down' | 'move_up',
+  direction: 'down' | 'up',
+): ActionDispatchDecorator => ({
+  actionId,
+  context: ActionContextTypes.NORMAL_MODE,
+  wrap: async (deps, trigger, next, dispatch) => {
+    if (await moveVertical(deps as BlockShortcutDependencies, direction)) return
+    await next(deps, trigger, dispatch)
+  },
+})
+
+const jumpEdgeDispatchDecorator = (
+  actionId: 'jump_to_first_visible_block' | 'jump_to_last_visible_block',
+  edge: 'first' | 'last',
+): ActionDispatchDecorator => ({
+  actionId,
+  context: ActionContextTypes.NORMAL_MODE,
+  wrap: async (deps, trigger, next, dispatch) => {
+    if (await jumpToPanelEdge(deps as BlockShortcutDependencies, edge)) return
+    await next(deps, trigger, dispatch)
+  },
+})
+
+const selectionVerticalDispatchDecorator = (
   actionId: 'extend_selection_down' | 'extend_selection_up' | 'multi_select.extend_selection_down' | 'multi_select.extend_selection_up',
   context: typeof ActionContextTypes.NORMAL_MODE | typeof ActionContextTypes.MULTI_SELECT_MODE,
   direction: 'down' | 'up',
-): ActionTransform => ({
+): ActionDispatchDecorator => ({
   actionId,
   context,
-  apply: action => ({
-    ...action,
-    handler: async (deps, trigger, dispatch) => {
-      if (await extendSelectionVertical(deps, direction)) return
-      await action.handler(deps, trigger, dispatch)
-    },
-  }),
+  wrap: async (deps, trigger, next, dispatch) => {
+    if (await extendSelectionVertical(deps, direction)) return
+    await next(deps, trigger, dispatch)
+  },
 })
 
 /**
- * Shift-click selection in visible DOM order — an `ActionTransform` on the
+ * Shift-click selection in visible DOM order — a DISPATCH decorator on the
  * structural `extend_block_selection` action, the mouse-side counterpart of
- * `selectionVerticalDecorator`: anchor → clicked block range across whatever is
- * on screen (backlinks, embeds), not the data tree. Declines back to the
- * structural base when no spatial range resolves (e.g. the clicked instance
- * isn't in this panel / isn't a navigable item).
+ * `selectionVerticalDispatchDecorator`: anchor → clicked block range across
+ * whatever is on screen (backlinks, embeds), not the data tree. Declines back to
+ * the structural base (via `next`) when no spatial range resolves (e.g. the
+ * clicked instance isn't in this panel / isn't a navigable item).
  *
  * `deps.targetElement` is the block shell the block-pointer dispatch captured —
  * the same element the spatial shell decorator tags with `data-block-nav-item`,
@@ -343,34 +408,45 @@ const selectionVerticalDecorator = (
  * shift-only pointer binding) means this only ever sees a plain shift-click, so
  * it no longer re-checks modifiers or interactive content.
  */
-export const spatialSelectionClickTransform: ActionTransform = {
+export const spatialSelectionClickDecorator: ActionDispatchDecorator = {
   actionId: EXTEND_BLOCK_SELECTION_ACTION_ID,
   context: ActionContextTypes.BLOCK_POINTER,
-  apply: action => ({
-    ...action,
-    handler: async (deps, trigger, dispatch) => {
-      const {uiStateBlock, targetElement} = deps as BlockPointerDependencies
-      // Only the clicked block's own panel can resolve a spatial range; for a
-      // mismatched panel defer to the structural base rather than swallow it.
-      // `extendSelectionToSpatialTarget` reports a mismatch as "handled" for
-      // the keyboard contract, so gate on the panel match here.
-      if (panelOf(targetElement)?.dataset.panelId === uiStateBlock.id) {
-        if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement)) return
-      }
-      await action.handler(deps, trigger, dispatch)
-    },
-  }),
+  wrap: async (deps, trigger, next, dispatch) => {
+    const {uiStateBlock, targetElement} = deps as BlockPointerDependencies
+    // Only the clicked block's own panel can resolve a spatial range; for a
+    // mismatched panel defer to the structural base rather than swallow it.
+    // `extendSelectionToSpatialTarget` reports a mismatch as "handled" for
+    // the keyboard contract, so gate on the panel match here.
+    if (panelOf(targetElement)?.dataset.panelId === uiStateBlock.id) {
+      if (await extendSelectionToSpatialTarget({uiStateBlock}, targetElement)) return
+    }
+    await next(deps, trigger, dispatch)
+  },
 }
 
-export function getSpatialNavigationActionDecorators(): ActionTransform[] {
+/** Presentational labels for the vertical-move actions — stays on the
+ *  definition-transform seam (binding/metadata shaping). */
+export function getSpatialNavigationActionTransforms(): ActionTransform[] {
   return [
-    verticalDecorator('move_down', 'down', 'Move focus down (next block, then stack-sibling panel below)'),
-    verticalDecorator('move_up', 'up', 'Move focus up (previous block, then stack-sibling panel above)'),
-    selectionVerticalDecorator('extend_selection_down', ActionContextTypes.NORMAL_MODE, 'down'),
-    selectionVerticalDecorator('extend_selection_up', ActionContextTypes.NORMAL_MODE, 'up'),
-    selectionVerticalDecorator('multi_select.extend_selection_down', ActionContextTypes.MULTI_SELECT_MODE, 'down'),
-    selectionVerticalDecorator('multi_select.extend_selection_up', ActionContextTypes.MULTI_SELECT_MODE, 'up'),
-    spatialSelectionClickTransform,
+    verticalDescriptionTransform('move_down', 'Move focus down (next block, then stack-sibling panel below)'),
+    verticalDescriptionTransform('move_up', 'Move focus up (previous block, then stack-sibling panel above)'),
+  ]
+}
+
+/** Behaviour wraps (move-then-fall-through, jump-to-edge, selection-extend,
+ *  shift-click range) on the action-dispatch seam — migrated off
+ *  `actionTransformsFacet`. */
+export function getSpatialNavigationDispatchDecorators(): ActionDispatchDecorator[] {
+  return [
+    verticalDispatchDecorator('move_down', 'down'),
+    verticalDispatchDecorator('move_up', 'up'),
+    jumpEdgeDispatchDecorator('jump_to_first_visible_block', 'first'),
+    jumpEdgeDispatchDecorator('jump_to_last_visible_block', 'last'),
+    selectionVerticalDispatchDecorator('extend_selection_down', ActionContextTypes.NORMAL_MODE, 'down'),
+    selectionVerticalDispatchDecorator('extend_selection_up', ActionContextTypes.NORMAL_MODE, 'up'),
+    selectionVerticalDispatchDecorator('multi_select.extend_selection_down', ActionContextTypes.MULTI_SELECT_MODE, 'down'),
+    selectionVerticalDispatchDecorator('multi_select.extend_selection_up', ActionContextTypes.MULTI_SELECT_MODE, 'up'),
+    spatialSelectionClickDecorator,
   ]
 }
 
@@ -379,7 +455,11 @@ export const spatialNavigationActionsExtension: AppExtension =
     actionsFacet.of(action as ActionConfig, {source: 'spatial-navigation'}),
   )
 
-export const spatialNavigationActionDecoratorsExtension: AppExtension =
-  getSpatialNavigationActionDecorators().map(decorator =>
-    actionTransformsFacet.of(decorator, {source: 'spatial-navigation'}),
-  )
+export const spatialNavigationActionDecoratorsExtension: AppExtension = [
+  ...getSpatialNavigationActionTransforms().map(transform =>
+    actionTransformsFacet.of(transform, {source: 'spatial-navigation'}),
+  ),
+  ...getSpatialNavigationDispatchDecorators().map(decorator =>
+    actionDispatchWrap(decorator, {source: 'spatial-navigation'}),
+  ),
+]

@@ -264,7 +264,7 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
     return <DefaultBlockLayout {...slots}/>
   }
 
-  const {Children} = slots
+  const {Children, Shell} = slots
   const clampedVideoPaneRatio = clampVideoNotesPaneRatio(videoPaneRatio)
   const videoPaneStyle: VideoNotesPaneStyle = {
     flexBasis: videoNotesPanePercent(clampedVideoPaneRatio),
@@ -274,7 +274,10 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
     flexBasis: videoNotesPanePercent(1 - clampedVideoPaneRatio),
   }
 
-  return (
+  // The fullscreen notes view renders its own chrome and ignores the shell
+  // props, but still mounts `Shell` so the focused video block keeps its
+  // 'block' shortcut surface (play/pause/seek) and shell decorators.
+  const notesView = (
     <div
       ref={containerRef}
       className="fixed inset-0 z-50 flex flex-col bg-background text-foreground md:flex-row"
@@ -336,6 +339,8 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
       </aside>
     </div>
   )
+
+  return <Shell>{() => notesView}</Shell>
 }
 
 /**

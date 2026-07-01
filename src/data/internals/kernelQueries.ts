@@ -20,12 +20,15 @@
 import { z } from 'zod'
 import {
   defineQuery,
+  blockPredicateSchema,
+  referenceFilterSchema,
   type AnyQuery,
   type BlockData,
   type BlockPredicate,
   type QueryCtx,
   type ResolvedTypedBlockQuery,
   type Schema,
+  type SubtreeRow,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
@@ -247,6 +250,16 @@ export const compileBlocksContentSearchQuery = (
   return {matchQuery, rankQuery}
 }
 
+/** Escape SQLite LIKE metacharacters (`%`, `_`) and the escape char
+ *  itself in a value that must be matched literally inside a LIKE
+ *  pattern. Pairs with an explicit `ESCAPE '\'` clause on the SQL side
+ *  (we use backslash as the escape char). Without this a user-typed
+ *  `_` or `%` acts as a wildcard — `a_b` would match `axb`, and a bare
+ *  `%` filter would match every row. Bound `?` params already block SQL
+ *  injection; this only fixes LIKE-pattern semantics. */
+const escapeLikePattern = (value: string): string =>
+  value.replace(/[\\%_]/g, c => `\\${c}`)
+
 /** Content search — case-insensitive trigram FTS substring match. */
 export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   SELECT ${buildQualifiedBlockColumnsSql('b')}
@@ -261,7 +274,7 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   ORDER BY
     CASE
       WHEN LOWER(b.content) = LOWER(?) THEN 0
-      WHEN LOWER(b.content) LIKE LOWER(?) || '%' THEN 1
+      WHEN LOWER(b.content) LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END,
     coalesce(b.user_updated_at, b.updated_at) DESC
@@ -293,12 +306,12 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
-    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
+    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%' ESCAPE '\\')
   GROUP BY ba.alias
   ORDER BY
     MIN(CASE
       WHEN ba.alias_lower = LOWER(?) THEN 0
-      WHEN ba.alias_lower LIKE LOWER(?) || '%' THEN 1
+      WHEN ba.alias_lower LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END),
     MIN(b.created_at),
@@ -365,7 +378,7 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
  *  aliases" path. */
 export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
   const filters = tokenCount > 0
-    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%'`).join(' AND ')
+    ? Array(tokenCount).fill(`ba.alias_lower LIKE '%' || ? || '%' ESCAPE '\\'`).join(' AND ')
     : '1=1'
   return `
     SELECT
@@ -381,7 +394,7 @@ export const buildFuzzyAliasMatchesSql = (tokenCount: number): string => {
     ORDER BY
       CASE
         WHEN ba.alias_lower = ? THEN 0
-        WHEN ba.alias_lower LIKE ? || '%' THEN 1
+        WHEN ba.alias_lower LIKE ? || '%' ESCAPE '\\' THEN 1
         ELSE 2
       END,
       b.created_at,
@@ -402,11 +415,11 @@ export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   JOIN blocks b ON b.id = ba.block_id
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
-    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
+    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%' ESCAPE '\\')
   ORDER BY
     CASE
       WHEN ba.alias_lower = LOWER(?) THEN 0
-      WHEN ba.alias_lower LIKE LOWER(?) || '%' THEN 1
+      WHEN ba.alias_lower LIKE LOWER(?) || '%' ESCAPE '\\' THEN 1
       ELSE 2
     END,
     b.created_at,
@@ -476,16 +489,21 @@ const numberSchema: Schema<number> = {
 const blockDataOrNullSchema: Schema<BlockData | null> = {
   parse: (input) => input as BlockData | null,
 }
+const subtreeRowArraySchema: Schema<SubtreeRow[]> = {
+  parse: (input) => input as SubtreeRow[],
+}
 
 // ──── Tree queries ────
 
-/** Subtree rooted at `id`, includeRoot=true (spec §11). Identity-stable
- *  via the dispatcher's handle-store key. Dep declaration mirrors the
- *  legacy `repo.subtree(id)` factory in `repo.ts`. */
-export const subtreeQuery = defineQuery<{id: string}, BlockData[]>({
+/** Subtree rooted at `id`, includeRoot=true (spec §11). Returns
+ *  {@link SubtreeRow}s — each block plus its `depth` relative to the root —
+ *  in pre-order, siblings by `(order_key, id)`. Identity-stable via the
+ *  dispatcher's handle-store key. Dep declaration mirrors the legacy
+ *  `repo.subtree(id)` factory in `repo.ts`. */
+export const subtreeQuery = defineQuery<{id: string}, SubtreeRow[]>({
   name: 'core.subtree',
   argsSchema: z.object({id: z.string()}),
-  resultSchema: blockDataArraySchema,
+  resultSchema: subtreeRowArraySchema,
   resolve: async ({id}, ctx) => {
     // Upfront deps — declared before SQL so the empty-result case (root
     // missing on first load) and any mid-load invalidations have
@@ -495,10 +513,16 @@ export const subtreeQuery = defineQuery<{id: string}, BlockData[]>({
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
-    for (const data of out) {
+    // SUBTREE_SQL already computes depth (0 at the root, +1 per level) and
+    // hydrateBlocks preserves row order, so `out[i]` ↔ `rows[i]`. depth is
+    // root-relative — a property of position in THIS subtree, not of the
+    // block — so it goes onto a fresh result wrapper, never onto the
+    // cached BlockData that hydrateBlocks just stored.
+    const withDepth = out.map((data, i): SubtreeRow => ({...data, depth: rows[i].depth}))
+    for (const data of withDepth) {
       ctx.depend({kind: 'parent-edge', parentId: data.id})
     }
-    return out
+    return withDepth
   },
 })
 
@@ -627,18 +651,6 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, Bloc
     )
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
-})
-
-const referenceFilterSchema = z.object({
-  id: z.string(),
-  sourceField: z.string().optional(),
-})
-
-const blockPredicateSchema = z.object({
-  scope: z.enum(['self', 'ancestor']).optional(),
-  id: z.string().optional(),
-  where: z.record(z.string(), z.unknown()).optional(),
-  referencedBy: referenceFilterSchema.optional(),
 })
 
 const typedBlocksArgsSchema = z.object({
@@ -1010,9 +1022,19 @@ export const searchByContentQuery = defineQuery<
       channel: KERNEL_CONTENT_CHANNEL,
       key: kernelContentKey(workspaceId),
     })
+    // The prefix-rank LIKE takes the escaped rankQuery (so `_`/`%` in
+    // the query rank as literals); the exact `= LOWER(?)` rank takes the
+    // raw rankQuery. The FTS MATCH itself is unaffected — LIKE is only a
+    // tiebreaker over the already-matched rows.
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_CONTENT_SQL,
-      [workspaceId, compiledQuery.matchQuery, compiledQuery.rankQuery, compiledQuery.rankQuery, limit],
+      [
+        workspaceId,
+        compiledQuery.matchQuery,
+        compiledQuery.rankQuery,
+        escapeLikePattern(compiledQuery.rankQuery),
+        limit,
+      ],
     )
     // Skip per-row deps. The kernel.content channel above covers
     // every axis that can flip a content-substring match: content
@@ -1105,8 +1127,12 @@ export const aliasesInWorkspaceQuery = defineQuery<
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
+    // Escaped value backs the substring + prefix LIKEs (so `_`/`%` in
+    // the filter match literally); raw value backs the `? = ''` guard
+    // and the exact `= LOWER(?)` rank comparison.
+    const escaped = escapeLikePattern(filter)
     const rows = await ctx.db.getAll<{alias: string}>(
-      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter],
+      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, escaped, filter, escaped],
     )
     return rows.map(r => r.alias)
   },
@@ -1135,8 +1161,11 @@ export const aliasMatchesQuery = defineQuery<
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
+    // See `aliasesInWorkspace`: escaped value for the LIKEs, raw for the
+    // `? = ''` guard and the exact `= LOWER(?)` rank comparison.
+    const escaped = escapeLikePattern(filter)
     const rows = await ctx.db.getAll<AliasMatch>(
-      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter, limit],
+      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, escaped, filter, escaped, limit],
     )
     // Per-row deps so content edits on a currently-returned alias block
     // refresh the autocomplete preview. Sister kernel queries that
@@ -1183,8 +1212,16 @@ export const aliasMatchesFuzzyQuery = defineQuery<
     const sql = buildFuzzyAliasMatchesSql(prefixes.length)
     // The two extra params back the exact/prefix ORDER BY so the LIMIT
     // retains the verbatim match; `alias_lower` is already lowercased.
+    // Prefixes are literal token substrings (first-3 of each query token,
+    // see `buildFilterPrefixes`), not wildcard patterns, so their LIKE
+    // metacharacters are escaped — as is the prefix-rank query — so a
+    // typed `_`/`%` matches literally. The exact `= ?` rank takes the
+    // raw query.
     const queryLower = query.toLowerCase()
-    const params: (string | number)[] = [workspaceId, ...prefixes, queryLower, queryLower, limit]
+    const escapedPrefixes = prefixes.map(escapeLikePattern)
+    const params: (string | number)[] = [
+      workspaceId, ...escapedPrefixes, queryLower, escapeLikePattern(queryLower), limit,
+    ]
     const rows = await ctx.db.getAll<AliasMatchWithRecency>(sql, params)
     // Same reasoning as `aliasMatches`: this query returns a custom row
     // shape (no BlockData hydration), so per-row deps have to be

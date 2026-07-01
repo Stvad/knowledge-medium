@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { Suspense, useEffect, type ReactNode } from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'

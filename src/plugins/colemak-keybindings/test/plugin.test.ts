@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import type { Repo } from '@/data/repo'
 import { resolveAppRuntimeSync } from '@/facets/resolveAppRuntime'

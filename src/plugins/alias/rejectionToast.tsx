@@ -11,6 +11,7 @@
  * contribution returns, inside its own `showCustom` envelope.
  */
 import { createElement } from 'react'
+import { truncate } from '@/utils/string'
 import type { ProcessorRejection } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { RejectionToastContribution } from '@/extensions/core.js'
@@ -45,9 +46,6 @@ const isAliasCollisionMeta = (meta: unknown): meta is AliasCollisionMeta =>
     (meta as AliasCollisionMeta).collisionOrigin === undefined
     || typeof (meta as AliasCollisionMeta).collisionOrigin === 'string'
   )
-
-const truncate = (s: string, n: number): string =>
-  s.length <= n ? s : `${s.slice(0, n - 1)}…`
 
 /** `rejectionToastFacet` contribution for `alias.collision`. */
 export const aliasCollisionRejectionToast: RejectionToastContribution = {

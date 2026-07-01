@@ -21,11 +21,12 @@
  *     hand to verify the dep-matching contract.)
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
+import type { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '../repo'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import type { Repo } from '../repo'
 import type { Dependency } from '../internals/handleStore'
 
 interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
@@ -33,8 +34,7 @@ interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  const repo = new Repo({db: h.db, cache, user: {id: 'u1'}})
+  const { repo, cache } = createTestRepo({db: h.db, user: {id: 'u1'}})
   return {h, cache, repo}
 }
 
@@ -43,9 +43,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const create = async (
   id: string,

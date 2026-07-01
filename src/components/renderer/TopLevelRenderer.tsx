@@ -24,7 +24,23 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
   useActionContext(ActionContextTypes.GLOBAL)
 
   return (
-    <div className="min-h-screen h-screen bg-background text-foreground flex flex-col">
+    // paddingTop reserves the iOS status-bar strip. As an installed PWA we run
+    // `apple-mobile-web-app-status-bar-style=black-translucent` + `viewport-fit=cover`
+    // (index.html), so iOS draws content full-screen BEHIND the translucent status
+    // bar; without this inset the Header sits under the clock/battery (visible on
+    // iPad). It's on the `bg-background` frame so the themed background still flows
+    // edge-to-edge behind the status bar (the immersive look black-translucent buys),
+    // with only the content pushed down. The *top* inset is 0 in a normal browser tab
+    // (Safari's own top chrome already covers the notch there), so this is inert
+    // outside the installed PWA. Bottom insets are handled per-surface (bottom nav,
+    // sidebar footer, panel scroller) to avoid double-insetting; the left-sidebar
+    // overlay reserves its OWN top inset (it's a viewport-anchored sibling of this
+    // frame, not a child — see LeftSidebar). Left/right insets aren't reserved
+    // anywhere yet (landscape-notch gutters) — a pre-existing gap, not handled here.
+    <div
+      className="min-h-screen h-screen bg-background text-foreground flex flex-col"
+      style={{paddingTop: 'env(safe-area-inset-top, 0px)'}}
+    >
       <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-0.5 md:px-2">
         <Header/>
         <NestedBlockContextProvider

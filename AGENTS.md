@@ -2,6 +2,12 @@ verification:
 - use `yarn run check` for verification unless otherwise stated
 - bridge/server tests that bind `127.0.0.1` fail in the Codex sandbox with `listen EPERM`; run `yarn run check` or those specific tests with elevated permissions
 
+inner loop (this repo is built primarily by agents — keep the edit→verify cycle tight):
+- iterate against ONE test file: `yarn vitest run <path>` (~1s). `yarn run check` (~64s, the full gate) is for *before a commit*, not after every edit.
+- inspect the LIVE client with no rebuild via the agent bridge: `yarn agent <verb>` — `runtime-summary` / `describe-runtime` for runtime + data-model context, `sql all "<query>"`, `get-block`, `subtree` for data. Full surface + pairing: `packages/agent-cli/README.md`. Read verbs (above) are safe to run freely; mutating verbs (`eval`, `sql execute`, `create-block`/`update-block`, `run-action`, `reload`, `navigate`) act on the live user client — use deliberately, and prefer a scratch page over touching real data.
+- the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
+- `yarn run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`yarn agent types`).
+
 secret handling:
 - do not read `.env`, `.env.*`, or other local secret files unless the user explicitly asks for it
 - do not print, echo, cat, grep, or otherwise reveal secrets or secret-bearing files in chat or command output
@@ -22,8 +28,8 @@ design docs (`docs/*.html`) are intent/history, not ground truth:
 - before relying on a doc claim that matters to the task, confirm it's reflected in the code. If the doc describes a mechanism the code doesn't have, presume it was abandoned or never built — NOT "planned/coming" — and flag the divergence instead of designing around it.
 - when a doc contradicts the code, say so in your output and (if cheap) fix or re-stamp the doc; don't silently inherit the stale claim.
 
-cloud / remote sessions (Claude Code on the web):
-- when running in a cloud/remote execution environment, open a pull request as soon as the branch has its first commit — don't wait to be asked — then subscribe to the PR's activity so review comments and CI failures come back into the session and can be addressed. (This standing authorization applies only to cloud sessions; local runs still default to not opening a PR unless asked.)
+cloud / remote sessions (Claude Code on the web) and git worktrees:
+- when running in a cloud/remote execution environment, OR working in a non-main git worktree (a checkout that isn't the primary repo dir), open a pull request as soon as the branch has its first commit — don't wait to be asked — then subscribe to the PR's activity so review comments and CI failures come back into the session and can be addressed. (This standing authorization applies to cloud sessions and non-main worktrees; a plain local run in the main checkout still defaults to not opening a PR unless asked.)
 
 ui event channels (audit B3 — do not reintroduce the untyped window.CustomEvent UI bus):
 - dialogs / pickers / one-shot prompts: `openDialog(Component, props)` from `@/utils/dialogs` (returns a promise; the component takes `resolve`/`cancel` via `DialogContextProps`). The plugin must pull in `dialogAppMountExtension` so DialogHost is mounted.

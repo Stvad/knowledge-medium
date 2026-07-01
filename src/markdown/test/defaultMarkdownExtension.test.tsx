@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import Markdown from 'react-markdown'
@@ -8,6 +9,7 @@ import { gfmMarkdownExtension, isExternalHref } from '@/markdown/defaultMarkdown
 const markdownConfig = gfmMarkdownExtension({
   block: {} as Block,
   blockContext: {},
+  data: {content: '', references: [], workspaceId: ''},
 })
 
 const renderMarkdown = (content: string) => {

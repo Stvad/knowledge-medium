@@ -65,6 +65,7 @@ import {
 } from './internals/propertyChildrenProcessor'
 import { kernelDataExtension } from './kernelDataExtension'
 import {
+  systemPagesFacet,
   type WorkspaceBackfill,
   type WorkspaceBackfillContext,
 } from './facets'
@@ -2741,6 +2742,26 @@ export class Repo {
    *  that mutate the table out-of-band to simulate cross-session state. */
   __resetReprojectionMarkerCache(): void {
     this.reprojectionMarkers.reset()
+  }
+
+  /**
+   * Ensure every registered system page (`systemPagesFacet`) exists for
+   * `workspaceId`. Called at workspace bootstrap BEFORE the landing resolver
+   * seeds, so a `[[reserved alias]]` wiki-link (Journal/Properties/Types/
+   * Locations) resolves to the canonical page instead of auto-creating a rival
+   * that trips `alias.collision`. Each `ensure` get-or-creates at a
+   * deterministic id (idempotent), so repeated bootstraps and offline-
+   * converging clients all land on the same rows.
+   *
+   * Reads off this Repo's own `facetRuntime` — which carries the data-layer
+   * contributions installed at construction (`staticDataExtensions`) — so no
+   * separate runtime resolution is needed. Awaited (not deferred): the pages
+   * must exist before the seed's references parse.
+   */
+  async ensureSystemPages(workspaceId: string): Promise<void> {
+    if (!workspaceId) return
+    const pages = this.facetRuntime?.read(systemPagesFacet) ?? []
+    await Promise.all(pages.map(page => page.ensure(this, workspaceId)))
   }
 
   /**

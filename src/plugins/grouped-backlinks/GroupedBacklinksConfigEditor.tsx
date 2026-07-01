@@ -1,13 +1,15 @@
 import {
   FormEvent,
-  KeyboardEvent,
-  useEffect,
   useId,
   useMemo,
   useState,
 } from 'react'
 import { Plus, X } from 'lucide-react'
+import { truncate } from '@/utils/string'
+import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
+import { useDebouncedSearch } from '@/hooks/useDebouncedSearch.js'
 import {
+  isReadOnlyBlock,
   type PropertyEditorProps,
 } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
@@ -19,6 +21,7 @@ import {
   searchLinkTargetValueCandidates,
   type LinkTargetValueCandidate,
 } from '@/utils/linkTargetAutocomplete.js'
+import { uniqueStrings } from '@/utils/array'
 import {
   normalizeGroupedBacklinksConfig,
   type GroupedBacklinksConfig,
@@ -28,18 +31,6 @@ const SEARCH_LIMIT = 6
 const DEBOUNCE_MS = 80
 
 type TagTone = 'high' | 'low' | 'excluded'
-
-const truncate = (text: string, max = 72): string =>
-  text.length > max ? `${text.slice(0, max - 3)}...` : text
-
-const uniqueStrings = (values: readonly string[]): string[] =>
-  Array.from(new Set(values.map(value => value.trim()).filter(Boolean)))
-
-const isReadOnlyBlock = (block: unknown): boolean => {
-  if (!block || typeof block !== 'object') return false
-  const repo = (block as { repo?: { isReadOnly?: unknown } }).repo
-  return repo?.isReadOnly === true
-}
 
 const toneClass = (tone: TagTone): string => {
   switch (tone) {
@@ -105,46 +96,50 @@ const ConfigTagInput = ({
   const workspaceId = repo.activeWorkspaceId ?? ''
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
-  const [results, setResults] = useState<LinkTargetValueCandidate[]>([])
-  const [activeIndex, setActiveIndex] = useState(-1)
   const currentValues = useMemo(() => uniqueStrings(values), [values])
   const currentValueSet = useMemo(() => new Set(currentValues), [currentValues])
   const trimmed = query.trim()
+
+  const { results, resultsQuery, reset: resetResults } = useDebouncedSearch<LinkTargetValueCandidate>({
+    query,
+    delayMs: DEBOUNCE_MS,
+    enabled: Boolean(workspaceId),
+    search: q => searchLinkTargetValueCandidates(repo, {
+      workspaceId,
+      query: q,
+      limit: SEARCH_LIMIT,
+      excludeValues: currentValueSet,
+    }),
+    // `setActiveIndex` is the listbox's stable setter, declared just below;
+    // onResults only runs async once results land, so the forward reference
+    // is safe.
+    onResults: () => setActiveIndex(0),
+    revalidateOn: [workspaceId, currentValueSet],
+  })
   const popupOpen = focused && trimmed.length > 0 && results.length > 0
-  const activeCandidate = activeIndex >= 0 ? results[activeIndex] : undefined
 
-  useEffect(() => {
-    if (!workspaceId || !trimmed) return
-
-    let cancelled = false
-    const timer = setTimeout(async () => {
-      const nextResults = await searchLinkTargetValueCandidates(repo, {
-        workspaceId,
-        query: trimmed,
-        limit: SEARCH_LIMIT,
-        excludeValues: currentValueSet,
-      })
-      if (cancelled) return
-
-      setResults(nextResults)
-      setActiveIndex(nextResults.length > 0 ? 0 : -1)
-    }, DEBOUNCE_MS)
-
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [currentValueSet, repo, trimmed, workspaceId])
-
-  const add = (value?: string) => {
+  const commitValue = (value: string) => {
     if (readOnly) return
-    const nextValue = (value ?? activeCandidate?.value ?? trimmed).trim()
-    if (!nextValue) return
-    onChange(uniqueStrings([...currentValues, nextValue]))
+    const next = value.trim()
+    if (!next) return
+    onChange(uniqueStrings([...currentValues, next]))
     setQuery('')
-    setResults([])
-    setActiveIndex(-1)
+    resetResults()
   }
+
+  const { activeIndex, setActiveIndex, activeDescendantId, onKeyDown, getOptionProps } =
+    useAutocompleteListbox({
+      itemCount: results.length,
+      setOpen: setFocused,
+      wrap: true,
+      listboxId,
+      onCommit: index => {
+        const candidate = results[index]
+        if (!candidate) return false
+        commitValue(candidate.value)
+        return true
+      },
+    })
 
   const remove = (value: string) => {
     if (readOnly) return
@@ -153,36 +148,11 @@ const ConfigTagInput = ({
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
-    add()
-  }
-
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'ArrowDown' && results.length > 0) {
-      event.preventDefault()
-      setFocused(true)
-      setActiveIndex(index => (
-        index < 0 ? 0 : (index + 1) % results.length
-      ))
-      return
-    }
-    if (event.key === 'ArrowUp' && results.length > 0) {
-      event.preventDefault()
-      setFocused(true)
-      setActiveIndex(index => (
-        index <= 0 ? results.length - 1 : index - 1
-      ))
-      return
-    }
-    if (event.key === 'Enter' && popupOpen && activeCandidate) {
-      event.preventDefault()
-      add(activeCandidate.value)
-      return
-    }
-    if (event.key === 'Escape') {
-      setQuery('')
-      setResults([])
-      setActiveIndex(-1)
-    }
+    // Only adopt the active result when it was fetched for what's currently
+    // typed; mid-debounce it may still reflect the previous text, so fall back
+    // to the typed value instead of committing a stale suggestion.
+    const fresh = resultsQuery === trimmed ? results[activeIndex]?.value : undefined
+    commitValue(fresh ?? trimmed)
   }
 
   return (
@@ -208,23 +178,33 @@ const ConfigTagInput = ({
             onChange={event => {
               const next = event.target.value
               setQuery(next)
-              if (!next.trim()) {
-                setResults([])
-                setActiveIndex(-1)
-              }
+              if (!next.trim()) resetResults()
             }}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
-            onKeyDown={handleKeyDown}
+            onKeyDown={event => {
+              if (event.key === 'Escape') {
+                setQuery('')
+                resetResults()
+                return
+              }
+              // Mid-debounce the visible results still belong to the previous
+              // text; commit the typed tag rather than letting the listbox adopt
+              // a stale highlight. A click still commits the row it hit.
+              if (event.key === 'Enter' && resultsQuery !== trimmed) {
+                event.preventDefault()
+                commitValue(trimmed)
+                return
+              }
+              onKeyDown(event)
+            }}
             placeholder={placeholder}
             className="h-8 min-w-0 text-xs"
             role="combobox"
             aria-autocomplete="list"
             aria-expanded={Boolean(popupOpen)}
             aria-controls={popupOpen ? listboxId : undefined}
-            aria-activedescendant={
-              popupOpen && activeCandidate ? `${listboxId}-option-${activeIndex}` : undefined
-            }
+            aria-activedescendant={popupOpen ? activeDescendantId : undefined}
           />
           <Button
             type="submit"
@@ -249,14 +229,7 @@ const ConfigTagInput = ({
               <button
                 type="button"
                 key={result.key}
-                id={`${listboxId}-option-${index}`}
-                role="option"
-                aria-selected={index === activeIndex}
-                onMouseEnter={() => setActiveIndex(index)}
-                onMouseDown={event => {
-                  event.preventDefault()
-                  add(result.value)
-                }}
+                {...getOptionProps(index)}
                 className={cn(
                   'flex w-full min-w-0 flex-col rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
                   index === activeIndex ? 'bg-accent' : '',
@@ -264,7 +237,7 @@ const ConfigTagInput = ({
               >
                 <span className="truncate font-medium">{result.label}</span>
                 {result.detail && result.detail !== result.label && (
-                  <span className="truncate text-muted-foreground">{truncate(result.detail)}</span>
+                  <span className="truncate text-muted-foreground">{truncate(result.detail, 72)}</span>
                 )}
               </button>
             ))}

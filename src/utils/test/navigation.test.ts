@@ -17,8 +17,8 @@ import {
   type NavigationGesture,
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import {
@@ -47,9 +47,8 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file (beforeAll), reset here per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache: new BlockCache(),
     user: USER,
   })
   repo.setActiveWorkspaceId(WS)
@@ -68,7 +67,6 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  env.repo.stopSyncObserver()
 })
 
 const layoutSessionBlock = async () => {

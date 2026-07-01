@@ -27,7 +27,9 @@ import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
 import { spatialNavigationPlugin } from '@/plugins/spatial-navigation'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
+import { onboardingPlugin } from '@/plugins/onboarding'
 import { videoPlayerPlugin } from '@/plugins/video-player'
+import { attachmentsPlugin } from '@/plugins/attachments'
 import { aliasPlugin } from '@/plugins/alias'
 import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { referencesPlugin } from '@/plugins/references'
@@ -50,7 +52,6 @@ import { dbMaintenancePlugin } from '@/plugins/db-maintenance'
 import { startupMetricsPlugin } from '@/plugins/startup-metrics'
 import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
-import { colemakKeybindingsPlugin } from '@/plugins/colemak-keybindings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
@@ -67,7 +68,6 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // below "Extensions" in the Preferences tree; functionally
   // independent (no shared facet contributions).
   keybindingsSettingsPlugin,
-  colemakKeybindingsPlugin,
   kernelDataExtension,
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
@@ -93,6 +93,10 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // facet's "last wins" arrangement does the right thing without an
   // explicit precedence number.
   dailyNotesPlugin({repo}),
+  // Onboarding seeds first-run content via its own higher-precedence
+  // landing resolver, then defers the landing target to daily-notes
+  // above. Depends on daily-notes (get-or-create of today's note).
+  onboardingPlugin({repo}),
   leftSidebarPlugin,
   workspaceHeaderPlugin,
   commandPalettePlugin,
@@ -109,6 +113,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   spatialNavigationPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
+  attachmentsPlugin,
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,

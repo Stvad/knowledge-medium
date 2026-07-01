@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { type PropertyEditorProps } from '@/data/api'
+import { isReadOnlyBlock, type PropertyEditorProps } from '@/data/api'
 import { useRepo } from '@/context/repo.js'
 import {
   normalizeBacklinksFilter,
@@ -7,12 +7,6 @@ import {
 } from './query.ts'
 import { BacklinkFilters } from './BacklinkFilters.tsx'
 import type { StoredBacklinksFilter } from './filterProperty.ts'
-
-const isReadOnlyBlock = (block: unknown): boolean => {
-  if (!block || typeof block !== 'object') return false
-  const repo = (block as { repo?: { isReadOnly?: unknown } }).repo
-  return repo?.isReadOnly === true
-}
 
 const workspaceIdFromBlock = (block: unknown): string | undefined => {
   if (!block || typeof block !== 'object') return undefined

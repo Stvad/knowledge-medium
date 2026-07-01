@@ -27,7 +27,7 @@
  * regression without adding a meaningless feature.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
@@ -41,6 +41,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
   mutatorsFacet,
@@ -109,28 +110,20 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
   h = sharedDb
-  cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  repo = new Repo({
+  ;({ repo, cache } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
     // Keep kernel mutators registered so the plugin layers in cleanly
     // alongside core; setFacetRuntime below replaces the registry with
     // the merged kernel + plugin runtime (the same shape
     // AppRuntimeProvider produces).
-  })
+  }))
   // Seed a row so setProperty has a target.
   await repo.tx(
     tx => tx.create({id: 'b1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
     {scope: ChangeScope.BlockDefault},
   )
 })
-
-afterEach(async () => { repo.stopSyncObserver() })
 
 // ──── End-to-end §12.1 wiring ────
 

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, afterEach, vi } from 'vitest'
 import { act, render, cleanup } from '@testing-library/react'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
@@ -1843,11 +1844,19 @@ describe('HotkeyReconciler', () => {
         dispatchKeydown('s')
         await new Promise(r => setTimeout(r, 80))
         dispatchKeydown('h')
-        // Allow any pending React work to settle, then assert.
-        await new Promise(r => setTimeout(r, 50))
-
+        // The modal handler fires once React flushes the post-hold commit.
+        // Wait for that observable outcome rather than a fixed settle, then
+        // assert the base-context handler was suppressed. (The 80ms above is a
+        // genuine real-time hold duration and stays.) This test runs on REAL
+        // timers, so under full-suite CPU contention the commit+flush can lag —
+        // give vi.waitFor a generous budget (default is 1000ms) to avoid a
+        // load-dependent flake; on success it still resolves the instant the
+        // handler fires.
+        await vi.waitFor(() => expect(modalHandler).toHaveBeenCalledTimes(1), {
+          timeout: 5000,
+          interval: 25,
+        })
         expect(baseHandler).not.toHaveBeenCalled()
-        expect(modalHandler).toHaveBeenCalledTimes(1)
       })
 
       it('skips sequence-chord hold bindings (warned at install)', () => {

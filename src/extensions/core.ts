@@ -27,8 +27,12 @@ export interface AppEffectContext {
  *  affordances (a [[Tutorial]] bullet etc.).
  *
  *  Runs BEFORE React mounts (inside App.tsx's bootstrap chain), so
- *  resolvers cannot use hooks or read the live `FacetRuntime`. Talk
- *  to the Repo directly. */
+ *  resolvers cannot use hooks or read the live `FacetRuntime`. Talk to the
+ *  Repo directly, including for type/schema lookups via
+ *  `repo.snapshotTypeRegistries()` — which at this point holds the
+ *  `staticDataExtensions` registered onto the Repo at construction. A
+ *  resolver that seeds blocks of a plugin type must ensure that plugin's
+ *  data extension is in `staticDataExtensions`. */
 export interface WorkspaceLandingContext {
   repo: Repo
   workspaceId: string

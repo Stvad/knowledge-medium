@@ -4,9 +4,9 @@
  * write, and the synced→drained→settled collector orchestration.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks'
 import { getClientId, resetClientIdCache } from '@/utils/clientId'
 import type { User } from '@/data/api'
@@ -32,7 +32,6 @@ const USER: User = { id: 'user-1', name: 'Alice' }
 
 let sharedDb: TestDb
 let repo: Repo
-let txSeq = 0
 
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
@@ -41,12 +40,10 @@ beforeEach(async () => {
   resetStartupTimeline()
   resetStartupMetricsRecorded()
   resetClientIdCache()
-  txSeq = 0
-  repo = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: USER, newTxSeq: () => ++txSeq })
+  repo = createTestRepo({ db: sharedDb.db, user: USER }).repo
   repo.setActiveWorkspaceId(WS)
 })
 afterEach(() => {
-  repo.stopSyncObserver()
   vi.restoreAllMocks()
 })
 
@@ -226,18 +223,32 @@ describe('collectStartupMetricsEffect', () => {
 
   it('does not record before first paint (no firstContentPaint mark)', async () => {
     startEffect(WS)
-    // Interactive detection re-polls for the paint mark; nothing is written.
+    // Deliberate exception to AGENTS.md's "poll with vi.waitFor, not setTimeout"
+    // rule: that rule is for waiting on an EXPECTED round-trip. This is the
+    // inverse — a prove-absence check with no event to poll for. The recorder's
+    // only write paths are deferred (setTimeout / scheduleIdle), so an immediate
+    // count is trivially 0 even if the paint gate were broken; we must give an
+    // erroneous pre-paint write a real window to land before asserting it
+    // didn't. 50ms stays well under the effect's 60s settle-fallback. (The
+    // positive fence below proves the effect is live, so the 0 isn't a no-op.)
     await new Promise(r => setTimeout(r, 50))
     expect(await countRecords()).toBe(0)
+    // Then prove the effect is genuinely live (so the 0 above isn't a dead
+    // effect): once paint is marked, the same re-poll writes exactly one
+    // record — the count goes 0 → 1, never to a spurious pre-paint extra.
+    markStartup('firstContentPaint')
+    await vi.waitFor(async () => expect(await countRecords()).toBe(1))
   })
 
   it('records at most once per session even if the effect restarts', async () => {
     markStartup('firstContentPaint')
     startEffect(WS)
     await vi.waitFor(async () => expect(await countRecords()).toBe(1))
-    // A second workspace open in the same session must not log a second startup.
+    // A second workspace open in the same session must not log a second
+    // startup. The once-per-session guard (`recorded`) makes the restart a
+    // synchronous no-op — no further write is scheduled — so the count is
+    // already final, no settle wait needed.
     startEffect('ws-2')
-    await new Promise(r => setTimeout(r, 0))
     expect(await countRecords()).toBe(1)
   })
 

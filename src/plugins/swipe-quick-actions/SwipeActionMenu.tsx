@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState, useRef, useMemo, type MouseEvent, type TouchEvent } from 'react'
+import { clamp } from 'lodash-es'
 import { createPortal } from 'react-dom'
 import { MoreHorizontal } from 'lucide-react'
 import { useIsMobile } from '@/utils/react.js'
@@ -122,9 +123,6 @@ const PREVIEW_FULL_REVEAL_PX = 100
 /** Duration of the snap-to-resting-state animation after the finger
  *  lifts. Long enough to read, short enough to feel responsive. */
 const SETTLE_DURATION_MS = 200
-
-const clamp = (value: number, min: number, max: number): number =>
-  Math.max(min, Math.min(max, value))
 
 /** Map an opening-drag delta (dx ≤ 0) to the toolbar's hide percent —
  *  0 = fully visible, 100 = parked off-screen right. */

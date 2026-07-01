@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '../keyStore.js'
 import { getModePin } from '../modePin.js'
@@ -41,7 +42,10 @@ describe('createEncryptedWorkspace (§8.1)', () => {
     expect(await validateCanary(pastedKey, rpcArgs!.options.wkCanary, 'ws-fixed')).toBe(true)
 
     // Key persisted on this device + workspace pinned e2ee.
-    expect(await keyStore.get(USER, 'ws-fixed')).not.toBeNull()
+    const rec = await keyStore.get(USER, 'ws-fixed')
+    expect(rec?.wk).toBeDefined()
+    // K_id (§10) derived + co-located at create, so this device resolves media.
+    expect(rec?.contentKeyHmac, 'create must derive K_id').not.toBeNull()
     expect(getModePin(USER, 'ws-fixed')).toBe('e2ee')
 
     // The pass-through workspace payload is preserved on the result.

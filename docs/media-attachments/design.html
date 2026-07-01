@@ -1,0 +1,1650 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Media attachments — design</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #171717;
+      --muted: #5f6368;
+      --line: #d6d9de;
+      --code: #f5f6f8;
+      --accent: #0f766e;
+      --accent-soft: #d1faf2;
+      --warn: #b45309;
+      --warn-soft: #fef3c7;
+      --reject: #9f1239;
+      --reject-soft: #ffe4e6;
+      --info: #1d4ed8;
+      --info-soft: #dbeafe;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e8eaed;
+        --muted: #a8adb4;
+        --line: #343941;
+        --code: #20242a;
+        --accent: #5eead4;
+        --accent-soft: #134e4a;
+        --warn: #fbbf24;
+        --warn-soft: #422006;
+        --reject: #fda4af;
+        --reject-soft: #4c0519;
+        --info: #93c5fd;
+        --info-soft: #1e3a5f;
+      }
+    }
+
+    body { margin: 0; color: var(--fg); background: Canvas; line-height: 1.55; }
+    main { max-width: 880px; margin: 0 auto; padding: 40px 24px 56px; }
+    h1 { margin: 0 0 8px; font-size: 2rem; }
+    h2 { margin: 36px 0 8px; font-size: 1.3rem; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+    h3 { margin: 24px 0 6px; font-size: 1.05rem; }
+    p { margin: 0 0 14px; }
+    ul, ol { margin: 0 0 16px 20px; padding: 0; }
+    li { margin-bottom: 4px; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    code { padding: 0.08rem 0.25rem; border-radius: 4px; background: var(--code); font-size: 0.92em; }
+    pre { overflow-x: auto; padding: 14px 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--code); font-size: 0.88em; line-height: 1.5; }
+    pre code { padding: 0; background: transparent; }
+    .lede { color: var(--muted); font-size: 1.05rem; }
+    .decision { border-left: 3px solid var(--accent); padding: 10px 14px; background: var(--accent-soft); border-radius: 0 6px 6px 0; margin: 12px 0 18px; }
+    .decision strong { color: var(--accent); }
+    .warn { border-left: 3px solid var(--warn); padding: 10px 14px; background: var(--warn-soft); border-radius: 0 6px 6px 0; margin: 12px 0 18px; }
+    .reject { border-left: 3px solid var(--reject); padding: 10px 14px; background: var(--reject-soft); border-radius: 0 6px 6px 0; margin: 12px 0 18px; }
+    .info { border-left: 3px solid var(--info); padding: 10px 14px; background: var(--info-soft); border-radius: 0 6px 6px 0; margin: 12px 0 18px; }
+    .info strong { color: var(--info); }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 0.95em; }
+    th, td { border-bottom: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { font-weight: 600; color: var(--muted); font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.04em; }
+    figure { margin: 18px 0 22px; padding: 0; }
+    figcaption { color: var(--muted); font-size: 0.9em; margin-top: 6px; text-align: center; }
+    svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+    .diagram { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: var(--code); }
+    .toc { border: 1px solid var(--line); border-radius: 8px; padding: 14px 22px; background: var(--code); margin: 20px 0 28px; }
+    .toc ol { margin: 6px 0 0 18px; }
+    .toc li { margin-bottom: 2px; }
+    .toc a { color: var(--accent); text-decoration: none; }
+    small { color: var(--muted); }
+    .diagram text { font-family: ui-sans-serif, system-ui, sans-serif; }
+    .diagram .mono { font-family: ui-monospace, Menlo, monospace; }
+  </style>
+</head>
+<body>
+<main>
+
+<h1>Media attachments</h1>
+<p class="lede">Design for image (and, by extension, arbitrary file) attachments in a system that
+  now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
+
+<aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
+<strong>Status:</strong> partially implemented — phases 1–6 have landed on branch
+<code>feat/media-attachments</code>. Phase 1 = the byte-crypto seam (§5/§5.1:
+the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, the
+read-side content-hash verify) in <code>src/sync/</code>. Phase 2 = the <code>attachments</code> bucket
++ RLS migration (read by member, <strong>insert/delete by writer</strong>, no update = immutability), and
+the <code>BlobStore</code> seam (§10/§10.1/§14), unit-tested. <strong>The §10.1 sole-writer Edge Function
+was removed</strong> (reversal, 2026-06-25) — uploads are now direct, writer-gated by RLS, with an off-path
+ciphertext audit as the tripwire. Phase 3 = the <code>K_id</code> content-key derivation (§10,
+<code>src/sync/crypto/contentKey.ts</code>, co-located with the WK in the keyStore + derived at
+unlock/create), the OPFS byte store (§8, <code>src/attachments/byteStore.ts</code>), and the in-thread
+asset resolver (§7.3, <code>src/attachments/resolver.ts</code>) — fetch → decode → <strong>hash-verify →
+store</strong>, fail-closed on every error, the read-side check now the sole byte-confidentiality control
+(returns verified bytes). Phase 4 = the <code>media</code> block type + property schemas and the
+<code>MediaBlockRenderer</code> (§11, <code>src/attachments/</code>) — the image branch resolves bytes
+in-thread, wraps them as an object URL, and renders through the existing lightbox; non-image MIMEs get a
+file chip; a fail-closed resolve shows a broken-asset placeholder, never an unverified source;
+<code>canRender</code> reads a <code>peek()</code> snapshot so it never throws above the block
+ErrorBoundary. Phase 5 = capture + the up-lane (§9/§11): paste/drop mints the asset block,
+stages bytes in a durable IndexedDB queue (stage-before-tx / promote-after-commit), and a
+single-owner lane drain encodes-at-drain + uploads (with a 409 poison-verify and a promote-only
+boot reconciler). Phase 6 = the down-lane (§8/§9 background replication): the resolver's
+<code>replicate</code> backlog lane (a cheap <code>has()</code> probe → present, else the SAME coalesced
+fetch the demand lane uses), the sequential, budget-bounded <code>reconcileDownLane</code> reconciler
+(present probes free; only a SUCCESSFUL download consumes the per-pass budget; failures are free and never halt
+the walk, so a stable-ordered failing prefix can't shadow the healthier tail), and
+<code>MediaDownLaneReplicator</code> — a per-active-workspace, single-owner (<code>navigator.locks</code>
+<code>ifAvailable</code>), deep-idle-scheduled pass re-armed on workspace switch / first-sync settle /
+reconnect / a slow sweep. Durable origin storage (§8) is the boot-time origin-wide
+<code>requestPersistentStorage</code>, not a per-store call. <strong>§16 reference-permanent GC remains
+deferred</strong> — until it lands, a never-promoted <code>staged</code> orphan and its OPFS bytes are
+retained (never reaped), and a <code>failed</code> upload record is recoverable only by re-paste (no §9
+recovery actor yet).
+Last verified against code 2026-06-26. Treat as current intent. The least-settled part is the byte-lane
+lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
+solid; the recovery edges are where the spec is still hardening.
+</aside>
+
+<div class="info">
+<strong>TL;DR.</strong> An attachment is a <em>block</em> carrying the registered <code>media</code>
+type (in the <code>types</code> array, via <code>typesProp</code>),
+embedded into prose with the existing <code>!((id))</code> mechanism — no new reference syntax, and
+metadata rides the existing encrypted block-content columns for free. The <em>bytes</em> live in an
+object store (Supabase Storage v1) behind a <code>BlobStore</code> interface, content-addressed by a
+per-workspace keyed hash so uploads are idempotent and object dedup is an invariant (§10). The reshaping
+constraint is <strong>E2EE</strong>: for an encrypted workspace the server holds only ciphertext and
+never the key, so bytes are sealed client-side with the workspace key and access becomes
+<em>entirely client-side</em>. We do <strong>not</strong> write two implementations — there is one
+byte transform parameterized by mode, where plaintext is the identity case, exactly as
+<code>src/sync/transform.ts</code> already does for text. Decryption happens <strong>in-thread</strong>
+(in the app / its data worker), keeping the keys, session, mode pin, and the already-decrypted block
+all in one context; the renderer resolves <em>both</em> modes through one fetch-with-session → object-URL
+path — the bucket is private/RLS-gated (§10), so a bare <code>&lt;img src&gt;</code> can't authenticate —
+with E2EE adding the decrypt step that plaintext skips (both still fetch with the session and both still
+produce an object URL, §7.3 / §8). A service-worker variant that would make
+<code>&lt;img src="${BASE_URL}asset/…"&gt;</code> uniform across modes was evaluated and
+<strong>rejected</strong> — its one benefit doesn't earn the app↔SW coordination tax (§7 / §7.3 / §18).
+</div>
+
+<div class="toc">
+<strong>Contents</strong>
+<ol>
+  <li><a href="#scope">What we're adding, and scope</a></li>
+  <li><a href="#ground">Current state we're building on</a></li>
+  <li><a href="#asblock">The core model: an attachment is a block</a></li>
+  <li><a href="#e2ee">The constraint that reshapes everything: E2EE</a></li>
+  <li><a href="#onepath">One byte transform; plaintext is the identity case</a></li>
+  <li><a href="#bytepath">The byte path, end to end</a></li>
+  <li><a href="#sw">The decryption boundary (chosen: in-thread)</a></li>
+  <li><a href="#cache">Local replication: one decrypted byte store</a></li>
+  <li><a href="#queue">The byte-replication subsystem (up-lane + down-lane)</a></li>
+  <li><a href="#storage">Storage layout &amp; RLS</a></li>
+  <li><a href="#renderer">The renderer &amp; capture surfaces</a></li>
+  <li><a href="#sharing">Subtree sharing (deferred — not a design driver)</a></li>
+  <li><a href="#public">The public-sharing escape hatch</a></li>
+  <li><a href="#portability">Vendor portability (the <code>BlobStore</code> seam)</a></li>
+  <li><a href="#plan">Phased plan</a></li>
+  <li><a href="#open">Open questions</a></li>
+  <li><a href="#tradeoffs">Tradeoffs we're accepting</a></li>
+  <li><a href="#design-notes">Design notes — where the complexity lives</a></li>
+</ol>
+</div>
+
+<h2 id="scope">1. What we're adding, and scope</h2>
+
+<p>The app cannot currently insert images. We want paste / drop / file-pick of an image to render
+  inline, work offline, and sync across a user's devices — and we want the same machinery to extend
+  to PDFs, audio, video, and generic files later without a content migration.</p>
+
+<p><strong>In scope (v1):</strong> images, via paste / drop / file picker; inline render with a
+  lightbox; offline-first local caching; cross-device sync; correctness under E2EE workspaces.</p>
+
+<p><strong>Designed-for but not built (vNext):</strong> non-image file types (the model is
+  type-dispatched, so a new mime is a new renderer branch, not a schema change); thumbnails /
+  transforms; resumable uploads for large media; public sharing.</p>
+
+<p><strong>Explicitly out of scope:</strong> server-side media features for E2EE workspaces (OCR,
+  thumbnails, transcode) — the server has no key; this is the existing E2EE tradeoff
+  (<a href="../e2ee-design.html">e2ee-design.html</a> §15), inherited, not new. E2EE
+  <em>subtree</em> sharing of media (needs the deferred key hierarchy — see §12).</p>
+
+<h2 id="ground">2. Current state we're building on</h2>
+
+<p>This design is grounded in the codebase as of this writing, not the proposal that predated the
+  encryption work. What actually shipped changes the answer materially:</p>
+
+<table>
+<tr><th>Capability</th><th>Status</th><th>Consequence for this design</th></tr>
+<tr><td>Per-workspace E2EE</td>
+    <td><strong>Shipped.</strong> <code>src/sync/</code> crypto layer, migration
+      <code>20260529120000_add_e2ee_workspace_columns.sql</code>.</td>
+    <td>The dominant constraint. Bytes for an E2EE workspace must be client-side sealed; access is
+      client-side. See §4.</td></tr>
+<tr><td>Layout B (staging + observer)</td>
+    <td><strong>Shipped.</strong> <code>blocks_synced</code> staging table; a JS observer decrypts
+      and reconciles into the plaintext <code>blocks</code> table.</td>
+    <td>Establishes the pattern we copy: a mode-parameterized transform with a pluggable key lookup.
+      See §5.</td></tr>
+<tr><td>Shares + API tokens</td>
+    <td><strong>NOT shipped.</strong> <a href="../shares-and-api-tokens.html">shares-and-api-tokens.html</a>
+      is a design only — no <code>block_shares</code> / <code>effective_share_ids</code> tables exist.</td>
+    <td>Do not build on it, and do not design around it — it is unshipped and doesn't map cleanly onto
+      the current (graph-ish, not strictly subtree) data model. Block-id storage paths keep a future
+      share-join <em>possible</em> without paying for it now (§10).</td></tr>
+<tr><td>Supabase Storage</td>
+    <td><strong>Unused.</strong> No buckets, no <code>supabase.storage.*</code>, no
+      <code>supabase/functions/</code>.</td>
+    <td>Greenfield. We add the first bucket + the first storage RLS policy.</td></tr>
+<tr><td>Image render / paste</td>
+    <td><strong>Text-only.</strong> <code>src/markdown/MarkdownImage.tsx</code> renders any
+      <code>![](url)</code> with a lightbox; paste handlers read only <code>text/plain</code>.</td>
+    <td>The lightbox is reusable. Paste/drop need a binary arm. See §11.</td></tr>
+<tr><td>Local SQLite VFS</td>
+    <td><strong>OPFS</strong> (<code>OPFSCoopSyncVFS</code> in <code>src/data/repoProvider.ts</code>).</td>
+    <td>Plaintext-derived data already lives on local disk by design (e2ee §15 #7); a decrypted-byte
+      cache sits inside that accepted posture.</td></tr>
+</table>
+
+<h2 id="asblock">3. The core model: an attachment is a block</h2>
+
+<p>An attachment is not a row in a side table. It is a <code>blocks</code> row carrying the
+  <code>media</code> type and binary-pointer metadata in its properties:</p>
+
+<pre><code>// asset block (illustrative). The type lives in the `types` ARRAY (typesProp),
+// NOT a `properties.type` scalar — that's what the type registry, type queries,
+// and the property panel read. Set via block.addType('media') / typesProp.
+properties: {
+  types:       ['media'],       // typesProp — registered media type id
+  mime:        'image/png',
+  size:        184213,          // plaintext byte length
+  hash:        'sha256:…',      // of plaintext bytes; client-side dedup key
+  filename:    'screenshot.png',
+  width:       1280,            // optional, for layout reservation
+  height:      720
+  // NOTE: no upload `status` here — that's per-device, tracked in the local
+  // upload queue (§9), NOT in synced (encrypted) properties_json. See §8.
+}
+content: 'image: screenshot.png'   // human-readable summary</code></pre>
+
+<p>The <code>media</code> type is <strong>registered as a <code>TypeContribution</code></strong> —
+  <code>defineBlockType({id: 'media', label, properties})</code> contributed via
+  <code>typesFacet.of(mediaType, {source: 'attachments'})</code> (the pattern daily-notes / geo /
+  block-tagging use), so type-filtered queries, the property panel, and renderer discovery all see
+  media blocks. This is <em>not</em> the same as video-player's setup, which contributes property
+  schemas + a renderer but <em>no</em> type — and a bare property schema is insufficient: the capture
+  path's <code>repo.addTypeInTx(tx, id, 'media', …)</code> looks the id up in the type registry
+  (<code>types.get(typeId)</code>) and <strong>throws unless a <code>TypeContribution</code> was
+  registered</strong> through <code>typesFacet</code>.</p>
+
+<p>Why a block, not an <code>attachments</code> table:</p>
+<ul>
+  <li><strong>Inspectable / user-accessible</strong> — the project's standing principle. An
+    attachment shows up in the outline, the properties panel, queries, and the agent runtime like
+    any other block.</li>
+  <li><strong>Embeds, backlinks, annotations come for free.</strong> Inline placement uses the
+    existing block embed <code>!((id))</code> (<code>src/components/references/BlockEmbed.tsx</code>);
+    captions / alt-text / OCR / transcripts are <em>child blocks</em>; "what references this image?"
+    is the existing backlink machinery.</li>
+  <li><strong>Type-dispatched rendering already exists.</strong> A <code>MediaBlockRenderer</code>
+    registers via <code>blockRenderersFacet</code> with a <code>canRender</code> gate on
+    <code>block.hasType('media')</code> — the same registration pattern as
+    <code>VideoPlayerRenderer</code>. New file types are new mime branches, never a schema change.</li>
+  <li><strong>Dedup is natural and workspace-wide</strong>: paste the same screenshot ten times
+    anywhere in a workspace and you get ten <code>!((id))</code> embeds of one asset block — one byte
+    copy, one upload (see §11).</li>
+</ul>
+
+<figure class="diagram">
+<svg viewBox="0 0 760 250" role="img" aria-label="A page block has a media child block. The media block carries type/mime/hash properties and points at an object-store path. A paragraph elsewhere embeds the media block by id.">
+  <style>
+    .n { fill: var(--code); stroke: var(--line); stroke-width: 1.4; }
+    .m { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.6; }
+    .e { fill: var(--info-soft); stroke: var(--info); stroke-width: 1.4; }
+    .lbl { font-size: 13px; fill: var(--fg); }
+    .sub { font-size: 11px; fill: var(--muted); }
+    .ed { stroke: var(--muted); stroke-width: 1.3; fill: none; }
+  </style>
+  <rect class="n" x="20" y="24" width="150" height="40" rx="6"/>
+  <text class="lbl" x="34" y="49">Page block</text>
+  <rect class="m" x="60" y="100" width="220" height="64" rx="6"/>
+  <text class="lbl" x="74" y="124">Media block (child)</text>
+  <text class="sub mono" x="74" y="142">type=media · mime · hash</text>
+  <text class="sub mono" x="74" y="156">(upload status: local §9)</text>
+  <path class="ed" d="M 95 64 L 120 100"/>
+  <rect class="n" x="60" y="196" width="220" height="36" rx="6"/>
+  <text class="lbl" x="74" y="219">Caption (child of media)</text>
+  <path class="ed" d="M 170 164 L 170 196"/>
+  <rect class="e" x="470" y="100" width="270" height="64" rx="6"/>
+  <text class="lbl" x="484" y="124">Paragraph on another page</text>
+  <text class="sub mono" x="484" y="146">…see !((media-block-id)) …</text>
+  <path class="ed" d="M 470 132 C 360 132, 340 132, 282 132" stroke-dasharray="5 4"/>
+  <text class="sub" x="320" y="120">embed</text>
+  <rect class="n" x="500" y="24" width="240" height="40" rx="6"/>
+  <text class="lbl" x="514" y="42">Object store</text>
+  <text class="sub mono" x="514" y="58">&lt;ws&gt;/HMAC(K_id, hash)</text>
+  <path class="ed" d="M 280 120 C 380 90, 420 60, 500 50"/>
+  <text class="sub" x="360" y="70">bytes</text>
+</svg>
+<figcaption>Metadata is a block (syncs encrypted via the normal path); bytes live in the object store
+  at a content-addressed path (<code>&lt;ws&gt;/HMAC(K_id, hash)</code> for E2EE); prose embeds the
+  block by id.</figcaption>
+</figure>
+
+<h2 id="e2ee">4. The constraint that reshapes everything: E2EE</h2>
+
+<p>For an E2EE workspace the server holds <em>only ciphertext</em> and never the key. The workspace
+  key (WK) lives as a non-extractable WebCrypto <code>CryptoKey</code> in IndexedDB
+  (<code>km-e2ee-keys</code>, keyed by <code>(user_id, workspace_id)</code> —
+  <code>src/sync/keys/keyStore.ts</code>). The server-side trigger
+  <code>blocks_require_ciphertext_for_e2ee</code> actively rejects any plaintext write to an
+  encrypted workspace's content columns.</p>
+
+<p>The E2EE design doc encrypts exactly three text columns and <strong>says nothing about binary
+  data</strong> — confirmed by inspection. So attachments are an unsolved problem that must be solved
+  <em>consistently with</em> E2EE, not bolted on beside it. Two pillars of any naïve "URL in markdown"
+  approach are dead on arrival:</p>
+
+<div class="reject">
+<strong>A signed Storage URL handed straight to <code>&lt;img src&gt;</code> — dead for E2EE.</strong>
+The object is ciphertext, so the browser can't render it directly; the bytes must be fetched and
+<em>decrypted client-side with the WK</em> first, then handed to <code>&lt;img&gt;</code> as an object URL
+(the chosen in-thread path; resolution detailed in §7). Note what this does <em>not</em> kill: signed URLs
+as a <em>fetch</em> mechanism are fine — what's dead is using one as the <em>render</em> URL.
+</div>
+
+<div class="reject">
+<strong>Public-bucket / public-share-URL — incompatible with E2EE.</strong> You cannot serve a
+publicly-readable image out of an encrypted workspace via RLS + signed URLs. RLS gates access to
+<em>ciphertext</em>; it cannot grant decryption. (This is just e2ee §15 #2 — "no server-side features
+for E2EE workspaces" — applied to bytes.) The escape hatch survives in a different form; see §13.
+</div>
+
+<p>What the encryption model gives us in return is also worth stating: because metadata rides the
+  encrypted <code>properties_json</code> column, an attachment's <strong>mime, filename, and hash are
+  confidential automatically</strong> on an E2EE workspace. The block-row routing identifiers
+  (<code>id</code>, <code>workspace_id</code>) are in clear — exactly the columns the sync transform
+  already leaves in clear.</p>
+
+<div class="warn">
+<strong>But the Storage object leaks more than the block row does — call it out, don't fold it into
+the inherited block-metadata leak.</strong> The encrypted blob's <strong>byte length</strong>
+(≈ plaintext size + 28&nbsp;B) is visible to the server via the stored object size and the
+<code>Content-Length</code> of an RLS-gated GET, and the object's existence and per-workspace count are
+visible. Exact file size is a much stronger fingerprint than note-text length — it can confirm a
+specific known file (a leaked document, a known image) by size, and combined with the
+<code>asset_block_id</code> in the path + timing, correlate which block embeds which known-size asset.
+This is a <em>new</em> leak <em>outside</em> the enumerated e2ee §15 set (tree shape / order / timing /
+authorship). Document it as an accepted tradeoff (§17), or pad ciphertext to size buckets if the
+threat model cares.
+</div>
+
+<h2 id="onepath">5. One byte transform; plaintext is the identity case</h2>
+
+<p>E2EE is opt-in, so most workspaces are plaintext. The temptation is two code paths. The codebase
+  already shows the better answer: <code>src/sync/transform.ts</code> is <em>one</em> function
+  parameterized by mode, where <code>mode === 'none'</code> is the identity transform.</p>
+
+<pre><code>// the text precedent, today
+encodeForWire(row, 'none', getCek)  // → row unchanged
+encodeForWire(row, 'e2ee', getCek)  // → seal content/properties_json/references_json</code></pre>
+
+<p>We mirror it for bytes — a new module in the same <code>src/sync/</code> seam:</p>
+
+<pre><code>encodeBytes(bytes: Uint8Array, mode: SyncMode, getCek: GetCek, ref: AssetByteRef): Promise&lt;Uint8Array&gt;
+decodeBytes(blob:  Uint8Array, mode: SyncMode, getCek: GetCek, ref: AssetByteRef): Promise&lt;Uint8Array&gt;
+//   ref = { contentHash, workspaceId } — binds the bytes' AAD (§5.1); decode
+//         authenticates the envelope only, the resolver verifies the hash separately
+//   mode === 'none'  → identity (return input)
+//   mode === 'e2ee'  → AES-256-GCM seal/open with the WK</code></pre>
+
+<div class="decision">
+<strong>Decision.</strong> There is one attachment implementation, not two. Everything expensive —
+the asset-as-block model, the <code>BlobStore</code>, the cache, the upload queue, dedup, the
+renderer — is mode-agnostic and shared. Only the ~15-line
+encode/decode seam is mode-aware, and plaintext is its degenerate (identity) branch, exactly like
+<code>encodeForWire</code>.
+</div>
+
+<h3>5.1 Reusing the crypto primitives</h3>
+
+<p>The WK <code>CryptoKey</code> is AES-256-GCM and works for <code>crypto.subtle.encrypt</code> over
+  raw bytes, not just the string <code>seal</code>/<code>open</code> in
+  <code>src/sync/crypto/aead.ts</code>. So byte encryption reuses the same
+  <code>getCek(workspaceId)</code> seam the sync transform uses, with two deltas:</p>
+
+<ul>
+  <li><strong>AAD binding extends the existing pattern.</strong> Where content columns bind
+    <code>contentAad(id, workspace_id, column)</code>, asset bytes bind
+    <code>(content_hash, workspace_id, "asset-bytes", schema_version)</code> — the <em>content hash</em>,
+    not a block id, because the object is content-addressed and shared by every block carrying those
+    bytes (§10); binding one block id would stop a co-referencing block from opening it. <code>workspace_id</code>
+    + the content hash give cross-workspace / cross-content domain separation, but the <em>real</em> defense
+    against an untrusted server returning arbitrary or stale bytes is the <strong>read-side hash check</strong>
+    (warn box below): the AAD's <code>content_hash</code> is the <em>same</em> <code>sha256(plaintext)</code>
+    the read path verifies against <code>block.properties.hash</code>, so it is redundant-but-cheap
+    defense-in-depth (it fails at GCM-open, a hair earlier, and survives a hypothetical read-check
+    regression), <em>not</em> the load-bearing check. (<code>schema_version</code> stays in the AAD to
+    cryptographically bind the format version — the <code>encb:v1:</code> magic is unauthenticated framing, so
+    the AAD term is what would make a future cross-version swap fail the tag; same reason the text path binds
+    it.)</li>
+  <li><strong>A binary envelope, not the base64url text envelope.</strong> The <code>enc:v1:</code>
+    envelope is a <em>string</em> (base64url), and the text <code>seal</code>/<code>open</code> seam is typed
+    <code>string→string</code> over <code>TextEncoder</code>/<code>TextDecoder</code> — which corrupts raw
+    bytes (invalid UTF-8 is replaced). So bytes need their own framing regardless of the ≈33% base64 bloat:
+    a sibling <strong><code>encb:v1:</code></strong> binary framing (<code>magic ‖ nonce ‖ ciphertext‖tag</code>
+    as raw bytes) sharing the nonce/tag layout. Small new module next to <code>aead.ts</code>.</li>
+</ul>
+
+<div class="warn">
+<strong>The AAD does not bind freshness — verify the content hash on read.</strong> Every AAD term
+(the <code>content_hash</code>, <code>workspace_id</code>, the literal, schema version) and the
+content-addressed storage path are <em>fixed by the bytes themselves</em>. AAD stops cross-content /
+cross-workspace swaps, but it does <em>not</em> stop an untrusted server (in scope per e2ee §2 — it may
+serve whichever bytes it likes) from returning <strong>arbitrary or stale bytes for a requested content
+path</strong> that happen to decrypt cleanly and pass the GCM tag. The
+bytes lane has no <code>updated_at</code>/monotonicity channel the text path gets from PowerSync. The
+fix is already in hand: the asset block stores <code>hash = sha256(plaintext)</code> in its
+(encrypted) <code>properties_json</code>; the read path <strong>must verify the decrypted bytes
+against that hash before caching/serving</strong>, and reject on mismatch. In the chosen
+<strong>in-thread</strong> path (§7.3) the resolver already holds the decrypted block, so the expected
+hash is just <code>block.properties.hash</code> — no extra plumbing. (The rejected SW path couldn't read
+the encrypted block state, so it would have needed an <strong>SW-readable metadata mirror</strong>
+(<a href="./rejected-sw-decryption-boundary.html">rejected-sw doc</a>) — <em>not</em> a request param:
+an <code>&lt;img src&gt;</code> can't carry custom headers, and a
+<code>?h=</code> query param would leak the plaintext SHA-256.) Either way it's a positive check that can
+only fail closed, never downgrade.</div>
+
+<div class="warn">
+<strong>Content-addressing makes the write lane intrinsically immutable — no monotonicity machinery.</strong>
+Because the path is derived from the bytes (<code>&lt;ws&gt;/HMAC(K_id, sha256)</code> for E2EE, §10),
+different content lands at a <em>different</em> path and identical content at the <em>same</em> one — so
+the &quot;two uploads race at one path / a stale upload overwrites a newer object&quot; hazard simply
+does not exist, and there is no &quot;older version&quot; for the server to replay. An edit is new bytes
+→ a new content path → a new asset block; the old object becomes unreferenced and is GC'd (§16).
+<strong>First-write-wins at a path is the entire rule</strong> (§10.1); the idempotency-token /
+write-once-rule / duplicate-object-GC machinery a block-id path would have needed is simply gone (the
+content-addressed path gets it for free — §10). (Dedup reuses an existing asset block by hash — a read, not
+a rewrite.)</div>
+
+<p>The <code>encb:v1:</code> magic is a <strong>format tag, not an authorization signal.</strong>
+  Whether to decrypt is decided by the workspace's mode pin (§7), exactly as the text path decides via
+  the pin rather than the <code>enc:v1:</code> prefix (<code>envelope.ts</code> / e2ee §6 rule&nbsp;2).
+  An E2EE-pinned workspace requires the magic and treats its absence as tampering; only a
+  <strong>plaintext-pinned</strong> workspace passes bytes through. A workspace with <em>no</em> pin
+  (never validated, or evicted) is <em>not</em> plaintext — it is the resolver's
+  <code>defer</code>/encryption-uncertain state (<code>src/sync/keys/resolver.ts</code>), so the read
+  path <strong>fails closed</strong> (placeholder), never passthrough — otherwise an encrypted workspace
+  with a missing local pin would serve attacker-controlled plaintext. The decode decision is therefore
+  <em>three-valued</em> — decrypt (E2EE + WK) / passthrough (plaintext-pinned) / fail-closed (E2EE
+  without WK, or no/uncertain pin) — and the in-thread resolver must drive it from that three-valued
+  materializability (<code>getMaterializability</code>), <em>not</em> the two-valued
+  <code>SyncMode</code>/<code>getMode</code> the upload direction uses (§7.3).</p>
+
+
+<h2 id="bytepath">6. The byte path, end to end</h2>
+
+<p>Bytes do <strong>not</strong> ride PowerSync. The asset <em>block</em> (metadata) syncs through the
+  normal Layout B path (encrypted content columns, observer-reconciled). The <em>bytes</em> take a
+  parallel path to the object store. The two arrive independently on other devices.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 820 300" role="img" aria-label="Two-lane diagram. On paste: bytes are hashed, written to the local byte store, and queued for upload to Storage (sealed at drain); in parallel the asset block is created and syncs through PowerSync. On render: the renderer resolves the bytes in-thread — reads the local byte store, or on a miss fetches ciphertext and decrypts with the workspace key — and sets an object URL on the image.">
+  <style>
+    .b { fill: var(--code); stroke: var(--line); stroke-width: 1.3; }
+    .acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+    .inf { fill: var(--info-soft); stroke: var(--info); stroke-width: 1.4; }
+    .t { font-size: 12px; fill: var(--fg); }
+    .s { font-size: 10.5px; fill: var(--muted); }
+    .ar { stroke: var(--accent); stroke-width: 1.5; fill: none; marker-end: url(#ah); }
+    .ph { font-size: 11px; fill: var(--accent); font-weight: 600; }
+  </style>
+  <defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="var(--accent)"/>
+    </marker>
+  </defs>
+  <text class="ph" x="20" y="22">① WRITE (paste / drop)</text>
+  <rect class="b" x="20" y="34" width="110" height="40" rx="6"/>
+  <text class="t" x="32" y="58">hash bytes</text>
+  <rect class="acc" x="150" y="34" width="120" height="40" rx="6"/>
+  <text class="t" x="162" y="52">byte store</text>
+  <text class="s" x="162" y="66">(plaintext)</text>
+  <rect class="b" x="290" y="34" width="130" height="40" rx="6"/>
+  <text class="t" x="302" y="52">encodeBytes()</text>
+  <text class="s mono" x="302" y="66">encb:v1: if e2ee</text>
+  <rect class="inf" x="440" y="34" width="150" height="40" rx="6"/>
+  <text class="t" x="452" y="52">byte upload queue</text>
+  <text class="s" x="452" y="66">→ Object store</text>
+  <path class="ar" d="M130 54 L150 54"/>
+  <path class="ar" d="M270 54 L290 54"/>
+  <path class="ar" d="M420 54 L440 54"/>
+  <rect class="b" x="290" y="100" width="130" height="38" rx="6"/>
+  <text class="t" x="302" y="123">create asset block</text>
+  <rect class="inf" x="440" y="100" width="150" height="38" rx="6"/>
+  <text class="t" x="452" y="118">PowerSync (Layout B)</text>
+  <text class="s" x="452" y="132">encrypted content cols</text>
+  <path class="ar" d="M355 74 L355 100"/>
+  <path class="ar" d="M420 119 L440 119"/>
+  <text class="ph" x="20" y="186">② READ (render on any device)</text>
+  <rect class="b" x="20" y="198" width="150" height="44" rx="6"/>
+  <text class="t" x="32" y="218">MediaBlockRenderer</text>
+  <text class="s mono" x="32" y="234">&lt;img src=blob:…&gt;</text>
+  <rect class="acc" x="200" y="198" width="150" height="44" rx="6"/>
+  <text class="t" x="212" y="218">in-thread resolver</text>
+  <text class="s" x="212" y="234">store ▸ fetch ▸ decrypt</text>
+  <rect class="inf" x="380" y="198" width="140" height="44" rx="6"/>
+  <text class="t" x="392" y="220">Object store</text>
+  <text class="s" x="392" y="234">ciphertext blob</text>
+  <rect class="b" x="560" y="198" width="150" height="44" rx="6"/>
+  <text class="t" x="572" y="218">WK in IndexedDB</text>
+  <text class="s mono" x="572" y="234">km-e2ee-keys</text>
+  <path class="ar" d="M170 220 L200 220"/>
+  <path class="ar" d="M350 214 L380 214"/>
+  <path class="ar" d="M380 230 C 470 250, 500 240, 560 226"/>
+</svg>
+<figcaption>Metadata and bytes are independent lanes. An in-thread resolver is the single place that
+  turns a local byte-store read — or, on a miss, a fetched + decrypted object — into displayable
+  bytes.</figcaption>
+</figure>
+
+<h2 id="sw">7. The decryption boundary (chosen: in-thread)</h2>
+
+<div class="decision">
+<strong>Decision: decrypt in-thread (§7.3), not in the service worker.</strong> The byte cache is OPFS
++ object URLs; the renderer carries a small mode branch. The service-worker variant — which would make
+<code>&lt;img src&gt;</code> uniform across modes at the cost of an app→SW token handshake, an
+SW-readable mode-pin + per-asset hash mirror, per-<code>clientId</code> sessions, and controller gating
+— was analyzed and <strong>rejected</strong>; the full analysis is preserved as the decision record in
+<a href="./rejected-sw-decryption-boundary.html">rejected-sw-decryption-boundary.html</a> (summarized in
+§7.1). §7.2 (destroying local data) and §8–§10 are boundary-agnostic; §7.3 is the chosen path and the
+full tally (see also §18).
+</div>
+
+<h3>7.1 The rejected alternative: a service-worker decryption boundary</h3>
+
+<p>The other boundary considered was decrypting in a <strong>service worker</strong>, so that
+  <code>&lt;img src="${BASE_URL}asset/…"&gt;</code> would be uniform across plaintext and E2EE. It is
+  feasible (the SW scope has <code>crypto.subtle</code>, IndexedDB, the Cache API) but was
+  <strong>rejected</strong>: it concentrates ~5 boundary-artifact coordination mechanisms — an app→SW
+  token handshake, an SW-readable mode-pin + per-asset hash mirror (the SW can't read the DB),
+  per-<code>clientId</code> sessions + per-user cache keying (one SW serves every tab/account), and a
+  controller-readiness / route-ordering / clientId-less-navigation lifecycle — to buy one benefit that
+  <code>&lt;img&gt;</code> doesn't need, since it takes an object URL. The in-thread path (§7.3) pays
+  none of that. The <strong>full</strong> coordination-tax analysis — the four request mechanics, the
+  two coordination problems, the SW-readable-facts requirement, and the Cache-API authorization boxes —
+  is preserved as the decision record in
+  <a href="./rejected-sw-decryption-boundary.html"><strong>rejected-sw-decryption-boundary.html</strong></a>.
+  The chosen path follows in §7.3.</p>
+
+<h3>7.2 Destroying local data is coarse and system-level — not an in-app wipe</h3>
+
+<div class="decision">
+<strong>The byte stores add no selective wipe machinery.</strong> Destroying local data is a coarse,
+all-or-nothing action delegated to the <em>platform</em>: the browser's own "clear site data" wipes the
+whole origin — SQLite DB, E2EE keys, and <em>every</em> byte store (OPFS, IndexedDB, Cache API) — in one
+shot. <strong>This shipped on master (2026-06-23):</strong> the selective per-user in-app
+Lock&nbsp;&amp;&nbsp;Wipe flow (a <code>PENDING_WIPE</code> marker, a boot-time
+<code>consumePendingWipe</code> purge, an app→SW purge handshake) was <em>removed</em>, and
+<code>lock_and_wipe_local_data</code> is now a thin guidance dialog (<code>WipeLocalDataDialog</code>)
+that hands off to the platform control and warns on unsynced changes. The team deliberately did
+<em>not</em> hand-roll a coarse <code>destroyAllLocalData()</code> either — the platform wipe runs
+<em>outside</em> the page/SW context, so it sidesteps the cross-tab OPFS race, the surviving service
+worker, and the pre-render boot gate a hand-rolled wipe would each have to solve (and a SW can't even
+synthesize a <code>Clear-Site-Data</code> header — Chromium ignores it; a programmatic trigger is
+deferred until the app leaves GitHub Pages, issue&nbsp;#245). Consequences for this design:
+<ul>
+  <li><strong>No wipe participants.</strong> The byte store and upload queue are ordinary local storage; the coarse clear removes them with the DB and keys —
+    nothing selective to drain, mark, or purge, and no app→SW wipe coordination to get right.</li>
+  <li><strong>No "plaintext survives a lock" hazard.</strong> Decrypted bytes in OPFS are destroyed by the same clear that removes everything else, so storing
+    them locally is consistent with the accepted posture (e2ee §15 #7) <em>without</em> a per-store wipe
+    rule to enforce.</li>
+  <li><strong>Re-securing a device is the coarse clear</strong> — it logs out every account / workspace
+    in the profile, not one. Accepted: a paranoid user would clear site data anyway, and re-affirming
+    workspace status (re-paste the WK) afterward is fine.</li>
+</ul>
+The runtime cache-hit <em>authorization</em> checks (§7.3, §8 — account switch, membership revoke, WK
+absence) are independent of destruction and stay — they gate <em>serving</em> stale bytes, which no
+amount of wiping addresses.
+</div>
+
+<h3 id="inthread">7.3 The chosen approach: in-thread decryption</h3>
+
+<p>In-thread (app, or its dedicated data worker) decryption: the renderer fetches the ciphertext,
+  decrypts via <code>getCek</code> directly (zero duplication), caches plaintext bytes, and hands
+  <code>&lt;img&gt;</code> an object URL. Because it runs in the context that already owns the session,
+  the keys, the mode pin, and the decrypted block, it pays <em>none</em> of the SW's coordination tax.
+  What it avoids:</p>
+<ul>
+  <li><strong>No mode-pin IDB store / no per-asset hash mirror.</strong> The app reads the mode pin
+    synchronously (WK-presence then resolves on the already-async render path, via
+    <code>getMaterializability</code>) and already holds the decrypted block (so the hash is just
+    <code>block.properties.hash</code>) — the §7.1 mirror machinery exists only because the SW can't reach
+    app state.</li>
+  <li><strong>Plaintext bytes in OPFS (not SQLite, not Cache API).</strong> The app-thread path stores
+    decrypted bytes as plain <strong>OPFS files</strong> (the single byte store, §8;
+    <code>assets/&lt;user&gt;/&lt;ws&gt;/&lt;content-key&gt;</code>
+    — local <code>assets</code> tree, distinct from the remote <code>attachments</code> bucket)
+    — the store the bytes always wanted (§8/§17 keep large blobs <em>out</em> of SQLite; an earlier draft
+    wrongly floated DB-blob storage purely for a "free wipe," which both bloats the hot query DB and
+    contradicts that principle). Destruction is not a differentiator either way now — the coarse clear
+    (§7.2) removes the OPFS tree and the Cache API alike. The real app-thread win here is
+    <em>simplicity of resolution</em>: the app owns the OPFS handle and the session, so
+    fetch→decrypt→write-OPFS→object-URL is one local flow with no SW cache/token/mirror lifecycle.</li>
+  <li><strong>No token handshake / no per-<code>clientId</code> session</strong> — the app already has
+    the Supabase session.</li>
+</ul>
+<p>What it <em>costs</em>: a renderer that resolves <em>both</em> modes to an object URL — the private
+  bucket (§10) rules out a bare authenticated <code>&lt;img src&gt;</code>, so both fetch with the app
+  session; E2EE additionally decrypts, plaintext serves as-is (fetching on a local miss) — plus
+  manual object-URL lifecycle
+  (<code>createObjectURL</code>/<code>revokeObjectURL</code>) — two local, well-understood concerns. Note
+  OPFS is <em>not</em> URL-addressable, so <code>&lt;img&gt;</code> needs an object URL either way; a
+  path-like stable URL is the <em>only</em> thing the SW route would have added.</p>
+
+<p><strong>Three properties the in-thread path must carry explicitly.</strong> They held in the SW
+  analysis above, but the chosen path is where they ship, so they are restated here rather than left in
+  the rejected framing:</p>
+<ul>
+  <li><strong>Fail-closed decode, not two-way.</strong> When decoding a freshly-fetched object
+    <em>before it enters the store</em>, the resolver drives the decision off the three-valued
+    <code>getMaterializability</code> — its values <code>decrypt</code> / <code>copy</code> / <code>defer</code>
+    (decrypt with the WK / pass plaintext through / fail-closed placeholder) — <em>never</em> the
+    two-valued <code>getMode</code> — that downgrade (an evicted-pin E2EE workspace served attacker
+    plaintext) is the §5.1 / e2ee §6 rule&nbsp;2 hazard, argued there. In-thread specifics: the pin read is
+    synchronous and WK-presence resolves on the already-async render path.</li>
+  <li><strong>Hash mismatch is hard-fail.</strong> On a mismatch against
+    <code>block.properties.hash</code> (§5.1) the resolver <em>discards</em> the bytes — never writes
+    them to the OPFS byte store — and renders the broken-asset placeholder; unverified bytes are
+    never served or stored.</li>
+  <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
+    The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
+    PowerSync drops the workspace's block rows from the local DB, and the out-of-band OPFS bytes need their
+    own claw-back to follow. <strong>That claw-back is DEFERRED to a future reference-GC cleanup job, not an
+    eager per-membership-change deleter</strong> (§16). The job is the natural home: it deletes byte-store
+    entries whose content hash is no longer referenced by any local <code>media</code> block, after a grace
+    period — which subsumes <em>revoke/leave</em> (the workspace's blocks are clawed back → its bytes go
+    unreferenced), <em>media replacement / deletion</em> (the old object becomes unreferenced), and quota
+    eviction, under one reference-counted sweep run when the lanes are quiescent. (History: an eager reactive
+    purger — a <code>workspace_members</code>-removal subscriber calling <code>byteStore.purgeWorkspace</code>
+    — was prototyped on the down-lane PR and removed. It deleted user media on a transient membership signal
+    that can glitch, and to be correct it needed retry-on-failure plus cancel/epoch coordination with
+    in-flight down-lane <code>put</code>s — too much machinery, and too eager a deletion, for what this very
+    bullet calls an accepted exposure. <code>purgeWorkspace</code> remains in <code>byteStore</code> as the
+    primitive the cleanup job will call.) So media revocation is handled like note text with a lag: a revoked
+    member's local <code>blocks</code> are dropped and the bytes are reclaimed on the next GC sweep, and an
+    already-synced member who keeps a copy in the meantime is the same accepted exposure for bytes as for text
+    (§8) — RLS still blocks any <em>new</em> fetch. WK-absence gates the <em>decode of new downloads</em>
+    (fail-closed, above), <em>not</em> the serving of already-stored, already-verified bytes — lock doesn't
+    scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code> table (§8).</li>
+</ul>
+
+<div class="decision">
+<strong>Why in-thread wins the tally.</strong> The SW would concentrate ~5 coordination mechanisms
+(tallied in §7.1 / the <a href="./rejected-sw-decryption-boundary.html">sibling doc</a>) to buy one benefit
+— a uniform mode-agnostic <code>&lt;img src&gt;</code> — that <code>&lt;img&gt;</code> doesn't need, since it
+takes an object URL; in-thread pays two small local concerns and avoids all of it. The one portable lesson:
+<strong>a service worker earns its tax only when the consumer needs a real URL, not a blob.</strong> <code>&lt;img&gt;</code> takes a blob → in-thread. A consumer
+that consumes URLs — e.g. the JS module loader for user plugins (<code>import()</code> of a
+<code>/module/&lt;blockId&gt;</code>) — is where a SW-served URL genuinely pays off, and even there the clean
+shape keeps the privileged work in-thread and lets the SW serve a pre-populated cache (separate
+investigation).
+</div>
+
+<h2 id="cache">8. Local replication: one decrypted byte store</h2>
+
+<p>PowerSync already gives every device a full local <em>replica</em> of the block <em>rows</em>, so
+  "it's all local" already holds for metadata. Media bytes are the one thing that breaks it — they live
+  out-of-band in Storage, not in the synced DB — so for genuine offline operation they get their own
+  replication, with the same target steady state as the DB: <strong>every asset for a workspace you use
+  is on disk</strong>. We reach it by <em>eager intent, lazy timing</em> — a background, idle-priority,
+  proximity-first drip that converges on full replication, not a boot-time thundering herd.</p>
+
+<p>There is <strong>one local byte store</strong>, holding the <strong>decrypted</strong> bytes (raw bytes
+  for a plaintext workspace; bytes decrypted with the WK for E2EE), keyed by the content-addressed Storage
+  path (<code>&lt;ws&gt;/&lt;content-key&gt;</code>, §10). It is both the offline replica <em>and</em> the
+  render source — there is no second tier. Decryption happens <strong>once, when bytes enter the
+  store</strong> (a download decrypts + hash-verifies before writing, §9; a paste already holds plaintext),
+  not on every render — so the render path is a plain local read → object URL, and plaintext and E2EE
+  workspaces are <strong>identical locally</strong>, differing only in the at-rest format on the
+  <em>server</em>.</p>
+
+<div class="decision">
+<strong>Why decrypted-at-rest, not a ciphertext replica.</strong> An earlier draft kept two tiers — a
+durable <em>ciphertext</em> replica (byte-identical to the server object) plus a throwaway decrypted display
+cache. The only thing the ciphertext tier bought over storing decrypted bytes was
+<em>replicate-while-locked</em> (a device pre-fetching encrypted bytes <em>before</em> its workspace is
+unlocked). We don't want that, so it's gone — and with it the duplication. Bytes are now stored exactly like
+the decrypted <code>blocks</code> table already is: plaintext-derived data on local OPFS, the posture
+e2ee §15 #7 already accepts (and an attacker with OPFS read already holds all your note text, so
+bytes-as-ciphertext bought no real confidentiality). Integrity at rest is the <code>sha256</code>
+hash-verify (§5.1), exactly as the wire path checks it; re-upload (after GC, or from the up-lane)
+re-encrypts on the fly — fresh nonce, same content path, first-write-wins idempotent (§10.1). Net: roughly
+half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of two.
+</div>
+
+<ul>
+  <li><strong>Backing store: OPFS</strong> (following the in-thread decryption choice, §7.3) — read the
+    file → object URL → <code>&lt;img&gt;</code>. User-scoping (<code>assets/&lt;user_id&gt;</code>) is the
+    access-isolation boundary (§7); workspace-scoping makes leave / revoke purge only the affected bytes.
+    Because the object is <strong>content-addressed</strong> (§10) it is immutable by construction — an edit
+    is new content at a new path, so a stored entry's bytes never change; a freshly-downloaded byte is
+    accepted only if it matches the block's expected <code>hash</code> (read directly from the decrypted
+    block in-thread, §5.1); never serve a content key's bytes for a different hash.</li>
+  <li><strong>Demand beats prefetch.</strong> The render path and the background replicator call the
+    <em>same</em> fetch primitive (fetch ciphertext → decrypt → verify hash → store decrypted bytes) over
+    <em>one in-flight map</em>, so a demand fetch and a queued backlog item for the same asset
+    <strong>coalesce into a single download</strong> — opening a queued image satisfies its backlog entry
+    instead of racing it. Two priority lanes ride that primitive: a <strong>high-priority demand
+    lane</strong> (the user is looking at it now) that jumps ahead, and a <strong>throttled, idle,
+    low-concurrency backlog lane</strong> (the drip) deliberately slow enough never to saturate the link or
+    starve a demand fetch. So opening not-yet-replicated media triggers an immediate high-priority fetch (a
+    brief spinner if online); the only <em>transient, self-resolving</em> hard failure on the happy path is
+    <em>offline AND not-yet-replicated</em>. The <em>persistent</em> (non-transient) failures — origin gone
+    before upload (§9, the one truly unrecoverable case), a poisoned content path (§17, broken until the path
+    frees), a hash mismatch (§5.1) — are separate, and each is called out where it arises.</li>
+  <li><strong>Eager replication is budgeted and scoped, or it backfires.</strong> Metadata is cheap to
+    fully replicate; media can be gigabytes, and unbounded eager replication would blow the origin quota
+    and trigger the very eviction it is meant to prevent. So the down-lane (§9) is bounded:
+    <strong>(a) scoped to active / opened workspaces</strong> (don't pull cold workspaces' bytes — the
+    same reasoning as the "don't touch unopened workspaces" sync-flood lesson); <strong>(b)
+    budget-capped</strong> — replicate eagerly up to a budget, beyond which the long tail stays
+    lazy-re-fetchable rather than quota-thrashing; <strong>(c) polite</strong> — idle / low priority,
+    viewport-proximity first, and metered / mobile aware (wifi-only or a user toggle); <strong>(d)
+    single-owner across tabs</strong> — one tab is elected via a <strong>Web Lock</strong>
+    (<code>navigator.locks.request</code>) to run the background replicator, so N open tabs of the same
+    workspace don't multiply the egress these controls bound (the lock auto-hands-off when that tab closes;
+    no SharedWorker needed). The viewport-driven <em>demand</em> lane stays per-tab — each tab fetches what
+    its own user is looking at. Reads are direct RLS-gated Storage GETs (writes are direct too — only
+    <em>uploads</em> are writer-gated rather than member-gated, §10.1), so the down-lane is plain egress.</li>
+  <li><strong>Eviction is for quota pressure, not a fixed cap.</strong> The store is
+    <code>navigator.storage.persist()</code>-backed (the lever that exempts it from best-effort eviction —
+    spun out as its own investigation) and <strong>preserved by default for full offline operation</strong>.
+    The only reason to evict is genuine origin-quota / disk pressure, and under it the priority is
+    <strong>DB &gt; replicated bytes</strong> — the DB always wins a real contest. So the bound is a
+    <em>quota budget</em> (a share of available quota, or a user cap), <em>not</em> an arbitrary fixed size:
+    a fixed ≈500&nbsp;MB cap would directly contradict the "every asset on disk" goal for any multi-GB
+    workspace. An evicted entry is graceful degradation, never data loss — next view re-fetches + re-decrypts
+    from the server (online). <em>Un-uploaded</em> bytes are <strong>exempt</strong> — they are the only copy
+    anywhere (§9). Eviction and the exemption are evaluated <em>per content key, not per block</em>: one
+    object can back several blocks (§11), so deleting one block must <strong>not</strong> evict the shared
+    entry while another local block still carries that hash — local eviction rides the same content-refcount
+    as object GC (§16).</li>
+  <li><strong>Destroying local data:</strong> the byte store is ordinary local storage, removed wholesale by
+    the coarse clear-all (§7.2) — no per-store wipe participation. <em>Authorization</em> is separate: on
+    per-workspace revoke/leave, purge that workspace's prefix (a serving-access control, not destruction),
+    fired off the <em>same membership change</em> that makes PowerSync drop the workspace's block rows
+    from the local DB — concretely, a <em>new subscriber</em> the feature wires to the user's own
+    <code>workspace_members</code> row leaving the local DB (there is no existing membership-change callback to
+    reuse). This is a deliberate <strong>one-shot purge, not a per-render TTL revalidation</strong>:
+    media is clawed back exactly like note text. The block rows fall out of the local DB on revoke (offline,
+    on the next sync after reconnect); the bytes live out-of-band in OPFS so they don't ride that row
+    claw-back and need their own prefix-purge fired off the same change (offline, it fires on reconnect —
+    the same window the rows themselves have). Ordering between the row-drop and the purge is
+    <em>immaterial</em>: with the block gone there is no hash and nothing renders the bytes anyway; and in the
+    reverse window (purge lands first, rows still present) a render misses OPFS and the demand-fetch fails
+    closed against the now-revoked Storage RLS (reads re-evaluate membership per GET, §10) — so neither order
+    ever serves stale bytes. (The purge is race-<em>safe</em>, not race-<em>free</em>: a demand-fetch that
+    finishes its OPFS write just <em>after</em> the purge leaves an inert orphan file — no surviving block
+    renders it, so it is never served — reclaimed by the next re-join purge or the coarse clear.) We
+    deliberately do <em>not</em>
+    re-validate every render against a freshness TTL: that would gate the image on a per-render membership
+    recheck that the far-more-sensitive note text never gets, for data the ex-member already downloaded — a
+    revoked-but-not-yet-synced member can read all the surrounding <code>blocks</code> too, so a media-only
+    recheck is not a coherent boundary, just render-path cost. (Lock alone does <em>not</em> scrub the store,
+    exactly as it doesn't scrub the decrypted <code>blocks</code> table — that's the coarse wipe's job;
+    membership revoke, not WK-absence, is the access gate.)</li>
+  <li><strong>Optimistic local-first write:</strong> on paste, the plaintext bytes are written straight to
+    the byte store (durable; the §9 up-lane drains from there). The image renders immediately from local
+    bytes; the upload drains in the background. Whether the bytes have uploaded yet is a
+    <strong>per-device</strong> fact, read from the local up-lane — see the next point. Offline it simply
+    stays pending and still renders on this device.</li>
+</ul>
+
+<div class="warn">
+<strong>Upload status is per-device; do not put it in synced block properties.</strong> An earlier
+draft stored <code>status: 'uploading' | 'synced'</code> on the asset block. But block
+<code>properties</code> serialize to the single synced (and, for E2EE, encrypted)
+<code>properties_json</code> column — so a flip to <code>'synced'</code> would replicate to every
+device and clobber a peer for which the bytes are <em>not</em> local. "Have the bytes uploaded?" and
+"are the bytes cached <em>here</em>?" are both per-device questions answered by the <strong>local
+upload queue</strong> (§9) / local byte store, keyed by <code>asset_block_id</code> — never by a synced
+flag. The synced block's mere existence is the only cross-device signal needed.
+</div>
+
+<div class="warn">
+<strong>Un-uploaded bytes are the only copy — keep them durable and exempt from eviction.</strong> If a
+paste happens offline, or the intake ceiling (below) is hit before the up-lane drains, evicting a
+not-yet-uploaded entry would leave a synced asset block stuck <code>pending</code> forever with no bytes to
+send. So
+un-uploaded bytes are <strong>exempt from eviction</strong>, and the durable write is on the capture path
+itself. Two corollaries: (1) the durable write at capture must <em>actually</em> be durable — if it fails,
+or <code>persist()</code> is denied so the write lands in best-effort storage, capture <strong>fails with a
+clear error</strong> (&quot;can't attach — local storage is full or not durable&quot;) rather than
+committing metadata over evictable bytes; the §11 staged-before-tx ordering catches a <em>thrown</em> stage,
+not a silently non-durable one. (2) Because un-uploaded bytes can't be evicted, there are really <em>two</em> distinct bounds, not one
+number: a <strong>retention budget</strong> over replicated (uploaded, evictable) bytes, and a separate
+<strong>pending-intake ceiling</strong> over un-uploaded (exempt) bytes. A new paste first evicts replicated
+bytes under the retention budget (DB &gt; replicated bytes, §8) to make room — so a workspace already full of
+<em>replicated</em> bytes never blocks a new capture. Only when the un-evictable <em>pending</em> bytes alone
+would breach the intake ceiling does paste apply backpressure (&quot;uploads pending — reconnect to drain
+them, or discard a pending attachment to reclaim its space&quot;) rather than accepting bytes you might have
+to evict. Ordinary eviction can't relieve this state
+(un-uploaded bytes are exempt), so the only offline release valve is the user deliberately abandoning a
+pending attachment — which requires the per-device pending up-lane records (§9) to be surfaced as
+<em>individually discardable</em> items, a required capture-surface affordance (§11), not just a
+&quot;bytes pending here&quot; indicator. A discard is <strong>content-refcount-gated</strong> like every
+other deleter (§8 eviction / §9 reap / §16 GC) — the <em>record</em> as well as the bytes: it removes both
+only when no live-or-soft-deleted block still carries the hash (the last reference). While another live block
+(e.g. a block copy) still carries it, discard reclaims nothing — bytes and the upload obligation both stay —
+so it can't strip a co-referencing block's bytes or strand its route to the server.
+</div>
+
+<h2 id="queue">9. The byte-replication subsystem (up-lane + down-lane)</h2>
+
+<p>Block <em>metadata</em> rides PowerSync's <code>ps_crud</code> upload queue. Bytes go through the
+  direct, RLS-gated upload path (§10.1), which has no such queue, so they need their own
+  durable one. The queue is a small <strong>status record over the §8 byte store</strong>, not a second
+  copy of the bytes: an IndexedDB record of
+  <code>{ user_id, asset_block_id, workspace_id, status }</code>. The source bytes live <em>once</em> in
+  the byte store (decrypted, §8); while a pending record exists for them they are <strong>exempt from
+  eviction</strong>, so a pending upload can never lose its source to eviction or an offline window (the §8
+  hazard). The <code>encb:v1:</code> encoding is done <em>at drain</em> — read the plaintext from the byte
+  store → encode (identity for plaintext workspaces) → PUT — so the queue keeps no ciphertext copy.
+  <strong>The <code>user_id</code> field is load-bearing</strong>: it namespaces the record (and
+  every cancel / drain key), because the store is shared across accounts in the profile but draining is
+  per-user — each upload rides the active user's session/token, so without the namespace a drain could
+  retry account A's entry under B's session, uploading A's bytes with B's credential or against the
+  wrong workspace membership. The upload target is the <em>content-addressed</em> path
+  (<code>&lt;ws&gt;/HMAC(K_id, hash)</code>, §10) computed from the block's hash — so a retry, even
+  after a reload, re-PUTs to the same path and is first-write-wins idempotent (§10.1); no random
+  idempotency token is needed (that was the block-id path's workaround). The record carries a small persisted
+  status closing the metadata-commit / byte-stage ordering gap (§11). The persisted values are
+  <code>staged</code> / <code>pending</code> / <code>failed</code>:
+  <code>staged</code> (durable but <em>not</em> drainable) → <code>pending</code> (drainable) → then either it
+  <strong>clears</strong> — the record is <strong>deleted</strong> on a confirmed upload (the bytes stay in
+  the byte store, §8, now eviction-eligible like any replicated bytes; &quot;eviction-eligible&quot; is simply
+  the <em>absence</em> of an up-lane record, not a retained <code>cleared</code> value) — or it moves to
+  <strong><code>failed</code></strong> on a <em>permanent</em> rejection (§10.1: an auth/size/path rejection
+  the upload can't satisfy — a non-writer, an over-limit body, a malformed path — or a content path an
+  active poisoner keeps re-occupying so writer-delete + re-upload can't terminate). A
+  <code>failed</code> record <strong>stops the tight correction loop</strong> (so a poisoned or rejected
+  upload never burns egress in a hot retry) but <strong>keeps its eviction
+  exemption</strong> — its bytes are un-uploaded, i.e. still the <em>only copy</em> <em>and</em> the self-heal
+  source (the §9 server-side backstop / §16), so evicting them would be irreversible data loss. The
+  <em>only</em> byte release is the user explicitly discarding the item from the §11 pending-attachments
+  affordance — and that discard is itself <strong>content-refcount-gated</strong> (§8/§9/§16), the
+  <em>record</em> as well as the bytes: it removes the record and frees the bytes only when <em>no</em>
+  live-or-soft-deleted block still carries the hash (the last reference). If another live block still
+  references the content, there is nothing to reclaim — the bytes are still needed <em>and</em> the upload
+  obligation is still owed — so a discard of a still-shared attachment is a no-op for reclamation (the content
+  stays pending until its last carrier is gone or it uploads), which is also what stops it stranding a
+  co-referencing block's route to the server. In the common capture-dedup path the asset is a <em>single</em>
+  block with a single record (§11), so this gating is moot; the shared case arises only from a block copy /
+  import of a not-yet-uploaded asset. And
+  <code>failed</code> is <strong>recoverable</strong>, not a dead end — but recovery is
+  <strong>bounded and cheap, never the hot loop the state exists to stop</strong>: a <code>failed</code>
+  record is re-attempted on app start, on reconnect, by an explicit user retry, and on a <strong>slow
+  periodic sweep</strong> (a bodiless <code>GET</code> every few hours — so a <em>long-lived online tab</em>
+  still heals once the path frees, rather than waiting on a restart it may never get). Even against a
+  <em>persistent</em> poisoner the cost is one sparse, bodiless probe per such event — never the tight
+  correction loop, and no new lane to walk it: the down-lane fetches bytes that are <em>absent</em>
+  locally, whereas a <code>failed</code> record's bytes are <em>present</em>, so the down-lane would never
+  visit it; this re-attempt sweep is the up-lane's own. Each re-attempt first does a <strong>cheap direct
+  RLS-gated <code>GET</code> of the content path</strong> (reads are direct, §8 — it streams no body) and
+  branches on what's there: object <strong>absent</strong> → the path is free, drain normally → clears;
+  <strong>present and hash-verifies</strong> → another device already materialized it → delete the record,
+  no upload → clears (the bytes are now eviction-eligible like any replicated bytes — note this drops the
+  durability floor for this content from &quot;a guaranteed un-evictable copy&quot; to the same best-effort
+  every replicated byte has, since no device is now obligated to keep an exempt copy; should the server object
+  later be removed — an active poisoner / writer-delete — this degrades to the §9 &quot;synced block outlives
+  its bytes&quot; backstop, a shown-as-unavailable broken image recoverable only while some replica survives,
+  never a silent loss); <strong>present but hash-mismatches</strong> → still poisoned → stays
+  <code>failed</code>. This
+  covers both causes without conflating them — a <em>poisoned</em> path heals when the probe finds it free or
+  materialized; a <em>shape-rejected</em> body (a stale / buggy client) heals only once the client is fixed,
+  whose post-upgrade re-attempt re-encodes correctly, so until then it stays surfaced-for-discard rather than
+  re-PUTting the same bad bytes. Only <em>permanent</em> rejections land in <code>failed</code>; transient
+  failures stay <code>pending</code> and retry with backoff (below). &quot;Upload in progress&quot; is an
+  <em>in-memory</em> single-flight guard, not a
+  persisted state — a crash mid-PUT leaves the record <code>pending</code> and the single-owner drain (§8)
+  re-PUTs (first-write-wins idempotent, §10.1), so no persisted <code>uploading</code> state is needed. Capture writes the record as
+  <code>staged</code> <em>before</em> the metadata <code>repo.tx</code>, so a committed asset block
+  always has its source bytes already on disk; the post-commit step flips it to <code>pending</code>
+  and arms the drain. The drain acts only on <code>pending</code>+ records, so the "block still
+  exists?" pre-PUT drop applies only <em>after</em> the commit (a post-commit deletion / undo) and
+  never to the legitimate pre-commit window. A flip that never lands (crash or throw between commit and
+  flip) is recovered by a <strong>boot-time reconciler</strong> that <strong>promotes</strong> any
+  <code>staged</code> record whose asset block has <em>materialized</em> in <code>blocks</code> (recovering the
+  post-commit flip that never landed) and <strong>leaves every other staged record untouched</strong>. It
+  deliberately does <em>not</em> reap absent ones. A <code>staged</code> record is non-drainable, so an orphan
+  never uploads on its own; leaving it costs only its bytes, which the <strong>§16 content-refcount GC</strong>
+  reclaims (no live-or-soft-deleted block carries their hash) — the same single rule that keeps §8 eviction /
+  §16 GC from dropping a shared object out from under a live block. Reaping <em>here</em> would instead demand
+  <em>proving</em> a block never committed — distinguishing a true orphan from a committed-but-unmaterialized
+  block (a locked e2ee workspace withholding it from <code>blocks</code>, the throttled observer still lagging
+  the download, an undecryptable/quarantined row, or another profile account's un-hydrated DB) — and any wrong
+  guess deletes the only un-uploaded copy of a <em>live</em> block's bytes. Trading a near-zero,
+  GC-reclaimable byte leak for &quot;can never reap a live block's bytes&quot; is the right call; the promote
+  reads plain <code>blocks</code> because a miss is non-committal (a later boot retries once it materializes —
+  and it couldn't drain while the workspace is locked anyway), never destructive. A <em>caught</em> tx rollback
+  still deletes its orphan record + bytes inline (it ran in-process and knows the block didn't commit); the
+  reconciler only leaves the residue where a crash lands between the throw and that cleanup, which §16 GC
+  sweeps. A profile account that is never re-opened simply leaves its records inert, costing bounded storage,
+  never loss. Entries drain (direct to Storage, §10.1) when connectivity returns, retrying with
+  backoff; on a confirmed upload the <em>queue entry</em> is deleted, but the <strong>bytes remain in
+  the byte store</strong> (§8, budget-bounded) — full replication keeps them on disk for offline; they
+  simply lose the un-uploaded eviction-exemption.
+  This is new infra the pre-E2EE proposal under-specified; E2EE doesn't change it, but the design
+  surfaces it clearly. The queue's local <code>status</code> is also the per-device source of truth
+  for the "bytes pending here?" UI (§8) — there is no synced status flag. Cross-device arrival is
+  naturally eventually-consistent: a peer that has the block but not yet the bytes shows the
+  "metadata present, bytes pending" state until the upload from the origin device completes.</p>
+
+<p><strong>The down-lane: background replication.</strong> The queue above is the <em>up-lane</em> —
+  local bytes the server doesn't have yet. Its mirror is the <em>down-lane</em>: a background reconciler
+  that walks the <code>media</code> blocks in the local DB for active workspaces and, for any whose
+  bytes are absent from the store, enqueues a fetch → decrypt → hash-verify → store (the §8 budget / scope
+  / politeness rules apply). The two lanes are halves of one <strong>byte-replication subsystem</strong>
+  over the single §8 byte store, paralleling what PowerSync does for rows:
+  up-lane drains local→server, down-lane reconciles server→local, and the demand lane (§8) lets a render
+  jump the backlog. So the §9 up-lane and the §8 byte store are one store + its per-device upload-status
+  records; the bytes exist <em>once</em>, not a second copy.</p>
+
+<div class="info">
+<strong>Cross-tab execution: the background lanes are single-owner; capture is per-tab.</strong> The
+<em>background</em> work — the down-lane replicator, the up-lane drain (<em>and its periodic
+re-attempt sweep</em> for <code>failed</code> records, §9), and the boot reconciler — runs under
+one tab elected by a <strong>Web Lock</strong> (<code>navigator.locks.request</code>, §8), so multiple open
+tabs don't multiply egress or redundantly re-PUT (the lock hands off automatically when that tab closes; no
+SharedWorker required). <em>Capture</em> stays per-tab: any tab can paste, staging its byte record and
+committing its <code>repo.tx</code> locally. That split is exactly why the up-lane keeps its
+session/generation stamp — single-owning the reconciler does <em>not</em> remove the reconciler-vs-capture
+race, because a capture in <em>another</em> tab can be mid-tx (staged record written, block not yet
+committed) while the owner's reconciler runs; the stamp is what stops it reaping a live capture's record.
+(A dedicated worker for the lane is a later perf option, not needed for this.)
+</div>
+
+<div class="warn">
+<strong>Undo / delete need no byte-lane compensation — the lane self-heals.</strong> §11 puts the
+asset-block create + the <code>!((id))</code> insert in one <code>repo.tx</code> (the <em>DB</em> half is
+atomic). The bytes aren't in that tx and don't need to be: block delete is a restorable
+<strong>soft-delete</strong> (§9/§16) and the Storage object is <strong>immutable + content-addressed</strong>
+(§10), so undo is a pure DB soft-delete and the byte lane reconciles around it.
+<ul>
+  <li><strong>Undo</strong> soft-deletes the block (shared <code>repo.tx</code>) and best-effort cancels
+    the queue entry; it does <em>not</em> touch the Storage object.</li>
+  <li><strong>The drain</strong> already re-checks &quot;block exists and is not soft-deleted&quot; before
+    PUT (needed for any post-commit delete, not just undo): so an undo <em>before</em> upload never PUTs,
+    and a PUT racing the undo just confirms idempotently to its immutable path (§10) — a harmless retained
+    object.</li>
+  <li><strong>Redo</strong> un-soft-deletes the block (pure DB). If the upload already happened the
+    immutable object is <em>still there</em> — nothing to re-upload; if not, the retained byte-store bytes
+    (never dropped on undo) resume draining — and if the record had reached <code>failed</code>, redo treats
+    it as a fresh trigger to re-attempt (the §9 opportunistic re-attempt), so a restored block never sits in
+    <code>failed</code> without a path forward.</li>
+  <li><strong>The object</strong> from an undone-then-not-redone paste is <em>not</em> an orphan — a
+    soft-deleted block still references its hash, so §16's reference-counted sweep retains it like any
+    other soft-deleted block's object (reference-permanent in v1), reclaiming it only when <em>no</em>
+    live-or-soft-deleted block carries the hash.</li>
+</ul>
+This is also what keeps it correct under <strong>dedup</strong>: one content object can back several blocks
+(§11), so deleting the object on undo of <em>one</em> of them would break the others' live images — the byte
+lane must <em>never</em> delete an object on undo; the refcounted §16 sweep is the sole deleter.</div>
+
+<div class="warn">
+<strong>A synced asset block can outlive its only bytes — the server-side backstop.</strong> A device can
+lose its <em>un-uploaded</em> bytes — a coarse wipe (§7.2), a lost / reinstalled device, or a crash — while
+the asset block's <em>metadata</em> already synced (PowerSync was up; the byte upload wasn't), leaving the
+server with a block whose content-addressed object can never materialize, a broken embed on peers that
+did nothing wrong. There is no reliable client-side fix at that moment (the origin device is gone or
+offline) — but the handling must <strong>not</strong> be a destructive server-side reap of the block.
+Block deletion is a subtree-aware soft-delete (<code>src/data/mutators.ts</code>), so reaping the asset
+block would <em>cascade-delete the user-authored caption / alt-text / transcript children</em> — turning
+a missing image into lost text — and elapsed time alone can't distinguish &quot;author offline, still
+intends to upload&quot; from &quot;author gone forever&quot;. So instead — with <em>no</em> new server
+write-path, because §16 never timed-reaps the block (its mere existence is the cross-device
+&quot;intended here&quot; signal, §8): (a) a peer that has the block but not the object runs a
+<em>bounded</em> down-lane retry, then surfaces a settled <strong>&quot;image not yet uploaded&quot;</strong>
+state (not an indefinite spinner, and it stops re-hitting Storage with 404s) — but that settled entry is re-attempted on the next down-lane
+reconcile pass (which re-walks the workspace's <code>media</code> blocks; the peer's bytes <em>are</em> absent
+locally, so the down-lane legitimately visits it), so a <em>transient</em> 404 (e.g.
+the §10.1 writer-delete → re-PUT correction window) self-heals rather than sticking; (b) the embed
+<strong>self-heals</strong> if the origin ever uploads — the origin's own durable local up-lane record
+(<code>staged</code>/<code>pending</code>, or a <code>failed</code> record, which keeps its exempt bytes and
+re-attempts opportunistically once a poisoned path frees, §9) carries the intent and drains on reconnect. Automatic destruction is reserved for orphan <em>objects</em> (bytes with no
+block — safe to delete); an orphan <em>block</em> is never auto-deleted (its children are real content),
+so the only unrecoverable case — origin gone before upload — is honestly shown as unavailable, never
+papered over by deleting user content.</div>
+
+<h2 id="storage">10. Storage layout &amp; RLS</h2>
+
+<p>One private bucket, <code>attachments</code>. Object path
+  <strong><code>&lt;workspace_id&gt;/&lt;content-key&gt;</code></strong> — <em>content-addressed</em>:
+  <code>content-key = HMAC(K_id, sha256(plaintext))</code> for an E2EE workspace, plain
+  <code>sha256(bytes)</code> for a plaintext one. For E2EE the object is the <code>encb:v1:</code>
+  ciphertext; for plaintext, the raw bytes (identity case, §5). Content-addressing makes uploads
+  idempotent and object dedup an <em>invariant</em>; the per-workspace HMAC key is what keeps it from
+  becoming a content oracle (below).</p>
+
+<div class="info">
+<strong>Why a <em>keyed</em> content hash (and what it buys).</strong> Content-addressing is the design
+we want — it makes uploads idempotent (same bytes → same path → a re-PUT is a no-op) and dedup an
+invariant rather than a race. The only thing that rules out a <em>raw</em> <code>sha256(plaintext)</code>
+path under E2EE is the <strong>content oracle</strong>: <code>&lt;ws&gt;/&lt;sha256-of-plaintext&gt;</code>
+would let the untrusted server confirm &quot;does this workspace contain <em>this known file</em>?&quot;
+by hashing a candidate and probing for the object. The fix is to <em>key</em> the hash:
+<code>&lt;ws&gt;/HMAC(K_id, sha256(plaintext))</code> is deterministic within a workspace (idempotent +
+dedup), unguessable to the server (no oracle), and distinct across workspaces (no cross-workspace
+correlation). A <strong>plaintext</strong> workspace has no secret to protect, so it uses the raw
+<code>sha256(bytes)</code> — the server already holds those bytes.
+<ul>
+  <li><strong><code>K_id</code> is an HMAC subkey derived from the WK material via HKDF at import
+    time</strong> — <em>not</em> the stored WK handle, which is a non-extractable AES-GCM key WebCrypto
+    won't sign with. Concretely <code>K_id = HKDF-SHA256(ikm = raw WK bytes, salt = &quot;&quot;, info =
+    &quot;km/asset-content-key/v1&quot;, L = 32)</code>, imported non-extractable as <code>{name:'HMAC',
+    hash:'SHA-256'}</code> and used at <strong>full length</strong> (path-encoded, never truncated —
+    truncation only invites two plaintexts to collide on one path; harmless to confidentiality since the
+    read check holds the full <code>sha256</code>, but a needless self-inflicted DoS). The empty salt is
+    safe (the WK is already 32 uniform bytes); the <code>info</code> label is <em>not</em> optional — it
+    domain-separates this derivation from any <em>other</em> future WK-derived key (the deferred §12 /
+    e2ee §13 key hierarchy, the §13 per-asset share key), exactly as <code>aad.ts</code> domain-separates
+    the canary from content columns. The raw key bytes are briefly in scope at unlock/create
+    (<code>parseWorkspaceKey</code> / <code>importWorkspaceKey</code>) before the non-extractable import;
+    that is the only window to derive <code>K_id</code> — and the WK bytes are <strong>zeroed right
+    after import</strong> (<code>createEncryptedWorkspace.ts</code>), so <code>K_id</code> can't be
+    re-derived on a later reload. (The <em>unlock</em> path <code>unlockWorkspaceWithKey.ts</code> has
+    <em>no</em> such derive window today — it doesn't even zero the parsed bytes, which drop to GC — so adding
+    derive-then-zero on unlock is a <strong>prerequisite of the storage-path phase (§15 phase 2, where
+    <code>K_id</code> is first needed)</strong>, and incidentally fixes that
+    standalone GC-leak.) It must therefore be <strong>persisted</strong> as its own non-extractable HMAC
+    <code>CryptoKey</code> in the keyStore, derived once at import/unlock. That adds a second stored handle but
+    no WK-exposure widening — it can't recover the WK, and lives in the same IndexedDB the model already
+    trusts. <strong>Co-locate it with the WK in one keyStore record</strong> (the store today holds a single
+    <code>CryptoKey</code> per <code>(user_id, workspace_id)</code>, so this widens the record shape):
+    IndexedDB is best-effort evictable, and losing <em>only</em> <code>K_id</code> while the WK handle
+    survives would silently fail-close media mid-session (text still working) — so they must evict together,
+    and any <code>K_id</code>-absence routes through the same re-paste affordance as the migration below.</li>
+  <li><strong>Migration: existing E2EE devices have no <code>K_id</code> yet.</strong> A workspace
+    unlocked before this feature ships holds a non-extractable WK handle but never derived
+    <code>K_id</code> (the raw bytes are long since zeroed, and a non-extractable AES-GCM key can't be
+    HKDF'd or exported). Such a device must <strong>re-paste the WK once</strong> (or re-unlock) to
+    populate <code>K_id</code>. <strong>Implemented choice (the simpler one): a <code>K_id</code>-less
+    record is treated as LOCKED</strong> — the workspace gate prompts a re-paste and the whole workspace
+    (text included) is read-only until it's supplied, rather than a media-only fail-closed path that keeps
+    text live. We took the uniform gate (one "no usable key ⇒ locked" rule) over the narrower media-only
+    carve-out; the stored WK handle is <em>preserved</em> (never discarded), so the re-paste fully restores
+    access and the only cost is a one-time re-paste — acceptable for the small coordinated fleet. A named
+    step, not a silent break. (<code>src/sync/keys/resolveWorkspaceEntry.ts</code> gates on
+    <code>contentKeyHmac !== null</code>.)</li>
+  <li><strong>What this removes</strong> (vs a block-id path): the idempotency token (§9/§10.1), the
+    write-once monotonicity rule (§5.1), and duplicate-object GC (§11) — the path <em>is</em> the
+    idempotency key and the immutability guarantee. Fewer moving parts, not just better scaling.</li>
+  <li><strong>Its one cost</strong> — the path no longer carries the block id, so a future share-RLS
+    join (object → block) needs a separate <code>content_key → block</code> mapping (§10.1). Zero today:
+    subtree sharing is unshipped and not a design driver (§12).</li>
+</ul>
+</div>
+
+<p>Every operation is a <strong>direct</strong>, RLS-gated client call — there is no mediating upload
+  service. <strong>Reads</strong> are member-gated; <strong>inserts</strong> are writer-gated;
+  <strong>updates</strong> have no policy (denied), which is exactly what makes a content-addressed object
+  write-once; <strong>deletes</strong> are writer-gated:</p>
+
+<pre><code>create policy "attachments read by workspace member"
+on storage.objects for select to authenticated
+using (
+  bucket_id = 'attachments'
+  and private.is_workspace_member(
+        (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
+        (auth.uid())::text)
+);
+
+-- INSERT is a DIRECT writer-gated upload. The WITH CHECK keys on the path's
+-- first segment, so a writer can only write into a workspace they write — there
+-- is no separate workspace param to spoof. The array_length check enforces the
+-- FLAT layout (exactly &lt;ws&gt;/&lt;content-key&gt;, one folder level): without it a
+-- writer could upload &lt;ws&gt;/sub/plaintext — RLS-allowed (first segment is their
+-- workspace) but hidden from the audit's top-level scan, so plaintext could
+-- evade the §10.1 tripwire under an E2EE subfolder. There is intentionally NO
+-- body inspection: a storage.objects policy can't see the body bytes (§10.1).
+create policy "attachments insert by workspace writer"
+on storage.objects for insert to authenticated
+with check (
+  bucket_id = 'attachments'
+  and array_length(storage.foldername(name), 1) = 1   -- flat: &lt;ws&gt;/&lt;key&gt; only
+  and right(name, 1) &lt;&gt; '/'                          -- non-empty content-key
+  and private.is_workspace_writer(
+        (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
+        (auth.uid())::text)
+);
+
+-- NO update policy → an object is write-once (immutability). The path IS the
+-- content key (§10), so a second upload to an existing path is a Storage 409 the
+-- client reads as first-write-wins idempotent dedup, never an overwrite. Storage
+-- needs UPDATE for every other mutation verb too — upsert, move (rename), and
+-- copy-onto-existing all require UPDATE — so with no UPDATE policy NONE of them
+-- can overwrite an existing object. A writer's only mutation is delete (then a
+-- fresh insert) — the accepted §17 poison, not a silent overwrite.
+
+-- DELETE is a direct writer-gated delete — delete removes an object, there is no
+-- body to inspect, and it is REQUIRED: without it BlobStore.delete() is
+-- default-denied, so §16 GC and the §10.1 poison-correction can't reap objects.
+create policy "attachments delete by workspace writer"
+on storage.objects for delete to authenticated
+using (
+  bucket_id = 'attachments'
+  and private.is_workspace_writer(
+        (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
+        (auth.uid())::text)
+);</code></pre>
+
+<p>So the mutation split is: <strong>reads</strong> member-gated, <strong>inserts</strong> and
+  <strong>deletes</strong> writer-gated, <strong>updates</strong> denied (immutability) — all direct RLS,
+  no mediating service. <code>BlobStore.delete()</code> (used by §16 GC and the §10.1 poison-correction
+  delete — <em>not</em> by undo, §9) uses that delete policy — without it, objects could never be
+  reclaimed.</p>
+
+<div class="warn">
+<strong>The <code>private.*</code> grant is not free — verify it, don't assume parity with
+<code>blocks</code>.</strong> <code>private.is_workspace_member</code> / <code>is_workspace_writer</code>
+exist and are <code>SECURITY DEFINER</code>, but the migrations contain <em>no explicit</em>
+<code>GRANT USAGE ON SCHEMA private</code> / <code>GRANT EXECUTE</code> to the app roles — the
+<code>blocks</code> RLS works via defaults and the fact that the policy and the table live in
+<code>public</code>. A <code>storage.objects</code> policy runs in a <em>different</em> ownership/role
+context (the table is owned by <code>supabase_storage_admin</code>, in the <code>storage</code>
+schema), so "the same functions <code>blocks</code> uses" is <em>not</em> automatically callable
+there. Treat the schema-<code>USAGE</code> + <code>EXECUTE</code> grants (or a thin public wrapper) as
+a first-class, tested step of the bucket migration — a wrong assumption yields a policy that errors at
+query time or silently denies all reads.
+</div>
+
+<p>For an E2EE workspace the blob is already ciphertext, so RLS here is defense-in-depth — it stops a
+  non-member from hoarding ciphertext against a future key compromise, and avoids leaking object
+  existence. For a plaintext workspace it is the actual access boundary.</p>
+
+<h3>10.1 No server-side write guard — direct writes, with a read-side backstop</h3>
+
+<p>RLS is not a ciphertext guarantee, and — unlike blocks — there is no server-side one either. For
+  blocks, a server trigger <em>rejects</em> a plaintext write to an E2EE workspace
+  (<code>is_enc_v1_envelope</code> shape-check), because Postgres has the row body inline. The naïve
+  analog for bytes — "a <code>storage.objects</code> trigger that checks the body" — <strong>cannot
+  exist</strong>: Supabase Storage object policies/triggers see object <em>metadata</em> (path, owner,
+  size), never the <em>body bytes</em> — the bytes live in S3 and <code>storage.objects</code> is just a
+  metadata row. A check that reads bytes could only sit in code on the write path, and would only enforce
+  anything if that code were the <em>sole</em> writer (a mediating Edge Function). We deliberately do
+  <strong>not</strong> pay that.</p>
+
+<div class="decision">
+<strong>Decision (reversal, 2026-06-25): direct writer-gated uploads; no body-inspecting upload service.</strong>
+An earlier draft made a service-role Edge Function the sole writer so the server could enforce the
+<code>encb:v1:</code> byte shape, matching the block trigger. We reversed it: that guard is not worth a
+function on every upload, because the byte-confidentiality <em>outcome</em> is already closed elsewhere.
+<ul>
+  <li><strong>The guard was shape-only, and a malicious writer forges it.</strong> The check is an 8-byte
+    magic compare (the server has no key); a writer who wants the server to see plaintext sends
+    <code>encb:v1:</code>‖zeros‖plaintext‖zeros and passes it — or just exfiltrates with the workspace key
+    they already hold. Against the threat that matters (a malicious writer / the untrusted server) it buys
+    nothing.</li>
+  <li><strong>The read side fail-closes — and that is now the sole byte-confidentiality control, so it was a
+    hard Phase-3 acceptance gate.</strong> The resolver (§7.3,
+    <strong>built — <code>src/attachments/resolver.ts</code></strong>) hash-verifies every fetched object
+    against the block's synced
+    <code>hash</code> and AEAD-opens it (§5.1/§7.3); anything that isn't the genuine plaintext (a fetch
+    failure, an AEAD-open failure, or a hash mismatch — including a poisoned object that AEAD-opens under a
+    known-hash AAD) renders a
+    broken-image placeholder and is <em>never stored or served as content</em>. Phase 1 shipped the primitives
+    (<code>decodeBytes</code>, <code>verifyContentHash</code>); Phase 3 wired them into the resolver — with the
+    tamper/swap and hash-mismatch tests §15 lists — which is what makes this reversal safe; nothing read
+    these objects until it landed. (This is the principled asymmetry with blocks: bytes are content-addressed
+    and self-verifying on read; block text is not — so byte-confidentiality <em>can</em> rest on a read-side
+    check where block-confidentiality can't.)</li>
+  <li><strong>It is a no-op for plaintext workspaces</strong> — no body to protect; the server holds those
+    bytes by design.</li>
+  <li><strong>The one residual</strong> it uniquely caught is an <em>honest</em> client with an encryption
+    regression accidentally uploading bare plaintext into an E2EE prefix — harmless to readers (fail-closed)
+    but visible to the untrusted server at rest until GC. We cover that with an <strong>off-path periodic
+    audit</strong> (<code>scripts/attachments-ciphertext-audit.ts</code>) that scans E2EE prefixes and
+    <em>alerts</em> on any object that is not a plausible <code>encb:v1:</code> envelope — missing the magic,
+    or carrying the magic but shorter than the envelope minimum (magic + nonce + tag), so a truncated runt
+    can't pass on the prefix alone — turning a client bug loud without putting a function on the write path. It alerts, it does not delete (deleting can't un-see what the server already
+    holds, and a one-test client invariant catches the bug class more cheaply).</li>
+</ul>
+So the write path is a <strong>direct, RLS-gated insert</strong> (§10): the <code>WITH CHECK</code> keys on
+the path's first workspace segment, re-imposing exactly the writer authorization the removed function did
+(and closing the same cross-workspace path-smuggling — the policy evaluates the <em>real</em> first segment
+of the object being written, not a spoofable param). What the function did that native RLS now does:
+<strong>authorization</strong> (writer INSERT policy), <strong>write-once immutability</strong> (no UPDATE
+policy → a re-upload to an existing content path is a Storage <code>409</code> the client reads as
+first-write-wins idempotent dedup, never an overwrite), and the <strong>size cap</strong> (the bucket's
+<code>file_size_limit</code>). The <code>encb:v1:</code> shape is now the <em>client's</em> pre-upload
+invariant (§9), backstopped read-side and by the audit. (Storage finalizes an object only on a complete
+upload, so a truncated request can't win a path with a partial object — the atomicity the function had to
+hand-roll is now the platform's.)</div>
+
+<p><strong>Existing-path dedup still hash-verifies</strong> (in the §9 up-lane drain — Phase 5, not yet
+  wired). On a <code>409</code> the uploading client must
+  <strong>not</strong> blindly clear its §9 queue entry: it fetches + hash-verifies the stored object against
+  its own <code>hash</code> — on a match it clears (genuine idempotent dedup); on a mismatch (a poisoned or
+  buggy prior write) it keeps its bytes and runs writer-delete + re-upload rather than dropping the only good
+  copy. First-write-wins makes a bad first write <strong>sticky until the path is freed</strong> — an
+  accidentally corrupt path is correctable by a writer delete + re-upload (§10 writer-delete RLS), but an
+  <em>active</em> member-poisoner can DoS a known asset (delete-then-re-PUT doesn't terminate against them),
+  so after a bounded number of correction cycles the client moves its §9 record to <code>failed</code> (§9 —
+  keeps its exempt bytes, surfaces for discard, re-attempts opportunistically once the path frees): a named
+  tradeoff in §17.</p>
+
+<p>Per the project's Supabase rule, the bucket + its RLS land in one migration with
+  <code>storage.objects</code> policies enabled; no public table is created without RLS.</p>
+
+<h2 id="renderer">11. The renderer &amp; capture surfaces</h2>
+
+<p>Packaged as one <code>attachments</code> plugin, mirroring the <code>video-player</code> plugin's
+  facet wiring:</p>
+
+<ul>
+  <li><strong><code>MediaBlockRenderer</code></strong> via <code>blockRenderersFacet</code>, with
+    <code>canRender = ({block}) =&gt; block.hasType('media')</code> and a
+    <code>priority</code> above the default. Branches on <code>mime</code>: image → the existing
+    <code>MarkdownImage</code> lightbox fed the object URL the in-thread resolver produces (§7.3); later, PDF / audio / video / generic
+    file-chip.</li>
+  <li><strong>No second image representation.</strong> An attachment is always a <code>media</code> block
+    rendered through its <code>!((id))</code> embed (above) — there is <em>no</em> <code>![](asset-ref)</code>
+    markdown form to special-case (that would side-step the block model for no gain). Plain <em>external</em>
+    <code>![](url)</code> images keep today's <code>MarkdownImage</code> lightbox unchanged; ingesting one
+    into our storage means converting it to a <code>media</code> block + embed, not rewriting its
+    <code>src</code> to an internal sentinel.</li>
+  <li><strong>Capture routes through the existing paste verb.</strong> Image paste / drop is a branch of
+    the established <code>pasteDecisionVerb</code> (<code>src/paste/decision.ts</code> — already the seam
+    both <code>CodeMirrorContentRenderer</code> and <code>DefaultBlockRenderer</code> route paste through),
+    by extending its input to carry <code>clipboardData.files</code> / <code>dataTransfer.files</code> so a
+    file payload decides &quot;create a media block&quot; — <em>not</em> a parallel
+    <code>domEventHandlers</code> interceptor. The <code>/image</code> command + file-picker is the
+    explicit-invocation path through the existing action / shortcut system.</li>
+  <li><strong>Pending-attachments affordance.</strong> The per-device up-lane records (§9) — both
+    <code>pending</code> and <code>failed</code> — surface as a small &quot;pending uploads&quot; list whose
+    entries are <em>individually discardable</em> — this is the only offline release valve when intake
+    backpressure hits (§8), so it's a required capture surface, not merely a &quot;bytes pending here&quot;
+    indicator. Discard is content-refcount-gated (§8/§9/§16) — record and bytes both go only as the last
+    reference — so discarding one media block's record can't strip a co-referencing block's bytes or strand
+    its upload. When a discard reclaims nothing because the content is still shared (the rare copy/import
+    case), the affordance must <em>say so</em> and point at the co-carrier — a silent no-op would leave a
+    user under intake backpressure with no model for why the space didn't free. (This differs from the §9
+    boot-reconciler reap, which drops a record whose <em>own</em> block is absent-past-checkpoint while
+    keeping shared bytes — different antecedent, same content-refcount gate.)</li>
+  <li><strong>On capture:</strong> client-side mime/size guard → hash → create the asset block at a
+    <strong>deterministic, content-derived id</strong> — <code>uuidv5(&lt;workspaceId&gt;:&lt;content-key&gt;)</code>,
+    where the content-key is the keyed hash for E2EE, raw <code>sha256</code> for plaintext (workspace-scoped,
+    like the storage path §10). It MUST be a <strong>UUID</strong>: the embed is a block-ref
+    (<code>!((id))</code>) and the block-ref grammar only matches UUID-shaped targets, so a literal
+    <code>media:&lt;content-key&gt;</code> id would render as plain <code>!((media:…))</code> text, never a media
+    embed. (The <code>media:…</code> form earlier in this doc is shorthand for "deterministic, content-derived",
+    not the literal id string.) Mint it through the codebase's established deterministic-id helper
+    (<code>createOrRestoreTargetBlock</code> — the path daily-notes / roam-import / alias-seats already use),
+    <em>not</em> a bare <code>createOrGet</code>: that helper (a) <code>systemMint</code>s the row at the
+    pristine <code>updated_at = 0</code> sentinel, so two devices' first pastes reconcile to one row instead
+    of racing wall-clocks, and (b) catches <code>DeletedConflictError</code> and <code>restore</code>s — so
+    re-pasting an image you just undid (its block is soft-deleted, §9) <em>restores</em> the same block
+    rather than throwing — and re-paste re-stages the byte record from the bytes the paste holds in hand
+    (§8), so it doesn't depend on the undone asset's byte-store entry having survived eviction/GC. (On the
+    restore branch <code>systemMint</code> is inert — a restored block lands a <em>real</em>
+    <code>updated_at</code>, not 0, which is harmless: a real version only wins or ties, never spuriously
+    yields. No seat-probe is needed either, unlike alias seats: the id <em>is</em> the content key, so the
+    only id-collider is identical content — exactly the dedup we want.) Repeat / concurrent pastes therefore
+    dedup to <strong>one block id + one object</strong>, no lookup (and the keyed id avoids leaking a raw-hash content oracle in the clear
+    <code>blocks.id</code> column — it does hand the server a free object↔block equality join, the same
+    content-key labelling both, but that correlation is timing-available anyway and stays workspace-local
+    since <code>K_id</code> differs per workspace). Placement is <strong>not</strong> under the containing
+    block: because dedup makes the asset block shared workspace-wide (it may be embedded from many notes),
+    parenting it in one note's subtree would let that note's soft-delete — which cascades to the subtree (§9)
+    — tombstone the shared asset and break <em>every other</em> embed. So media blocks are anchored in a
+    dedicated workspace-level <em>assets</em> container (flat — not a disposable subtree) and embedded
+    everywhere via <code>!((id))</code>. The type is stamped via <code>repo.addTypeInTx(tx, id, 'media', …)</code> (the in-tx variant
+    — the standalone <code>block.addType</code> wouldn't compose into the single tx; and the
+    <code>media</code> <code>TypeContribution</code> must be registered via <code>typesFacet</code> first,
+    §3, or this throws). The asset-block create + the <code>!((id))</code> insert go in one
+    <code>repo.tx({scope: ChangeScope.BlockDefault})</code> so they share an undo bucket. The
+    <strong>durable byte record is staged (non-drainable) BEFORE that tx, and the drain is armed only
+    AFTER it resolves</strong> — not inside it (see the box below).</li>
+</ul>
+
+<div class="warn">
+<strong>Stage the byte record durably <em>before</em> the metadata tx; gate its drain on the commit.</strong>
+<code>repo.tx</code> only makes the SQLite/PowerSync writes atomic — an IDB/OPFS byte-queue write is an
+external side effect that neither joins that tx nor rolls back with it. Two failure windows have to
+close at once. <strong>(a)</strong> If the byte write happened <em>after</em> the commit and then failed
+(quota, private-mode, a store error), the metadata is already committed and syncs to peers with
+<em>no</em> durable source bytes, no per-device pending status, and no queue entry to drain
+— a permanently un-uploadable asset on every peer. <strong>(b)</strong> If the enqueue instead
+kicked off a drain <em>before</em> the commit is visible, the §9 "block still exists?" pre-PUT re-check
+would drop the bytes as a missing block. The resolution closes both: <strong>write the durable byte
+record first in a non-drainable <code>staged</code> state (§9), <em>then</em> run <code>repo.tx</code>,
+<em>then</em> flip <code>staged → pending</code> and arm the drain.</strong> Because the bytes are
+staged before the commit, a committed asset block <em>always</em> has its source bytes already on disk
+— window (a) is gone (a failed stage aborts capture before any metadata commits, attaching nothing);
+because <code>staged</code> is not drainable, the drain can't race ahead of the commit — window (b) is
+gone. The post-commit flip can itself fail, but that is recoverable, not lossy: the durable
+<code>staged</code> record survives, and a boot-time reconciler (§9) promotes any <code>staged</code>
+record whose asset block did commit. Undo needs no special byte-lane step (§9): the shared
+<code>repo.tx</code> soft-deletes the block and best-effort cancels the queue entry; any already-uploaded
+object is left in place (immutable, content-addressed) and owned by §16's refcounted sweep — never deleted
+on undo.</div>
+
+<div class="warn">
+<strong>Object dedup is an invariant; block <em>identity</em> dedups too on the capture path.</strong> The
+object path is content-addressed (<code>HMAC(K_id, sha256)</code>, §10), so concurrent pastes of the same
+image — two devices, two tabs, offline-then-reconnect — all compute the <em>same</em> path and converge on
+<strong>one</strong> Storage object (first-write-wins idempotent, §10.1; keyed off the <em>plaintext</em>
+hash, so randomized GCM doesn't matter). No duplicate objects, ever. And because capture mints the block at a
+<em>deterministic content-derived id</em> (above), those same pastes resolve to <strong>one block id</strong>
+too — no duplicate block, no lookup. One honest caveat: the cross-device merge of that shared block is
+whole-row last-writer-wins, <em>not</em> a field merge, so a <em>non-hash</em> property that differs between
+two pastes (e.g. <code>filename</code>) LWW-resolves — cosmetic, and the render-critical fields
+(<code>hash</code>, <code>size</code>) are identical by construction; the user-authored caption / alt-text
+are <em>child</em> blocks, untouched by the parent upsert. The system still <em>tolerates</em> multiple
+blocks per object from <em>other</em> paths (a block copy, an import) — harmless: they share the one verified
+object and both render. Crucially, <em>every</em> capture — including a dedup hit on an already-existing
+block — stages its own in-hand bytes and uploads idempotently (§11 staging box): so reusing an asset whose
+object hasn't uploaded yet (e.g. the originating device is still offline) does <em>not</em> drop this
+capture's bytes — whoever is online first materializes the content path. So object GC stays
+content-reference-counted: GC the object only when <em>no</em> live-or-soft-deleted block carries the hash,
+behind §16's grace-windowed deferred sweep — <strong>never on a live zero-crossing</strong> (moving an
+embed, or a not-yet-synced cross-device add, transiently hits zero), preserving child content. Dedup is workspace-wide, deliberately
+<em>not</em> subtree-scoped (the model isn't tree-shaped and subtree sharing is unshipped — §12).</div>
+
+<h2 id="sharing">12. Subtree sharing (deferred — not a design driver)</h2>
+
+<p>Subtree sharing (<a href="../shares-and-api-tokens.html">shares-and-api-tokens.html</a>) is
+  <strong>not shipped</strong>, and it doesn't map cleanly onto the current data model — the app isn't
+  strictly tree-shaped anymore, so "share this subtree" is itself an unsolved design a future effort
+  would have to work out. So this design does <em>not</em> bend around it: dedup is workspace-wide (§11),
+  asset placement isn't share-driven, and we add no share machinery now. We also don't <em>foreclose</em>
+  it — the content-addressed storage path keeps a future "membership <em>or</em> a share covers this
+  block" RLS join possible (via a §10.1 <code>content_key → block</code> mapping), and retargeting a
+  workspace-wide asset into a shared scope (e.g. copy under the
+  shared root at share time) would be that feature's job, not ours.</p>
+
+<div class="warn">
+<strong>E2EE + subtree sharing is doubly deferred.</strong> Even once sharing exists, an E2EE
+subtree-share recipient needs a key — but there is one WK per <em>whole</em> workspace and no
+per-subtree key; that needs the key hierarchy the e2ee doc defers (e2ee §13). So encrypted subtree
+sharing is a non-goal for the foreseeable future and media just inherits that boundary (consistent with
+e2ee §15 #2; E2EE sharing stays out-of-band whole-workspace WK transfer). Don't special-case it.
+</div>
+
+<h2 id="public">13. The public-sharing escape hatch</h2>
+
+<p>We still reserve <code>properties.publicUrl</code> on asset blocks and a render-audience flag on
+  the block context (<code>'workspace'</code> member / <code>'shared'</code> subtree recipient /
+  <code>'public'</code> logged-out). But the <em>implementation</em> for a public, logged-out viewer
+  differs by mode:</p>
+
+<table>
+<tr><th>Mode</th><th>Public-share implementation</th></tr>
+<tr><td>Plaintext workspace</td>
+    <td>A public bucket copy (or long-lived signed URL) written to
+      <code>properties.publicUrl</code>; the renderer prefers it when audience is <code>'public'</code>.
+      The original signed-URL story works here.</td></tr>
+<tr><td>E2EE workspace</td>
+    <td>Either <strong>export-to-plaintext</strong> (decrypt + re-upload to a public bucket — the
+      asset deliberately <em>leaves</em> E2EE, an explicit, consensual exit, never silent) or
+      <strong>key-in-fragment</strong> (<code>app/share#&lt;per-asset-key&gt;</code>; the client
+      decrypts from the URL fragment, which the browser never sends to the server). "Anyone with the
+      link" is exactly key-in-link semantics.</td></tr>
+</table>
+
+<div class="reject">
+<strong>If built, key-in-fragment requires a fresh per-asset key — NEVER the WK.</strong> The §5.1 crypto
+seals with the WK <em>directly</em> (no per-asset key in v1), so a naïve "put the decrypt key in the
+fragment" would put the <em>WK</em> in a URL and expose the <em>whole workspace</em>. The mechanism (vNext):
+generate a one-off key, hash-verify the source object against <code>block.properties.hash</code> first (a
+public viewer can't — §5.1's read-side check lives in the authed app — so a poisoned object §10.1/§17 isn't
+laundered into a public artifact), re-encrypt under the one-off key, upload to a <em>public</em> bucket, and
+put only that key in the fragment; the WK never leaves the device (e2ee §5). Two tradeoffs to state when it
+ships: the fragment is a softer target than the CSP-hardened app (it persists in history, is readable as
+<code>location.hash</code>, can ride a <code>Referer</code>), and a key-in-link share is
+<strong>irrevocable</strong> — once the link leaks, the asset leaks, permanently. Both escape hatches are
+vNext; the v1 commitment is only the reserved property + audience flag.
+</div>
+
+<p>&quot;Reserve&quot; here is light, and worth being honest about: block properties are a schemaless map, so
+  <code>publicUrl</code> can simply be added when the feature ships — that's not a migration — and the
+  render-audience branch is renderer code, also addable later. So v1 pre-provisions <em>nothing</em>
+  mechanical; it just names the plug-in points (a <code>publicUrl</code> property + an audience-aware URL
+  resolver branching on workspace mode × render audience) so the design doesn't accidentally foreclose the
+  vNext escape hatch. Practically: don't repurpose the <code>publicUrl</code> key for anything else.</p>
+
+<h2 id="portability">14. Vendor portability (the <code>BlobStore</code> seam)</h2>
+
+<p>All object-store access goes behind a ~50-line interface:</p>
+
+<pre><code>interface BlobStore {
+  // The object is addressed by a per-workspace CONTENT KEY, not the block id:
+  //   contentKey = HMAC(K_id, sha256(plaintext))  (E2EE) | sha256(bytes) (plaintext), §10.
+  // The resolver computes it (it holds K_id + the plaintext hash from the decrypted
+  // block); BlobStore just routes bytes to <ws>/<contentKey>. No idempotency token —
+  // the content path IS the idempotency key: a re-PUT to an existing path is
+  // first-write-wins success (§10.1). The plaintext sha256 never reaches the origin
+  // as such: for E2EE the wire path is the HMAC, unguessable without K_id (no oracle, §10).
+  put(workspaceId, contentKey, bytes): Promise&lt;void&gt;     // direct, RLS-gated writer upload (§10.1)
+  get(workspaceId, contentKey): Promise&lt;Uint8Array&gt;       // bytes, not a url: the private
+  //   bucket (§10) rules out a bare &lt;img src&gt;; the resolver fetches → decrypts →
+  //   hash-verifies (§5.1/§7.3), so the seam returns BYTES the resolver turns into an object URL.
+  delete(workspaceId, contentKey): Promise&lt;void&gt;
+}</code></pre>
+
+<p>v1 backs it with Supabase Storage. E2EE actually <em>increases</em> portability: because the
+  server is a dumb encrypted-blob store and never mediates bytes, swapping to R2 / S3 / B2 later is a
+  bytes-copy plus re-pointing one module — no auth or schema rework. We do not pre-migrate; we keep
+  the seam clean and pull the trigger if egress cost or another driver appears. (A Worker-fronted R2
+  from day one is defensible only if a Worker is being introduced for other reasons; otherwise it is
+  permanent operational surface for no present benefit.)</p>
+
+<h2 id="plan">15. Phased plan</h2>
+
+<table>
+<tr><th>Phase</th><th>Scope</th></tr>
+<tr><td>1 — crypto seam</td>
+    <td><code>encb:v1:</code> binary envelope + <code>encodeBytes</code>/<code>decodeBytes</code> in
+      <code>src/sync/</code>, reusing <code>getCek</code> and the AAD pattern. Read path verifies the
+      decrypted bytes against the block's <code>hash</code> (§5.1). Unit tests incl. the
+      plaintext-identity case, a tamper/swap test, and a stale-ciphertext-replay test.</td></tr>
+<tr><td>2 — storage + RLS</td>
+    <td><code>attachments</code> bucket migration; storage RLS — read by member, insert/delete by writer,
+      no update = immutability (with the explicit <code>private</code>-schema grants / wrapper, §10);
+      <code>BlobStore</code> over Supabase Storage (direct writer-gated upload, §10.1); off-path
+      ciphertext audit. The RLS contract (writer-gated flat insert, member read, no-update
+      immutability, writer delete) is verified end-to-end against a real stack with real gotrue
+      users by <code>scripts/attachments-rls-verify.ts</code> (a pre-deploy gate, not in
+      <code>yarn run check</code> — it needs a live stack; 13/13).</td></tr>
+<tr><td>3 — cache + resolver (in-thread)</td>
+    <td>An in-thread asset resolver: fetch ciphertext (RLS-gated Storage <code>GET</code> with the app's
+      session) → decrypt / passthrough / fail-closed per the three-valued materializability (pin read is
+      sync, WK-presence resolves on the async render path; not two-valued <code>getMode</code>; §7.3) →
+      verify against the block's
+      <code>hash</code> (§5.1) → write plaintext to the OPFS byte cache → hand <code>&lt;img&gt;</code> an
+      object URL (revoke on unmount). No SW route, token handshake, IDB hash mirror, or
+      per-<code>clientId</code> session — those were the rejected SW path (§7.1–§7.2 / §7.3). Destruction
+      is the coarse platform clear (§7.2), so no per-store wipe purge.</td></tr>
+<tr><td>4 — block model + renderer</td>
+    <td><code>media</code> block type; <code>MediaBlockRenderer</code> (image branch) reusing the
+      lightbox (external <code>![](url)</code> images keep the existing <code>MarkdownImage</code>, §11).</td></tr>
+<tr><td>5 — capture + up-lane</td>
+    <td>paste / drop / file-pick arms (through <code>pasteDecisionVerb</code>); deterministic content-derived
+      block id via <code>createOrRestoreTargetBlock</code> (dedup is automatic, §11); optimistic write to the durable byte
+      store (§8); the up-lane drain — direct upload, encode at drain (§10.1) — with the
+      <code>staged → pending</code> lifecycle + boot reconciler (§9).</td></tr>
+<tr><td>6 — background replication (down-lane)</td>
+    <td>the down-lane reconciler (walk active-workspace <code>media</code> blocks → fetch / verify /
+      store); the shared demand + backlog priority lanes with in-flight coalescing (§8); the replication
+      <em>budget</em> / active-workspace <em>scope</em> / <em>politeness</em> controls; and
+      <code>navigator.storage.persist()</code> so the byte store isn't best-effort-evicted.</td></tr>
+<tr><td>vNext</td>
+    <td>non-image mimes; thumbnails / transforms; resumable upload; the
+      <code>effective_share_ids</code> storage-RLS branch when subtree sharing ships; public-share
+      (export / key-in-fragment).</td></tr>
+</table>
+
+<h2 id="open">16. Open questions</h2>
+<ul>
+  <li><strong>Multi-account profile (decided shape, needs care):</strong> in-thread, each tab already
+    owns its own Supabase session, so there is no shared-SW session slot to mis-key. The residual work is
+    scoping the OPFS byte store by <code>user_id</code> and preserving the keyStore's
+    <code>(user_id, workspace_id)</code> keying under an account <em>switch</em>, so account A's cache /
+    keys can never serve account B (§7.3).</li>
+  <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
+    error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
+  <li><strong>Asset block deletion → byte GC (must be conservative under content-addressing):</strong>
+    because one content-addressed object may back several blocks (§11), deleting a block does <em>not</em>
+    delete the object. Object GC is <strong>content-reference-counted</strong>, but the refcount can only
+    be evaluated <em>client-side</em> against one device's <em>local</em> view (the hash is in encrypted
+    <code>properties_json</code> — the server can't read it). A naive &quot;no live block carries hash H →
+    delete&quot; loses live data three ways: a not-yet-synced block on another device still needs H; a
+    <em>soft-deleted</em> block (delete is a tombstone — <code>mutators.ts</code> — that still carries H)
+    can be undone/restored; and <code>blocks_history</code> (the device-loss-resistant PITR substrate)
+    still references H. So object GC must (a) run only on a <strong>settled-synced</strong> workspace (the
+    §9 hydration gate), (b) sit behind a <strong>grace window</strong> like block GC — never a live
+    zero-crossing, (c) count <em>every</em> live <strong>or</strong> soft-deleted block <em>and</em> every
+    <code>blocks_history</code> reference to the hash — and note the code has <strong>no</strong> soft-delete
+    retention/purge or <code>blocks_history</code> horizon today (soft-deletes are kept indefinitely, history
+    is append-only), so the refcount is effectively <em>reference-permanent</em> in v1 and object GC
+    essentially never fires for a hash any block or history row ever carried; that <em>is</em> the intended
+    err-toward-retention posture, not a bug — and (d) be <strong>recoverable by re-upload</strong> from any
+    device still holding the bytes, since the cross-device-unsynced race can't be fully closed from one view.
+    <strong>Open:</strong> <em>if</em> a soft-delete retention horizon or history pruning is ever added,
+    object GC must gate on it — and on whether a history/PITR <em>restore</em> is meant to recover media
+    bytes (else media is an explicit PITR carve-out); decide that <em>when</em> the horizon is introduced.
+    Today there is no horizon to gate on, and v1 errs toward <em>retention</em> (storage is cheap; a stranded
+    live image is not). The accepted cost is monotonic Storage growth: an object stays referenced (so
+    un-reclaimed) as long as <em>any</em> soft-deleted block or <code>blocks_history</code> row carries its
+    hash — which today is forever — so per-workspace object Storage only grows over v1's life. This is also an
+    <em>adversarial</em> lever, not just an honest-use cost: a member can pin unbounded unreclaimable storage
+    by uploading distinct-content garbage objects (each a new path, first-write-wins, never overwritten), and
+    even deleting the block doesn't reclaim them (the soft-deleted block + its history rows keep the hash
+    referenced) — an accepted residual at this fleet size that the deferred history horizon would bound.
+    Dangling embeds render the existing
+    &quot;unresolved embed&quot; state. Beyond the <em>undo</em> case (which needs no byte-lane action — it's a
+    soft-delete; the object is retained, §9), a
+    vNext orphan sweep covers <strong>both</strong> directions, but they are <em>not</em> symmetric: orphan
+    <em>objects</em> (a Storage object with no block — e.g. an interrupted delete) are auto-deletable;
+    orphan <em>blocks</em> (an asset block whose object never materialized — e.g. an upload that never
+    completed before the origin device was cleared / lost / reinstalled) are <strong>never</strong>
+    auto-deleted — their caption/transcript children are real content and a block delete cascades (§9),
+    and elapsed time can't tell an offline-but-intending author from a gone one. The block direction is
+    handled by the peer's bounded &quot;not yet uploaded&quot; settled state + self-heal (§9), with removal
+    left to the user — not a timed server reap (which is why no server-side intent marker is needed).</li>
+</ul>
+
+<h2 id="tradeoffs">17. Tradeoffs we're accepting</h2>
+<table>
+<tr><th>Choice</th><th>Cost</th><th>Why / exit</th></tr>
+<tr><td>In-thread decryption → a mode-aware renderer</td>
+    <td>The renderer resolves both modes to an object URL (private bucket → no bare authenticated
+      <code>&lt;img src&gt;</code>; both fetch with the app session); E2EE adds the decrypt step, and manages
+      the object-URL lifecycle; decrypted bytes are the one byte store on OPFS (§8).</td>
+    <td><strong>Chosen (§7.3)</strong> over SW decryption: it avoids the whole app→SW coordination tax
+      (token handshake, mode/hash mirror, per-client sessions, controller gating) for two small local
+      concerns. Bytes are stored <strong>decrypted-at-rest</strong> in one store (no ciphertext replica) —
+      ≈half the E2EE on-disk footprint, consistent with the decrypted <code>blocks</code> table (e2ee §15
+      #7); the only dropped capability is replicate-while-locked (§8). Destruction is the coarse platform
+      clear (§7.2).</td></tr>
+<tr><td>Storage byte-length is visible to the server</td>
+    <td>Exact encrypted-object size (≈ plaintext + 28&nbsp;B) + existence/count — a stronger known-file
+      fingerprint than the accepted block-metadata leak (§4).</td>
+    <td><strong>New</strong> accepted leak, outside the e2ee §15 set. Size-bucket padding if the threat
+      model later cares.</td></tr>
+<tr><td>Byte AAD doesn't bind freshness</td>
+    <td>An untrusted server can serve arbitrary or stale bytes for a requested content path (no
+      PowerSync monotonicity on the byte lane).</td>
+    <td>Closed by verifying decrypted bytes against the block's synced <code>hash</code> on read
+      (§5.1) — not left as a residual.</td></tr>
+<tr><td>No server-side byte-ciphertext enforcement (reversal)</td>
+    <td>The <code>encb:v1:</code> shape rests on the client encoding correctly before upload (§9), not on a
+      server check — a <code>storage.objects</code> policy can't see body bytes (§10.1), so the only
+      enforcement point would be a sole-writer Edge Function on every upload.</td>
+    <td><strong>Decided: dropped</strong> (§10.1, 2026-06-25). The guard was shape-only (a malicious writer
+      forges the 8-byte magic), a no-op for plaintext, and the served-plaintext outcome is fail-closed
+      read-side (§5.1/§7.3 — the resolver's hash-verify gate, now built, since the reversal makes that
+      read-check the sole
+      byte-confidentiality control); its only residual — an honest client accidentally uploading plaintext —
+      is caught by an off-path audit (<code>scripts/attachments-ciphertext-audit.ts</code>), not worth a
+      function on the write path.</td></tr>
+<tr><td>Bytes off the sync path</td>
+    <td>A second durable upload queue; eventual consistency between metadata and bytes; undo is a pure
+      soft-delete — the byte lane self-heals, no compensator (§9).</td>
+    <td>Keeps large blobs out of SQLite/PowerSync entirely; the queue is small and self-draining.</td></tr>
+<tr><td>Content-addressed storage path (keyed-hash)</td>
+    <td>Path is <code>HMAC(K_id, sha256)</code> (E2EE) / <code>sha256</code> (plaintext), not the block
+      id, so a future share-RLS join needs a small <code>content_key → block</code> mapping, and
+      <code>K_id</code> must be HKDF-derived from WK material at import <em>and persisted</em> (the raw
+      WK bytes are zeroed post-import, so it can't be re-derived).</td>
+    <td><strong>Chosen (§10):</strong> uploads are idempotent and object dedup is an invariant — removes
+      the idempotency token, the write-once-race rule, and duplicate-object GC. Mapping cost is zero
+      today (sharing unshipped, §12). Block dedup is also an invariant on the capture path (deterministic
+      content-derived id, §11) — other paths (copy, import) may still make multiple blocks per object,
+      harmlessly. The
+      content-path oracle is closed only under <code>K_id</code> secrecy — <code>K_id</code> is static and
+      never rotated, so its compromise reopens the known-file oracle <em>retroactively</em> for that
+      workspace. Because <code>K_id</code> is a <em>non-extractable</em> handle its raw bytes never leak, so
+      the residual is narrow: an attacker who can execute script inside the authenticated origin (XSS or a
+      malicious extension) could <em>use</em> the handle to compute content paths and probe for known files,
+      but cannot exfiltrate <code>K_id</code> itself or widen WK exposure. An accepted residual.</td></tr>
+<tr><td>First-write-wins is poisonable by a member</td>
+    <td>Any member can compute <code>HMAC(K_id, sha256(x))</code> and pre-occupy a content path with
+      garbage; first-write-wins then silently no-ops the honest upload of that exact content → a
+      workspace-wide broken image. The predictable <code>uuidv5(workspace:content-key)</code> block id (§11) is a
+      second pre-occupiable target, but the consequence is identical and bounded (a member-authored,
+      soft-deletable / restorable block whose hash-mismatch renders fail-closed) — a widened DoS surface, not
+      a new spoof. A content-targeted DoS primitive the block-id path lacked.</td>
+    <td>Accepted &amp; named: read-side hash-verify (§5.1) makes it fail-closed (broken image, never
+      spoofed content); the server (no <code>K_id</code>) can't do it; a writer delete + re-upload corrects
+      an <em>accidentally</em> corrupt path but does <strong>not</strong> terminate against an <em>active</em>
+      poisoner (who re-occupies the freed path), so a member can permanently DoS a known asset — and
+      workspace-wide dedup makes that break every embed of it at once (§10.1). Members are inside the
+      content-correctness trust boundary, and the server-side
+      &quot;verify body matches path&quot; defense is foreclosed (the guard has no key). It stays a
+      <em>broken image, never data loss</em>: the honest uploader's bytes are un-uploaded, so their up-lane
+      record lands in <code>failed</code> which <strong>keeps the exempt bytes</strong> (§9) — and re-attempts
+      opportunistically (§9) to finish the upload once the poisoned path is freed or the object materializes
+      elsewhere, so the asset self-heals rather than being lost.</td></tr>
+<tr><td>Concurrent offline replace of one embed</td>
+    <td>Two devices replacing the same image offline each mint a new immutable asset block; on reconnect
+      the embed pointer (plain block content) resolves last-writer-wins, so one replacement is silently
+      dropped (its orphaned asset is GC'd).</td>
+    <td>Accepted &amp; named (not hidden): no byte corruption — immutability holds; only the
+      <em>pointer</em> is LWW. A merge-surfacing / both-render variant is a vNext product call.</td></tr>
+<tr><td>No server-side media features for E2EE</td>
+    <td>No server thumbnails / OCR / transcode for encrypted workspaces.</td>
+    <td>Inherited from e2ee §15 #2, not new. Client-side transforms remain possible.</td></tr>
+<tr><td>E2EE subtree-share of media unsupported</td>
+    <td>Encrypted workspaces can't subtree-share images until the key hierarchy lands.</td>
+    <td>Needs e2ee §13. Plaintext workspaces are unaffected; don't special-case.</td></tr>
+<tr><td>Supabase Storage in v1</td>
+    <td>Egress cost at scale.</td>
+    <td>Behind <code>BlobStore</code>; E2EE makes the backend a dumb blob store, so the swap is a
+      bytes-copy + one module.</td></tr>
+</table>
+
+<h2 id="design-notes">18. Design notes — where the complexity lives, and the seams that contain it</h2>
+
+<p>This design went through several adversarial review passes; the findings clustered in a few places,
+  and the pattern is worth recording so the implementation leans on the seams that keep it simple.</p>
+
+<ul>
+  <li><strong>Reuse the proven block lane; don't re-derive a parallel one.</strong> "An attachment is a
+    block" (§3) is load-bearing: metadata sync, encryption (<code>transform.ts</code>), undo, and
+    permissions all come for free by riding the existing block path. The fragile parts are exactly
+    where the <em>byte</em> lane <em>diverges</em> from how blocks already work — blocks have
+    <code>ps_crud</code> (→ we need a §9 queue), a server ciphertext trigger (→ bytes can't have one,
+    §10.1, so confidentiality leans on the §5.1 read check + an off-path audit), and
+    PowerSync monotonicity (→ a §5.1 hash check). Each divergence had to re-solve a problem blocks
+    already solved. Prefer mirroring the block mechanism over inventing a byte-specific one wherever
+    the choice exists.</li>
+  <li><strong>Funnel URL + mode + hash + cache-key through one asset-resolver seam.</strong> Many
+    review findings were not "the design is wrong" but "a fact didn't propagate" — the base-path
+    prefix, the expected-hash source (SW mirror), the mode decision, and the cache key are all facets
+    of one operation ("given an asset block + render context, produce displayable bytes"). Implement
+    that as a single named function so those parameters can't drift apart; scattering them across call
+    sites is what manufactured the drift.</li>
+  <li><strong>Content-addressing is the storage path, keyed for E2EE</strong> (§10): the keyed-hash path
+    makes uploads idempotent and object dedup an invariant, and <em>removes</em> the idempotency token, the
+    write-once monotonicity rule, and duplicate-object GC a block-id path would have needed — the
+    simpler-correct choice, not merely the better-scaling one. The one cost (an <code>object→block</code>
+    mapping if subtree-share RLS is ever built) is zero today (§12).</li>
+  <li><strong>Decided: in-thread decryption (§7.3).</strong> The biggest genuine-complexity call was
+    <em>not</em> putting decryption in a service worker — a context that can't read app state and is
+    shared/respawned, so it would need ~5 coordination mechanisms to buy a uniform <code>&lt;img src&gt;</code>
+    that <code>&lt;img&gt;</code> doesn't need (it takes an object URL). The full tally is §7.1 / the
+    <a href="./rejected-sw-decryption-boundary.html">sibling doc</a>; the portable lesson — a SW earns its
+    tax only when the consumer needs a real URL, not a blob (cf. the user-plugin <code>/module/&lt;id&gt;</code>
+    case) — is the keeper.</li>
+</ul>
+
+<p><small>Grounded against: <code>src/sync/transform.ts</code>, <code>src/sync/crypto/</code>
+  (incl. <code>aead.ts</code>, <code>envelope.ts</code>, <code>aad.ts</code>),
+  <code>src/sync/keys/</code> (incl. <code>keyStore.ts</code>, <code>modePin.ts</code>),
+  <code>src/data/properties.ts</code> (<code>typesProp</code> / <code>getBlockTypes</code>),
+  <code>supabase/migrations/20260529120000_add_e2ee_workspace_columns.sql</code> and the consolidated
+  migration's <code>private.is_workspace_member</code>/<code>is_workspace_writer</code>,
+  <code>src/data/repoProvider.ts</code>, <code>src/components/references/BlockEmbed.tsx</code>,
+  <code>src/markdown/MarkdownImage.tsx</code>, <code>public/sw.js</code>, and the design docs
+  <a href="../e2ee-design.html">e2ee-design.html</a> /
+  <a href="../shares-and-api-tokens.html">shares-and-api-tokens.html</a>. Revised after an adversarial
+  review pass (SW lifecycle, threat-model, and factual-grounding lenses).</small></p>
+
+</main>
+</body>
+</html>

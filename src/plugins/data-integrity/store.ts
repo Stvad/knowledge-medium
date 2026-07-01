@@ -8,6 +8,7 @@
 // gated by the scheduling effect), so the store is repopulated on every page
 // load. There's no cross-reload persistence to manage — a fresh session
 // re-derives the current health within a few seconds of opening.
+import { CallbackSet } from '@/utils/callbackSet.js'
 import type { ConsistencyAuditResult } from './audit.js'
 
 /** Id of the global action that runs the built-in audit on demand (registered by
@@ -17,24 +18,20 @@ import type { ConsistencyAuditResult } from './audit.js'
 export const RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = 'run_data_integrity_audit'
 
 let latest: ConsistencyAuditResult | null = null
-const listeners = new Set<() => void>()
+const listeners = new CallbackSet('data-integrity-audit')
 
 /** Publish a completed audit result and notify subscribers. */
 export const publishConsistencyAudit = (result: ConsistencyAuditResult): void => {
   latest = result
-  for (const listener of listeners) listener()
+  listeners.notify()
 }
 
 /** Current snapshot — a stable reference until the next publish (so it's safe
  *  for useSyncExternalStore). */
 export const getConsistencyAuditSnapshot = (): ConsistencyAuditResult | null => latest
 
-export const subscribeConsistencyAudit = (listener: () => void): (() => void) => {
+export const subscribeConsistencyAudit = (listener: () => void): (() => void) =>
   listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
-}
 
 /** Test helper — clear the published result + listeners. */
 export const resetConsistencyAuditStore = (): void => {

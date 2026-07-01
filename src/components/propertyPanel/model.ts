@@ -104,9 +104,6 @@ const partitionProperties = (
   return {visibleProperties, hiddenProperties}
 }
 
-const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
-
 const resolveModelRow = (
   row: PropertyPanelRow,
   args: {
@@ -198,7 +195,7 @@ export const buildPropertyPanelModel = (args: {
   )
   const pinnedRawRows: readonly PropertyPanelRow[] = [{
     name: typesProp.name,
-    encodedValue: hasOwn(visibleProperties, typesProp.name)
+    encodedValue: Object.hasOwn(visibleProperties, typesProp.name)
       ? visibleProperties[typesProp.name]
       : typesProp.codec.encode(blockTypes),
     isSet: true,

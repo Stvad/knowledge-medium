@@ -20,7 +20,7 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['describe-runtime', {type: 'describe-runtime', guides: ['external-sync-plugin'], brief: true}],
     ['sql', {type: 'sql', sql: 'SELECT 1', mode: 'all'}],
     ['get-block', {type: 'get-block', id: 'b-1'}],
-    ['get-subtree', {type: 'get-subtree', rootId: 'r-1', includeRoot: true}],
+    ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
     ['update-block', {type: 'update-block', id: 'b-1', content: 'hi'}],
     ['install-extension', {type: 'install-extension', source: '// source', label: 'foo'}],

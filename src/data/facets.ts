@@ -23,6 +23,7 @@ import type {
 } from '@/data/api'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
+import type { Repo } from './repo.ts'
 
 export interface LocalSchemaDb {
   execute: (sql: string) => Promise<unknown>
@@ -169,6 +170,41 @@ export const localSchemaFacet = defineFacet<LocalSchemaContribution, readonly Lo
 export const workspaceBackfillsFacet = defineFacet<WorkspaceBackfill, readonly WorkspaceBackfill[]>({
   id: 'data.workspaceBackfills',
   validate: isWorkspaceBackfill,
+})
+
+/**
+ * A per-workspace singleton page that must exist EARLY — before the workspace's
+ * landing/first-run seed runs. Owners (kernel + plugins) declare theirs; the
+ * bootstrap materialises them all via `Repo.ensureSystemPages` before any
+ * landing resolver runs.
+ *
+ * Why eager: `[[Name]]` is auto-create (Roam-style) — the references processor
+ * mints a page at an alias-"seat" id when no page with that alias exists yet.
+ * Singleton pages (Journal/Properties/Types/Locations) are created elsewhere at
+ * their OWN deterministic ids and claim a reserved alias, so a wiki-link that
+ * resolves first auto-creates a rival claimant → two blocks, one alias →
+ * `alias.collision`. Creating the canonical page first means `aliasLookup` hits
+ * and no rival is minted.
+ *
+ * `ensure` MUST be idempotent and write at a deterministic, workspace-derived
+ * id (see `getOrCreateKernelPage`) so repeated bootstraps and offline-
+ * converging clients all land on the same row.
+ */
+export interface SystemPage {
+  /** Stable id, for facet dedup. */
+  readonly id: string
+  /** Returns `Promise<unknown>` so the existing get-or-create helpers
+   *  (which resolve to the created `Block`) assign directly; the result is
+   *  ignored by `ensureSystemPages`. */
+  ensure: (repo: Repo, workspaceId: string) => Promise<unknown>
+}
+
+const isSystemPage = (value: unknown): value is SystemPage =>
+  isRecord(value) && typeof value.id === 'string' && typeof value.ensure === 'function'
+
+export const systemPagesFacet = defineFacet<SystemPage, readonly SystemPage[]>({
+  id: 'data.systemPages',
+  validate: isSystemPage,
 })
 
 /** Default inner-property to use when filtering a `ref`/`refList`

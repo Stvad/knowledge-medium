@@ -42,9 +42,6 @@ interface BlockPropertiesProps {
 
 const EMPTY_PROPERTIES: Record<string, unknown> = {}
 
-const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
-
 interface SyntheticPropertyRef {
   readonly blockId: string
   readonly name: string
@@ -100,7 +97,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     () => syntheticProperties
       .filter(ref =>
         ref.blockId === block.id
-        && !hasOwn(properties, ref.name)
+        && !Object.hasOwn(properties, ref.name)
         && schemas.has(ref.name),
       )
       .map(ref => ({

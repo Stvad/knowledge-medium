@@ -23,6 +23,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { v4 as uuidv4 } from 'uuid'
 import {
   ChangeScope,
   codecs,
@@ -31,11 +32,11 @@ import {
   type TypeContribution,
   type User,
 } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { addedTypes } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { Repo } from '../repo'
 import { PAGE_TYPE, USER_TYPE } from '@/data/blockTypes'
@@ -72,19 +73,19 @@ interface Harness {
 // `h.cleanup` disposes this harness's sync observer without closing the shared
 // DB, so every `*.h.cleanup()` call (main or secondary) stays correct.
 const setup = async (types: readonly TypeContribution[] = []): Promise<Harness> => {
-  const cache = new BlockCache()
-  const repo = new Repo({
+  // Match the Repo production defaults (uuid ids + a per-Repo monotonic
+  // tx-seq) rather than the harness's deterministic counters: several tests
+  // build a SECOND Repo over the SAME shared db, and shared-deterministic
+  // newId/newTxSeq would collide on command_events.tx_id.
+  let txSeq = Date.now()
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: USER,
+    newId: uuidv4,
+    newTxSeq: () => ++txSeq,
+    extensions: types.length > 0 ? [types.map(type => typesFacet.of(type, {source: 'test'}))] : undefined,
   })
   repo.setActiveWorkspaceId(WS)
-  if (types.length > 0) {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
-      kernelDataExtension,
-      types.map(type => typesFacet.of(type, {source: 'test'})),
-    ]))
-  }
   return {h: {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}, repo}
 }
 
@@ -189,11 +190,13 @@ describe('getUserPrefsBlock', () => {
     // like any other write; the server's RLS rejection then lands in
     // ps_crud_rejected, which the status surface exposes.
     const h = await createTestDb()
-    const repo = new Repo({
+    let txSeq = Date.now()
+    const { repo } = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: USER,
       isReadOnly: true,
+      newId: uuidv4,
+      newTxSeq: () => ++txSeq,
     })
     repo.setActiveWorkspaceId(WS)
 

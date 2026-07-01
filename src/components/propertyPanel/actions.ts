@@ -8,9 +8,6 @@ import { typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
 
-const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
-  Object.prototype.hasOwnProperty.call(properties, name)
-
 export const writeProperty = (
   block: Block,
   schema: AnyPropertySchema,
@@ -72,7 +69,7 @@ export const renameProperty = async (args: {
   if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis)) return
 
   const value = args.properties[args.oldName]
-  if (value === undefined || !hasOwn(args.properties, args.oldName)) return
+  if (value === undefined || !Object.hasOwn(args.properties, args.oldName)) return
 
   await args.block.repo.tx(async tx => {
     const next = {...args.properties}
@@ -94,7 +91,7 @@ export const deleteProperty = async (args: {
 }) => {
   if (args.name === typesProp.name) return
   if (isPropertyPanelHiddenProperty(args.name, args.schemas, args.uis)) return
-  if (!hasOwn(args.properties, args.name)) return
+  if (!Object.hasOwn(args.properties, args.name)) return
 
   const next = {...args.properties}
   delete next[args.name]

@@ -4,9 +4,9 @@
  * plugin's run/publish/cadence wiring (schedule.ts) and that the engine's checks
  * actually catch injected inconsistencies. The engine lives in ./audit.ts.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { BlockCache } from '@/data/blockCache'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   AT_REST_ANOMALY_FLOOR,
   runConsistencyAudit,
@@ -39,12 +39,11 @@ import { Repo } from '@/data/repo'
 
 interface Harness {
   repo: Repo
-  cleanup: () => Promise<void>
 }
 
 const setup = (db: TestDb['db']): Harness => {
-  const repo = new Repo({ db, cache: new BlockCache(), user: { id: 'user-1' } })
-  return { repo, cleanup: async () => { repo.stopSyncObserver() } }
+  const { repo } = createTestRepo({ db, user: { id: 'user-1' } })
+  return { repo }
 }
 
 let sharedDb: TestDb
@@ -58,7 +57,6 @@ beforeEach(async () => {
   resetConsistencyAuditStore()
   env = setup(sharedDb.db)
 })
-afterEach(async () => { await env.cleanup() })
 
 describe('data-integrity audit runner + cadence (schedule.ts)', () => {
   it('runs on a healthy workspace, returns + publishes a clean result', async () => {

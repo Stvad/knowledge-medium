@@ -453,6 +453,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   private status_: HandleStatus = 'idle'
   private error: unknown = undefined
 
+  // eslint-disable-next-line callback-set/prefer-callback-set -- kernel hot path: this set is wrapped in handle-specific notify bookkeeping (structural-diff dedup via notifiedValue/equality, batch coalescing, metrics counters). notify() already snapshots + isolates listener errors exactly like CallbackSet, so a swap would replace only the ~6-line dispatch loop while coupling the kernel to the util — no behavioral gain.
   private readonly listeners = new Set<(value: T) => void>()
   private deps: Dependency[] = []
 

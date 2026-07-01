@@ -22,19 +22,18 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
+import { addBlockTypeToProperties, aliasesProp, isCollapsedProp, typesProp } from '@/data/properties'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../../../data/repo'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import {
   dailyNoteBlockId,
   dailyNotesDataExtension,
   journalBlockId,
   todayIso,
 } from '@/plugins/daily-notes'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
@@ -68,27 +67,21 @@ const setup = async (): Promise<Harness> => {
   // returned h.cleanup disposes this Repo's observer rather than closing the
   // shared DB, so the existing afterEach stays correct.
   await resetTestDb(sharedDb.db)
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const {repo} = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: USER_ID},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    startSyncObserver: true,
+    extensions: [
+      kernelValuePresetsExtension,
+      dailyNotesDataExtension,
+      todoDataExtension,
+      srsReschedulingDataExtension,
+    ],
     // The importer pre-populates references[] explicitly; running
     // parseReferences on top would re-parse content + clobber. The
     // importer also calls processors itself for alias resolution.
   })
   repo.setActiveWorkspaceId(WORKSPACE)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    kernelValuePresetsExtension,
-    dailyNotesDataExtension,
-    todoDataExtension,
-    srsReschedulingDataExtension,
-  ]))
   await getOrCreatePropertiesPage(repo, WORKSPACE)
   const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {h, repo}
@@ -504,6 +497,217 @@ describe('importRoam', () => {
       alias: personId,
       sourceField: ROAM_ISA_PROP,
     })
+  })
+
+  it('retains an existing property-derived backlink on re-import when its ref schema is absent', async () => {
+    // Regression for the schema-absence deletion class
+    // (docs/contracts/derived-data-add-only.md) — the same shape that wiped
+    // ~10k SRS `next-review-date` backlinks. A page already carries a
+    // property-derived backlink under a ref field whose schema is NOT loaded
+    // at import time (plugin toggled off / ?safeMode / a UserSchemasService
+    // bucket that hasn't republished). Re-importing that page through the
+    // merge path — which runs applyPromotedAttributes and rebuilds
+    // references — must NOT silently drop the backlink the projection can't
+    // re-derive. Before the fix, the property-derived ref was filtered out
+    // and replace-written away; reconcileDerived now retains it.
+    const targetId = 'retain-backlink-target'
+    // A ref field with no registered schema. It only lives on the
+    // pre-existing row, never in the imported dump, so schema reconciliation
+    // never registers it — it stays absent at applyPromotedAttributes time.
+    const absentRefField = 'plugin:relatesTo'
+    const pageId = 'retain-existing-page'
+
+    await env.repo.tx(async tx => {
+      // The block the property-derived backlink points at.
+      await tx.create({
+        id: targetId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Backlink target',
+      })
+      // The page that already owns the property-derived backlink under the
+      // absent-schema field.
+      await tx.create({
+        id: pageId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'Retain Target',
+        properties: addBlockTypeToProperties({
+          [aliasesProp.name]: aliasesProp.codec.encode(['Retain Target']),
+          [absentRefField]: targetId,
+        }, PAGE_TYPE),
+        references: [{id: targetId, alias: targetId, sourceField: absentRefField}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    // Precondition: the field's schema really is absent from the registry,
+    // so the projection contributes nothing for it.
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import a page that merges into the existing one (matching alias) and
+    // carries a promoted inline attribute, so applyPromotedAttributes runs
+    // and rebuilds the page's references.
+    await importRoam([
+      {
+        title: 'Retain Target',
+        uid: 'retainReimport',
+        children: [
+          {string: 'note:: a promoted value', uid: 'retainNote'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const page = await readBlock(pageId)
+    const refs = JSON.parse(page!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // The absent-schema property-derived backlink survives the re-import.
+    expect(refs).toContainEqual({
+      id: targetId,
+      alias: targetId,
+      sourceField: absentRefField,
+    })
+    // And the promotion actually ran (so the merge path was exercised, not
+    // skipped) — proving the retain happened on the rebuild, not by accident.
+    const props = JSON.parse(page!.properties_json) as Record<string, unknown>
+    expect(props['roam:note']).toBe('a promoted value')
+  })
+
+  it('retains an existing property-derived backlink on re-import of a descendant block when its ref schema is absent', async () => {
+    // The descendant twin of the page-merge case above, on the route the
+    // canonical victims (SRS next-review-date cards) actually travel:
+    // upsertImportedBlock's existing-row branch. The page path re-reads
+    // existing.references in applyPromotedAttributes; the descendant path used
+    // to replace-write the dump-derived references and silently drop a backlink
+    // whose schema is absent. It must reconcile against the live row instead.
+    const targetId = 'desc-retain-target'
+    const absentRefField = 'plugin:relatesTo'
+    const descId = roamBlockId(WORKSPACE, 'descRetainUid')
+
+    await env.repo.tx(async tx => {
+      // The block the property-derived backlink points at.
+      await tx.create({
+        id: targetId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Backlink target',
+      })
+      // The existing descendant row carrying the absent-schema backlink. Its
+      // deterministic id (roamBlockId of the re-imported uid) is what makes the
+      // re-import upsert onto THIS row rather than insert a fresh one.
+      await tx.create({
+        id: descId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a1',
+        content: 'card content',
+        properties: {[absentRefField]: targetId},
+        references: [{id: targetId, alias: targetId, sourceField: absentRefField}],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import a graph whose child block reuses descRetainUid → upserts onto
+    // the existing descendant row via upsertImportedBlock.
+    await importRoam([
+      {
+        title: 'Desc Retain Page',
+        uid: 'descRetainPage',
+        children: [
+          {string: 'card content', uid: 'descRetainUid'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const desc = await readBlock(descId)
+    const refs = JSON.parse(desc!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // The absent-schema property-derived backlink survives the re-import.
+    expect(refs).toContainEqual({
+      id: targetId,
+      alias: targetId,
+      sourceField: absentRefField,
+    })
+    // The row really went through the upsert existing-row branch: it was
+    // reparented from null under the freshly-imported page.
+    expect(desc!.parent_id).toBe(roamBlockId(WORKSPACE, 'descRetainPage'))
+  })
+
+  it('drops a removed content ref while retaining the absent-schema backlink on descendant re-import (no over-retain)', async () => {
+    // The negative half of the contract on the upsert path: the reconcile must
+    // RETAIN the absent-schema property-derived backlink but still DROP a
+    // content ref the re-imported content no longer contains. Proves the fix is
+    // a content-authoritative reconcile, not a blanket "keep everything".
+    const contentTargetId = 'over-retain-content-target'
+    const propTargetId = 'over-retain-prop-target'
+    const absentRefField = 'plugin:relatesTo'
+    const descId = roamBlockId(WORKSPACE, 'overRetainUid')
+
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: contentTargetId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a0', content: 'content target',
+      })
+      await tx.create({
+        id: propTargetId, workspaceId: WORKSPACE, parentId: null, orderKey: 'a1', content: 'prop target',
+      })
+      // Existing descendant: one content ref (sourceField empty) + one
+      // absent-schema property-derived backlink.
+      await tx.create({
+        id: descId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a2',
+        content: 'see [[KeepAlias]]',
+        properties: {[absentRefField]: propTargetId},
+        references: [
+          {id: contentTargetId, alias: 'KeepAlias'},
+          {id: propTargetId, alias: propTargetId, sourceField: absentRefField},
+        ],
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(env.repo.propertySchemas.has(absentRefField)).toBe(false)
+
+    // Re-import the same block (same uid) but with content that no longer
+    // mentions the ref → the content ref must drop.
+    await importRoam([
+      {
+        title: 'Over Retain Page',
+        uid: 'overRetainPage',
+        children: [
+          {string: 'plain text now, no refs', uid: 'overRetainUid'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const desc = await readBlock(descId)
+    const refs = JSON.parse(desc!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    // Absent-schema property backlink retained…
+    expect(refs).toContainEqual({id: propTargetId, alias: propTargetId, sourceField: absentRefField})
+    // …but the removed content ref is gone (content stays import-authoritative).
+    expect(refs.some(r => r.id === contentTargetId)).toBe(false)
   })
 
   it('creates permanent alias blocks for unmatched [[alias]] references', async () => {

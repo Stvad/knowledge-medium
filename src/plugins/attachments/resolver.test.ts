@@ -1,0 +1,506 @@
+import { describe, expect, it, vi } from 'vitest'
+import { createAssetResolver, type AssetResolverDeps } from './resolver.js'
+import { NO_REMOTE_BLOB_STORE } from './assetResolver.js'
+import { InMemoryByteStore } from './byteStore.js'
+import type { BlobStore } from './blobStore.js'
+import { encodeBytes } from '@/sync/byteTransform.js'
+import { computeContentHash } from '@/sync/crypto/contentHash.js'
+import { deriveContentKey, deriveContentKeyHmac } from '@/sync/crypto/contentKey.js'
+import { importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
+import type { GetCek, Materializability, SyncMode } from '@/sync/transform.js'
+
+const USER = 'user-1'
+const WS = 'ws-A'
+const WK_BYTES = new Uint8Array(32).fill(7)
+
+// One real WK + its derived K_id, shared across the e2ee cases.
+const wk = await importWorkspaceKey(WK_BYTES)
+const kid = await deriveContentKeyHmac(WK_BYTES)
+const getCek: GetCek = async () => wk
+
+const bytes = (...vals: number[]) => new Uint8Array(vals)
+const hashOf = (b: Uint8Array<ArrayBuffer>) => computeContentHash(b)
+/** A typed materializability thunk (a bare `mat('copy')` widens to string). */
+const mat = (m: Materializability) => async (): Promise<Materializability> => m
+
+/** Seal bytes exactly as the up-lane would (§5): identity for plaintext, an
+ *  `encb:v1:` envelope (AAD-bound to `contentHash`) for e2ee. */
+const seal = (mode: SyncMode, b: Uint8Array<ArrayBuffer>, contentHash: string) =>
+  encodeBytes(b, mode, getCek, { contentHash, workspaceId: WS })
+
+const contentKeyFor = (mode: SyncMode, contentHash: string) =>
+  deriveContentKey({ contentHash, mode, contentKeyHmac: mode === 'e2ee' ? kid : null })
+
+/** A BlobStore whose GET returns `serve()` (or throws it). Only `get` is used. */
+const fakeBlob = (serve: () => Promise<Uint8Array<ArrayBuffer>>): { store: BlobStore; get: ReturnType<typeof vi.fn> } => {
+  const get = vi.fn(serve)
+  const store = { get, put: vi.fn(), delete: vi.fn() } as unknown as BlobStore
+  return { store, get }
+}
+
+const build = (over: Partial<AssetResolverDeps> & { serve?: () => Promise<Uint8Array<ArrayBuffer>> } = {}) => {
+  const byteStore = over.byteStore ?? new InMemoryByteStore()
+  const { store: blobStore, get } = fakeBlob(over.serve ?? (async () => bytes(0)))
+  const resolver = createAssetResolver({
+    getUserId: () => USER,
+    byteStore,
+    blobStore: over.blobStore ?? blobStore,
+    getMaterializability: over.getMaterializability ?? (async (): Promise<Materializability> => 'copy'),
+    getCek: over.getCek ?? getCek,
+    getContentKeyHmac: over.getContentKeyHmac ?? (async () => kid),
+  })
+  return { resolver, byteStore, blobGet: get }
+}
+
+describe('createAssetResolver — happy paths', () => {
+  it('plaintext: fetch on miss → verify → store → serve, and the next resolve is a local hit', async () => {
+    const plain = bytes(1, 2, 3, 4)
+    const contentHash = await hashOf(plain)
+    const served = await seal('none', plain, contentHash)
+    const { resolver, byteStore, blobGet } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => served,
+    })
+
+    const r = await resolver.resolve({ workspaceId: WS, contentHash })
+    expect(r).toEqual({ ok: true, bytes: plain })
+
+    // Stored under the plaintext content-key (raw sha256), so a 2nd resolve is local.
+    const key = await contentKeyFor('none', contentHash)
+    expect(await byteStore.has(USER, WS, key)).toBe(true)
+    blobGet.mockClear()
+    await resolver.resolve({ workspaceId: WS, contentHash })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('e2ee: fetch ciphertext → decrypt → verify → store → serve the plaintext', async () => {
+    const plain = bytes(9, 8, 7, 6, 5)
+    const contentHash = await hashOf(plain)
+    const served = await seal('e2ee', plain, contentHash)
+    const { resolver, byteStore } = build({
+      getMaterializability: mat('decrypt'),
+      serve: async () => served,
+    })
+
+    const r = await resolver.resolve({ workspaceId: WS, contentHash })
+    expect(r).toEqual({ ok: true, bytes: plain })
+    const key = await contentKeyFor('e2ee', contentHash)
+    expect(await byteStore.get(USER, WS, key)).toEqual(plain) // decrypted at rest
+  })
+
+  it('serves a local hit WITHOUT fetching (already verified when stored, §8)', async () => {
+    const plain = bytes(4, 2)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('e2ee', contentHash), plain)
+    const { resolver, blobGet } = build({ getMaterializability: mat('decrypt'), byteStore })
+
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('still serves the verified bytes when the cache write fails (quota) — render is not denied', async () => {
+    const plain = bytes(1, 1)
+    const contentHash = await hashOf(plain)
+    const failingPut = new InMemoryByteStore()
+    vi.spyOn(failingPut, 'put').mockRejectedValue(new Error('QuotaExceededError'))
+    const { resolver } = build({
+      getMaterializability: mat('copy'),
+      byteStore: failingPut,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+  })
+})
+
+describe('NO_REMOTE_BLOB_STORE — local-only build (no Supabase)', () => {
+  it('serves a locally-captured paste from the byte store with no remote object store', async () => {
+    const plain = bytes(7, 7, 7)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const { resolver } = build({ getMaterializability: mat('copy'), byteStore, blobStore: NO_REMOTE_BLOB_STORE })
+
+    // The local-only paste rendered from disk — no remote object store needed.
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+  })
+
+  it('fails closed (fetch-failed, no crash) on a true miss with no remote object store', async () => {
+    const plain = bytes(1, 2)
+    const contentHash = await hashOf(plain)
+    const { resolver } = build({ getMaterializability: mat('copy'), blobStore: NO_REMOTE_BLOB_STORE })
+
+    // Nothing local + no remote → fail closed (the placeholder), never a throw.
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
+  })
+})
+
+describe('createAssetResolver — fail-closed (the §7.3/§5.1 acceptance gate)', () => {
+  it('defer → deferred, with NO fetch and NO passthrough', async () => {
+    const { resolver, blobGet } = build({ getMaterializability: mat('defer') })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'deferred',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('signed out → deferred, touching nothing', async () => {
+    const { store: blobStore, get } = fakeBlob(async () => bytes(0))
+    const resolver = createAssetResolver({
+      getUserId: () => null,
+      byteStore: new InMemoryByteStore(),
+      blobStore,
+      getMaterializability: mat('copy'),
+      getCek,
+      getContentKeyHmac: async () => kid,
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'deferred',
+    })
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('e2ee with no K_id → no-content-key, with NO fetch (the §10 re-paste migration)', async () => {
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('decrypt'),
+      getContentKeyHmac: async () => null,
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'no-content-key',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('a malformed content hash → invalid-hash, with NO fetch', async () => {
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy') })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash: 'not-a-hash' })).toEqual({
+      ok: false,
+      reason: 'invalid-hash',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('a fetch error → fetch-failed, nothing stored', async () => {
+    const plain = bytes(5)
+    const contentHash = await hashOf(plain)
+    const { resolver, byteStore } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => {
+        throw new Error('offline')
+      },
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
+    expect(await byteStore.has(USER, WS, await contentKeyFor('none', contentHash))).toBe(false)
+  })
+
+  it('e2ee: a tampered / wrong-key object (AEAD fails) → decode-failed, nothing stored', async () => {
+    const plain = bytes(3, 3, 3)
+    const contentHash = await hashOf(plain)
+    // Garbage bytes that are not a valid encb:v1: envelope → openBytes throws.
+    const { resolver, byteStore } = build({
+      getMaterializability: mat('decrypt'),
+      serve: async () => bytes(1, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'decode-failed' })
+    expect(await byteStore.has(USER, WS, await contentKeyFor('e2ee', contentHash))).toBe(false)
+  })
+
+  it('e2ee: a poisoned object that AEAD-opens but mismatches the hash → hash-mismatch, NEVER stored', async () => {
+    // The load-bearing case: the server returns DIFFERENT bytes sealed under the
+    // right AAD (a poisoner who knows the content hash). The GCM tag passes; only
+    // the read-side sha256 check stops it.
+    const real = bytes(1, 1, 1, 1)
+    const contentHash = await hashOf(real)
+    const poison = bytes(2, 2, 2, 2) // hashes to something else
+    const served = await seal('e2ee', poison, contentHash) // sealed under the REQUESTED hash's AAD
+    const { resolver, byteStore } = build({
+      getMaterializability: mat('decrypt'),
+      serve: async () => served,
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'hash-mismatch' })
+    expect(await byteStore.has(USER, WS, await contentKeyFor('e2ee', contentHash))).toBe(false)
+  })
+
+  it('plaintext: an untrusted server returning the WRONG bytes is caught by the hash check too', async () => {
+    const real = bytes(1, 2, 3)
+    const contentHash = await hashOf(real)
+    const { resolver, byteStore } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => bytes(9, 9, 9), // not what contentHash names
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'hash-mismatch' })
+    expect(await byteStore.has(USER, WS, await contentKeyFor('none', contentHash))).toBe(false)
+  })
+})
+
+describe('createAssetResolver — never throws out of resolve (the §7.3 fail-closed contract)', () => {
+  it('treats a transient local-store read error (non-NotFound) as a miss and re-fetches', async () => {
+    // OpfsByteStore.get rethrows any DOMException that isn't NotFoundError; the
+    // resolver must treat it as a miss (bytes are re-fetchable, §8), not fail.
+    const plain = bytes(7, 7)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    vi.spyOn(byteStore, 'get').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash })).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalled() // fell through to the network
+  })
+
+  it('fails closed (error verdict, not a thrown promise) when an injected policy dep rejects', async () => {
+    const { resolver, blobGet } = build({
+      getMaterializability: () => Promise.reject(new Error('pin store exploded')),
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'error',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('fails closed on an UNEXPECTED materializability value — never defaults to plaintext passthrough', async () => {
+    // A buggy/hostile policy provider returning a non-union value must not be
+    // treated as 'copy' (plaintext) — that is the two-valued downgrade hazard.
+    const { resolver, blobGet } = build({
+      getMaterializability: (async () => 'bogus') as unknown as AssetResolverDeps['getMaterializability'],
+    })
+    expect(await resolver.resolve({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'error',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+})
+
+describe('createAssetResolver — replicate (the §8/§9 down-lane backlog lane)', () => {
+  it('present locally → "present", via a has() probe only — NO fetch, NO full byte read', async () => {
+    const plain = bytes(1, 2, 3)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    const getSpy = vi.spyOn(byteStore, 'get')
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'present' })
+    expect(blobGet).not.toHaveBeenCalled() // no remote egress for an already-replicated asset
+    expect(getSpy).not.toHaveBeenCalled() // the politeness win: probe with has(), never read the bytes
+  })
+
+  it('absent → fetches, verifies, STORES, and reports "replicated" (a later render is a local hit)', async () => {
+    const plain = bytes(5, 6, 7, 8)
+    const contentHash = await hashOf(plain)
+    const { resolver, byteStore, blobGet } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'replicated' })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, await contentKeyFor('none', contentHash))).toEqual(plain)
+  })
+
+  it('a byte-store WRITE failure (quota) → store-failed, NOT "replicated" (no durable copy landed)', async () => {
+    // The demand lane serves these verified bytes uncached (a render is never denied),
+    // but the backlog lane must NOT claim replication when nothing persisted — else the
+    // down-lane spends its budget + skips the tail on assets that stay absent and
+    // re-download every sweep. (See the matching demand-lane test in "happy paths".)
+    const plain = bytes(1, 1)
+    const contentHash = await hashOf(plain)
+    const failingPut = new InMemoryByteStore()
+    vi.spyOn(failingPut, 'put').mockRejectedValue(new Error('QuotaExceededError'))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore: failingPut,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'store-failed' })
+    expect(blobGet).toHaveBeenCalledTimes(1) // it DID fetch — the failure is the store, not the fetch
+  })
+
+  it('fails closed on a poisoned object (hash-mismatch) — never stored', async () => {
+    const real = bytes(1, 1, 1, 1)
+    const contentHash = await hashOf(real)
+    const { resolver, byteStore } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => bytes(9, 9, 9), // not what contentHash names
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'hash-mismatch' })
+    expect(await byteStore.has(USER, WS, await contentKeyFor('none', contentHash))).toBe(false)
+  })
+
+  it('a locked e2ee workspace (no K_id) → no-content-key, with NO fetch', async () => {
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('decrypt'),
+      getContentKeyHmac: async () => null,
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash: await hashOf(bytes(1)) })).toEqual({
+      ok: false,
+      reason: 'no-content-key',
+    })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('an offline / absent miss → fetch-failed (the down-lane retries it next pass), nothing stored', async () => {
+    const plain = bytes(3)
+    const contentHash = await hashOf(plain)
+    const { resolver } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => {
+        throw new Error('offline')
+      },
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: false, reason: 'fetch-failed' })
+  })
+
+  it('coalesces a backlog replicate with a concurrent demand resolve into ONE fetch', async () => {
+    const plain = bytes(2, 4, 6)
+    const contentHash = await hashOf(plain)
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    // Demand (render) and backlog (down-lane) hit the SAME asset in the same tick:
+    // they ride one in-flight fetch, not two (§8 "same primitive, one in-flight map").
+    const [res, rep] = await Promise.all([
+      resolver.resolve({ workspaceId: WS, contentHash }),
+      resolver.replicate({ workspaceId: WS, contentHash }),
+    ])
+    expect(res).toEqual({ ok: true, bytes: plain })
+    expect(rep).toEqual({ ok: true, status: 'replicated' })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+  })
+
+  it('a pre-enumerated present set short-circuits to "present" — no has() probe, no fetch', async () => {
+    // The down-lane passes ONE workspace enumeration; replicate checks it in memory
+    // instead of a has() per block.
+    const plain = bytes(1, 2, 3)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    const hasSpy = vi.spyOn(byteStore, 'has')
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+    const present = new Set([await contentKeyFor('none', contentHash)])
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }, present)).toEqual({
+      ok: true,
+      status: 'present',
+    })
+    expect(hasSpy).not.toHaveBeenCalled() // used the in-memory set, not a per-block has()
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('a present set that LACKS the key falls through to a fetch (replicates)', async () => {
+    const plain = bytes(4, 5, 6)
+    const contentHash = await hashOf(plain)
+    const { resolver, byteStore, blobGet } = build({
+      getMaterializability: mat('copy'),
+      serve: async () => seal('none', plain, contentHash),
+    })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash }, new Set())).toEqual({
+      ok: true,
+      status: 'replicated',
+    })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+    expect(await byteStore.get(USER, WS, await contentKeyFor('none', contentHash))).toEqual(plain)
+  })
+
+  it('a LOCAL hit reached via a flaky has() probe is "present", NOT "replicated" (never charges the budget)', async () => {
+    // has() throws (transient), so replicate falls through to the coalesced resolve — but
+    // the asset IS local, so it's served from a get() hit, no download. That is presence,
+    // not replication: reporting "replicated" would charge the down-lane budget for a
+    // steady-state asset every sweep (Codex P2 — local hits must not be charged).
+    const plain = bytes(4, 4)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    await byteStore.put(USER, WS, await contentKeyFor('none', contentHash), plain)
+    vi.spyOn(byteStore, 'has').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), byteStore })
+
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'present' })
+    expect(blobGet).not.toHaveBeenCalled() // local hit — no remote egress despite the flaky probe
+  })
+
+  it('treats a transient has() probe error as unknown → fetches (never fails the pass on it)', async () => {
+    const plain = bytes(7, 7)
+    const contentHash = await hashOf(plain)
+    const byteStore = new InMemoryByteStore()
+    vi.spyOn(byteStore, 'has').mockRejectedValue(new DOMException('locked', 'InvalidStateError'))
+    const { resolver, blobGet } = build({
+      getMaterializability: mat('copy'),
+      byteStore,
+      serve: async () => seal('none', plain, contentHash),
+    })
+    expect(await resolver.replicate({ workspaceId: WS, contentHash })).toEqual({ ok: true, status: 'replicated' })
+    expect(blobGet).toHaveBeenCalled() // fell through to the network rather than failing
+  })
+})
+
+describe('createAssetResolver — concurrency', () => {
+  it('coalesces concurrent resolves of the same asset into ONE fetch', async () => {
+    const plain = bytes(9, 8, 7)
+    const contentHash = await hashOf(plain)
+    const served = await seal('none', plain, contentHash)
+    const { resolver, blobGet } = build({ getMaterializability: mat('copy'), serve: async () => served })
+
+    // Two resolves fired in the SAME tick, before either settles (the same asset
+    // embedded twice). The in-flight dedup must share one fetch+decode+verify, not
+    // run it twice (both would otherwise miss the still-empty byte store and fetch).
+    const [a, b] = await Promise.all([
+      resolver.resolve({ workspaceId: WS, contentHash }),
+      resolver.resolve({ workspaceId: WS, contentHash }),
+    ])
+    expect(a).toEqual({ ok: true, bytes: plain })
+    expect(b).toEqual({ ok: true, bytes: plain })
+    expect(blobGet).toHaveBeenCalledTimes(1)
+
+    // Settling drops the in-flight entry; a later resolve is a normal local hit
+    // (now served from the byte store), still without a second remote fetch.
+    blobGet.mockClear()
+    await resolver.resolve({ workspaceId: WS, contentHash })
+    expect(blobGet).not.toHaveBeenCalled()
+  })
+
+  it('does NOT coalesce across an account switch — A’s in-flight fetch is never handed to B', async () => {
+    // The demand + backlog lanes share ONE in-flight map; a fetch started under account A
+    // must not be reused by a resolve under B after a switch (B would receive A's plaintext
+    // without its own prepare / user-scoped byte store). Keying the map by the active user
+    // closes it: different principal → different key → its own fetch.
+    const plain = bytes(3, 1, 4, 1, 5)
+    const contentHash = await hashOf(plain)
+    const served = await seal('none', plain, contentHash)
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const blobGet = vi.fn(async () => {
+      await gate // hold the fetch in-flight so both calls overlap
+      return served
+    })
+    let activeUser = 'user-A'
+    const resolver = createAssetResolver({
+      getUserId: () => activeUser,
+      byteStore: new InMemoryByteStore(),
+      blobStore: { get: blobGet, put: vi.fn(), delete: vi.fn() } as unknown as BlobStore,
+      getMaterializability: mat('copy'),
+      getCek,
+      getContentKeyHmac: async () => kid,
+    })
+
+    const pA = resolver.replicate({ workspaceId: WS, contentHash }) // in-flight under A
+    await vi.waitFor(() => expect(blobGet).toHaveBeenCalledTimes(1)) // A is into the gated fetch
+
+    activeUser = 'user-B' // account switch before A settles
+    const pB = resolver.resolve({ workspaceId: WS, contentHash })
+    await vi.waitFor(() => expect(blobGet).toHaveBeenCalledTimes(2)) // B started its OWN fetch, no reuse
+
+    release()
+    await Promise.all([pA, pB])
+  })
+})

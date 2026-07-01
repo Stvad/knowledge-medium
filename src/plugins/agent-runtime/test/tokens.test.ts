@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentTokenStore } from '../tokens.ts'
 import { ClientLocalSettings } from '@/utils/ClientLocalSettings.js'

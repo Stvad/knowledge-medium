@@ -57,10 +57,9 @@ export const panelBlockIds = (rows: readonly BlockData[]): string[] =>
     .map(panelBlockId)
     .filter((id): id is string => Boolean(id))
 
-export const panelRowsInLayoutOrder = (
-  rootId: string,
-  rows: readonly BlockData[],
-): BlockData[] => {
+/** Group rows by `parentId`, preserving row order within each parent.
+ *  Rows without a parent are skipped (we never want an `undefined` bucket). */
+const buildChildrenByParent = (rows: readonly BlockData[]): Map<string, BlockData[]> => {
   const childrenByParent = new Map<string, BlockData[]>()
   for (const row of rows) {
     if (!isPanelLayoutStorageRow(row)) continue
@@ -69,6 +68,14 @@ export const panelRowsInLayoutOrder = (
     children.push(row)
     childrenByParent.set(row.parentId, children)
   }
+  return childrenByParent
+}
+
+export const panelRowsInLayoutOrder = (
+  rootId: string,
+  rows: readonly BlockData[],
+): BlockData[] => {
+  const childrenByParent = buildChildrenByParent(rows)
 
   const visit = (row: BlockData): BlockData[] =>
     isPanelStackRow(row)
@@ -94,14 +101,7 @@ export const layoutSlotsFromRows = (
   rootId: string,
   rows: readonly BlockData[],
 ): LayoutSlot[] => {
-  const childrenByParent = new Map<string, BlockData[]>()
-  for (const row of rows) {
-    if (!isPanelLayoutStorageRow(row)) continue
-    if (!row.parentId) continue
-    const children = childrenByParent.get(row.parentId) ?? []
-    children.push(row)
-    childrenByParent.set(row.parentId, children)
-  }
+  const childrenByParent = buildChildrenByParent(rows)
 
   const visit = (row: BlockData): LayoutSlot | null => {
     if (isPanelStackRow(row)) {

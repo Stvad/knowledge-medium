@@ -10,6 +10,7 @@ import {
   bridgeLogPath,
   bridgeSecret as resolveBridgeSecret,
   bridgeUrl as resolveBridgeUrl,
+  isErrnoException,
   isLocalBridgeUrl,
   pairingUrl,
   tokenStorePath as resolveTokenStorePath,
@@ -28,6 +29,7 @@ import {
   kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
 } from './kernelDts.js'
+import {renderSubtreeOutline} from './subtreeOutline.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const serverScript = path.join(here, 'server.js')
@@ -51,11 +53,6 @@ const bridgeStartTimeoutMs = 5_000
 const tokenStorePath = resolveTokenStorePath()
 const defaultProfileName = 'default'
 let selectedProfileName = defaultProfileName
-
-// Narrow a thrown `unknown` to NodeJS fs/HTTP errors so we can check
-// `.code === 'ENOENT'` etc without sprinkling `as any` everywhere.
-const isErrnoException = (error: unknown): error is NodeJS.ErrnoException =>
-  error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string'
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
@@ -883,6 +880,12 @@ cli
   })
 
 cli
+  .command('health', wireDescription('health'))
+  .action(async () => {
+    await runAndPrint({type: 'health'})
+  })
+
+cli
   .command('describe-runtime', wireDescription('describe-runtime'))
   .option('--actions <text>', 'Filter actions (repeatable)')
   .option('--facets <text>', 'Filter facets (repeatable)')
@@ -946,13 +949,18 @@ cli
 
 cli
   .command('subtree <rootId>', wireDescription('get-subtree'))
-  .option('--include-root', 'Include the root block itself in the response')
-  .action(async (rootId: string, options: {includeRoot?: boolean}) => {
-    await runAndPrint({
-      type: 'get-subtree',
-      rootId,
-      includeRoot: Boolean(options.includeRoot),
-    })
+  .option('--json', 'Print the raw flat array (each row a block + its depth) instead of the indented outline')
+  .action(async (rootId: string, options: {json?: boolean}) => {
+    if (options.json) {
+      await runAndPrint({type: 'get-subtree', rootId})
+      return
+    }
+    // Default: a depth-indented `- [id] content` outline. The subtree
+    // comes back already in pre-order / (order_key, id) order — we render
+    // it verbatim and never re-sort (see renderSubtreeOutline).
+    await ensureBridgeRunning()
+    const value = await runCommand({type: 'get-subtree', rootId})
+    process.stdout.write(`${renderSubtreeOutline(value)}\n`)
   })
 
 cli

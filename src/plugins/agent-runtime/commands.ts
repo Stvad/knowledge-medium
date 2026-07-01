@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
-import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
+import { ChangeScope, type BlockData, type BlockReference, type SubtreeRow } from '@/data/api'
 import { aliasesProp, extensionDescriptionProp, extensionNameProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.js'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BACKLINKS_FOR_BLOCK_QUERY, type BacklinksFilter } from '@/plugins/backlinks/query.js'
@@ -20,6 +20,7 @@ import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
+import { runHealthCommand } from './healthCommand.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
 import {
   actionsFacet,
@@ -28,6 +29,8 @@ import {
   blockRenderersFacet,
 } from '@/extensions/core.js'
 import { readRuntimeActions } from '@/extensions/runtimeActions.js'
+import { invokeAction } from '@/shortcuts/actionDispatch.js'
+import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
@@ -626,15 +629,22 @@ const runRuntimeAction = async (
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
 
+  // Route imperative agent dispatch through the same `invokeAction` choke the
+  // keyboard / pointer / runActionById paths use, so the action-dispatch
+  // middleware (and the behaviour decorators migrated off `actionTransformsFacet`)
+  // cover M-x-style dispatch too — otherwise calling `action.handler` directly
+  // would skip the decorators the effective action no longer carries.
+  const deps = {
+    uiStateBlock,
+    block,
+    selectedBlocks,
+    anchorBlock,
+    scopeRootId,
+  } as BaseShortcutDependencies
+  const trigger = new CustomEvent('agent-runtime:run-action', {detail: {actionId}})
   let returned: unknown
   try {
-    returned = await action.handler({
-      uiStateBlock,
-      block,
-      selectedBlocks,
-      anchorBlock,
-      scopeRootId,
-    }, new CustomEvent('agent-runtime:run-action', {detail: {actionId}}))
+    returned = await invokeAction(context.runtime, {action, deps, trigger})
   } catch (handlerError) {
     // Bubble up with action context so the CLI shows "which action
     // failed", not just an opaque dispatcher message.
@@ -1059,7 +1069,7 @@ export const createAgentRuntimeContext = ({
     sql: (sql, params, mode) => runSql(repo, sql, params, mode),
     block: id => repo.block(id),
     getBlock: id => repo.load(id),
-    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as BlockData[],
+    getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
     installExtension: input => installRuntimeExtension(repo, input, context),
@@ -1087,6 +1097,9 @@ export const executeCommand = async (
 
     case 'runtime-summary':
       return describeRuntimeSummary(context)
+
+    case 'health':
+      return runHealthCommand(context.repo)
 
     case 'describe-runtime':
       return describeRuntime(context, {

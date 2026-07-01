@@ -379,6 +379,39 @@ export const focusBlock = async (
   }, {scope: ChangeScope.UiState, description: 'focus block'})
 }
 
+/** Exit edit mode on behalf of `blockId` — but only if that block still
+ *  owns edit mode when the tx commits.
+ *
+ *  `isEditing` is a single flag shared across the UI-state surface, so an
+ *  unconditional clear is identity-less: it can't tell *whose* edit mode it
+ *  ends. During a block→block tap the tapped block's `focusBlock(edit:true)`
+ *  and the outgoing editor's blur-driven exit race. An anonymous clear that
+ *  commits *after* the handoff clobbers the flag the new block just set,
+ *  dropping edit mode entirely (on a soft keyboard it hides, needing a
+ *  second tap) — and it only misfires under that timing, which is why it
+ *  doesn't repro on fast/native paths.
+ *
+ *  Reading the focused location INSIDE the tx (commit-consistent — the same
+ *  `tx.get` pattern `focusBlock` uses to preserve edit mode) makes this a
+ *  compare-and-swap: whichever of the two txs commits second sees the
+ *  other's effect, so both interleavings settle on the tapped block editing.
+ *  Unlike a DOM-focus heuristic it's oblivious to *where* focus physically
+ *  sits (the iOS soft-keyboard proxy input, the incoming block's shell, …). */
+export const exitEditModeForBlock = async (
+  uiStateBlock: Block,
+  blockId: string,
+  renderScopeId?: string,
+): Promise<void> => {
+  await uiStateBlock.repo.tx(async tx => {
+    const location = focusedBlockLocationFromProperties((await tx.get(uiStateBlock.id))?.properties)
+    // Another block owns the focused location now (or a different render-scope
+    // copy of this block does) → the handoff already moved on; not ours to clear.
+    if (location && location.blockId !== blockId) return
+    if (location && renderScopeId !== undefined && location.renderScopeId !== renderScopeId) return
+    await tx.setProperty(uiStateBlock.id, isEditingProp, false)
+  }, {scope: ChangeScope.UiState, description: 'exit edit mode'})
+}
+
 export const requestEditorFocus = (uiStateBlock: Block): void => {
   const current = uiStateBlock.peekProperty(editorFocusRequestProp) ?? 0
   void uiStateBlock.set(editorFocusRequestProp, current + 1)

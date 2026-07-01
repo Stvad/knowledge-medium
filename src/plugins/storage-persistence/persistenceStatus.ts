@@ -10,6 +10,7 @@
  * so it re-checks when the tab regains focus and clears the nudge on its own.
  */
 import { getPersistenceState, subscribePersistenceChange } from '@/requestPersistentStorage.js'
+import { CallbackSet } from '@/utils/callbackSet.js'
 import type {
   DiagnosticSnapshot,
   DiagnosticSourceContribution,
@@ -23,11 +24,9 @@ let started = false
 // change-signal/focus refresh) can resolve out of order, so a stale read must
 // not clobber a newer one. The latest-*started* refresh wins.
 let refreshSeq = 0
-const listeners = new Set<() => void>()
+const listeners = new CallbackSet('persistence-status')
 
-const notify = (): void => {
-  for (const listener of listeners) listener()
-}
+const notify = (): void => listeners.notify()
 
 const sameSnapshot = (a: DiagnosticSnapshot | null, b: DiagnosticSnapshot | null): boolean => {
   if (a === b) return true
@@ -127,10 +126,10 @@ export const persistenceDiagnosticSource: DiagnosticSourceContribution = {
   id: 'storage-persistence',
   label: 'Storage',
   subscribe: (listener) => {
-    listeners.add(listener)
+    const off = listeners.add(listener)
     start()
     return () => {
-      listeners.delete(listener)
+      off()
       // Last subscriber gone — detach the document/change listeners so we don't
       // leak across plugin toggles / HMR (and so a disabled chip stops working).
       if (listeners.size === 0) stop()

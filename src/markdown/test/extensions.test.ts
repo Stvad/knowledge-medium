@@ -8,6 +8,7 @@ import type { Components } from 'react-markdown'
 import type { Plugin } from 'unified'
 
 const block = {} as Block
+const emptyData = {content: '', references: [], workspaceId: ''}
 const basePlugin: Plugin = () => undefined
 const videoPlugin: Plugin = () => undefined
 
@@ -28,6 +29,7 @@ describe('markdown extensions', () => {
     ], {
       block,
       blockContext: {videoPlayerBlockId: 'video-1'},
+      data: emptyData,
     })
 
     expect(config.remarkPlugins).toEqual([basePlugin, videoPlugin])
@@ -48,6 +50,7 @@ describe('markdown extensions', () => {
     ], {
       block,
       blockContext: {},
+      data: emptyData,
     })
 
     expect(config.remarkPlugins).toEqual([basePlugin])

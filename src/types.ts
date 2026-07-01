@@ -131,6 +131,12 @@ export interface BlockContextType {
     isEmbedded?: boolean
     isBacklink?: boolean
     isBreadcrumb?: boolean
+    /** A block rendered as an inline reference (`((id))`). Set alongside
+     *  `isNestedSurface`, so it inherits focal-exclusion / nested-surface
+     *  behaviour from the umbrella; the specific flag lets the reference
+     *  layout self-gate (render the navigating link + raw content) without
+     *  matching embeds or backlink entries. */
+    isReference?: boolean
     [key: string]: unknown
 }
 

@@ -12,6 +12,7 @@ import {
   type MouseEvent,
 } from 'react'
 import { Search } from 'lucide-react'
+import { truncate } from '@/utils/string'
 import { cn } from '@/lib/utils'
 import {
   Dialog,
@@ -89,8 +90,6 @@ export interface QuickFindListGroup {
   items: QuickFindListItem[]
 }
 
-const truncate = (text: string, max = 80) =>
-  text.length > max ? text.slice(0, max - 1) + '…' : text
 
 const quickFindListValueSeparator = '\u001f'
 
@@ -607,7 +606,7 @@ function QuickFindDialog({
         value: `recent:${item.blockId}`,
         className: 'flex justify-between items-center',
         children: (
-          <span className="truncate">{truncate(item.label)}</span>
+          <span className="truncate">{truncate(item.label, 80)}</span>
         ),
       })),
     })
@@ -664,7 +663,7 @@ function QuickFindDialog({
         key: `block:${match.blockId}`,
         value: quickFindBlockValue(match),
         children: (
-          <span className="truncate">{truncate(match.content)}</span>
+          <span className="truncate">{truncate(match.content, 80)}</span>
         ),
       })),
     })

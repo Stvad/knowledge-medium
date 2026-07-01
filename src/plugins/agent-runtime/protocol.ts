@@ -2,7 +2,7 @@ import type React from 'react'
 import type ReactDOM from 'react-dom'
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import type { BlockData } from '@/data/api'
+import type { BlockData, SubtreeRow } from '@/data/api'
 import type { FacetRuntime } from '@/facets/facet.js'
 import type { blockRenderersFacet } from '@/extensions/core.js'
 import type { ActionConfig } from '@/shortcuts/types.js'
@@ -136,7 +136,7 @@ export interface AgentRuntimeContext {
   sql: (sql: string, params?: unknown[], mode?: SqlMode) => Promise<unknown>
   block: (id: string) => Block
   getBlock: (id: string) => Promise<BlockData | null>
-  getSubtree: (rootId: string) => Promise<BlockData[]>
+  getSubtree: (rootId: string) => Promise<SubtreeRow[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   installExtension: (input: InstallExtensionInput) => Promise<InstallExtensionResult>

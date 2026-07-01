@@ -7,14 +7,12 @@
  * block-ref entry from their `references`, atomically with the delete.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, normalizeReferences, type BlockData } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
 
@@ -35,23 +33,11 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo, cache } = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    extensions: [referencesDataExtension, aliasDataExtension],
   })
-  // The constructor installs a kernel-only runtime; this swap REPLACES it
-  // with the kernel + references + alias registry these tests exercise.
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    referencesDataExtension,
-    aliasDataExtension,
-  ]))
   // Undo/redo are scoped to the active workspace (issue #186).
   repo.setActiveWorkspaceId(WS)
   return {
@@ -66,7 +52,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const aliasProperty = (aliases: readonly string[]) => ({
   [aliasesProp.name]: aliasesProp.codec.encode([...aliases]),

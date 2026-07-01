@@ -9,6 +9,8 @@
  *    short op summary so a row reads as "PUT blocks abc12345…" at a
  *    glance without expanding into the full payload. */
 
+import { truncate } from '@/utils/string'
+
 export interface ParsedRejectionError {
   message: string
   code: string | null
@@ -91,9 +93,6 @@ const CONTENT_PREVIEW_MAX = 80
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null
-
-const truncate = (value: string, max: number): string =>
-  value.length <= max ? value : `${value.slice(0, max)}…`
 
 export const extractBlockDetails = (rawData: string): RejectedBlockDetails => {
   const empty: RejectedBlockDetails = {

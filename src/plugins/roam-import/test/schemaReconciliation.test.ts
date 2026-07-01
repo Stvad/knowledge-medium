@@ -1,10 +1,8 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope, type BlockData } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
@@ -28,26 +26,18 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file (beforeAll), reset here per test.
   await resetTestDb(sharedDb.db)
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    startSyncObserver: false,
+    extensions: [
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+    ],
   })
   repo.setActiveWorkspaceId(WS)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    kernelPropertyUiExtension,
-    kernelValuePresetsExtension,
-  ]))
   await getOrCreatePropertiesPage(repo, WS)
   const dispose = repo.userSchemas.start()
-  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => {}}
   return {h, repo, dispose}
 }
 

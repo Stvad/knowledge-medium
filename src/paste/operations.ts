@@ -6,7 +6,9 @@ import { revealChildren } from '@/data/mutators'
 import { parseMarkdownToBlocks, singleParsedBlock, type ParsedBlock } from '@/utils/markdownParser.js'
 import { keysBetween } from '../data/orderKey.ts'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from '../data/orderKeyPlacement.ts'
-import { pasteDecisionVerb } from './decision.js'
+import { FacetRuntime } from '@/facets/facet.js'
+import { captureMediaVerb } from './captureMediaVerb.js'
+import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from './decision.js'
 
 type PastePosition = 'before' | 'after'
 type PastePlacement = 'visible' | 'sibling'
@@ -189,6 +191,63 @@ const resolveRootDestination = async (
   return {rootParentId, rootInsertion, targetChildren}
 }
 
+interface PastePlacementPlan {
+  /** Parsed blocks to create — the absorbed root (if any) is excluded. */
+  blocksToCreate: ParsedBlock[]
+  /** A parsed block's final parentId: absorbed-root children reparent onto
+   *  `target`, parentless blocks go to the resolved root parent. */
+  finalParentId: (block: ParsedBlock) => string
+  /** Order key to assign each created block, by parsed id. Blocks landing
+   *  among a parent's existing children get fresh keys between neighbours;
+   *  blocks whose parent is itself being created keep their parsed orderKey. */
+  orderKeysByParsedId: Map<string, string>
+}
+
+/** Shared placement math for both multiline-paste paths: which blocks to
+ *  create, where each lands, and the order keys for blocks inserted among an
+ *  existing parent's children. The ordering invariants live in the
+ *  keysBetween / insertionForFirstChild primitives this delegates to — this
+ *  only groups blocks by destination parent and assigns the returned keys. */
+const planPastePlacement = async (
+  tx: Tx,
+  target: BlockData,
+  parsedBlocks: readonly ParsedBlock[],
+  absorbedRootId: string | undefined,
+  {rootParentId, rootInsertion, targetChildren}: RootDestination,
+): Promise<PastePlacementPlan> => {
+  const blocksToCreate = parsedBlocks.filter(block => block.id !== absorbedRootId)
+  const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
+  const finalParentId = (block: ParsedBlock): string => {
+    if (!block.parentId) return rootParentId
+    if (block.parentId === absorbedRootId) return target.id
+    return block.parentId
+  }
+
+  const existingParentGroups = new Map<string, ParsedBlock[]>()
+  for (const block of blocksToCreate) {
+    const parentId = finalParentId(block)
+    if (createdParsedIds.has(parentId)) continue
+    const group = existingParentGroups.get(parentId) ?? []
+    group.push(block)
+    existingParentGroups.set(parentId, group)
+  }
+
+  const orderKeysByParsedId = new Map<string, string>()
+  for (const [parentId, blocks] of existingParentGroups) {
+    const insertion = parentId === rootParentId
+      ? rootInsertion
+      : insertionForFirstChild(
+        parentId === target.id
+          ? targetChildren[0]?.orderKey
+          : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
+      )
+    const keys = await insertion.keys(blocks.length)
+    blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
+  }
+
+  return {blocksToCreate, finalParentId, orderKeysByParsedId}
+}
+
 export const planEditModeMultilinePaste = (
   pastedText: string,
   currentContent: string,
@@ -262,7 +321,7 @@ export async function pasteMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
-    const {rootParentId, rootInsertion, targetChildren} = await resolveRootDestination(tx, target, {
+    const destination = await resolveRootDestination(tx, target, {
       position,
       scopeRootId,
       placement,
@@ -274,35 +333,9 @@ export async function pasteMultilineText(
       rootBlocks.push(repo.block(target.id))
     }
 
-    const blocksToCreate = parsed.filter(block => block.id !== absorbedRoot?.id)
-    const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
-    const finalParentId = (block: ParsedBlock): string => {
-      if (!block.parentId) return rootParentId
-      if (block.parentId === absorbedRoot?.id) return target.id
-      return block.parentId
-    }
-
-    const existingParentGroups = new Map<string, ParsedBlock[]>()
-    for (const block of blocksToCreate) {
-      const parentId = finalParentId(block)
-      if (createdParsedIds.has(parentId)) continue
-      const group = existingParentGroups.get(parentId) ?? []
-      group.push(block)
-      existingParentGroups.set(parentId, group)
-    }
-
-    const orderKeysByParsedId = new Map<string, string>()
-    for (const [parentId, blocks] of existingParentGroups) {
-      const insertion = parentId === rootParentId
-        ? rootInsertion
-        : insertionForFirstChild(
-          parentId === target.id
-            ? targetChildren[0]?.orderKey
-            : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
-        )
-      const keys = await insertion.keys(blocks.length)
-      blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
-    }
+    const {blocksToCreate, finalParentId, orderKeysByParsedId} = await planPastePlacement(
+      tx, target, parsed, absorbedRoot?.id, destination,
+    )
 
     for (const block of blocksToCreate) {
       const parentId = finalParentId(block)
@@ -334,7 +367,7 @@ export async function pasteEditModeMultilineText(
     const target = await tx.get(pasteTarget.id)
     if (!target) return
 
-    const {rootParentId, rootInsertion, targetChildren} = await resolveRootDestination(tx, target, {
+    const destination = await resolveRootDestination(tx, target, {
       position: 'after',
       scopeRootId: options.scopeRootId,
       placement: 'sibling',
@@ -343,35 +376,9 @@ export async function pasteEditModeMultilineText(
     await tx.update(target.id, {content: plan.targetContent})
     rootBlocks.push(repo.block(target.id))
 
-    const blocksToCreate = plan.parsed.filter(block => block.id !== plan.absorbedRoot.id)
-    const createdParsedIds = new Set(blocksToCreate.map(block => block.id))
-    const finalParentId = (block: ParsedBlock): string => {
-      if (!block.parentId) return rootParentId
-      if (block.parentId === plan.absorbedRoot.id) return target.id
-      return block.parentId
-    }
-
-    const existingParentGroups = new Map<string, ParsedBlock[]>()
-    for (const block of blocksToCreate) {
-      const parentId = finalParentId(block)
-      if (createdParsedIds.has(parentId)) continue
-      const group = existingParentGroups.get(parentId) ?? []
-      group.push(block)
-      existingParentGroups.set(parentId, group)
-    }
-
-    const orderKeysByParsedId = new Map<string, string>()
-    for (const [parentId, blocks] of existingParentGroups) {
-      const insertion = parentId === rootParentId
-        ? rootInsertion
-        : insertionForFirstChild(
-          parentId === target.id
-            ? targetChildren[0]?.orderKey
-            : (await tx.childrenOf(parentId, target.workspaceId))[0]?.orderKey,
-        )
-      const keys = await insertion.keys(blocks.length)
-      blocks.forEach((block, index) => orderKeysByParsedId.set(block.id, keys[index]))
-    }
+    const {blocksToCreate, finalParentId, orderKeysByParsedId} = await planPastePlacement(
+      tx, target, plan.parsed, plan.absorbedRoot.id, destination,
+    )
 
     const lastCreatedBlock = blocksToCreate.at(-1)
     for (const block of blocksToCreate) {
@@ -393,6 +400,61 @@ export async function pasteEditModeMultilineText(
   }, {scope: ChangeScope.BlockDefault, description: 'paste multiline text at editor selection'})
 
   return {pasted: rootBlocks, focusBlock, focusOffset}
+}
+
+/** The applied paste once any media capture is done: a non-`media` decision plus
+ *  the final text to paste (the decision's own rewrite, else the source text with
+ *  the captured references spliced in). */
+export interface ResolvedTextPaste {
+  readonly decision: Exclude<PasteDecision, { kind: 'media' }>
+  readonly text: string
+}
+
+/** Resolve a paste decision, performing MEDIA CAPTURE when the decision is `media`:
+ *  capture the files via {@link captureMediaVerb} (the attachments plugin's effect —
+ *  this module never imports the plugin), splice the returned `((id))` reference text
+ *  into the paste, and RE-DECIDE with the files stripped so the references flow through
+ *  the normal text path (landing at the caret like any pasted text, not a forced
+ *  child). Surface-agnostic: the caller applies the returned decision its own way
+ *  (outline insert vs editor dispatch), and reads `request.surface`/`caret` itself.
+ *
+ *  Returns `null` when there's nothing to paste — a capture that yielded no references
+ *  AND no accompanying text, or a plugin that returned `media` with no files. A
+ *  capture THROW is swallowed (a buggy plugin must not break the paste; the text
+ *  half still pastes). The capture awaits, so a caller with a DETACHABLE surface (an
+ *  editor view that can unmount mid-await) must re-check liveness AFTER this resolves
+ *  and before applying. */
+export async function resolvePasteWithMediaCapture(
+  runtime: FacetRuntime,
+  request: PasteRequest,
+  capture: { repo: Repo; workspaceId: string },
+): Promise<ResolvedTextPaste | null> {
+  const decided = pasteDecisionVerb.runSync(runtime, request)
+  if (decided.kind !== 'media') return { decision: decided, text: decided.text ?? request.text }
+
+  const files = request.files ?? []
+  let references: readonly string[] = []
+  if (capture.workspaceId && files.length > 0) {
+    try {
+      references = (await captureMediaVerb.run(runtime, { repo: capture.repo, workspaceId: capture.workspaceId, files }))
+        .references
+    } catch (err) {
+      // A buggy capture plugin must not break the paste — the text half still pastes.
+      console.warn('[media] paste capture failed', err)
+    }
+  } else if (files.length > 0) {
+    console.warn('[media] could not capture pasted file(s): no workspace')
+  }
+
+  // Clipboard text first, then one reference per captured file — each on its own line.
+  const text = [request.text, ...references].filter(Boolean).join('\n')
+  if (!text) return null // nothing captured and no text
+
+  // Re-decide with files stripped + the spliced text, so the file half doesn't
+  // re-trigger `media`.
+  const decision = pasteDecisionVerb.runSync(runtime, { ...request, text, files: [] })
+  if (decision.kind === 'media') return null // a plugin returned media without files — nothing to paste
+  return { decision, text: decision.text ?? text }
 }
 
 /** Read the clipboard and paste it around `pasteTarget`. This is the
@@ -423,6 +485,9 @@ export async function pasteFromClipboard(
   // The decision is a pure, synchronous policy (`runSync`); the clipboard text
   // is already in hand, so there's nothing to await before deciding.
   const decision = pasteDecisionVerb.runSync(runtime, {text, intent: 'split', surface: 'shell'})
+  // This path is text-only (navigator.clipboard.readText carries no files), so a
+  // `media` decision can't arise — fall back to the text paste if one does.
+  if (decision.kind === 'media') return pasteMultilineText(text, pasteTarget, repo, options)
   return pasteMultilineText(decision.text ?? text, pasteTarget, repo, {
     ...options,
     asSingleBlock: decision.kind === 'single-block',

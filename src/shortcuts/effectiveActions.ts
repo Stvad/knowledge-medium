@@ -24,7 +24,12 @@ export const actionRuntimeKey = (
  *  user override. */
 export const WILDCARD_ACTION_ID = '*'
 
-const matchesAction = (
+/** Does a per-action target (`{actionId, context?}`) apply to `action`?
+ *  `actionId` may be {@link WILDCARD_ACTION_ID} (`'*'`) to match every action;
+ *  `context` (when set) narrows to one context. Shared by both the
+ *  `actionTransformsFacet` pipeline here and the action-dispatch seam's
+ *  `actionDispatchWrap` (same targeting on the definition and invocation sides). */
+export const matchesAction = (
   target: Pick<ActionTransform, 'actionId' | 'context'>,
   action: Pick<ActionConfig, 'id' | 'context'>,
 ): boolean =>

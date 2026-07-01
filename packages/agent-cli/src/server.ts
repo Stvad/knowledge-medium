@@ -12,6 +12,8 @@ import {
   type Audience,
   type CommandPayload,
   commandPayloadSchema,
+  knownCommandRegistry,
+  type KnownCommandMeta,
   registerClientMetadataSchema,
   registerTokenSpecSchema,
   type TokenAudience,
@@ -237,18 +239,22 @@ const isReadOnlySql = (sql: unknown): boolean =>
   typeof sql === 'string' && /^(select|explain)\b/i.test(sql.trimStart())
 
 const isReadOnlyCommand = (command: CommandPayload): boolean => {
-  switch (command.type) {
-    case 'ping':
-    case 'runtime-summary':
-    case 'describe-runtime':
-    case 'get-block':
-    case 'get-subtree':
-      return true
-    case 'sql':
-      return command.mode !== 'execute' && isReadOnlySql(command.sql)
-    default:
-      return false
+  // `sql` is the one verb whose read-only-ness depends on the call, not
+  // just the verb: a non-execute SELECT/EXPLAIN is a read, but
+  // `mode: 'execute'` (or a mutating statement) is not. Refine it here
+  // before falling back to the schema-derived registry.
+  if (command.type === 'sql') {
+    return command.mode !== 'execute' && isReadOnlySql(command.sql)
   }
+  // Every other verb's read-only-ness is a static, per-verb fact declared
+  // once in `knownCommandRegistry` — TypeScript-exhaustiveness-checked, so
+  // a verb can't be added to the wire protocol without classifying it, and
+  // this allowlist can't drift. Unknown types (legacy aliases `action` /
+  // `set-extension-enabled`, or arbitrary `kmagent raw` bodies) have no
+  // entry and default to write (deny).
+  const meta: KnownCommandMeta | undefined =
+    (knownCommandRegistry as Record<string, KnownCommandMeta>)[command.type]
+  return meta?.readOnly === true
 }
 
 const dropClient = (clientId: ClientId): void => {
