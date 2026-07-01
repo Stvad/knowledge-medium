@@ -525,8 +525,10 @@ unit, zero existing seam, real demand (I3):
   replay, on, hook, lifecycle — against the event that has no other way to be
   observed and that plugins demonstrably need.
 
-**Phase 1 — lifecycle events.** `workspace:created` (from `bootstrapWorkspace`,
-reusing `freshlyCreated`), `app:booted`, `runtime:swapped` (emitted *after*
+**Phase 1 — lifecycle events.** `workspace:created` (from the real insert sites —
+`resolveWorkspace` when `inserted` + the `CreateWorkspaceDialog` create path,
+dedupe by id; **not** `bootstrapWorkspace`/`freshlyCreated`, which misses
+dialog-created workspaces — see §1), `app:booted`, `runtime:swapped` (emitted *after*
 `AppRuntimeProvider` installs the new runtime — not the early
 `refreshAppRuntime` refresh-requested signal; see the inventory caveat). Turns
 the bus into the "lifecycle hook"
