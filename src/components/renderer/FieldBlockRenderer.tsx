@@ -182,40 +182,46 @@ const FieldBlockLayout: BlockLayout = ({
   Footer,
   Controls,
   Header,
-  shellProps,
+  Shell,
 }) => {
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
-  const {className: shellClassName, ...collapsibleProps} = shellProps
 
   return (
     <div>
       <Header/>
 
-      <Collapsible
-        {...collapsibleProps}
-        open={!isCollapsed || isTopLevel}
-        data-property-field-table-row="true"
-        className={`tm-block tm-field-table-row group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
-      >
-        <Controls/>
+      <Shell>
+        {(shellProps) => {
+          const {className: shellClassName, ...collapsibleProps} = shellProps
+          return (
+            <Collapsible
+              {...collapsibleProps}
+              open={!isCollapsed || isTopLevel}
+              data-property-field-table-row="true"
+              className={`tm-block tm-field-table-row group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+            >
+              <Controls/>
 
-        <div className="block-body relative min-w-0 flex-grow">
-          <div className="tm-field-table-grid grid min-w-0 grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent py-0.5 hover:border-border/50">
-            <div className="tm-field-name-cell min-w-0">
-              <Content/>
-            </div>
-            <CollapsibleContent className="tm-field-value-cell min-w-0">
-              <Children/>
-              <FieldEmptyValueEditor block={block}/>
-            </CollapsibleContent>
-          </div>
+              <div className="block-body relative min-w-0 flex-grow">
+                <div className="tm-field-table-grid grid min-w-0 grid-cols-[minmax(9rem,13rem)_minmax(0,1fr)] items-start gap-3 rounded-sm border-b border-transparent py-0.5 hover:border-border/50">
+                  <div className="tm-field-name-cell min-w-0">
+                    <Content/>
+                  </div>
+                  <CollapsibleContent className="tm-field-value-cell min-w-0">
+                    <Children/>
+                    <FieldEmptyValueEditor block={block}/>
+                  </CollapsibleContent>
+                </div>
 
-          {Properties && <Properties/>}
-          <Footer/>
-        </div>
-      </Collapsible>
+                {Properties && <Properties/>}
+                <Footer/>
+              </div>
+            </Collapsible>
+          )
+        }}
+      </Shell>
     </div>
   )
 }

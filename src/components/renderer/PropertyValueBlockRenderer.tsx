@@ -128,23 +128,29 @@ const PropertyValueBlockLayout: BlockLayout = ({
   Children,
   Footer,
   Header,
-  shellProps,
+  Shell,
 }) => {
   const isSelected = useIsSelected(block.id)
-  const {className: shellClassName, ...bodyProps} = shellProps
 
   return (
     <div>
       <Header/>
-      <div
-        {...bodyProps}
-        className={`tm-property-value-block group/block relative min-w-0 outline-none focus:outline-none focus-visible:outline-none ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
-      >
-        <Content/>
-        {Properties && <Properties/>}
-        <Children/>
-        <Footer/>
-      </div>
+      <Shell>
+        {(shellProps) => {
+          const {className: shellClassName, ...bodyProps} = shellProps
+          return (
+            <div
+              {...bodyProps}
+              className={`tm-property-value-block group/block relative min-w-0 outline-none focus:outline-none focus-visible:outline-none ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
+            >
+              <Content/>
+              {Properties && <Properties/>}
+              <Children/>
+              <Footer/>
+            </div>
+          )
+        }}
+      </Shell>
     </div>
   )
 }

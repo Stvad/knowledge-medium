@@ -11,6 +11,7 @@ import { useEffect } from 'react'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets'
 import { usePropertyValue } from '@/hooks/block'
 import { focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
@@ -21,7 +22,7 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
 import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
-import { type FacetRuntime } from '@/facets/facet'
+import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import { blockRenderersFacet } from '@/extensions/core'
 import type { Block } from '@/data/block'
@@ -105,20 +106,27 @@ const propertyOnlyLayout: BlockLayout = ({Properties, Shell}) => (
       </div>
     )}
   </Shell>
->
 )
 
-const contentOnlyLayout: BlockLayout = ({Content, shellProps}) => (
-  <div {...shellProps}>
-    <Content />
-  </div>
+const contentOnlyLayout: BlockLayout = ({Content, Shell}) => (
+  <Shell>
+    {(shellProps) => (
+      <div {...shellProps}>
+        <Content />
+      </div>
+    )}
+  </Shell>
 )
 
-const controlsAndContentLayout: BlockLayout = ({Controls, Content, shellProps}) => (
-  <div {...shellProps}>
-    <Controls />
-    <Content />
-  </div>
+const controlsAndContentLayout: BlockLayout = ({Controls, Content, Shell}) => (
+  <Shell>
+    {(shellProps) => (
+      <div {...shellProps}>
+        <Controls />
+        <Content />
+      </div>
+    )}
+  </Shell>
 )
 
 const TestContentRenderer = ({block}: BlockRendererProps) => (
