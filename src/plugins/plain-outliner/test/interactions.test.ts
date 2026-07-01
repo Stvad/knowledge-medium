@@ -18,6 +18,9 @@ vi.mock('@/extensions/blockInteraction.js', async (importOriginal) => ({
   enterEditModeForBlock,
 }))
 
+const grabSoftKeyboard = vi.hoisted(() => vi.fn())
+vi.mock('@/utils/softKeyboardGrab.js', () => ({ grabSoftKeyboard }))
+
 const PrimaryRenderer: BlockRenderer = () => null
 const SecondaryRenderer: BlockRenderer = () => null
 
@@ -79,9 +82,9 @@ describe('plain outliner interactions', () => {
 })
 
 describe('plain outliner click-to-edit action', () => {
-  const deps = (): BlockPointerDependencies => ({
+  const deps = (isReadOnly = false): BlockPointerDependencies => ({
     block: {id: 'block-1'} as Block,
-    uiStateBlock: {id: 'panel'} as Block,
+    uiStateBlock: {id: 'panel', repo: {isReadOnly}} as unknown as Block,
     targetElement: document.createElement('div'),
     renderScopeId: 'scope-a',
   })
@@ -92,11 +95,12 @@ describe('plain outliner click-to-edit action', () => {
     clientY: 8,
   }) as unknown as ActionTrigger
 
-  it('enters edit mode at the click position on a plain click', () => {
+  it('enters edit mode at the click position and grabs the keyboard on a plain click', () => {
     // Interactive-target exclusion is the block-pointer context's job
     // (pointerTargetFilter), so this action assumes a real surface click and
     // just enters edit mode at the click position.
     enterEditModeForBlock.mockClear()
+    grabSoftKeyboard.mockClear()
     const target = document.createElement('span')
     const d = deps()
 
@@ -105,5 +109,18 @@ describe('plain outliner click-to-edit action', () => {
     expect(enterEditModeForBlock).toHaveBeenCalledWith(
       d.block, d.uiStateBlock, 'scope-a', {x: 4, y: 8},
     )
+    expect(grabSoftKeyboard).toHaveBeenCalledOnce()
+  })
+
+  it('does not grab the keyboard in a read-only workspace (no editor will mount)', () => {
+    // Read-only no-ops edit mode, so grabbing would raise a soft keyboard with
+    // nothing to type into until the failsafe blurs it.
+    enterEditModeForBlock.mockClear()
+    grabSoftKeyboard.mockClear()
+    const d = deps(true)
+
+    enterBlockEditModeOnClickAction.handler(d, clickEvent(document.createElement('span')))
+
+    expect(grabSoftKeyboard).not.toHaveBeenCalled()
   })
 })

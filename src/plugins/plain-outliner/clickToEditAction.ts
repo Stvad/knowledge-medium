@@ -36,7 +36,11 @@ export const enterBlockEditModeOnClickAction: ActionConfig<typeof ActionContextT
     // outside the gesture, and iOS won't raise the keyboard for it — so without
     // this the block enters edit mode but needs a second tap for a keyboard.
     // The editor's later focus transfers seamlessly. See grabSoftKeyboard.
-    grabSoftKeyboard()
+    // Skip in read-only workspaces: no editor will mount (edit mode is gated on
+    // !isReadOnly, same as focusBlock), so grabbing would raise a soft keyboard
+    // with nothing to type into until the failsafe blurs it. isReadOnly is a
+    // sync read, so the gesture-synchronous requirement is preserved.
+    if (!uiStateBlock.repo.isReadOnly) grabSoftKeyboard()
     const event = trigger as ReactMouseEvent<HTMLElement>
     void enterEditModeForBlock(block, uiStateBlock, renderScopeId, {
       x: event.clientX,
