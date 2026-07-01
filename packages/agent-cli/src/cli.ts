@@ -17,14 +17,24 @@ import {
 } from './config.js'
 import {
   type Audience,
-  type CommandResult,
-  type CommandStatusResponse,
   getCommandMeta,
   type KnownCommand,
   type KnownCommandType,
   sqlModeSchema,
   type WhoamiInfo,
 } from './protocol.js'
+import {
+  createBridgeClient,
+  defaultProfileName,
+  errorMessage,
+  listStoredProfiles as listProfilesInStore,
+  loadStoredToken as loadStoredTokenFor,
+  normalizeProfileName,
+  removeStoredToken as removeStoredTokenFor,
+  requestJson,
+  sleep,
+  writeStoredToken as writeStoredTokenFor,
+} from './client.js'
 import {
   kernelTypeDeclarationCandidates,
   renderKernelTypesInstallSummary,
@@ -47,32 +57,13 @@ const pkgVersion = (() => {
   }
 })()
 const bridgeUrl = resolveBridgeUrl()
-const pollIntervalMs = 100
-const defaultTimeoutMs = 30_000
 const bridgeStartTimeoutMs = 5_000
 const tokenStorePath = resolveTokenStorePath()
-const defaultProfileName = 'default'
 let selectedProfileName = defaultProfileName
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
-
-interface TokenRecord {
-  token: string
-  savedAt?: number
-}
-
-interface TokenStore {
-  profiles: Record<string, TokenRecord>
-}
-
-/** Subset of fetch's `RequestInit` we use. Typed narrowly so the
- *  helpers below stay free of `any`s. */
-interface RequestOptions {
-  method?: string
-  body?: string
-  headers?: Record<string, string>
-}
+/** Bridge client bound to the currently selected profile. Created per
+ *  call because `--profile` mutates `selectedProfileName` after parse. */
+const client = () => createBridgeClient({profile: selectedProfileName})
 
 /** Per-client record returned by GET /health?detail=1 — typed loose
  *  (only the fields we read for the `ping` summary). */
@@ -88,9 +79,6 @@ interface BridgeStatusResponse {
   ok?: boolean
   clients?: BridgeStatusClient[]
 }
-
-const sleep = (ms: number): Promise<void> =>
-  new Promise(resolve => setTimeout(resolve, ms))
 
 const canAutoStartBridge = (): boolean =>
   !process.env.AGENT_RUNTIME_URL && isLocalBridgeUrl(bridgeUrl)
@@ -155,68 +143,7 @@ const extensionHandle = (handle: string): {id: string} | {label: string} => {
   return isUuid ? {id: handle} : {label: handle}
 }
 
-const normalizeProfileName = (value = '') => {
-  const name = value.trim()
-  if (!name) return defaultProfileName
-  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
-    throw new Error('Profile names may only contain letters, numbers, underscores, dots, and dashes.')
-  }
-  return name
-}
-
 selectedProfileName = normalizeProfileName(process.env.AGENT_RUNTIME_PROFILE ?? '')
-
-const normalizeTokenRecord = (value: unknown): TokenRecord | null => {
-  if (!value || typeof value !== 'object') return null
-  const candidate = value as {token?: unknown, savedAt?: unknown}
-  if (typeof candidate.token !== 'string') return null
-  return {
-    token: candidate.token,
-    savedAt: typeof candidate.savedAt === 'number' ? candidate.savedAt : undefined,
-  }
-}
-
-const normalizeTokenStore = (value: unknown): TokenStore => {
-  const profiles: Record<string, TokenRecord> = {}
-
-  if (value && typeof value === 'object') {
-    const legacy = normalizeTokenRecord(value)
-    if (legacy) profiles[defaultProfileName] = legacy
-
-    const candidate = value as {profiles?: unknown}
-    if (candidate.profiles && typeof candidate.profiles === 'object') {
-      for (const [name, record] of Object.entries(candidate.profiles as Record<string, unknown>)) {
-        const profileName = normalizeProfileName(name)
-        const normalized = normalizeTokenRecord(record)
-        if (normalized) profiles[profileName] = normalized
-      }
-    }
-  }
-
-  return {profiles}
-}
-
-const loadTokenStore = async (): Promise<TokenStore> => {
-  try {
-    const raw = await fs.readFile(tokenStorePath, 'utf8')
-    return normalizeTokenStore(JSON.parse(raw))
-  } catch (error) {
-    if (isErrnoException(error) && error.code === 'ENOENT') return {profiles: {}}
-    throw error
-  }
-}
-
-const writeTokenStore = async (store: TokenStore): Promise<void> => {
-  const profiles = Object.fromEntries(
-    Object.entries(store.profiles).sort(([a], [b]) => a.localeCompare(b)),
-  )
-  await fs.mkdir(path.dirname(tokenStorePath), {recursive: true})
-  await fs.writeFile(
-    tokenStorePath,
-    `${JSON.stringify({profiles}, null, 2)}\n`,
-    {mode: 0o600},
-  )
-}
 
 const assertBundledKernelTypes = async (): Promise<void> => {
   try {
@@ -302,73 +229,13 @@ const readKernelTypeModuleDeclaration = async (moduleSpec: string): Promise<stri
   )
 }
 
-const loadStoredToken = async (profileName = selectedProfileName): Promise<string | null> => {
-  const store = await loadTokenStore()
-  return store.profiles[profileName]?.token ?? null
-}
-
-const writeStoredToken = async (token: string, profileName = selectedProfileName): Promise<void> => {
-  const store = await loadTokenStore()
-  store.profiles[profileName] = {token, savedAt: Date.now()}
-  await writeTokenStore(store)
-}
-
-const removeStoredToken = async (profileName = selectedProfileName) => {
-  const store = await loadTokenStore()
-  if (!store.profiles[profileName]) return false
-  delete store.profiles[profileName]
-  if (Object.keys(store.profiles).length > 0) {
-    await writeTokenStore(store)
-    return true
-  }
-
-  try {
-    await fs.unlink(tokenStorePath)
-    return true
-  } catch (error) {
-    if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
-    return false
-  }
-}
-
-const listStoredProfiles = async () => {
-  const store = await loadTokenStore()
-  return Object.entries(store.profiles)
-    .map(([name, record]) => ({
-      name,
-      savedAt: record.savedAt ?? null,
-      selected: name === selectedProfileName,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name))
-}
-
-const resolveToken = async () => {
-  const fromEnv = process.env.AGENT_RUNTIME_TOKEN?.trim()
-  if (fromEnv) return fromEnv
-  return loadStoredToken()
-}
-
-const requestJson = async <T = unknown>(
-  url: string,
-  options: RequestOptions = {},
-): Promise<T> => {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...(options.body ? {'content-type': 'application/json'} : {}),
-      ...(options.headers ?? {}),
-    },
-  })
-
-  const text = await response.text()
-  const body = text ? JSON.parse(text) : null
-
-  if (!response.ok) {
-    throw new Error(body?.error ?? `Request failed with status ${response.status}`)
-  }
-
-  return body as T
-}
+// Thin delegates binding the store helpers from client.ts to the
+// currently selected `--profile`.
+const loadStoredToken = (profileName = selectedProfileName) => loadStoredTokenFor(profileName)
+const writeStoredToken = (token: string, profileName = selectedProfileName) => writeStoredTokenFor(token, profileName)
+const removeStoredToken = (profileName = selectedProfileName) => removeStoredTokenFor(profileName)
+const listStoredProfiles = () => listProfilesInStore(selectedProfileName)
+const resolveToken = () => client().resolveToken()
 
 const promptForToken = async () => {
   const rl = createInterface({
@@ -382,12 +249,7 @@ const promptForToken = async () => {
   }
 }
 
-const fetchBridgeHealth = async () => {
-  const response = await fetch(`${bridgeUrl}/health`)
-  if (!response.ok) {
-    throw new Error(`Bridge health check failed with status ${response.status}`)
-  }
-}
+const fetchBridgeHealth = () => client().health()
 
 const waitForBridgeReady = async () => {
   const startedAt = Date.now()
@@ -505,9 +367,7 @@ const printPing = async () => {
 }
 
 const whoamiWithToken = (token: string): Promise<WhoamiInfo> =>
-  requestJson<WhoamiInfo>(`${bridgeUrl}/runtime/whoami`, {
-    headers: {authorization: `Bearer ${token}`},
-  })
+  createBridgeClient({token}).whoami()
 
 const reloadAppAndWait = async ({timeoutMs = 30_000} = {}) => {
   const token = await resolveToken()
@@ -649,97 +509,8 @@ const connectInteractively = async ({force = false} = {}) => {
   await connectWithToken(token, {saveBeforeVerify: false})
 }
 
-// Errors the server returns when the client has temporarily lost its
-// token registration (typical after a `yarn agent reload` or after
-// `install-extension` triggers refreshAppRuntime). Retrying on these
-// for ~10–15s smooths over the reconnect gap without papering over
-// real auth failures (scope mismatch, missing token, etc.).
-const isTransientTokenError = (error: unknown): boolean => {
-  const message = errorMessage(error)
-  return message.includes('Unknown or expired token')
-    || message.includes('Missing or invalid command status credentials')
-}
-
-const authedRetryTotalMs = 15_000
-const authedRetryStartDelayMs = 200
-const authedRetryMaxDelayMs = 1_000
-
-const authedRequest = async <T = unknown>(
-  url: string,
-  options: RequestOptions = {},
-): Promise<T> => {
-  const token = await resolveToken()
-  if (!token) {
-    throw new Error(
-      `No agent token configured for profile "${selectedProfileName}". Run \`yarn agent --profile ${selectedProfileName} connect\` to pair the CLI with the app.`,
-    )
-  }
-
-  const send = (): Promise<T> => requestJson<T>(url, {
-    ...options,
-    headers: {
-      ...(options.headers ?? {}),
-      authorization: `Bearer ${token}`,
-    },
-  })
-
-  const start = Date.now()
-  let delay = authedRetryStartDelayMs
-  while (true) {
-    try {
-      return await send()
-    } catch (error) {
-      if (!isTransientTokenError(error) || Date.now() - start >= authedRetryTotalMs) {
-        throw error
-      }
-      await sleep(delay)
-      delay = Math.min(Math.round(delay * 1.5), authedRetryMaxDelayMs)
-    }
-  }
-}
-
-const submitCommand = async (command: KnownCommand): Promise<string> => {
-  const response = await authedRequest<{id: string}>(`${bridgeUrl}/runtime/commands`, {
-    method: 'POST',
-    body: JSON.stringify(command),
-  })
-
-  return response.id
-}
-
-const waitForCommand = async (
-  id: string,
-  timeoutMs = defaultTimeoutMs,
-): Promise<CommandResult> => {
-  const start = Date.now()
-
-  while (Date.now() - start < timeoutMs) {
-    const command = await authedRequest<CommandStatusResponse>(`${bridgeUrl}/runtime/commands/${id}`)
-    if (command.status === 'completed') {
-      return command.result
-    }
-    if (command.status === 'failed') {
-      const error = command.result?.error
-      throw new Error(error?.message ?? `Runtime command ${id} failed`)
-    }
-
-    await sleep(pollIntervalMs)
-  }
-
-  throw new Error(`Timed out waiting for runtime command ${id}`)
-}
-
-const runCommand = async (command: KnownCommand): Promise<unknown> => {
-  const id = await submitCommand(command)
-  const result = await waitForCommand(id)
-
-  if (!result?.ok) {
-    const error = result?.error
-    throw new Error(error?.message ?? 'Runtime command failed')
-  }
-
-  return result.value
-}
+const runCommand = (command: KnownCommand): Promise<unknown> =>
+  client().runCommand(command)
 
 /** Helper: connect to the bridge, run a wire-protocol command, and
  *  pretty-print the result. Used by the "thin" bridge-fronting commands
