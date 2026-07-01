@@ -10,34 +10,31 @@ import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts
 
 /** Computes the on-screen keyboard's CSS-px inset for the toolbar.
  *
- *  Three browser shapes have to be handled and earlier attempts each
- *  broke at least one:
- *  - Chrome on Android (resizes-content default): both layout and
- *    visual viewports shrink with the IME. `bottom: 0` already lands
- *    above the keyboard; we just want inset = 0.
- *  - iOS Safari: visual viewport shrinks, layout stays full, but
- *    position:fixed is *pinned to the visual viewport*. `bottom: 0`
- *    again lands above the keyboard; inset must be 0 or we open a gap.
- *  - Edge / Samsung Internet on Android: visual viewport shrinks,
- *    layout stays full, AND position:fixed is anchored to the layout
- *    viewport. `bottom: 0` lands under the keyboard; inset must be the
- *    keyboard height — and *just* the keyboard height, not the URL
- *    bar (which is what the naive `innerHeight - vv.height` formula
- *    accidentally added in earlier attempts, producing the gap the
- *    user reported).
+ *  The PRIMARY mechanism is CSS, not this hook: `index.html` sets
+ *  `interactive-widget=resizes-content`, so when the keyboard opens the
+ *  browser shrinks the *layout* viewport and a `position: fixed; bottom: 0`
+ *  toolbar already rides above the keyboard — inset 0 — on every browser in
+ *  our fleet (verified on device: Chrome, Edge, Firefox; iOS Safari):
+ *  - Chromium (Chrome / Edge / Samsung Internet) and Firefox honor the meta
+ *    key and shrink the layout viewport. (Edge earlier — before the meta key
+ *    — kept the layout viewport full and needed a nonzero inset; with
+ *    resizes-content it shrinks like the rest and no longer does.)
+ *  - iOS Safari ignores the meta key but pins position:fixed to the *visual*
+ *    viewport, so `bottom: 0` again lands above the keyboard — inset 0.
  *
- *  The fix has two pieces:
- *  - Track a *baseline* maximum visualViewport.height across the
- *    component lifetime. The URL bar height is constant — present in
- *    both the baseline and the current measurement — so it cancels
- *    out. The keyboard height is the only delta:
- *    `keyboardHeight = baseline - current`.
- *  - Use a hidden 1×1 sentinel at `position: fixed; bottom: 0` to
- *    detect which anchoring mode the browser is using. If the
- *    sentinel's bottom (in CSS-px) sits below the visual viewport's
- *    bottom, the browser is layout-anchoring fixed elements (Edge
- *    case) and we apply the inset. Otherwise (Chrome / iOS) we keep
- *    inset = 0 because `bottom: 0` is already correct. */
+ *  So this hook is now only a FALLBACK for a browser that neither honors
+ *  `interactive-widget` nor visual-viewport-pins fixed elements — i.e. one
+ *  that layout-anchors them against a full-height viewport (older Chromium /
+ *  some WebViews). There `bottom: 0` lands under the keyboard and we reserve
+ *  the keyboard height, measured URL-bar-invariantly:
+ *  - Track a *baseline* maximum visualViewport.height across the component
+ *    lifetime; the URL bar is present in both the baseline and the current
+ *    measurement, so it cancels — the keyboard height is the only delta
+ *    (`baseline - current`).
+ *  - A hidden 1×1 sentinel at `position: fixed; bottom: 0` detects the
+ *    anchoring mode: if its bottom (CSS-px) sits below the visual viewport's
+ *    bottom the browser is layout-anchoring, so apply the inset; otherwise
+ *    (the whole fleet, post-meta-key) inset stays 0. */
 const useKeyboardInset = (active: boolean): number => {
   const sentinelRef = useRef<HTMLDivElement | null>(null)
   const [inset, setInset] = useState(0)
@@ -226,11 +223,11 @@ export function MobileKeyboardToolbar() {
   return (
     <div
       ref={toolbarRef}
-      // `keyboardInset` is 0 on browsers where bottom:0 already lands
-      // above the keyboard (Chrome on Android, iOS Safari) and equals
-      // the keyboard's CSS-px height on browsers that anchor
-      // position:fixed to a full-height layout viewport (Edge,
-      // Samsung Internet) — see useKeyboardInset.
+      // `keyboardInset` is 0 on every browser in our fleet now that
+      // index.html sets interactive-widget=resizes-content (bottom:0
+      // rides above the keyboard). It's nonzero only as a fallback on a
+      // browser that ignores the meta key AND layout-anchors fixed
+      // elements against a full-height viewport — see useKeyboardInset.
       className="mobile-keyboard-toolbar fixed left-0 right-0 z-50 flex items-center justify-around gap-1 border-t border-border bg-background/95 px-1 py-1 backdrop-blur supports-[backdrop-filter]:bg-background/80"
       style={{bottom: keyboardInset}}
       data-block-interaction="ignore"
