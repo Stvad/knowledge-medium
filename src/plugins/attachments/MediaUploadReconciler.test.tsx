@@ -24,9 +24,11 @@ vi.mock('./assetUpload.js', () => ({
   armUploadDrain: h.armUploadDrain,
   runUploadRecovery: h.runUploadRecovery,
   RECOVERY_SWEEP_INTERVAL_MS: 3 * 60 * 60 * 1000,
+  RECOVERY_SWEEP_MAX_ATTEMPTS: 120,
 }))
 
 const { MediaUploadReconciler } = await import('./MediaUploadReconciler.js')
+const { RECOVERY_SWEEP_INTERVAL_MS, RECOVERY_SWEEP_MAX_ATTEMPTS } = await import('./assetUpload.js')
 
 afterEach(cleanup)
 beforeEach(() => {
@@ -54,6 +56,35 @@ describe('MediaUploadReconciler', () => {
     // bypassBound) — a prior session's failures deserve one guaranteed pass.
     expect(h.runUploadRecovery.mock.calls[0][0]).toBe('u1')
     expect(h.runUploadRecovery.mock.calls[0][1]).toBeUndefined()
+  })
+
+  it('recovers on reconnect (online) — coalesced (skip-if-busy), low (default) cap', () => {
+    // The frequent trigger: coalesce so an `online` flap across N tabs doesn't queue N
+    // sweeps, and NO cap override → the low default bound (a flap can't re-PUT a bad body).
+    render(<MediaUploadReconciler />)
+    h.runUploadRecovery.mockClear() // ignore the boot call
+    window.dispatchEvent(new Event('online'))
+    expect(h.runUploadRecovery).toHaveBeenCalledWith('u1', { coalesce: true })
+  })
+
+  it('recovers on the slow periodic sweep — coalesced, HIGH cap (the auto-heal window)', () => {
+    // Spy setInterval (call-through) and invoke the recovery sweep's callback directly —
+    // robust vs advancing fake timers. The sweep bypasses the low bound via a HIGH cap so
+    // a freed path / fixed client still auto-heals (§9), and coalesces across tabs.
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    try {
+      render(<MediaUploadReconciler />)
+      h.runUploadRecovery.mockClear()
+      const sweepCall = setIntervalSpy.mock.calls.find(([, ms]) => ms === RECOVERY_SWEEP_INTERVAL_MS)
+      expect(sweepCall, 'a recovery sweep interval should be scheduled').toBeDefined()
+      ;(sweepCall![0] as () => void)()
+      expect(h.runUploadRecovery).toHaveBeenCalledWith('u1', {
+        coalesce: true,
+        maxRecoveryAttempts: RECOVERY_SWEEP_MAX_ATTEMPTS,
+      })
+    } finally {
+      setIntervalSpy.mockRestore()
+    }
   })
 
   it('does nothing when no user is active', () => {

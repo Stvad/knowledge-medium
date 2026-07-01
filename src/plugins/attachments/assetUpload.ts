@@ -143,6 +143,14 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
  *  each pass is only cheap GET probes over the (small) failed set. */
 export const RECOVERY_SWEEP_INTERVAL_MS = 3 * 60 * 60 * 1000 // 3 hours
 
+/** The slow sweep's re-drive cap (design §9). Far above the frequent-trigger default (3),
+ *  but FINITE: it gives a genuinely-freed path a wide auto-heal window — ~120 sweeps ×
+ *  {@link RECOVERY_SWEEP_INTERVAL_MS} ≈ 15 days — for a raised limit / upgraded client to
+ *  land, then stops re-PUTting a permanently-rejected body's full sealed bytes forever.
+ *  The counter is IndexedDB-shared, so this caps TOTAL re-drives across all open tabs, not
+ *  per-tab. An explicit user Retry passes `Infinity` to override it. */
+export const RECOVERY_SWEEP_MAX_ATTEMPTS = 120
+
 /** §9 failed-upload recovery: probe each `failed` record's content path and 3-way it
  *  (requeue a freed path → the drain re-uploads; clear an already-uploaded one; keep a
  *  poisoned one), then drain the requeued records — ALL single-owner under ONE lane-lock
@@ -150,13 +158,13 @@ export const RECOVERY_SWEEP_INTERVAL_MS = 3 * 60 * 60 * 1000 // 3 hours
  *  lock request, which would deadlock). A no-op when Supabase isn't configured / the
  *  session is local-only (nothing to probe). Bound to `userId` (not the active account)
  *  end-to-end, like the drain, so an account switch mid-recovery can't act under the wrong
- *  session/keys.
+ *  session/keys. Returns the lane promise so a caller can serialize on it (the Retry
+ *  action debounces overlapping clicks); the fire-and-forget triggers ignore it.
  *
  *  Two per-trigger knobs (see {@link MediaUploadReconciler}):
- *   - `bypassBound` — re-drive a freed path even past the per-record bound (the slow sweep
- *     + explicit user retry, which must auto-heal a fixed client / raised limit); left off
- *     for the frequent triggers (boot / reconnect) so a shape-rejected body can't re-PUT
- *     on every reconnect.
+ *   - `maxRecoveryAttempts` — this trigger's re-drive cap: default LOW (3) for the frequent
+ *     triggers, {@link RECOVERY_SWEEP_MAX_ATTEMPTS} for the slow sweep, `Infinity` for an
+ *     explicit user Retry (see {@link recoverFailedUploads}'s BOUND note).
  *   - `coalesce` — use the NON-blocking lane lock (skip if another tab already owns the
  *     lane) instead of queuing behind it. Set by the repeatable AUTOMATIC triggers
  *     (reconnect / periodic sweep) so N open tabs don't each run a full probe sweep in
@@ -164,10 +172,10 @@ export const RECOVERY_SWEEP_INTERVAL_MS = 3 * 60 * 60 * 1000 // 3 hours
  *     run (a skip there would drop a real heal, not a redundant one). */
 export const runUploadRecovery = (
   userId: string,
-  opts: { bypassBound?: boolean; coalesce?: boolean } = {},
-): void => {
+  opts: { maxRecoveryAttempts?: number; coalesce?: boolean } = {},
+): Promise<void> => {
   const blobStore = getBlobStore()
-  if (!blobStore) return
+  if (!blobStore) return Promise.resolve()
   const resolver = syncResolverForUser(userId)
   const isActiveUser = () => getActiveUserId() === userId
   const pass = async (): Promise<void> => {
@@ -176,7 +184,7 @@ export const runUploadRecovery = (
       blobStore,
       ...laneKeyDeps(resolver),
       isActiveUser,
-      bypassBound: opts.bypassBound,
+      maxRecoveryAttempts: opts.maxRecoveryAttempts,
     })
     // Upload whatever the probe re-queued (a freed path → pending). Same user-bound deps
     // as every other drain, so a mid-recovery switch can't drain under the wrong session.
@@ -187,7 +195,7 @@ export const runUploadRecovery = (
   const lane = opts.coalesce
     ? runSingleOwner(laneLockName(userId), pass) // skip if another tab owns the lane
     : withLock(laneLockName(userId), pass) // queue behind it — this pass must run
-  void lane.catch((err) => console.warn('[assetUpload] recovery failed', err))
+  return lane.then(() => {}).catch((err) => console.warn('[assetUpload] recovery failed', err))
 }
 
 const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({

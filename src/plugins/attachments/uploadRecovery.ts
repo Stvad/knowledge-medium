@@ -35,22 +35,26 @@
  * a `failed` record's bytes are PRESENT locally, so the down-lane never visits it. This
  * re-attempt sweep is the up-lane's own (design §9).
  *
- * BOUND vs AUTO-HEAL — the subtle part. The `recoveryAttempts` counter (bumped by
- * `requeue`) gates the ONE expensive branch (absent → requeue → PUT). Note WHICH case it
- * actually bounds: a persistent POISONER is `present+mismatch` → `poisoned`, which never
- * requeues and never increments — it already costs only a bodiless GET per trigger,
- * bounded by trigger sparsity, no counter needed. The counter therefore only ever accrues
- * on `absent + the re-drive PUT permanently fails` — i.e. a shape-rejected body (413 /
- * over-limit / a buggy client), OR a misconfig (bucket missing). That is EXACTLY the case
- * §9 says must auto-heal once the obstruction lifts (limit raised, client upgraded, bucket
- * created): "a long-lived online tab still heals once the path frees." So a hard forever-
- * bound would silently drop that guarantee. The resolution: the bound throttles only the
- * FREQUENT triggers (boot / reconnect — so a flapping reconnect can't re-PUT a known-bad
- * body on every event); the SLOW periodic sweep and the explicit USER retry pass
- * `bypassBound` and DO re-drive past it, so a freed path / fixed client still auto-heals
- * (within one sweep interval, or instantly on Retry). Past the bound on a frequent trigger
- * the cheap probe still runs (it still heals the "uploaded elsewhere" case) — only the PUT
- * is withheld.
+ * BOUND vs AUTO-HEAL — the subtle part, tuned per trigger via one `maxRecoveryAttempts`
+ * cap. The `recoveryAttempts` counter (bumped by `requeue`, persisted + shared across tabs
+ * in IndexedDB) gates the ONE expensive branch (absent → requeue → PUT). Note WHICH case
+ * it bounds: a persistent POISONER is `present+mismatch` → `poisoned`, which never
+ * requeues and never increments — it already costs only a bodiless GET per trigger, no
+ * counter needed. The counter therefore only accrues on `absent + the re-drive PUT
+ * permanently fails` — a shape-rejected body (413 / over-limit / a buggy client) or a
+ * misconfig (bucket missing). That case must AUTO-HEAL once the obstruction lifts (limit
+ * raised, client upgraded, bucket created) — §9's "a long-lived online tab still heals
+ * once the path frees" — yet a genuinely-permanent reject must not re-PUT its full sealed
+ * bytes forever (× every open tab, since the counter is shared). So the caller passes a
+ * DIFFERENT cap per trigger:
+ *   - FREQUENT triggers (boot / reconnect): a LOW cap (3) — a flapping reconnect can't
+ *     re-PUT a known-bad body on every event.
+ *   - the SLOW periodic sweep: a HIGH cap (~weeks of 3h sweeps) — a wide auto-heal window
+ *     for a raised limit / upgraded client, then it stops (the shared counter caps TOTAL
+ *     re-drives across all tabs, not per-tab).
+ *   - explicit USER retry: `Infinity` — the user asked; never give up on their command.
+ * Past the cap on any trigger the cheap probe still runs (it still heals the "uploaded
+ * elsewhere" case) — only the re-drive PUT is withheld.
  *
  * PURE: like {@link import('./uploadReconcile.js').reconcileUploads} /
  * {@link import('./uploadDrain.js').drainUploads}, this only reads the queue + probes /
@@ -86,13 +90,11 @@ export interface UploadRecoveryDeps {
    *  session + resolve keys against the active user, so a mid-recovery account switch
    *  must not verify/re-drive userA's record under userB. Defaults to always-active. */
   readonly isActiveUser?: () => boolean
+  /** The re-drive cap for THIS trigger (see the BOUND note): a LOW value (default 3) for
+   *  the frequent triggers, a HIGH value for the slow sweep, `Infinity` for an explicit
+   *  user retry. A `failed` record whose `recoveryAttempts` has reached it is probed but
+   *  not re-driven (the PUT is withheld). */
   readonly maxRecoveryAttempts?: number
-  /** Bypass the per-record re-drive bound. Set by the SPARSE triggers that must still
-   *  auto-heal past the bound — the explicit user retry (the user asked) AND the slow
-   *  periodic sweep (§9: a freed path / fixed client heals "once the path frees"). Left
-   *  false for the frequent triggers (boot / reconnect), where the bound stops a
-   *  shape-rejected body from re-PUTting on every event. */
-  readonly bypassBound?: boolean
 }
 
 export interface RecoverySummary {
@@ -117,7 +119,6 @@ interface RecoverOneCtx {
   readonly getCek: GetCek
   readonly isActiveUser: () => boolean
   readonly maxRecoveryAttempts: number
-  readonly bypassBound: boolean
 }
 
 const recoverOne = async (
@@ -145,12 +146,11 @@ const recoverOne = async (
   }
 
   // (3a) ABSENT → the path is free. Re-drive via the drain (requeue failed→pending)
-  //      UNLESS the bound is spent on a frequent trigger (`bypassBound` is set by the
-  //      slow sweep + explicit retry, which must still auto-heal — see the BOUND note).
-  //      The `requeue` CAS on `stagedAt` drops the write if a re-paste re-armed the
-  //      record mid-probe.
+  //      UNLESS this trigger's re-drive cap is spent (LOW for boot/reconnect, HIGH for the
+  //      slow sweep, Infinity for explicit retry — see the BOUND note). The `requeue` CAS
+  //      on `stagedAt` drops the write if a re-paste re-armed the record mid-probe.
   if (stored === null) {
-    if (!ctx.bypassBound && (rec.recoveryAttempts ?? 0) >= ctx.maxRecoveryAttempts) return 'exhausted'
+    if ((rec.recoveryAttempts ?? 0) >= ctx.maxRecoveryAttempts) return 'exhausted'
     await ctx.store.requeue(userId, rec.assetBlockId, rec.stagedAt)
     return 'requeued'
   }
@@ -196,7 +196,6 @@ export const recoverFailedUploads = async (
     getCek: deps.getCek,
     isActiveUser: deps.isActiveUser ?? (() => true),
     maxRecoveryAttempts: deps.maxRecoveryAttempts ?? DEFAULT_MAX_RECOVERY_ATTEMPTS,
-    bypassBound: deps.bypassBound ?? false,
   }
 
   const failed = await deps.store.listByStatus(userId, 'failed')

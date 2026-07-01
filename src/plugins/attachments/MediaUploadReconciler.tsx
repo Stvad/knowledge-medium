@@ -19,11 +19,12 @@
  *     freed path / clear an already-uploaded one / keep a poisoned one. Refocus stays
  *     drain-only (cheap): recovery is the sparser, probe-driven trigger set. (The fourth
  *     recovery trigger, explicit user-retry, is the diagnostics warning's Retry button.)
- *     Per-trigger: the frequent ones (boot / reconnect) keep the per-record re-drive bound
- *     (a shape-rejected body can't re-PUT on every reconnect); the slow sweep + Retry
- *     `bypassBound` so a freed path / fixed client still auto-heals. And the repeatable
- *     AUTOMATIC ones (reconnect / sweep) `coalesce` (skip if another tab owns the lane) so
- *     N tabs don't each run a full probe sweep; boot must actually run, so it queues.
+ *     Per-trigger re-drive cap: the frequent ones (boot / reconnect) use the LOW default
+ *     (a shape-rejected body can't re-PUT on every reconnect); the slow sweep uses a HIGH
+ *     cap (a wide auto-heal window for a freed path / fixed client, then it stops); Retry
+ *     is uncapped. And the repeatable AUTOMATIC ones (reconnect / sweep) `coalesce` (skip
+ *     if another tab owns the lane) so N tabs don't each run a full probe sweep; boot must
+ *     actually run, so it queues.
  *
  * Renders nothing. The happy path doesn't need this (capture arms the drain right
  * after commit); this is crash/close recovery + the in-session retry/recovery sweeps.
@@ -32,7 +33,13 @@
 import { useEffect } from 'react'
 import { useRepo } from '@/context/repo.js'
 import { getActiveUserId } from '@/data/repoProvider.js'
-import { armUploadDrain, RECOVERY_SWEEP_INTERVAL_MS, runUploadReconcile, runUploadRecovery } from './assetUpload.js'
+import {
+  armUploadDrain,
+  RECOVERY_SWEEP_INTERVAL_MS,
+  RECOVERY_SWEEP_MAX_ATTEMPTS,
+  runUploadReconcile,
+  runUploadRecovery,
+} from './assetUpload.js'
 import { armSharedLaneTriggers } from './laneArming.js'
 
 export const MediaUploadReconciler = (): null => {
@@ -50,9 +57,9 @@ export const MediaUploadReconciler = (): null => {
     // drain), per-trigger opts (see runUploadRecovery). Reads the CURRENT active user at
     // fire time (like `sweep`), so it always targets whoever is signed in now, independent
     // of any account-switch remount.
-    const recover = (opts?: { bypassBound?: boolean; coalesce?: boolean }) => {
+    const recover = (opts?: { maxRecoveryAttempts?: number; coalesce?: boolean }) => {
       const active = getActiveUserId()
-      if (active) runUploadRecovery(active, opts)
+      if (active) void runUploadRecovery(active, opts)
     }
 
     // Required work — runs even with NO initial sync (offline / never-synced):
@@ -82,10 +89,11 @@ export const MediaUploadReconciler = (): null => {
     const disposeShared = armSharedLaneTriggers(userId, reconcile, () => recover({ coalesce: true }))
     document.addEventListener('visibilitychange', onVisible)
     // The slow periodic §9 sweep: a long-lived online tab still heals once a poisoned /
-    // occupied path frees, rather than waiting on a restart it may never get. It BYPASSES
-    // the re-drive bound (so a freed path / fixed client auto-heals per §9) and coalesces.
+    // occupied path frees, rather than waiting on a restart it may never get. It re-drives
+    // under a HIGH cap (RECOVERY_SWEEP_MAX_ATTEMPTS — a wide auto-heal window per §9, then
+    // it stops re-PUTting a permanently-rejected body) and coalesces across tabs.
     const recoverySweep = setInterval(
-      () => recover({ coalesce: true, bypassBound: true }),
+      () => recover({ coalesce: true, maxRecoveryAttempts: RECOVERY_SWEEP_MAX_ATTEMPTS }),
       RECOVERY_SWEEP_INTERVAL_MS,
     )
     return () => {
