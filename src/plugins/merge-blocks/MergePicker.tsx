@@ -14,6 +14,7 @@
  * the kernel `core.merge` mutator stays generic.
  */
 import { useEffect, useRef, useState } from 'react'
+import { truncate } from '@/utils/string'
 import {
   CommandDialog,
   CommandInput,
@@ -37,8 +38,6 @@ import { pickMergeContentStrategy } from './strategy.ts'
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
 
-const truncate = (text: string, max = 80) =>
-  text.length > max ? text.slice(0, max - 1) + '…' : text
 
 interface ActiveSession {
   sourceBlockId: string
@@ -247,7 +246,7 @@ export function MergePicker({
                 onSelect={() => { void commit(match.blockId) }}
                 disabled={pending}
               >
-                <span className="truncate">{truncate(match.content)}</span>
+                <span className="truncate">{truncate(match.content, 80)}</span>
               </CommandItem>
             ))}
           </CommandGroup>

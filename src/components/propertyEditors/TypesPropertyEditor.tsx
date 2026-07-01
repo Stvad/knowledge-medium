@@ -1,5 +1,6 @@
 import { useId, useMemo, useState, type KeyboardEvent } from 'react'
 import { Plus, X } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { type PropertyEditorProps } from '@/data/api'
 import { typesFacet } from '@/data/facets.js'
 import { Block } from '@/data/block'
@@ -180,9 +181,10 @@ export function TypesPropertyEditor({
             type="button"
             role="option"
             aria-selected={index === activeIndex}
-            className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left ${
-              index === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-            }`}
+            className={cn(
+              'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left',
+              index === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground',
+            )}
             onMouseDown={event => event.preventDefault()}
             onMouseEnter={() => setActiveIndex(index)}
             onClick={() => addType(option.id)}

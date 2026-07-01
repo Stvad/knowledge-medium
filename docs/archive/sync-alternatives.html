@@ -1,0 +1,1026 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Sync-layer alternatives to PowerSync</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fafaf9;
+    --fg: #111;
+    --muted: #555;
+    --card: #fff;
+    --card-alt: #f3f1ec;
+    --line: #e5e5e2;
+    --accent: #2b6cb0;
+    --good: #1b7a3a;
+    --warn: #b67500;
+    --bad:  #a33;
+    --code-bg: #f3f1ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614;
+      --fg: #ececec;
+      --muted: #aaa;
+      --card: #1f1f1d;
+      --card-alt: #262624;
+      --line: #2e2e2b;
+      --accent: #6cb6ff;
+      --good: #6fcf97;
+      --warn: #f0c34a;
+      --bad:  #ff8a8a;
+      --code-bg: #232320;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 32px 24px 96px; }
+  h1 { font-size: 28px; margin: 0 0 6px; }
+  h2 { font-size: 20px; margin: 36px 0 14px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 0 0 6px; }
+  p, ul, ol { margin: 0 0 12px; }
+  ul, ol { padding-left: 22px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, .path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.86em;
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .lede { color: var(--muted); margin: 0 0 24px; }
+
+  /* TL;DR */
+  .tldr {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 0 0 28px;
+  }
+  .tldr h2 { margin-top: 0; border: 0; padding: 0; font-size: 16px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  .pick { display: flex; gap: 12px; align-items: baseline; margin: 6px 0; flex-wrap: wrap; }
+  .pick .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); min-width: 80px; }
+  .pick .name { font-weight: 600; }
+
+  /* Legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 13px; margin: 14px 0 22px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .dot.good { background: var(--good); }
+  .dot.warn { background: var(--warn); }
+  .dot.bad  { background: var(--bad);  }
+
+  /* TOC */
+  .toc { font-size: 14px; columns: 2; column-gap: 24px; margin: 0 0 26px; }
+  .toc a { display: block; padding: 2px 0; }
+  .toc .top { font-weight: 600; }
+
+  /* Comparison table */
+  .scoretable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0 0 30px; }
+  .scoretable th, .scoretable td {
+    border: 1px solid var(--line);
+    padding: 7px 9px;
+    text-align: left;
+    vertical-align: top;
+  }
+  .scoretable th {
+    background: var(--card-alt);
+    font-weight: 600;
+    position: sticky; top: 0;
+    font-size: 12px;
+  }
+  .scoretable td.cand {
+    background: var(--card);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .scoretable .cell {
+    display: flex; gap: 6px; align-items: flex-start;
+  }
+  .scoretable .cell .dot { margin-top: 5px; }
+
+  /* Candidate cards */
+  details.cand-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0;
+    margin: 0 0 12px;
+  }
+  details.cand-card[open] { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  details.cand-card summary {
+    cursor: pointer;
+    padding: 14px 18px;
+    list-style: none;
+    display: flex; gap: 12px; align-items: baseline;
+    flex-wrap: wrap;
+  }
+  details.cand-card summary::-webkit-details-marker { display: none; }
+  details.cand-card summary::before {
+    content: "▸";
+    color: var(--muted);
+    display: inline-block;
+    transition: transform 0.15s;
+    width: 12px;
+  }
+  details.cand-card[open] summary::before { transform: rotate(90deg); }
+  details.cand-card .title { font-weight: 600; font-size: 16px; }
+  details.cand-card .tag {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--card-alt);
+    color: var(--muted);
+  }
+  details.cand-card .tag.top { background: var(--good); color: white; }
+  details.cand-card .tag.runner { background: var(--accent); color: white; }
+  details.cand-card .tag.bad { background: var(--bad); color: white; }
+  details.cand-card .headline {
+    color: var(--muted);
+    flex: 1 1 100%;
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  details.cand-card .body {
+    padding: 4px 18px 18px;
+    border-top: 1px solid var(--line);
+    margin-top: 4px;
+  }
+  details.cand-card dl {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 6px 16px;
+    margin: 10px 0 12px;
+    font-size: 14px;
+  }
+  details.cand-card dt {
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding-top: 2px;
+  }
+  details.cand-card dd { margin: 0; }
+  details.cand-card .note { color: var(--muted); font-size: 13px; padding-top: 8px; border-top: 1px dashed var(--line); margin-top: 12px; }
+
+  /* Migration sketch */
+  .migration table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0 0 16px; }
+  .migration th, .migration td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .migration th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .migration .delta { white-space: nowrap; color: var(--muted); font-family: ui-monospace, monospace; }
+  .migration .file { font-family: ui-monospace, monospace; font-size: 0.92em; }
+
+  /* Open questions */
+  ol.questions li { margin-bottom: 10px; }
+
+  @media (max-width: 720px) {
+    .toc { columns: 1; }
+    details.cand-card dl { grid-template-columns: 1fr; gap: 2px 0; }
+    details.cand-card dt { padding-top: 6px; }
+  }
+</style>
+</head>
+<body>
+<main>
+
+<aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
+<strong>Status: historical / archived</strong> &middot; point-in-time decision snapshot (authored ~2026-05-13), not maintained. The recommendation and the project trajectory it cites (release cadence, download counts, bug-fix timelines) reflect that date and have not been re-checked since. Treat <em>code + tests</em> and the current state of the sync stack as authoritative (see <code>AGENTS.md</code> &rarr; &ldquo;design docs&rdquo;); do not rely on any claim here without re-verifying. Preserved for the evaluation rationale and the ElectricSQL comparison. <strong>Last verified against code:</strong> not since this banner (archived 2026-06-27).
+</aside>
+
+<header>
+  <h1>Sync-layer evaluation: long-term architecture</h1>
+  <p class="lede">
+    Choosing the sync stack for a row-shaped block app with heavy edit traffic, multi-user multi-workspace, local SQLite (any WASM build with OPFS) preferred, backend choice open.
+    The PowerSync bucket-wipe bug (<a href="https://github.com/powersync-ja/powersync-js/issues/954">powersync-js#954</a>;
+    see <a href="powersync-bucket-wipe-bug-report.md">powersync-bucket-wipe-bug-report.md</a>) is one input among many — weighed against PowerSync's overall trajectory, the maintainer's response posture, and the cost of any alternative.
+  </p>
+</header>
+
+<section class="tldr" aria-label="Recommendation">
+  <h2>Recommendation</h2>
+  <p style="margin: 0 0 14px">
+    <strong>Stay on PowerSync; have ElectricSQL documented as the migration plan if 954 stalls or other quality issues emerge.</strong>
+    The expected-value math favors staying: bug 954 is a single well-isolated issue actively owned by <code>simolus3</code> (same-day response, comparable adjacent bug #584 fixed in 6 days), PowerSync's trajectory is accelerating
+    (monthly releases, npm downloads up ~11x in 10 months to ~128k/mo, Rust sync client became default May 2026), and a sync-layer migration is multi-month work. Realistic wait for an upstream fix: 2-6 weeks.
+  </p>
+  <div class="pick">
+    <span class="label">①</span>
+    <span class="name">Stay on PowerSync <em style="color:var(--muted)">— recommended</em></span>
+  </div>
+  <div class="pick">
+    <span class="label">②</span>
+    <span class="name">ElectricSQL + own writes <em style="color:var(--muted)">— migration plan if we leave</em></span>
+  </div>
+  <div class="pick">
+    <span class="label">③</span>
+    <span class="name">Custom on Postgres logical replication <em style="color:var(--muted)">— fallback if Electric doesn't fit</em></span>
+  </div>
+  <div class="pick">
+    <span class="label">④</span>
+    <span class="name">Zero (Rocicorp) <em style="color:var(--muted)">— off-the-shelf alternative; replaces SQLite</em></span>
+  </div>
+  <p style="margin-top:14px">
+    The earlier framing of this doc — "escape PowerSync at all costs" — was wrong. PowerSync is mature, well-maintained, on a strong growth curve, and the 954 fix is plausibly weeks away from a maintainer who has already taken ownership.
+    The question isn't whether we can survive the bug; it's whether the long-term architecture is right. On that question PowerSync still wins on least disruption and best fit for our existing trigger-based pipeline.
+  </p>
+  <p>
+    <strong>If we do migrate, ② ElectricSQL is the clear pick</strong> — and this is a genuine correction from the earlier draft. The "PGlite or bust" framing was wrong. Electric Next is a pure HTTP/Shape protocol;
+    <code>@electric-sql/client</code> is ~29 KB gzipped with no SQLite/Postgres runtime deps. Four documented write patterns exist; the simplest is exactly our current shape — "hit your REST API, let Shapes stream the result back" — and the
+    <code>write_id</code> echo-skip recipe is published, not DIY. We keep SQLite, the 15 triggers, the upload connector; we replace the PowerSync sync stream with Electric Shapes.
+  </p>
+  <p>
+    <strong>③ Custom on Postgres logical replication</strong> is the fallback if Electric turns out not to fit (e.g. write-path operational complexity, no production references for non-PGlite client stores).
+    Most of the "multi-month custom engineering" in the previous draft is exactly what Electric provides off-the-shelf (initial snapshot, ordered replication, reconnect/resume, <code>write_id</code> round-trip).
+    With Electric in the picture, Custom drops from "Path A" to a defensive option.
+  </p>
+  <p>
+    <strong>④ Zero</strong> is the off-the-shelf alternative if we'd be willing to give up local SQLite. Server-authoritative mutator replay structurally precludes the PowerSync class of bug, but the client store is Zero-owned (IDB/SQLite, opaque)
+    and bundle/OPFS specifics are undocumented. Not preferred given our investment in the SQLite + triggers pipeline.
+  </p>
+  <p>
+    <strong>LiveStore</strong> deserved evaluation (it uses a wa-sqlite fork, OPFS-only — actually closer to our setup than several other candidates) but is currently <strong>blocked on eventlog compaction</strong>
+    (<a href="https://github.com/livestorejs/livestore/issues/136">livestore#136</a>, open). Per-keystroke-debounced edits would grow the event log linearly forever. Re-evaluate when compaction ships.
+  </p>
+  <p style="font-size: 13px; color: var(--muted); margin-top: 10px">
+    Other candidates (Replicache, Triplit, Yjs, Automerge, Loro, Jazz, TinyBase, Liveblocks, Convex, WatermelonDB) each fail on a separate axis — none changes the ranking. Detail cards retained below for reference.
+  </p>
+</section>
+
+<h2 id="contents">Contents</h2>
+<nav class="toc">
+  <a class="top" href="#scorecard">At a glance</a>
+  <a class="top" href="#stay">★ Stay on PowerSync <em>(recommended)</em></a>
+  <a class="top" href="#electric">② ElectricSQL <em>(migration plan)</em></a>
+  <a href="#custom">③ Custom on Postgres logical replication <em>(fallback)</em></a>
+  <a href="#zero">④ Zero (Rocicorp)</a>
+  <a href="#livestore">⑤ LiveStore <em>(blocked: compaction)</em></a>
+  <a href="#replicache">⑥ Replicache</a>
+  <a href="#triplit">⑦ Triplit</a>
+  <a href="#yjs">⑧ Yjs / Hocuspocus</a>
+  <a href="#automerge">⑨ Automerge</a>
+  <a href="#loro">⑩ Loro</a>
+  <a href="#jazz">⑪ Jazz</a>
+  <a href="#tinybase">⑫ TinyBase</a>
+  <a href="#liveblocks">⑬ Liveblocks Sync</a>
+  <a href="#convex">⑭ Convex (curvilinear)</a>
+  <a href="#watermelon">⑮ WatermelonDB</a>
+  <a href="#migration">Migration sketch (Electric)</a>
+  <a href="#open">Open questions</a>
+</nav>
+
+<h2 id="scorecard">At a glance</h2>
+<div class="legend">
+  <span><span class="dot good"></span>fit / advantage</span>
+  <span><span class="dot warn"></span>trade-off / caveat</span>
+  <span><span class="dot bad"></span>blocker / mismatch</span>
+</div>
+
+<table class="scoretable">
+  <thead>
+    <tr>
+      <th>Candidate</th>
+      <th>Stack fit</th>
+      <th>Echo-skip</th>
+      <th>Row vs doc</th>
+      <th>Maturity</th>
+      <th>Migration cost</th>
+      <th>Conflict model</th>
+      <th>Web runtime</th>
+      <th>Hosting/$</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr style="background: var(--card-alt)">
+      <td class="cand"><a href="#stay">★ Stay on PowerSync</a></td>
+      <td><span class="cell"><span class="dot good"></span>Already integrated; no migration</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Bug 954 exposed an echo edge; maintainer engaged, fix owned</span></td>
+      <td><span class="cell"><span class="dot good"></span>Row + column-level (existing)</span></td>
+      <td><span class="cell"><span class="dot good"></span>Monthly releases; npm ~11× growth 10mo; Rust client default May 2026</span></td>
+      <td><span class="cell"><span class="dot good"></span>Zero — already deployed</span></td>
+      <td><span class="cell"><span class="dot good"></span>LWW on server timestamps</span></td>
+      <td><span class="cell"><span class="dot good"></span>Already paid in current bundle</span></td>
+      <td><span class="cell"><span class="dot good"></span>OSS self-host or Cloud</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#electric">ElectricSQL</a></td>
+      <td><span class="cell"><span class="dot good"></span>BYO local store; ShapeStream feeds any SQLite</span></td>
+      <td><span class="cell"><span class="dot good"></span>Published <code>write_id</code> round-trip recipe</span></td>
+      <td><span class="cell"><span class="dot good"></span>Row</span></td>
+      <td><span class="cell"><span class="dot good"></span>GA 1.0 Mar 2025; Trigger.dev 20k changes/s</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Moderate: ~150 LOC consumer + <code>write_id</code> column</span></td>
+      <td><span class="cell"><span class="dot good"></span>LWW; through-DB pattern available</span></td>
+      <td><span class="cell"><span class="dot good"></span>~29 KB gz client, no WASM, no Postgres deps</span></td>
+      <td><span class="cell"><span class="dot good"></span>OSS self-host; Cloud $1/M writes</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#custom">Custom on Postgres LR</a></td>
+      <td><span class="cell"><span class="dot good"></span>Most code survives; any Postgres backend</span></td>
+      <td><span class="cell"><span class="dot warn"></span>DIY: <code>client_write_id</code> filter on outbox</span></td>
+      <td><span class="cell"><span class="dot good"></span>Row + column-level</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Realtime is GA; no reference impl on wa-sqlite</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Medium: ~700 LOC new sync glue you own</span></td>
+      <td><span class="cell"><span class="dot good"></span>LWW on <code>updated_at</code></span></td>
+      <td><span class="cell"><span class="dot good"></span>wa-sqlite + ~80 KB Realtime client</span></td>
+      <td><span class="cell"><span class="dot good"></span>Supabase plan, or any Postgres host</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#zero">Zero (Rocicorp)</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Reads any Postgres; client store is Zero-owned (replaces wa-sqlite)</span></td>
+      <td><span class="cell"><span class="dot good"></span>Server-authoritative mutator replay + rebase</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Per-mutator</span></td>
+      <td><span class="cell"><span class="dot warn"></span>1.0 stable but no public big-name users</span></td>
+      <td><span class="cell"><span class="dot bad"></span>High: replace wa-sqlite, rewrite writes</span></td>
+      <td><span class="cell"><span class="dot good"></span>Server-authoritative LWW</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Zero-owned IDB/SQLite; bundle not published</span></td>
+      <td><span class="cell"><span class="dot good"></span>Apache-2; managed cloud opaque</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#livestore">LiveStore</a></td>
+      <td><span class="cell"><span class="dot good"></span>wa-sqlite fork + OPFS — closest to our existing setup</span></td>
+      <td><span class="cell"><span class="dot good"></span>seqNum + client nanoid; structural</span></td>
+      <td><span class="cell"><span class="dot good"></span>Event-sourced; row projections are ours</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Beta (v0.3.1); compaction not yet shipped</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Medium: rewrite writes as events, materializers replace triggers</span></td>
+      <td><span class="cell"><span class="dot good"></span>LWW on rebased seqNum</span></td>
+      <td><span class="cell"><span class="dot warn"></span>~480 KB total (JS + WASM)</span></td>
+      <td><span class="cell"><span class="dot good"></span>OSS; bring your own sync backend (CF DO, Electric, S2)</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#replicache">Replicache</a></td>
+      <td><span class="cell"><span class="dot warn"></span>BYO backend; IDB-only client store</span></td>
+      <td><span class="cell"><span class="dot good"></span><code>lastMutationID</code> rebase</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Per-mutator</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Maintenance mode since 2024</span></td>
+      <td><span class="cell"><span class="dot bad"></span>High</span></td>
+      <td><span class="cell"><span class="dot good"></span>Server-authoritative LWW</span></td>
+      <td><span class="cell"><span class="dot good"></span>~50 KB, IDB only</span></td>
+      <td><span class="cell"><span class="dot good"></span>Free, OSS</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#triplit">Triplit</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Own server replaces Postgres; backend swap now acceptable</span></td>
+      <td><span class="cell"><span class="dot good"></span>CRDT idempotence</span></td>
+      <td><span class="cell"><span class="dot good"></span>Per-attribute</span></td>
+      <td><span class="cell"><span class="dot warn"></span>1.0 Mar 2025; roadmap uncertain (cofounder→Supabase)</span></td>
+      <td><span class="cell"><span class="dot bad"></span>High; replaces backend</span></td>
+      <td><span class="cell"><span class="dot good"></span>CRDT</span></td>
+      <td><span class="cell"><span class="dot warn"></span>IDB/SQLite</span></td>
+      <td><span class="cell"><span class="dot bad"></span>AGPL-3 (commercial-hostile)</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#yjs">Yjs / Hocuspocus</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Hocuspocus runs separately; Postgres becomes derived</span></td>
+      <td><span class="cell"><span class="dot warn"></span>CRDT idempotence; tombstone GC issues</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Per-doc (Y.Map)</span></td>
+      <td><span class="cell"><span class="dot good"></span>Most mature CRDT; Tiptap/BlockNote/Sanity in prod</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Very high: reshape blocks into Y.Doc</span></td>
+      <td><span class="cell"><span class="dot bad"></span>YATA; <strong>no tree-move CRDT</strong></span></td>
+      <td><span class="cell"><span class="dot good"></span>~80 KB core</span></td>
+      <td><span class="cell"><span class="dot good"></span>OSS; Tiptap Cloud managed</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#automerge">Automerge</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Own sync server; opaque chunks</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Snapshot+incremental compaction</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Per-doc</span></td>
+      <td><span class="cell"><span class="dot bad"></span><code>automerge-repo</code> "not ready for production"</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Very high</span></td>
+      <td><span class="cell"><span class="dot warn"></span>RGA; <strong>move-tree not shipped</strong></span></td>
+      <td><span class="cell"><span class="dot warn"></span>~200 KB WASM</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Self-host only</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#loro">Loro</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Library only; you build the server</span></td>
+      <td><span class="cell"><span class="dot good"></span>Op-based + binary snapshots</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Per-doc, but tree-shaped</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Self-described "experimental"</span></td>
+      <td><span class="cell"><span class="dot warn"></span>High (build server)</span></td>
+      <td><span class="cell"><span class="dot good"></span><strong>First-class movable-tree CRDT</strong></span></td>
+      <td><span class="cell"><span class="dot warn"></span>Rust→WASM, ~300–500 KB est.</span></td>
+      <td><span class="cell"><span class="dot warn"></span>OSS only</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#jazz">Jazz</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Replaces Postgres with CoJSON sync server</span></td>
+      <td><span class="cell"><span class="dot good"></span>CoValue-level ops</span></td>
+      <td><span class="cell"><span class="dot bad"></span>CoMap per block</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Active 0.18+; small team</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Complete rewrite</span></td>
+      <td><span class="cell"><span class="dot good"></span>CRDT</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Bundle not published</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Cloud + self-host</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#tinybase">TinyBase</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Brings its own SQLite WASM (acceptable post-clarification)</span></td>
+      <td><span class="cell"><span class="dot good"></span>Per-cell HLC merge</span></td>
+      <td><span class="cell"><span class="dot good"></span>Cell-level</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Solo-maintained; no big prod refs</span></td>
+      <td><span class="cell"><span class="dot bad"></span>High</span></td>
+      <td><span class="cell"><span class="dot good"></span>LWW CRDT (HLC)</span></td>
+      <td><span class="cell"><span class="dot warn"></span>~10 KB core + 1 MB SQLite WASM</span></td>
+      <td><span class="cell"><span class="dot warn"></span>OSS; you host sync server</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#liveblocks">Liveblocks Sync</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Liveblocks is source of truth; you give up Postgres</span></td>
+      <td><span class="cell"><span class="dot good"></span>CRDT idempotence</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Per-doc</span></td>
+      <td><span class="cell"><span class="dot warn"></span>GA; Feb 2026 rewrite; not yet self-hostable</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Very high</span></td>
+      <td><span class="cell"><span class="dot good"></span>CRDT</span></td>
+      <td><span class="cell"><span class="dot warn"></span>~50 KB + Yjs</span></td>
+      <td><span class="cell"><span class="dot bad"></span>$0.02/MAU + $0.002/collab-min</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#convex">Convex (curvilinear)</a></td>
+      <td><span class="cell"><span class="dot warn"></span>Convex replaces Postgres + RLS; offline path still alpha</span></td>
+      <td><span class="cell"><span class="dot good"></span>Server-authoritative</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Per-doc</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Convex GA; curvilinear alpha</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Total rewrite</span></td>
+      <td><span class="cell"><span class="dot good"></span>Server-authoritative</span></td>
+      <td><span class="cell"><span class="dot good"></span>~80 KB client</span></td>
+      <td><span class="cell"><span class="dot warn"></span>$25/dev/mo + usage</span></td>
+    </tr>
+    <tr>
+      <td class="cand"><a href="#watermelon">WatermelonDB</a></td>
+      <td><span class="cell"><span class="dot bad"></span>Web build uses LokiJS, not wa-sqlite</span></td>
+      <td><span class="cell"><span class="dot bad"></span>Per-column LWW; <strong>abort-on-conflict push</strong></span></td>
+      <td><span class="cell"><span class="dot good"></span>Row + column-level</span></td>
+      <td><span class="cell"><span class="dot bad"></span>RN-first; web is second-class</span></td>
+      <td><span class="cell"><span class="dot warn"></span>Medium</span></td>
+      <td><span class="cell"><span class="dot good"></span>LWW (client-wins)</span></td>
+      <td><span class="cell"><span class="dot good"></span>LokiJS, no WASM</span></td>
+      <td><span class="cell"><span class="dot good"></span>OSS</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="candidates">Candidates</h2>
+
+<details class="cand-card" id="stay" open>
+  <summary>
+    <span class="title">★ Stay on PowerSync</span>
+    <span class="tag top">Recommended</span>
+    <span class="headline">
+      Bug 954 is one well-isolated issue actively owned by <code>simolus3</code> (same-day response, comparable adjacent bug #584 fixed in 6 days, no client workaround per his comment).
+      PowerSync's trajectory is accelerating: npm <code>@powersync/web</code> downloads grew ~11× in 10 months to ~128k/mo, monthly coordinated SDK+service releases, Rust sync client became default across all platforms in May 2026.
+      Realistic wait for an upstream fix: <strong>2–6 weeks</strong>. Migration to anything else is multi-month work. Expected value favors staying.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Already integrated. wa-sqlite + 15 triggers + <code>ps_crud</code> + REST upload connector + sync-config.yaml are in production. No migration needed.</dd>
+      <dt>Bug 954 ownership</dt>
+      <dd>The server omits the <code>data</code> frame for ~1/3 of the uploader-of-record's own writes, leaving the Rust client unable to recompute its bucket checksum and forcing a re-download. <a href="https://github.com/powersync-ja/powersync-js/issues/954">Issue thread</a>: simolus3 (Simon Binder, owns most of the Rust client commits) responded same-day, called the behavior "really bad" on 2026-05-13, said "should never happen per protocol," and explicitly took it on with "I'll need to try this out myself." No client-side workaround surface exists per his comment.</dd>
+      <dt>Adjacent track record</dt>
+      <dd><a href="https://github.com/powersync-ja/powersync-service/issues/584">powersync-service#584</a> (different but adjacent checksum-mismatch class, server-side) was fixed in ~6 days. Bug 954 looks isolated, not a class pattern — no other open issues describe write-echo / uploader-of-record symptoms.</dd>
+      <dt>Trajectory</dt>
+      <dd>Healthy and growing. Release cadence: monthly (2026-05-11, 2026-04-14, 2026-04-13). Open issues on powersync-js: 26. Closed since 2025-05: ~68 issues, ~35 sync/bucket/checkpoint-related — high fix throughput, not stagnant. npm downloads: Jun 2025 ~11k → Apr 2026 ~128k (~11×). Major 2026 product investment: Rust sync client became default May 2026 (JS sync client removed); Sync Streams beta replacing Sync Rules; BSON over HTTP; .NET and Tauri SDKs. <a href="https://releases.powersync.com/">Release feed</a>.</dd>
+      <dt>Risks of staying</dt>
+      <dd>(a) Bug fix slips past expected window — mitigated by the OS service repo being OSS; we can contribute the patch (OP has already done the diagnostic work). (b) Different correctness bug emerges that does suggest a class pattern — covered by quarterly review. (c) Periodic full bucket re-download in the meantime — bad UX but not data loss; keep buckets per-workspace so re-download is cheap.</dd>
+      <dt>Exit triggers</dt>
+      <dd>Revisit / start migration to ② Electric if any of: 954 stalls past ~8 weeks with no in-flight PR; a new sync-correctness bug suggests a class pattern; PowerSync's investment in sync-protocol semantics drops materially.</dd>
+      <dt>Cost</dt>
+      <dd>Zero — already deployed. Either OSS self-host (<code>powersync-service</code>) or PowerSync Cloud.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="custom">
+  <summary>
+    <span class="title">③ Custom on Postgres logical replication + outbox</span>
+    <span class="tag">Fallback</span>
+    <span class="headline">
+      Preserves the 15 triggers + the REST connector. Local store can be wa-sqlite, <code>@sqlite.org/sqlite-wasm</code>, or libSQL — trigger SQL is portable across SQLite impls.
+      <strong>Most of what would make this "multi-month" is what ② Electric provides off-the-shelf</strong> (initial snapshot, ordered replication, reconnect/resume, write_id round-trip).
+      Defensible only if Electric turns out not to fit operationally.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Native. Supabase Realtime broadcasts row-level INSERT/UPDATE/DELETE over WebSocket from Postgres WAL. Pair with a local outbox table (renamed <code>ps_crud</code>) and our existing upload connector.</dd>
+      <dt>Echo-skip</dt>
+      <dd>DIY. Add a <code>client_write_id</code> column on the outbox and on every <code>blocks</code> row. The trigger in <a href="../src/data/internals/clientSchema.ts">clientSchema.ts</a> already runs only when <code>tx_context.source = 'user'</code>; stamp the id there. Realtime subscriber drops events whose <code>client_write_id</code> is still pending in the outbox.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Row, column-level. <code>postgres_changes</code> emits at row+column granularity.</dd>
+      <dt>Maturity</dt>
+      <dd>Supabase Realtime is GA; tens of thousands of projects using <code>postgres_changes</code>. Caveat: it is single-threaded per DB; Supabase itself recommends Broadcast over <code>postgres_changes</code> for heavy throughput. <strong>No public reference impl</strong> of wa-sqlite + Supabase Realtime + custom outbox. Closest published wisdom is <a href="https://rxdb.info/replication-supabase.html">RxDB's Supabase plugin</a> and Antoine Forand's <a href="https://antoine.fi/sqlite-sync-engine-with-reactivity">SQLite sync-engine post</a>.</dd>
+      <dt>Migration cost</dt>
+      <dd>Low for what survives, but the new code is non-trivial. Survives: wa-sqlite, 15 triggers, <a href="../src/services/powersync.ts">upload connector</a>, RLS, block schema, audit log. Rebuilds: write loop (no longer driven by PowerSync CRUD), Realtime subscriber, initial-snapshot REST bootstrap, reconnect/resume by <code>updated_at &gt; checkpoint</code>.</dd>
+      <dt>Conflict model</dt>
+      <dd>LWW on server-stamped <code>updated_at</code>. Column-level LWW is achievable in Postgres triggers if needed.</dd>
+      <dt>Web runtime</dt>
+      <dd>wa-sqlite (~1 MB) + Supabase Realtime client (~80 KB). Smallest footprint of any option here.</dd>
+      <dt>Pricing</dt>
+      <dd>Included in Supabase plan. Heavy keystroke PATCH traffic likely needs a Small/Medium compute add-on to keep <code>postgres_changes</code> responsive.</dd>
+    </dl>
+    <div class="note">
+      <strong>Risk:</strong> PowerSync handles dozens of corner cases here (out-of-order delivery, partial replication of joined writes, exponential backoff, causal ordering across multi-row tx).
+      Plan on a multi-month investment before this is production-grade.
+      Mitigation for multi-row tx atomicity: write a <code>tx_completed</code> fence row and defer apply until the fence arrives.
+      Mitigation for Realtime throughput limits: validate end-to-end with synthetic keystroke load before committing.
+    </div>
+  </div>
+</details>
+
+<details class="cand-card" id="electric" open>
+  <summary>
+    <span class="title">② ElectricSQL (Electric Next, electric.ax)</span>
+    <span class="tag runner">Migration plan</span>
+    <span class="headline">
+      <strong>Major correction from the earlier draft.</strong> Electric Next is BYO-local-store, not "PGlite or bust." <code>@electric-sql/client</code> is ~29 KB gzipped with no SQLite/Postgres runtime deps.
+      Four documented write patterns; the simplest is exactly our current shape — "hit your REST API, let Shapes stream the result back" — and the published <code>write_id</code> round-trip recipe handles echo-skip.
+      Production-ready (GA Mar 2025; Trigger.dev runs 20k changes/s).
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Native. <code>ShapeStream</code> subscribes to a filtered Postgres row subset and emits row-level <code>ChangeMessage{key, value, op}</code> events. We consume them into our existing wa-sqlite via the <code>BLOCKS_RAW_TABLE.put</code> SQL we already use. The pivot post is explicit: <em>"Client-side data access library — not core. There are many ways of mapping a replication stream to objects, graphs or databases in the client."</em> <a href="https://electric.ax/sync/postgres-sync">The current site</a>: <em>"You can sync data into anything you like."</em></dd>
+      <dt>Correction note</dt>
+      <dd>The "wa-sqlite dropped" framing applied to legacy Electric (<code>electric-sql/electric-old</code>), where the client was a wa-sqlite-driven CRDT engine. Electric Next is a pure HTTP/Shape protocol — the client store question was deleted from scope, not narrowed to PGlite. PGlite is a sibling product Electric publishes, not a required target.</dd>
+      <dt>Echo-skip</dt>
+      <dd>Published recipe. Attach a <code>write_id</code> (UUID) to the local optimistic write AND send it as a column in the API request. <code>write_id</code> round-trips through Postgres back into the Shape. Client dedupes with <code>matchBy('write_id', value.write_id)</code> for inserts/updates and <code>matchBy('id', value.id)</code> for deletes. Adding <code>write_id</code> to blocks is a schema migration + 1-line trigger update.</dd>
+      <dt>Write patterns</dt>
+      <dd>Electric documents four, in increasing complexity: <strong>(1) online writes</strong> — plain REST; <strong>(2) optimistic state</strong> — component-scoped optimistic + API; <strong>(3) shared persistent optimistic state</strong> — shared reactive store + API; <strong>(4) through-the-DB</strong> — <code>_synced</code>/<code>_local</code> shadow tables. Patterns 1–3 are "hit your existing API, let Shapes stream the result back." Pattern 4 is the only one that requires PGlite.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Per-row. Shapes are row-shaped Postgres replicas.</dd>
+      <dt>Maturity</dt>
+      <dd>GA 1.0 March 2025; v1.1 August 2025 (~100× faster writes, new storage engine). Production users: Trigger.dev (20k changes/s, <a href="https://trigger.dev/blog/how-we-built-realtime">read-path</a>), Otto, IP.world. <strong>Unknown:</strong> any public production deployment of "Shape → custom SQLite consumer" — absence of marketing evidence, not a technical block.</dd>
+      <dt>Migration cost</dt>
+      <dd>Moderate. <strong>Lose:</strong> PowerSync SDK, <code>ps_crud</code> queue, sync-config.yaml, db.connect/disconnect plumbing. <strong>Keep:</strong> wa-sqlite (or swap), the 15 triggers (SQLite syntax stays), upload connector, blocks schema, row-events audit. <strong>New:</strong> ShapeStream consumer (~150 LOC), <code>write_id</code> column migration + trigger update, Electric service deployment.</dd>
+      <dt>Conflict model</dt>
+      <dd>LWW on server timestamps for synced state. Through-the-DB shadow tables available if more sophisticated rebase is ever needed.</dd>
+      <dt>Web runtime</dt>
+      <dd><code>@electric-sql/client</code>: 127 KB unminified ESM, ~29 KB gzipped (verified directly from jsdelivr). One runtime dep: <code>@microsoft/fetch-event-source</code>. No WASM, no Postgres driver. No PGlite unless we opt in.</dd>
+      <dt>Pricing</dt>
+      <dd>OSS self-host (Docker, Railway). Electric Cloud: $1/M writes, free reads, free under 5M writes/mo; Pro $249/mo; Scale $1,999/mo. Per-keystroke PATCH at a few thousand users could exceed Pro tier; self-host is the right call for this workload.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="zero">
+  <summary>
+    <span class="title">④ Zero (Rocicorp)</span>
+    <span class="tag">Off-the-shelf alt</span>
+    <span class="headline">
+      Server-authoritative mutator-replay model structurally rules out the PowerSync bug class. Works with any Postgres.
+      Cost: client store is Zero-owned — replaces wa-sqlite entirely. Bundle size + OPFS story not publicly documented.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Backend: reads Supabase Postgres natively (since v0.20; schema-change detection in 1.0). Client store: Zero-owned (IndexedDB/SQLite, not user-controlled). Would replace wa-sqlite, not wrap it.</dd>
+      <dt>Echo-skip</dt>
+      <dd>Server-authoritative mutator replay. Client rolls back the optimistic local effect on checkpoint and replaces it with the authoritative server row. Identified by mutation id; structurally precludes the PowerSync echo bug.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Per-mutator JSON ops replayed server-side. Column UPDATEs are fine inside a mutator; you give up the per-CRUD-row abstraction.</dd>
+      <dt>Maturity</dt>
+      <dd>1.0 declared (a thin bump from 0.26.2). Active Apache-2 releases. No public list of large prod deployments; docs flag no offline write + TypeScript-only.</dd>
+      <dt>Migration cost</dt>
+      <dd>High. Triggers, ps_crud, sync-config.yaml, raw-table mapping do not survive. Sync rules become row-level auth (Postgres RLS / Zero permissions DSL).</dd>
+      <dt>Conflict model</dt>
+      <dd>Server-authoritative LWW on rebased state with custom mutator logic.</dd>
+      <dt>Web runtime</dt>
+      <dd>WebSocket to <code>zero-cache</code>; client IDB/SQLite. <strong>Bundle size not published.</strong></dd>
+      <dt>Pricing</dt>
+      <dd>Apache-2, self-hostable. Community deploys cite $5-10/mo single-node. Managed pricing not public.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="livestore">
+  <summary>
+    <span class="title">⑤ LiveStore</span>
+    <span class="tag bad">Evaluated, blocked</span>
+    <span class="headline">
+      Event-sourced local-first framework (Johannes Schickling, ex-Prisma). Uses a fork of wa-sqlite with OPFS — structurally the closest match to our existing local-store setup of any candidate here.
+      <strong>Blocked on eventlog compaction</strong> (<a href="https://github.com/livestorejs/livestore/issues/136">livestore#136</a>) — per-keystroke-debounced edits would grow the log linearly forever in both OPFS and the sync backend. Re-evaluate when compaction ships.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Data model</dt>
+      <dd>Events are source of truth; SQLite tables are projections via materializers. Each event has past-tense name + typed args + version (<code>BlockCreated</code>, <code>BlockContentEdited</code>, ...). Two categories: synced and client-only. Schema evolution adds/removes optional fields but cannot delete event definitions post-deployment.</dd>
+      <dt>Sync model</dt>
+      <dd>Git-style push/pull. Each event has <code>seqNum</code> + <code>parentSeqNum</code> + 6-char client nanoid. Clients pull upstream before push; local pending events rebase on upstream. Backends supply ordered query-from-cursor + reactivity (WebSocket / HTTP / poll). First-party adapters: <code>@livestore/sync-cf</code> (Cloudflare Durable Objects), <code>@livestore/sync-electric</code>, <code>@livestore/sync-s2</code>.</dd>
+      <dt>Echo-skip</dt>
+      <dd>Structural via <code>seqNum</code> + client nanoid. Client recognises its own already-applied events on pull and skips re-materialising. Design-implicit; not documented as a named feature — would need code review to confirm idempotence under replay.</dd>
+      <dt>Local store</dt>
+      <dd>Fork of wa-sqlite (<code>@livestore/wa-sqlite</code>) with sync APIs + session extension. OPFS-only persistence; WAL mode. Leader-tab elected across browser tabs/workers. LiveStore owns the SQLite instance — not pluggable into an existing wa-sqlite handle.</dd>
+      <dt>Row-shape fit</dt>
+      <dd>Good. Define <code>BlockCreated</code> / <code>BlockContentEdited</code> / <code>BlockMoved</code> / <code>BlockPropertiesChanged</code> events; materializers emit UPSERTs against our existing blocks table. The SQLite projection is ours to shape — LiveStore does not impose a schema.</dd>
+      <dt>Maturity</dt>
+      <dd>Beta. v0.3.1 (June 2025), Apache-2.0, 3.6k stars / 127 forks. Powers Overtone (Schickling's music app, source of the extraction) in production. Docs explicitly say "not yet ready for all production scenarios" with three breaking-change categories warned (API, client storage, backend storage). No 1.0 date.</dd>
+      <dt>Migration cost</dt>
+      <dd>Substantial but contained. <strong>Delete:</strong> <code>ps_crud</code> queue, the 15 upload-routing triggers (event log replaces them), <code>row_events</code> table (event log IS the audit log). <strong>Rewrite:</strong> every <code>tx.X</code> call site becomes a <code>commit(events.Y(...))</code>; materializers replace the trigger SQL. <strong>Keep:</strong> row schema as the projection target.</dd>
+      <dt>Conflict model</dt>
+      <dd>LWW ordered by rebased seqNum. Custom merge logic requires the unshipped "facts system."</dd>
+      <dt>Web runtime</dt>
+      <dd>~180 KB gzip JS + ~300 KB gzip WASM (~480 KB total). OPFS-only (no IndexedDB fallback). Recommends DB ≤ ~1 GB and "10s to low 100s collaborating on the same thing."</dd>
+      <dt>Pricing</dt>
+      <dd>Apache-2 OSS; you host the sync provider yourself (CF DO, Electric, S2, or custom).</dd>
+    </dl>
+    <div class="note">
+      <strong>🚫 Blocking concern: eventlog compaction.</strong> (<a href="https://github.com/livestorejs/livestore/issues/136">livestore#136</a>, open, blocked by #254.) Planned Kafka-style key-based compaction (a new event for the same key drops the prior). Until that ships, every debounced keystroke batch persists forever in both the local OPFS event log AND the sync backend. For our heavy-edit workload this is the single biggest risk. Today's mitigations are weak: coarser debounce, periodic snapshot+GC events, or wait.
+    </div>
+  </div>
+</details>
+
+<details class="cand-card" id="replicache">
+  <summary>
+    <span class="title">④ Replicache</span>
+    <span class="tag bad">Maintenance mode</span>
+    <span class="headline">
+      Free, OSS, backend-agnostic. Rocicorp explicitly steers new users to Zero — feature-frozen since 2024.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Backend-agnostic via push/pull endpoints you implement against Supabase REST. Client store: Replicache's own IDB-backed KV. Replaces wa-sqlite.</dd>
+      <dt>Echo-skip</dt>
+      <dd><code>lastMutationID</code> per client; unconfirmed mutators rebased on new server state. Self-echo advances the id rather than re-issuing the write.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Per-mutator.</dd>
+      <dt>Maturity</dt>
+      <dd>Maintenance mode since 2024; open-sourced and free. Used by Linear historically.</dd>
+      <dt>Migration cost</dt>
+      <dd>High. Same shape as Zero.</dd>
+      <dt>Conflict model</dt>
+      <dd>Server-authoritative LWW with mutator replay.</dd>
+      <dt>Web runtime</dt>
+      <dd>~50 KB, IDB only.</dd>
+      <dt>Pricing</dt>
+      <dd>Free, OSS, BYO backend.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="triplit">
+  <summary>
+    <span class="title">⑤ Triplit</span>
+    <span class="tag bad">AGPL-3 + uncertain roadmap</span>
+    <span class="headline">
+      Backend-replacement is now acceptable, but two blockers remain: AGPL-3.0 (commercial-hostile) and roadmap uncertainty (co-founder joined Supabase Oct 2025; last release end of Jul 2025).
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Own server (Node + pluggable storage: SQLite/LMDB/Durable Objects). Does not sit on Supabase Postgres; Supabase relevant only for JWT auth.</dd>
+      <dt>Echo-skip</dt>
+      <dd>CRDT-based per-attribute merge; conflicts resolve deterministically. Echo-skip is implicit in CRDT idempotence.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Per-attribute — finest-grained, closest semantically to our row/column model.</dd>
+      <dt>Maturity</dt>
+      <dd>1.0 March 2025. Roadmap uncertain after co-founder→Supabase Oct 2025; ~36 open issues; last release end of July 2025.</dd>
+      <dt>Migration cost</dt>
+      <dd>High; replaces backend.</dd>
+      <dt>Conflict model</dt>
+      <dd>CRDT (attribute-level).</dd>
+      <dt>Web runtime</dt>
+      <dd>Pluggable; IDB default, optional SQLite/WASM.</dd>
+      <dt>Pricing</dt>
+      <dd>AGPL-3.0; Triplit Cloud managed; self-host on Node.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="yjs">
+  <summary>
+    <span class="title">⑥ Yjs / Hocuspocus</span>
+    <span class="tag bad">Doc-shaped</span>
+    <span class="headline">
+      Most mature CRDT (Tiptap, BlockNote, Sanity, Evernote in prod). But no native tree-move CRDT — moves are delete+insert, lossy under concurrency.
+      Per-block docs don't scale; per-workspace docs make row queries into in-memory iteration.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Hocuspocus is a WebSocket Y.Doc server. Canonical pattern stores opaque binary Yjs updates in a <code>BYTEA</code> column; block row schema doesn't survive intact.</dd>
+      <dt>Echo-skip</dt>
+      <dd>Update-based CRDT; tombstones can't be fully GC'd. Echo isn't a concern, but docs grow monotonically without periodic compaction.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Per-doc. Per-block degrades past ~100 sockets; recommended: one Y.Doc per workspace with Y.Map of blocks + subdocs for lazy load.</dd>
+      <dt>Maturity</dt>
+      <dd>Most mature option. Used by Tiptap, BlockNote, Sanity, Evernote, JupyterLab.</dd>
+      <dt>Migration cost</dt>
+      <dd>Very high. Postgres rows become derived projections of Y.Doc state. Probably keep a Postgres mirror written by a Hocuspocus extension hook.</dd>
+      <dt>Conflict model</dt>
+      <dd>YATA for text; Y.Array/Y.Map for structure. No native tree-move CRDT — moves in Y.Array are delete+insert.</dd>
+      <dt>Web runtime</dt>
+      <dd>~50–80 KB core; <code>y-indexeddb</code> standard. OPFS not first-class.</dd>
+      <dt>Pricing</dt>
+      <dd>Hocuspocus MIT, free self-host. Tiptap Cloud managed.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="automerge">
+  <summary>
+    <span class="title">⑦ Automerge</span>
+    <span class="tag bad">Pre-production</span>
+    <span class="headline">
+      Core stable; <code>automerge-repo</code> explicitly "not ready for production" per official docs.
+      Kleppmann move-tree algorithm published (arXiv 2311.14007) but not yet shipped.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd><code>automerge-repo-sync-server</code> is an unsecured Express+websocket reference impl. Storage chunks are opaque; no Postgres-row mapping.</dd>
+      <dt>Echo-skip</dt>
+      <dd>Op-based; snapshot+incremental with periodic compaction. Out-of-order delivery handled.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Per-doc. Same Yjs-class issue; doc-per-workspace typical.</dd>
+      <dt>Maturity</dt>
+      <dd>Core <code>@automerge/automerge</code> stable; repo toolkit "not ready for production." Funded by Ink&amp;Switch, GoodNotes, Bowtie, Fly, Prisma.</dd>
+      <dt>Migration cost</dt>
+      <dd>Very high.</dd>
+      <dt>Conflict model</dt>
+      <dd>RGA for sequences. Move-tree algorithm proven in Isabelle/HOL but <strong>not shipped</strong>.</dd>
+      <dt>Web runtime</dt>
+      <dd>WASM core ~200+ KB; IndexedDB standard.</dd>
+      <dt>Pricing</dt>
+      <dd>100% self-host, no managed offering.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="loro">
+  <summary>
+    <span class="title">⑧ Loro</span>
+    <span class="headline">
+      Only stack here with first-class movable-tree CRDT (Kleppmann move-op + fractional index + cycle detection).
+      Cost: library self-described "experimental, not for production"; no sync server (build your own).
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Rust/WASM library; embeddable in the client. No official sync server; persist binary snapshots in any KV/blob/Postgres <code>BYTEA</code>.</dd>
+      <dt>Echo-skip</dt>
+      <dd>Op-based with binary snapshot/update formats.</dd>
+      <dt>Row vs doc</dt>
+      <dd>LoroTree maps naturally to <code>parent_id</code>/<code>order_key</code> blocks; fractional indexes built-in.</dd>
+      <dt>Maturity</dt>
+      <dd>API/encoding "experimental, not for production" per its own docs. Active releases (1.10.5, Jan 2026). One unnamed computational-notebook user.</dd>
+      <dt>Migration cost</dt>
+      <dd>Medium — data model fits, but you build the sync server.</dd>
+      <dt>Conflict model</dt>
+      <dd><strong>First-class movable-tree CRDT.</strong> Strongest fit for an outliner.</dd>
+      <dt>Web runtime</dt>
+      <dd>Rust→WASM single artifact; size not published. Likely 300–500 KB.</dd>
+      <dt>Pricing</dt>
+      <dd>OSS only, no managed cloud.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="jazz">
+  <summary>
+    <span class="title">⑨ Jazz</span>
+    <span class="tag bad">Small team + doc-shaped</span>
+    <span class="headline">
+      Backend swap is now on the table, but Jazz still has a small team (Anselm Eickhoff / garden-co), no major-brand prod references, undocumented tombstone GC, and a CoMap-per-block document shape that mismatches our row schema.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Jazz takes over the backend. CoJSON is the wire/storage model; cannot wrap existing Supabase Postgres as source of truth.</dd>
+      <dt>Echo-skip</dt>
+      <dd>CoValue-level ops with built-in history. Tombstone GC behavior not publicly documented — flag as unverified.</dd>
+      <dt>Row vs doc</dt>
+      <dd>CoMap-per-block is the natural shape, similar to Yjs.</dd>
+      <dt>Maturity</dt>
+      <dd>Active 0.18+ (2025), small team (Anselm Eickhoff / garden-co). No major-brand prod users I could verify.</dd>
+      <dt>Migration cost</dt>
+      <dd>Highest. Incompatible with this stack.</dd>
+      <dt>Conflict model</dt>
+      <dd>CRDT under the hood; no published movable-tree guarantee.</dd>
+      <dt>Web runtime</dt>
+      <dd><code>jazz-tools</code> npm; bundle size not published.</dd>
+      <dt>Pricing</dt>
+      <dd>Jazz Cloud (opaque pricing) or OSS self-host on Node 20+.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="tinybase">
+  <summary>
+    <span class="title">⑩ TinyBase</span>
+    <span class="headline">
+      Solo-maintained; no battle-tested production references beyond maintainer demos. Cell-level CRDT (HLC) is a clean conflict model.
+      Bundles its own <code>@sqlite.org/sqlite-wasm</code> — neutral now that we're SQLite-impl-agnostic, but the maturity question is the dominant blocker.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Own in-memory Store with pluggable persisters. <code>persister-sqlite-wasm</code> requires its own <code>@sqlite.org/sqlite-wasm</code> DB instance; won't transparently sit on wa-sqlite.</dd>
+      <dt>Echo-skip</dt>
+      <dd><code>MergeableStore</code> + <code>Synchronizer</code> with per-cell HLC metadata. CRDT-based; echo loop not by construction.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Cell-level (column-level). Close fit.</dd>
+      <dt>Maturity</dt>
+      <dd>Solo-maintained (Jamie Pittock / tinyplex). Active 6.x in 2025/2026. No named prod users.</dd>
+      <dt>Migration cost</dt>
+      <dd>High. Throw out ps_crud triggers, sync-config.yaml, upload connector, raw-table.put hooks.</dd>
+      <dt>Conflict model</dt>
+      <dd>LWW CRDT at cell level via HLC.</dd>
+      <dt>Web runtime</dt>
+      <dd>Core ~5–10 KB gz; sqlite-wasm adds ~1 MB.</dd>
+      <dt>Pricing</dt>
+      <dd>MIT, fully self-host. No managed sync service.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="liveblocks">
+  <summary>
+    <span class="title">⑪ Liveblocks Sync Engine</span>
+    <span class="tag bad">Doc-shaped + MAU pricing</span>
+    <span class="headline">
+      Backend swap is now acceptable, but Liveblocks remains document-shaped (mismatch with our row UPDATE model), not yet production-self-hostable despite Feb 2026 open-sourcing, and MAU-billed in a way that scales painfully with our heavy edit traffic.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Liveblocks Storage is source of truth; Supabase becomes a webhook mirror.</dd>
+      <dt>Echo-skip</dt>
+      <dd>Yjs/Storage CRDT; no echo-loop class of bug.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Per-document (Storage trees or Yjs docs). Mismatch with row UPDATE model.</dd>
+      <dt>Maturity</dt>
+      <dd>GA since 2.0. Feb 2026 brought rewritten engine + AGPLv3 of <code>@liveblocks/server</code>; explicitly not self-hostable in prod ("requires infra/expertise not yet packaged").</dd>
+      <dt>Migration cost</dt>
+      <dd>Very high. Almost nothing survives.</dd>
+      <dt>Conflict model</dt>
+      <dd>CRDT (Yjs or proprietary).</dd>
+      <dt>Web runtime</dt>
+      <dd>Client ~50–80 KB; Yjs adds ~50 KB. No OPFS local store.</dd>
+      <dt>Pricing</dt>
+      <dd>MAU-based: 1k MAU free, then $0.02/MAU + $0.002/collab-min. Low-hundreds USD/mo at a few thousand users, scales with session minutes.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="convex">
+  <summary>
+    <span class="title">⑫ Convex (curvilinear)</span>
+    <span class="tag bad">Offline path alpha</span>
+    <span class="headline">
+      Convex itself is GA and well-funded, and the backend swap is acceptable now — but the offline/SQLite path (<code>curvilinear</code>) is <strong>alpha</strong>, explicitly unpolished, scale unproven per its own README. Document-shaped, not row-shaped.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>Backend migration. Curvilinear adds <code>ctx.localDb</code> with server-driven query subscriptions.</dd>
+      <dt>Echo-skip</dt>
+      <dd>Server is authoritative and idempotent; echo issue structurally absent. Unverified at heavy edit traffic.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Document store; not row/column.</dd>
+      <dt>Maturity</dt>
+      <dd>Convex GA + well-funded. Curvilinear alpha as of 2026.</dd>
+      <dt>Migration cost</dt>
+      <dd>Total rewrite — schema, auth, RLS, queries, triggers.</dd>
+      <dt>Conflict model</dt>
+      <dd>Server-authoritative transactions; optimistic mutations rolled back/replayed.</dd>
+      <dt>Web runtime</dt>
+      <dd>Client ~80 KB; curvilinear adds IndexedDB layer.</dd>
+      <dt>Pricing</dt>
+      <dd>Free 1M calls / 0.5 GB; Pro $25/dev/mo + $0.20/GB bandwidth + $0.30/GB-hr. Per-keystroke PATCH likely four-figures/mo.</dd>
+    </dl>
+  </div>
+</details>
+
+<details class="cand-card" id="watermelon">
+  <summary>
+    <span class="title">⑬ WatermelonDB</span>
+    <span class="tag bad">Web second-class + abort-on-conflict</span>
+    <span class="headline">
+      React-Native-first; web build uses LokiJS (all-in-memory, slow cold start).
+      Documented "abort entire push on mid-sync conflict" behavior (<a href="https://github.com/Nozbe/WatermelonDB/issues/1374">#1374</a>) would be catastrophic under our edit traffic.
+    </span>
+  </summary>
+  <div class="body">
+    <dl>
+      <dt>Stack fit</dt>
+      <dd>BYO backend via <code>synchronize()</code> (pull/push). Web build uses LokiJS, not wa-sqlite; no OPFS adapter shipped (discussion since 2022, no merge).</dd>
+      <dt>Echo-skip</dt>
+      <dd>Per-column "client-wins" merge on pull. <strong>Push aborts entirely</strong> if a record changed server-side between pull and push.</dd>
+      <dt>Row vs doc</dt>
+      <dd>Per-row, per-column. Best model fit of the low-tier candidates.</dd>
+      <dt>Maturity</dt>
+      <dd>RN-first; web is a second-class citizen. No widely-known web-prod reference.</dd>
+      <dt>Migration cost</dt>
+      <dd>Medium. RPC-based <code>synchronize()</code>; drop ps_crud, sync-config.yaml, raw-table hooks; rewrite schema via WatermelonDB's model layer.</dd>
+      <dt>Conflict model</dt>
+      <dd>LWW, per-column, client-wins.</dd>
+      <dt>Web runtime</dt>
+      <dd>LokiJS adapter ~78 KB; no WASM. All-in-memory constraint dominates.</dd>
+      <dt>Pricing</dt>
+      <dd>MIT, self-host. Cheapest option here.</dd>
+    </dl>
+  </div>
+</details>
+
+<h2 id="migration">Migration sketch — ② ElectricSQL</h2>
+
+<p>Sketched for the migration plan: the path we'd take if exit triggers in the ★ Stay card fire. The shape is "Electric handles the read path; we keep the rest of our data layer." Most of what would make ③ Custom "multi-month" — initial snapshot, ordered replication, reconnect/resume — Electric provides as a product. Our part is a small Shape→SQLite consumer plus the <code>write_id</code> column for echo-skip.</p>
+
+<section class="migration">
+<table>
+  <thead>
+    <tr><th>File</th><th>Δ LOC</th><th>Change</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="file"><a href="../src/services/powersync.ts">src/services/powersync.ts</a></td>
+      <td class="delta">~+50</td>
+      <td>Keep <code>uploadData</code> (now invoked from our own write-loop, not a PowerSync CRUD connector). Add <code>write_id</code> stamping on every uploaded row. Rename to <code>upload.ts</code>.</td>
+    </tr>
+    <tr>
+      <td class="file"><a href="../src/data/internals/clientSchema.ts">src/data/internals/clientSchema.ts</a></td>
+      <td class="delta">~+30</td>
+      <td>Rename <code>ps_crud</code> → <code>outbox</code>, add <code>write_id</code> column. Upload triggers stay; one-line change to the trigger body to populate <code>write_id</code> from <code>tx_context</code>.</td>
+    </tr>
+    <tr>
+      <td class="file"><a href="../src/data/repoProvider.ts">src/data/repoProvider.ts</a></td>
+      <td class="delta">~−200</td>
+      <td>Drop <code>@powersync/web</code>; bootstrap wa-sqlite directly via <code>@journeyapps/wa-sqlite</code>. Drop <code>db.connect()</code>/<code>disconnect()</code>. Start the Electric <code>ShapeStream</code> subscriber as a background task tied to user-id.</td>
+    </tr>
+    <tr>
+      <td class="file"><a href="../src/data/blockSchema.ts">src/data/blockSchema.ts</a></td>
+      <td class="delta">~+15</td>
+      <td>Add <code>write_id</code> column. <code>BLOCKS_RAW_TABLE.put</code> becomes the <code>UPSERT_BLOCK_SQL</code> consumed by our Shape subscriber. Trivial rename.</td>
+    </tr>
+    <tr>
+      <td class="file"><a href="../powersync/sync-config.yaml">powersync/sync-config.yaml</a> + <a href="../scripts/gen-sync-config.ts">scripts/gen-sync-config.ts</a></td>
+      <td class="delta">deleted</td>
+      <td>Replaced by Electric Shape definitions (server-side), scoped by workspace_id via the same predicate. Postgres RLS already in place handles auth.</td>
+    </tr>
+    <tr>
+      <td class="file">src/services/sync/shapeSubscriber.ts <em>(new)</em></td>
+      <td class="delta">~+150</td>
+      <td>Subscribes to <code>ShapeStream</code> for <code>blocks</code> / <code>workspaces</code> / <code>workspace_members</code>, applies row events via <code>UPSERT_BLOCK_SQL</code>, dedupes own writes via <code>matchBy('write_id', value.write_id)</code>. No initial-snapshot logic needed — Electric streams snapshot+live as one ordered protocol.</td>
+    </tr>
+    <tr>
+      <td class="file"><a href="../src/data/internals/commitPipeline.ts">src/data/internals/commitPipeline.ts</a></td>
+      <td class="delta">~0</td>
+      <td>Already abstracts over a minimal <code>PowerSyncDb</code> interface (<code>writeTransaction</code> + <code>execute</code> + <code>onChange</code>). No engine changes; the wa-sqlite handle now satisfies the interface directly.</td>
+    </tr>
+    <tr>
+      <td class="file"><em>(infra)</em> Electric service</td>
+      <td class="delta">deploy</td>
+      <td>Run <code>electric-sql/electric</code> Docker image alongside (or in place of) PowerSync. Connect to existing Supabase Postgres via logical replication. Configure auth (JWT validation against Supabase Auth's public key).</td>
+    </tr>
+  </tbody>
+</table>
+</section>
+
+<h3>Risks that remain</h3>
+<ul>
+  <li><strong>Trailblazing risk.</strong> No public production deployment of "Electric Shape → custom SQLite consumer." The pattern is documented in <a href="https://electric.ax/docs/guides/writes">writes guide pattern 1–3</a> and the <code>write_id</code> recipe is published, but we'd be the first visible case study. Mitigation: build a thin proof-of-concept against a single Shape before committing the full migration.</li>
+  <li><strong>Causal ordering across joined writes.</strong> Electric Shapes emit per-row events, like Realtime. A multi-row tx (block move + ordering key updates) can be observed mid-state. Mitigation: <code>tx_completed</code> fence row, defer apply until fence arrives. Same as Path ③.</li>
+  <li><strong>Self-host operational complexity.</strong> Running the Electric service adds an operational surface we don't have today (it's stateful, talks logical replication to Postgres). Lower than running PowerSync's own service was, but non-zero.</li>
+  <li><strong>Echo-skip correctness under reconnect.</strong> If the local outbox is wiped and a pending write's <code>write_id</code> is lost, the round-tripped event will replay as a remote write. Outbox needs durability guarantees similar to PowerSync's <code>ps_crud</code> — already what we have, but verify it survives the rename.</li>
+</ul>
+
+<h2 id="open">Open questions</h2>
+<ol class="questions">
+  <li><strong>Bug 954 timing.</strong> Realistic expectation is 2–6 weeks for an upstream fix (based on simolus3's response on the issue and a ~6-day fix for the comparable adjacent <a href="https://github.com/powersync-ja/powersync-service/issues/584">powersync-service#584</a>). What's the maximum we'd wait before triggering the ② Electric migration? Proposed: 8 weeks with no in-flight PR. Open for discussion.</li>
+  <li><strong>Electric: any production Shape → custom SQLite consumer to learn from?</strong> Public evidence is thin. Not a technical block (the API is straightforward), but a small proof-of-concept against a single Shape is worth doing before committing to the full migration if/when we trigger it.</li>
+  <li><strong>Electric self-host operational cost.</strong> Running the Electric service is non-zero ops work. Worth pricing out (CPU/RAM footprint per N synced rows, replication-slot impact on Postgres) against what PowerSync Cloud currently costs us.</li>
+  <li><strong>Could we contribute the 954 server-side fix ourselves?</strong> <code>powersync-service</code> is OSS and the OP has already done the diagnostic work isolating the missing <code>data</code> frame. A targeted PR may be the fastest path to "fix lands." Worth assessing the powersync-service codebase complexity.</li>
+  <li><strong>Zero's client store internals.</strong> Still unknown — bundle size, OPFS support, client SQLite/IDB choice not publicly documented. Only matters if we ever end up considering ④ Zero seriously (we don't right now).</li>
+  <li><strong>LiveStore eventlog compaction timeline.</strong> When (if) <a href="https://github.com/livestorejs/livestore/issues/136">livestore#136</a> ships, ⑤ LiveStore becomes a genuine contender (closest local-store match to our setup of any candidate). Worth watching the issue.</li>
+  <li><strong>Turso / libSQL embedded replicas.</strong> Not researched in this pass — a SQLite-native sync model where the server is libSQL and the client is a local libSQL DB that syncs from the server's WAL. If we ever leave PowerSync and Electric somehow fails to fit, this is the next thing to research before going to ③ Custom.</li>
+</ol>
+
+</main>
+</body>
+</html>

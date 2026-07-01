@@ -1,11 +1,8 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, defineBlockType } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { typesFacet } from '@/data/facets'
 import {
@@ -13,6 +10,7 @@ import {
   kernelPageBlockId,
 } from '@/data/kernelPage'
 import { Repo } from '@/data/repo'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 
 const WS = 'ws-kernel-page'
@@ -27,18 +25,16 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const repo = new Repo({
-    db: h.db,
-    cache: new BlockCache(),
-    user: {id: 'user-1'},
-  })
-  repo.setActiveWorkspaceId(WS)
   // Install a runtime that registers the synthetic marker type alongside
   // kernel data so addTypeInTx will accept it.
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    typesFacet.of(defineBlockType({id: FOO_PAGE_TYPE, label: 'Foo'}), {source: 'test'}),
-  ]))
+  const { repo } = createTestRepo({
+    db: h.db,
+    user: {id: 'user-1'},
+    extensions: [
+      typesFacet.of(defineBlockType({id: FOO_PAGE_TYPE, label: 'Foo'}), {source: 'test'}),
+    ],
+  })
+  repo.setActiveWorkspaceId(WS)
   return {h, repo}
 }
 
@@ -47,9 +43,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('getOrCreateKernelPage', () => {
   it('creates a deterministic page tagged with PAGE_TYPE plus the marker type', async () => {

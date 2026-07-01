@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { CallbackSet } from '@/utils/callbackSet'
 
 /** Which blocks have their inline backlinks manually expanded, this
  *  session. Deliberately ephemeral module state (a `Set` of block ids),
@@ -10,23 +11,14 @@ import { useSyncExternalStore } from 'react'
  *  Keyed by block id alone — ids are globally unique, and the set lives
  *  only for the tab's lifetime, so no workspace qualifier is needed. */
 const expanded = new Set<string>()
-const listeners = new Set<() => void>()
+const listeners = new CallbackSet('backlink-expansion')
 
-const emit = (): void => {
-  for (const listener of listeners) listener()
-}
-
-const subscribe = (listener: () => void): (() => void) => {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
-}
+const subscribe = (listener: () => void): (() => void) => listeners.add(listener)
 
 export const toggleBacklinkExpansion = (blockId: string): void => {
   if (expanded.has(blockId)) expanded.delete(blockId)
   else expanded.add(blockId)
-  emit()
+  listeners.notify()
 }
 
 /** Reactive: is this block's inline backlinks section expanded? */

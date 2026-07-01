@@ -12,6 +12,8 @@ import {
   ActiveContextsMap,
 } from '@/shortcuts/ActiveContexts.js'
 import { contextConfigsByTypeFrom, dispatchActiveActionById, setRunActionDispatcher, setActionWithDepsDispatcher } from '@/shortcuts/runAction.js'
+import { invokeAction } from '@/shortcuts/actionDispatch.js'
+import type { FacetRuntime } from '@/facets/facet.js'
 import {
   actionRuntimeKey,
   getEffectiveActions,
@@ -173,11 +175,17 @@ export function HotkeyReconciler(): null {
   const activeRef = useRef<ActiveContextsMap>(active)
   const contextConfigsByTypeRef = useRef<ReadonlyMap<ActionContextType, ActionContextConfig>>(contextConfigsByType)
   const dispatchRef = useRef<ActionDispatch>(dispatch)
+  // The runtime is needed at dispatch time so `invokeAction` can read the
+  // action-dispatch middleware facets. Threaded through a ref so the once-
+  // installed keydown coordinator and the hold companion see the current
+  // runtime without rebinding (same reason as the other refs above).
+  const runtimeRef = useRef<FacetRuntime>(runtime)
   useLayoutEffect(() => {
     activeRef.current = active
     contextConfigsByTypeRef.current = contextConfigsByType
     dispatchRef.current = dispatch
-  }, [active, contextConfigsByType, dispatch])
+    runtimeRef.current = runtime
+  }, [active, contextConfigsByType, dispatch, runtime])
 
   // Install the module-level runActionById dispatcher. Reads refs so it's
   // always current. Torn down on unmount so stray callers fail loudly.
@@ -215,7 +223,7 @@ export function HotkeyReconciler(): null {
       return runOrderedCandidates(
         ordered,
         trigger,
-        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        {runtime, active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
         () => undefined,
       )
@@ -269,7 +277,7 @@ export function HotkeyReconciler(): null {
       return runOrderedCandidates(
         ordered,
         event,
-        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        {runtime, active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
         action => applyTriggerEventOptions(event, action, contextConfigsByType),
       )
@@ -305,7 +313,7 @@ export function HotkeyReconciler(): null {
       return runOrderedCandidates(
         ordered,
         event,
-        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        {runtime, active, contextConfigsByType, dispatch: dispatchRef.current},
         supplied,
         action => applyTriggerEventOptions(event, action, contextConfigsByType),
       )
@@ -341,16 +349,18 @@ export function HotkeyReconciler(): null {
         const deps = resolveDeps(action, active, contextConfigsByType, supplied)
         if (!deps) continue
         if (action.canDispatch && !action.canDispatch(deps)) continue
-        const {handler} = action
         // A preview streams MANY ticks; a throwing/rejecting handler must be
         // contained the same way the commit/keyboard path contains it
         // (runOrderedCandidates), or one bad tick becomes an uncaught error /
         // unhandled rejection on every pointer-move. Log and swallow so the
-        // gesture keeps running.
+        // gesture keeps running. Routed through `invokeAction` so a dispatch
+        // decorator that redirects/wraps the action applies to its preview
+        // identically to its commit (before/after observers see each tick — they
+        // discriminate on the trigger if they only want committed dispatches).
         const runProgress = (event: ActionTrigger): void => {
           let result: ActionHandlerResult
           try {
-            result = handler(deps, event, dispatchRef.current)
+            result = invokeAction(runtime, {action, deps, trigger: event, dispatch: dispatchRef.current})
           } catch (error) {
             console.error(`[HotkeyReconciler] Progress action ${action.id} threw`, error)
             return
@@ -428,6 +438,7 @@ export function HotkeyReconciler(): null {
           activeRef,
           contextConfigsByTypeRef,
           dispatchRef,
+          runtimeRef,
         })
         state.hold.set(actionKey, {unsubscribe})
         continue
@@ -489,7 +500,7 @@ export function HotkeyReconciler(): null {
       runOrderedCandidates(
         ordered,
         event,
-        {active, contextConfigsByType, dispatch: dispatchRef.current},
+        {runtime: runtimeRef.current, active, contextConfigsByType, dispatch: dispatchRef.current},
         undefined,
         action => applyEventOptions(event, action, bindings.get(action)!, contextConfigsByType),
       )
@@ -529,6 +540,7 @@ interface HoldBindingInstall {
   activeRef: { current: ActiveContextsMap }
   contextConfigsByTypeRef: { current: ReadonlyMap<ActionContextType, ActionContextConfig> }
   dispatchRef: { current: ActionDispatch }
+  runtimeRef: { current: FacetRuntime }
 }
 
 /**
@@ -548,10 +560,10 @@ interface HoldBindingInstall {
  *    still applied so the input event doesn't reach editable targets.
  *  - On keyup of the same primary key before the timer fires, cancel.
  *  - On `blur` of the window, cancel.
- *  - On timer fire, run `action.handler(deps, originalKeydown, dispatch)`
- *    after re-validating the context is still active. Same path as the
- *    keydown / keyup makeHandler uses minus the preventDefault (already
- *    done at arm time).
+ *  - On timer fire, dispatch via `invokeAction(runtime, {action, deps,
+ *    trigger: originalKeydown, dispatch})` after re-validating the context is
+ *    still active. Same path as the keydown / keyup makeHandler uses minus the
+ *    preventDefault (already done at arm time).
  *
  * Limitation: if the chord includes modifiers (e.g. `'$mod+s'`) and the
  * user releases the modifier but keeps the primary key pressed, the timer
@@ -562,7 +574,7 @@ interface HoldBindingInstall {
  * sequence" doesn't have well-defined semantics here.
  */
 const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
-  const {action, binding, keys, holdMs, activeRef, contextConfigsByTypeRef, dispatchRef} = config
+  const {action, binding, keys, holdMs, activeRef, contextConfigsByTypeRef, dispatchRef, runtimeRef} = config
 
   interface ParsedHold {
     rawKey: string
@@ -607,7 +619,9 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     if (action.canDispatch && !action.canDispatch(deps)) return
 
     try {
-      void Promise.resolve(action.handler(deps, originalEvent, dispatchRef.current)).catch(error => {
+      void Promise.resolve(
+        invokeAction(runtimeRef.current, {action, deps, trigger: originalEvent, dispatch: dispatchRef.current}),
+      ).catch(error => {
         console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
       })
     } catch (error) {
@@ -666,6 +680,7 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
 }
 
 interface CandidateRunContext {
+  runtime: FacetRuntime
   active: ActiveContextsMap
   contextConfigsByType: ReadonlyMap<ActionContextType, ActionContextConfig>
   dispatch: ActionDispatch
@@ -697,7 +712,7 @@ interface CandidateRunContext {
 const runOrderedCandidates = (
   ordered: readonly ActionConfig[],
   trigger: ActionTrigger,
-  {active, contextConfigsByType, dispatch}: CandidateRunContext,
+  {runtime, active, contextConfigsByType, dispatch}: CandidateRunContext,
   supplied: Partial<BaseShortcutDependencies> | undefined,
   applyOptions: (action: ActionConfig) => void,
 ): boolean => {
@@ -708,7 +723,7 @@ const runOrderedCandidates = (
 
     let result: ActionHandlerResult
     try {
-      result = action.handler(deps, trigger, dispatch)
+      result = invokeAction(runtime, {action, deps, trigger, dispatch})
     } catch (error) {
       console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
       applyOptions(action)

@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { isCollapsedProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
-import { pasteDecisionVerb, type PasteDecision } from '../decision'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { captureMediaVerb } from '../captureMediaVerb'
+import { pasteDecisionVerb, type PasteDecision, type PasteRequest } from '../decision'
 import {
   pasteChordIntent,
   pasteEditModeMultilineText,
@@ -13,6 +15,7 @@ import {
   pasteMultilineText,
   planEditModeMultilinePaste,
   planSingleBlockPaste,
+  resolvePasteWithMediaCapture,
 } from '../operations'
 
 const WS = 'ws-1'
@@ -26,15 +29,9 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file (beforeAll), reset here per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
   })
   return {h, repo}
 }
@@ -44,7 +41,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const createBlock = async (
   id: string,
@@ -438,5 +434,62 @@ describe('pasteFromClipboard (shortcut/programmatic paste)', () => {
 
     // Default shell decision is `split` → markdown parsed, bullets stripped.
     expect(await childContents('root')).toEqual(['Target', 'Alpha', 'Beta'])
+  })
+})
+
+describe('resolvePasteWithMediaCapture', () => {
+  // The attachments plugin's decision rule, inline so this test needs none of the
+  // heavy capture deps: a paste carrying file(s) is `media`, else defer to the default.
+  const mediaWhenFiles = pasteDecisionVerb.decorator(
+    next => req => (req.files && req.files.length > 0 ? { kind: 'media' as const } : next(req)),
+  )
+  // The helper only forwards files to the (stubbed) capture verb; it never reads them.
+  const files = [{} as File]
+  // Narrow override (not Partial<PasteRequest>) so `surface: 'shell'` stays literal and
+  // the shell variant of the discriminated union is preserved.
+  const req = (over: { text?: string; files?: readonly File[] } = {}): PasteRequest => ({
+    text: '',
+    intent: 'split',
+    surface: 'shell',
+    ...over,
+  })
+  const repo = {} as Repo // capture is stubbed; repo is forwarded, not used
+
+  it('passes a non-media paste straight through, no capture', async () => {
+    const runtime = resolveFacetRuntimeSync([mediaWhenFiles, captureMediaVerb.impl(() => ({ references: ['((x))'] }))])
+    const r = await resolvePasteWithMediaCapture(runtime, req({ text: 'hello' }), { repo, workspaceId: 'ws' })
+    expect(r).toEqual({ decision: { kind: 'split' }, text: 'hello' })
+  })
+
+  it('captures media, splices the reference text per file, and re-decides as text', async () => {
+    const seen: { workspaceId: string }[] = []
+    const runtime = resolveFacetRuntimeSync([
+      mediaWhenFiles,
+      captureMediaVerb.impl(i => {
+        seen.push({ workspaceId: i.workspaceId })
+        return { references: ['((a))', '((b))'] }
+      }),
+    ])
+    const r = await resolvePasteWithMediaCapture(runtime, req({ text: 'note', files }), { repo, workspaceId: 'ws-x' })
+    expect(seen[0]).toEqual({ workspaceId: 'ws-x' })
+    // Re-decided with files stripped → no longer media; clipboard text then one reference/line.
+    expect(r?.decision.kind).toBe('split')
+    expect(r?.text).toBe('note\n((a))\n((b))')
+  })
+
+  it('returns null when capture yields no references and there is no text', async () => {
+    const runtime = resolveFacetRuntimeSync([mediaWhenFiles, captureMediaVerb.impl(() => ({ references: [] }))])
+    expect(await resolvePasteWithMediaCapture(runtime, req({ text: '', files }), { repo, workspaceId: 'ws' })).toBeNull()
+  })
+
+  it('swallows a capture throw — the text half still pastes', async () => {
+    const runtime = resolveFacetRuntimeSync([
+      mediaWhenFiles,
+      captureMediaVerb.impl(() => {
+        throw new Error('boom')
+      }),
+    ])
+    const r = await resolvePasteWithMediaCapture(runtime, req({ text: 'kept', files }), { repo, workspaceId: 'ws' })
+    expect(r?.text).toBe('kept')
   })
 })

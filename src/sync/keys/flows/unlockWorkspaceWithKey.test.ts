@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { InMemoryWorkspaceKeyStore } from '../keyStore.js'
 import { getModePin, setModePin } from '../modePin.js'
@@ -37,7 +38,10 @@ describe('unlockWorkspaceWithKey (§8.2)', () => {
     })
 
     expect(result.ok).toBe(true)
-    expect(await keyStore.get(USER, WS)).not.toBeNull()
+    const rec = await keyStore.get(USER, WS)
+    expect(rec?.wk).toBeDefined()
+    // Unlock must derive + persist K_id (§10), so media resolves on this device.
+    expect(rec?.contentKeyHmac, 'unlock must derive K_id').not.toBeNull()
     expect(getModePin(USER, WS)).toBe('e2ee')
   })
 

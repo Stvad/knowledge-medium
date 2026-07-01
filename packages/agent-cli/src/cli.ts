@@ -10,6 +10,7 @@ import {
   bridgeLogPath,
   bridgeSecret as resolveBridgeSecret,
   bridgeUrl as resolveBridgeUrl,
+  isErrnoException,
   isLocalBridgeUrl,
   pairingUrl,
   tokenStorePath as resolveTokenStorePath,
@@ -52,11 +53,6 @@ const bridgeStartTimeoutMs = 5_000
 const tokenStorePath = resolveTokenStorePath()
 const defaultProfileName = 'default'
 let selectedProfileName = defaultProfileName
-
-// Narrow a thrown `unknown` to NodeJS fs/HTTP errors so we can check
-// `.code === 'ENOENT'` etc without sprinkling `as any` everywhere.
-const isErrnoException = (error: unknown): error is NodeJS.ErrnoException =>
-  error instanceof Error && typeof (error as NodeJS.ErrnoException).code === 'string'
 
 const errorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error)
@@ -881,6 +877,12 @@ cli
   .command('runtime-summary', wireDescription('runtime-summary'))
   .action(async () => {
     await runAndPrint({type: 'runtime-summary'})
+  })
+
+cli
+  .command('health', wireDescription('health'))
+  .action(async () => {
+    await runAndPrint({type: 'health'})
   })
 
 cli

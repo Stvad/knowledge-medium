@@ -168,10 +168,15 @@ export type BlockChildrenFooterResolver =
 //
 // Shell concerns the *typical* block wrapper bears (click/paste handler
 // dispatch, the canonical `data-block-id` / `data-editing` attributes,
-// the focusable tabIndex) are exposed as `shellProps`. The default
-// layout splats them onto its outer Collapsible; custom layouts apply
-// where appropriate or ignore entirely (a fullscreen overlay layout
-// has no need for any of them).
+// the focusable tabIndex, plus the shortcut-surface activation and shell
+// decorators) are exposed as the `Shell` slot — an opt-in render-prop
+// wrapper. A layout that wants the interactive block surface renders
+// `<Shell>{shellProps => <wrapper {...shellProps}/>}</Shell>`; the shell's
+// machinery (paste/click handlers, shell decorators, `useShortcutSurface-
+// Activations`) only runs when the layout actually mounts it. A read-only
+// layout (a block reference) simply doesn't render `Shell`, so it pays for
+// none of that — the lazy-slot equivalent of "don't allocate what you don't
+// use".
 export interface BlockShellProps {
   'data-block-id': string
   'data-render-scope-id'?: string
@@ -211,10 +216,35 @@ export type BlockShellDecoratorContribution =
 export type BlockShellDecoratorResolver =
   (context: BlockResolveContext) => readonly BlockShellDecorator[]
 
+/** Render-prop a layout passes to the `Shell` slot: given the shell props
+ *  (after the shell decorators have transformed them), return the focusable
+ *  wrapper element the props should land on. */
+export type BlockShellRender = (shellProps: BlockShellProps) => ReactNode
+
+export interface BlockShellSlotProps {
+  children: BlockShellRender
+}
+
+/** Opt-in interactive block surface. Rendering it runs the shell decorators
+ *  + `useShortcutSurfaceActivations` and yields the composed `shellProps` to
+ *  the layout's render-prop; not rendering it skips all of that. It is an
+ *  indivisible bundle — there's no way to get just the focusable data
+ *  attributes without the decorators/activations, and a layout should mount it
+ *  at most once (two mounts = duplicate shortcut activations + duplicate
+ *  `data-block-id`/nav nodes for one block). */
+export type BlockShellSlot = ComponentType<BlockShellSlotProps>
+
 export interface BlockLayoutSlots {
   block: Block
   /** Block content surface — content renderer + surface props + error boundary. */
   Content: ComponentType
+  /** Read-only, chrome-free inline content — the block's *base read* content
+   *  renderer, with no editable `block-content` wrapper, surface props, or
+   *  gesture ref. This is the raw content as it appears in an inline citation
+   *  (a block reference): it never becomes an editor even when the same block
+   *  is being edited at its home location, because it is built from the read
+   *  renderer rather than the edit-aware dispatcher. */
+  RawContent: ComponentType
   /** Block properties (metadata key/value pairs); `null` when hidden. */
   Properties: ComponentType | null
   /** Block children subtree (raw `BlockChildren`; layout decides whether to wrap in CollapsibleContent). */
@@ -225,8 +255,11 @@ export interface BlockLayoutSlots {
   Controls: ComponentType
   /** Above-body sections contributed via `blockHeaderFacet` (top-level breadcrumbs by default). */
   Header: ComponentType
-  /** Shell-level attributes + handlers the typical block wrapper bears. */
-  shellProps: BlockShellProps
+  /** Opt-in interactive block surface (shell props + decorators + shortcut
+   *  activations). A layout renders `<Shell>{shellProps => <wrapper
+   *  {...shellProps}/>}</Shell>` to become a focusable, editable block; a
+   *  read-only layout omits it and pays for none of the shell machinery. */
+  Shell: BlockShellSlot
 }
 
 export type BlockLayout = ComponentType<BlockLayoutSlots>

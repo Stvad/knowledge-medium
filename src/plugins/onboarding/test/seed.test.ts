@@ -12,15 +12,14 @@
  * `repo.tx` so both pages land atomically.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { aliasesProp, isCollapsedProp } from '@/data/properties'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { typesFacet } from '@/data/facets'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { pluginDataExtensions } from '@/data/pluginDataExtensions'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
@@ -50,7 +49,6 @@ const WS = 'ws-1'
 // contains these (the original bug was char-counter + geo missing from the
 // pre-glob hand-maintained list).
 const TUTORIAL_TYPE_EXTENSIONS = [
-  kernelDataExtension,
   todoDataExtension,
   characterCounterDataExtension,
   srsReschedulingDataExtension,
@@ -65,21 +63,15 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
-    db: h.db,
-    cache,
-    user: { id: 'user-1' },
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-  })
   // Mirror production: at construction the Repo gets its data-layer types from
   // `setFacetRuntime` (see src/context/repo.tsx). Here we install just the
   // tutorial's demo types so `repo.snapshotTypeRegistries()` resolves them at
   // seed time.
-  repo.setFacetRuntime(resolveFacetRuntimeSync(TUTORIAL_TYPE_EXTENSIONS))
+  const { repo } = createTestRepo({
+    db: h.db,
+    user: { id: 'user-1' },
+    extensions: TUTORIAL_TYPE_EXTENSIONS,
+  })
   return { h, repo }
 }
 
@@ -88,9 +80,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's sync observer so its db.onChange subscription
-// doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 const listAllBlockIds = async (h: TestDb): Promise<string[]> => {
   const rows = await h.db.getAll<{ id: string }>('SELECT id FROM blocks WHERE deleted = 0')

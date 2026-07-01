@@ -1,10 +1,16 @@
 import {
   actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
+  blockContentDecoratorsFacet,
   ChangeScope, codecs, defineBlockType, defineProperty, definePropertyEditorOverride,
   getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, propertySchemasFacet,
   showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
+  type BlockContentDecorator,
+  type BlockContentDecoratorContribution,
   type PropertyEditorProps,
 } from '@/extensions/api.js'
+import { useHandle } from '@/hooks/block.js'
+import type { Block } from '@/data/block.js'
+import type { BlockRenderer } from '@/types.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import { createOrRestoreTargetBlock } from '@/data/targets.js'
 import { addBlockTypeToProperties } from '@/data/properties.js'
@@ -17,7 +23,7 @@ import {
 import { Button } from '@/components/ui/button.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 
 // ---------------------------------------------------------------------------
@@ -1075,6 +1081,122 @@ const resetPositionAction = {
 }
 
 // ---------------------------------------------------------------------------
+// audio-url content decorator — a message carrying a `matrix:audio-url`
+// property (promoted from an `audio-url::` attribute in the message body) gets
+// a small audio glyph pinned to its top-right corner that opens the linked
+// audio in a new tab. A decorator (not a renderer override) so it composes with
+// whatever content renderer the block already uses — same idiom as the geo /
+// character-counter / readwise decorators. Gated on the stable `matrix-message`
+// type membership (resolver context doesn't track property changes); the icon
+// itself is shown/hidden inside the component from a reactive `useHandle` read,
+// so it appears the moment the property lands and vanishes if it's cleared.
+
+const AUDIO_URL_KEY = 'matrix:audio-url'
+
+// The property is promoted from message *content* (external, untrusted), so
+// only honour http(s) URLs before placing one in an <a href> — never let a
+// `javascript:`/`data:` value through. A multi-valued promotion arrives as an
+// array; take the first usable entry.
+const firstHttpUrl = (value: unknown): string | null => {
+  const candidates = Array.isArray(value) ? value : [value]
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue
+    const trimmed = candidate.trim()
+    if (/^https?:\/\//i.test(trimmed)) return trimmed
+  }
+  return null
+}
+
+const matrixAudioStyles = {
+  wrapper: {position: 'relative', width: '100%'},
+  link: {
+    position: 'absolute',
+    top: '1px',
+    right: '1px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '22px',
+    height: '22px',
+    borderRadius: '4px',
+    color: 'var(--muted-foreground)',
+    background: 'var(--background)',
+    cursor: 'pointer',
+    textDecoration: 'none',
+  },
+} satisfies Record<string, CSSProperties>
+
+// lucide `audio-lines` glyph, inlined to avoid a runtime dependency import.
+const AudioGlyph = () => (
+  <svg
+    xmlns='http://www.w3.org/2000/svg'
+    width='16'
+    height='16'
+    viewBox='0 0 24 24'
+    fill='none'
+    stroke='currentColor'
+    strokeWidth='2'
+    strokeLinecap='round'
+    strokeLinejoin='round'
+    aria-hidden='true'
+  >
+    <path d='M2 10v3'/>
+    <path d='M6 6v11'/>
+    <path d='M10 3v18'/>
+    <path d='M14 8v7'/>
+    <path d='M18 5v13'/>
+    <path d='M22 10v3'/>
+  </svg>
+)
+
+const MatrixAudioDecorator = ({block, Inner}: {block: Block; Inner: BlockRenderer}) => {
+  const audioUrl = useHandle(block, {
+    selector: data => firstHttpUrl(data?.properties?.[AUDIO_URL_KEY]),
+  })
+  return (
+    <div style={matrixAudioStyles.wrapper}>
+      <Inner block={block}/>
+      {audioUrl && (
+        <a
+          href={audioUrl}
+          target='_blank'
+          rel='noreferrer'
+          title='Open audio'
+          aria-label='Open audio'
+          style={matrixAudioStyles.link}
+          onClick={event => event.stopPropagation()}
+          onMouseDown={event => event.stopPropagation()}
+        >
+          <AudioGlyph/>
+        </a>
+      )}
+    </div>
+  )
+}
+
+// Cached per inner renderer so React keeps a stable component identity and
+// never unmounts the inner subtree on a parent re-render (same invariant the
+// other decorators rely on).
+const matrixAudioDecoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
+
+const decorateMatrixAudio: BlockContentDecorator = inner => {
+  const existing = matrixAudioDecoratorCache.get(inner)
+  if (existing) return existing
+  const Decorated: BlockRenderer = ({block}) => (
+    <MatrixAudioDecorator block={block} Inner={inner}/>
+  )
+  Decorated.displayName = 'WithMatrixAudio'
+  matrixAudioDecoratorCache.set(inner, Decorated)
+  return Decorated
+}
+
+const matrixAudioContentDecorator: BlockContentDecoratorContribution = ctx => {
+  if (!ctx.types.includes(MATRIX_MESSAGE_TYPE)) return null
+  if (ctx.blockContext?.isBreadcrumb) return null
+  return decorateMatrixAudio
+}
+
+// ---------------------------------------------------------------------------
 // wiring
 
 export default [
@@ -1100,6 +1222,8 @@ export default [
 
   appMountsFacet.of({id: 'matrix.setup-dialog', component: MatrixSetupDialog}, {source}),
   appEffectsFacet.of(matrixIngestEffect, {source}),
+
+  blockContentDecoratorsFacet.of(matrixAudioContentDecorator, {source}),
 
   actionsFacet.of(openSettingsAction, {source}),
   actionsFacet.of(connectAction, {source}),

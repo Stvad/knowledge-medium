@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canaryAad, contentAad } from './aad.js'
+import { assetBytesAad, canaryAad, contentAad } from './aad.js'
 
 const bytes = (aad: Uint8Array): number[] => Array.from(aad)
 
@@ -37,5 +37,27 @@ describe('canonical AAD encoding', () => {
     // whose ids share a prefix/suffix. The prefix must keep them distinct.
     expect(bytes(contentAad('A', 'BC', 'content')))
       .not.toEqual(bytes(contentAad('AB', 'C', 'content')))
+  })
+
+  it('asset-bytes AAD pins [contentHash ‖ workspace ‖ "asset-bytes" ‖ schema_version]', () => {
+    // fields = ['h', 'w', 'asset-bytes', '1']. Pins the exact wire layout so a
+    // silent field-order / literal change can't pass round-trips while breaking
+    // interop with objects already sealed on disk.
+    expect(bytes(assetBytesAad('h', 'w'))).toEqual([
+      0, 0, 0, 1, 0x68, // "h"
+      0, 0, 0, 1, 0x77, // "w"
+      // "asset-bytes" (11 bytes)
+      0, 0, 0, 11, 0x61, 0x73, 0x73, 0x65, 0x74, 0x2d, 0x62, 0x79, 0x74, 0x65, 0x73,
+      0, 0, 0, 1, 0x31, // "1"
+    ])
+  })
+
+  it('asset-bytes AAD is domain-separated from every real content column', () => {
+    // Same arity as contentAad but the literal `asset-bytes` occupies the
+    // column slot, which is disjoint from the three real column names — so no
+    // (blockId, ws, column) content AAD can collide with an asset-bytes AAD.
+    for (const column of ['content', 'properties_json', 'references_json']) {
+      expect(bytes(assetBytesAad('h', 'w'))).not.toEqual(bytes(contentAad('h', 'w', column)))
+    }
   })
 })

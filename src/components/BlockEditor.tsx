@@ -3,6 +3,7 @@ import { Block } from '../data/block'
 import {
   editorSelection,
   editorFocusRequestProp,
+  exitEditModeForBlock,
   isFocusedBlock,
   type EditorSelectionState,
 } from '@/data/properties.js'
@@ -17,34 +18,11 @@ import { EditorSelection, type Extension } from '@codemirror/state'
 import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useBlockContext } from '@/context/block.js'
+import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
   ref?: Ref<ReactCodeMirrorRef>
-}
-
-/** Module-level latch read by BlockEditor's onBlur. While > 0, the
- *  editor's blur handler refuses to exit edit mode — instead it
- *  re-focuses the contenteditable so the user stays editing. The
- *  mobile keyboard toolbar acquires a hold around each structural
- *  action (reorder / indent / etc.) whose React commit reparents the
- *  editor's DOM node, dropping native focus and otherwise tripping
- *  the exit-on-blur path. The counter (rather than a boolean) means
- *  overlapping taps don't release each other's window. */
-let blurExitSuppressionCount = 0
-
-/** Acquire one hold on the suppression. Returns the release fn;
- *  callers MUST schedule the release on their own timer or via finally.
- *  Idempotent — the returned fn is safe to call more than once but
- *  only decrements the count once. */
-export const acquireBlurExitSuppression = (): (() => void) => {
-  blurExitSuppressionCount++
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    blurExitSuppressionCount--
-  }
 }
 
 export const BlockEditor = ({
@@ -57,7 +35,7 @@ export const BlockEditor = ({
   const cm = useRef<ReactCodeMirrorRef>(null)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
-  const [isEditing, setIsEditing] = useIsEditing()
+  const [isEditing] = useIsEditing()
   const inEditMode = useInEditMode(block.id)
   const blockContext = useBlockContext()
   const renderScopeId = typeof blockContext.renderScopeId === 'string'
@@ -299,16 +277,24 @@ export const BlockEditor = ({
         flushDebouncers()
         requestAnimationFrame(() => {
           if (!document.hasFocus() || !shouldExitEditModeAfterBlur(document.activeElement)) return
-          // Suppression hold (acquired by the mobile keyboard toolbar
-          // around structural actions whose React commit reparents
-          // this DOM node) — instead of exiting edit mode, snap focus
-          // back so the user keeps editing. The acquirer releases on
-          // its own timer; we just honor the count here.
-          if (blurExitSuppressionCount > 0) {
+          // A keepalive hold (mobile toolbar around structural actions /
+          // the file picker, or the command palette while open) means a
+          // surface pulled focus without intending to end editing. Honor
+          // it instead of exiting: 'refocus' snaps focus back to the
+          // editor (the focus loss was incidental), 'yield' leaves focus
+          // alone (a surface owns it and refocuses us on close). See
+          // editModeKeepalive.
+          const keepalive = resolveEditModeKeepalive()
+          if (keepalive === 'refocus') {
             cm.current?.view?.focus()
             return
           }
-          setIsEditing(false)
+          if (keepalive === 'yield') return
+          // Clear edit mode only if THIS block still owns it. A block→block
+          // tap may have already handed edit mode to the tapped block; an
+          // unconditional clear would race that handoff and drop it (the
+          // "keyboard hides / needs a second tap" bug). See exitEditModeForBlock.
+          void exitEditModeForBlock(uiStateBlock, block.id, renderScopeId)
         })
       }}
       extensions={mergedExtensions}

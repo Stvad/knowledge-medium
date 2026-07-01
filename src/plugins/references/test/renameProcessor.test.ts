@@ -16,11 +16,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
 
@@ -34,24 +33,17 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file (beforeAll), reset here per test.
   await resetTestDb(sharedDb.db)
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo, cache } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    extensions: [
+      dailyNotesDataExtension,
+      referencesDataExtension,
+      aliasDataExtension,
+    ],
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-    referencesDataExtension,
-    aliasDataExtension,
-  ]))
   // h.cleanup disposes this Repo's observer (not the shared DB).
-  const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
+  const h: TestDb = {db: sharedDb.db, cleanup: async () => {}}
   return {
     h,
     cache,

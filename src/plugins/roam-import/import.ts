@@ -66,6 +66,7 @@ import {
 } from '@/plugins/references/referenceProjection.js'
 import type { RoamExport } from './types'
 import { writeImportLog } from './report'
+import { uniqueExactStrings } from './properties'
 import { collectTypeCandidates, type RoamTypeCandidate } from './typeCandidates'
 import type { RoamMemoImportPlanSummary } from './roamMemo'
 import {
@@ -729,17 +730,6 @@ interface PageAliasRulePlan {
   diagnostics: string[]
 }
 
-const uniqueExactAliases = (values: readonly string[]): string[] => {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const value of values) {
-    if (value === '' || seen.has(value)) continue
-    seen.add(value)
-    out.push(value)
-  }
-  return out
-}
-
 const quotedList = (values: readonly string[]): string => {
   const quoted = values.map(value => `'${value}'`)
   if (quoted.length <= 2) return quoted.join(' and ')
@@ -770,7 +760,7 @@ const buildPageAliasRulePlan = (
   }
 
   for (const page of preparedPages) {
-    for (const alias of uniqueExactAliases(page.pageAliases)) {
+    for (const alias of uniqueExactStrings(page.pageAliases)) {
       if (alias === page.title) continue
       if (skipDailyAliasMerge(page, alias)) continue
       const aliases = validAliasesByTitle.get(page.title) ?? []
@@ -860,10 +850,10 @@ const buildPageAliasRulePlan = (
     const aliases = aliasesByRootTitle.get(root) ?? [root]
     if (page.title !== root) aliases.push(page.title)
 
-    for (const alias of uniqueExactAliases(validAliasesByTitle.get(page.title) ?? [])) {
+    for (const alias of uniqueExactStrings(validAliasesByTitle.get(page.title) ?? [])) {
       aliases.push(alias)
     }
-    aliasesByRootTitle.set(root, uniqueExactAliases(aliases))
+    aliasesByRootTitle.set(root, uniqueExactStrings(aliases))
   }
 
   for (const [root, aliases] of aliasesByRootTitle) {
@@ -1284,11 +1274,6 @@ const appendRoamMemoExistingConflicts = (
   )
 }
 
-const hasOwn = (
-  obj: Record<string, unknown>,
-  key: string,
-): boolean => Object.prototype.hasOwnProperty.call(obj, key)
-
 const mergeImportedProperties = (
   existing: Record<string, unknown>,
   planned: Record<string, unknown>,
@@ -1315,8 +1300,8 @@ const mergeImportedProperties = (
   const next: Record<string, unknown> = {}
 
   for (const key of keys) {
-    const existingHas = hasOwn(existing, key)
-    const plannedHas = hasOwn(planned, key)
+    const existingHas = Object.hasOwn(existing, key)
+    const plannedHas = Object.hasOwn(planned, key)
 
     if (appOwned.has(key)) {
       if (existingHas) next[key] = existing[key]
@@ -1533,7 +1518,7 @@ const withPageAliases = (
   ...data,
   properties: addBlockTypeToProperties({
     ...(data.properties ?? {}),
-    [aliasesProp.name]: aliasesProp.codec.encode(uniqueExactAliases(aliases)),
+    [aliasesProp.name]: aliasesProp.codec.encode(uniqueExactStrings(aliases)),
   }, PAGE_TYPE),
 })
 
@@ -1549,7 +1534,7 @@ const mergePageAliases = async (
   const current = Array.isArray(currentValue)
     ? currentValue.filter((v): v is string => typeof v === 'string')
     : []
-  const next = uniqueExactAliases([...current, ...aliasesToApply])
+  const next = uniqueExactStrings([...current, ...aliasesToApply])
   if (next.length === current.length && next.every((alias, index) => alias === current[index])) return
 
   await tx.setProperty(id, aliasesProp, next)

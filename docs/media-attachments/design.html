@@ -82,10 +82,41 @@
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
-<strong>Status:</strong> design — not yet implemented (no <code>src/</code> code yet); last verified
-against code 2026-06-24 (a grounding pass found zero wrong code claims). Treat as current intent. The
-least-settled part is the byte-lane lifecycle / failure-recovery machinery (§8–§9, §16): the happy path
-and the crypto / threat model are solid; the recovery edges are where the spec is still hardening.
+<strong>Status:</strong> partially implemented — phases 1–6 have landed on branch
+<code>feat/media-attachments</code>. Phase 1 = the byte-crypto seam (§5/§5.1:
+the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, the
+read-side content-hash verify) in <code>src/sync/</code>. Phase 2 = the <code>attachments</code> bucket
++ RLS migration (read by member, <strong>insert/delete by writer</strong>, no update = immutability), and
+the <code>BlobStore</code> seam (§10/§10.1/§14), unit-tested. <strong>The §10.1 sole-writer Edge Function
+was removed</strong> (reversal, 2026-06-25) — uploads are now direct, writer-gated by RLS, with an off-path
+ciphertext audit as the tripwire. Phase 3 = the <code>K_id</code> content-key derivation (§10,
+<code>src/sync/crypto/contentKey.ts</code>, co-located with the WK in the keyStore + derived at
+unlock/create), the OPFS byte store (§8, <code>src/attachments/byteStore.ts</code>), and the in-thread
+asset resolver (§7.3, <code>src/attachments/resolver.ts</code>) — fetch → decode → <strong>hash-verify →
+store</strong>, fail-closed on every error, the read-side check now the sole byte-confidentiality control
+(returns verified bytes). Phase 4 = the <code>media</code> block type + property schemas and the
+<code>MediaBlockRenderer</code> (§11, <code>src/attachments/</code>) — the image branch resolves bytes
+in-thread, wraps them as an object URL, and renders through the existing lightbox; non-image MIMEs get a
+file chip; a fail-closed resolve shows a broken-asset placeholder, never an unverified source;
+<code>canRender</code> reads a <code>peek()</code> snapshot so it never throws above the block
+ErrorBoundary. Phase 5 = capture + the up-lane (§9/§11): paste/drop mints the asset block,
+stages bytes in a durable IndexedDB queue (stage-before-tx / promote-after-commit), and a
+single-owner lane drain encodes-at-drain + uploads (with a 409 poison-verify and a promote-only
+boot reconciler). Phase 6 = the down-lane (§8/§9 background replication): the resolver's
+<code>replicate</code> backlog lane (a cheap <code>has()</code> probe → present, else the SAME coalesced
+fetch the demand lane uses), the sequential, budget-bounded <code>reconcileDownLane</code> reconciler
+(present probes free; only a SUCCESSFUL download consumes the per-pass budget; failures are free and never halt
+the walk, so a stable-ordered failing prefix can't shadow the healthier tail), and
+<code>MediaDownLaneReplicator</code> — a per-active-workspace, single-owner (<code>navigator.locks</code>
+<code>ifAvailable</code>), deep-idle-scheduled pass re-armed on workspace switch / first-sync settle /
+reconnect / a slow sweep. Durable origin storage (§8) is the boot-time origin-wide
+<code>requestPersistentStorage</code>, not a per-store call. <strong>§16 reference-permanent GC remains
+deferred</strong> — until it lands, a never-promoted <code>staged</code> orphan and its OPFS bytes are
+retained (never reaped), and a <code>failed</code> upload record is recoverable only by re-paste (no §9
+recovery actor yet).
+Last verified against code 2026-06-26. Treat as current intent. The least-settled part is the byte-lane
+lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
+solid; the recovery edges are where the spec is still hardening.
 </aside>
 
 <div class="info">
@@ -333,8 +364,10 @@ encodeForWire(row, 'e2ee', getCek)  // → seal content/properties_json/referenc
 
 <p>We mirror it for bytes — a new module in the same <code>src/sync/</code> seam:</p>
 
-<pre><code>encodeBytes(bytes: Uint8Array, mode: SyncMode, getCek: GetCek): Promise&lt;Uint8Array&gt;
-decodeBytes(blob:  Uint8Array, mode: SyncMode, getCek: GetCek): Promise&lt;Uint8Array&gt;
+<pre><code>encodeBytes(bytes: Uint8Array, mode: SyncMode, getCek: GetCek, ref: AssetByteRef): Promise&lt;Uint8Array&gt;
+decodeBytes(blob:  Uint8Array, mode: SyncMode, getCek: GetCek, ref: AssetByteRef): Promise&lt;Uint8Array&gt;
+//   ref = { contentHash, workspaceId } — binds the bytes' AAD (§5.1); decode
+//         authenticates the envelope only, the resolver verifies the hash separately
 //   mode === 'none'  → identity (return input)
 //   mode === 'e2ee'  → AES-256-GCM seal/open with the WK</code></pre>
 
@@ -599,20 +632,24 @@ amount of wiping addresses.
     never served or stored.</li>
   <li><strong>Stored bytes are not an independent authority — revocation rides the block claw-back.</strong>
     The OPFS byte store is namespaced by <code>user_id</code> (account isolation); on workspace leave/revoke
-    its prefix is purged — fired off the <em>same membership change</em> that makes PowerSync drop the
-    workspace's block rows from the local DB. (Concretely: the purge is a <em>new subscriber</em> the feature
-    wires — there is no existing membership-change callback to reuse; the clean reactive fact to hook is the
-    user's own <code>workspace_members</code> row leaving the local DB, the same change that causes PowerSync
-    to claw back the workspace's <code>blocks</code> rows. The bytes live out-of-band in OPFS, so they don't
-    ride that row claw-back and need their own one-shot purge; offline, the purge fires on reconnect, exactly
-    as the rows fall out on the next sync.) That purge — not a per-render membership recheck — is the
-    claw-back, so
-    media revocation is handled <em>exactly</em> like note text: a revoked member's local <code>blocks</code>
-    are dropped and gets no per-render re-authorization either, and an already-synced member who keeps a copy
-    is the same accepted exposure for bytes as for text (§8). WK-absence gates the <em>decode of new
-    downloads</em> (fail-closed, above), <em>not</em> the serving of already-stored, already-verified bytes —
-    lock doesn't scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code> table
-    (§8).</li>
+    PowerSync drops the workspace's block rows from the local DB, and the out-of-band OPFS bytes need their
+    own claw-back to follow. <strong>That claw-back is DEFERRED to a future reference-GC cleanup job, not an
+    eager per-membership-change deleter</strong> (§16). The job is the natural home: it deletes byte-store
+    entries whose content hash is no longer referenced by any local <code>media</code> block, after a grace
+    period — which subsumes <em>revoke/leave</em> (the workspace's blocks are clawed back → its bytes go
+    unreferenced), <em>media replacement / deletion</em> (the old object becomes unreferenced), and quota
+    eviction, under one reference-counted sweep run when the lanes are quiescent. (History: an eager reactive
+    purger — a <code>workspace_members</code>-removal subscriber calling <code>byteStore.purgeWorkspace</code>
+    — was prototyped on the down-lane PR and removed. It deleted user media on a transient membership signal
+    that can glitch, and to be correct it needed retry-on-failure plus cancel/epoch coordination with
+    in-flight down-lane <code>put</code>s — too much machinery, and too eager a deletion, for what this very
+    bullet calls an accepted exposure. <code>purgeWorkspace</code> remains in <code>byteStore</code> as the
+    primitive the cleanup job will call.) So media revocation is handled like note text with a lag: a revoked
+    member's local <code>blocks</code> are dropped and the bytes are reclaimed on the next GC sweep, and an
+    already-synced member who keeps a copy in the meantime is the same accepted exposure for bytes as for text
+    (§8) — RLS still blocks any <em>new</em> fetch. WK-absence gates the <em>decode of new downloads</em>
+    (fail-closed, above), <em>not</em> the serving of already-stored, already-verified bytes — lock doesn't
+    scrub the store, exactly as it doesn't scrub the decrypted <code>blocks</code> table (§8).</li>
 </ul>
 
 <div class="decision">
@@ -691,8 +728,8 @@ half the E2EE on-disk footprint, no decrypt-on-render, and one store instead of 
     (<code>navigator.locks.request</code>) to run the background replicator, so N open tabs of the same
     workspace don't multiply the egress these controls bound (the lock auto-hands-off when that tab closes;
     no SharedWorker needed). The viewport-driven <em>demand</em> lane stays per-tab — each tab fetches what
-    its own user is looking at. Reads are direct RLS-gated Storage GETs (only <em>uploads</em> go through
-    the §10.1 function), so the down-lane is plain egress.</li>
+    its own user is looking at. Reads are direct RLS-gated Storage GETs (writes are direct too — only
+    <em>uploads</em> are writer-gated rather than member-gated, §10.1), so the down-lane is plain egress.</li>
   <li><strong>Eviction is for quota pressure, not a fixed cap.</strong> The store is
     <code>navigator.storage.persist()</code>-backed (the lever that exempts it from best-effort eviction —
     spun out as its own investigation) and <strong>preserved by default for full offline operation</strong>.
@@ -779,7 +816,7 @@ so it can't strip a co-referencing block's bytes or strand its route to the serv
 <h2 id="queue">9. The byte-replication subsystem (up-lane + down-lane)</h2>
 
 <p>Block <em>metadata</em> rides PowerSync's <code>ps_crud</code> upload queue. Bytes go through the
-  guarded upload function (§10.1) on a different path with no such queue, so they need their own
+  direct, RLS-gated upload path (§10.1), which has no such queue, so they need their own
   durable one. The queue is a small <strong>status record over the §8 byte store</strong>, not a second
   copy of the bytes: an IndexedDB record of
   <code>{ user_id, asset_block_id, workspace_id, status }</code>. The source bytes live <em>once</em> in
@@ -801,10 +838,11 @@ so it can't strip a co-referencing block's bytes or strand its route to the serv
   <strong>clears</strong> — the record is <strong>deleted</strong> on a confirmed upload (the bytes stay in
   the byte store, §8, now eviction-eligible like any replicated bytes; &quot;eviction-eligible&quot; is simply
   the <em>absence</em> of an up-lane record, not a retained <code>cleared</code> value) — or it moves to
-  <strong><code>failed</code></strong> on a <em>permanent</em> rejection (§10.1: a shape-rejected body, or a
-  content path an active poisoner keeps re-occupying so writer-delete + re-upload can't terminate). A
+  <strong><code>failed</code></strong> on a <em>permanent</em> rejection (§10.1: an auth/size/path rejection
+  the upload can't satisfy — a non-writer, an over-limit body, a malformed path — or a content path an
+  active poisoner keeps re-occupying so writer-delete + re-upload can't terminate). A
   <code>failed</code> record <strong>stops the tight correction loop</strong> (so a poisoned or rejected
-  upload never burns egress / function invocations in a hot retry) but <strong>keeps its eviction
+  upload never burns egress in a hot retry) but <strong>keeps its eviction
   exemption</strong> — its bytes are un-uploaded, i.e. still the <em>only copy</em> <em>and</em> the self-heal
   source (the §9 server-side backstop / §16), so evicting them would be irreversible data loss. The
   <em>only</em> byte release is the user explicitly discarding the item from the §11 pending-attachments
@@ -849,31 +887,24 @@ so it can't strip a co-referencing block's bytes or strand its route to the serv
   and arms the drain. The drain acts only on <code>pending</code>+ records, so the "block still
   exists?" pre-PUT drop applies only <em>after</em> the commit (a post-commit deletion / undo) and
   never to the legitimate pre-commit window. A flip that never lands (crash or throw between commit and
-  flip) is recovered by a <strong>boot-time reconciler</strong> — but its commit-vs-rollback test must
-  not misread a not-yet-hydrated DB: it runs <em>after</em> PowerSync reports initial sync settled, so an
-  absent block means truly-absent (not merely not-yet-loaded — otherwise it would reap the only durable
-  copy of a committed-and-synced block's un-uploaded bytes). It then promotes any <code>staged</code>
-  record whose asset block is present, and reaps one whose block is absent <em>past that checkpoint</em>.
-  Reaping a record also deletes its un-uploaded byte-store bytes — but that byte delete is gated on the
-  <strong>content-refcount</strong>, exactly as object GC (§16) and local eviction (§8) are: the bytes are
-  dropped only if <em>no</em> live-or-soft-deleted block in the workspace carries their hash. They are orphan
-  bytes (a block that never committed) only when nothing else references the content; under dedup a
-  <em>different</em> committed embed may be the live carrier of the same content key, so the record is dropped
-  but its bytes are kept whenever any block still references the hash — the same single rule that keeps GC and
-  eviction from evicting a shared object out from under a live block.
-  <strong>That presence test is scoped to the record's own <code>user_id</code></strong>: the up-lane store is
-  shared across the profile's accounts (above), and the hydrated DB belongs to the <em>active</em> account — so a
-  record is reap-eligible only against the DB hydrated for <em>its own</em> account, and only once <em>that</em>
-  account's PowerSync has settled. Without this per-<code>user_id</code> gate (not just a global one), switching
-  from account B to account A would find B's not-yet-synced block &quot;absent&quot; in A's DB and reap the only
-  durable copy of B's un-uploaded bytes — manufacturing the very &quot;synced block outlives its bytes&quot; loss
-  this lane exists to prevent. A profile account that is never re-opened simply leaves its records inert —
-  they keep their bytes and neither drain nor reap, costing bounded storage, never loss.
-  A <em>caught</em> tx rollback shrinks the inferred set to the genuine crash window by
-  <strong>deleting the orphan record (and its un-uploaded bytes) inline</strong> — it ran in-process and
-  knows the block didn't commit, so it needs no deferred reap state; the boot reconciler then only has to
-  cover the residue where a crash lands between the throw and that cleanup. Records carry a session/generation
-  stamp so a reaper never races an in-flight capture. Entries drain (to the §10.1 function) when connectivity returns, retrying with
+  flip) is recovered by a <strong>boot-time reconciler</strong> that <strong>promotes</strong> any
+  <code>staged</code> record whose asset block has <em>materialized</em> in <code>blocks</code> (recovering the
+  post-commit flip that never landed) and <strong>leaves every other staged record untouched</strong>. It
+  deliberately does <em>not</em> reap absent ones. A <code>staged</code> record is non-drainable, so an orphan
+  never uploads on its own; leaving it costs only its bytes, which the <strong>§16 content-refcount GC</strong>
+  reclaims (no live-or-soft-deleted block carries their hash) — the same single rule that keeps §8 eviction /
+  §16 GC from dropping a shared object out from under a live block. Reaping <em>here</em> would instead demand
+  <em>proving</em> a block never committed — distinguishing a true orphan from a committed-but-unmaterialized
+  block (a locked e2ee workspace withholding it from <code>blocks</code>, the throttled observer still lagging
+  the download, an undecryptable/quarantined row, or another profile account's un-hydrated DB) — and any wrong
+  guess deletes the only un-uploaded copy of a <em>live</em> block's bytes. Trading a near-zero,
+  GC-reclaimable byte leak for &quot;can never reap a live block's bytes&quot; is the right call; the promote
+  reads plain <code>blocks</code> because a miss is non-committal (a later boot retries once it materializes —
+  and it couldn't drain while the workspace is locked anyway), never destructive. A <em>caught</em> tx rollback
+  still deletes its orphan record + bytes inline (it ran in-process and knows the block didn't commit); the
+  reconciler only leaves the residue where a crash lands between the throw and that cleanup, which §16 GC
+  sweeps. A profile account that is never re-opened simply leaves its records inert, costing bounded storage,
+  never loss. Entries drain (direct to Storage, §10.1) when connectivity returns, retrying with
   backoff; on a confirmed upload the <em>queue entry</em> is deleted, but the <strong>bytes remain in
   the byte store</strong> (§8, budget-bounded) — full replication keeps them on disk for offline; they
   simply lose the un-uploaded eviction-exemption.
@@ -997,7 +1028,8 @@ correlation). A <strong>plaintext</strong> workspace has no secret to protect, s
     after import</strong> (<code>createEncryptedWorkspace.ts</code>), so <code>K_id</code> can't be
     re-derived on a later reload. (The <em>unlock</em> path <code>unlockWorkspaceWithKey.ts</code> has
     <em>no</em> such derive window today — it doesn't even zero the parsed bytes, which drop to GC — so adding
-    derive-then-zero on unlock is a <strong>phase-1 prerequisite</strong>, and incidentally fixes that
+    derive-then-zero on unlock is a <strong>prerequisite of the storage-path phase (§15 phase 2, where
+    <code>K_id</code> is first needed)</strong>, and incidentally fixes that
     standalone GC-leak.) It must therefore be <strong>persisted</strong> as its own non-extractable HMAC
     <code>CryptoKey</code> in the keyStore, derived once at import/unlock. That adds a second stored handle but
     no WK-exposure widening — it can't recover the WK, and lives in the same IndexedDB the model already
@@ -1010,9 +1042,14 @@ correlation). A <strong>plaintext</strong> workspace has no secret to protect, s
     unlocked before this feature ships holds a non-extractable WK handle but never derived
     <code>K_id</code> (the raw bytes are long since zeroed, and a non-extractable AES-GCM key can't be
     HKDF'd or exported). Such a device must <strong>re-paste the WK once</strong> (or re-unlock) to
-    populate <code>K_id</code>; until it does, media on that device is <em>fail-closed</em>
-    (broken-image placeholder, never plaintext) while text keeps working. Cheap for the small coordinated
-    fleet, but a named step — not a silent break.</li>
+    populate <code>K_id</code>. <strong>Implemented choice (the simpler one): a <code>K_id</code>-less
+    record is treated as LOCKED</strong> — the workspace gate prompts a re-paste and the whole workspace
+    (text included) is read-only until it's supplied, rather than a media-only fail-closed path that keeps
+    text live. We took the uniform gate (one "no usable key ⇒ locked" rule) over the narrower media-only
+    carve-out; the stored WK handle is <em>preserved</em> (never discarded), so the re-paste fully restores
+    access and the only cost is a one-time re-paste — acceptable for the small coordinated fleet. A named
+    step, not a silent break. (<code>src/sync/keys/resolveWorkspaceEntry.ts</code> gates on
+    <code>contentKeyHmac !== null</code>.)</li>
   <li><strong>What this removes</strong> (vs a block-id path): the idempotency token (§9/§10.1), the
     write-once monotonicity rule (§5.1), and duplicate-object GC (§11) — the path <em>is</em> the
     idempotency key and the immutability guarantee. Fewer moving parts, not just better scaling.</li>
@@ -1022,9 +1059,10 @@ correlation). A <strong>plaintext</strong> workspace has no secret to protect, s
 </ul>
 </div>
 
-<p>Storage <strong>reads</strong> are RLS-gated by workspace membership on the path's first segment.
-  Storage <strong>writes</strong> are NOT direct — they go through the guarded upload path (§10.1);
-  the bucket grants <em>no</em> client <code>insert</code>/<code>update</code>:</p>
+<p>Every operation is a <strong>direct</strong>, RLS-gated client call — there is no mediating upload
+  service. <strong>Reads</strong> are member-gated; <strong>inserts</strong> are writer-gated;
+  <strong>updates</strong> have no policy (denied), which is exactly what makes a content-addressed object
+  write-once; <strong>deletes</strong> are writer-gated:</p>
 
 <pre><code>create policy "attachments read by workspace member"
 on storage.objects for select to authenticated
@@ -1034,16 +1072,37 @@ using (
         (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
         (auth.uid())::text)
 );
--- NO insert/update policy for `authenticated` on the attachments bucket:
--- direct client writes are denied so they can't bypass the §10.1 byte guard.
--- The service-role Edge Function (which receives + inspects the body) is the
--- ONLY writer. Not a signed upload URL: uploadToSignedUrl writes direct to
--- Storage without the function seeing bytes, defeating the encb:v1: check (§10.1).
 
--- DELETE is allowed directly for workspace writers — delete removes an object,
--- there is no body to inspect, so the §10.1 byte guard doesn't apply and a
--- writer-only RLS policy is sufficient (and is REQUIRED: without it BlobStore.delete()
--- is default-denied, so §16 GC and the §10.1 poison-correction can't reap objects).
+-- INSERT is a DIRECT writer-gated upload. The WITH CHECK keys on the path's
+-- first segment, so a writer can only write into a workspace they write — there
+-- is no separate workspace param to spoof. The array_length check enforces the
+-- FLAT layout (exactly &lt;ws&gt;/&lt;content-key&gt;, one folder level): without it a
+-- writer could upload &lt;ws&gt;/sub/plaintext — RLS-allowed (first segment is their
+-- workspace) but hidden from the audit's top-level scan, so plaintext could
+-- evade the §10.1 tripwire under an E2EE subfolder. There is intentionally NO
+-- body inspection: a storage.objects policy can't see the body bytes (§10.1).
+create policy "attachments insert by workspace writer"
+on storage.objects for insert to authenticated
+with check (
+  bucket_id = 'attachments'
+  and array_length(storage.foldername(name), 1) = 1   -- flat: &lt;ws&gt;/&lt;key&gt; only
+  and right(name, 1) &lt;&gt; '/'                          -- non-empty content-key
+  and private.is_workspace_writer(
+        (storage.foldername(name))[1],   -- &lt;workspace_id&gt;
+        (auth.uid())::text)
+);
+
+-- NO update policy → an object is write-once (immutability). The path IS the
+-- content key (§10), so a second upload to an existing path is a Storage 409 the
+-- client reads as first-write-wins idempotent dedup, never an overwrite. Storage
+-- needs UPDATE for every other mutation verb too — upsert, move (rename), and
+-- copy-onto-existing all require UPDATE — so with no UPDATE policy NONE of them
+-- can overwrite an existing object. A writer's only mutation is delete (then a
+-- fresh insert) — the accepted §17 poison, not a silent overwrite.
+
+-- DELETE is a direct writer-gated delete — delete removes an object, there is no
+-- body to inspect, and it is REQUIRED: without it BlobStore.delete() is
+-- default-denied, so §16 GC and the §10.1 poison-correction can't reap objects.
 create policy "attachments delete by workspace writer"
 on storage.objects for delete to authenticated
 using (
@@ -1053,11 +1112,11 @@ using (
         (auth.uid())::text)
 );</code></pre>
 
-<p>So the mutation split is: <strong>writes</strong> go through the body-inspecting Edge Function
-  (§10.1); <strong>deletes</strong> are a direct, writer-only RLS delete (no byte to inspect);
-  <strong>reads</strong> are direct, member-gated RLS. <code>BlobStore.delete()</code> (used by §16 GC
-  and the §10.1 poison-correction delete — <em>not</em> by undo, §9) uses that delete policy — without it,
-  objects could never be reclaimed.</p>
+<p>So the mutation split is: <strong>reads</strong> member-gated, <strong>inserts</strong> and
+  <strong>deletes</strong> writer-gated, <strong>updates</strong> denied (immutability) — all direct RLS,
+  no mediating service. <code>BlobStore.delete()</code> (used by §16 GC and the §10.1 poison-correction
+  delete — <em>not</em> by undo, §9) uses that delete policy — without it, objects could never be
+  reclaimed.</p>
 
 <div class="warn">
 <strong>The <code>private.*</code> grant is not free — verify it, don't assume parity with
@@ -1077,69 +1136,76 @@ query time or silently denies all reads.
   non-member from hoarding ciphertext against a future key compromise, and avoids leaking object
   existence. For a plaintext workspace it is the actual access boundary.</p>
 
-<h3>10.1 Server-side ciphertext enforcement for E2EE bytes</h3>
+<h3>10.1 No server-side write guard — direct writes, with a read-side backstop</h3>
 
-<p>RLS is not the ciphertext guarantee. For blocks, a server trigger <em>rejects</em> a plaintext
-  write to an E2EE workspace (<code>is_enc_v1_envelope</code> shape-check), so "the server only ever
-  sees ciphertext" does not rest solely on the client upload hook. The naïve analog —
-  "<code>storage.objects</code> trigger that checks the bytes" — <strong>does not work</strong>:
-  Supabase Storage object policies/triggers see object <em>metadata</em> (path, owner, size), not the
-  <em>body bytes</em>, so they cannot inspect the envelope. A check that can read bytes has to sit in
-  code on the write path — and that code only enforces anything if it is the <em>only</em> write path.</p>
+<p>RLS is not a ciphertext guarantee, and — unlike blocks — there is no server-side one either. For
+  blocks, a server trigger <em>rejects</em> a plaintext write to an E2EE workspace
+  (<code>is_enc_v1_envelope</code> shape-check), because Postgres has the row body inline. The naïve
+  analog for bytes — "a <code>storage.objects</code> trigger that checks the body" — <strong>cannot
+  exist</strong>: Supabase Storage object policies/triggers see object <em>metadata</em> (path, owner,
+  size), never the <em>body bytes</em> — the bytes live in S3 and <code>storage.objects</code> is just a
+  metadata row. A check that reads bytes could only sit in code on the write path, and would only enforce
+  anything if that code were the <em>sole</em> writer (a mediating Edge Function). We deliberately do
+  <strong>not</strong> pay that.</p>
 
 <div class="decision">
-<strong>Decision: a guarded upload service is the sole writer; direct client writes are denied.</strong>
-Attachments must match the block guarantee — the server enforces ciphertext, not by client
-convention. So: <strong>(1)</strong> the <code>attachments</code> bucket grants no
-<code>insert</code>/<code>update</code> to <code>authenticated</code> (§10); and <strong>(2)</strong>
-all uploads go through an upload-mediating <strong>Edge Function</strong> that <em>receives and
-inspects the body bytes itself</em> and then writes them with service-role. Per request it:
-<ol>
-  <li><strong>Authenticates the caller's JWT and authorizes the write</strong> — checks
-    <code>private.is_workspace_writer(&lt;workspace_id&gt;, caller)</code> for the path's first segment
-    — <em>before</em> using the bypass-RLS credential. The service-role write must re-impose the
-    authorization that direct RLS would have enforced; otherwise a read-only or recently-removed member
-    who can invoke the function could write <code>&lt;ws&gt;/&lt;content-key&gt;</code> bytes that
-    <code>blocks_write</code> / storage policies deny.</li>
-  <li><strong>Inspects the bytes</strong> — for an object under an <strong>E2EE-workspace
-    prefix</strong>, rejects bodies not beginning with the <code>encb:v1:</code> magic + the minimum
-    nonce(12)+tag(16) length (the binary analog of <code>is_enc_v1_envelope</code>), with a
-    <em>permanent</em>-failure response that moves the client's §9 record to the
-    <code>failed</code> state — it quarantines the upload rather than retrying forever in a hot loop
-    (a shape rejection clears only once the client is fixed; §9 covers the opportunistic re-attempt). Shape-only
-    (the server has no key), sufficient to keep bare plaintext out.</li>
-  <li><strong>Enforces write-once by content-addressing — no token.</strong> The path <em>is</em> the
-    content key (§10), so an edit is automatically a <em>different</em> path: no same-path overwrite race, no
-    &quot;older version&quot; to strand the asset. A PUT to a <em>new</em> path writes; a PUT to an
-    <em>existing</em> path is <strong>first-write-wins success</strong> (<code>200</code>), never an
-    overwrite — which doubles as the idempotency key (a lost-response retry finds the object present and
-    succeeds, so no random token is needed). But the uploading client must <strong>not</strong> clear its §9
-    queue entry on a bare existing-path <code>200</code>: it first fetches + hash-verifies the stored object
-    against its own <code>hash</code> — on a match it clears (genuine idempotent dedup), on a mismatch (a
-    poisoned or buggy prior write) it keeps its bytes and runs the writer-delete + re-upload (below) rather
-    than dropping the only good copy. The function must persist <strong>atomically</strong> (reject an
-    incomplete body, so a partial upload can't win the path) — a phase-2 task is to confirm the function →
-    service-role-Storage relay <em>can</em> write all-or-nothing (buffer-then-PUT with a <code>Content-Length</code>
-    check, or write-temp-then-server-copy); if it can't, a truncated body that wins the path simply degrades to
-    the poison case (the read-side hash check fail-closes it, correctable by writer-delete + re-PUT), never a
-    spoof. The guard can't verify the body <em>matches</em>
-    the content key (no key, sees only ciphertext); a garbage or truncated PUT is caught fail-closed by the
-    read-side hash check (§5.1). First-write-wins makes a bad first write <strong>sticky until the path is
-    freed</strong> (not permanently terminal) — an accidentally corrupt path is correctable by a writer
-    delete + re-upload (§10 writer-delete RLS), but an <em>active</em> member-poisoner can DoS a known asset
-    (delete-then-re-PUT doesn't terminate against them, so after a bounded number of correction cycles the
-    client stops looping and moves its §9 record to the <code>failed</code> state (§9 — keeps its exempt
-    bytes, surfaces for discard, and re-attempts opportunistically once the path is freed or the object
-    materializes; burning neither egress nor function invocations in a hot loop meanwhile): a
-    named tradeoff in §17.</li>
-</ol>
-<strong>Not a signed-upload token.</strong> Minting a one-shot signed upload URL would let the client
-<code>uploadToSignedUrl</code> the body <em>directly to Storage</em>, which Supabase accepts without
-the function seeing the bytes — defeating the magic check. The body must flow <em>through</em> the
-function. The §9 byte-upload queue therefore drains <em>to this function</em>, not to Storage directly.
-Cost: every upload is one function invocation that streams the body (latency + per-call cost);
-acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). Lands in phase&nbsp;2
-(§15) with the bucket + RLS migration.</div>
+<strong>Decision (reversal, 2026-06-25): direct writer-gated uploads; no body-inspecting upload service.</strong>
+An earlier draft made a service-role Edge Function the sole writer so the server could enforce the
+<code>encb:v1:</code> byte shape, matching the block trigger. We reversed it: that guard is not worth a
+function on every upload, because the byte-confidentiality <em>outcome</em> is already closed elsewhere.
+<ul>
+  <li><strong>The guard was shape-only, and a malicious writer forges it.</strong> The check is an 8-byte
+    magic compare (the server has no key); a writer who wants the server to see plaintext sends
+    <code>encb:v1:</code>‖zeros‖plaintext‖zeros and passes it — or just exfiltrates with the workspace key
+    they already hold. Against the threat that matters (a malicious writer / the untrusted server) it buys
+    nothing.</li>
+  <li><strong>The read side fail-closes — and that is now the sole byte-confidentiality control, so it was a
+    hard Phase-3 acceptance gate.</strong> The resolver (§7.3,
+    <strong>built — <code>src/attachments/resolver.ts</code></strong>) hash-verifies every fetched object
+    against the block's synced
+    <code>hash</code> and AEAD-opens it (§5.1/§7.3); anything that isn't the genuine plaintext (a fetch
+    failure, an AEAD-open failure, or a hash mismatch — including a poisoned object that AEAD-opens under a
+    known-hash AAD) renders a
+    broken-image placeholder and is <em>never stored or served as content</em>. Phase 1 shipped the primitives
+    (<code>decodeBytes</code>, <code>verifyContentHash</code>); Phase 3 wired them into the resolver — with the
+    tamper/swap and hash-mismatch tests §15 lists — which is what makes this reversal safe; nothing read
+    these objects until it landed. (This is the principled asymmetry with blocks: bytes are content-addressed
+    and self-verifying on read; block text is not — so byte-confidentiality <em>can</em> rest on a read-side
+    check where block-confidentiality can't.)</li>
+  <li><strong>It is a no-op for plaintext workspaces</strong> — no body to protect; the server holds those
+    bytes by design.</li>
+  <li><strong>The one residual</strong> it uniquely caught is an <em>honest</em> client with an encryption
+    regression accidentally uploading bare plaintext into an E2EE prefix — harmless to readers (fail-closed)
+    but visible to the untrusted server at rest until GC. We cover that with an <strong>off-path periodic
+    audit</strong> (<code>scripts/attachments-ciphertext-audit.ts</code>) that scans E2EE prefixes and
+    <em>alerts</em> on any object that is not a plausible <code>encb:v1:</code> envelope — missing the magic,
+    or carrying the magic but shorter than the envelope minimum (magic + nonce + tag), so a truncated runt
+    can't pass on the prefix alone — turning a client bug loud without putting a function on the write path. It alerts, it does not delete (deleting can't un-see what the server already
+    holds, and a one-test client invariant catches the bug class more cheaply).</li>
+</ul>
+So the write path is a <strong>direct, RLS-gated insert</strong> (§10): the <code>WITH CHECK</code> keys on
+the path's first workspace segment, re-imposing exactly the writer authorization the removed function did
+(and closing the same cross-workspace path-smuggling — the policy evaluates the <em>real</em> first segment
+of the object being written, not a spoofable param). What the function did that native RLS now does:
+<strong>authorization</strong> (writer INSERT policy), <strong>write-once immutability</strong> (no UPDATE
+policy → a re-upload to an existing content path is a Storage <code>409</code> the client reads as
+first-write-wins idempotent dedup, never an overwrite), and the <strong>size cap</strong> (the bucket's
+<code>file_size_limit</code>). The <code>encb:v1:</code> shape is now the <em>client's</em> pre-upload
+invariant (§9), backstopped read-side and by the audit. (Storage finalizes an object only on a complete
+upload, so a truncated request can't win a path with a partial object — the atomicity the function had to
+hand-roll is now the platform's.)</div>
+
+<p><strong>Existing-path dedup still hash-verifies</strong> (in the §9 up-lane drain — Phase 5, not yet
+  wired). On a <code>409</code> the uploading client must
+  <strong>not</strong> blindly clear its §9 queue entry: it fetches + hash-verifies the stored object against
+  its own <code>hash</code> — on a match it clears (genuine idempotent dedup); on a mismatch (a poisoned or
+  buggy prior write) it keeps its bytes and runs writer-delete + re-upload rather than dropping the only good
+  copy. First-write-wins makes a bad first write <strong>sticky until the path is freed</strong> — an
+  accidentally corrupt path is correctable by a writer delete + re-upload (§10 writer-delete RLS), but an
+  <em>active</em> member-poisoner can DoS a known asset (delete-then-re-PUT doesn't terminate against them),
+  so after a bounded number of correction cycles the client moves its §9 record to <code>failed</code> (§9 —
+  keeps its exempt bytes, surfaces for discard, re-attempts opportunistically once the path frees): a named
+  tradeoff in §17.</p>
 
 <p>Per the project's Supabase rule, the bucket + its RLS land in one migration with
   <code>storage.objects</code> policies enabled; no public table is created without RLS.</p>
@@ -1180,9 +1246,13 @@ acceptable for the guarantee, and reads stay direct/RLS-gated (the hot path). La
     boot-reconciler reap, which drops a record whose <em>own</em> block is absent-past-checkpoint while
     keeping shared bytes — different antecedent, same content-refcount gate.)</li>
   <li><strong>On capture:</strong> client-side mime/size guard → hash → create the asset block at a
-    <strong>deterministic, content-derived id</strong> (<code>media:&lt;content-key&gt;</code> — the keyed
-    hash for E2EE, raw <code>sha256</code> for plaintext, workspace-scoped, exactly like the storage path
-    §10). Mint it through the codebase's established deterministic-id helper
+    <strong>deterministic, content-derived id</strong> — <code>uuidv5(&lt;workspaceId&gt;:&lt;content-key&gt;)</code>,
+    where the content-key is the keyed hash for E2EE, raw <code>sha256</code> for plaintext (workspace-scoped,
+    like the storage path §10). It MUST be a <strong>UUID</strong>: the embed is a block-ref
+    (<code>!((id))</code>) and the block-ref grammar only matches UUID-shaped targets, so a literal
+    <code>media:&lt;content-key&gt;</code> id would render as plain <code>!((media:…))</code> text, never a media
+    embed. (The <code>media:…</code> form earlier in this doc is shorthand for "deterministic, content-derived",
+    not the literal id string.) Mint it through the codebase's established deterministic-id helper
     (<code>createOrRestoreTargetBlock</code> — the path daily-notes / roam-import / alias-seats already use),
     <em>not</em> a bare <code>createOrGet</code>: that helper (a) <code>systemMint</code>s the row at the
     pristine <code>updated_at = 0</code> sentinel, so two devices' first pastes reconcile to one row instead
@@ -1329,8 +1399,10 @@ vNext; the v1 commitment is only the reserved property + audience flag.
   // the content path IS the idempotency key: a re-PUT to an existing path is
   // first-write-wins success (§10.1). The plaintext sha256 never reaches the origin
   // as such: for E2EE the wire path is the HMAC, unguessable without K_id (no oracle, §10).
-  put(workspaceId, contentKey, bytes): Promise&lt;void&gt;
-  url(workspaceId, contentKey): string
+  put(workspaceId, contentKey, bytes): Promise&lt;void&gt;     // direct, RLS-gated writer upload (§10.1)
+  get(workspaceId, contentKey): Promise&lt;Uint8Array&gt;       // bytes, not a url: the private
+  //   bucket (§10) rules out a bare &lt;img src&gt;; the resolver fetches → decrypts →
+  //   hash-verifies (§5.1/§7.3), so the seam returns BYTES the resolver turns into an object URL.
   delete(workspaceId, contentKey): Promise&lt;void&gt;
 }</code></pre>
 
@@ -1351,9 +1423,13 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       decrypted bytes against the block's <code>hash</code> (§5.1). Unit tests incl. the
       plaintext-identity case, a tamper/swap test, and a stale-ciphertext-replay test.</td></tr>
 <tr><td>2 — storage + RLS</td>
-    <td><code>attachments</code> bucket migration; membership storage RLS (with the explicit
-      <code>private</code>-schema grants / wrapper, §10); the E2EE byte-ciphertext upload guard (§10.1);
-      <code>BlobStore</code> over Supabase Storage. Post-create RLS audit per the Supabase rule.</td></tr>
+    <td><code>attachments</code> bucket migration; storage RLS — read by member, insert/delete by writer,
+      no update = immutability (with the explicit <code>private</code>-schema grants / wrapper, §10);
+      <code>BlobStore</code> over Supabase Storage (direct writer-gated upload, §10.1); off-path
+      ciphertext audit. The RLS contract (writer-gated flat insert, member read, no-update
+      immutability, writer delete) is verified end-to-end against a real stack with real gotrue
+      users by <code>scripts/attachments-rls-verify.ts</code> (a pre-deploy gate, not in
+      <code>yarn run check</code> — it needs a live stack; 13/13).</td></tr>
 <tr><td>3 — cache + resolver (in-thread)</td>
     <td>An in-thread asset resolver: fetch ciphertext (RLS-gated Storage <code>GET</code> with the app's
       session) → decrypt / passthrough / fail-closed per the three-valued materializability (pin read is
@@ -1369,8 +1445,8 @@ vNext; the v1 commitment is only the reserved property + audience flag.
 <tr><td>5 — capture + up-lane</td>
     <td>paste / drop / file-pick arms (through <code>pasteDecisionVerb</code>); deterministic content-derived
       block id via <code>createOrRestoreTargetBlock</code> (dedup is automatic, §11); optimistic write to the durable byte
-      store (§8); the up-lane drain to §10.1 (encode at drain) with the <code>staged → pending</code>
-      lifecycle + boot reconciler (§9).</td></tr>
+      store (§8); the up-lane drain — direct upload, encode at drain (§10.1) — with the
+      <code>staged → pending</code> lifecycle + boot reconciler (§9).</td></tr>
 <tr><td>6 — background replication (down-lane)</td>
     <td>the down-lane reconciler (walk active-workspace <code>media</code> blocks → fetch / verify /
       store); the shared demand + backlog priority lanes with in-flight coalescing (§8); the replication
@@ -1389,8 +1465,15 @@ vNext; the v1 commitment is only the reserved property + audience flag.
     scoping the OPFS byte store by <code>user_id</code> and preserving the keyStore's
     <code>(user_id, workspace_id)</code> keying under an account <em>switch</em>, so account A's cache /
     keys can never serve account B (§7.3).</li>
-  <li><strong>Max inline size + large-media story:</strong> a v1 cap (e.g. 10&nbsp;MB) with a clear
-    error, deferring resumable/tus upload to vNext. Where exactly is the cap enforced?</li>
+  <li><strong>Max inline size + large-media story (RESOLVED — cap shipped):</strong> the cap is
+    enforced at <strong>50&nbsp;MiB</strong> (<code>DEFAULT_MAX_CAPTURE_BYTES</code>) in three layers:
+    (a) a client, mode-aware reject on the <em>encoded</em> size (plaintext + the e2ee envelope
+    overhead) BEFORE staging in <code>captureMedia</code> (→ <code>too-large</code>, with a user
+    message); (b) a client pre-read <code>file.size</code> fast-path in
+    <code>captureMediaFromFiles</code> so a multi-GB paste is rejected before <code>arrayBuffer()</code>;
+    (c) the bucket's server-side <code>file_size_limit&nbsp;=&nbsp;52428800</code>, with a 413 /
+    <code>EntityTooLarge</code> mapped to a permanent failure. What remains vNext is only the
+    <em>large-media</em> story: no resumable/chunked (tus) upload, so 50&nbsp;MiB is a hard ceiling.</li>
   <li><strong>Asset block deletion → byte GC (must be conservative under content-addressing):</strong>
     because one content-addressed object may back several blocks (§11), deleting a block does <em>not</em>
     delete the object. Object GC is <strong>content-reference-counted</strong>, but the refcount can only
@@ -1455,11 +1538,17 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       PowerSync monotonicity on the byte lane).</td>
     <td>Closed by verifying decrypted bytes against the block's synced <code>hash</code> on read
       (§5.1) — not left as a residual.</td></tr>
-<tr><td>Server byte-ciphertext enforcement is a deliberate add</td>
-    <td>A body-inspecting mediating Edge Function as the sole write path (a
-      <code>storage.objects</code> trigger can't see body bytes, §10.1).</td>
-    <td><strong>Decided: ship it</strong> (§10.1), so the byte ciphertext guarantee matches the block
-      trigger rather than resting on client correctness.</td></tr>
+<tr><td>No server-side byte-ciphertext enforcement (reversal)</td>
+    <td>The <code>encb:v1:</code> shape rests on the client encoding correctly before upload (§9), not on a
+      server check — a <code>storage.objects</code> policy can't see body bytes (§10.1), so the only
+      enforcement point would be a sole-writer Edge Function on every upload.</td>
+    <td><strong>Decided: dropped</strong> (§10.1, 2026-06-25). The guard was shape-only (a malicious writer
+      forges the 8-byte magic), a no-op for plaintext, and the served-plaintext outcome is fail-closed
+      read-side (§5.1/§7.3 — the resolver's hash-verify gate, now built, since the reversal makes that
+      read-check the sole
+      byte-confidentiality control); its only residual — an honest client accidentally uploading plaintext —
+      is caught by an off-path audit (<code>scripts/attachments-ciphertext-audit.ts</code>), not worth a
+      function on the write path.</td></tr>
 <tr><td>Bytes off the sync path</td>
     <td>A second durable upload queue; eventual consistency between metadata and bytes; undo is a pure
       soft-delete — the byte lane self-heals, no compensator (§9).</td>
@@ -1483,7 +1572,7 @@ vNext; the v1 commitment is only the reserved property + audience flag.
 <tr><td>First-write-wins is poisonable by a member</td>
     <td>Any member can compute <code>HMAC(K_id, sha256(x))</code> and pre-occupy a content path with
       garbage; first-write-wins then silently no-ops the honest upload of that exact content → a
-      workspace-wide broken image. The predictable <code>media:&lt;content-key&gt;</code> block id (§11) is a
+      workspace-wide broken image. The predictable <code>uuidv5(workspace:content-key)</code> block id (§11) is a
       second pre-occupiable target, but the consequence is identical and bounded (a member-authored,
       soft-deletable / restorable block whose hash-mismatch renders fail-closed) — a widened DoS surface, not
       a new spoof. A content-targeted DoS primitive the block-id path lacked.</td>
@@ -1526,7 +1615,8 @@ vNext; the v1 commitment is only the reserved property + audience flag.
     block" (§3) is load-bearing: metadata sync, encryption (<code>transform.ts</code>), undo, and
     permissions all come for free by riding the existing block path. The fragile parts are exactly
     where the <em>byte</em> lane <em>diverges</em> from how blocks already work — blocks have
-    <code>ps_crud</code> (→ we need a §9 queue), a server ciphertext trigger (→ a §10.1 guard), and
+    <code>ps_crud</code> (→ we need a §9 queue), a server ciphertext trigger (→ bytes can't have one,
+    §10.1, so confidentiality leans on the §5.1 read check + an off-path audit), and
     PowerSync monotonicity (→ a §5.1 hash check). Each divergence had to re-solve a problem blocks
     already solved. Prefer mirroring the block mechanism over inventing a byte-specific one wherever
     the choice exists.</li>

@@ -14,6 +14,7 @@
  * `RescheduleToast`'s direct-action-with-Undo philosophy.
  */
 import { useState } from 'react'
+import { truncate } from '@/utils/string'
 import { Button } from '@/components/ui/button'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.js'
 import { navigate } from '@/utils/navigation.js'
@@ -39,9 +40,6 @@ export interface AliasCollisionToastProps {
   offerMerge: boolean
   repo: Repo
 }
-
-const truncate = (s: string, n: number): string =>
-  s.length <= n ? s : `${s.slice(0, n - 1)}…`
 
 export const AliasCollisionToast = ({
   toastId,

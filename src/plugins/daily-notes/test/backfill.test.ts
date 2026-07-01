@@ -2,12 +2,10 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { aliasesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { getOrCreateDailyNote } from '../dailyNotes.ts'
 import { dailyNoteDateValue } from '../dailyNotes.ts'
 import { dailyNotesDataExtension } from '../dataExtension.ts'
@@ -26,14 +24,11 @@ let env: Harness
 
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
-  let id = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: sharedDb.db,
-    cache: new BlockCache(),
     user: USER,
-    newId: () => `gen-${++id}`,
+    extensions: [dailyNotesDataExtension],
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, dailyNotesDataExtension]))
   repo.setActiveWorkspaceId(WS)
   return {h: sharedDb, repo}
 }
@@ -86,7 +81,6 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   vi.useRealTimers()
-  env.repo.stopSyncObserver()
 })
 
 describe('dailyNoteDateBackfill', () => {

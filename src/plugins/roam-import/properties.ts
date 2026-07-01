@@ -50,18 +50,6 @@ export const inferRefListTargetTypes = (
 export const isDailyNoteAlias = (alias: string): boolean =>
   parseLiteralDailyPageTitle(alias) !== null
 
-export const uniqueStrings = (values: readonly string[]): string[] => {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const value of values) {
-    const trimmed = value.trim()
-    if (!trimmed || seen.has(trimmed)) continue
-    seen.add(trimmed)
-    out.push(trimmed)
-  }
-  return out
-}
-
 export const uniqueExactStrings = (values: readonly string[]): string[] => {
   const out: string[] = []
   const seen = new Set<string>()

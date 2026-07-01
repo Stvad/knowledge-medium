@@ -19,10 +19,13 @@ interface WikilinkComponentProps {
   children?: ReactNode
 }
 
-export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
-  const data = block.peek()
-  if (!data) return null
-
+export const wikilinkMarkdownExtension: MarkdownExtension = ({block, data}) => {
+  // Build the alias→id map from the reactive render `data`, NOT `block.peek()`:
+  // the resolver is memoized (React Compiler) on the identity-stable `block`,
+  // so a peek() read would freeze with whatever references existed at first
+  // render and never pick up the async parse (link stays unresolved until a
+  // remount). See MarkdownRenderContext.data.
+  //
   // Block refs store alias === id (both the target UUID); page refs store the
   // human-typed alias separately from the resolved id. Filter to the latter
   // so a stray [[uuid]] wikilink can't silently resolve via a block-ref entry.

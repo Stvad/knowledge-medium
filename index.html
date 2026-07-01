@@ -5,7 +5,8 @@
     <link rel="icon" type="image/svg+xml" href="./icon.svg" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <link rel="manifest" href="./manifest.webmanifest" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- interactive-widget=resizes-content shrinks the LAYOUT viewport when the on-screen keyboard opens, so the mobile editing toolbar (position:fixed; bottom:0) rides above the keyboard on Chromium (Chrome/Edge/Samsung) and Firefox. Safari ignores the key: there the layout viewport stays full-height and fixed elements are layout-anchored, so bottom:0 sits BEHIND the keyboard and useKeyboardInset supplies the lift instead. Load-bearing for src/plugins/mobile-keyboard-toolbar. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="theme-color" content="#1e1b4b" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />

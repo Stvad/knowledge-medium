@@ -7,12 +7,13 @@ import {
   codecs,
   defineProperty,
 } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
+import { useEffect } from 'react'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { propertySchemasFacet } from '@/data/facets'
-import { focusedBlockLocationProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
+import { usePropertyValue } from '@/hooks/block'
+import { focusedBlockLocationProp, isCollapsedProp, showPropertiesProp, topLevelBlockIdProp } from '@/data/properties'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
@@ -20,7 +21,7 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
 import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
-import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
+import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
@@ -72,6 +73,12 @@ vi.mock('@/data/globalState.ts', async () => {
 vi.mock('@/paste/operations.ts', () => ({
   pasteMultilineText: vi.fn(async () => []),
   pasteFromClipboard: vi.fn(async () => []),
+  // The renderer resolves the decision (+ any media capture) through this; for a
+  // plain text paste it returns the split decision and the text unchanged.
+  resolvePasteWithMediaCapture: vi.fn(async (_runtime: unknown, request: { text: string }) => ({
+    decision: { kind: 'split' as const },
+    text: request.text,
+  })),
 }))
 
 const statusProp = defineProperty<string>('test:status', {
@@ -80,10 +87,14 @@ const statusProp = defineProperty<string>('test:status', {
   changeScope: ChangeScope.BlockDefault,
 })
 
-const propertyOnlyLayout: BlockLayout = ({Properties, shellProps}) => (
-  <div {...shellProps}>
-    {Properties && <Properties />}
-  </div>
+const propertyOnlyLayout: BlockLayout = ({Properties, Shell}) => (
+  <Shell>
+    {(shellProps) => (
+      <div {...shellProps}>
+        {Properties && <Properties />}
+      </div>
+    )}
+  </Shell>
 )
 
 const TestContentRenderer = ({block}: BlockRendererProps) => (
@@ -114,19 +125,7 @@ describe('DefaultBlockRenderer paste handling', () => {
 
     await resetTestDb(sharedDb.db)
     h = sharedDb
-    let now = 1700_000_000_000
-    let txSeq = 0
-    repo = new Repo({
-      db: h.db,
-      cache: new BlockCache(),
-      user: {id: 'user-1'},
-      now: () => ++now,
-      newId: () => crypto.randomUUID(),
-      newTxSeq: () => ++txSeq,
-      startSyncObserver: false,
-    })
-    runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
+    const extensions = [
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       defaultEditorInteractionExtension,
@@ -135,8 +134,14 @@ describe('DefaultBlockRenderer paste handling', () => {
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
         {source: 'test'},
       ),
-    ])
-    repo.setFacetRuntime(runtime)
+    ]
+    repo = createTestRepo({
+      db: h.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions,
+    }).repo
+    runtime = repo.facetRuntime!
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
 
@@ -180,7 +185,6 @@ describe('DefaultBlockRenderer paste handling', () => {
     cleanup()
     repoRef.current = undefined
     uiStateBlockRef.current = undefined
-    repo.stopSyncObserver()
   })
 
   const renderBlock = () =>
@@ -267,5 +271,101 @@ describe('DefaultBlockRenderer paste handling', () => {
     const remountedShell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
     expect(remountedShell).not.toBe(firstShell)
     await waitFor(() => expect(document.activeElement).toBe(remountedShell))
+  })
+})
+
+// Counts every mount of the content so a remount (vs a re-render) is visible.
+let contentMountCount = 0
+const CountingContentRenderer = ({block}: BlockRendererProps) => {
+  useEffect(() => {
+    contentMountCount += 1
+  }, [])
+  return <div className="counting-content">{block.id}</div>
+}
+
+// A layout that wraps Content in the opt-in Shell and re-renders on a reactive
+// prop (isCollapsed) — i.e. the exact shape the default layout has. Toggling the
+// prop recreates the layout's `<Shell>` render-prop closure; the content must
+// NOT remount as a result (stable-identity invariant).
+const ContentShellLayout: BlockLayout = ({Content, Shell, block}) => {
+  const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  return (
+    <Shell>
+      {(shellProps) => (
+        <div {...shellProps} data-collapsed={String(isCollapsed)}>
+          <Content />
+        </div>
+      )}
+    </Shell>
+  )
+}
+
+describe('DefaultBlockRenderer slot identity', () => {
+  let sharedDb: TestDb
+  let repo: Repo
+  let runtime: FacetRuntime
+
+  beforeAll(async () => { sharedDb = await createTestDb() })
+  afterAll(async () => { await sharedDb.cleanup() })
+  beforeEach(async () => {
+    contentMountCount = 0
+    await resetTestDb(sharedDb.db)
+    repo = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [
+        defaultEditorInteractionExtension,
+        blockLayoutFacet.of(
+          () => ({id: 'content-shell', label: 'Content + shell', render: ContentShellLayout}),
+          {source: 'test'},
+        ),
+      ],
+    }).repo
+    runtime = repo.facetRuntime!
+    repo.setActiveWorkspaceId('ws-1')
+    repoRef.current = repo
+
+    await repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Root'})
+      await tx.create({id: 'block-1', workspaceId: 'ws-1', parentId: 'root', orderKey: 'a0', content: 'Block'})
+      await tx.create({
+        id: 'ui-state', workspaceId: 'ws-1', parentId: null, orderKey: 'a1',
+        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root')},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'slot-identity fixture'})
+    uiStateBlockRef.current = repo.block('ui-state')
+  })
+
+  afterEach(() => {
+    cleanup()
+    repoRef.current = undefined
+    uiStateBlockRef.current = undefined
+  })
+
+  it('does not remount the content subtree when a collapse toggle re-renders the layout', async () => {
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('block-1')} ContentRenderer={CountingContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await screen.findByText('block-1')
+    await waitFor(() => expect(contentMountCount).toBe(1))
+
+    // Toggle a prop the layout reads → the layout re-renders and hands Shell a
+    // fresh render-prop closure. The content must re-render, not remount.
+    await act(async () => {
+      await repo.block('block-1').set(isCollapsedProp, true)
+    })
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-collapsed="true"]')).toBeTruthy(),
+    )
+    expect(contentMountCount).toBe(1)
   })
 })

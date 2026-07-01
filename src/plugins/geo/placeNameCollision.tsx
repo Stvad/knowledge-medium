@@ -24,6 +24,7 @@
  * the toast, and `null` means the user cancelled.
  */
 import { useState } from 'react'
+import { truncate } from '@/utils/string'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { dismissToast, showCustom } from '@/utils/toast'
@@ -45,9 +46,6 @@ export interface InteractivePlaceResult {
    *  existing block's alias); for a renamed create it's the new name. */
   linkName: string
 }
-
-const truncate = (s: string, n: number): string =>
-  s.length <= n ? s : `${s.slice(0, n - 1)}…`
 
 /** Best link-name for a block: first human alias, else content, else
  *  the caller's fallback. Mirrors the autocomplete's display logic. */

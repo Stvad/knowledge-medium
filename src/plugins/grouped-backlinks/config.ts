@@ -6,6 +6,7 @@ import {
   type BlockData,
   type Codec,
 } from '@/data/api'
+import { uniqueStrings } from '@/utils/array'
 
 export interface GroupedBacklinksConfig {
   highPriorityTags: string[]
@@ -64,15 +65,6 @@ export const INITIAL_GROUPED_BACKLINKS_CONFIG: GroupedBacklinksConfig = {
     '^[A-Z][a-z]+ \\d{1,2}(st|nd|rd|th), \\d{4}$',
   ],
 }
-
-const uniqueStrings = (value: unknown): string[] =>
-  Array.from(new Set(
-    Array.isArray(value)
-      ? value.filter((item): item is string => typeof item === 'string')
-        .map(item => item.trim())
-        .filter(Boolean)
-      : [],
-  ))
 
 const stringList = (record: Record<string, unknown>, key: string): string[] =>
   uniqueStrings(record[key])

@@ -1,23 +1,14 @@
-import { Fragment, ReactNode } from 'react'
-import Markdown from 'react-markdown'
-import type { Components } from 'react-markdown'
+import { ReactNode } from 'react'
+import { BlockComponent } from '@/components/BlockComponent'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
 import { useRepo } from '@/context/repo'
-import { useBlockContext } from '@/context/block'
-import { useBlockExists, useContent, useWorkspaceId } from '@/hooks/block'
-import { useAppRuntime } from '@/extensions/runtimeContext'
-import { markdownExtensionsFacet } from '@/markdown/extensions'
-import { buildAppHash } from '@/utils/routing'
-import { useOpenBlock } from '@/utils/navigation'
+import { useBlockExists } from '@/hooks/block'
+import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js'
 import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
+import { ReferenceLink } from './ReferenceLink'
 
-// Force the inner Markdown render to stay inline — block-level elements
-// (paragraph, lists, headings) inside a ref span would break flow with the
-// surrounding text. Block-level wrappers collapse to fragments; their
-// children still get the configured remark/components treatment.
-const inlineComponents: Components = {
-  p: ({children}: {children?: ReactNode}) => <Fragment>{children}</Fragment>,
-}
+const REFERENCE_CONTEXT_OVERRIDES = {isNestedSurface: true, isReference: true}
 
 const hasDisplayChildren = (children: ReactNode) =>
   children !== undefined
@@ -26,16 +17,31 @@ const hasDisplayChildren = (children: ReactNode) =>
 
 const shortBlockRef = (blockId: string) => `((${blockId.slice(0, 8)}…))`
 
-export function BlockRef({blockId, children}: {blockId: string; children?: ReactNode}) {
+/**
+ * Inline block reference (`((id))`). A reference is the SAME block, rendered
+ * through the one block-rendering pipeline with the reference layout (which
+ * picks the block's raw content and wraps it in a navigating link). This thin
+ * entry only handles the states that must short-circuit *before* mounting the
+ * target: unresolved, cycle, and the alias case (where a human-typed display
+ * string replaces the content, so there's no reason to mount the target at
+ * all). Everything else flows into `BlockComponent`.
+ */
+export function BlockRef({
+  blockId,
+  sourceBlockId,
+  occurrenceId,
+  children,
+}: {
+  blockId: string
+  sourceBlockId?: string
+  occurrenceId?: string
+  children?: ReactNode
+}) {
   const repo = useRepo()
-  const {panelId} = useBlockContext()
+  const blockContext = useBlockContext()
   const ancestors = useBlockRefAncestors()
   const target = repo.block(blockId)
   const targetExists = useBlockExists(target)
-  const content = useContent(target)
-  const workspaceId = useWorkspaceId(target, repo.activeWorkspaceId ?? '')
-  const runtime = useAppRuntime()
-  const onClick = useOpenBlock({blockId, workspaceId})
   const display = hasDisplayChildren(children) ? children : null
 
   if (!targetExists) {
@@ -54,32 +60,27 @@ export function BlockRef({blockId, children}: {blockId: string; children?: React
     )
   }
 
-  const href = buildAppHash(workspaceId, blockId)
-
-  const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
-  const baseConfig = resolveMarkdownConfig({block: target, blockContext: {panelId}})
-  const markdownConfig = {
-    ...baseConfig,
-    components: {...baseConfig.components, ...inlineComponents},
+  // Alias short-circuit: the reference carries its own display string, so render
+  // a plain navigating link and do NOT mount the target's content.
+  if (display) {
+    return <ReferenceLink block={target}>{display}</ReferenceLink>
   }
+
+  const parentRenderScopeId = typeof blockContext.renderScopeId === 'string'
+    ? blockContext.renderScopeId
+    : outlineRenderScopeId(sourceBlockId ?? blockId)
+  const renderScopeId = embedRenderScopeId(
+    parentRenderScopeId,
+    sourceBlockId ?? blockId,
+    occurrenceId ?? 'unknown',
+    blockId,
+  )
 
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
-      <a
-        href={href}
-        className="blockref text-inherit no-underline cursor-pointer rounded-sm px-0.5 hover:bg-muted/60"
-        data-block-id={blockId}
-        onClick={onClick}
-      >
-        {display ?? (
-          <Markdown
-            remarkPlugins={markdownConfig.remarkPlugins}
-            components={markdownConfig.components}
-          >
-            {content}
-          </Markdown>
-        )}
-      </a>
+      <NestedBlockContextProvider overrides={{...REFERENCE_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
+        <BlockComponent blockId={blockId}/>
+      </NestedBlockContextProvider>
     </BlockRefAncestorsProvider>
   )
 }

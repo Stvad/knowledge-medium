@@ -1,13 +1,11 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types'
 import { cycleTodoState, todoActions } from '../actions'
@@ -25,17 +23,13 @@ beforeEach(async () => {
   h = sharedDb
   let now = 1700_000_000_000
   let id = 0
-  repo = new Repo({
+  ;({ repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: {id: 'user-1'},
     now: () => ++now,
     newId: () => `generated-${++id}`,
-  })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    todoDataExtension,
-  ]))
+    extensions: [todoDataExtension],
+  }))
   expect(repo.propertySchemas.get(statusProp.name)).toBe(statusProp)
   await repo.tx(tx => tx.create({
     id: 'block-1',
@@ -44,8 +38,6 @@ beforeEach(async () => {
     orderKey: 'a0',
   }), {scope: ChangeScope.BlockDefault, description: 'create block'})
 })
-
-afterEach(() => { repo.stopSyncObserver() })
 
 describe('cycleTodoState', () => {
   it('rotates not todo -> open -> done -> not todo', async () => {

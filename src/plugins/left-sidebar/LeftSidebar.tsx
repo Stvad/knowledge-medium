@@ -371,6 +371,13 @@ export function LeftSidebar() {
         role="dialog"
         aria-modal="true"
         aria-label="Sidebar"
+        // paddingTop reserves the iOS status-bar strip in the installed PWA. This
+        // overlay is a viewport-anchored sibling of the TopLevelRenderer frame
+        // (mounted via AppMounts), so it doesn't inherit that frame's top inset —
+        // without this, the close button below sits under the clock/battery. On the
+        // `bg-background` aside so the panel fill still flows behind the status bar;
+        // 0 in a normal browser tab. Mirrors TopLevelRenderer's frame inset.
+        style={{paddingTop: 'env(safe-area-inset-top, 0px)'}}
         className="absolute inset-y-0 left-0 flex w-[min(82vw,28rem)] max-w-full flex-col border-r border-border bg-background shadow-2xl md:w-80"
       >
         <div className="flex h-14 shrink-0 items-center justify-end px-4">

@@ -17,7 +17,7 @@
  * snapshots → cache.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ChangeScope,
   CycleError,
@@ -41,9 +41,10 @@ import {
   type Schema,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
-import { BlockCache } from '@/data/blockCache'
+import type { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '../repo'
+import { createTestRepo } from '@/data/test/createTestRepo'
+import type { Repo } from '../repo'
 
 // ──── Test fixtures ────
 
@@ -90,22 +91,17 @@ const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
   const tick = () => ++timeCursor
-  let idCursor = 0
-  const newId = () => `gen-${++idCursor}`
-  const repo = new Repo({
+  // Engine tests pin Tx primitive behavior. Kernel processors firing
+  // on content writes would add follow-up txs (parseReferences) the
+  // engine assertions don't account for — keep the processor surface
+  // empty and let the parseReferences integration tests cover it.
+  const {repo, cache} = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1', name: 'Test'},
     isReadOnly: overrides?.isReadOnly,
     now: tick,
-    newId,
-    // Engine tests pin Tx primitive behavior. Kernel processors firing
-    // on content writes would add follow-up txs (parseReferences) the
-    // engine assertions don't account for — keep the processor surface
-    // empty and let the parseReferences integration tests cover it.
   })
   // Register only the local test probe — afterCommit tests use it to
   // schedule explicit jobs. The rest of the engine tests don't call
@@ -127,9 +123,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-// Dispose the per-test Repo's default sync observer so its db.onChange
-// subscription doesn't leak onto the shared DB (closed once in afterAll).
-afterEach(() => { env.repo.stopSyncObserver() })
 
 // ──── tx.create ────
 

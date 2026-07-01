@@ -2,14 +2,12 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { dailyNoteBlockId } from '@/plugins/daily-notes'
-import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import {
   formatRescheduleToastMessage,
   rescheduleBlock,
@@ -40,18 +38,16 @@ beforeEach(async () => {
   h = sharedDb
   let now = 1700_000_000_000
   let id = 0
-  repo = new Repo({
+  ;({ repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: {id: USER},
     now: () => ++now,
     newId: () => `generated-${++id}`,
-  })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-    srsReschedulingDataExtension,
-  ]))
+    extensions: [
+      dailyNotesDataExtension,
+      srsReschedulingDataExtension,
+    ],
+  }))
   // Undo/redo are scoped to the active workspace (issue #186).
   repo.setActiveWorkspaceId(WORKSPACE)
 })
@@ -59,7 +55,6 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.useRealTimers()
   vi.restoreAllMocks()
-  repo.stopSyncObserver()
 })
 
 describe('rescheduleBlock', () => {

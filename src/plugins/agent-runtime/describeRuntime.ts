@@ -1,6 +1,7 @@
 import { FacetRuntime } from '@/facets/facet.js'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.js'
 import { Repo } from '@/data/repo'
+import { truncate } from '@/utils/string'
 import {
   describeAuthoringCatalog,
   type AuthoringCatalog,
@@ -299,8 +300,7 @@ const summarizeContributionValue = (value: unknown): string => {
   // pathological value can't bloat describe-runtime output.
   const rendered = renderSummaryValue(value, 3)
   const json = JSON.stringify(rendered)
-  if (json.length <= MAX_SUMMARY_LENGTH) return json
-  return `${json.slice(0, MAX_SUMMARY_LENGTH - 1)}…`
+  return truncate(json, MAX_SUMMARY_LENGTH)
 }
 
 const summarizeValidate = (
@@ -308,9 +308,7 @@ const summarizeValidate = (
 ): string | undefined => {
   if (!validate) return undefined
   const source = validate.toString().replace(/\s+/g, ' ').trim()
-  return source.length <= MAX_SUMMARY_LENGTH
-    ? source
-    : `${source.slice(0, MAX_SUMMARY_LENGTH - 1)}…`
+  return truncate(source, MAX_SUMMARY_LENGTH)
 }
 
 export const describeFacets = (runtime: FacetRuntime): FacetSummary[] => {

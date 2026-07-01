@@ -34,6 +34,12 @@ export default defineConfig(({command}) => {
 
     return ({
         base,
+        // Opt-in via VITE_TUNNEL=1: allow a Tailscale-serve HTTPS *.ts.net
+        // hostname to proxy into the dev server for real-device (iPad/iPhone)
+        // testing — otherwise Vite's DNS-rebinding host check returns "Blocked
+        // request". Off by default; the dev server still binds localhost only
+        // (tailscaled forwards to it). See .claude/skills/ios-device-debug.
+        server: process.env.VITE_TUNNEL ? {allowedHosts: ['.ts.net']} : undefined,
         // Baked into the bundle as a literal so the client can show which
         // build it's running (see src/appVersion.ts). The same object is
         // emitted as dist/version.json below for the deploy-time update check.

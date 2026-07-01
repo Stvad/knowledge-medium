@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Tests for the AppRuntimeProvider's brittle bit: the hook that reads
  * the overrides cache at mount, subscribes to `refreshAppRuntime`

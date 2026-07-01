@@ -20,6 +20,8 @@
 import { z } from 'zod'
 import {
   defineQuery,
+  blockPredicateSchema,
+  referenceFilterSchema,
   type AnyQuery,
   type BlockData,
   type BlockPredicate,
@@ -649,18 +651,6 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, Bloc
     )
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
-})
-
-const referenceFilterSchema = z.object({
-  id: z.string(),
-  sourceField: z.string().optional(),
-})
-
-const blockPredicateSchema = z.object({
-  scope: z.enum(['self', 'ancestor']).optional(),
-  id: z.string().optional(),
-  where: z.record(z.string(), z.unknown()).optional(),
-  referencedBy: referenceFilterSchema.optional(),
 })
 
 const typedBlocksArgsSchema = z.object({

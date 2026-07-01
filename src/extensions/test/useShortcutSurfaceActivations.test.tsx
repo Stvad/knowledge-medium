@@ -4,8 +4,8 @@ import { Suspense } from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { actionContextsFacet } from '@/extensions/core'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
@@ -130,14 +130,10 @@ describe('useShortcutSurfaceActivations', () => {
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
     h = sharedDb
-    let txSeq = 0
-    repo = new Repo({
+    repo = createTestRepo({
       db: h.db,
-      cache: new BlockCache(),
       user: testGlobals.user,
-      newTxSeq: () => ++txSeq,
-      startSyncObserver: false,
-    })
+    }).repo
     repo.setActiveWorkspaceId(WS)
     testGlobals.repo = repo
 
@@ -208,7 +204,6 @@ describe('useShortcutSurfaceActivations', () => {
 
   afterEach(() => {
     cleanup()
-    repo.stopSyncObserver()
     testGlobals.repo = undefined
   })
 

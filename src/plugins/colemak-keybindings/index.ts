@@ -13,7 +13,12 @@ import {
   DATE_SCRUB_WEEK_FORWARD_ACTION_ID,
 } from '@/plugins/daily-notes/dateScrubActions.ts'
 
-export const COLEMAK_KEYBINDINGS_PLUGIN_ID = 'system:colemak-keybindings'
+// Nested under the Vim normal-mode toggle (id `system:vim-normal-mode`),
+// so the slash-scoped id mirrors that parentage (cf.
+// `system:backlinks/inline-counts`). These are Colemak remaps of the
+// vim-style movement keys, so they only make sense — and are only
+// reachable — while vim normal mode is on; the parent boundary gates them.
+export const COLEMAK_KEYBINDINGS_PLUGIN_ID = 'system:vim-normal-mode/colemak'
 const SOURCE = 'colemak-keybindings'
 
 export const colemakMovementKeybindingOverrides: readonly KeybindingOverride[] = [

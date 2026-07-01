@@ -4,16 +4,7 @@ import {
   defineProperty,
   type Codec,
 } from '@/data/api'
-
-const uniqueStrings = (value: unknown): string[] =>
-  Array.from(new Set(
-    Array.isArray(value)
-      ? value
-        .filter((item): item is string => typeof item === 'string')
-        .map(item => item.trim())
-        .filter(Boolean)
-      : [],
-  ))
+import { uniqueStrings } from '@/utils/array'
 
 /** Tag names are interpolated into a wikilink (`[[name]]`). The
  *  reference parser balances `[[ … ]]` pairs, so a name containing

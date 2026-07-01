@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
@@ -15,7 +16,7 @@ import {
 import { ENTER_BLOCK_EDIT_MODE_ACTION_ID } from '@/plugins/plain-outliner/clickToEditAction.js'
 import {
   enterBlockEditModeOnGestureAction,
-  vimClickToFocusTransform,
+  vimClickToFocusDecorator,
   vimNormalModeActivation,
 } from '../interactions.ts'
 
@@ -84,16 +85,18 @@ describe('vim normal mode interactions', () => {
     })
   })
 
-  describe('click-to-focus transform (single click focuses, does not edit)', () => {
+  describe('click-to-focus decorator (single click focuses, does not edit)', () => {
     const editAction: ActionConfig = {
       id: ENTER_BLOCK_EDIT_MODE_ACTION_ID,
       description: 'Enter edit mode on click',
       context: ActionContextTypes.BLOCK_POINTER,
       handler: vi.fn(),
     }
-    const transformed = vimClickToFocusTransform.apply(editAction)
-    if (!transformed) throw new Error('expected vim transform to return a decorated action')
-    const focusHandler = transformed.handler
+    // The dispatch decorator wraps the click-to-edit action's invocation and
+    // replaces its behaviour (it never calls `next`). Run the wrap with the base
+    // handler as `next` to exercise it the way `invokeAction` would.
+    const focusHandler: ActionConfig['handler'] = (deps, trigger, dispatch) =>
+      vimClickToFocusDecorator.wrap(deps, trigger, editAction.handler, dispatch)
 
     const deps: BlockPointerDependencies = {
       block: {id: 'block-1'} as Block,
@@ -104,7 +107,7 @@ describe('vim normal mode interactions', () => {
 
     it('focuses the clicked block without entering edit mode', () => {
       // Interactive-target exclusion is the block-pointer context's job; the
-      // transform just replaces the edit handler with focus-without-editing.
+      // decorator just replaces the edit handler with focus-without-editing.
       focusBlockWithoutEditing.mockClear()
       focusHandler(deps, {} as ActionTrigger)
 

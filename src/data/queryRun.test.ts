@@ -13,12 +13,12 @@
  * re-resolves — which is exactly what the dep mode controls.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { ChangeScope, defineQuery, type Query } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { queriesFacet } from '@/data/facets'
 import { Repo } from '@/data/repo'
@@ -40,13 +40,11 @@ beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
-  repo = new Repo({
+  ;({ repo } = createTestRepo({
     db: sharedDb.db,
-    cache: new BlockCache(),
     user: {id: 'user-1'},
-  })
+  }))
 })
-afterEach(() => { repo.stopSyncObserver() })
 
 const create = (id: string, content: string, parentId: string | null) =>
   repo.tx(tx => tx.create({

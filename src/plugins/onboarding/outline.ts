@@ -63,13 +63,13 @@ const vimKeys = {
   newBelow: 'press `o` (or `Shift+O` to create above)',
   enterCreates: '— or, while editing any block, press `Enter` to split / create a new one',
   move: '`j` / `k` (or arrow keys)',
-  panelHop: '`h` / `l` (or arrow keys)',
-  firstLast: '`gg` jumps to the first visible bullet, `Shift+G` to the last',
+  panelHop: '`h` to the panel on the left, `l` to the right (or arrow keys)',
+  firstLast: '`gg` jumps to the top of the panel, `Shift+G` to the last block in it',
   jumpMany: '`Ctrl+d` / `Ctrl+u` jump down / up by ~8 bullets',
   startSelect: 'press `Space` (or `v`) to select the focused bullet; `Shift+J` / `Shift+K` then grow the selection down / up — the first press selects the current block, each next press adds the neighbour',
-  delete: 'press `d d` (the vim `dd`) or `Delete`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
+  delete: 'press `d d` or `Delete`; to remove several at once, select them first (see the **Multi-select** section) and press `Delete`',
   properties: 'press `t`',
-  copyRef: 'focus the block and press `Y R` (yank reference); `Y E` yanks an embed, `Y Y` the whole subtree, `Y C` just this block\'s text, `Y L` a shareable link',
+  copyRef: 'focus the block and press `y r` (yank reference); `y e` yanks an embed, `y y` the whole subtree, `y c` just this block\'s text, `y l` a shareable link',
   paste: '`p` pastes after the focused block, `Shift+P` before',
   undo: '`u` (or `Cmd+Z` anywhere)',
   redo: '`Ctrl+R` (or `Cmd+Shift+Z` anywhere)',
@@ -77,9 +77,9 @@ const vimKeys = {
 
 const defaultKeys: typeof vimKeys = {
   fold: 'while editing, `Cmd+Up` (`Ctrl+Up`) collapses the block and `Cmd+Down` (`Ctrl+Down`) expands it — or click the `▸` / `▾` chevron next to my bullet on hover (on touch it stays visible, and the block\'s swipe menu has a **Collapse** item)',
-  // Single-click edits in the default config; double-click-to-edit is a
+  // A plain click edits in the default config; double-click-to-edit is a
   // vim-only gesture (it exists because vim makes single-click just focus).
-  edit: 'single-click anywhere in my text to start typing',
+  edit: 'click anywhere in my text to start typing',
   // No keyboard "normal mode" without vim, so leaving the editor by
   // keyboard buys nothing here — just click elsewhere. (`Esc` still blurs.)
   exitEdit: '',
@@ -97,7 +97,7 @@ const defaultKeys: typeof vimKeys = {
   startSelect: 'while editing, `Shift+↓` / `Shift+↑` at a block edge first select the current block, then extend the selection down / up with each further press',
   delete: 'select it (or several — see the **Multi-select** section) and press `Delete`; for a single empty block, `Backspace` at its start removes it and merges into the block above',
   properties: 'open the command palette with `Cmd+K` and run "Toggle block properties"',
-  copyRef: 'open the on-block quick-actions menu ("Copy Ref" / "Copy Embed"); keyboard yanks (`Y R` / `Y E`) need vim mode',
+  copyRef: 'open the on-block quick-actions menu ("Copy Ref" / "Copy Embed"); keyboard yanks (`y r` / `y e`) need vim mode',
   paste: '`Cmd+V` — pastes after the focused block',
   undo: '`Cmd+Z`',
   redo: '`Cmd+Shift+Z`',
@@ -126,9 +126,14 @@ const sharedKeys = {
  */
 export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
   const km = variant === 'vim' ? vimKeys : defaultKeys
+  // A light, default-only nudge toward vim mode for the few gestures that
+  // are genuinely smoother there. Deliberately occasional — vim users don't
+  // need their own bindings explained, and over-mentioning it would nag.
+  // Returns '' (no leading space) in the vim variant.
+  const vimNudge = (s: string) => (variant === 'default' ? ` ${s}` : '')
   const altLabel =
     variant === 'vim'
-      ? '**This is the vim-keybindings tutorial.** Vim mode is currently on. To turn it off, run **Manage extensions** from the command palette (`Cmd+K`) and untick **Vim normal mode**, then read [[Tutorial]] for the default keys.'
+      ? '**This is the vim-keybindings tutorial.** To follow it, vim mode needs to be on — if it isn\'t, run **Manage extensions** from the command palette (`Cmd+K`) and tick **Vim normal mode**. Prefer the default keys? See [[Tutorial]].'
       : '**This is the default tutorial.** Vim keybindings are off by default. Want them? Run **Manage extensions** from the command palette (`Cmd+K`), tick **Vim normal mode**, then read [[Tutorial (vim)]].'
 
   // Stable per-variant id for the block-ref / embed demo target. The
@@ -144,14 +149,14 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       ...(variant === 'default'
         ? {
             children: [{
-              content: 'New to "vim keybindings"? It\'s an optional **navigation** layer, not a different way of typing — editing text is identical either way. With it on, a block has a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and then keys move you around and restructure without reaching for the mouse — `j`/`k` move between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `Y R` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
+              content: 'New to "vim keybindings"? **It lets you move and restructure your outline straight from the keyboard.** With it on, a block gains a *normal mode*: single-click (or `Esc`) *focuses* a block instead of editing it, and from there the keys do the work — `j`/`k` between blocks, `h`/`l` between panels, `z` folds, `d d` deletes, `y r` copies a reference, `i` starts editing. If you live on the keyboard it\'s worth a try; flip it on as above and the shortcuts in [[Tutorial (vim)]] take over.',
             }],
           }
         : {}),
     },
 
     sect('Welcome', [
-      'This is a malleable thought medium. Every line below is a **block** you can fold, link, drag around, and extend — including this tutorial itself.',
+      'This is a malleable thought medium. Every line below is a **block** you can link, drag around, fold, and extend — including this tutorial itself.',
       'Bullets are blocks. Bullets nest. Everything else builds on that.',
       "Don't just read — try the keys/clicks on each bullet as you go. Edit anything; this tutorial is just blocks in your workspace.",
       'The first few sections cover the essentials; the deeper ones below start **folded** to keep this scannable — expand any that interest you (that fold/unfold is itself a core gesture you\'ll use everywhere).',
@@ -173,7 +178,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     sect('Move around', [
-      `Between blocks: ${km.move}.`,
+      `Between blocks: ${km.move}.${vimNudge('Vim mode lets you move between blocks with `j` / `k` without entering the editor.')}`,
       ...(km.firstLast ? [km.firstLast] : []),
       ...(km.jumpMany ? [km.jumpMany] : []),
       `Zoom into a block (treat it as the new root of the view): ${sharedKeys.zoomIn}. Zoom back out: ${sharedKeys.zoomOut}.`,
@@ -205,7 +210,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
         children: [
           {
             id: refDemoTargetId,
-            content: `👋 I am the demo target. Copy a ref or embed to me (${variant === 'vim' ? 'focus me and press `Y R` / `Y E`' : 'open my quick-actions menu → "Copy Ref" / "Copy Embed"'}), then paste in a new bullet to see the result.`,
+            content: `👋 I am the demo target. Copy a ref or embed to me (${variant === 'vim' ? 'focus me and press `y r` / `y e`' : 'open my quick-actions menu → "Copy Ref" / "Copy Embed"'}), then paste in a new bullet to see the result.`,
             children: [
               { content: "I'm a child of the demo target. Embeds bring children along — so the bare-embed bullet further down will render me too." },
             ],
@@ -232,7 +237,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
 
     advancedSect('Search', [
       `QuickFind (${sharedKeys.quickFind}) searches page aliases first, then block content. Press Enter to open the selected result; if the name is missing, QuickFind can create a new page for it.`,
-      'Multiple words must all appear, in any order: `project notes` matches blocks that contain both `project` and `notes`.',
+      'When you search for several words, all of them must appear, in any order: `project notes` matches blocks that contain both `project` and `notes`.',
       'Wrap text in quotes for an exact phrase: `"project notes"` only matches that contiguous text.',
       'Use uppercase `OR` for alternatives: `project OR meeting` finds either term.',
       'Use a leading minus to exclude a term when the query also has something positive to search for: `project -archived` and `-archived project` both mean "project, but not archived". By itself, `-archived` searches for the literal text `-archived`.',
@@ -241,7 +246,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
     ]),
 
     advancedSect('Properties & types', [
-      `Properties are typed key/value pairs attached to any block. To open the properties panel on a focused block: ${km.properties}.`,
+      `Properties are typed key/value pairs attached to any block. To open the properties panel on a focused block: ${km.properties}.${vimNudge('With vim mode on, this is just `t`.')}`,
       'Try giving me a property — e.g. `priority: high`. It will appear under my content.',
       "Types attach behavior to a block via the special `types` property. `types = ['page']` makes a block a page — addressable by name (through its aliases) and resolvable from wiki links, wherever it lives in the tree. `types = ['extension']` makes it an extension — see below.",
       'Aliases (a list property on a page) let you reach the page from multiple names — including ones with spaces or different casing. Wiki links resolve through aliases.',
@@ -325,7 +330,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'Every daily note is filed under the [[Journal]] page — open it for a reverse-chronological list of them all.',
       ...(variant === 'vim'
         ? ['Scrub a date in place: focus a dated block and **hold `s`**. While held, `k` / `↑` move the date +1 day and `j` / `↓` −1 day; `l` / `→` +7 days and `h` / `←` −7 days. Release `s` to commit, `Esc` to cancel.']
-        : []),
+        : ['**Scrub a date in place** — nudge a dated block\'s date forward or back without retyping it. This one\'s a vim-mode perk: tick **Vim normal mode** in **Manage extensions**, then focus the date and **hold `s`**, moving by day (`j` / `k`) or week (`h` / `l`). On a phone, a two-finger horizontal drag does it with no vim needed.']),
     ]),
 
     advancedSect('Undo, redo, copy, paste', [
@@ -334,8 +339,9 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       `Paste blocks: ${km.paste}.`,
     ]),
 
-    advancedSect('Preferences, themes & extensions', [
+    advancedSect('Settings — preferences, shortcuts, themes & extensions', [
       `Open preferences: run **Open preferences** from the command palette (${sharedKeys.commandPalette}) — it has no default shortcut.`,
+      'Remap any shortcut: run **Customize keyboard shortcuts** from the command palette. It lists every action grouped by context — click a binding and press the new keys to rebind it, or reset / disable it; conflicts are flagged, and your overrides sync to your other devices.',
       'Change the look: each theme has its own command — run **Theme: <name>** from the command palette to apply it directly (e.g. `Theme: Solarized Dark`). Eight ship built-in — light and dark variants of Sunset Warm, Indigo, and Solarized, plus a plain Light and Dark — and extensions can register their own.',
       "Run **Manage extensions** from the command palette to open the extensions tree — every extension can be toggled on or off there, and the toggle syncs to your other devices. Vim mode itself is an extension (`system:vim-normal-mode`); it's off by default. Tick it to get vim normal-mode keys (and switch this tutorial to the vim variant); untick it for the default click-to-edit experience.",
     ]),
@@ -344,8 +350,9 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
       'On a phone-sized screen the app swaps in touch affordances:',
       'A **bottom navigation bar** gives one-tap access to the sidebar, a new block, append-to-today, today\'s daily note, search, the command palette, and undo.',
       'While editing, a **keyboard toolbar** floats above the on-screen keyboard with indent / outdent, move up / down, `[[` page-reference and `((` block-reference inserts, undo / redo, and a Done button to dismiss the keyboard.',
-      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete. This is how you reach the per-block actions on touch — the same ones vim binds to keys (`z`, `t`, `Y R`, …) — without a keyboard.',
+      '**Swipe a block** to reveal its quick-actions menu — Copy, Copy Ref / Embed, Open in panel, Properties, Collapse, Zoom in, Delete. This is how you reach the per-block actions on touch — the same ones vim binds to keys (`z`, `t`, `y r`, …) — without a keyboard.',
       'Swipe a block to the right to cycle its todo / done state.',
+      'Scrub a date: drag a **dated** block sideways with **two fingers** — right moves the date forward, left back, with an overlay previewing the new date as you drag. Two fingers so it never clashes with one-finger scroll or the swipe menu. For a bigger jump, the swipe menu has a **Reschedule** sheet.',
     ]),
 
     advancedSect('Workspaces & encryption', [

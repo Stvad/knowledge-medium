@@ -15,6 +15,8 @@
   the real hash is locked in (or the dev force flag is set).
 */
 
+import { hex } from '@scure/base'
+
 /** Birthday, local time. Month is 1-based here for readability; the check
  *  below converts to JS's 0-based month. A date alone is not PII. */
 const BIRTHDAY_MONTH = 6
@@ -37,9 +39,7 @@ const FORCE_KEY = 'birthday:force'
 async function sha256Hex(input: string): Promise<string> {
   const bytes = new TextEncoder().encode(input)
   const digest = await crypto.subtle.digest('SHA-256', bytes)
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
+  return hex.encode(new Uint8Array(digest))
 }
 
 export function isForced(): boolean {

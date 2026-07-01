@@ -20,6 +20,7 @@ import { parseRelativeDate } from '@/utils/relativeDate.js'
 import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
+import { runHealthCommand } from './healthCommand.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
 import {
   actionsFacet,
@@ -28,6 +29,8 @@ import {
   blockRenderersFacet,
 } from '@/extensions/core.js'
 import { readRuntimeActions } from '@/extensions/runtimeActions.js'
+import { invokeAction } from '@/shortcuts/actionDispatch.js'
+import type { BaseShortcutDependencies } from '@/shortcuts/types.js'
 import { refreshAppRuntime } from '@/facets/runtimeEvents.js'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.js'
 import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
@@ -626,15 +629,22 @@ const runRuntimeAction = async (
     ? dependencies.scopeRootId
     : realUiStateBlock?.peekProperty(topLevelBlockIdProp)
 
+  // Route imperative agent dispatch through the same `invokeAction` choke the
+  // keyboard / pointer / runActionById paths use, so the action-dispatch
+  // middleware (and the behaviour decorators migrated off `actionTransformsFacet`)
+  // cover M-x-style dispatch too — otherwise calling `action.handler` directly
+  // would skip the decorators the effective action no longer carries.
+  const deps = {
+    uiStateBlock,
+    block,
+    selectedBlocks,
+    anchorBlock,
+    scopeRootId,
+  } as BaseShortcutDependencies
+  const trigger = new CustomEvent('agent-runtime:run-action', {detail: {actionId}})
   let returned: unknown
   try {
-    returned = await action.handler({
-      uiStateBlock,
-      block,
-      selectedBlocks,
-      anchorBlock,
-      scopeRootId,
-    }, new CustomEvent('agent-runtime:run-action', {detail: {actionId}}))
+    returned = await invokeAction(context.runtime, {action, deps, trigger})
   } catch (handlerError) {
     // Bubble up with action context so the CLI shows "which action
     // failed", not just an opaque dispatcher message.
@@ -1087,6 +1097,9 @@ export const executeCommand = async (
 
     case 'runtime-summary':
       return describeRuntimeSummary(context)
+
+    case 'health':
+      return runHealthCommand(context.repo)
 
     case 'describe-runtime':
       return describeRuntime(context, {

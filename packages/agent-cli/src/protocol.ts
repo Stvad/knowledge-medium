@@ -83,6 +83,11 @@ export const runtimeSummaryCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const healthCommandSchema = z.looseObject({
+  type: z.literal('health'),
+  ...commandIdField,
+})
+
 export const describeRuntimeCommandSchema = z.looseObject({
   type: z.literal('describe-runtime'),
   actions: z.array(z.string()).optional(),
@@ -280,6 +285,7 @@ export const searchCommandSchema = z.looseObject({
 export const knownCommandSchema = z.discriminatedUnion('type', [
   pingCommandSchema,
   runtimeSummaryCommandSchema,
+  healthCommandSchema,
   describeRuntimeCommandSchema,
   sqlCommandSchema,
   getBlockCommandSchema,
@@ -314,6 +320,7 @@ export type KnownCommandType = KnownCommand['type']
 export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   pingCommandSchema,
   runtimeSummaryCommandSchema,
+  healthCommandSchema,
   describeRuntimeCommandSchema,
   sqlCommandSchema,
   getBlockCommandSchema,
@@ -352,6 +359,18 @@ export interface KnownCommandMeta {
   usage: string
   /** Short one-line description for help / summary surfaces. */
   description: string
+  /** Whether a `read-only`-scoped token may run this verb — i.e. the
+   *  verb performs no writes through the kernel. The bridge derives its
+   *  read-only allowlist from this single field (see `isReadOnlyCommand`
+   *  in `server.ts`), so the registry is the one source of truth: a verb
+   *  added to `knownCommandSchema` without a registry entry is already a
+   *  TypeScript error, and that entry must now classify `readOnly` too —
+   *  the allowlist can't silently drift when a verb is added.
+   *
+   *  `sql` is the one verb whose read-only-ness depends on the call (mode
+   *  + statement), not just the verb; it's `false` here and refined
+   *  per-mode by the bridge before this field is consulted. */
+  readOnly: boolean
 }
 
 /** Schema-derived registry of every known wire command. Typed as
@@ -367,82 +386,122 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'ping': {
     usage: 'kmagent ping',
     description: 'Ping the bridge + runtime; print a status summary.',
+    readOnly: true,
   },
   'runtime-summary': {
     usage: 'kmagent runtime-summary',
     description: 'Compact agent-oriented runtime context.',
+    readOnly: true,
+  },
+  'health': {
+    usage: 'kmagent health',
+    description: 'Layout B sync-health snapshot: app-visible block count vs blocks_synced, distinct blocks queued for upload, and the materialization backlog. One read to triage a stuck or unsynced client (healthy = both queues 0 and blocks ≈ blocks_synced).',
+    readOnly: true,
   },
   'describe-runtime': {
     usage: 'kmagent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>] [--modules <text>] [--components <text>] [--storage]',
     description: 'Show full or targeted runtime diagnostics. Canonical "what is registered" view — prefer over reaching into facetRuntime/Repo internals via eval. When --guide is passed alone, defaults to brief output; pass --full to include actions/facets/modules/components too.',
+    readOnly: true,
   },
   'sql': {
     usage: 'kmagent sql <all|get|optional|execute> <sql> [paramsJson]',
     description: 'Run SQL (mode: all|get|optional|execute).',
+    // Mode-dependent: `execute` (or a mutating statement) writes. The
+    // bridge refines this per-call before consulting the registry, so
+    // the verb-level default here is the conservative `false`.
+    readOnly: false,
   },
   'get-block': {
     usage: 'kmagent get-block <id>',
     description: 'Fetch a block by id.',
+    readOnly: true,
   },
   'get-subtree': {
     usage: 'kmagent subtree <rootId> [--json]',
     description: 'Fetch the subtree rooted at <rootId> (root included). Prints a depth-indented `- [id] content` outline by default (one line per block, id first); --json returns the raw flat array (each row carries its depth from the root). Both are a pre-order traversal with siblings in (order_key, id) order — already sorted; read top-to-bottom, do not re-sort.',
+    readOnly: true,
   },
   'create-block': {
     usage: 'kmagent create-block <json>',
     description: 'Create a block (body shape per <json>).',
+    readOnly: false,
   },
   'update-block': {
     usage: 'kmagent update-block <json>',
     description: 'Update a block (body shape per <json>).',
+    readOnly: false,
   },
   'install-extension': {
     usage: 'kmagent install-extension [--verify] [--description <text>] <file> [label]',
     description: 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext.',
+    readOnly: false,
   },
   'enable-extension': {
     usage: 'kmagent enable-extension <id|label>',
     description: 'Enable an installed extension by id or label. Sets the synced enabled intent AND approves the current source on this device (pins its hash) so it runs here. Re-run after editing the source to re-pin the new version.',
+    readOnly: false,
   },
   'disable-extension': {
     usage: 'kmagent disable-extension <id|label>',
     description: 'Disable an installed extension by id or label (clears the synced intent; the device trust grant persists for a frictionless re-enable).',
+    readOnly: false,
   },
   'uninstall-extension': {
     usage: 'kmagent uninstall-extension <id|label>',
     description: 'Uninstall an extension by id or label (deletes the block and revokes this device’s trust grant).',
+    readOnly: false,
   },
   'run-action': {
     usage: 'kmagent run-action <id> [depsJson]',
     description: 'Run a registered action by id.',
+    // Actions are arbitrary handlers — assume they write.
+    readOnly: false,
   },
   'eval': {
     usage: 'kmagent eval [--raw] [--file <path>] [--data <path> | --data-json <json>] <code>',
     description: 'Run JS in the app. Use "return …" to print a value. The code runs with `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` already in scope. `--data <path>` reads JSON from a file (or `--data-json <inline>` for an inline payload) and binds the parsed value as `data` — avoids template-embedding structured input in the code string.',
+    // Arbitrary code execution — never read-only.
+    readOnly: false,
   },
+  // backlinks / grouped-backlinks resolve the user's backlinks prefs
+  // sub-block (`--filter effective`, and grouped-backlinks' default
+  // `--grouping user`). That sub-block is eagerly bootstrapped at idle on
+  // every client via `pluginPrefsExtension` (src/data/pluginStateExtensions.ts),
+  // so on the warm/live client the bridge talks to it already exists and
+  // the resolve path is a pure read. (The only write either could ever do
+  // is the same one-time, benign prefs-block creation the app itself does
+  // at idle, were it somehow invoked before that bootstrap ran.)
   'backlinks': {
     usage: "kmagent backlinks <blockId> [--filter none|stored|effective|<json>] [--workspace <id>]",
     description: 'Hydrated backlinks of a block (blocks whose references point at it). --filter defaults to none. See `kmagent data-model`.',
+    readOnly: true,
   },
   'grouped-backlinks': {
     usage: "kmagent grouped-backlinks <blockId> [--filter none|stored|effective|<json>] [--grouping user|none|<json>] [--workspace <id>]",
     description: 'The grouped-references view for a block: hydrated groups (+ Other fallback). --grouping defaults to the user config (matches the UI); --filter defaults to none. See `kmagent data-model`.',
+    readOnly: true,
   },
   'data-model': {
     usage: 'kmagent data-model',
     description: "Print the agent-facing data-model guide (blocks, references, pages/daily-notes, backlinks vs grouped-backlinks, source_field, done-status, deep-links). Read this first when working with a user's data.",
+    readOnly: true,
   },
   'page': {
     usage: 'kmagent page <name> [--limit <n>] [--workspace <id>]',
     description: 'Resolve a page by alias/title: exact match plus substring candidates, hydrated.',
+    readOnly: true,
   },
   'daily-note': {
     usage: 'kmagent daily-note <date> [--workspace <id>]',
     description: 'Resolve a date (today | yesterday | 2026-06-18 | "June 17th, 2026" | "next monday") to its daily-note block (deterministic id; reports whether it exists yet).',
+    // Pure read: computes the deterministic daily-note id and loads it,
+    // reporting existence. It does NOT create the note.
+    readOnly: true,
   },
   'search': {
     usage: 'kmagent search <query> [--limit <n>] [--workspace <id>]',
     description: 'Full-text search over block content; hydrated results.',
+    readOnly: true,
   },
 }
 

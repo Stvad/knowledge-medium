@@ -6,7 +6,13 @@ import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
 import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js'
 
-const EMBED_CONTEXT_OVERRIDES = {isNestedSurface: true, isEmbedded: true}
+// `isReference: false` CLEARS an inherited reference flag: a reference renders
+// its raw markdown content, which can itself contain a `!((id))` embed. Without
+// clearing it, that nested embed would inherit `isReference` (context merges,
+// never clears) and wrongly render via the reference layout — inline, no
+// children, not editable — instead of as an embed. An embed is its own surface,
+// never a reference.
+const EMBED_CONTEXT_OVERRIDES = {isNestedSurface: true, isEmbedded: true, isReference: false}
 
 export function BlockEmbed({
   blockId,
@@ -48,8 +54,16 @@ export function BlockEmbed({
     )
   }
 
-  // Just the highlighted box around the rendered subtree — the bullet on
-  // each row inside is already navigable, so no separate "source" link.
+  // The embed already renders the target through the one block-rendering
+  // pipeline (`BlockComponent` → the block's renderer → its layout). The box is
+  // OUTER chrome around that fully-rendered block, not an alternative layout of
+  // it — so unlike the reference (whose layout changes *what* renders: raw
+  // content instead of the editable surface), the embed keeps a plain wrapper
+  // here rather than a `blockLayoutFacet` contribution. Keeping it outside the
+  // layout axis avoids coupling the box to the inner renderer and avoids
+  // fighting per-block layouts (e.g. the video player) for the single-winner
+  // layout slot. The bullet on each row inside is already navigable, so there's
+  // no separate "source" link.
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
       <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">

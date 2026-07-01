@@ -1,11 +1,17 @@
 // @vitest-environment node
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
-import { focusBlock, focusedBlockLocationProp, isEditingProp, topLevelBlockIdProp } from '@/data/properties'
+import {
+  exitEditModeForBlock,
+  focusBlock,
+  focusedBlockLocationProp,
+  isEditingProp,
+  topLevelBlockIdProp,
+} from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 
 const WS = 'ws-1'
 const USER = {id: 'user-1'}
@@ -19,16 +25,10 @@ interface Harness {
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  let now = 1700_000_000_000
-  let txSeq = 0
-  const repo = new Repo({
+  const { repo } = createTestRepo({
     db: h.db,
-    cache: new BlockCache(),
     user: USER,
-    now: () => ++now,
     newId: () => crypto.randomUUID(),
-    newTxSeq: () => ++txSeq,
-    startSyncObserver: false,
   })
   repo.setActiveWorkspaceId(WS)
 
@@ -58,10 +58,6 @@ beforeEach(async () => {
   env = await setup()
 })
 
-afterEach(async () => {
-  env.repo.stopSyncObserver()
-})
-
 describe('focusBlock', () => {
   it('preserves edit mode when a same-location normal focus write lands after edit mode', async () => {
     const uiStateBlock = env.repo.block('ui')
@@ -87,5 +83,55 @@ describe('focusBlock', () => {
       renderScopeId: NOTE_SCOPE,
     })
     expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false)
+  })
+})
+
+describe('exitEditModeForBlock', () => {
+  it('clears the edit flag when this block still owns edit mode (a genuine tap-away)', async () => {
+    const uiStateBlock = env.repo.block('ui')
+    await focusBlock(uiStateBlock, 'note-1', {edit: true, renderScopeId: NOTE_SCOPE})
+
+    await exitEditModeForBlock(uiStateBlock, 'note-1', NOTE_SCOPE)
+
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(false)
+    // The focus location is left intact — only the edit flag is cleared.
+    expect(uiStateBlock.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'note-1',
+      renderScopeId: NOTE_SCOPE,
+    })
+  })
+
+  it('is a no-op once another block has taken over edit mode (block→block handoff)', async () => {
+    const uiStateBlock = env.repo.block('ui')
+    // note-1 is editing; a tap on note-2 hands edit mode over (focusBlock
+    // commits first) — then note-1's outgoing editor blurs and tries to exit.
+    // The stale clear must NOT clobber note-2's edit mode (else the keyboard
+    // drops and it takes a second tap to resume). This is the exact ordering
+    // an unconditional `setIsEditing(false)` got wrong.
+    await focusBlock(uiStateBlock, 'note-1', {edit: true, renderScopeId: NOTE_SCOPE})
+    await focusBlock(uiStateBlock, 'note-2', {edit: true, renderScopeId: NOTE_SCOPE})
+
+    await exitEditModeForBlock(uiStateBlock, 'note-1', NOTE_SCOPE)
+
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+    expect(uiStateBlock.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'note-2',
+      renderScopeId: NOTE_SCOPE,
+    })
+  })
+
+  it('is a no-op when another render-scope copy of the same block owns edit mode', async () => {
+    const uiStateBlock = env.repo.block('ui')
+    const EMBED_SCOPE = 'embed:xyz'
+    await focusBlock(uiStateBlock, 'note-1', {edit: true, renderScopeId: NOTE_SCOPE})
+    await focusBlock(uiStateBlock, 'note-1', {edit: true, renderScopeId: EMBED_SCOPE})
+
+    await exitEditModeForBlock(uiStateBlock, 'note-1', NOTE_SCOPE)
+
+    expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
+    expect(uiStateBlock.peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'note-1',
+      renderScopeId: EMBED_SCOPE,
+    })
   })
 })

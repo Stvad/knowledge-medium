@@ -25,6 +25,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
@@ -53,26 +54,19 @@ const setup = async (
   // again from a nested beforeEach (with a different schema extension); the
   // reset is idempotent and h.cleanup disposes the prior Repo's observer.
   await resetTestDb(sharedDb.db)
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const { repo, cache } = createTestRepo({
     db: sharedDb.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
+    extensions: [
+      dailyNotesDataExtension,
+      referencesDataExtension,
+      ...extraExtensions,
+    ],
   })
   // Reprojection is workspace-scoped: it only scans + marks the active
   // workspace. All fixtures here live in WS, so make it active or every
   // schema-swap reprojection would no-op (no active workspace ⇒ skip).
   repo.setActiveWorkspaceId(WS)
-  repo.setFacetRuntime(resolveFacetRuntimeSync([
-    kernelDataExtension,
-    dailyNotesDataExtension,
-    referencesDataExtension,
-    ...extraExtensions,
-  ]))
   const h: TestDb = {db: sharedDb.db, cleanup: async () => { repo.stopSyncObserver() }}
   return {
     h,
@@ -849,10 +843,8 @@ describe('parseReferences — schema-swap reprojection', () => {
     // The merged schema map is kernel→merged-with-reviewer, which would
     // normally re-scan every block. The persisted marker should make
     // this a no-op.
-    const cache2 = new BlockCache()
-    const repo2 = new Repo({
+    const { repo: repo2 } = createTestRepo({
       db: env.h.db,
-      cache: cache2,
       user: {id: 'user-1'},
     })
     repo2.setActiveWorkspaceId(WS)

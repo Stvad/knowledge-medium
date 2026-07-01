@@ -1,8 +1,8 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { Repo } from '../repo'
-import { BlockCache } from '../blockCache'
 import { ChangeScope } from '../api'
 import { createTestDb, resetTestDb, type TestDb } from './createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 
 /**
  * `sourceTimestamps` insert opt: an import/restore path can stamp
@@ -30,15 +30,13 @@ describe('sourceTimestamps insert opt', () => {
   afterAll(async () => { await sharedDb.cleanup() })
   beforeEach(async () => {
     await resetTestDb(sharedDb.db)
-    repo = new Repo({
+    repo = createTestRepo({
       db: sharedDb.db,
-      cache: new BlockCache(),
       user: {id: USER},
       startSyncObserver: false,
       now: () => NOW,
-    })
+    }).repo
   })
-  afterEach(() => { repo.stopSyncObserver() })
 
   it('tx.create sources created_at + user_updated_at; updated_at stays engine now', async () => {
     await repo.tx(async tx => {

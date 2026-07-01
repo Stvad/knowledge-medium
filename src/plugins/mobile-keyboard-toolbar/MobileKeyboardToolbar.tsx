@@ -1,175 +1,60 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
-import {
-  IndentDecrease,
-  IndentIncrease,
-  ArrowUp,
-  ArrowDown,
-  Undo2,
-  Redo2,
-  KeyboardOff,
-} from 'lucide-react'
-import { useIsMobile } from '@/utils/react.js'
+import { usePointerCoarse } from '@/utils/react.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
-import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.js'
-import { acquireBlurExitSuppression } from '@/components/BlockEditor.js'
-import { setEditingToolbarHeight } from '@/utils/keyboardViewport.js'
+import { useActiveContextsState, editorViewFromActiveContexts } from '@/shortcuts/ActiveContexts.js'
+import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
+import { ActionContextTypes } from '@/shortcuts/types.js'
+import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import {
-  INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
-  INSERT_PAGE_REF_TRIGGER_ACTION_ID,
-} from './actions.ts'
+  getLayoutViewportKeyboardOverlap,
+  setEditingToolbarHeight,
+  subscribeKeyboardViewport,
+} from '@/utils/keyboardViewport.js'
+import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts'
 
-type ToolbarAction = {
-  kind: 'icon'
-  id: string
-  actionId: string
-  label: string
-  icon: typeof IndentDecrease
-} | {
-  kind: 'text'
-  id: string
-  actionId: string
-  label: string
-  text: string
-}
-
-const EXIT_EDIT_ACTION_ID = 'exit_edit_mode_cm'
-
-const TOOLBAR_ACTIONS: readonly ToolbarAction[] = [
-  {kind: 'icon', id: 'outdent', actionId: 'edit.cm.outdent_block', label: 'Outdent', icon: IndentDecrease},
-  {kind: 'icon', id: 'indent', actionId: 'edit.cm.indent_block', label: 'Indent', icon: IndentIncrease},
-  {kind: 'text', id: 'page-ref', actionId: INSERT_PAGE_REF_TRIGGER_ACTION_ID, label: 'Page reference', text: '[['},
-  {kind: 'text', id: 'block-ref', actionId: INSERT_BLOCK_REF_TRIGGER_ACTION_ID, label: 'Block reference', text: '(('},
-  {kind: 'icon', id: 'move-up', actionId: 'move_block_up_cm', label: 'Move up', icon: ArrowUp},
-  {kind: 'icon', id: 'move-down', actionId: 'move_block_down_cm', label: 'Move down', icon: ArrowDown},
-  {kind: 'icon', id: 'undo', actionId: 'undo', label: 'Undo', icon: Undo2},
-  {kind: 'icon', id: 'redo', actionId: 'redo', label: 'Redo', icon: Redo2},
-  {kind: 'icon', id: 'done', actionId: EXIT_EDIT_ACTION_ID, label: 'Done', icon: KeyboardOff},
-]
-
-const ToolbarButtonContent = ({action}: {action: ToolbarAction}) => {
-  if (action.kind === 'text') {
-    return <span className="font-mono text-base font-semibold leading-none">{action.text}</span>
-  }
-
-  const Icon = action.icon
-  return <Icon className="h-5 w-5"/>
-}
-
-/** Computes the on-screen keyboard's CSS-px inset for the toolbar.
+/** Track a value derived from viewport geometry, recomputed on every relevant
+ *  change via the shared keyboard-viewport subscription (the same listener set
+ *  keyboardAwareScroll uses), and re-rendering only when the mapped value
+ *  changes. `read` must be a stable module-level reader. Only subscribes while
+ *  `active`, so an app with no active editor carries no listeners.
  *
- *  Three browser shapes have to be handled and earlier attempts each
- *  broke at least one:
- *  - Chrome on Android (resizes-content default): both layout and
- *    visual viewports shrink with the IME. `bottom: 0` already lands
- *    above the keyboard; we just want inset = 0.
- *  - iOS Safari: visual viewport shrinks, layout stays full, but
- *    position:fixed is *pinned to the visual viewport*. `bottom: 0`
- *    again lands above the keyboard; inset must be 0 or we open a gap.
- *  - Edge / Samsung Internet on Android: visual viewport shrinks,
- *    layout stays full, AND position:fixed is anchored to the layout
- *    viewport. `bottom: 0` lands under the keyboard; inset must be the
- *    keyboard height — and *just* the keyboard height, not the URL
- *    bar (which is what the naive `innerHeight - vv.height` formula
- *    accidentally added in earlier attempts, producing the gap the
- *    user reported).
- *
- *  The fix has two pieces:
- *  - Track a *baseline* maximum visualViewport.height across the
- *    component lifetime. The URL bar height is constant — present in
- *    both the baseline and the current measurement — so it cancels
- *    out. The keyboard height is the only delta:
- *    `keyboardHeight = baseline - current`.
- *  - Use a hidden 1×1 sentinel at `position: fixed; bottom: 0` to
- *    detect which anchoring mode the browser is using. If the
- *    sentinel's bottom (in CSS-px) sits below the visual viewport's
- *    bottom, the browser is layout-anchoring fixed elements (Edge
- *    case) and we apply the inset. Otherwise (Chrome / iOS) we keep
- *    inset = 0 because `bottom: 0` is already correct. */
-const useKeyboardInset = (active: boolean): number => {
-  const sentinelRef = useRef<HTMLDivElement | null>(null)
-  const [inset, setInset] = useState(0)
-
-  useLayoutEffect(() => {
-    if (!active || typeof document === 'undefined') return
-    const el = document.createElement('div')
-    el.setAttribute('aria-hidden', 'true')
-    Object.assign(el.style, {
-      position: 'fixed',
-      left: '0',
-      bottom: '0',
-      width: '1px',
-      height: '1px',
-      pointerEvents: 'none',
-      visibility: 'hidden',
-    } as Partial<CSSStyleDeclaration>)
-    document.body.appendChild(el)
-    sentinelRef.current = el
-    return () => {
-      document.body.removeChild(el)
-      sentinelRef.current = null
-    }
-  }, [active])
+ *  Accepted transient: during a rapid keyboard open/close iOS emits a burst of
+ *  events while clientHeight / vv.height / offsetTop settle independently, so a
+ *  derived value can be briefly off for a frame; the next event recomputes it.
+ *  Not rAF-coalesced — that would add a frame of latency to the common
+ *  smooth-scroll case for a rare, self-correcting blip. */
+const useKeyboardViewportValue = <T,>(active: boolean, read: () => T, initial: T): T => {
+  const [value, setValue] = useState(initial)
 
   useEffect(() => {
     if (!active || typeof window === 'undefined') return
-    const vv = window.visualViewport
-
-    // Seed the baseline with the larger of innerHeight and the current
-    // visualViewport height. If the toolbar mounts AFTER the keyboard
-    // is already up (vv.height already shrunk), innerHeight still
-    // reflects the no-keyboard layout viewport on layout-anchored
-    // browsers, so it's the right ceiling. On `resizes-content`
-    // browsers innerHeight has shrunk too, but the sentinel-based
-    // anchoring check below gates inset to 0 in that case anyway.
-    let maxVvHeight = Math.max(vv?.height ?? 0, window.innerHeight)
-
-    const update = () => {
-      const sentinel = sentinelRef.current
-      if (!sentinel) return
-      const sentinelBottom = sentinel.getBoundingClientRect().bottom
-      const vvHeight = vv?.height ?? window.innerHeight
-
-      if (vvHeight > maxVvHeight) maxVvHeight = vvHeight
-
-      // Anchoring detection: when position:fixed is pinned to the
-      // visual viewport, the sentinel sits flush with vv.bottom and
-      // sentinelBottom == vvHeight. When it's anchored to the layout
-      // viewport, the sentinel sits past the visual viewport bottom
-      // and sentinelBottom > vvHeight. The 1px tolerance absorbs
-      // sub-pixel rounding from getBoundingClientRect().
-      const isLayoutAnchored = sentinelBottom > vvHeight + 1
-      const keyboardHeight = Math.max(0, maxVvHeight - vvHeight)
-      const next = isLayoutAnchored ? Math.round(keyboardHeight) : 0
-
-      setInset(prev => (prev === next ? prev : next))
-    }
-
+    const update = () =>
+      setValue(prev => {
+        const next = read()
+        return prev === next ? prev : next
+      })
     update()
-    if (vv) {
-      vv.addEventListener('resize', update)
-      vv.addEventListener('scroll', update)
-    }
-    window.addEventListener('resize', update)
-    return () => {
-      if (vv) {
-        vv.removeEventListener('resize', update)
-        vv.removeEventListener('scroll', update)
-      }
-      window.removeEventListener('resize', update)
-    }
-  }, [active])
+    return subscribeKeyboardViewport(update)
+  }, [active, read])
 
-  return inset
+  return value
 }
 
+/** The toolbar's `bottom` inset — the live layout-viewport keyboard overlap
+ *  that lifts the `position: fixed` toolbar just above the on-screen keyboard
+ *  (see `getLayoutViewportKeyboardOverlap` for the iOS clientHeight/pan
+ *  rationale). ~0 on Chromium/Firefox, nonzero on iOS Safari. */
+const useKeyboardInset = (active: boolean): number =>
+  useKeyboardViewportValue(active, getLayoutViewportKeyboardOverlap, 0)
+
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
- *  block is being edited, exposing tap targets for the workflowy/roam-
- *  style block commands (indent / outdent / reorder / undo / done).
- *  Each button dispatches the same action id that the keyboard binding
- *  invokes, so behavior stays in lockstep with the desktop shortcuts. */
+ *  block is being edited. Its buttons are facet contributions
+ *  (`mobileKeyboardToolbarItemsFacet`): the structural/reference set comes
+ *  from this plugin, and other plugins add their own (the image button from
+ *  attachments, the todo toggle from todo). Each button dispatches the same
+ *  action id that the keyboard binding invokes, so behavior stays in lockstep
+ *  with the desktop shortcuts. */
 export function MobileKeyboardToolbar() {
-  const isMobile = useIsMobile()
   // Editing state is per-panel (`isEditingProp` is set on the panel's
   // UI-state block), so the app-shell `useIsEditing()` hook — which
   // resolves to the user-root UI-state block when no panel context is
@@ -179,10 +64,29 @@ export function MobileKeyboardToolbar() {
   const activeContexts = useActiveContextsState()
   const isEditing = activeContexts.has(ActionContextTypes.EDIT_MODE_CM)
   const runAction = useRunAction()
+  // Buttons are facet contributions, ordered by contribution precedence; each
+  // button's glyph + label are read from its action (icon / description), so
+  // presentation lives on the action. The toolbar only shows in edit mode, so
+  // unqualified items resolve against EDIT_MODE_CM.
+  const resolved = useActionRefItems(mobileKeyboardToolbarItemsFacet, ActionContextTypes.EDIT_MODE_CM)
+  // Show the toolbar whenever a block is being edited on a touch-primary device
+  // (phone / tablet / convertible in tablet mode — `pointer: coarse`), where its
+  // buttons (outdent/indent/insert-ref/…) have no physical keys to fall back on.
+  // On a device whose primary pointer is a mouse/trackpad (desktop, laptop,
+  // convertible in laptop mode) the pointer reads `fine` and the bar stays
+  // hidden. A tablet with a keyboard folio still reads `coarse`, so the bar
+  // shows even though a hardware keyboard is attached — accepted: HW-keyboard
+  // presence isn't detectable on the web, and a redundant bar (you have keys) is
+  // cheaper than a missing one (you don't). This replaces the earlier width +
+  // soft-keyboard-geometry gate, which missed wide Chromium/Firefox soft-kb
+  // devices (landscape Android phone, wide tablet) whose layout viewport shrinks
+  // with the keyboard so the geometry delta reads ~0.
+  const pointerCoarse = usePointerCoarse()
+  const showToolbar = isEditing && pointerCoarse
   // Hooks above the early-return must run on every render. Pass the
   // activation flag in so the sentinel only mounts/listens while the
   // toolbar is on screen.
-  const keyboardInset = useKeyboardInset(isMobile && isEditing)
+  const keyboardInset = useKeyboardInset(showToolbar)
 
   // Publish the toolbar's rendered height so keyboardAwareScroll can keep
   // the caret above the toolbar, not just above the keyboard. Measured
@@ -203,9 +107,9 @@ export function MobileKeyboardToolbar() {
       observer.disconnect()
       setEditingToolbarHeight(0)
     }
-  }, [isMobile, isEditing])
+  }, [showToolbar])
 
-  if (!isMobile || !isEditing) return null
+  if (!showToolbar) return null
 
   // Prevent the editor from blurring when a button is pressed — losing
   // focus would dismiss the on-screen keyboard mid-tap and tear down
@@ -218,13 +122,6 @@ export function MobileKeyboardToolbar() {
     event.preventDefault()
   }
 
-  const getActiveEditorView = () => {
-    const editDeps = activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as
-      | CodeMirrorEditModeDependencies
-      | undefined
-    return editDeps?.editorView
-  }
-
   const handleClick = (actionId: string) => async (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
     event.stopPropagation()
@@ -232,7 +129,7 @@ export function MobileKeyboardToolbar() {
     // Snapshot the editor view from the EDIT_MODE_CM dependencies
     // BEFORE the action runs, so a structural action that swaps panels
     // mid-flight can't trick us into focusing the wrong editor.
-    const editorView = getActiveEditorView()
+    const editorView = editorViewFromActiveContexts(activeContexts)
 
     // Action handlers expect ActionTrigger = KeyboardEvent | CustomEvent.
     // None of the actions wired to this toolbar consult the trigger,
@@ -240,63 +137,69 @@ export function MobileKeyboardToolbar() {
     // misrepresent a click as a keyboard event.
     const trigger = new CustomEvent('mobile-toolbar-action', {detail: {actionId}})
 
-    // Some actions reorder the focused block's DOM node, and the
-    // reparenting drops native focus from the contenteditable. The
-    // editor's onBlur then schedules a raf that exits edit mode
-    // because document.activeElement is no longer inside any
-    // .cm-editor. The blur fires whenever React eventually commits
-    // the post-mutation render — that's *after* this handler returns,
-    // and the timing is variable (PowerSync subscription → React
-    // batched render → DOM diff/commit → blur). Stacked requestAnimation
-    // Frames aren't enough; the blur regularly lands several frames
-    // later still. Acquire a hold for a window that covers the worst-
-    // case render delay (~150ms in playwright) plus headroom; the
-    // BlockEditor's onBlur honors the hold by re-focusing instead of
-    // dropping out of edit mode. The Done button is the *one* path
-    // that genuinely wants edit mode off — leave its blur alone.
-    const releaseHold = actionId === EXIT_EDIT_ACTION_ID
-      ? null
-      : acquireBlurExitSuppression()
-    try {
-      await runAction(actionId, trigger)
-    } catch (error) {
-      console.error(`[MobileKeyboardToolbar] Failed to run ${actionId}`, error)
+    const run = async () => {
+      try {
+        await runAction(actionId, trigger)
+      } catch (error) {
+        console.error(`[MobileKeyboardToolbar] Failed to run ${actionId}`, error)
+      }
     }
-    if (releaseHold) {
-      window.setTimeout(releaseHold, 400)
-      // Snap focus back immediately for the common case where the editor
-      // is already remounted under the new DOM position. If it isn't yet,
-      // the suppressed blur won't tear us out of edit mode and the next
-      // edit-driven focus effect catches up.
-      requestAnimationFrame(() => editorView?.focus())
+
+    // The Done button is the *one* path that genuinely wants edit mode off —
+    // run it with no keepalive so its blur tears edit mode down.
+    if (actionId === EXIT_EDIT_ACTION_ID) {
+      await run()
+      return
     }
+
+    // Some actions reorder the focused block's DOM node, and the reparenting
+    // drops native focus from the contenteditable. The editor's onBlur then
+    // schedules a raf that exits edit mode because document.activeElement is no
+    // longer inside any .cm-editor — and that blur lands AFTER this handler
+    // returns, several frames late and variably (PowerSync → React render → DOM
+    // commit → blur). Hold a 'refocus' keepalive across the action and past its
+    // resolution (withEditModeKeepalive owns the timed release) so the late blur
+    // re-focuses instead of dropping out of edit mode.
+    await withEditModeKeepalive('refocus', run)
+    // Snap focus back immediately for the common case where the editor is
+    // already remounted under the new DOM position. If it isn't yet, the
+    // suppressed blur won't tear us out of edit mode and the next edit-driven
+    // focus effect catches up.
+    requestAnimationFrame(() => editorView?.focus())
   }
 
   return (
     <div
       ref={toolbarRef}
-      // `keyboardInset` is 0 on browsers where bottom:0 already lands
-      // above the keyboard (Chrome on Android, iOS Safari) and equals
-      // the keyboard's CSS-px height on browsers that anchor
-      // position:fixed to a full-height layout viewport (Edge,
-      // Samsung Internet) — see useKeyboardInset.
+      // `keyboardInset` lifts the fixed toolbar above the on-screen
+      // keyboard by the keyboard's intrusion into the layout viewport:
+      // nonzero on iOS Safari (layout viewport stays full-height while the
+      // keyboard overlays + pans it), ~0 on Chromium/Firefox (where
+      // interactive-widget=resizes-content shrinks the layout viewport, so
+      // bottom:0 already clears the keyboard). See useKeyboardInset.
       className="mobile-keyboard-toolbar fixed left-0 right-0 z-50 flex items-center justify-around gap-1 border-t border-border bg-background/95 px-1 py-1 backdrop-blur supports-[backdrop-filter]:bg-background/80"
       style={{bottom: keyboardInset}}
       data-block-interaction="ignore"
     >
-      {TOOLBAR_ACTIONS.map(action => (
-        <button
-          key={action.id}
-          type="button"
-          aria-label={action.label}
-          title={action.label}
-          onMouseDown={handleMouseDown}
-          onClick={handleClick(action.actionId)}
-          className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
-        >
-          <ToolbarButtonContent action={action}/>
-        </button>
-      ))}
+      {resolved.map(({item, action}) => {
+        // A button with no resolved icon is skipped (its plugin may be disabled,
+        // or the action lacks an icon) — same contract as the bottom nav.
+        if (!action?.icon) return null
+        const Icon = action.icon
+        return (
+          <button
+            key={item.id}
+            type="button"
+            aria-label={action.description}
+            title={action.description}
+            onMouseDown={handleMouseDown}
+            onClick={handleClick(item.actionId)}
+            className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
+          >
+            <Icon className="h-5 w-5"/>
+          </button>
+        )
+      })}
     </div>
   )
 }

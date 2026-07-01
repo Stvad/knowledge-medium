@@ -20,10 +20,10 @@
  *     by checking ps_crud row count grew after the undo replay
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, ReadOnlyError } from '@/data/api'
-import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
@@ -37,18 +37,9 @@ const setup = async (): Promise<Harness> => {
   // Shared DB opened once per file, reset between tests; fresh Repo per test.
   await resetTestDb(sharedDb.db)
   const h = sharedDb
-  const cache = new BlockCache()
-  let timeCursor = 1700_000_000_000
-  let idCursor = 0
-  const repo = new Repo({
+  const {repo} = createTestRepo({
     db: h.db,
-    cache,
     user: {id: 'user-1'},
-    now: () => ++timeCursor,
-    newId: () => `gen-${++idCursor}`,
-    // Disable kernel processors so parseReferences doesn't fire and
-    // add its own tx entries during these tests — keeps the audited
-    // stack predictable.
   })
   // Undo / redo are scoped to the active workspace (issue #186); pin it
   // to WS so the default-workspace edits below are the cmd-Z target.
@@ -98,7 +89,6 @@ let env: Harness
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
-afterEach(() => { env.repo.stopSyncObserver() })
 
 describe('repo.undo / redo on tx.update (setContent)', () => {
   it('reverts content on undo and re-applies on redo', async () => {
