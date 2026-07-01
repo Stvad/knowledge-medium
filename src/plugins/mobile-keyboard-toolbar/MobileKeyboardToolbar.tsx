@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
-import { useIsMobile } from '@/utils/react.js'
+import { usePointerCoarse } from '@/utils/react.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
 import { useActiveContextsState, editorViewFromActiveContexts } from '@/shortcuts/ActiveContexts.js'
 import { useActionRefItems } from '@/shortcuts/actionRefItems.js'
@@ -7,7 +7,6 @@ import { ActionContextTypes } from '@/shortcuts/types.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import {
   getLayoutViewportKeyboardOverlap,
-  getSoftKeyboardPresent,
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
 } from '@/utils/keyboardViewport.js'
@@ -48,12 +47,6 @@ const useKeyboardViewportValue = <T,>(active: boolean, read: () => T, initial: T
 const useKeyboardInset = (active: boolean): number =>
   useKeyboardViewportValue(active, getLayoutViewportKeyboardOverlap, 0)
 
-/** Whether a soft keyboard is currently up (pan-invariant — see
- *  `getSoftKeyboardPresent`). Lets the toolbar show on a wide iPad with no
- *  hardware keyboard, where the `useIsMobile` width gate is off. */
-const useSoftKeyboardPresent = (active: boolean): boolean =>
-  useKeyboardViewportValue(active, getSoftKeyboardPresent, false)
-
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
  *  block is being edited. Its buttons are facet contributions
  *  (`mobileKeyboardToolbarItemsFacet`): the structural/reference set comes
@@ -62,7 +55,6 @@ const useSoftKeyboardPresent = (active: boolean): boolean =>
  *  action id that the keyboard binding invokes, so behavior stays in lockstep
  *  with the desktop shortcuts. */
 export function MobileKeyboardToolbar() {
-  const isMobile = useIsMobile()
   // Editing state is per-panel (`isEditingProp` is set on the panel's
   // UI-state block), so the app-shell `useIsEditing()` hook — which
   // resolves to the user-root UI-state block when no panel context is
@@ -77,14 +69,20 @@ export function MobileKeyboardToolbar() {
   // presentation lives on the action. The toolbar only shows in edit mode, so
   // unqualified items resolve against EDIT_MODE_CM.
   const resolved = useActionRefItems(mobileKeyboardToolbarItemsFacet, ActionContextTypes.EDIT_MODE_CM)
-  // Show while editing on a narrow (phone) viewport, OR — regardless of width —
-  // whenever a soft keyboard is up. The soft-keyboard arm covers a wide iPad
-  // with no hardware keyboard: the keyboard appears, so the toolbar should too;
-  // with a hardware keyboard connected no soft keyboard shows and the toolbar
-  // stays hidden. Only detect the keyboard when the width gate wouldn't already
-  // show the bar (`!isMobile`), so phones don't pay for the extra subscription.
-  const softKeyboardPresent = useSoftKeyboardPresent(isEditing && !isMobile)
-  const showToolbar = isEditing && (isMobile || softKeyboardPresent)
+  // Show the toolbar whenever a block is being edited on a touch-primary device
+  // (phone / tablet / convertible in tablet mode — `pointer: coarse`), where its
+  // buttons (outdent/indent/insert-ref/…) have no physical keys to fall back on.
+  // On a device whose primary pointer is a mouse/trackpad (desktop, laptop,
+  // convertible in laptop mode) the pointer reads `fine` and the bar stays
+  // hidden. A tablet with a keyboard folio still reads `coarse`, so the bar
+  // shows even though a hardware keyboard is attached — accepted: HW-keyboard
+  // presence isn't detectable on the web, and a redundant bar (you have keys) is
+  // cheaper than a missing one (you don't). This replaces the earlier width +
+  // soft-keyboard-geometry gate, which missed wide Chromium/Firefox soft-kb
+  // devices (landscape Android phone, wide tablet) whose layout viewport shrinks
+  // with the keyboard so the geometry delta reads ~0.
+  const pointerCoarse = usePointerCoarse()
+  const showToolbar = isEditing && pointerCoarse
   // Hooks above the early-return must run on every render. Pass the
   // activation flag in so the sentinel only mounts/listens while the
   // toolbar is on screen.

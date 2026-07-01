@@ -72,42 +72,6 @@ export const getLayoutViewportKeyboardOverlap = (): number => {
 export const getVisualViewportHeight = (): number =>
   typeof window === 'undefined' ? 0 : Math.round(window.visualViewport?.height ?? 0)
 
-/** Minimum layout-vs-visual height delta (CSS px) that counts as a soft
- *  keyboard being up. Deliberately well above the URL-bar band (~60–100px on
- *  mobile Safari): the delta is used width-independently to decide whether to
- *  show the editing toolbar on a wide iPad (no hardware keyboard ⇒ soft
- *  keyboard ⇒ toolbar), so a collapsing URL bar must NOT read as a keyboard.
- *  A real soft keyboard is ≥ ~200px; this sits between. */
-export const SOFT_KEYBOARD_MIN_HEIGHT = 150
-
-/** Pure: is a soft keyboard up, judged by how much the visual viewport has
- *  shrunk below the layout viewport? Uses ONLY the height delta (no offsetTop)
- *  so it's invariant to the iOS pan — unlike the positioning overlap, this must
- *  stay true while the page scrolls with the keyboard up. On Chromium/Firefox
- *  (interactive-widget=resizes-content) the layout viewport shrinks WITH the
- *  keyboard, so the delta is ~0 and this reads false; the delta is the extra
- *  signal for wide iOS, where the layout viewport stays full.
- *
- *  Known gap: a Chromium/Firefox device that is BOTH >767px AND has a soft
- *  keyboard (a landscape Android phone, a wide Android tablet, a Chromebook /
- *  Windows 2-in-1 in tablet mode) satisfies neither the width gate nor this
- *  delta, so the toolbar stays hidden while editing. Narrow-width Chromium
- *  phones are covered by `useIsMobile`; wide iOS is covered here. There's no
- *  cheap robust Chromium signal for the wide+soft-kb case (the VirtualKeyboard
- *  overlaysContent API is app-global and was rejected), so it's accepted. */
-export const softKeyboardPresent = (layoutHeight: number, visualViewportHeight: number): boolean =>
-  layoutHeight - visualViewportHeight >= SOFT_KEYBOARD_MIN_HEIGHT
-
-/** Live {@link softKeyboardPresent} read from the DOM. Layout height is
- *  `documentElement.clientHeight` (stays full on iOS while the keyboard is up),
- *  matching {@link getLayoutViewportKeyboardOverlap}'s source. */
-export const getSoftKeyboardPresent = (): boolean => {
-  if (typeof document === 'undefined') return false
-  const vv = typeof window === 'undefined' ? undefined : window.visualViewport
-  if (!vv) return false
-  return softKeyboardPresent(document.documentElement.clientHeight, vv.height)
-}
-
 const listeners = new CallbackSet('keyboard-viewport')
 let attached = false
 
