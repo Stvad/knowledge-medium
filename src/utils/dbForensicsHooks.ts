@@ -7,6 +7,7 @@
 
 import { dbForensics, type DbForensics } from '@/utils/dbForensics.js'
 import { isLocalDbCorruptionError } from '@/utils/localDbCorruption.js'
+import { reportRuntimeLocalDbCorruption } from '@/data/localDbCorruptionSignal.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 
 /**
@@ -79,10 +80,15 @@ export const captureDbOpenCorruption = (
 
 /**
  * Watch the PowerSync connection for a RUNTIME sync-apply corruption
- * (`downloadError`) and capture a snapshot the first time one appears. This is
- * the class the DB-open detector never sees (connect isn't awaited). Read-only:
- * it records forensics, it does NOT trigger recovery (that's a separate #281
- * follow-up). Installed once per process.
+ * (`downloadError`) — the class the DB-open detector never sees (connect isn't
+ * awaited). On the first one it (a) captures a forensic snapshot on the BROAD
+ * matcher, and (b) routes to the recovery UI on the STRICT matcher, via
+ * `reportRuntimeLocalDbCorruption` → the sentinel → the bootstrap ErrorBoundary.
+ *
+ * Two matchers on purpose: forensic capture is read-only so it fires on the
+ * broad `powersync_control` phrasing (maximum context), while routing to the
+ * DESTRUCTIVE-adjacent recovery UI is gated on the strict, corruption-specific
+ * matcher. Installed once per process.
  */
 export const watchForRuntimeCorruption = (
   db: CorruptionWatchDb,
@@ -93,21 +99,35 @@ export const watchForRuntimeCorruption = (
   if (runtimeWatchInstalled) return
   runtimeWatchInstalled = true
   const check = (status: DownloadErrorStatus | undefined): void => {
-    if (runtimeCorruptionCaptured) return
     const err = downloadErrorOf(status)
-    if (err === undefined || err === null || !looksLikeDbCorruptionForForensics(err)) return
-    runtimeCorruptionCaptured = true
-    void forensics.captureCorruptionSnapshot({
-      userId,
-      dbFilename,
-      reason: 'runtime-sync-corrupt',
-      sql: { downloadError: err instanceof Error ? err.message : String(err) },
-    })
+    if (err === undefined || err === null) return
+    if (looksLikeDbCorruptionForForensics(err) && !runtimeCorruptionCaptured) {
+      runtimeCorruptionCaptured = true
+      void forensics.captureCorruptionSnapshot({
+        userId,
+        dbFilename,
+        reason: 'runtime-sync-corrupt',
+        sql: { downloadError: err instanceof Error ? err.message : String(err) },
+      })
+    }
+    // Route to the recovery UI only on the strict, reset-gating matcher (latched
+    // in the signal, so repeated sync-loop failures don't re-fire).
+    if (isLocalDbCorruptionError(err)) {
+      reportRuntimeLocalDbCorruption(userId, err)
+    }
   }
   check(db.currentStatus)
   if (typeof db.registerListener === 'function') {
     db.registerListener({ statusChanged: check })
   }
+}
+
+/** Test-only: reset the once-per-process guards. */
+export const __resetDbForensicsHooksForTest = (): void => {
+  sessionRecorded = false
+  runtimeWatchInstalled = false
+  runtimeCorruptionCaptured = false
+  lifecycleInstalled = false
 }
 
 /**

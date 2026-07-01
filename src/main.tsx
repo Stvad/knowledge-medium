@@ -7,7 +7,7 @@ import App from './App.tsx'
 import { RepoProvider } from '@/context/repo.js'
 import { Login } from '@/components/Login.js'
 import { SuspenseFallback } from '@/components/util/suspense.js'
-import { BootstrapErrorFallback } from '@/components/util/error.js'
+import { BootstrapErrorFallback, LocalDbCorruptionSentinel } from '@/components/util/error.js'
 import { registerServiceWorker } from '@/registerServiceWorker.js'
 import { requestPersistentStorage } from '@/requestPersistentStorage.js'
 import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
@@ -53,6 +53,9 @@ createRoot(document.getElementById('root')!).render(
     <Suspense fallback={<SuspenseFallback/>}>
       <Login>
         <ErrorBoundary FallbackComponent={BootstrapErrorFallback}>
+          {/* Routes a RUNTIME sync-apply corruption (which opens fine, so it
+              never throws through init) into this same boundary → recovery UI. */}
+          <LocalDbCorruptionSentinel />
           <RepoProvider>
             <Suspense fallback={<SuspenseFallback/>}>
               <App/>
