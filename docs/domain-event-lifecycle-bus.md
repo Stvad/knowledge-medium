@@ -327,8 +327,10 @@ export interface AppEventBus {
 
 ### 3.4 Scope & lifecycle
 
-- **Workspace scope is in the payload, not the channel.** Every event carries
-  `workspaceId`; subscribers filter (`options.filter` or in-handler). This keeps
+- **Workspace scope is in the payload, not the channel.** Every *workspace-scoped*
+  event carries `workspaceId` (the session/connection-global ones — `app:booted`,
+  `sync:status` — deliberately don't; §1 table); subscribers filter
+  (`options.filter` or in-handler). This keeps
   the bus a single flat registry (no per-workspace bus instances to create/tear
   down) and matches how processors/invalidation already pass `workspaceId`
   through. A subscriber that only cares about the active workspace compares
@@ -373,9 +375,12 @@ export interface AppEventBus {
   on emit order. (A future per-event opt-in "serialized" mode could be added if a
   real ordering need appears, but the default stays non-blocking.)
 - **Data events are bridged, not double-emitted.** `block:created/updated/deleted`
-  are emitted by *one* internal post-commit hook reading the same snapshots the
-  processor runner already has, so they fire exactly once per committed tx and
-  inherit the "registry snapshotted at tx start" / fire-after-resolve timing.
+  are emitted by *one* internal post-commit hook that walks the tx's snapshots
+  (the same `SnapshotsMap` the processor runner already has). The payloads are
+  singular, so a multi-block tx emits **one event per changed row** (each row
+  classified into exactly one of created/updated/deleted — §1) — i.e. exactly
+  once per affected block, not once per tx. They inherit the "registry snapshotted
+  at tx start" / fire-after-resolve timing.
   Subscribers are pure observers — for *writes* in reaction to data, a real
   processor is still the right tool (atomicity, ordering, the existing veto/
   same-tx options). The bus's data events are for observers that can't or
