@@ -110,6 +110,31 @@ export const createGraph = (client: BridgeClient) => {
     return Array.isArray(result) ? result : []
   }
 
+  /** Batched property fetch — ONE query per tick instead of a bridge
+   *  round-trip per backlink source, so processed mentions stay cheap
+   *  to re-scan forever. */
+  const blockProps = async (ids: string[]): Promise<Map<string, Record<string, unknown>>> => {
+    const props = new Map<string, Record<string, unknown>>()
+    for (let offset = 0; offset < ids.length; offset += 500) {
+      const chunk = ids.slice(offset, offset + 500)
+      const placeholders = chunk.map(() => '?').join(', ')
+      const rows = await sqlAll(
+        `SELECT id, properties_json FROM blocks WHERE id IN (${placeholders})`,
+        chunk,
+      )
+      for (const row of rows) {
+        const {id, properties_json} = row as {id?: unknown, properties_json?: unknown}
+        if (typeof id !== 'string' || typeof properties_json !== 'string') continue
+        try {
+          props.set(id, JSON.parse(properties_json) as Record<string, unknown>)
+        } catch {
+          props.set(id, {})
+        }
+      }
+    }
+    return props
+  }
+
   return {
     client,
     resolvePageId,
@@ -120,6 +145,7 @@ export const createGraph = (client: BridgeClient) => {
     setTaskProps,
     createReply,
     sqlAll,
+    blockProps,
   }
 }
 

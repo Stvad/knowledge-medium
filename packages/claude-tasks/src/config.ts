@@ -117,6 +117,7 @@ export const loadConfig = async (configPath = defaultConfigPath()): Promise<Daem
     if (isErrnoException(error) && error.code === 'ENOENT') {
       throw new Error(
         `No claude-tasks config at ${configPath}. Create it first — see packages/claude-tasks/README.md for the format.`,
+        {cause: error},
       )
     }
     throw error

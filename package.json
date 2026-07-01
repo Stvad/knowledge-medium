@@ -31,7 +31,8 @@
     "check:db": "node scripts/check-db.mjs",
     "check": "node scripts/check.mjs",
     "agent:server": "node packages/agent-cli/dist/server.js",
-    "agent": "node packages/agent-cli/dist/cli.js"
+    "agent": "node packages/agent-cli/dist/cli.js",
+    "claude-daemon": "node packages/claude-tasks/dist/daemon.js"
   },
   "dependencies": {
     "@babel/standalone": "^7.29.2",

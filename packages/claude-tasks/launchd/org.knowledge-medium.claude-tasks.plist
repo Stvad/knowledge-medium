@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template — substitute __NODE__ (absolute node path) and __REPO__
+     (absolute repo root) before installing; see the package README. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>org.knowledge-medium.claude-tasks</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__REPO__/packages/claude-tasks/dist/daemon.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart on crash, but not on clean exit (config errors shouldn't
+       hot-loop; fix the config and kickstart). -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/km-claude-daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/km-claude-daemon.log</string>
+
+  <!-- Keep PATH minimal but sufficient for `claude` (installed via its
+       own launcher in ~/.local/bin by default) and node. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>
