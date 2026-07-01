@@ -62,6 +62,11 @@ export interface ByteStore {
    *  ONE-SHOT presence scan (§8): a single directory enumeration in place of a `has()`
    *  per block. Empty when nothing is stored. */
   listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>>
+  /** Every workspace id that has bytes stored for this user — a single
+   *  `assets/<user>/` directory enumeration. Empty when the user has nothing stored.
+   *  The §16 GC's entry point: the stored prefixes it diffs against the user's still-
+   *  accessible workspaces to find orphaned (revoked/left) ones to `purgeWorkspace`. */
+  listWorkspaceIds(userId: string): Promise<Set<string>>
   /** Drop a single object's bytes — the §9 reconciler's orphan reap (a never-
    *  committed capture's bytes). A no-op when absent. */
   delete(userId: string, workspaceId: string, contentKey: string): Promise<void>
@@ -106,6 +111,12 @@ export class InMemoryByteStore implements ByteStore {
     return `${ASSETS_ROOT}/${encodeSegment(userId)}/${encodeSegment(workspaceId)}/`
   }
 
+  /** The `assets/<user>/` key prefix — one workspace-id enumeration reads the segment
+   *  after it. Kept alongside {@link wsPrefix} so both scans encode the user the same way. */
+  private userPrefix(userId: string): string {
+    return `${ASSETS_ROOT}/${encodeSegment(userId)}/`
+  }
+
   async get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null> {
     const hit = this.blobs.get(this.key(userId, workspaceId, contentKey))
     return hit ? new Uint8Array(hit) : null
@@ -124,6 +135,19 @@ export class InMemoryByteStore implements ByteStore {
     const out = new Set<string>()
     for (const k of this.blobs.keys()) {
       if (k.startsWith(prefix)) out.add(decodeSegment(k.slice(prefix.length)))
+    }
+    return out
+  }
+
+  async listWorkspaceIds(userId: string): Promise<Set<string>> {
+    const prefix = this.userPrefix(userId)
+    const out = new Set<string>()
+    for (const k of this.blobs.keys()) {
+      if (!k.startsWith(prefix)) continue
+      // `k` is `assets/<enc user>/<enc ws>/<enc key>` — encodeSegment escapes any `/`,
+      // so the segment up to the next `/` is exactly the (encoded) workspace id.
+      const wsSegment = k.slice(prefix.length).split('/', 1)[0]
+      if (wsSegment) out.add(decodeSegment(wsSegment))
     }
     return out
   }
@@ -259,6 +283,20 @@ export class OpfsByteStore implements ByteStore {
       return keys
     } catch (err) {
       if (isNotFound(err)) return new Set() // no objects stored for this (user, workspace) yet
+      throw err
+    }
+  }
+
+  async listWorkspaceIds(userId: string): Promise<Set<string>> {
+    try {
+      const userDir = await this.walk([ASSETS_ROOT, encodeSegment(userId)], false)
+      const ids = new Set<string>()
+      // Under the user dir every entry is a workspace directory (put only ever creates
+      // `assets/<user>/<ws>/`), so each name decodes back to a workspace id.
+      for await (const name of userDir.keys()) ids.add(decodeSegment(name))
+      return ids
+    } catch (err) {
+      if (isNotFound(err)) return new Set() // nothing stored for this user yet
       throw err
     }
   }

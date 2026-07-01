@@ -37,7 +37,7 @@ export const DOWN_LANE_SWEEP_INTERVAL_MS = 10 * 60 * 1000 // 10 minutes
  *  run concurrently — a per-user lock would skip whichever tab lost the race, starving
  *  its workspace until the next sweep/reconnect. Same (user, workspace) in two tabs IS
  *  duplicate work and still dedups (one owner; the other skips). */
-const downLaneLockName = (userId: string, workspaceId: string) =>
+export const downLaneLockName = (userId: string, workspaceId: string) =>
   `km-asset-down-lane:${userId}:${workspaceId}`
 
 /** The active workspace's media blocks → distinct replication requests. Skips a block
