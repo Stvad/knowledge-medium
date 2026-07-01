@@ -11,3 +11,5 @@ export const characterCounterDataExtension: AppExtension = [
   CHAR_COUNTER_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'character-counter'})),
   propertySchemasFacet.of(charLimitProp, {source: 'character-counter'}),
 ]
+
+export default characterCounterDataExtension

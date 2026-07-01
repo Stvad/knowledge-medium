@@ -20,3 +20,5 @@ export const birthdayPlugin: AppExtension = systemToggle({
     { source: 'birthday' },
   ),
 ])
+
+export default birthdayPlugin

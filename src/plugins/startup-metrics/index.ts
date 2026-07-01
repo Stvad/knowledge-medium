@@ -20,3 +20,5 @@ export const startupMetricsPlugin: AppExtension = systemToggle({
   propertySchemasFacet.of(startupRecordProp, { source: 'startup-metrics' }),
   typesFacet.of(startupMetricsUIStateType, { source: 'startup-metrics' }),
 ])
+
+export default startupMetricsPlugin

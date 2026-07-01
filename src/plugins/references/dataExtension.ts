@@ -21,3 +21,5 @@ export const referencesDataExtension: AppExtension = [
     postCommitProcessorsFacet.of(processor, {source: 'references'}),
   ),
 ]
+
+export default referencesDataExtension

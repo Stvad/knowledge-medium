@@ -20,3 +20,5 @@ export const referencesPlugin: AppExtension = systemToggle({
   blockLayoutFacet.of(referenceLayoutContribution, {source: 'references'}),
   codeMirrorExtensionsFacet.of(referencesCodeMirrorExtensions, {source: 'references'}),
 ])
+
+export default referencesPlugin

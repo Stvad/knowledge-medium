@@ -14,3 +14,5 @@ export const backlinksDataExtension: AppExtension = [
   propertySchemasFacet.of(dailyNoteBacklinksDefaultsProp, {source: 'backlinks'}),
   ...pluginPrefsExtension(backlinksPrefsType, 'backlinks'),
 ]
+
+export default backlinksDataExtension

@@ -20,7 +20,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { typesFacet } from '@/data/facets'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions'
+import { pluginDataExtensions } from '@/data/pluginDataExtensions'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { characterCounterDataExtension } from '@/plugins/character-counter/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
@@ -42,11 +42,12 @@ import {
 const WS = 'ws-1'
 
 // The block-type data extensions the tutorial's demos depend on. A focused
-// list — NOT the full `staticDataExtensions` — so the seed tx doesn't register
-// the references/alias post-commit processors, which fire async and would make
-// the "single command_events row" assertion racy. The separate completeness
-// test below guards that production's `staticDataExtensions` actually contains
-// these (the original bug was char-counter + geo missing from it).
+// list — NOT the full `pluginDataExtensions` glob — so the seed tx doesn't
+// register the references/alias post-commit processors, which fire async and
+// would make the "single command_events row" assertion racy. The separate
+// completeness test below guards that the discovered plugin data actually
+// contains these (the original bug was char-counter + geo missing from the
+// pre-glob hand-maintained list).
 const TUTORIAL_TYPE_EXTENSIONS = [
   todoDataExtension,
   characterCounterDataExtension,
@@ -222,13 +223,16 @@ describe('seedTutorial', () => {
     expect(rows[0]?.count).toBe(1)
   })
 
-  // The seed runs at bootstrap against the Repo's construction-time registry,
-  // which is built from `staticDataExtensions` (see src/context/repo.tsx). So
-  // every block type the tutorial tags a demo with MUST be registered there,
-  // or `addType` throws and no tutorial seeds (the original char-counter / geo
-  // regression). Guard the production list directly — no DB, no processors.
-  it('staticDataExtensions registers every block type the tutorial seeds', () => {
-    const types = resolveFacetRuntimeSync(staticDataExtensions).read(typesFacet)
+  // The seed runs at bootstrap against the toggle-aware `staticAppExtensions`
+  // runtime that `bootstrapWorkspace` installs (see src/bootstrap/
+  // workspaceBootstrap.ts). Every block type the tutorial tags a demo with MUST
+  // be registered there, or `addType` throws and no tutorial seeds (the original
+  // char-counter / geo regression). Guard the discovered plugin data directly —
+  // `pluginDataExtensions` is the UI-free glob of every plugin's dataExtension,
+  // so a demo type can't silently go missing the way it did from the old
+  // hand-maintained list. No DB, no processors.
+  it('plugin data registers every block type the tutorial seeds', () => {
+    const types = resolveFacetRuntimeSync(pluginDataExtensions).read(typesFacet)
     for (const typeId of [TODO_TYPE, CHAR_COUNTER_TYPE, SRS_SM25_TYPE, MAP_TYPE, PLACE_TYPE]) {
       expect(types.has(typeId)).toBe(true)
     }

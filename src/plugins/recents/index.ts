@@ -52,3 +52,5 @@ export const recentsPlugin = ({repo}: {repo: Repo}): AppExtension =>
     headerItemsFacet.of(recentsHeaderItem, {source: 'recents', precedence: 35}),
     actionsFacet.of(openRecentsAction(repo), {source: 'recents'}),
   ])
+
+export default recentsPlugin

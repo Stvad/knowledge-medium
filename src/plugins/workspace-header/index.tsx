@@ -42,3 +42,5 @@ export const workspaceHeaderPlugin: AppExtension = systemToggle({
     precedence: 30,
   }),
 ])
+
+export default workspaceHeaderPlugin

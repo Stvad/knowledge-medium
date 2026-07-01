@@ -1,5 +1,9 @@
 /**
- * Extensions meta-plugin data registrations.
+ * Extensions meta-plugin data registrations — DATA ONLY, so this module
+ * stays graph-free for the `pluginDataExtensions` glob (the headless
+ * local-schema / data path). The UI editor and the "Manage extensions"
+ * command-palette action (its handler imports `navigate` → React) live in
+ * `./index.ts` instead.
  *
  *   - `propertySchemasFacet` registers the overrides codec so the
  *     property reads/writes go through the strict decoder.
@@ -11,29 +15,21 @@
  *   - `extensionsSyncEffect` subscribes to the block, mirrors
  *     each change into the localStorage cache, and dispatches
  *     `refreshAppRuntime` whenever the canonical state diverges.
- *   - `propertyEditorOverridesFacet` registers the custom checkbox-
- *     tree editor that renders inside the prefs block's property
- *     panel — this is the actual settings UI surface.
- *   - `actionsFacet` exposes "Manage extensions" in the command
- *     palette; the handler just navigates to the prefs block in a
- *     new panel.
  */
-import {actionsFacet, appEffectsFacet} from '@/extensions/core.js'
+import {appEffectsFacet} from '@/extensions/core.js'
 import type {AppExtension} from '@/facets/facet.js'
-import {propertyEditorOverridesFacet, propertySchemasFacet} from '@/data/facets.js'
+import {propertySchemasFacet} from '@/data/facets.js'
 import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
-import {openExtensionsSettingsAction} from './actions.ts'
 import {
   extensionsOverridesProp,
   extensionsPrefsType,
 } from './config.ts'
 import {extensionsSyncEffect} from './effect.ts'
-import {extensionsOverridesUi} from './propertyEditorOverride.ts'
 
 export const extensionsDataExtension: AppExtension = [
   propertySchemasFacet.of(extensionsOverridesProp, {source: 'extensions-settings'}),
-  propertyEditorOverridesFacet.of(extensionsOverridesUi, {source: 'extensions-settings'}),
   ...pluginPrefsExtension(extensionsPrefsType, 'extensions-settings'),
   appEffectsFacet.of(extensionsSyncEffect, {source: 'extensions-settings'}),
-  actionsFacet.of(openExtensionsSettingsAction, {source: 'extensions-settings'}),
 ]
+
+export default extensionsDataExtension

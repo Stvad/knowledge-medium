@@ -5,10 +5,15 @@ import { ChangeScope, normalizeReferences, type BlockData } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
+import { resolveFacetRuntimeSync } from '@/facets/facet.js'
+import { sameTxProcessorsFacet } from '@/data/facets.js'
+import { pluginDataExtensions } from '@/data/pluginDataExtensions.js'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge.ts'
+import { ALIAS_SYNC_PROCESSOR } from '@/plugins/alias/syncProcessor.ts'
 import { referencesDataExtension } from '../dataExtension.ts'
+import { RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR } from '../mergeRetargetProcessor.ts'
 
 const WS = 'ws-1'
 
@@ -141,5 +146,23 @@ describe('references.retargetMergedBlockReferences', () => {
       {id: 'target', alias: 'Existing'},
       {id: 'target', alias: 'Other'},
     ]))
+  })
+})
+
+describe('same-tx processor order in the discovered runtime', () => {
+  // Regression: references' merge-retarget and alias's sync both fire inside a
+  // single merge tx and can touch the same row, so their relative order is
+  // load-bearing (same-tx processors run in facet collection order). Plugins
+  // are now discovered from the glob alphabetically, where `alias` sorts
+  // before `references` — the reverse of the hand-ordered pre-glob list. The
+  // fix is a precedence on alias's same-tx contribution; this pins the
+  // resulting execution order against both that and any future reshuffle.
+  it('runs references merge-retarget before alias sync', () => {
+    const order = [...resolveFacetRuntimeSync(pluginDataExtensions)
+      .read(sameTxProcessorsFacet).keys()]
+    expect(order).toContain(RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR)
+    expect(order).toContain(ALIAS_SYNC_PROCESSOR)
+    expect(order.indexOf(RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR))
+      .toBeLessThan(order.indexOf(ALIAS_SYNC_PROCESSOR))
   })
 })

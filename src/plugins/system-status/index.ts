@@ -31,3 +31,5 @@ export const systemStatusPlugin: AppExtension = systemToggle({
   // "Run data integrity audit" — command palette + the dropdown's Re-run button.
   runDataIntegrityAuditActionContribution,
 ])
+
+export default systemStatusPlugin

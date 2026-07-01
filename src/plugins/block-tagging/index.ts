@@ -37,3 +37,5 @@ export const blockTaggingPlugin: AppExtension = systemToggle({
 export { blockTagsConfigProp } from './config.ts'
 export { ADD_TAG_ACTION_ID, ADD_TAG_BLOCKS_ACTION_ID } from './addTagAction.ts'
 export { appendTagToBlocks, appendTagToContent } from './appendTag.ts'
+
+export default blockTaggingPlugin

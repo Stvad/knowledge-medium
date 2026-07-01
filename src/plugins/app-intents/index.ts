@@ -49,3 +49,7 @@ export const appIntentsPlugin: AppExtension = systemToggle({
 }).of([
   appEffectsFacet.of(appIntentsBootstrapEffect, {source: 'app-intents'}),
 ])
+
+export default appIntentsPlugin
+
+export const pluginOrder = 100

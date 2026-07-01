@@ -99,3 +99,5 @@ export {
 } from './schema.ts'
 export { buildDueCardsQuery, dueBoundary } from './dueQuery.ts'
 export { getOrCreateReviewDeck, reviewDeckBlockId } from './deck.ts'
+
+export default srsReviewPlugin

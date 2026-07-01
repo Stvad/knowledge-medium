@@ -29,3 +29,5 @@ export const mergeBlocksPlugin: AppExtension = systemToggle({
   dialogAppMountExtension,
   actionsFacet.of(mergeIntoAction, {source: 'merge-blocks'}),
 ])
+
+export default mergeBlocksPlugin

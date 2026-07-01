@@ -77,3 +77,5 @@ export const findReplacePlugin: AppExtension = systemToggle({
     }),
   ),
 ])
+
+export default findReplacePlugin

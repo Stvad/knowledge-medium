@@ -66,3 +66,5 @@ export const leftSidebarPlugin: AppExtension = systemToggle({
     precedence: 10,
   }),
 ])
+
+export default leftSidebarPlugin

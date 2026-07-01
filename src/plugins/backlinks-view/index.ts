@@ -17,3 +17,5 @@ export const backlinksViewPlugin: AppExtension = systemToggle({
   propertySchemasFacet.of(backlinksViewProp, {source: 'backlinks-view'}),
   blockChildrenFooterFacet.of(backlinksViewFooterContribution, {source: 'backlinks-view'}),
 ])
+
+export default backlinksViewPlugin

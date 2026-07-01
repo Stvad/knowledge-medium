@@ -21,3 +21,5 @@ export const srsReschedulingDataExtension: AppExtension = [
   propertySchemasFacet.of(srsSnapshotHistoryProp, {source: 'srs-rescheduling'}),
   typesFacet.of(srsSm25Type, {source: 'srs-rescheduling'}),
 ]
+
+export default srsReschedulingDataExtension

@@ -62,3 +62,5 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   // otherwise silent — off the paste hot-path).
   diagnosticsFacet.of(uploadLaneDiagnosticSource, { source: 'attachments' }),
 ])
+
+export default attachmentsPlugin

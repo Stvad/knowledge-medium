@@ -89,3 +89,5 @@ export {
   type RoamTodoState,
   type TodoStatus,
 } from './schema.ts'
+
+export default todoPlugin

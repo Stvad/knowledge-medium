@@ -46,3 +46,5 @@ export const vimNormalModePlugin = ({repo}: { repo: Repo }): AppExtension =>
     // remaps have nothing to act on, and the settings UI shows it under Vim.
     colemakKeybindingsPlugin,
   ])
+
+export default vimNormalModePlugin

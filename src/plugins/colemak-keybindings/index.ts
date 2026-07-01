@@ -142,3 +142,5 @@ export const colemakKeybindingsPlugin: AppExtension = systemToggle({
     keybindingOverridesFacet.of(override, {source: SOURCE}),
   ),
 )
+
+export default colemakKeybindingsPlugin

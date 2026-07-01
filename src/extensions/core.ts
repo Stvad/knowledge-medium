@@ -30,9 +30,10 @@ export interface AppEffectContext {
  *  resolvers cannot use hooks or read the live `FacetRuntime`. Talk to the
  *  Repo directly, including for type/schema lookups via
  *  `repo.snapshotTypeRegistries()` — which at this point holds the
- *  `staticDataExtensions` registered onto the Repo at construction. A
- *  resolver that seeds blocks of a plugin type must ensure that plugin's
- *  data extension is in `staticDataExtensions`. */
+ *  toggle-aware `staticAppExtensions` runtime that `bootstrapWorkspace`
+ *  installs before resolving landing. A resolver that seeds blocks of a
+ *  plugin type relies on that plugin's `dataExtension` being discovered into
+ *  `staticAppExtensions` (the glob) and the plugin being enabled. */
 export interface WorkspaceLandingContext {
   repo: Repo
   workspaceId: string

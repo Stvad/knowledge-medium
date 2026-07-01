@@ -19,3 +19,5 @@ export const defaultThemesPlugin: AppExtension = systemToggle({
     themesFacet.of(theme, { source: 'default-themes' }),
   ),
 )
+
+export default defaultThemesPlugin

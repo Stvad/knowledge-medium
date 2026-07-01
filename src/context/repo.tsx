@@ -7,8 +7,6 @@ import { useIsLocalOnly, useUser } from '@/components/Login'
 import { ensurePowerSyncReady, getPowerSyncDb, syncObserverDepsFor } from '@/data/repoProvider'
 import { User } from '@/types.js'
 import { memoize } from 'lodash-es'
-import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import { surfaceProcessorRejection } from '@/extensions/processorRejectionToast.js'
 import { markStartup } from '@/utils/startupTimeline.js'
 
@@ -30,12 +28,17 @@ const initRepo = memoize(
       user: {id: user.id, name: user.name},
       syncObserverDeps: syncObserverDepsFor(user.id),
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
-      repo,
-      workspaceId: null,
-      safeMode: false,
-      generation: 'repo-bootstrap',
-    }))
+    // The Repo comes up kernel-only (its constructor installs the kernel
+    // runtime via `installKernelRuntime`). Plugin data ownership is no
+    // longer installed here from a separate `staticDataExtensions` list —
+    // it's resolved (toggle-aware) from the single `staticAppExtensions`
+    // tree and installed in `bootstrapWorkspace`, before the bootstrap
+    // writes that need it (the daily-notes landing resolver, seedTutorial's
+    // references processor). Nothing between construction and bootstrap
+    // consumes non-kernel plugin data (resolveWorkspace / the access gate /
+    // role lookup are kernel-only). Doing the install workspace-side also
+    // makes it honour the workspace's toggle overrides, so a disabled
+    // plugin's data is genuinely absent rather than silently registered.
     // Subscribe at bootstrap so user-surfaceable errors from any
     // `repo.tx` call site (mutators, palette actions, bootstrap writes)
     // route through the toast layer from the moment the repo exists. The

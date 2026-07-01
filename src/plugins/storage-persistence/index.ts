@@ -19,3 +19,5 @@ export const storagePersistencePlugin: AppExtension = systemToggle({
   diagnosticsFacet.of(persistenceDiagnosticSource, { source: 'storage-persistence' }),
   requestPersistenceActionContribution,
 ])
+
+export default storagePersistencePlugin

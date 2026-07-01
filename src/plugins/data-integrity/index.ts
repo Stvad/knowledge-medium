@@ -20,3 +20,5 @@ export const dataIntegrityPlugin = ({ repo }: { repo: Repo }): AppExtension =>
       source: 'data-integrity',
     }),
   ])
+
+export default dataIntegrityPlugin

@@ -6,6 +6,13 @@ import {
   type LocalSchemaDb,
 } from './facets.ts'
 
+/** Collect `localSchemaFacet` contributions from a UI-free extension list,
+ *  via the facet system (NOT a hand-listed set of contributions). Used by
+ *  the pre-observer / pre-React local-DDL path (`repoProvider`,
+ *  `createTestDb`, the bench) off `pluginDataExtensions`. Toggle-blind
+ *  (bare collector): local tables/triggers are provisioned regardless of a
+ *  plugin's enabled state, so toggling one on mid-session never hits a
+ *  missing table. */
 export const resolveLocalSchemaContributions = (
   extensions: readonly AppExtension[],
 ): readonly LocalSchemaContribution[] =>

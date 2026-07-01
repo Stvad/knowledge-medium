@@ -16,3 +16,5 @@ export const groupedBacklinksDataExtension: AppExtension = [
   queriesFacet.of(groupedBacklinksForBlockQuery, {source: 'grouped-backlinks'}),
   ...pluginPrefsExtension(groupedBacklinksPrefsType, 'grouped-backlinks'),
 ]
+
+export default groupedBacklinksDataExtension

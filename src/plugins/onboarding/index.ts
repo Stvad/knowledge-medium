@@ -16,8 +16,9 @@ import { insertTutorialAction } from './action.ts'
 // The seeded tutorial tags demo blocks with the todo / char-counter / srs /
 // place / map types. The seed runs at bootstrap (before the app runtime is
 // applied), so it reads those types from `repo.snapshotTypeRegistries()` —
-// which is populated from `staticDataExtensions`, where those plugins' data
-// extensions are registered. That's the dependency; it isn't re-declared here.
+// which is populated from the toggle-aware `staticAppExtensions` runtime that
+// `bootstrapWorkspace` installs before seeding. That's the dependency; it isn't
+// re-declared here.
 //
 // A `{repo}` factory (not a bare extension) because the "Insert tutorial"
 // action needs the live Repo to seed into the active workspace — the same
@@ -41,3 +42,5 @@ export {
   TUTORIAL_VIM_TITLE,
   EXTENSIONS_PAGE_TITLE,
 } from './outline.ts'
+
+export default onboardingPlugin

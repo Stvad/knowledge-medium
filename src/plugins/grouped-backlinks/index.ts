@@ -22,3 +22,5 @@ export const groupedBacklinksPlugin: AppExtension = systemToggle({
     {source: 'grouped-backlinks'},
   ),
 ])
+
+export default groupedBacklinksPlugin

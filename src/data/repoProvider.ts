@@ -71,7 +71,7 @@ import {
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.js'
 import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import { pluginDataExtensions } from '@/data/pluginDataExtensions.js'
 
 const appSchema = new Schema({})
 // Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
@@ -409,7 +409,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await backfillBlocksFtsIfEmpty(backfillDb)
   await applyLocalSchemaContributions(
     backfillDb,
-    resolveLocalSchemaContributions(staticDataExtensions),
+    resolveLocalSchemaContributions(pluginDataExtensions),
   )
 
   // ANALYZE off the cold-start path. wa-sqlite never auto-populates

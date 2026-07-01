@@ -30,3 +30,5 @@ export const breadcrumbsPlugin: AppExtension = systemToggle({
     {source: 'breadcrumbs'},
   ),
 ])
+
+export default breadcrumbsPlugin

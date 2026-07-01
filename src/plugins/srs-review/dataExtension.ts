@@ -15,3 +15,5 @@ export const srsReviewDataExtension: AppExtension = [
   typesFacet.of(srsReviewDeckType, {source: 'srs-review'}),
   typesFacet.of(srsReviewProgressType, {source: 'srs-review'}),
 ]
+
+export default srsReviewDataExtension

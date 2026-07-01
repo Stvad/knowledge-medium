@@ -7,3 +7,5 @@ export const blockTaggingDataExtension: AppExtension = [
   propertySchemasFacet.of(blockTagsConfigProp, {source: 'block-tagging'}),
   ...pluginPrefsExtension(blockTaggingPrefsType, 'block-tagging'),
 ]
+
+export default blockTaggingDataExtension

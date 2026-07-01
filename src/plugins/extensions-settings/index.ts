@@ -10,7 +10,11 @@
 
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
+import {actionsFacet} from '@/extensions/core.js'
+import {propertyEditorOverridesFacet} from '@/data/facets.js'
 import {extensionsDataExtension} from './dataExtension.ts'
+import {extensionsOverridesUi} from './propertyEditorOverride.ts'
+import {openExtensionsSettingsAction} from './actions.ts'
 
 export const extensionsSettingsPlugin: AppExtension = systemToggle({
   id: 'system:extensions-settings',
@@ -19,9 +23,19 @@ export const extensionsSettingsPlugin: AppExtension = systemToggle({
   essential: true,
 }).of([
   extensionsDataExtension,
+  // UI + the "Manage extensions" action live here, not in dataExtension:
+  // the editor imports useToggleTree → staticAppExtensions, and the action's
+  // handler imports `navigate` → React. Keeping them out keeps dataExtension
+  // graph-free for the pluginDataExtensions glob.
+  propertyEditorOverridesFacet.of(extensionsOverridesUi, {source: 'extensions-settings'}),
+  actionsFacet.of(openExtensionsSettingsAction, {source: 'extensions-settings'}),
 ])
 
 export {
   extensionsOverridesProp,
   extensionsPrefsType,
 } from './config.ts'
+
+export default extensionsSettingsPlugin
+
+export const pluginOrder = -10

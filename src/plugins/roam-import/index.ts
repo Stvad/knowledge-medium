@@ -11,3 +11,5 @@ export type {
 } from './plan'
 export type { RoamBlock, RoamExport, RoamPage, RoamUidRef } from './types'
 export { ensureRoamImportWindowHook } from './runtime'
+
+export { roamImportPlugin as default } from './plugin'

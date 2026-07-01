@@ -62,7 +62,7 @@ import {
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import { pluginDataExtensions } from '@/data/pluginDataExtensions.js'
 
 export interface TestDb {
   /** The real PowerSync database — same type as production. */
@@ -72,7 +72,7 @@ export interface TestDb {
   cleanup: () => Promise<void>
 }
 
-const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
+const localSchemaContributions = resolveLocalSchemaContributions(pluginDataExtensions)
 
 const createTestSchema = (): Schema => {
   const schema = new Schema({})

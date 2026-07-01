@@ -30,3 +30,5 @@ export const mobileKeyboardToolbarPlugin: AppExtension = systemToggle({
   ),
   appMountsFacet.of(mobileKeyboardToolbarMount, {source: 'mobile-keyboard-toolbar'}),
 ])
+
+export default mobileKeyboardToolbarPlugin

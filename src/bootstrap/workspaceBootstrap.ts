@@ -19,40 +19,41 @@ const replaceHash = (hash: string): void => {
   window.history.replaceState(null, '', nextHash)
 }
 
-// Resolve the static-extension runtime once per (repo, workspace).
-// `workspaceLandingFacet` resolvers only need the kernel + static
-// plugin contributions — dynamic plugins haven't loaded yet at this
-// point in bootstrap, and we don't want to give them the power to
-// redirect a user's first paint.
+// Build the static-extension runtime for this bootstrap. It serves two roles:
+//   1. It's installed into the Repo (`bootstrapWorkspace` below) as the
+//      source of plugin data ownership (types / mutators / processors /
+//      queries / system pages) — repo.tsx no longer installs a separate
+//      `staticDataExtensions` list, so this is where the Repo learns about
+//      plugin data before the bootstrap writes that need it.
+//   2. Its `workspaceLandingFacet` resolvers decide the empty-layout
+//      landing block. Dynamic plugins haven't loaded yet at this point,
+//      and we don't want to give them the power to redirect first paint.
 //
 // Resolution goes through `resolveAppRuntimeSync` with the workspace's
 // cached toggle overrides — NOT the bare collector — so a togglable
-// boundary the user has disabled is honoured here too. Without this, a
-// disabled non-essential plugin (e.g. `system:daily-notes`, the sole
-// `workspaceLandingFacet` contributor) would still steer first paint.
+// boundary the user has disabled is honoured: a disabled plugin's data is
+// genuinely absent from the Repo (no "secretly enabled" data) and a
+// disabled landing contributor (e.g. `system:daily-notes`) doesn't steer
+// first paint.
 //
-// The cache keeps the cost down across re-entries via getInitialLayout's
-// promise cache; entries are keyed by `repo.instanceId` + workspace +
-// the override state, so a fresh Repo (new login), a workspace switch,
-// or a mid-session toggle change (Settings dispatches
-// `refreshAppRuntime`) all build a fresh runtime instead of replaying a
-// stale one — otherwise a just-disabled daily-notes could still steer a
-// later empty-layout navigation until a full reload.
-const landingRuntimeCache = new Map<string, ReturnType<typeof resolveAppRuntimeSync>>()
-const getLandingRuntime = (repo: Repo) => {
+// Built FRESH every call — never cached. `repo.setFacetRuntime` MUTATES its
+// argument (`adoptDurableContributionsFrom` copies the previous runtime's
+// durable `user-data` buckets — user property schemas / types — onto it).
+// Caching the object we hand to `setFacetRuntime` would let one workspace's
+// adopted user-data accumulate on the shared instance and replay on a later
+// bootstrap for another workspace, before that workspace's projectors clear
+// and repopulate the bucket. A fresh object per bootstrap can't leak across
+// workspaces. The build is cheap (the modules are already imported; this
+// just walks the extension array), and getInitialLayout's promise cache
+// already dedupes re-entry, so there's nothing to cache here. The same
+// instance is reused for landing resolution below, so install and landing
+// always agree on the contribution set.
+const buildStaticAppRuntime = (repo: Repo) => {
   const workspaceId = repo.activeWorkspaceId
   const overrides = workspaceId
     ? readOverridesCache(workspaceId)
     : new Map<string, boolean>()
-  // Sparse map (only entries diverging from manifest defaults), sorted
-  // for a stable key regardless of insertion order.
-  const overridesFingerprint = JSON.stringify(
-    [...overrides.entries()].sort(([a], [b]) => a.localeCompare(b)),
-  )
-  const cacheKey = `${repo.instanceId}:${workspaceId ?? ''}:${overridesFingerprint}`
-  const cached = landingRuntimeCache.get(cacheKey)
-  if (cached) return cached
-  const runtime = resolveAppRuntimeSync(staticAppExtensions({repo}), {
+  return resolveAppRuntimeSync(staticAppExtensions({repo}), {
     overrides,
     context: {
       repo,
@@ -60,8 +61,6 @@ const getLandingRuntime = (repo: Repo) => {
       safeMode: false,
     },
   })
-  landingRuntimeCache.set(cacheKey, runtime)
-  return runtime
 }
 
 // Walk landing resolvers in reverse (highest precedence last in the
@@ -71,10 +70,10 @@ const getLandingRuntime = (repo: Repo) => {
 // block the user from booting the app.
 const resolveLandingBlockId = async (
   repo: Repo,
+  runtime: ReturnType<typeof buildStaticAppRuntime>,
   workspaceId: string,
   freshlyCreated: boolean,
 ): Promise<string | null> => {
-  const runtime = getLandingRuntime(repo)
   const resolvers = runtime.read(workspaceLandingFacet)
   for (let i = resolvers.length - 1; i >= 0; i -= 1) {
     try {
@@ -113,6 +112,23 @@ export const bootstrapWorkspace = async ({
   requestedHash,
   requestedWorkspaceId,
 }: WorkspaceBootstrapArgs): Promise<Block> => {
+  // Install the toggle-aware static-extension runtime into the Repo BEFORE
+  // any bootstrap write. This is now the Repo's source of plugin data
+  // ownership (types / mutators / processors / queries / system pages) —
+  // repo.tsx no longer installs a separate `staticDataExtensions` list. It
+  // must precede the writes below that depend on plugin data: ensureSystemPages
+  // reads `systemPagesFacet`, the onboarding seed triggers the references
+  // post-commit processor, and the daily-notes landing resolver calls
+  // `repo.addTypeInTx(DAILY_NOTE_TYPE)` (which throws if the type is
+  // unregistered). Resolved with the workspace's toggle overrides, so a
+  // disabled plugin's data is genuinely absent. AppRuntimeProvider re-installs
+  // the same tree (+ dynamic extensions) once it mounts; the contribution
+  // instances are shared, so that later swap reads as additive. Built fresh
+  // (not cached) because setFacetRuntime mutates it — see buildStaticAppRuntime.
+  // Reused for landing resolution below.
+  const staticRuntime = buildStaticAppRuntime(repo)
+  repo.setFacetRuntime(staticRuntime)
+
   // Only NOW remember it as the default. Remembering a locked/waiting workspace
   // would make the next empty-hash visit re-select it and render only the key
   // gate (no switcher), trapping the user away from accessible spaces.
@@ -145,8 +161,9 @@ export const bootstrapWorkspace = async ({
   // that seeds on `freshlyCreated` and then defers the landing target to
   // daily-notes (see src/plugins/onboarding). That keeps first-run content
   // out of the kernel and lets disabling the plugin remove it cleanly. The
-  // tutorial's typed demos seed against `repo.snapshotTypeRegistries()`,
-  // which is populated from `staticDataExtensions` at repo construction.
+  // tutorial's typed demos seed against `repo.snapshotTypeRegistries()`, which
+  // is populated from the toggle-aware static-extension runtime installed
+  // above — so the plugins' demo types are present for the seed.
 
   // Resolve the layout-session block the app paints — the warm-start critical
   // path. This chain is genuinely serial: each ui-state child's deterministic id
@@ -180,7 +197,7 @@ export const bootstrapWorkspace = async ({
       // before we've even built a layout, and the sync runtime carries
       // the same kernel + static plugin contributions
       // AppRuntimeProvider's initial render uses.
-      const landingId = await resolveLandingBlockId(repo, workspaceId, freshlyCreated)
+      const landingId = await resolveLandingBlockId(repo, staticRuntime, workspaceId, freshlyCreated)
       if (landingId) {
         replaceHash(buildLayout(workspaceId, [landingId]))
         await repo.tx(async tx => {

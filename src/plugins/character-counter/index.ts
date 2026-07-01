@@ -21,3 +21,5 @@ export const characterCounterPlugin: AppExtension = systemToggle({
   characterCounterDataExtension,
   blockContentDecoratorsFacet.of(characterCountDecoratorContribution, {source: 'character-counter'}),
 ])
+
+export default characterCounterPlugin

@@ -29,3 +29,5 @@ export const backlinksPlugin: AppExtension = systemToggle({
   ),
   inlineBacklinkCountsExtension,
 ])
+
+export default backlinksPlugin

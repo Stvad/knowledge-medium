@@ -32,7 +32,7 @@ import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/internals/repo'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline'
 import { instrumentDb, type DbCounters } from './harness'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions'
+import { pluginDataExtensions } from '@/data/pluginDataExtensions'
 
 export interface BenchEnv {
   db: PowerSyncDb
@@ -79,7 +79,7 @@ export const setupBenchEnv = async (opts: SetupOptions = {}): Promise<BenchEnv> 
   await backfillBlockAliasesIfEmpty(backfillDb)
   await applyLocalSchemaContributions(
     backfillDb,
-    resolveLocalSchemaContributions(staticDataExtensions),
+    resolveLocalSchemaContributions(pluginDataExtensions),
   )
 
   let dbForRepo: PowerSyncDb = psDb as unknown as PowerSyncDb

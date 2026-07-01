@@ -40,9 +40,9 @@ import {
  *
  * The typed demos (todo / char-counter / srs / place / map) tag themselves
  * against `repo.snapshotTypeRegistries()` — the Repo's live registry. Those
- * plugin types are installed onto the Repo at construction via
- * `staticDataExtensions`, so they're present here even though this runs at
- * bootstrap, before the React app runtime is applied.
+ * plugin types come from the toggle-aware `staticAppExtensions` runtime that
+ * `bootstrapWorkspace` installs before seeding, so they're present here even
+ * though this runs at bootstrap, before the React app runtime is applied.
  */
 export const seedTutorial = async (
   repo: Repo,
