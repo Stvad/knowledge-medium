@@ -7,44 +7,52 @@ import { ActionContextTypes } from '@/shortcuts/types.js'
 import { withEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import {
   getLayoutViewportKeyboardOverlap,
+  getSoftKeyboardPresent,
   setEditingToolbarHeight,
   subscribeKeyboardViewport,
 } from '@/utils/keyboardViewport.js'
 import { EXIT_EDIT_ACTION_ID, mobileKeyboardToolbarItemsFacet } from './facet.ts'
 
-/** The mobile editing toolbar's `bottom` inset — lifts the `position: fixed`
- *  toolbar just above the on-screen keyboard while editing. The value is the
- *  layout-viewport keyboard overlap (see `getLayoutViewportKeyboardOverlap` for
- *  the formula and the iOS clientHeight-vs-innerHeight + pan rationale); this
- *  hook tracks it live while the toolbar is active (`isMobile && isEditing`)
- *  and re-renders on change. */
-const useKeyboardInset = (active: boolean): number => {
-  const [inset, setInset] = useState(0)
+/** Track a value derived from viewport geometry, recomputed on every relevant
+ *  change via the shared keyboard-viewport subscription (the same listener set
+ *  keyboardAwareScroll uses), and re-rendering only when the mapped value
+ *  changes. `read` must be a stable module-level reader. Only subscribes while
+ *  `active`, so an app with no active editor carries no listeners.
+ *
+ *  Accepted transient: during a rapid keyboard open/close iOS emits a burst of
+ *  events while clientHeight / vv.height / offsetTop settle independently, so a
+ *  derived value can be briefly off for a frame; the next event recomputes it.
+ *  Not rAF-coalesced — that would add a frame of latency to the common
+ *  smooth-scroll case for a rare, self-correcting blip. */
+const useKeyboardViewportValue = <T,>(active: boolean, read: () => T, initial: T): T => {
+  const [value, setValue] = useState(initial)
 
   useEffect(() => {
     if (!active || typeof window === 'undefined') return
-    // Recompute on every viewport change (keyboard open/close, the iOS pan on
-    // scroll, rotation) via the shared subscription — the same listener set
-    // keyboardAwareScroll uses. Its extra fire on toolbar-height changes is a
-    // no-op here: the inset doesn't depend on that, and the equality guard
-    // drops the redundant recompute.
-    //
-    // Accepted transient: during a rapid keyboard open/close iOS emits a burst
-    // of events while clientHeight / vv.height / offsetTop settle
-    // independently, so the inset can be briefly off for a frame; the next
-    // event recomputes it correctly. Not rAF-coalesced — that would add a frame
-    // of latency to the common smooth-scroll case for a rare, self-correcting
-    // blip.
-    const update = () => {
-      const next = getLayoutViewportKeyboardOverlap()
-      setInset(prev => (prev === next ? prev : next))
-    }
+    const update = () =>
+      setValue(prev => {
+        const next = read()
+        return prev === next ? prev : next
+      })
     update()
     return subscribeKeyboardViewport(update)
-  }, [active])
+  }, [active, read])
 
-  return inset
+  return value
 }
+
+/** The toolbar's `bottom` inset — the live layout-viewport keyboard overlap
+ *  that lifts the `position: fixed` toolbar just above the on-screen keyboard
+ *  (see `getLayoutViewportKeyboardOverlap` for the iOS clientHeight/pan
+ *  rationale). ~0 on Chromium/Firefox, nonzero on iOS Safari. */
+const useKeyboardInset = (active: boolean): number =>
+  useKeyboardViewportValue(active, getLayoutViewportKeyboardOverlap, 0)
+
+/** Whether a soft keyboard is currently up (pan-invariant — see
+ *  `getSoftKeyboardPresent`). Lets the toolbar show on a wide iPad with no
+ *  hardware keyboard, where the `useIsMobile` width gate is off. */
+const useSoftKeyboardPresent = (active: boolean): boolean =>
+  useKeyboardViewportValue(active, getSoftKeyboardPresent, false)
 
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
  *  block is being edited. Its buttons are facet contributions
@@ -69,10 +77,18 @@ export function MobileKeyboardToolbar() {
   // presentation lives on the action. The toolbar only shows in edit mode, so
   // unqualified items resolve against EDIT_MODE_CM.
   const resolved = useActionRefItems(mobileKeyboardToolbarItemsFacet, ActionContextTypes.EDIT_MODE_CM)
+  // Show while editing on a narrow (phone) viewport, OR — regardless of width —
+  // whenever a soft keyboard is up. The soft-keyboard arm covers a wide iPad
+  // with no hardware keyboard: the keyboard appears, so the toolbar should too;
+  // with a hardware keyboard connected no soft keyboard shows and the toolbar
+  // stays hidden. Only detect the keyboard when the width gate wouldn't already
+  // show the bar (`!isMobile`), so phones don't pay for the extra subscription.
+  const softKeyboardPresent = useSoftKeyboardPresent(isEditing && !isMobile)
+  const showToolbar = isEditing && (isMobile || softKeyboardPresent)
   // Hooks above the early-return must run on every render. Pass the
   // activation flag in so the sentinel only mounts/listens while the
   // toolbar is on screen.
-  const keyboardInset = useKeyboardInset(isMobile && isEditing)
+  const keyboardInset = useKeyboardInset(showToolbar)
 
   // Publish the toolbar's rendered height so keyboardAwareScroll can keep
   // the caret above the toolbar, not just above the keyboard. Measured
@@ -93,9 +109,9 @@ export function MobileKeyboardToolbar() {
       observer.disconnect()
       setEditingToolbarHeight(0)
     }
-  }, [isMobile, isEditing])
+  }, [showToolbar])
 
-  if (!isMobile || !isEditing) return null
+  if (!showToolbar) return null
 
   // Prevent the editor from blurring when a button is pressed — losing
   // focus would dismiss the on-screen keyboard mid-tap and tear down

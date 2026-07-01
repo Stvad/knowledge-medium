@@ -4,6 +4,7 @@ import {
   getKeyboardOverlap,
   layoutViewportKeyboardOverlap,
   setEditingToolbarHeight,
+  softKeyboardPresent,
   subscribeKeyboardViewport,
 } from '@/utils/keyboardViewport'
 
@@ -101,6 +102,41 @@ describe('layoutViewportKeyboardOverlap', () => {
     // proper round yields 336; dropping Math.round (335.9) or swapping it for
     // floor/trunc (335) would diverge — this pins the rounding.
     expect(layoutViewportKeyboardOverlap(650, 313.7, 0.4)).toBe(336)
+  })
+})
+
+describe('softKeyboardPresent', () => {
+  // Width-independent "is a soft keyboard up" signal for showing the editing
+  // toolbar on a wide iPad. Uses only the layout-vs-visual height delta (no
+  // offsetTop), so unlike the positioning overlap it stays true as the page
+  // pans/scrolls with the keyboard up.
+  it('is true when the visual viewport is shrunk by a keyboard (iOS)', () => {
+    // Real iPad: clientHeight 650, keyboard shrinks vv to 314.
+    expect(softKeyboardPresent(650, 314)).toBe(true)
+  })
+
+  it('stays true while scrolled — the same shrunk vv.height, no offsetTop term', () => {
+    // Scrolled case where the positioning overlap drops to 59; presence must
+    // NOT, because the keyboard is still up (vv.height still 314).
+    expect(softKeyboardPresent(650, 314)).toBe(true)
+  })
+
+  it('is false with no keyboard (visual viewport fills the layout viewport)', () => {
+    expect(softKeyboardPresent(650, 650)).toBe(false)
+  })
+
+  it('does NOT treat a collapsing URL bar as a keyboard', () => {
+    // A mobile-Safari URL bar shrinks the visual viewport by ~60px — well below
+    // the threshold, so it must not switch the toolbar on.
+    expect(softKeyboardPresent(650, 600)).toBe(false)
+  })
+
+  it('is false on Chromium resizes-content (layout shrinks with the keyboard)', () => {
+    expect(softKeyboardPresent(433, 433)).toBe(false)
+  })
+
+  it('is true exactly at the 150px threshold', () => {
+    expect(softKeyboardPresent(650, 500)).toBe(true)
   })
 })
 
