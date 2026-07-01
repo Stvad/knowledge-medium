@@ -244,7 +244,13 @@ export interface AppEventRegistry { /* augmented per event */ }
 //   }
 
 export type AppEventName = keyof AppEventRegistry & string
-export type AppEventPayload<N extends AppEventName> = AppEventRegistry[N]
+// Payload is conditional on `N extends string` (NOT constrained to the
+// registry keys) — mirroring `SameTxEventPayload`/`ScheduledArgsFor`
+// (`P extends keyof … ? …[P] : unknown`) — so a dynamic plugin's unaugmented
+// event name still type-checks with an `unknown` payload instead of being a
+// compile error. `AppEventName` just enumerates the *known* keys.
+export type AppEventPayload<N extends string> =
+  N extends keyof AppEventRegistry ? AppEventRegistry[N] : unknown
 ```
 
 Kernel events (`workspace:*`, `navigation:*`, `sync:*`, `app:*`, `block:*`) are
@@ -256,8 +262,11 @@ exactly as the two existing registries do.
 
 ```ts
 export interface AppEventBus {
-  emit<N extends AppEventName>(name: N, payload: AppEventPayload<N>): void
-  on<N extends AppEventName>(
+  // `N extends string` (not `AppEventName`) — same as `tx.emitEvent<P extends
+  // string>` — so a known name gets its typed payload and a dynamic name still
+  // works with `unknown`.
+  emit<N extends string>(name: N, payload: AppEventPayload<N>): void
+  on<N extends string>(
     name: N,
     handler: (payload: AppEventPayload<N>) => void | Promise<void>,
     options?: { filter?: (p: AppEventPayload<N>) => boolean },
@@ -542,8 +551,9 @@ only if a plugin wants config-style subscription.
 
 **Phase 2 — navigation + sync.** Bridge `navigation:completed` from
 `navigationVerb.after` (an internal `.after` observer that calls `repo.events
-.emit`), and `sync:synced`/`sync:status` from the PowerSync status listener +
-`syncObserver` `applyOutcome`. Both are pure bridges over existing observer
+.emit`), `sync:status` from the PowerSync status listener, and `block:synced`
+(the inventory's down-sync event) from `syncObserver` `applyOutcome`. Pure
+bridges over existing observer
 slots — no new choke.
 
 **Phase 3 — data events.** `block:created/updated/deleted`, filterable by type,
