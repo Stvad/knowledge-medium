@@ -1,5 +1,6 @@
 import { cn } from "../../lib/utils.js";
 import { Button } from "../../components/ui/button.js";
+import { useHash } from "../../../node_modules/react-use/esm/useHash.js";
 import { showError } from "../../utils/toast.js";
 import { useRepo } from "../../context/repo.js";
 import { Check } from "../../../node_modules/lucide-react/dist/esm/icons/check.js";
@@ -8,6 +9,7 @@ import { CircleCheck } from "../../../node_modules/lucide-react/dist/esm/icons/c
 import { Copy } from "../../../node_modules/lucide-react/dist/esm/icons/copy.js";
 import { RefreshCw } from "../../../node_modules/lucide-react/dist/esm/icons/refresh-cw.js";
 import { TriangleAlert } from "../../../node_modules/lucide-react/dist/esm/icons/triangle-alert.js";
+import { buildAppHash } from "../../utils/routing.js";
 import { useNavigate } from "../../utils/navigation.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { getConsistencyAuditSnapshotFor, subscribeConsistencyAudit } from "./store.js";
@@ -190,24 +192,34 @@ var formatCheckedAt = (checkedAt) => {
 function ConsistencyAuditDialog({ cancel, workspaceId: pinnedWorkspaceId }) {
 	const repo = useRepo();
 	const navigate = useNavigate();
-	const targetWorkspaceId = pinnedWorkspaceId ?? repo.activeWorkspaceId;
-	const result = useSyncExternalStore(subscribeConsistencyAudit, () => getConsistencyAuditSnapshotFor(targetWorkspaceId), () => getConsistencyAuditSnapshotFor(targetWorkspaceId));
+	const [, setHash] = useHash();
+	const [runPinnedWorkspaceId, setRunPinnedWorkspaceId] = useState(null);
+	const targetWorkspaceId = pinnedWorkspaceId ?? runPinnedWorkspaceId ?? repo.activeWorkspaceId;
+	const getSnapshot = () => getConsistencyAuditSnapshotFor(targetWorkspaceId);
+	const result = useSyncExternalStore(subscribeConsistencyAudit, getSnapshot, getSnapshot);
 	const [rerunning, setRerunning] = useState(false);
 	const open = (id) => {
+		const ws = result?.workspaceId;
+		if (ws && ws !== repo.activeWorkspaceId) {
+			repo.setActiveWorkspaceId(ws);
+			setHash(buildAppHash(ws));
+		}
 		navigate({
 			blockId: id,
 			target: "sidebar-stack",
-			workspaceId: result?.workspaceId
+			workspaceId: ws
 		});
 	};
 	const rerun = async () => {
-		if (!targetWorkspaceId) {
+		const ws_0 = targetWorkspaceId;
+		if (!ws_0) {
 			showError("Data integrity audit: no active workspace.");
 			return;
 		}
+		setRunPinnedWorkspaceId(ws_0);
 		setRerunning(true);
 		try {
-			await runConsistencyAuditNow(repo, targetWorkspaceId);
+			await runConsistencyAuditNow(repo, ws_0);
 		} catch (e) {
 			showError(`Data integrity audit failed: ${e instanceof Error ? e.message : String(e)}`);
 		} finally {

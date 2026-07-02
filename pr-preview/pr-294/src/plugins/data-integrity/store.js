@@ -11,20 +11,13 @@ var RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = "run_data_integrity_audit";
 *  dropdown's generic "Inspect" button here so viewing last results is cheap (no
 *  expensive re-scan). */
 var VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID = "view_data_integrity_audit";
-var latest = null;
 var byWorkspace = /* @__PURE__ */ new Map();
 var listeners = new CallbackSet("data-integrity-audit");
 /** Publish a completed audit result and notify subscribers. */
 var publishConsistencyAudit = (result) => {
-	latest = result;
 	byWorkspace.set(result.workspaceId, result);
 	listeners.notify();
 };
-/** Most-recently-published result, ANY workspace — the "current health" pointer
-*  the scheduling/diagnostics plumbing has always exposed. A stable reference
-*  until the next publish. Prefer `getConsistencyAuditSnapshotFor` when you care
-*  about a specific workspace (almost always). */
-var getConsistencyAuditSnapshot = () => latest;
 /** The last result FOR `workspaceId` — a stable reference until THAT workspace is
 *  re-audited, or null. This is the single place the "the store is per-workspace,
 *  scope it before use" invariant lives: a publish for another workspace does not
@@ -34,11 +27,10 @@ var getConsistencyAuditSnapshotFor = (workspaceId) => (workspaceId != null ? byW
 var subscribeConsistencyAudit = (listener) => listeners.add(listener);
 /** Test helper — clear the published results + listeners. */
 var resetConsistencyAuditStore = () => {
-	latest = null;
 	byWorkspace.clear();
 	listeners.clear();
 };
 //#endregion
-export { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID, VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID, getConsistencyAuditSnapshot, getConsistencyAuditSnapshotFor, publishConsistencyAudit, resetConsistencyAuditStore, subscribeConsistencyAudit };
+export { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID, VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID, getConsistencyAuditSnapshotFor, publishConsistencyAudit, resetConsistencyAuditStore, subscribeConsistencyAudit };
 
 //# sourceMappingURL=store.js.map
