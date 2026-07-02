@@ -110,11 +110,15 @@ the walk, so a stable-ordered failing prefix can't shadow the healthier tail), a
 <code>MediaDownLaneReplicator</code> — a per-active-workspace, single-owner (<code>navigator.locks</code>
 <code>ifAvailable</code>), deep-idle-scheduled pass re-armed on workspace switch / first-sync settle /
 reconnect / a slow sweep. Durable origin storage (§8) is the boot-time origin-wide
-<code>requestPersistentStorage</code>, not a per-store call. <strong>§16 reference-permanent GC remains
-deferred</strong> — until it lands, a never-promoted <code>staged</code> orphan and its OPFS bytes are
-retained (never reaped), and a <code>failed</code> upload record is recoverable only by re-paste (no §9
-recovery actor yet).
-Last verified against code 2026-06-26. Treat as current intent. The least-settled part is the byte-lane
+<code>requestPersistentStorage</code>, not a per-store call. <strong>§16 byte GC: Branch A (the
+orphaned-workspace purge) is now built</strong> (<a href="./byte-gc-design.md">byte-gc-design.md</a>) — a
+quiescent, grace-windowed sweep reclaims the OPFS byte prefix of a revoked / left / deleted workspace under
+the down-lane lock, giving <code>purgeWorkspace</code> its first live caller. The per-content-key selective
+reap (Branch B — staged orphans + replaced media <em>within</em> a live workspace), remote-object GC, and
+quota eviction <strong>remain deferred</strong> (reference-permanent), so a never-promoted <code>staged</code>
+orphan's OPFS bytes inside a still-accessible workspace are still retained, and a <code>failed</code> upload
+record is recoverable only by re-paste (no §9 recovery actor yet).
+Last verified against code 2026-07-01. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
 solid; the recovery edges are where the spec is still hardening.
 </aside>
@@ -1475,6 +1479,10 @@ vNext; the v1 commitment is only the reserved property + audience flag.
     <code>EntityTooLarge</code> mapped to a permanent failure. What remains vNext is only the
     <em>large-media</em> story: no resumable/chunked (tus) upload, so 50&nbsp;MiB is a hard ceiling.</li>
   <li><strong>Asset block deletion → byte GC (must be conservative under content-addressing):</strong>
+    <em>(Partly built — see <a href="./byte-gc-design.md">byte-gc-design.md</a>. Branch A, the
+    orphaned-workspace purge, now reclaims the local OPFS prefix of a revoked / left workspace; the
+    per-content-key selective reap, remote-object GC, and quota eviction described below remain deferred and
+    reference-permanent.)</em>
     because one content-addressed object may back several blocks (§11), deleting a block does <em>not</em>
     delete the object. Object GC is <strong>content-reference-counted</strong>, but the refcount can only
     be evaluated <em>client-side</em> against one device's <em>local</em> view (the hash is in encrypted

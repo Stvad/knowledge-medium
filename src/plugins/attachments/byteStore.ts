@@ -62,6 +62,11 @@ export interface ByteStore {
    *  ONE-SHOT presence scan (§8): a single directory enumeration in place of a `has()`
    *  per block. Empty when nothing is stored. */
   listWorkspaceKeys(userId: string, workspaceId: string): Promise<Set<string>>
+  /** Every workspace id that has bytes stored for this user — a single
+   *  `assets/<user>/` directory enumeration. Empty when the user has nothing stored.
+   *  The §16 GC's entry point: the stored prefixes it diffs against the user's still-
+   *  accessible workspaces to find orphaned (revoked/left) ones to `purgeWorkspace`. */
+  listWorkspaceIds(userId: string): Promise<Set<string>>
   /** Drop a single object's bytes — the §9 reconciler's orphan reap (a never-
    *  committed capture's bytes). A no-op when absent. */
   delete(userId: string, workspaceId: string, contentKey: string): Promise<void>
@@ -106,6 +111,12 @@ export class InMemoryByteStore implements ByteStore {
     return `${ASSETS_ROOT}/${encodeSegment(userId)}/${encodeSegment(workspaceId)}/`
   }
 
+  /** The `assets/<user>/` key prefix — one workspace-id enumeration reads the segment
+   *  after it. Kept alongside {@link wsPrefix} so both scans encode the user the same way. */
+  private userPrefix(userId: string): string {
+    return `${ASSETS_ROOT}/${encodeSegment(userId)}/`
+  }
+
   async get(userId: string, workspaceId: string, contentKey: string): Promise<Uint8Array<ArrayBuffer> | null> {
     const hit = this.blobs.get(this.key(userId, workspaceId, contentKey))
     return hit ? new Uint8Array(hit) : null
@@ -124,6 +135,19 @@ export class InMemoryByteStore implements ByteStore {
     const out = new Set<string>()
     for (const k of this.blobs.keys()) {
       if (k.startsWith(prefix)) out.add(decodeSegment(k.slice(prefix.length)))
+    }
+    return out
+  }
+
+  async listWorkspaceIds(userId: string): Promise<Set<string>> {
+    const prefix = this.userPrefix(userId)
+    const out = new Set<string>()
+    for (const k of this.blobs.keys()) {
+      if (!k.startsWith(prefix)) continue
+      // `k` is `assets/<enc user>/<enc ws>/<enc key>` — encodeSegment escapes any `/`,
+      // so the segment up to the next `/` is exactly the (encoded) workspace id.
+      const wsSegment = k.slice(prefix.length).split('/', 1)[0]
+      if (wsSegment) out.add(decodeSegment(wsSegment))
     }
     return out
   }
@@ -263,6 +287,20 @@ export class OpfsByteStore implements ByteStore {
     }
   }
 
+  async listWorkspaceIds(userId: string): Promise<Set<string>> {
+    try {
+      const userDir = await this.walk([ASSETS_ROOT, encodeSegment(userId)], false)
+      const ids = new Set<string>()
+      // Under the user dir every entry is a workspace directory (put only ever creates
+      // `assets/<user>/<ws>/`), so each name decodes back to a workspace id.
+      for await (const name of userDir.keys()) ids.add(decodeSegment(name))
+      return ids
+    } catch (err) {
+      if (isNotFound(err)) return new Set() // nothing stored for this user yet
+      throw err
+    }
+  }
+
   async delete(userId: string, workspaceId: string, contentKey: string): Promise<void> {
     try {
       const dir = await this.workspaceDir(userId, workspaceId, false)
@@ -274,11 +312,15 @@ export class OpfsByteStore implements ByteStore {
   }
 
   async purgeWorkspace(userId: string, workspaceId: string): Promise<void> {
-    // COORDINATION CAVEAT for the deferred §16 reference-GC job (the only intended caller —
-    // there is none today): a purge that races a concurrent down-lane `put` for the same
+    // COORDINATION CAVEAT for the §16 reference-GC job (its sole caller, `assetGc.
+    // runMediaGcSweep`): a purge that races a concurrent down-lane `put` for the same
     // workspace can lose, because `put`'s retry re-creates the ws dir from a fresh resolve
-    // after this `removeEntry`. The GC job must run with the workspace quiescent — hold the
-    // per-(user,workspace) down-lane lock (laneLock.runSingleOwner) so no `put` is in flight.
+    // after this `removeEntry`. The GC excludes the DOWN-LANE put by holding the same
+    // per-(user,workspace) down-lane lock (laneLock.runSingleOwner). Capture / demand-resolve
+    // puts are NOT under that lock — the GC is safe from them only because it purges a
+    // workspace orphaned past its grace window, which by construction isn't being captured
+    // into or viewed. A future reuse of purgeWorkspace on an ACCESSIBLE workspace (Branch B)
+    // would need its own exclusion for those callers.
     this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId)) // the cached handle is about to go stale
     try {
       // Walk to the USER dir, then remove the workspace subtree from it.

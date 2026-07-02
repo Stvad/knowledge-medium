@@ -155,6 +155,31 @@ describe.each([
     await store.put(U, WS, 'a/b', bytes(1)) // '/' is escaped on disk, must decode back
     expect(await store.listWorkspaceKeys(U, WS)).toEqual(new Set(['a/b']))
   })
+
+  it('listWorkspaceIds enumerates the user’s stored workspaces, scoped to the user', async () => {
+    const store = make()
+    await store.put(U, WS, 'aaaa', bytes(1))
+    await store.put(U, WS, 'bbbb', bytes(2)) // same ws, two objects → still one ws id
+    await store.put(U, 'ws-B', 'cccc', bytes(3))
+    await store.put('other-user', 'ws-C', 'dddd', bytes(4)) // another account
+
+    expect(await store.listWorkspaceIds(U)).toEqual(new Set([WS, 'ws-B']))
+    expect(await store.listWorkspaceIds('never-stored-user')).toEqual(new Set()) // nothing stored
+  })
+
+  it('listWorkspaceIds decodes a reserved char in the workspace id', async () => {
+    const store = make()
+    await store.put(U, 'w/y', KEY, bytes(1)) // '/' is escaped on disk, must decode back
+    expect(await store.listWorkspaceIds(U)).toEqual(new Set(['w/y']))
+  })
+
+  it('listWorkspaceIds drops a workspace once its bytes are purged', async () => {
+    const store = make()
+    await store.put(U, WS, KEY, bytes(1))
+    await store.put(U, 'ws-B', KEY, bytes(2))
+    await store.purgeWorkspace(U, WS)
+    expect(await store.listWorkspaceIds(U)).toEqual(new Set(['ws-B']))
+  })
 })
 
 describe('assetPathSegments', () => {

@@ -18,6 +18,7 @@ import { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'
 import { mobileKeyboardToolbarItemsFacet } from '@/plugins/mobile-keyboard-toolbar/facet.js'
 import { MediaBlockRenderer } from './MediaBlockRenderer.js'
 import { MediaDownLaneReplicator } from './MediaDownLaneReplicator.js'
+import { MediaGcSweeper } from './MediaGcSweeper.js'
 import { MediaUploadReconciler } from './MediaUploadReconciler.js'
 import { captureMediaContribution, mediaPasteDecisionContribution } from './pasteCapture.js'
 import {
@@ -58,6 +59,9 @@ export const attachmentsPlugin: AppExtension = systemToggle({
   appMountsFacet.of({ id: 'attachments.upload-reconciler', component: MediaUploadReconciler }, { source: 'attachments' }),
   // Background replication of the active workspace's bytes to the local store (§8/§9).
   appMountsFacet.of({ id: 'attachments.down-lane-replicator', component: MediaDownLaneReplicator }, { source: 'attachments' }),
+  // Quiescent-time byte GC (§16) — reclaims the byte prefixes of workspaces the user has
+  // left/been revoked from, behind a grace window + the down-lane lock.
+  appMountsFacet.of({ id: 'attachments.byte-gc-sweeper', component: MediaGcSweeper }, { source: 'attachments' }),
   // Surface background upload FAILURES in the status indicator (a failed drain is
   // otherwise silent — off the paste hot-path).
   diagnosticsFacet.of(uploadLaneDiagnosticSource, { source: 'attachments' }),
