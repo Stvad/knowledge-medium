@@ -30,23 +30,15 @@ export const RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = 'run_data_integrity_audit'
  *  expensive re-scan). */
 export const VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID = 'view_data_integrity_audit'
 
-let latest: ConsistencyAuditResult | null = null
 // One entry per audited workspace, so results for different workspaces coexist.
 const byWorkspace = new Map<string, ConsistencyAuditResult>()
 const listeners = new CallbackSet('data-integrity-audit')
 
 /** Publish a completed audit result and notify subscribers. */
 export const publishConsistencyAudit = (result: ConsistencyAuditResult): void => {
-  latest = result
   byWorkspace.set(result.workspaceId, result)
   listeners.notify()
 }
-
-/** Most-recently-published result, ANY workspace — the "current health" pointer
- *  the scheduling/diagnostics plumbing has always exposed. A stable reference
- *  until the next publish. Prefer `getConsistencyAuditSnapshotFor` when you care
- *  about a specific workspace (almost always). */
-export const getConsistencyAuditSnapshot = (): ConsistencyAuditResult | null => latest
 
 /** The last result FOR `workspaceId` — a stable reference until THAT workspace is
  *  re-audited, or null. This is the single place the "the store is per-workspace,
@@ -63,7 +55,6 @@ export const subscribeConsistencyAudit = (listener: () => void): (() => void) =>
 
 /** Test helper — clear the published results + listeners. */
 export const resetConsistencyAuditStore = (): void => {
-  latest = null
   byWorkspace.clear()
   listeners.clear()
 }
