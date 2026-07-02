@@ -15,19 +15,37 @@ import type { AssetResolveResult } from './resolver.js'
 import type { AssetUrlState, ReportDecodeFailure } from './useAssetObjectUrl.js'
 
 /** What every viewer receives. An EAGER viewer reads `state`/`reportDecodeFailure`; a
- *  LAZY one reads `resolveBytes` — each ignores the props it doesn't use, so the
- *  renderer stays a pure dispatch and never special-cases a mime. */
+ *  LAZY one reads `resolveBytes`; a LAZY-INLINE one (audio) reads `state` too but drives
+ *  it with `requestResolve` — each ignores the props it doesn't use, so the renderer stays
+ *  a pure dispatch and never special-cases a mime. */
 export interface MediaViewerProps {
-  /** EAGER path: the resolve of the block's bytes to a verified object URL (§7.3).
-   *  `ready` ⇒ the url wraps hash-verified bytes; `error` ⇒ fail-closed placeholder.
-   *  For a LAZY viewer this is left `loading` (the renderer skips the eager resolve). */
+  /** The resolve of the block's bytes to a verified object URL (§7.3). `ready` ⇒ the url
+   *  wraps hash-verified bytes; `error` ⇒ fail-closed placeholder. Live from mount for an
+   *  EAGER viewer; for a LAZY-INLINE viewer it stays `loading` until the viewer calls
+   *  {@link requestResolve} (then transitions loading → ready|error like the eager path);
+   *  for a pure download (LAZY) viewer it stays `loading` and is ignored. */
   readonly state: AssetUrlState
-  /** EAGER path: report that the verified bytes at `state.url` couldn't be DECODED (the
-   *  <img> onError) — frees the Blob + goes terminal. Ignored by lazy viewers. */
+  /** Report that the verified bytes at `state.url` couldn't be DECODED as the claimed
+   *  media (the `<img>`/`<audio>` onError) — frees the Blob + goes terminal. Used by
+   *  inline viewers (image/audio); ignored by the pure download viewer. */
   readonly reportDecodeFailure: ReportDecodeFailure
-  /** LAZY path: fetch the block's VERIFIED bytes on demand (fail-closed — discards
-   *  unverified bytes, §5.1). Resolves the same content as the eager path, on click. */
+  /** Fetch the block's VERIFIED bytes on demand (fail-closed — discards unverified bytes,
+   *  §5.1). Resolves the same content as the eager path, on click — used by the download
+   *  affordance of the file fallback and the audio player. */
   readonly resolveBytes: () => Promise<AssetResolveResult>
+  /** LAZY-INLINE path: request that the (otherwise-gated) eager resolve of `state` BEGIN —
+   *  for an inline viewer that shows the bytes but defers the fetch/decrypt until the user
+   *  intends to consume them (audio: on first play). An EAGER viewer (image) never calls it
+   *  (its resolve is already live); a pure download viewer (file) doesn't either (it uses
+   *  {@link resolveBytes}). */
+  readonly requestResolve: () => void
+  /** LAZY-INLINE path (the read-half of {@link requestResolve}): whether the resolve is
+   *  armed for the CURRENT content. A lazy-inline viewer shows its metadata affordance while
+   *  `false` and defers to `state` once `true`. The renderer OWNS this (single source of
+   *  truth — it also gates the resolve) and RESETS it when the block's content changes, so a
+   *  replaced/synced attachment returns to the un-armed affordance instead of auto-resolving
+   *  (or autoplaying) the new bytes. Ignored by eager/download viewers. */
+  readonly armed: boolean
   readonly mime: string
   readonly filename: string | undefined
   /** Plaintext byte length (`media:size`); `0` = unknown, then the size is omitted. */
@@ -43,8 +61,10 @@ export interface MediaViewerContribution {
   /** Does this viewer handle `mime`? */
   readonly match: (mime: string) => boolean
   readonly Component: ComponentType<MediaViewerProps>
-  /** Render the EAGERLY-resolved object URL (inline image/PDF/audio), vs resolve LAZILY
-   *  on demand (the download fallback). The renderer gates the eager resolve on this. */
+  /** Resolve the object URL EAGERLY on mount (image), vs NOT (the renderer leaves `state`
+   *  loading until the viewer either uses {@link MediaViewerProps.resolveBytes} on click —
+   *  the download fallback — or arms it via {@link MediaViewerProps.requestResolve} — the
+   *  play-gated audio player). The renderer gates the mount-time resolve on this. */
   readonly eager: boolean
 }
 

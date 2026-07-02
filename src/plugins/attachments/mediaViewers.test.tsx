@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { FILE_VIEWER_FALLBACK, formatByteSize, imageMediaViewer, pickMediaViewer } from './mediaViewers.js'
+import {
+  FILE_VIEWER_FALLBACK,
+  audioMediaViewer,
+  formatByteSize,
+  imageMediaViewer,
+  pickMediaViewer,
+} from './mediaViewers.js'
 import type { MediaViewerContribution } from './mediaViewersFacet.js'
 
 const fakePdf: MediaViewerContribution = {
@@ -11,9 +17,11 @@ const fakePdf: MediaViewerContribution = {
 
 describe('pickMediaViewer', () => {
   it('returns the first viewer whose match() accepts the mime (list is precedence-ordered)', () => {
-    const viewers = [imageMediaViewer, fakePdf]
+    const viewers = [imageMediaViewer, audioMediaViewer, fakePdf]
     expect(pickMediaViewer(viewers, 'image/png')).toBe(imageMediaViewer)
     expect(pickMediaViewer(viewers, 'IMAGE/PNG')).toBe(imageMediaViewer) // MIME is case-insensitive (RFC 2045)
+    expect(pickMediaViewer(viewers, 'audio/mpeg')).toBe(audioMediaViewer)
+    expect(pickMediaViewer(viewers, 'AUDIO/OGG')).toBe(audioMediaViewer)
     expect(pickMediaViewer(viewers, 'application/pdf')).toBe(fakePdf)
   })
 
@@ -21,6 +29,16 @@ describe('pickMediaViewer', () => {
     expect(pickMediaViewer([imageMediaViewer], 'audio/mpeg')).toBe(FILE_VIEWER_FALLBACK)
     // Empty facet → still downloadable (the fallback is a hardcoded floor, not a contribution).
     expect(pickMediaViewer([], 'application/pdf')).toBe(FILE_VIEWER_FALLBACK)
+  })
+})
+
+describe('audioMediaViewer', () => {
+  it('claims audio/* and resolves LAZILY (eager: false) — bytes are fetched on first play, not on mount', () => {
+    expect(audioMediaViewer.match('audio/mpeg')).toBe(true)
+    expect(audioMediaViewer.match('image/png')).toBe(false)
+    // Not eager: the renderer must NOT resolve the (possibly large) bytes on mount — the
+    // AudioViewer arms the resolve itself on the first play intent (§8/§11).
+    expect(audioMediaViewer.eager).toBe(false)
   })
 })
 

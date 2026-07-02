@@ -138,7 +138,7 @@ describe('useAssetObjectUrl', () => {
     expect(resolver.resolve).toHaveBeenCalledTimes(2)
   })
 
-  it('on a DECODE failure, revokes the URL NOW (frees the Blob) and settles to a terminal image-undecodable error', async () => {
+  it('on a DECODE failure, revokes the URL NOW (frees the Blob) and settles to a terminal media-undecodable error', async () => {
     const resolver = okResolver()
     const { result } = renderHook(() => useAssetObjectUrl(args, resolver))
     await flush()
@@ -146,18 +146,18 @@ describe('useAssetObjectUrl', () => {
     expect(url).toMatch(/^blob:/)
     expect(revokeObjectURL).not.toHaveBeenCalled() // still alive while ready/rendered
 
-    // The renderer's <img> couldn't decode the verified bytes → report it.
+    // The renderer's <img>/<audio> couldn't decode the verified bytes → report it.
     act(() => result.current[1](url))
     // The load-bearing fix: the Blob is freed immediately, NOT held until unmount.
     expect(revokeObjectURL).toHaveBeenCalledWith(url)
-    expect(result.current[0]).toEqual({ status: 'error', reason: 'image-undecodable' })
+    expect(result.current[0]).toEqual({ status: 'error', reason: 'media-undecodable' })
 
     // Terminal: a reconnect must NOT re-resolve (the bytes won't become decodable).
     await act(async () => {
       window.dispatchEvent(new Event('online'))
     })
     await flush()
-    expect(result.current[0]).toEqual({ status: 'error', reason: 'image-undecodable' })
+    expect(result.current[0]).toEqual({ status: 'error', reason: 'media-undecodable' })
     expect(resolver.resolve).toHaveBeenCalledTimes(1)
   })
 
