@@ -129,6 +129,26 @@ export const chordFromEvent = (event: ChordEventShape): string | null => {
   return parts.join('+')
 }
 
+/** Preview chord for held modifiers only ('$mod+Shift'), mirroring
+ *  `chordFromEvent`'s $mod/Control/Meta normalisation so the preview
+ *  glyphs match what a completed chord will capture. Null when no
+ *  modifier is held. Shared by every surface that shows a "⌘…" style
+ *  hint (KeyCaptureInput, shortcut-help's inspector) so the non-obvious
+ *  platform-swapped primary/secondary rules live in one place. */
+export const modifierPreview = (
+  event: Pick<ChordEventShape, 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,
+): string | null => {
+  const onMac = isMacPlatform()
+  const primary = onMac ? event.metaKey : event.ctrlKey
+  const secondary = onMac ? event.ctrlKey : event.metaKey
+  const parts: string[] = []
+  if (primary) parts.push('$mod')
+  if (secondary) parts.push(onMac ? 'Control' : 'Meta')
+  if (event.altKey) parts.push('Alt')
+  if (event.shiftKey) parts.push('Shift')
+  return parts.length ? parts.join('+') : null
+}
+
 /** Resolved `$mod` glyph for the current platform: ⌘ on macOS (Cmd),
  *  Ctrl elsewhere. Matches what tinykeys actually binds (`Meta` on Mac,
  *  `Control` on Windows/Linux) — see PLATFORM detection in

@@ -143,6 +143,12 @@ const parsePress = (press: string): ParsedPress => {
 const splitSequence = (raw: string): string[] =>
   raw.split(' ').map(p => p.trim()).filter(Boolean)
 
+/** Normalise a binding's `keys` field (one chord or a list) to a list.
+ *  The single shared copy — keybinding overrides, conflict detection, and
+ *  the shortcut-help model all expand bindings the same way. */
+export const toChordArray = (keys: string | readonly string[]): readonly string[] =>
+  typeof keys === 'string' ? [keys] : keys
+
 /** Serialise a parsed press back to its canonical chord string. */
 const formatPress = ({mods, key}: ParsedPress): string =>
   [...mods, key].filter(Boolean).join('+')
