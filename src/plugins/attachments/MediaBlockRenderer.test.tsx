@@ -13,13 +13,21 @@ const h = vi.hoisted(() => ({
   reportDecodeFailure: vi.fn(),
   resolve: vi.fn(),
   downloadBlob: vi.fn(),
+  useAssetObjectUrl: vi.fn(),
 }))
 vi.mock('@/hooks/block.js', () => ({
   usePropertyValue: (_b: unknown, s: { name: string }) => [h.props[s.name], () => {}],
   useWorkspaceId: () => 'ws-A',
 }))
 // The eager hook returns [state, reportDecodeFailure]; the renderer wires onError → the latter.
-vi.mock('./useAssetObjectUrl.js', () => ({ useAssetObjectUrl: () => [h.urlState, h.reportDecodeFailure] }))
+// Record the call so a test can assert the renderer passed the right `{ enabled }` (the
+// lazy-vs-eager gate) — the spy captures args; the return is the controlled state.
+vi.mock('./useAssetObjectUrl.js', () => ({
+  useAssetObjectUrl: (...args: unknown[]) => {
+    h.useAssetObjectUrl(...args)
+    return [h.urlState, h.reportDecodeFailure]
+  },
+}))
 vi.mock('./assetResolver.js', () => ({ getAssetResolver: () => ({ resolve: h.resolve }) }))
 vi.mock('@/utils/downloadBlob.js', () => ({ downloadBlob: h.downloadBlob }))
 // The runtime resolves the media-viewer facet to just the (real) image viewer, so an
@@ -42,6 +50,7 @@ beforeEach(() => {
   h.resolve.mockReset()
   h.resolve.mockResolvedValue({ ok: true, bytes: new Uint8Array([1, 2, 3]) })
   h.downloadBlob.mockReset()
+  h.useAssetObjectUrl.mockClear()
 })
 
 describe('MediaContentRenderer — image branch', () => {
@@ -50,6 +59,8 @@ describe('MediaContentRenderer — image branch', () => {
     renderContent()
     const img = screen.getByRole('img', { name: 'cat.png' })
     expect(img).toHaveAttribute('src', 'blob:fake/1')
+    // The image viewer is EAGER: the renderer resolves its bytes up front.
+    expect(h.useAssetObjectUrl).toHaveBeenCalledWith(expect.anything(), expect.anything(), { enabled: true })
   })
 
   it('shows the loading placeholder while resolving', () => {
@@ -93,8 +104,10 @@ describe('MediaContentRenderer — non-image (file) branch', () => {
     expect(btn).toHaveTextContent('doc.pdf')
     expect(btn).toHaveTextContent('2 MB')
     expect(screen.queryByRole('img')).toBeNull() // not the image lightbox
-    // The bytes are NOT fetched on mount — only on a download click (§8 budgeted egress).
-    expect(h.resolve).not.toHaveBeenCalled()
+    // The download fallback is LAZY: the renderer must gate the eager resolve OFF for it,
+    // so no object-URL Blob is held for a download nobody clicked (guards the viewer.eager wiring).
+    expect(h.useAssetObjectUrl).toHaveBeenCalledWith(expect.anything(), expect.anything(), { enabled: false })
+    expect(h.resolve).not.toHaveBeenCalled() // and nothing is fetched until a download click
   })
 
   it('resolves the VERIFIED bytes on click and downloads them as a NEUTRAL octet-stream blob', async () => {
