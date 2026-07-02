@@ -150,8 +150,20 @@ export default defineConfig(({command}) => {
                 },
                 preserveEntrySignatures: 'strict', // Preserves the signature of the entry point
             },
+            // Sourcemaps are deliberate and load-bearing, not just DX: each map
+            // carries `sourcesContent` (the original TSX), which powers in-system
+            // plugin editing and the plugin-materialization "eject" flow
+            // (docs/plugin-materialization.md recovers a system plugin's authored
+            // source from the shipped maps). They must always ship — never drop them.
             sourcemap: true,
-            minify: false,
+            // Minify the emitted JS (~7 MB / ~10% off each deploy; faster client
+            // parse/exec). `true` uses rolldown-vite's oxc minifier — NOT 'esbuild',
+            // which isn't installed here (build errors: "Cannot find package
+            // 'esbuild'"). Safe with the setup above: oxc preserves module
+            // boundaries (preserveModules) and bare import specifiers, so the
+            // externalized-react import map still resolves; and minification stays
+            // fully reversible for inspection via the retained sourcesContent.
+            minify: true,
             target: 'esnext',
         },
     })
