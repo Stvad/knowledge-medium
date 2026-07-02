@@ -26,7 +26,7 @@ import { c } from "react/compiler-runtime";
 */
 /** Failures that may clear on their own (object arrives / network recovers /
 *  workspace unlocks / re-paste the WK), so a refocus/reconnect should retry.
-*  `image-undecodable` is deliberately ABSENT — the bytes won't become decodable
+*  `media-undecodable` is deliberately ABSENT — the bytes won't become decodable
 *  without a block edit, so it's terminal. */
 var TRANSIENT_FAILURES = new Set([
 	"fetch-failed",
@@ -169,7 +169,7 @@ function useAssetObjectUrl(args, resolver, t0) {
 				key: prev.key,
 				state: {
 					status: "error",
-					reason: "image-undecodable"
+					reason: "media-undecodable"
 				}
 			} : prev);
 		};
