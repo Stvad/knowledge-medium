@@ -73,9 +73,9 @@ const EMPTY: MediaGcSummary = { purged: [], pending: [], skippedUnUploaded: [] }
  * prefixes, and for each that is no longer accessible, advances the grace state — purging
  * only a candidate that has been continuously orphaned past the window across ≥2 sweeps
  * and holds no un-uploaded bytes. Safe to run repeatedly; idempotent modulo the grace
- * clock. Never throws for an individual workspace's failure — a purge error propagates to
- * the caller's outer catch, but the loop structure keeps one workspace's decision from
- * corrupting another's.
+ * clock. Each workspace's grace decision is independent of the others'; a `purgeWorkspace`
+ * / `hasUnUploadedBytes` throw propagates to the caller's outer catch and ends this sweep
+ * early, leaving the remaining workspaces to be retried on the next sweep (retention-biased).
  */
 export const reclaimOrphanedWorkspaces = async (deps: MediaGcDeps): Promise<MediaGcSummary> => {
   const stored = await deps.listStoredWorkspaceIds()

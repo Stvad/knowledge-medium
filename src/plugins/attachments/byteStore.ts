@@ -312,10 +312,10 @@ export class OpfsByteStore implements ByteStore {
   }
 
   async purgeWorkspace(userId: string, workspaceId: string): Promise<void> {
-    // COORDINATION CAVEAT for the deferred §16 reference-GC job (the only intended caller —
-    // there is none today): a purge that races a concurrent down-lane `put` for the same
+    // COORDINATION CAVEAT for the §16 reference-GC job (its sole caller, `assetGc.
+    // runMediaGcSweep`): a purge that races a concurrent down-lane `put` for the same
     // workspace can lose, because `put`'s retry re-creates the ws dir from a fresh resolve
-    // after this `removeEntry`. The GC job must run with the workspace quiescent — hold the
+    // after this `removeEntry`. So the GC runs with the workspace quiescent — it holds the
     // per-(user,workspace) down-lane lock (laneLock.runSingleOwner) so no `put` is in flight.
     this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId)) // the cached handle is about to go stale
     try {

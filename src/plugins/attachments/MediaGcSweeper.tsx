@@ -49,7 +49,11 @@ export const MediaGcSweeper = (): null => {
     }
 
     // Sweep once initial sync settles (also fires synchronously if already settled → the
-    // initial pass) and on reconnect; both idle-deferred via schedulePass.
+    // initial pass) and on reconnect; both idle-deferred via schedulePass. The first-sync
+    // trigger binds to the MOUNT-time user (the effect has no user dep), but that's only a
+    // latency detail, not a correctness one: `runMediaGcSweep` re-reads the live active user
+    // every pass, so a post-account-switch user still gets correctly-scoped sweeps — just via
+    // the periodic interval / reconnect rather than its own first-sync-settle.
     const disposeShared = armSharedLaneTriggers(userId, schedulePass, schedulePass)
     const sweep = setInterval(schedulePass, GC_SWEEP_INTERVAL_MS)
 

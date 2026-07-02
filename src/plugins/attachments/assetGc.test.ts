@@ -16,6 +16,12 @@ const h = vi.hoisted(() => ({
   // `toHaveBeenCalledWith(user, ws)` / the returned set still work.
   purge: vi.fn(async () => {}),
   listWorkspaceIds: vi.fn(async () => h.storedWs),
+  // runSingleOwner runs the work directly (no navigator.locks in node) and reports it ran;
+  // a spy so a test can pin the lock NAME (mutual exclusion with the down-lane depends on it).
+  runSingleOwner: vi.fn(async (_name: string, work: () => Promise<void>) => {
+    await work()
+    return true
+  }),
   markers: null as unknown as import('./gcMarkerStore.js').GcMarkerStore,
 }))
 
@@ -43,19 +49,14 @@ vi.mock('./uploadStore.js', () => ({
             : [],
   }),
 }))
-// runSingleOwner runs the work directly (no navigator.locks in node) and reports it ran.
-vi.mock('./laneLock.js', () => ({
-  runSingleOwner: async (_name: string, work: () => Promise<void>) => {
-    await work()
-    return true
-  },
-}))
+vi.mock('./laneLock.js', () => ({ runSingleOwner: h.runSingleOwner }))
 vi.mock('./gcMarkerStore.js', async (orig) => ({
   ...(await orig<typeof import('./gcMarkerStore.js')>()),
   getGcMarkerStore: () => h.markers,
 }))
 
 import { InMemoryGcMarkerStore } from './gcMarkerStore.js'
+import { downLaneLockName } from './assetDownLane.js'
 import { GC_GRACE_MS, runMediaGcSweep } from './assetGc.js'
 
 const USER = 'user-1'
@@ -73,6 +74,7 @@ beforeEach(() => {
   h.markers = new InMemoryGcMarkerStore()
   h.purge.mockClear()
   h.listWorkspaceIds.mockClear()
+  h.runSingleOwner.mockClear()
 })
 afterEach(() => vi.clearAllMocks())
 
@@ -111,6 +113,9 @@ describe('runMediaGcSweep — wiring', () => {
     await runMediaGcSweep()
 
     expect(h.purge).toHaveBeenCalledWith(USER, 'ws-gone')
+    // The purge MUST hold the down-lane's own lock name, or it loses mutual exclusion with
+    // an in-flight `put` (the purgeWorkspace coordination caveat).
+    expect(h.runSingleOwner).toHaveBeenCalledWith(downLaneLockName(USER, 'ws-gone'), expect.any(Function))
     expect(await h.markers.get(USER, 'ws-gone')).toBeNull() // cleared after purge
   })
 
