@@ -39,10 +39,7 @@ import {
   subscribeConsistencyAudit,
 } from '@/plugins/data-integrity/store.js'
 import { runConsistencyAuditNow } from '@/plugins/data-integrity/schedule.js'
-import type {
-  ConsistencyAuditResult,
-  ConsistencyCheckResult,
-} from '@/plugins/data-integrity/audit.js'
+import type { ConsistencyCheckResult } from '@/plugins/data-integrity/audit.js'
 
 const num = (c: ConsistencyCheckResult, key: string): number => Number(c[key] ?? 0)
 const samplesOf = (c: ConsistencyCheckResult): string[] =>
