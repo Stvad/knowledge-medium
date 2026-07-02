@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type MouseEvent, type SetStateAction } from 'react'
 import { Filter, Pause, Play } from 'lucide-react'
 import { Block } from '@/data/block'
 import { useWorkspaceId } from '@/hooks/block.js'
@@ -22,7 +22,10 @@ import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
   type GroupedBacklinksResult,
 } from './query.ts'
-import { groupedBacklinksGroupHeaderActionsFacet } from './facet.ts'
+import {
+  groupedBacklinksGroupHeaderActionsFacet,
+  type GroupedBacklinksGroupHeaderAction,
+} from './facet.ts'
 import { GroupHeaderActionButton } from './GroupHeaderActionButton.tsx'
 
 interface GroupedBacklinksSnapshot {
@@ -80,6 +83,74 @@ const snapshotFromGroupedResult = (
   ),
 })
 
+/** Re-render whenever any block in `blocks` gains or changes its cached
+ *  row. The group-header action buttons decide their own visibility from
+ *  each source block's content — through the referenced action's
+ *  `isVisible` gate (e.g. the daily-notes "spread" button gates on
+ *  `hasAnyBlockDateAdapter`, which reads `block.peek()`). Source blocks
+ *  are resolved as ids and hydrate lazily as their entries mount, so
+ *  `peek()` is `undefined` on a group's first paint; without a
+ *  subscription the gate would run once against the unhydrated set, hide
+ *  the button, and never re-run. Subscribing to the shared cache
+ *  re-evaluates the gate as the (open) group's entries load, so the
+ *  button appears reliably instead of only when the sources happened to
+ *  already be cached. No load is forced here — the lazy entries own that;
+ *  priming every source up front would defeat `LazyViewportMount`.
+ *
+ *  Boundary (intentional): because nothing is forced, the gate resolves
+ *  only once a source actually hydrates. An open group's in-view entries
+ *  do that immediately; a group the user has collapsed (entries never
+ *  mount) — or a sole date-bearing source scrolled beyond the lazy-mount
+ *  overscan — keeps the button hidden until the group is expanded / that
+ *  entry scrolls in. Accepted for the reported default-open, all-dated
+ *  daily-notes case; forcing loads to close it would undo the laziness. */
+const useBlockCacheSignal = (blocks: readonly Block[]): void => {
+  const versionRef = useRef(0)
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      const unsubscribes = blocks.map(block =>
+        block.subscribe(() => {
+          versionRef.current += 1
+          onStoreChange()
+        }),
+      )
+      return () => {
+        for (const unsubscribe of unsubscribes) unsubscribe()
+      }
+    },
+    [blocks],
+  )
+  useSyncExternalStore(subscribe, () => versionRef.current, () => versionRef.current)
+}
+
+/** Header-row action buttons for one group. Split out of `GroupItems` so
+ *  the cache subscription that keeps their visibility gates fresh
+ *  (`useBlockCacheSignal`) re-renders only this row, not the group's
+ *  backlink entries. */
+const GroupHeaderActions = ({
+  sourceBlocks,
+  headerActions,
+}: {
+  sourceBlocks: Block[]
+  headerActions: readonly GroupedBacklinksGroupHeaderAction[]
+}) => {
+  useBlockCacheSignal(sourceBlocks)
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      {headerActions.map((entry, index) => (
+        <GroupHeaderActionButton
+          key={`${entry.actionId}:${index}`}
+          actionId={entry.actionId}
+          sourceBlocks={sourceBlocks}
+          icon={entry.icon}
+          label={entry.label}
+          triggerDetail={entry.triggerDetail}
+        />
+      ))}
+    </div>
+  )
+}
+
 const GroupItems = ({
   sourceBlocks,
   group,
@@ -106,18 +177,10 @@ const GroupItems = ({
           <span className="text-xs text-muted-foreground/70">{group.sourceIds.length}</span>
         </button>
         {headerActions.length > 0 && (
-          <div className="flex shrink-0 items-center gap-0.5">
-            {headerActions.map((entry, index) => (
-              <GroupHeaderActionButton
-                key={`${entry.actionId}:${index}`}
-                actionId={entry.actionId}
-                sourceBlocks={sourceBlocks}
-                icon={entry.icon}
-                label={entry.label}
-                triggerDetail={entry.triggerDetail}
-              />
-            ))}
-          </div>
+          <GroupHeaderActions
+            sourceBlocks={sourceBlocks}
+            headerActions={headerActions}
+          />
         )}
       </div>
       {open && (
