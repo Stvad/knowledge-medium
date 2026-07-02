@@ -1,2 +1,0 @@
-import{CodecError as e}from"../../data/api/errors.js";var t=t=>({type:`ref`,targetTypes:Object.freeze([...t?.targetTypes??[]]),encode:e=>e===void 0?null:e,decode:t=>{if(t!=null){if(typeof t!=`string`)throw new e(`ref (string id)`,t);return t}}});export{t as optionalRefCodec};
-//# sourceMappingURL=codecs.js.map

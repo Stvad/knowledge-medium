@@ -1,1 +1,0 @@
-{"version":3,"file":"breadcrumbPreview.js","names":[],"sources":["../../../../src/plugins/breadcrumbs/breadcrumbPreview.ts"],"sourcesContent":["export const getBreadcrumbContentPreview = (content: string) =>\n  content.match(/^[^\\r\\n]*/)?.[0] ?? ''\n"],"mappings":"AAAA,IAAa,EAA+B,GAC1C,EAAQ,MAAM,YAAY,GAAG,IAAM"}
