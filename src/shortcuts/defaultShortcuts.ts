@@ -684,12 +684,22 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // event reaches this window-level shortcut. But it accepts via the same
         // `acceptCompletion`, which no-ops during CM's brief post-open
         // `interactionDelay` (default 75ms) — and a no-op accept doesn't
-        // stopPropagation, so a fast Return bubbles here. On iOS Safari the
-        // soft-keyboard Return reaches this shortcut regardless. Either way, if a
-        // popup is active we swallow the key: `acceptCompletion` applies the
-        // option when CM allows it and is a no-op inside the interactionDelay
-        // window (the next Return accepts) — but we return unconditionally so the
-        // key can't fall through to a mid-completion split.
+        // stopPropagation, so a fast Return bubbles here. On iOS Safari the *real*
+        // Enter keydown reaches this shortcut regardless (CM defers it as a
+        // pendingIOSKey and runs its own keymap only on the later synthetic Enter
+        // from flushIOSKey, which is non-bubbling and never reaches us). Either
+        // way, if a popup is active we swallow the key: `acceptCompletion` applies
+        // the option when CM allows it and is a no-op inside the interactionDelay
+        // window — but we return unconditionally so the key can't fall through to
+        // a mid-completion split.
+        //
+        // Inside the delay window we swallow without accepting; the accept then
+        // lands a beat later on its own — on desktop when the user presses Return
+        // again (past the delay), on iOS via CM's deferred synthetic Enter
+        // (~250ms) hitting the completion keymap. No second manual press needed on
+        // iOS. The only split path is this window shortcut on the real keydown, so
+        // swallowing here is sufficient to prevent the split; the synthetic Enter
+        // can't split (it never reaches this window listener).
         //
         // At most one accept happens per press: CM's keymap and this guard both
         // *call* acceptCompletion, but they're exclusive by state — a successful

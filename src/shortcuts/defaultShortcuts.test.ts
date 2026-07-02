@@ -1035,8 +1035,12 @@ describe('default CodeMirror shortcuts', () => {
   it('swallows Enter (no split, no accept) while a completion is active but within interactionDelay', async () => {
     // During CM's post-open interactionDelay, acceptCompletion no-ops even though
     // completionStatus is already 'active'. A large delay makes that deterministic.
-    // The guard must still consume the key so it can't fall through to a split —
-    // the popup just stays open and the next Enter accepts.
+    // This pins the guard IN ISOLATION: it must consume the key (no split) even
+    // when it can't yet accept. The actual accept then lands a beat later through
+    // a path outside this handler — on desktop the user's next Return, on iOS CM's
+    // deferred synthetic Enter (~250ms) hitting the completion keymap — neither of
+    // which is exercised here; this test only asserts "no split, no synchronous
+    // accept".
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
