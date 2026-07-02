@@ -14,6 +14,8 @@ describe('isLocalDbCorruptionError', () => {
       'file is not a database',
       'file is encrypted or is not a database',
       'SQLITE_CORRUPT: database disk image is malformed',
+      // Runtime sync-apply corruption surfaced by PowerSync's control fn (#284).
+      'powersync_control: internal SQLite call returned CORRUPT',
     ]) {
       expect(isLocalDbCorruptionError(new Error(msg)), msg).toBe(true)
     }

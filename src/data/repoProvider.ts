@@ -60,6 +60,11 @@ import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
 import { scheduleIdle } from '@/utils/scheduleIdle.js'
 import { toLocalDbOpenError } from '@/utils/localDbCorruption.js'
+import {
+  captureDbOpenCorruption,
+  recordForensicSessionStart,
+  watchForRuntimeCorruption,
+} from '@/utils/dbForensicsHooks.js'
 import { releasePowerSyncConnection } from '@/data/releasePowerSyncConnection.js'
 import {
   applyLocalSchemaContributions,
@@ -99,9 +104,33 @@ const MAX_USER_SEGMENT = 40
 // production setup: OPFSCoopSync for fast sync access handles + multi-
 // tabs enabled. Each VFS bump gets a fresh filename so we don't reuse
 // storage across backends.
-export const dbFilenameForUser = (userId: string) => {
-  const sanitized = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, MAX_USER_SEGMENT)
-  return `kmp-v6-${sanitized}.db`
+// PR previews are served under /<repo>/pr-preview/pr-<n>/ on the SAME origin as
+// production, and OPFS/IndexedDB is per-origin — so without a per-deploy suffix a
+// signed-in preview would open production's REAL local DB, and any client schema
+// change / migration / PowerSync bump in the PR would mutate it (the app is
+// offline-first, so the local store is authoritative). Derive a namespace from
+// the deploy path so previews get their own DB. Production (BASE_URL = /<repo>/)
+// matches nothing here, so its filename stays byte-for-byte identical and
+// existing users keep their data. The `-pr-<n>` suffix is short enough to stay
+// under the 64-char wa-sqlite pathname cap (see MAX_USER_SEGMENT).
+export const previewDbSuffix = (base: string): string => {
+  const match = base.match(/\/pr-preview\/(pr-[^/]+)\//)
+  return match ? `-${match[1]}` : ''
+}
+
+export const dbFilenameForUser = (
+  userId: string,
+  base: string = import.meta.env.BASE_URL,
+) => {
+  const suffix = previewDbSuffix(base)
+  // The preview suffix comes OUT of the user budget, so the base name stays
+  // within the same envelope as production (`kmp-v6-` + <=MAX_USER_SEGMENT +
+  // `.db` = 50) regardless of the suffix — preserving the headroom the 64-char
+  // wa-sqlite pathname cap needs for the -journal/-wal/-shm derivatives.
+  const sanitized = userId
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, Math.max(0, MAX_USER_SEGMENT - suffix.length))
+  return `kmp-v6-${sanitized}${suffix}.db`
 }
 
 const dbsByUser = new Map<string, PowerSyncDatabase>()
@@ -245,6 +274,7 @@ export const ensurePowerSyncReady = async (
   await assertOpfsAvailable()
 
   const db = getPowerSyncDb(userId)
+  const dbFilename = dbFilenameForUser(userId)
 
   let initPromise = initPromises.get(userId)
   if (!initPromise) {
@@ -255,11 +285,20 @@ export const ensurePowerSyncReady = async (
     await initPromise
   } catch (error) {
     // A corrupt local `.db` surfaces here (e.g. "database disk image is
-    // malformed"). Re-throw as a typed, recoverable error carrying the userId
-    // so the bootstrap error boundary can offer Export + Reset. Any other
+    // malformed"). Record a forensic snapshot (issue #284) BEFORE anything
+    // touches the file, then re-throw as a typed, recoverable error carrying the
+    // userId so the bootstrap error boundary can offer Export + Reset. Any other
     // failure passes through unchanged.
+    captureDbOpenCorruption(userId, dbFilename, error)
     throw toLocalDbOpenError(error, userId)
   }
+
+  // Out-of-band forensic instrumentation (issue #284): record the session (with
+  // unclean-shutdown detection), schedule an idle zero-page scan, and watch for
+  // a RUNTIME sync-apply corruption the DB-open detector never sees. All
+  // best-effort — guarded to run once per process, never throws into boot.
+  recordForensicSessionStart(userId, dbFilename)
+  watchForRuntimeCorruption(db, userId, dbFilename)
 
   // The local DB is now mounted for this user — record it as the active account in
   // BOTH modes. The asset byte path (§7.3) + media capture key off getActiveUserId,

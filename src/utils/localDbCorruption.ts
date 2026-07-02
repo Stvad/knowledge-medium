@@ -17,8 +17,11 @@
 // case-insensitively. Each entry is the SPECIFIC SQLite phrasing, not a bare
 // token: a routing decision here can lead the user to a DESTRUCTIVE reset, so a
 // benign "malformed URL" / "malformed JSON" surfacing during init must NOT match
-// (the bare token `malformed` would). These two are the only "malformed" emits
-// from SQLite (`SQLITE_CORRUPT`).
+// (the bare token `malformed` would). The two "malformed" entries are the only
+// such emits from SQLite (`SQLITE_CORRUPT`). `sqlite call returned corrupt` is
+// the RUNTIME shape: PowerSync's `powersync_control` surfacing SQLITE_CORRUPT
+// during sync-apply ("powersync_control: internal SQLite call returned CORRUPT")
+// — the class that opens fine but corrupts an already-mounted DB (issue #284).
 const CORRUPTION_SUBSTRINGS = [
   'disk image is malformed', // "database disk image is malformed"
   'malformed database schema', // "malformed database schema (...)"
@@ -26,6 +29,7 @@ const CORRUPTION_SUBSTRINGS = [
   'database corruption',
   'sqlite_corrupt',
   'sqlite_notadb',
+  'sqlite call returned corrupt', // powersync_control surfacing SQLITE_CORRUPT at runtime
 ] as const
 
 const messageOf = (error: unknown): string =>
