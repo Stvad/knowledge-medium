@@ -47,10 +47,10 @@ const withSamples = (): ConsistencyAuditResult => ({
   },
 })
 
-const renderDialog = () => {
+const renderDialog = (props: { workspaceId?: string } = {}) => {
   const resolve = vi.fn()
   const cancel = vi.fn()
-  render(<ConsistencyAuditDialog resolve={resolve} cancel={cancel} />)
+  render(<ConsistencyAuditDialog resolve={resolve} cancel={cancel} {...props} />)
   return { resolve, cancel }
 }
 
@@ -116,6 +116,19 @@ describe('ConsistencyAuditDialog', () => {
       target: 'sidebar-stack',
       workspaceId: 'ws-1',
     })
+  })
+
+  it('shows a pinned workspace’s results even when a different workspace is active', () => {
+    // The run action audited ws-A; the user switched to ws-1 (active) before the
+    // dialog opened. Pinning ws-A keeps its just-published result visible, and a
+    // sample opens against ws-A — not the now-active ws-1.
+    publishConsistencyAudit({ ...withSamples(), workspaceId: 'ws-A' })
+    renderDialog({ workspaceId: 'ws-A' })
+    expect(screen.getByText(FULL_ID)).toBeTruthy()
+    fireEvent.click(screen.getByText(FULL_ID))
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ target: 'sidebar-stack', workspaceId: 'ws-A' }),
+    )
   })
 
   it('re-runs on demand via the store engine (updating in place)', async () => {
