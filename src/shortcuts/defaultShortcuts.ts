@@ -678,8 +678,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        // With an autocomplete popup open, Enter belongs to the popup — accept
-        // the highlighted completion; NEVER split the block. On desktop CM's
+        // With an autocomplete popup ON SCREEN, Enter belongs to the popup —
+        // accept the highlighted completion; NEVER split the block. On desktop CM's
         // completion keymap normally accepts and `stopPropagation`s before the
         // event reaches this window-level shortcut. But it accepts via the same
         // `acceptCompletion`, which no-ops during CM's brief post-open
@@ -687,29 +687,38 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // stopPropagation, so a fast Return bubbles here. On iOS Safari the *real*
         // Enter keydown reaches this shortcut regardless (CM defers it as a
         // pendingIOSKey and runs its own keymap only on the later synthetic Enter
-        // from flushIOSKey, which is non-bubbling and never reaches us). Either
-        // way, whenever completion UI is present we swallow the key:
-        // `acceptCompletion` applies the option when CM allows it, and otherwise
-        // we still return, so the key can't fall through to a mid-completion split.
-        // We gate on `!== null`, i.e. BOTH 'active' AND 'pending' — the `[[`/`((`/
-        // place sources are async, so every keystroke re-queries and leaves the
-        // (still-visible) dropdown in the 'pending' state until data arrives; a
-        // Return during that refresh must not split under the open popup.
+        // from flushIOSKey, which is non-bubbling and never reaches us).
         //
-        // When we swallow without accepting (interactionDelay window, or a pending
-        // refresh where the popup is disabled), the accept lands a beat later on
-        // its own — on desktop when the user presses Return again, on iOS via CM's
-        // deferred synthetic Enter (~250ms) hitting the completion keymap once the
-        // popup is 'active' again. No second manual press needed on iOS. The only
-        // split path is this window shortcut on the real keydown, so swallowing
-        // here is sufficient; the synthetic Enter can't split (non-bubbling, it
-        // never reaches this window listener).
+        // We gate on a VISIBLE popup, not on `completionStatus`. The `[[`/`((`/
+        // place sources are async, so CM reports `completionStatus === 'pending'`
+        // in two very different situations: (a) an already-open dropdown refreshing
+        // after a keystroke (popup still shown, greyed/disabled) — Enter must NOT
+        // split under it; and (b) a background query kicked off by ordinary typing
+        // BEFORE any popup opens — here Enter must still split the block, or normal
+        // prose editing breaks. `completionStatus` can't tell them apart, so we key
+        // off the rendered tooltip instead: CM keeps `.cm-tooltip-autocomplete`
+        // mounted (adding a `-disabled` modifier) for case (a) and renders nothing
+        // for case (b). The tooltip lives under `view.dom` (no tooltip parent is
+        // configured), so the query is scoped to THIS block's editor. The
+        // `=== 'active'` arm is a fast path / guard against the sub-tick where the
+        // popup is logically active but the tooltip DOM hasn't mounted yet.
+        //
+        // When we swallow without accepting (interactionDelay window, or a disabled
+        // refresh), the accept lands a beat later on its own — on desktop when the
+        // user presses Return again, on iOS via CM's deferred synthetic Enter
+        // (~250ms) hitting the completion keymap once the popup is 'active' again.
+        // No second manual press needed on iOS. The only split path is this window
+        // shortcut on the real keydown, so swallowing here is sufficient; the
+        // synthetic Enter can't split (non-bubbling, it never reaches this listener).
         //
         // At most one accept happens per press: CM's keymap and this guard both
         // *call* acceptCompletion, but they're exclusive by state — a successful
         // keymap accept stopPropagations so we never run; a failed one (delay /
         // pending) can't succeed on the retry within the same synchronous keystroke.
-        if (completionStatus(editorView.state) !== null) {
+        if (
+          completionStatus(editorView.state) === 'active' ||
+          editorView.dom.querySelector('.cm-tooltip-autocomplete')
+        ) {
           acceptCompletion(editorView)
           return
         }
