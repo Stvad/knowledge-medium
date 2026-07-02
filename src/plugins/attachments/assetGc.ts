@@ -58,16 +58,17 @@ export const runMediaGcSweep = async (): Promise<void> => {
 
   // The set of workspaces still holding un-uploaded (sole-copy) bytes — computed once per
   // sweep and reused across candidates (the sole-copy guard is only consulted for a
-  // past-grace orphan, typically none). A staged/pending record's bytes may exist nowhere
-  // else, so a workspace holding one is never purged.
+  // past-grace orphan, typically none). ANY un-uploaded record — `staged`, `pending`, OR
+  // `failed` — means the bytes may exist nowhere else (a `failed` record's bytes were
+  // never uploaded and there is no §9 recovery actor yet), so a workspace holding one is
+  // never purged. Erring toward retention over dropping a sole copy is the §16 posture.
   let unUploadedWs: Set<string> | null = null
   const unUploadedWorkspaces = async (): Promise<Set<string>> => {
     if (!unUploadedWs) {
-      const [staged, pending] = await Promise.all([
-        uploadStore.listByStatus(userId, 'staged'),
-        uploadStore.listByStatus(userId, 'pending'),
-      ])
-      unUploadedWs = new Set([...staged, ...pending].map((r) => r.workspaceId))
+      const byStatus = await Promise.all(
+        (['staged', 'pending', 'failed'] as const).map((s) => uploadStore.listByStatus(userId, s)),
+      )
+      unUploadedWs = new Set(byStatus.flat().map((r) => r.workspaceId))
     }
     return unUploadedWs
   }

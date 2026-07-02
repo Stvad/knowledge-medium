@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   storedWs: new Set<string>(),
   stagedRecs: [] as Array<{ workspaceId: string }>,
   pendingRecs: [] as Array<{ workspaceId: string }>,
+  failedRecs: [] as Array<{ workspaceId: string }>,
   // No declared params: vi.fn records actual call args regardless, so
   // `toHaveBeenCalledWith(user, ws)` / the returned set still work.
   purge: vi.fn(async () => {}),
@@ -33,7 +34,13 @@ vi.mock('./byteStore.js', () => ({
 vi.mock('./uploadStore.js', () => ({
   getByteUploadStore: () => ({
     listByStatus: async (_u: string, status: string) =>
-      status === 'staged' ? h.stagedRecs : status === 'pending' ? h.pendingRecs : [],
+      status === 'staged'
+        ? h.stagedRecs
+        : status === 'pending'
+          ? h.pendingRecs
+          : status === 'failed'
+            ? h.failedRecs
+            : [],
   }),
 }))
 // runSingleOwner runs the work directly (no navigator.locks in node) and reports it ran.
@@ -62,6 +69,7 @@ beforeEach(() => {
   h.storedWs = new Set()
   h.stagedRecs = []
   h.pendingRecs = []
+  h.failedRecs = []
   h.markers = new InMemoryGcMarkerStore()
   h.purge.mockClear()
   h.listWorkspaceIds.mockClear()
@@ -117,10 +125,14 @@ describe('runMediaGcSweep — wiring', () => {
     expect(await h.markers.get(USER, 'ws-A')).toBeNull() // stale marker cleared, not acted on
   })
 
-  it('defers purging an orphaned workspace that still has un-uploaded (sole-copy) bytes', async () => {
+  it.each([
+    ['pending', () => (h.pendingRecs = [{ workspaceId: 'ws-gone' }])],
+    ['staged', () => (h.stagedRecs = [{ workspaceId: 'ws-gone' }])],
+    ['failed', () => (h.failedRecs = [{ workspaceId: 'ws-gone' }])], // never uploaded, no recovery actor yet
+  ])('defers purging an orphaned workspace with a %s (sole-copy) upload record', async (_status, seed) => {
     h.storedWs = new Set(['ws-gone'])
     h.workspaceRows = []
-    h.pendingRecs = [{ workspaceId: 'ws-gone' }] // an un-uploaded capture — bytes may be the only copy
+    seed() // an un-uploaded capture — its bytes may be the only copy anywhere
     await h.markers.set({ userId: USER, workspaceId: 'ws-gone', firstSeenOrphanedAt: oldEnough() })
 
     await runMediaGcSweep()

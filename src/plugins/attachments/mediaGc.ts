@@ -23,8 +23,8 @@
  *     `graceMs`, with the clock reset the instant it becomes accessible again. This is
  *     "never a live zero-crossing" — it survives the transient absences a checksum-wipe
  *     re-download or a momentary membership glitch can produce.
- *   - SOLE-COPY GUARD: never purge a workspace that still has un-uploaded (staged/pending)
- *     bytes — those may exist nowhere else. Retention-biased.
+ *   - SOLE-COPY GUARD: never purge a workspace that still has un-uploaded bytes (a
+ *     staged/pending/failed upload record) — those may exist nowhere else. Retention-biased.
  */
 
 import type { GcMarkerStore } from './gcMarkerStore.js'

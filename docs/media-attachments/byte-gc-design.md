@@ -191,9 +191,11 @@ observations accrue; both are exported constants, tunable.
   download complete, via `onFirstSync`). There is no per-workspace settled predicate today
   (`hasSynced` is global); the grace window covers the residual imprecision.
 - **Sole-copy guard (Branch A).** Before purging an orphaned prefix, skip it if the upload
-  store still holds `staged`/`pending` records for that workspace — those bytes may be the
-  only copy anywhere (never uploaded). Retention-biased: a rare edge, deferred rather than
-  risked.
+  store still holds *any* un-uploaded record — `staged`, `pending`, **or** `failed` — for
+  that workspace: those bytes may be the only copy anywhere (never reached remote, and a
+  `failed` record has no §9 recovery actor yet). Retention-biased: a rare edge, deferred
+  rather than risked (a stuck `failed` record pins its workspace until that record is
+  cleared/recovered).
 - **Recoverable by re-upload / re-download.** Local reclamation is graceful degradation, not
   data loss: if a purged workspace is re-joined, the down-lane re-replicates its bytes from
   the retained remote object; the remote object itself is retained (below), so the bytes are
