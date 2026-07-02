@@ -30,6 +30,7 @@
 
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
+import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
 import type {
   Completion,
   CompletionContext,
@@ -111,77 +112,12 @@ export interface PlaceAutocompleteOptions {
   persistInsert?: (args: {triggerText: string; insert: string}) => Promise<void>
 }
 
-interface TriggerMatch {
-  /** Character position in the doc where the `@` itself sits. The
-   *  inserted text replaces from here (so the `@` is removed). */
-  from: number
-  /** The text typed after `@`, possibly empty. */
-  query: string
-}
-
-const isInsideUnclosedWikilink = (text: string, beforePos: number): boolean => {
-  let opens = 0
-  let closes = 0
-  for (let i = 0; i < beforePos - 1; i++) {
-    if (text[i] === '[' && text[i + 1] === '[') {
-      opens += 1
-      i += 1
-    } else if (text[i] === ']' && text[i + 1] === ']') {
-      closes += 1
-      i += 1
-    }
-  }
-  return opens > closes
-}
-
-/** Place names routinely contain spaces ("Blue Bottle Coffee"), so the
- *  query may span words. The caps below decide when an `@` earlier in
- *  the line stops owning what the user types: a double space or any
- *  non-space whitespace ends the query immediately, and a query longer
- *  than this many chars/words is prose, not a place name. Without the
- *  caps, every sentence containing a bare `@word` would re-open the
- *  dropdown on each keystroke until end of line. */
-const MAX_QUERY_LEN = 50
-const MAX_QUERY_WORDS = 6
-
-/** Pure trigger-detection helper. Exported for direct testing — the
- *  CompletionSource glue just adapts to CodeMirror's call shape. */
-export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null => {
-  // Walk backward from the cursor to find the most recent `@`. Single
-  // spaces are part of the query; wikilink brackets, non-space
-  // whitespace, a double space, or an over-long scan interrupt the
-  // trigger sequence.
-  let i = pos
-  while (i > 0) {
-    const c = text[i - 1]
-    if (c === '@') break
-    if (c === ' ') {
-      if (i >= 2 && text[i - 2] === ' ') return null
-    } else if (/\s/.test(c)) {
-      return null
-    }
-    if (c === '[' || c === ']') return null
-    if (pos - i >= MAX_QUERY_LEN) return null
-    i -= 1
-  }
-  if (i === 0 || text[i - 1] !== '@') return null
-
-  const query = text.slice(i, pos)
-  // `@ 5pm` is prose, not a half-typed place query.
-  if (query.startsWith(' ')) return null
-  if (query.split(' ').filter(w => w.length > 0).length > MAX_QUERY_WORDS) return null
-
-  const atPos = i - 1
-  // Word char immediately before `@` → email-like (`a@b`); skip.
-  if (atPos > 0 && /\w/.test(text[atPos - 1])) return null
-  // `@` directly preceded by `[` → inside a half-typed `[[@foo`; skip.
-  if (atPos > 0 && text[atPos - 1] === '[') return null
-  // `@` lives inside an unclosed `[[...` somewhere earlier on the
-  // line → the wikilink autocomplete owns this input.
-  if (isInsideUnclosedWikilink(text, atPos)) return null
-
-  return {from: atPos, query}
-}
+/** `@` trigger detection — the shared matcher (see
+ *  `src/editor/triggerMatch.ts` for the query/guard semantics: single
+ *  spaces allowed for multi-word place names, email guard, wikilink
+ *  ownership, length/word caps). Exported for direct testing. */
+export const matchAtTrigger = (text: string, pos: number): TriggerMatch | null =>
+  matchCharTrigger(text, pos, '@')
 
 /** Where to apply the trigger-text → wikilink replacement once the
  *  resolution settles. Prefers the recorded span if the text is still

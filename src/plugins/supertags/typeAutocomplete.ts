@@ -1,13 +1,10 @@
 /** CodeMirror CompletionSource for the `#` type-tag trigger (Tana-style
  *  supertags).
  *
- *  Trigger shape mirrors the geo plugin's `@` matcher: `#<query>` with
- *  no word character before the `#` (so URLs like `example.com#anchor`
- *  and `a#b` don't fire), no `[`/`]` in the query (the wikilink
- *  autocomplete owns `[[…`), and single spaces allowed inside the query
- *  (type labels like "Meeting Note" span words). A query starting with
- *  a space never matches, which keeps markdown headings (`# Title`)
- *  out of the trigger.
+ *  Trigger detection is the shared `matchCharTrigger`
+ *  (`src/editor/triggerMatch.ts`, also behind the geo `@` trigger)
+ *  with the stacked-hash guard on, so markdown headings (`# Title`,
+ *  `##foo`) and URL anchors never fire it.
  *
  *  On select the trigger text (`#query`) is deleted from the doc
  *  immediately — the tag lives in the block's `types` property and is
@@ -32,6 +29,7 @@ import type {
   CompletionSource,
 } from '@codemirror/autocomplete'
 import type { TypeContribution } from '@/data/api'
+import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
 
 /** The tagging UX hides `structural` contributions (kernel structure
  *  like page/panel, plugin prefs/ui-state plumbing — see
@@ -68,80 +66,15 @@ export type TypeTagCandidate =
    *  block id minted at pick time. `label` is the trimmed query. */
   | {kind: 'create', label: string, detail?: string}
 
-interface TriggerMatch {
-  /** Position in the line where the `#` sits. The trigger span
-   *  (`#query`) is deleted from here on pick. */
-  from: number
-  /** The text typed after `#`, possibly empty. */
-  query: string
-}
-
-/** Same caps as the geo `@` matcher, same rationale: labels span words
- *  ("Meeting Note"), but without the caps every sentence containing a
- *  bare `#word` would re-open the dropdown on each keystroke until end
- *  of line. */
-const MAX_QUERY_LEN = 50
-const MAX_QUERY_WORDS = 6
-
 /** Dropdown length cap. Typing narrows the list, so truncation only
  *  ever hides types the query hasn't disambiguated yet. */
 const RESULT_CAP = 12
 
-const isInsideUnclosedWikilink = (text: string, beforePos: number): boolean => {
-  let opens = 0
-  let closes = 0
-  for (let i = 0; i < beforePos - 1; i++) {
-    if (text[i] === '[' && text[i + 1] === '[') {
-      opens += 1
-      i += 1
-    } else if (text[i] === ']' && text[i + 1] === ']') {
-      closes += 1
-      i += 1
-    }
-  }
-  return opens > closes
-}
-
-/** Pure trigger-detection helper. Exported for direct testing — the
- *  CompletionSource glue just adapts to CodeMirror's call shape. */
-export const matchHashTrigger = (text: string, pos: number): TriggerMatch | null => {
-  // Walk backward from the cursor to find the most recent `#`. Single
-  // spaces are part of the query; wikilink brackets, non-space
-  // whitespace, a double space, or an over-long scan interrupt the
-  // trigger sequence.
-  let i = pos
-  while (i > 0) {
-    const c = text[i - 1]
-    if (c === '#') break
-    if (c === ' ') {
-      if (i >= 2 && text[i - 2] === ' ') return null
-    } else if (/\s/.test(c)) {
-      return null
-    }
-    if (c === '[' || c === ']') return null
-    if (pos - i >= MAX_QUERY_LEN) return null
-    i -= 1
-  }
-  if (i === 0 || text[i - 1] !== '#') return null
-
-  const query = text.slice(i, pos)
-  // `# Title` is a markdown heading, not a half-typed type query.
-  if (query.startsWith(' ')) return null
-  if (query.split(' ').filter(w => w.length > 0).length > MAX_QUERY_WORDS) return null
-
-  const hashPos = i - 1
-  // Word char immediately before `#` → URL anchor / mid-word hash; skip.
-  if (hashPos > 0 && /\w/.test(text[hashPos - 1])) return null
-  // Stacked hashes (`##foo`) are heading syntax territory, not a tag.
-  if (hashPos > 0 && text[hashPos - 1] === '#') return null
-  // `#` directly preceded by `[` → inside a half-typed `[[#foo`; skip.
-  if (hashPos > 0 && text[hashPos - 1] === '[') return null
-  // `#` lives inside an unclosed `[[...` somewhere earlier on the
-  // line → the wikilink autocomplete owns this input.
-  if (isInsideUnclosedWikilink(text, hashPos)) return null
-
-  return {from: hashPos, query}
-}
+/** `#` trigger detection — the shared matcher with the stacked-hash
+ *  guard on (`##foo` is heading territory, not a tag). Exported for
+ *  direct testing. */
+export const matchHashTrigger = (text: string, pos: number): TriggerMatch | null =>
+  matchCharTrigger(text, pos, '#', {rejectDoubledTrigger: true})
 
 const labelOf = (type: TypeContribution): string => type.label ?? type.id
 
