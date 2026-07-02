@@ -39,6 +39,13 @@ const messageOf = (error: unknown): string =>
 // — PowerSync/app layers can rethrow with a generic outer message and the real
 // error on `.cause` (e.g. `new Error('boot failed', { cause: sqliteError })`).
 // Concatenate the whole cause chain (bounded) so substring-matching sees it.
+//
+// A non-Error is handled too: an error that crosses a Web Worker / Comlink
+// boundary can arrive as a PLAIN OBJECT `{name, message, stack}` rather than a
+// real `Error` instance — PowerSync's runtime `downloadError` (thrown by the
+// wa-sqlite worker's `powersync_control`) is exactly this shape. Reading its
+// string `.message` (instead of `String(obj)` → "[object Object]") is what lets
+// the runtime-corruption routing match at all.
 const messageChainOf = (error: unknown, depth = 5): string => {
   if (depth <= 0 || error === null || error === undefined) return ''
   if (error instanceof Error) {
@@ -46,6 +53,14 @@ const messageChainOf = (error: unknown, depth = 5): string => {
     return cause === undefined
       ? error.message
       : `${error.message}\n${messageChainOf(cause, depth - 1)}`
+  }
+  if (typeof error === 'object') {
+    const obj = error as { message?: unknown; cause?: unknown }
+    if (typeof obj.message === 'string') {
+      return obj.cause === undefined
+        ? obj.message
+        : `${obj.message}\n${messageChainOf(obj.cause, depth - 1)}`
+    }
   }
   return String(error)
 }
