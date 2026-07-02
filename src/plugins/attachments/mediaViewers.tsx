@@ -118,6 +118,19 @@ const useLazyDownload = (
   return { status, onDownload }
 }
 
+/** The download button's leading icon for a {@link DownloadStatus} — spinner while
+ *  resolving, warning on error, else the download glyph. Shared by the file + PDF
+ *  download affordances so the status→icon mapping lives in one place; each call site
+ *  passes its own sizing/color className. */
+const DownloadStatusIcon = ({ status, className }: { status: DownloadStatus; className: string }) =>
+  status === 'resolving' ? (
+    <Loader2 className={`${className} animate-spin`} />
+  ) : status === 'error' ? (
+    <FileWarning className={className} />
+  ) : (
+    <Download className={className} />
+  )
+
 /** LAZY fallback viewer for any non-image (or as-yet-unhandled) mime: a download button
  *  rendered from METADATA — it resolves NO bytes until clicked, then saves the verified
  *  bytes under the original filename via {@link useLazyDownload} (transient octet-stream
@@ -135,13 +148,7 @@ const FileViewer = ({ resolveBytes, mime, filename, size }: MediaViewerProps) =>
       aria-label={status === 'error' ? `${label} — download failed, click to retry` : `Download ${label}`}
       className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground hover:bg-muted disabled:opacity-70"
     >
-      {status === 'resolving' ? (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-      ) : status === 'error' ? (
-        <FileWarning className="h-4 w-4 shrink-0 text-muted-foreground" />
-      ) : (
-        <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
-      )}
+      <DownloadStatusIcon status={status} className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="truncate">{label}</span>
       {size > 0 && <span className="shrink-0 text-muted-foreground">{formatByteSize(size)}</span>}
       {status === 'error' && <span className="shrink-0 text-muted-foreground">· unavailable</span>}
@@ -187,13 +194,7 @@ const PdfViewer = ({ state, resolveBytes, filename }: MediaViewerProps) => {
           aria-label={status === 'error' ? `Download ${label} — failed, click to retry` : `Download ${label}`}
           className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-xs text-foreground hover:bg-muted disabled:opacity-70"
         >
-          {status === 'resolving' ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : status === 'error' ? (
-            <FileWarning className="h-3.5 w-3.5" />
-          ) : (
-            <Download className="h-3.5 w-3.5" />
-          )}
+          <DownloadStatusIcon status={status} className="h-3.5 w-3.5" />
           <span>{status === 'error' ? 'Retry' : 'Download'}</span>
         </button>
       </div>
