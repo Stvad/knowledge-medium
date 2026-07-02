@@ -56,8 +56,13 @@ appSchema.withRawTables({
 	workspace_members: WORKSPACE_MEMBERS_RAW_TABLE
 });
 var MAX_USER_SEGMENT = 40;
-var dbFilenameForUser = (userId) => {
-	return `kmp-v6-${userId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_USER_SEGMENT)}.db`;
+var previewDbSuffix = (base) => {
+	const match = base.match(/\/pr-preview\/(pr-[^/]+)\//);
+	return match ? `-${match[1]}` : "";
+};
+var dbFilenameForUser = (userId, base = "/knowledge-medium/pr-preview/pr-292/") => {
+	const suffix = previewDbSuffix(base);
+	return `kmp-v6-${userId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_USER_SEGMENT - suffix.length)}${suffix}.db`;
 };
 var dbsByUser = /* @__PURE__ */ new Map();
 var initPromises = /* @__PURE__ */ new Map();
@@ -220,6 +225,6 @@ var initializePowerSyncDb = async (powerSyncDb) => {
 	if (!powerSyncDb.currentStatus?.hasSynced) onFirstSync(powerSyncDb, () => scheduleAnalyzeCheck("first-sync"));
 };
 //#endregion
-export { closePowerSyncDbIfOpen, dbFilenameForUser, ensurePowerSyncReady, getActiveSyncResolver, getActiveUserId, getPowerSyncDb, isRemoteSyncActive, syncObserverDepsFor, syncResolverForUser };
+export { closePowerSyncDbIfOpen, dbFilenameForUser, ensurePowerSyncReady, getActiveSyncResolver, getActiveUserId, getPowerSyncDb, isRemoteSyncActive, previewDbSuffix, syncObserverDepsFor, syncResolverForUser };
 
 //# sourceMappingURL=repoProvider.js.map
