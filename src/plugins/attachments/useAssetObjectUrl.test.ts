@@ -48,6 +48,30 @@ describe('useAssetObjectUrl', () => {
     expect(blob.size).toBe(bytes.length) // the verified bytes, wrapped
   })
 
+  it('does NOT resolve when disabled (the lazy download path) — no fetch, no URL', async () => {
+    const resolver = okResolver()
+    const { result } = renderHook(() => useAssetObjectUrl(args, resolver, { enabled: false }))
+    await flush()
+    expect(result.current[0].status).toBe('loading') // stays loading; a lazy viewer ignores it
+    expect(resolver.resolve).not.toHaveBeenCalled() // no eager fetch/decrypt of the bytes
+    expect(createObjectURL).not.toHaveBeenCalled()
+  })
+
+  it('starts resolving once enabled flips true (a viewer became eager)', async () => {
+    const resolver = okResolver()
+    const { result, rerender } = renderHook(
+      (p: { enabled: boolean }) => useAssetObjectUrl(args, resolver, { enabled: p.enabled }),
+      { initialProps: { enabled: false } },
+    )
+    await flush()
+    expect(resolver.resolve).not.toHaveBeenCalled()
+
+    rerender({ enabled: true })
+    await flush()
+    expect(result.current[0]).toEqual({ status: 'ready', url: expect.stringMatching(/^blob:/) })
+    expect(resolver.resolve).toHaveBeenCalledTimes(1)
+  })
+
   it('surfaces a fail-closed resolve as error and NEVER creates an object URL', async () => {
     const resolver = failResolver('hash-mismatch')
     const { result } = renderHook(() => useAssetObjectUrl(args, resolver))

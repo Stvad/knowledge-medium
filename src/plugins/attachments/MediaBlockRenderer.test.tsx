@@ -1,26 +1,41 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block.js'
 import { typesProp } from '@/data/properties.js'
 import type { BlockRendererProps } from '@/types.js'
 
-// Control the block's props + the resolved URL state without the data layer.
+// Control the block's props, the eager URL state, and the lazy resolve without the data layer.
 const h = vi.hoisted(() => ({
   props: {} as Record<string, unknown>,
   urlState: { status: 'loading' } as { status: string; url?: string; reason?: string },
   reportDecodeFailure: vi.fn(),
+  resolve: vi.fn(),
+  downloadBlob: vi.fn(),
+  useAssetObjectUrl: vi.fn(),
 }))
 vi.mock('@/hooks/block.js', () => ({
   usePropertyValue: (_b: unknown, s: { name: string }) => [h.props[s.name], () => {}],
   useWorkspaceId: () => 'ws-A',
 }))
-// The hook returns [state, reportDecodeFailure]; the renderer wires onError → the latter.
-vi.mock('./useAssetObjectUrl.js', () => ({ useAssetObjectUrl: () => [h.urlState, h.reportDecodeFailure] }))
-vi.mock('./assetResolver.js', () => ({
-  getAssetResolver: () => ({ resolve: async () => ({ ok: false, reason: 'error' }) }),
+// The eager hook returns [state, reportDecodeFailure]; the renderer wires onError → the latter.
+// Record the call so a test can assert the renderer passed the right `{ enabled }` (the
+// lazy-vs-eager gate) — the spy captures args; the return is the controlled state.
+vi.mock('./useAssetObjectUrl.js', () => ({
+  useAssetObjectUrl: (...args: unknown[]) => {
+    h.useAssetObjectUrl(...args)
+    return [h.urlState, h.reportDecodeFailure]
+  },
 }))
+vi.mock('./assetResolver.js', () => ({ getAssetResolver: () => ({ resolve: h.resolve }) }))
+vi.mock('@/utils/downloadBlob.js', () => ({ downloadBlob: h.downloadBlob }))
+// The runtime resolves the media-viewer facet to just the (real) image viewer, so an
+// image mime dispatches to ImageViewer and everything else to the download fallback.
+vi.mock('@/extensions/runtimeContext.js', async () => {
+  const { imageMediaViewer } = await import('./mediaViewers.js')
+  return { useAppRuntime: () => ({ read: () => [imageMediaViewer] }) }
+})
 
 const { MediaBlockRenderer, MediaContentRenderer } = await import('./MediaBlockRenderer.js')
 
@@ -32,6 +47,10 @@ beforeEach(() => {
   h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'image/png', 'media:filename': 'cat.png' }
   h.urlState = { status: 'loading' }
   h.reportDecodeFailure.mockClear()
+  h.resolve.mockReset()
+  h.resolve.mockResolvedValue({ ok: true, bytes: new Uint8Array([1, 2, 3]) })
+  h.downloadBlob.mockReset()
+  h.useAssetObjectUrl.mockClear()
 })
 
 describe('MediaContentRenderer — image branch', () => {
@@ -40,6 +59,8 @@ describe('MediaContentRenderer — image branch', () => {
     renderContent()
     const img = screen.getByRole('img', { name: 'cat.png' })
     expect(img).toHaveAttribute('src', 'blob:fake/1')
+    // The image viewer is EAGER: the renderer resolves its bytes up front.
+    expect(h.useAssetObjectUrl).toHaveBeenCalledWith(expect.anything(), expect.anything(), { enabled: true })
   })
 
   it('shows the loading placeholder while resolving', () => {
@@ -69,13 +90,59 @@ describe('MediaContentRenderer — image branch', () => {
   })
 })
 
-describe('MediaContentRenderer — non-image branch', () => {
-  it('renders a file chip for a non-image MIME, regardless of resolve state', () => {
-    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/pdf', 'media:filename': 'doc.pdf' }
-    h.urlState = { status: 'ready', url: 'blob:should-not-be-used' }
+describe('MediaContentRenderer — non-image (file) branch', () => {
+  const fileProps = (extra: Record<string, unknown> = {}) => {
+    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/pdf', 'media:filename': 'doc.pdf', ...extra }
+  }
+
+  it('renders a METADATA-ONLY download button — no eager resolve — for a non-image MIME', () => {
+    fileProps({ 'media:size': 2_100_000 })
+    h.urlState = { status: 'ready', url: 'blob:should-not-be-used' } // eager state is ignored here
     renderContent()
-    expect(screen.getByTestId('media-file')).toHaveTextContent('doc.pdf')
-    expect(screen.queryByRole('img')).toBeNull()
+    const btn = screen.getByTestId('media-file')
+    expect(btn.tagName).toBe('BUTTON')
+    expect(btn).toHaveTextContent('doc.pdf')
+    expect(btn).toHaveTextContent('2 MB')
+    expect(screen.queryByRole('img')).toBeNull() // not the image lightbox
+    // The download fallback is LAZY: the renderer must gate the eager resolve OFF for it,
+    // so no object-URL Blob is held for a download nobody clicked (guards the viewer.eager wiring).
+    expect(h.useAssetObjectUrl).toHaveBeenCalledWith(expect.anything(), expect.anything(), { enabled: false })
+    expect(h.resolve).not.toHaveBeenCalled() // and nothing is fetched until a download click
+  })
+
+  it('resolves the VERIFIED bytes on click and downloads them as a NEUTRAL octet-stream blob', async () => {
+    fileProps()
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-file'))
+    await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
+    const [blob, name] = h.downloadBlob.mock.calls[0]
+    expect(name).toBe('doc.pdf')
+    // NEVER the attacker-influenceable media:mime — a neutral type so a navigated blob URL
+    // downloads instead of rendering (no same-origin XSS via media:mime = text/html).
+    expect(blob.type).toBe('application/octet-stream')
+  })
+
+  it('fails closed on a failed resolve — nothing downloaded, retryable error affordance', async () => {
+    fileProps()
+    h.resolve.mockResolvedValue({ ok: false, reason: 'hash-mismatch' })
+    renderContent()
+    const btn = screen.getByTestId('media-file')
+    fireEvent.click(btn)
+    await waitFor(() => expect(btn).toHaveTextContent('unavailable'))
+    // The load-bearing assertion: nothing is ever served for an unverified/failed asset.
+    expect(h.downloadBlob).not.toHaveBeenCalled()
+    expect(btn).toBeEnabled() // still clickable to retry a transient failure
+  })
+
+  it('names the download from the filename, else a generic name; omits size when unknown', async () => {
+    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/zip', 'media:size': 0 }
+    renderContent()
+    const btn = screen.getByTestId('media-file')
+    expect(btn).toHaveTextContent('application/zip') // mime is the label fallback
+    expect(btn).not.toHaveTextContent('B') // size 0/unknown → no size shown (guards the `> 0` check)
+    fireEvent.click(btn)
+    await waitFor(() => expect(h.downloadBlob).toHaveBeenCalled())
+    expect(h.downloadBlob.mock.calls[0][1]).toBe('attachment') // generic download name
   })
 })
 
