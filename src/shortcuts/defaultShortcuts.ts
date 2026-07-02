@@ -678,18 +678,27 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        // With an autocomplete popup open, Enter accepts the highlighted
-        // completion rather than splitting the block. On desktop CodeMirror's
-        // completion keymap handles this and `stopPropagation`s before the event
-        // reaches this window-level shortcut, so we never get here. On iOS the
-        // soft-keyboard Return reaches the shortcut anyway (the completion keymap
-        // doesn't intercept it the same way), so without this guard Enter splits
-        // the block mid-completion. `insertParagraph` is prevented at the
-        // beforeinput layer (see softLineBreakOnBeforeInput), which keeps the
-        // popup alive until this runs. This is the single accept path — the
-        // beforeinput handler deliberately doesn't accept — so we can't both
-        // accept and split for one press.
-        if (completionStatus(editorView.state) === 'active' && acceptCompletion(editorView)) return
+        // With an autocomplete popup open, Enter belongs to the popup — accept
+        // the highlighted completion; NEVER split the block. On desktop CM's
+        // completion keymap normally accepts and `stopPropagation`s before the
+        // event reaches this window-level shortcut. But it accepts via the same
+        // `acceptCompletion`, which no-ops during CM's brief post-open
+        // `interactionDelay` (default 75ms) — and a no-op accept doesn't
+        // stopPropagation, so a fast Return bubbles here. On iOS Safari the
+        // soft-keyboard Return reaches this shortcut regardless. Either way, if a
+        // popup is active we swallow the key: `acceptCompletion` applies the
+        // option when CM allows it and is a no-op inside the interactionDelay
+        // window (the next Return accepts) — but we return unconditionally so the
+        // key can't fall through to a mid-completion split.
+        //
+        // At most one accept happens per press: CM's keymap and this guard both
+        // *call* acceptCompletion, but they're exclusive by state — a successful
+        // keymap accept stopPropagations so we never run; a failed one (delay)
+        // can't succeed on the retry within the same synchronous keystroke.
+        if (completionStatus(editorView.state) === 'active') {
+          acceptCompletion(editorView)
+          return
+        }
 
         if (!scopeRootId) return
 

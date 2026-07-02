@@ -1032,6 +1032,52 @@ describe('default CodeMirror shortcuts', () => {
     view.destroy()
   })
 
+  it('swallows Enter (no split, no accept) while a completion is active but within interactionDelay', async () => {
+    // During CM's post-open interactionDelay, acceptCompletion no-ops even though
+    // completionStatus is already 'active'. A large delay makes that deterministic.
+    // The guard must still consume the key so it can't fall through to a split —
+    // the popup just stays open and the next Enter accepts.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: '[[Fo'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '[[Fo',
+        selection: {anchor: 4},
+        extensions: [
+          autocompletion({
+            defaultKeymap: false,
+            interactionDelay: 100_000, // effectively "always within the delay"
+            override: [() => ({from: 2, options: [{label: 'Foo', apply: 'Foo]]'}]})],
+          }),
+        ],
+      }),
+    })
+    startCompletion(view)
+    await vi.waitFor(() => expect(completionStatus(view.state)).toBe('active'))
+
+    const childrenBefore = await childIds('root')
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView: view,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // Consumed: doc unchanged (accept no-opped in the delay) AND no sibling (no split).
+    expect(view.state.doc.toString()).toBe('[[Fo')
+    expect(await childIds('root')).toEqual(childrenBefore)
+    view.destroy()
+  })
+
   // Scope-root behaviour: when the focused block is the root of the
   // surface's visible subtree (e.g. a backlink entry's shown block,
   // where scopeRootId === the block's own id) a "new block below" must

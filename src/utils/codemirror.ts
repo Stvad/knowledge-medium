@@ -129,6 +129,20 @@ const mdNoQuoteClose = markdownLanguage.data.of({
 //     popup stays alive for the guard); we deliberately do NOT accept the
 //     completion here, keeping a single accept path so we can't both accept and
 //     split for one press.
+//
+//     Scope: this popup-stays-alive reasoning is iOS-Safari-specific, where
+//     `preventDefault` on beforeinput actually cancels the native paragraph. On
+//     Chromium (incl. Android soft keyboards / GBoard) beforeinput
+//     `preventDefault` is a NO-OP (see CM's own note in @codemirror/view's
+//     beforeinput handler), so the native "\n" still lands, closes the popup, and
+//     the block still splits on a soft-keyboard Return mid-completion. That
+//     Android gap is pre-existing and NOT addressed here — fixing it needs the
+//     accept to happen synchronously in this handler, which reopens the
+//     double-fire problem on iOS. `preventDefault` here is still harmless on
+//     Chromium (the `return true` only suppresses CM's built-in beforeinput for
+//     insertParagraph, whose Android Enter synthesis is covered by the observed
+//     DOM-mutation path), and on desktop the branch is inert because the shortcut
+//     preventDefaults the keydown before any beforeinput fires.
 export const softLineBreakOnBeforeInput = EditorView.domEventHandlers({
   beforeinput(event, view) {
     if (event.inputType === 'insertParagraph') {
