@@ -30,8 +30,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog.js'
 import { Button } from '@/components/ui/button.js'
+import { useHash } from 'react-use'
 import { cn } from '@/lib/utils.js'
 import { useNavigate } from '@/utils/navigation.js'
+import { buildAppHash } from '@/utils/routing.js'
 import { useRepo } from '@/context/repo.js'
 import { showError } from '@/utils/toast.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
@@ -161,46 +163,63 @@ export function ConsistencyAuditDialog({
 }: DialogContextProps<void> & ConsistencyAuditDialogProps) {
   const repo = useRepo()
   const navigate = useNavigate()
-  // The workspace whose results this dialog shows: the explicitly PINNED one (the
-  // run action passes the workspace it just scanned) or, failing that, the active
-  // workspace (the "View last…" action). Pinning matters because the run action
-  // opens the store-driven dialog after the scan — if the user switched workspace
-  // mid-scan, the active workspace would no longer match the just-audited result.
-  const targetWorkspaceId = pinnedWorkspaceId ?? repo.activeWorkspaceId
+  const [, setHash] = useHash()
+  // A workspace pinned by an IN-DIALOG run (empty-state "Run audit" / "Re-run").
+  // The run publishes for a specific workspace; if the active workspace changes
+  // before it lands, an unpinned "View last" dialog would resubscribe to the new
+  // active workspace and hide the fresh result as "no audit has run". Capturing
+  // the run's workspace here keeps the dialog showing what it just ran — the same
+  // guard the global run action applies via its `workspaceId` prop.
+  const [runPinnedWorkspaceId, setRunPinnedWorkspaceId] = useState<string | null>(null)
+  // The workspace whose results this dialog shows: an explicitly PINNED one (the
+  // run action passes the workspace it just scanned), else one pinned by an
+  // in-dialog run, else the active workspace (the "View last…" action). Pinning
+  // matters because a run publishes for a specific workspace — if the active
+  // workspace changes afterward, an unpinned view would stop matching it.
+  const targetWorkspaceId = pinnedWorkspaceId ?? runPinnedWorkspaceId ?? repo.activeWorkspaceId
   // Read ONLY this workspace's result from the per-workspace store. Reading the
-  // scoped entry (not the global "latest") means a cadenced/manual audit for a
-  // DIFFERENT workspace can't blank an open dialog — its subscription value is
-  // unchanged by the foreign publish, so the (expensive) result stays put. No run
-  // for the target workspace → null → the empty state; a Re-run repopulates it.
-  const result = useSyncExternalStore(
-    subscribeConsistencyAudit,
-    () => getConsistencyAuditSnapshotFor(targetWorkspaceId),
-    () => getConsistencyAuditSnapshotFor(targetWorkspaceId),
-  )
+  // workspace-scoped entry means a cadenced/manual audit for a DIFFERENT
+  // workspace can't blank an open dialog — its subscription value is unchanged by
+  // the foreign publish, so the (expensive) result stays put. No run for the
+  // target workspace → null → the empty state; a Re-run repopulates it.
+  const getSnapshot = () => getConsistencyAuditSnapshotFor(targetWorkspaceId)
+  const result = useSyncExternalStore(subscribeConsistencyAudit, getSnapshot, getSnapshot)
   const [rerunning, setRerunning] = useState(false)
 
   // Open the block in the Roam-style side panel (sidebar-stack) and — crucially —
-  // KEEP the dialog open, so a click no longer discards the (expensive) audit
-  // results. Pin the audited workspace (`result.workspaceId` == targetWorkspaceId,
-  // since `result` is that workspace's scoped entry) so the id resolves against
-  // the workspace it belongs to, not a different active one. No sourcePanelId: a
-  // fresh stack is appended at the end of the layout.
+  // KEEP the dialog open (it's non-modal), so a click no longer discards the
+  // (expensive) audit results. The sample belongs to THIS dialog's workspace
+  // (`result.workspaceId`); if that isn't the active workspace, `navigate` writes
+  // the panel into that workspace's layout WITHOUT switching to it, so the click
+  // would appear to do nothing. Switch to the sample's workspace first (repo
+  // state + hash, exactly like WorkspaceSwitcher) so the opened panel is actually
+  // visible, then open the block. No sourcePanelId: a fresh stack is appended at
+  // the end of the layout.
   const open = (id: string) => {
-    void navigate({ blockId: id, target: 'sidebar-stack', workspaceId: result?.workspaceId })
+    const ws = result?.workspaceId
+    if (ws && ws !== repo.activeWorkspaceId) {
+      repo.setActiveWorkspaceId(ws)
+      setHash(buildAppHash(ws))
+    }
+    void navigate({ blockId: id, target: 'sidebar-stack', workspaceId: ws })
   }
 
   const rerun = async () => {
     // Re-run the SHOWN workspace (the pinned/target one), not just whatever is
     // active now, so the refreshed result stays coherent with what's displayed.
-    if (!targetWorkspaceId) {
+    const ws = targetWorkspaceId
+    if (!ws) {
       showError('Data integrity audit: no active workspace.')
       return
     }
+    // Pin the dialog to the workspace being run so a mid-run active-workspace
+    // switch can't hide the fresh result (it publishes under `ws`).
+    setRunPinnedWorkspaceId(ws)
     setRerunning(true)
     try {
       // Publishes to the audit store on success → this dialog re-renders with the
       // fresh result via its store subscription.
-      await runConsistencyAuditNow(repo, targetWorkspaceId)
+      await runConsistencyAuditNow(repo, ws)
     } catch (e) {
       showError(`Data integrity audit failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {

@@ -21,12 +21,27 @@ import { ConsistencyAuditDialog } from '../ConsistencyAuditDialog.tsx'
 
 const navigate = vi.fn()
 const runConsistencyAuditNow = vi.fn()
+const setActiveWorkspaceId = vi.fn()
+const setHash = vi.fn()
+// Mutable so a test can simulate the user switching workspaces while the dialog
+// is open — the dialog reads `repo.activeWorkspaceId` fresh on each render.
+const repoState: { activeWorkspaceId: string | null } = { activeWorkspaceId: 'ws-1' }
 
 vi.mock('@/utils/navigation.js', () => ({
   useNavigate: () => navigate,
 }))
 vi.mock('@/context/repo.js', () => ({
-  useRepo: () => ({ activeWorkspaceId: 'ws-1' }),
+  useRepo: () => ({
+    activeWorkspaceId: repoState.activeWorkspaceId,
+    setActiveWorkspaceId,
+  }),
+}))
+vi.mock('react-use', async (importActual) => ({
+  ...(await importActual<typeof import('react-use')>()),
+  useHash: () => ['', setHash] as const,
+}))
+vi.mock('@/utils/routing.js', () => ({
+  buildAppHash: (workspaceId: string) => `hash:${workspaceId}`,
 }))
 vi.mock('@/plugins/data-integrity/schedule.js', () => ({
   runConsistencyAuditNow: (...args: unknown[]) => runConsistencyAuditNow(...args),
@@ -62,6 +77,9 @@ afterEach(() => {
   resetConsistencyAuditStore()
   navigate.mockReset()
   runConsistencyAuditNow.mockReset()
+  setActiveWorkspaceId.mockClear()
+  setHash.mockClear()
+  repoState.activeWorkspaceId = 'ws-1'
 })
 
 describe('ConsistencyAuditDialog', () => {
@@ -91,6 +109,34 @@ describe('ConsistencyAuditDialog', () => {
     )
     // The dialog must stay open so the (expensive) audit results aren't discarded.
     expect(cancel).not.toHaveBeenCalled()
+  })
+
+  it('switches to the sample’s workspace before opening it when that workspace is inactive', () => {
+    // Dialog pinned to ws-A while the user is viewing ws-1 (the mocked active one).
+    // `navigate` alone writes the panel into ws-A's layout WITHOUT switching to it,
+    // so the click would look dead — the dialog must switch to ws-A first.
+    publishConsistencyAudit({ ...withSamples(), workspaceId: 'ws-A' })
+    renderDialog({ workspaceId: 'ws-A' })
+
+    fireEvent.click(screen.getByText(FULL_ID))
+    expect(setActiveWorkspaceId).toHaveBeenCalledWith('ws-A')
+    expect(setHash).toHaveBeenCalledWith('hash:ws-A')
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ blockId: FULL_ID, target: 'sidebar-stack', workspaceId: 'ws-A' }),
+    )
+  })
+
+  it('does NOT switch workspace when the sample already belongs to the active one', () => {
+    // Same-workspace open (the common case) must not churn the active workspace/hash.
+    publishConsistencyAudit(withSamples()) // ws-1 == active
+    renderDialog()
+
+    fireEvent.click(screen.getByText(FULL_ID))
+    expect(setActiveWorkspaceId).not.toHaveBeenCalled()
+    expect(setHash).not.toHaveBeenCalled()
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ blockId: FULL_ID, workspaceId: 'ws-1' }),
+    )
   })
 
   it('renders NO dimming overlay (non-modal) but stays closable via ✕', () => {
@@ -197,5 +243,35 @@ describe('ConsistencyAuditDialog', () => {
     // In place: the fresh result's id replaces the old one — no re-open needed.
     await waitFor(() => expect(screen.getByText(NEW_ID)).toBeTruthy())
     expect(screen.queryByText(FULL_ID)).toBeNull()
+  })
+
+  it('keeps showing the workspace it ran even after the active workspace switches', async () => {
+    // An unpinned "View last" dialog follows the active workspace — but once you
+    // start an in-dialog run, it must PIN that workspace so a mid/post-run switch
+    // can't resubscribe the view and hide the fresh result as "no audit has run".
+    const RUN_ID = 'run-pinned-sample-id'
+    runConsistencyAuditNow.mockImplementation(async () => {
+      const updated: ConsistencyAuditResult = {
+        workspaceId: 'ws-1',
+        checkedAt: 2_000_000_000_000,
+        anomalies: 1,
+        checks: {
+          references_index_mirror: { status: 'anomaly', missingIndexRows: 1, samples: [RUN_ID] },
+        },
+      }
+      publishConsistencyAudit(updated)
+      return updated
+    })
+    // Nothing has run yet → empty state; the run happens from inside the dialog.
+    const { rerender } = render(<ConsistencyAuditDialog resolve={vi.fn()} cancel={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /run audit/i }))
+    await waitFor(() => expect(screen.getByText(RUN_ID)).toBeTruthy())
+
+    // User switches to ws-2 after the run. Without the run-pin, the dialog would
+    // resubscribe to ws-2 (empty) on the next render; with it, ws-1's result stays.
+    repoState.activeWorkspaceId = 'ws-2'
+    rerender(<ConsistencyAuditDialog resolve={vi.fn()} cancel={vi.fn()} />)
+    expect(screen.getByText(RUN_ID)).toBeTruthy()
+    expect(screen.queryByText(/no audit has run/i)).toBeNull()
   })
 })
