@@ -1,5 +1,6 @@
 import { systemToggle } from "../../facets/togglable.js";
 import { diagnosticsFacet } from "../diagnostics/facet.js";
+import { dialogAppMountExtension } from "../../extensions/dialogAppMount.js";
 import { createDataIntegrityDiagnosticSource } from "./diagnosticsSource.js";
 import { consistencyAuditEffectContribution } from "./schedule.js";
 import { runDataIntegrityAuditActionContribution, viewDataIntegrityAuditActionContribution } from "./auditAction.js";
@@ -18,7 +19,8 @@ var dataIntegrityPlugin = ({ repo }) => systemToggle({
 	consistencyAuditEffectContribution,
 	diagnosticsFacet.of(createDataIntegrityDiagnosticSource(repo), { source: "data-integrity" }),
 	runDataIntegrityAuditActionContribution,
-	viewDataIntegrityAuditActionContribution
+	viewDataIntegrityAuditActionContribution,
+	dialogAppMountExtension
 ]);
 //#endregion
 export { dataIntegrityPlugin };
