@@ -8,6 +8,10 @@
 // gated by the scheduling effect), so the store is repopulated on every page
 // load. There's no cross-reload persistence to manage — a fresh session
 // re-derives the current health within a few seconds of opening.
+//
+// This snapshot is ALSO the "last results" the on-demand results dialog
+// (ConsistencyAuditDialog) reads, so it can be re-opened to inspect the last run
+// WITHOUT paying for another full audit.
 import { CallbackSet } from '@/utils/callbackSet.js'
 import type { ConsistencyAuditResult } from './audit.js'
 
@@ -16,6 +20,12 @@ import type { ConsistencyAuditResult } from './audit.js'
  *  and the status dropdown via `runActionById`). Lives here so neither
  *  caller has to import the other's module graph. */
 export const RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = 'run_data_integrity_audit'
+
+/** Id of the global action that RE-OPENS the results dialog for the last audit
+ *  WITHOUT re-running it — reading the snapshot below. Registered alongside the
+ *  run action by the system-status plugin; the status dropdown's "Inspect" button
+ *  points here so viewing last results is cheap (no expensive re-scan). */
+export const VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID = 'view_data_integrity_audit'
 
 let latest: ConsistencyAuditResult | null = null
 const listeners = new CallbackSet('data-integrity-audit')

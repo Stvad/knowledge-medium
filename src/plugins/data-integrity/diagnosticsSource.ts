@@ -7,7 +7,7 @@
 import type { Repo } from '@/data/repo'
 import type { ConsistencyAuditResult } from './audit.js'
 import {
-  RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
+  VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID,
   getConsistencyAuditSnapshot,
   subscribeConsistencyAudit,
 } from './store.js'
@@ -66,7 +66,9 @@ export const mapAuditToSnapshot = (result: ConsistencyAuditResult): DiagnosticSn
     severity,
     summary,
     detail: detailParts.join(' · ') || undefined,
-    actionId: RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
+    // "Inspect" re-opens the LAST results (this same snapshot) without paying for
+    // another full audit; the dialog carries its own "Re-run" for a fresh scan.
+    actionId: VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID,
   }
 }
 
