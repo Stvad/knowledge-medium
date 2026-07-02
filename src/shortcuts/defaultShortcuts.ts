@@ -45,6 +45,7 @@ import {
 } from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
+import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
 import {
   isOnFirstVisualLine,
   isOnLastVisualLine,
@@ -676,6 +677,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
+
+        // With an autocomplete popup open, Enter accepts the highlighted
+        // completion rather than splitting the block. On desktop CodeMirror's
+        // completion keymap handles this and `stopPropagation`s before the event
+        // reaches this window-level shortcut, so we never get here. On iOS the
+        // soft-keyboard Return reaches the shortcut anyway (the completion keymap
+        // doesn't intercept it the same way), so without this guard Enter splits
+        // the block mid-completion. `insertParagraph` is prevented at the
+        // beforeinput layer (see softLineBreakOnBeforeInput), which keeps the
+        // popup alive until this runs. This is the single accept path — the
+        // beforeinput handler deliberately doesn't accept — so we can't both
+        // accept and split for one press.
+        if (completionStatus(editorView.state) === 'active' && acceptCompletion(editorView)) return
+
         if (!scopeRootId) return
 
         const policy = await structuralEditPolicyForBlock(block, scopeRootId)
