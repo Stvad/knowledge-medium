@@ -34,15 +34,24 @@ var TRANSIENT_FAILURES = new Set([
 	"no-content-key",
 	"error"
 ]);
-function useAssetObjectUrl(args, resolver) {
-	const $ = c(25);
+function useAssetObjectUrl(args, resolver, t0) {
+	const $ = c(29);
+	let t1;
+	if ($[0] !== t0) {
+		t1 = t0 === void 0 ? {} : t0;
+		$[0] = t0;
+		$[1] = t1;
+	} else t1 = $[1];
+	const options = t1;
 	const { workspaceId, contentHash, mime } = args;
+	const enabled = options.enabled ?? true;
 	const key = `${workspaceId} ${contentHash} ${mime}`;
 	const [settled, setSettled] = useState(null);
 	const [retryTick, setRetryTick] = useState(0);
-	let t0;
-	if ($[0] !== contentHash || $[1] !== key || $[2] !== mime || $[3] !== resolver || $[4] !== workspaceId) {
-		t0 = () => {
+	let t2;
+	if ($[2] !== contentHash || $[3] !== enabled || $[4] !== key || $[5] !== mime || $[6] !== resolver || $[7] !== workspaceId) {
+		t2 = () => {
+			if (!enabled) return;
 			let cancelled = false;
 			let objectUrl = null;
 			resolver.resolve({
@@ -82,16 +91,18 @@ function useAssetObjectUrl(args, resolver) {
 				if (objectUrl) URL.revokeObjectURL(objectUrl);
 			};
 		};
-		$[0] = contentHash;
-		$[1] = key;
-		$[2] = mime;
-		$[3] = resolver;
-		$[4] = workspaceId;
-		$[5] = t0;
-	} else t0 = $[5];
-	let t1;
-	if ($[6] !== contentHash || $[7] !== key || $[8] !== mime || $[9] !== resolver || $[10] !== retryTick || $[11] !== workspaceId) {
-		t1 = [
+		$[2] = contentHash;
+		$[3] = enabled;
+		$[4] = key;
+		$[5] = mime;
+		$[6] = resolver;
+		$[7] = workspaceId;
+		$[8] = t2;
+	} else t2 = $[8];
+	let t3;
+	if ($[9] !== contentHash || $[10] !== enabled || $[11] !== key || $[12] !== mime || $[13] !== resolver || $[14] !== retryTick || $[15] !== workspaceId) {
+		t3 = [
+			enabled,
 			resolver,
 			workspaceId,
 			contentHash,
@@ -99,35 +110,36 @@ function useAssetObjectUrl(args, resolver) {
 			key,
 			retryTick
 		];
-		$[6] = contentHash;
-		$[7] = key;
-		$[8] = mime;
-		$[9] = resolver;
-		$[10] = retryTick;
-		$[11] = workspaceId;
-		$[12] = t1;
-	} else t1 = $[12];
-	useEffect(t0, t1);
-	let t2;
-	if ($[13] !== key || $[14] !== settled) {
-		t2 = settled?.key === key ? settled.state : { status: "loading" };
-		$[13] = key;
-		$[14] = settled;
-		$[15] = t2;
-	} else t2 = $[15];
-	const state = t2;
-	let t3;
-	if ($[16] !== state.reason || $[17] !== state.status) {
-		t3 = state.status === "error" && TRANSIENT_FAILURES.has(state.reason);
-		$[16] = state.reason;
-		$[17] = state.status;
-		$[18] = t3;
-	} else t3 = $[18];
-	const retryable = t3;
+		$[9] = contentHash;
+		$[10] = enabled;
+		$[11] = key;
+		$[12] = mime;
+		$[13] = resolver;
+		$[14] = retryTick;
+		$[15] = workspaceId;
+		$[16] = t3;
+	} else t3 = $[16];
+	useEffect(t2, t3);
 	let t4;
+	if ($[17] !== key || $[18] !== settled) {
+		t4 = settled?.key === key ? settled.state : { status: "loading" };
+		$[17] = key;
+		$[18] = settled;
+		$[19] = t4;
+	} else t4 = $[19];
+	const state = t4;
 	let t5;
-	if ($[19] !== retryable) {
-		t4 = () => {
+	if ($[20] !== state.reason || $[21] !== state.status) {
+		t5 = state.status === "error" && TRANSIENT_FAILURES.has(state.reason);
+		$[20] = state.reason;
+		$[21] = state.status;
+		$[22] = t5;
+	} else t5 = $[22];
+	const retryable = t5;
+	let t6;
+	let t7;
+	if ($[23] !== retryable) {
+		t6 = () => {
 			if (!retryable) return;
 			const retry = () => setRetryTick(_temp);
 			const onVisible = () => {
@@ -140,18 +152,18 @@ function useAssetObjectUrl(args, resolver) {
 				document.removeEventListener("visibilitychange", onVisible);
 			};
 		};
-		t5 = [retryable];
-		$[19] = retryable;
-		$[20] = t4;
-		$[21] = t5;
+		t7 = [retryable];
+		$[23] = retryable;
+		$[24] = t6;
+		$[25] = t7;
 	} else {
-		t4 = $[20];
-		t5 = $[21];
+		t6 = $[24];
+		t7 = $[25];
 	}
-	useEffect(t4, t5);
-	let t6;
-	if ($[22] === Symbol.for("react.memo_cache_sentinel")) {
-		t6 = (failedUrl) => {
+	useEffect(t6, t7);
+	let t8;
+	if ($[26] === Symbol.for("react.memo_cache_sentinel")) {
+		t8 = (failedUrl) => {
 			URL.revokeObjectURL(failedUrl);
 			setSettled((prev) => prev?.state.status === "ready" && prev.state.url === failedUrl ? {
 				key: prev.key,
@@ -161,16 +173,16 @@ function useAssetObjectUrl(args, resolver) {
 				}
 			} : prev);
 		};
-		$[22] = t6;
-	} else t6 = $[22];
-	const reportDecodeFailure = t6;
-	let t7;
-	if ($[23] !== state) {
-		t7 = [state, reportDecodeFailure];
-		$[23] = state;
-		$[24] = t7;
-	} else t7 = $[24];
-	return t7;
+		$[26] = t8;
+	} else t8 = $[26];
+	const reportDecodeFailure = t8;
+	let t9;
+	if ($[27] !== state) {
+		t9 = [state, reportDecodeFailure];
+		$[27] = state;
+		$[28] = t9;
+	} else t9 = $[28];
+	return t9;
 }
 function _temp(t) {
 	return t + 1;

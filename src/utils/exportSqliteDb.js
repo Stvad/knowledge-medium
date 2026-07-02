@@ -1,6 +1,7 @@
 import v4 from "../../node_modules/uuid/dist/v4.js";
 import { dbFilenameForUser } from "../data/repoProvider.js";
 import { Zip, ZipPassThrough } from "../../node_modules/fflate/esm/browser.js";
+import { downloadBlob } from "./downloadBlob.js";
 //#region src/utils/exportSqliteDb.ts
 /**
 * Download / replace a raw `.db` image for the current user's
@@ -193,24 +194,6 @@ var insufficientOpfsSpaceMessage = (requiredBytes, freeBytes) => {
 	const pickerHint = typeof globalThis.showSaveFilePicker === "function" ? "" : " (A Chromium-based browser can export without this temporary copy, but it keeps its own separate local database and would not include anything that exists only in this browser, such as unsynced changes or local history.)";
 	return `Not enough browser storage to export the SQLite database: the export first copies it into browser storage (OPFS), which needs ${toMiB(requiredBytes)} MiB of free space${haveClause}. Free up storage for this site and try again.${pickerHint}`;
 };
-function downloadBlob(blob, filename, cleanup) {
-	const url = URL.createObjectURL(blob);
-	try {
-		const a = document.createElement("a");
-		a.href = url;
-		a.download = filename;
-		document.body.appendChild(a);
-		a.click();
-		a.remove();
-	} finally {
-		setTimeout(() => URL.revokeObjectURL(url), 0);
-		if (cleanup) setTimeout(() => {
-			Promise.resolve(cleanup()).catch((error) => {
-				console.warn("[export-db] failed to clean export snapshot:", error);
-			});
-		}, 3600 * 1e3);
-	}
-}
 var SQLITE_MAGIC = new Uint8Array([
 	83,
 	81,
