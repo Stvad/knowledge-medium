@@ -233,7 +233,7 @@ const softDeleteSubtree = async (tx: Tx, rootId: string): Promise<void> => {
     const block = stack.pop()!
     if (seen.has(block.id)) continue
     seen.add(block.id)
-    const children = await tx.childrenOf(block.id)
+    const children = await tx.childrenOf(block.id, undefined, {includePropertyChildren: true})
     for (const c of children) stack.push(c)
     await tx.delete(block.id)
     if (!block.deleted) {

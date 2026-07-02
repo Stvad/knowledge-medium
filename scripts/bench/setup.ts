@@ -22,6 +22,7 @@ import {
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL,
 } from '@/data/blockSchema'
 import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty } from '@/data/internals/clientSchema'
 import {
@@ -68,6 +69,7 @@ export const setupBenchEnv = async (opts: SetupOptions = {}): Promise<BenchEnv> 
   await psDb.execute(CREATE_BLOCKS_TABLE_SQL)
   await psDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await psDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  await psDb.execute(CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) await psDb.execute(stmt)
   const backfillDb = {
     execute: (sql: string) => psDb.execute(sql),

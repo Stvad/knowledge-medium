@@ -77,6 +77,12 @@ export interface BlocksSyncedObserverArgs {
    *  Tests shrink it to exercise multi-window backlogs. */
   readonly drainChunkSize?: number
   readonly onError?: (err: unknown) => void
+  /** Fired once per drain window with the before/after snapshots that were
+   *  applied into BlockCache (after `applySyncInvalidation`). Consumers use
+   *  this for derived local catch-up that must run once remote rows land —
+   *  e.g. the property-children backfill. Relocated from rowEventsTail's
+   *  `onRowsAccepted` hook (D-4 cleanup deleted that machinery). */
+  readonly onRowsAccepted?: (snapshots: ReadonlyMap<string, SyncSnapshot>) => void
 }
 
 export interface BlocksSyncedObserver {
@@ -131,7 +137,7 @@ export const cycleScanCandidatesByWorkspace = (
 export const startBlocksSyncedObserver = (
   args: BlocksSyncedObserverArgs,
 ): BlocksSyncedObserver => {
-  const { db, cache, handleStore, deps, getInvalidationRules, onCycleDetected } = args
+  const { db, cache, handleStore, deps, getInvalidationRules, onCycleDetected, onRowsAccepted } = args
   const throttleMs = args.throttleMs ?? DEFAULT_THROTTLE_MS
   const drainChunk = Math.max(1, args.drainChunkSize ?? DEFAULT_DRAIN_CHUNK)
   const rules = (): readonly InvalidationRule[] => getInvalidationRules?.() ?? []
@@ -168,6 +174,13 @@ export const startBlocksSyncedObserver = (
     outcome: MaterializeOutcome,
   ): Promise<void> => {
     applySyncInvalidation(cache, handleStore, outcome.snapshots, rules())
+    if (onRowsAccepted && outcome.snapshots.size > 0) {
+      try {
+        onRowsAccepted(outcome.snapshots)
+      } catch (err) {
+        onError(err)
+      }
+    }
     await runCycleScan(outcome.snapshots)
   }
 

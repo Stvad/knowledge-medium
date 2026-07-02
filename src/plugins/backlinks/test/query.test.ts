@@ -532,7 +532,7 @@ describe('backlinksDataExtension query', () => {
     // Layout B sync path: staged into blocks_synced, materialized by the
     // observer. A newer updated_at wins the LWW gate (real server writes do).
     await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
-      id: 'src', workspaceId: WS, parentId: null, orderKey: 'key-src',
+      id: 'src', workspaceId: WS, parentId: null, referenceTargetId: null, orderKey: 'key-src',
       content: '', properties: {}, references: [{id: 'target', alias: 'T'}],
       createdAt: 0, updatedAt: 9_000_000_000_000, userUpdatedAt: 9_000_000_000_000, createdBy: 'remote', updatedBy: 'remote', deleted: false,
     }))

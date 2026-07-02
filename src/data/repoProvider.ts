@@ -37,9 +37,13 @@ import type { MaterializeDeps } from '@/data/internals/syncObserver/materialize.
 import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL,
+  ensureBlockStorageColumns,
 } from '@/data/blockSchema'
 import {
   CREATE_WORKSPACES_TABLE_SQL,
@@ -379,6 +383,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
 
   // ── blocks + its indexes ──
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
+  await ensureBlockStorageColumns(powerSyncDb)
   // Layout B staging table (§9.2). The raw-table mapping above tells
   // PowerSync how to write it, but does NOT create the local SQLite table —
   // we run the DDL ourselves, same as `blocks`. This is the live landing zone
@@ -386,7 +391,10 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // into `blocks`.
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_NONEMPTY_PROPERTIES_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_RECENT_CONTENT_INDEX_SQL)
   // Idempotent local migration: add `user_updated_at` to an existing
   // `blocks` / `blocks_synced` on upgrading devices (CREATE TABLE IF NOT
   // EXISTS above is a no-op when the table already exists) + one-shot

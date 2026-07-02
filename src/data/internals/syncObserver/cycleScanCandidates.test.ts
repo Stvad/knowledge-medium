@@ -16,7 +16,7 @@ import type { SyncSnapshot } from './materialize.js'
 import type { BlockData } from '@/data/api'
 
 const block = (o: Partial<BlockData> = {}): BlockData => ({
-  id: 'b', workspaceId: 'ws', parentId: null, orderKey: 'a0', content: '',
+  id: 'b', workspaceId: 'ws', parentId: null, referenceTargetId: null, orderKey: 'a0', content: '',
   properties: {}, references: [], createdAt: 1, updatedAt: 1, userUpdatedAt: 1, createdBy: 'u',
   updatedBy: 'u', deleted: false, ...o,
 })

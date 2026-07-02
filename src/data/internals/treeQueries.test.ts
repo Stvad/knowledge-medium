@@ -31,6 +31,7 @@ import {
 interface Seed {
   id: string
   parent_id?: string | null
+  reference_target_id?: string | null
   order_key?: string
   workspace_id?: string
   deleted?: 0 | 1
@@ -41,13 +42,14 @@ interface Seed {
 const insertOne = async (db: TestDb['db'], seed: Seed): Promise<void> => {
   await db.execute(
     `INSERT INTO blocks
-      (id, workspace_id, parent_id, order_key, content, properties_json, references_json,
+      (id, workspace_id, parent_id, reference_target_id, order_key, content, properties_json, references_json,
        created_at, updated_at, created_by, updated_by, deleted)
-     VALUES (?, ?, ?, ?, '', '{}', '[]', 0, 0, 'u', 'u', ?)`,
+     VALUES (?, ?, ?, ?, ?, '', '{}', '[]', 0, 0, 'u', 'u', ?)`,
     [
       seed.id,
       seed.workspace_id ?? 'ws',
       seed.parent_id ?? null,
+      seed.reference_target_id ?? null,
       seed.order_key ?? 'a0',
       seed.deleted ?? 0,
     ],
@@ -94,6 +96,22 @@ describe('SUBTREE_SQL', () => {
     ])
     const rows = await h.db.getAll<{id: string}>(SUBTREE_SQL, ['q'])
     expect(rows.map(r => r.id)).toEqual(['q', 'q-xxx', 'q-yyy'])
+  })
+
+  it('includes property field children in subtree order', async () => {
+    await seed(h.db, [
+      {id: 'field-root', parent_id: null, order_key: 'd0'},
+      {id: 'field-child', parent_id: 'field-root', reference_target_id: 'property:status', order_key: 'a0'},
+      {id: 'field-grandchild', parent_id: 'field-child', order_key: 'a0'},
+      {id: 'normal-child', parent_id: 'field-root', order_key: 'a1'},
+    ])
+    const rows = await h.db.getAll<{id: string}>(SUBTREE_SQL, ['field-root'])
+    expect(rows.map(r => r.id)).toEqual([
+      'field-root',
+      'field-child',
+      'field-grandchild',
+      'normal-child',
+    ])
   })
 
   it('truncates a 2-cycle to one occurrence per member, no UNION-ALL explosion', async () => {
@@ -237,6 +255,16 @@ describe('CHILDREN_SQL', () => {
     ])
     const rows = await h.db.getAll<{id: string}>(CHILDREN_SQL, ['cp'])
     expect(rows.map(r => r.id)).toEqual(['cp-c1a', 'cp-c1b', 'cp-c2', 'cp-c3'])
+  })
+
+  it('includes property field children as direct children', async () => {
+    await seed(h.db, [
+      {id: 'field-cp', parent_id: null, order_key: 'c0'},
+      {id: 'field-cp-prop', parent_id: 'field-cp', reference_target_id: 'property:status', order_key: 'a0'},
+      {id: 'field-cp-normal', parent_id: 'field-cp', order_key: 'a1'},
+    ])
+    const rows = await h.db.getAll<{id: string}>(CHILDREN_SQL, ['field-cp'])
+    expect(rows.map(r => r.id)).toEqual(['field-cp-prop', 'field-cp-normal'])
   })
 
   it('excludes soft-deleted children', async () => {

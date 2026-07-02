@@ -37,6 +37,18 @@ export const computeMergedContent = (
   return intoContent + strategy.separator + fromContent
 }
 
+/** Recursively soft-delete a block and every descendant (property-field
+ *  rows AND their value children). `tx.delete` only tombstones the row passed
+ *  to it, so a bare delete of a materialized field row would leave its value
+ *  children live-but-orphaned under a tombstone (still indexed/uploaded). */
+const deleteSubtreeInTx = async (tx: Tx, id: string): Promise<void> => {
+  const children = await tx.childrenOf(id, undefined, {includePropertyChildren: true})
+  for (const child of children) {
+    await deleteSubtreeInTx(tx, child.id)
+  }
+  await tx.delete(id)
+}
+
 export const mergeBlocksInTx = async (
   tx: Tx,
   {
@@ -64,13 +76,25 @@ export const mergeBlocksInTx = async (
     throw new MergeIntoDescendantError(into.id, from.id)
   }
 
-  const intoChildren = await tx.childrenOf(into.id)
-  const fromChildren = await tx.childrenOf(from.id)
+  // Re-parent only `from`'s regular (non property-field) children under
+  // `into`. Property-field children are derived from the property bag and
+  // must NOT be carried over — the merged bag written to `into` below
+  // re-materializes the correct field/value children for `into`.
+  const intoChildren = await tx.childrenOf(into.id, undefined, {includePropertyChildren: false})
+  const fromChildren = await tx.childrenOf(from.id, undefined, {includePropertyChildren: false})
   if (fromChildren.length > 0) {
     const keys = keysBetween(intoChildren.at(-1)?.orderKey ?? null, null, fromChildren.length)
     for (let i = 0; i < fromChildren.length; i++) {
       await tx.move(fromChildren[i].id, {parentId: into.id, orderKey: keys[i]})
     }
+  }
+
+  // Drop `from`'s remaining (property-field) children — including their value
+  // children — so no live rows dangle under the tombstone once `from` is
+  // deleted. `into`'s merged bag re-materializes its own field/value rows.
+  const fromPropertyChildren = await tx.childrenOf(from.id, undefined, {includePropertyChildren: true})
+  for (const child of fromPropertyChildren) {
+    await deleteSubtreeInTx(tx, child.id)
   }
 
   // Delete before merging properties so aliases held by `from` are

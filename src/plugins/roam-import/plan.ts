@@ -529,6 +529,7 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     id,
     workspaceId: ctx.options.workspaceId,
     parentId,
+    referenceTargetId: null,
     orderKey,
     content,
     properties,

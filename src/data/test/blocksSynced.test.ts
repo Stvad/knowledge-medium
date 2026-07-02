@@ -36,6 +36,7 @@ const fixture: BlockData = {
   id: 'b1',
   workspaceId: 'ws1',
   parentId: null,
+  referenceTargetId: null,
   orderKey: 'a0',
   content: 'hello',
   properties: {},

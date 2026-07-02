@@ -386,6 +386,7 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
         'id', ${rowRef}.id,
         'workspaceId', ${rowRef}.workspace_id,
         'parentId', ${rowRef}.parent_id,
+        'referenceTargetId', ${rowRef}.reference_target_id,
         'orderKey', ${rowRef}.order_key,
         'content', ${rowRef}.content,
         'properties', json(${rowRef}.properties_json),
@@ -414,6 +415,15 @@ const triggerTxIdSql = `
 `.trim()
 
 const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
+
+// ============================================================================
+// row_events triggers (3) — fire for both local AND sync writes; the
+// COALESCE-to-'sync' tag distinguishes them.
+//
+// Soft-delete semantics (§4.3): tx.delete sets deleted = 1 (UPDATE), so it
+// fires the UPDATE trigger. The body inspects whether `deleted` transitioned
+// from 0 to 1 and writes kind = 'soft-delete' instead of 'update'.
+// ============================================================================
 
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
@@ -506,6 +516,7 @@ interface UploadColumnSpec {
 const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
   {name: 'workspace_id', jsonValue: rowRef => `${rowRef}.workspace_id`},
   {name: 'parent_id', jsonValue: rowRef => `${rowRef}.parent_id`},
+  {name: 'reference_target_id', jsonValue: rowRef => `${rowRef}.reference_target_id`},
   {name: 'order_key', jsonValue: rowRef => `${rowRef}.order_key`},
   {name: 'content', jsonValue: rowRef => `${rowRef}.content`},
   {name: 'properties_json', jsonValue: rowRef => `${rowRef}.properties_json`},
@@ -1098,6 +1109,21 @@ export const CLEAR_REPROJECT_REF_MARKER_SQL = `
   DELETE FROM client_schema_state WHERE key = ?
 `
 
+/** Per-workspace/schema markers for the one-time local migration from
+ *  parent `properties_json` into Tana-style field/value children. Sync
+ *  arrivals still run row-targeted catch-up; these markers only stop
+ *  repeated full workspace scans once the local DB is caught up. */
+export const PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX = 'property_children_backfill:v2:'
+
+export const SELECT_PROPERTY_CHILDREN_BACKFILL_MARKERS_SQL = `
+  SELECT key FROM client_schema_state WHERE key LIKE '${PROPERTY_CHILDREN_BACKFILL_MARKER_PREFIX}%'
+`
+
+export const RECORD_PROPERTY_CHILDREN_BACKFILL_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
 /** Completion markers for workspace-scoped repo.tx data backfills
  *  (`workspaceBackfillsFacet`). Keyed `workspace_backfill:<workspaceId>:<id>`;
  *  a row lands once a backfill has run for a workspace, so subsequent opens
@@ -1133,7 +1159,9 @@ export const RECORD_RECONCILE_RESCAN_MARKER_SQL = `
 
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
-// initialization creates it). Idempotent (`IF NOT EXISTS`).
+// initialization creates it). Idempotent (`IF NOT EXISTS` plus targeted
+// trigger drops before recreation where trigger bodies are part of the
+// evolving client schema).
 // ============================================================================
 
 // A trigger created with `CREATE TRIGGER IF NOT EXISTS` is FROZEN on upgrade:
@@ -1444,4 +1472,3 @@ export const runAnalyzeNow = async (
   await db.execute('ANALYZE')
   return {count}
 }
-

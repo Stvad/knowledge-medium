@@ -41,6 +41,7 @@ const snap = (overrides: Partial<BlockData> = {}): BlockData => ({
   updatedBy: 'user',
   deleted: false,
   ...overrides,
+  referenceTargetId: overrides.referenceTargetId ?? null,
 })
 
 describe('BlockCache snapshot storage', () => {
@@ -411,4 +412,3 @@ describe('BlockCache metrics counters', () => {
     expect(before.setSnapshotCalls).toBeGreaterThan(0)
   })
 })
-

@@ -135,6 +135,24 @@ const sameTxFieldChanged = (
   return a === b ? false : JSON.stringify(a) !== JSON.stringify(b)
 }
 
+export interface SameTxProcessorTiming {
+  readonly name: string
+  readonly changedRows: number
+  readonly collectMs: number
+  readonly applyMs: number
+}
+
+export interface TxTimingDiagnostics {
+  txContextSetMs: number
+  userFnMs: number
+  sameTxMs: number
+  sameTxChangedRows: number
+  sameTxProcessorRuns: SameTxProcessorTiming[]
+  commandEventMs: number
+  txContextClearMs: number
+  snapshotCount: number
+}
+
 export interface RunTxParams<R> {
   db: PowerSyncDb
   cache: BlockCache
@@ -207,6 +225,9 @@ export interface TxResult<R> {
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
   /** Merged property-schema registry snapshot paired with `processors`. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Step-level timings for diagnostics. Internal callers use this to
+   *  attribute slow writeTransactions without changing tx semantics. */
+  timing: Readonly<TxTimingDiagnostics>
 }
 
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
@@ -237,6 +258,16 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // the list at commit time into command_events.mutator_calls.
   const mutatorCalls: MutatorCallRecord[] = []
   const meta = newTxMeta({txId, scope, source, user, description})
+  const timing: TxTimingDiagnostics = {
+    txContextSetMs: 0,
+    userFnMs: 0,
+    sameTxMs: 0,
+    sameTxChangedRows: 0,
+    sameTxProcessorRuns: [],
+    commandEventMs: 0,
+    txContextClearMs: 0,
+    snapshotCount: 0,
+  }
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
   const value = await db.writeTransaction(async (txDb): Promise<R> => {
@@ -245,10 +276,12 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // checks (§4.1.1, §4.3, §4.5). tx_seq is the integer key the
     // upload triggers stamp into ps_crud.tx_id so PowerSync's
     // getNextCrudTransaction() groups multi-row writes correctly.
+    let stepStartedAt = performance.now()
     await txDb.execute(
       `UPDATE tx_context SET tx_id = ?, tx_seq = ?, user_id = ?, scope = ?, source = ? WHERE id = 1`,
       [txId, txSeq, user.id, scope, source],
     )
+    timing.txContextSetMs = performance.now() - stepStartedAt
 
     // Step 2: construct Tx + snapshots map + run user fn.
     const tx = new TxImpl({
@@ -260,6 +293,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       mutatorCalls,
       mutators,
       processors,
+      propertySchemas,
       sameTxEvents,
       now,
       newId,
@@ -269,7 +303,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // capture the running list (mutating closure) rather than passing
     // a snapshot so the command_events row written in step 4 reflects
     // every mutator the tx actually ran.
+    stepStartedAt = performance.now()
     const result = await fn(tx)
+    timing.userFnMs = performance.now() - stepStartedAt
 
     // Step 3.5: same-tx processor pass. Runs after `fn` returns but
     // before the command_events insert — inside the writeTransaction,
@@ -292,10 +328,24 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // re-deriving here would override the restore. See the `isReplay`
     // doc on RunTxParams.
     if (!isReplay && sameTxProcessors.size > 0 && (snapshots.size > 0 || sameTxEvents.length > 0)) {
+      const sameTxStartedAt = performance.now()
       for (const processor of sameTxProcessors.values()) {
+        const collectStartedAt = performance.now()
         const changedRows = collectSameTxFieldMatches(processor, snapshots)
+        const collectMs = performance.now() - collectStartedAt
         const emittedEvents = collectSameTxEventMatches(processor, sameTxEvents)
-        if (changedRows.length === 0 && emittedEvents.length === 0) continue
+        if (changedRows.length === 0 && emittedEvents.length === 0) {
+          if (collectMs >= 1) {
+            timing.sameTxProcessorRuns.push({
+              name: processor.name,
+              changedRows: 0,
+              collectMs,
+              applyMs: 0,
+            })
+          }
+          continue
+        }
+        const applyStartedAt = performance.now()
         // workspaceId is guaranteed here: field matches require a
         // snapshot-producing write, and tx.emitEvent refuses to run
         // before the tx has pinned a workspace.
@@ -313,13 +363,23 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
           },
           {tx, db: txDb, propertySchemas},
         )
+        const applyMs = performance.now() - applyStartedAt
+        timing.sameTxChangedRows += changedRows.length
+        timing.sameTxProcessorRuns.push({
+          name: processor.name,
+          changedRows: changedRows.length,
+          collectMs,
+          applyMs,
+        })
       }
+      timing.sameTxMs = performance.now() - sameTxStartedAt
     }
 
     // Step 4: write command_events row — one per repo.tx invocation
     // (per §4.4). workspace_id is the pinned value (or NULL on
     // zero-write txs). source is uniformly 'user' for every repo.tx
     // invocation; sync-applied writes don't go through repo.tx.
+    stepStartedAt = performance.now()
     await txDb.execute(
       `INSERT INTO command_events
         (tx_id, description, scope, user_id, workspace_id, mutator_calls, source, created_at)
@@ -339,6 +399,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         now(),
       ],
     )
+    timing.commandEventMs = performance.now() - stepStartedAt
 
     // Step 5: clear tx_context. Doing this inside the writeTransaction
     // means rollback restores the pre-tx state atomically — no risk of
@@ -346,12 +407,15 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // ps_crud row after a crashed local tx (the trigger CASE on
     // `source IS NULL` is the belt-and-suspenders backup for row_events;
     // this clear is the primary).
+    stepStartedAt = performance.now()
     await txDb.execute(
       `UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1`,
     )
+    timing.txContextClearMs = performance.now() - stepStartedAt
 
     return result
   })
+  timing.snapshotCount = snapshots.size
 
   // Step 6: post-COMMIT cache walk. Update cache to `after` per id
   // (deepFrozen by BlockCache.setSnapshot). A hard-delete drives the
@@ -378,6 +442,10 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     user,
     processors,
     propertySchemas,
+    timing: Object.freeze({
+      ...timing,
+      sameTxProcessorRuns: timing.sameTxProcessorRuns.slice(),
+    }),
   }
 }
 

@@ -222,7 +222,7 @@ export const aliasSeatReaderFromTx = (tx: Tx): AliasSeatReader =>
     // we just loaded gives us workspaceId, so the lookup is well-scoped
     // even for workspace-root seats (parentId === null is the typical
     // alias-seat shape).
-    const children = await tx.childrenOf(id, block.workspaceId)
+    const children = await tx.childrenOf(id, block.workspaceId, {includePropertyChildren: false})
     return {
       deleted: block.deleted,
       content: block.content,
@@ -249,9 +249,12 @@ export const aliasSeatReaderFromDb = (db: ProcessorReadDb): AliasSeatReader =>
     } catch {
       // Malformed properties_json — leave properties empty; predicate fails.
     }
-    // Partial index idx_blocks_parent_order covers (parent_id, deleted=0).
     const childRow = await db.getOptional<{one: 1}>(
-      `SELECT 1 AS one FROM blocks WHERE parent_id = ? AND deleted = 0 LIMIT 1`,
+      `SELECT 1 AS one
+       FROM blocks
+       WHERE parent_id = ?
+         AND deleted = 0
+       LIMIT 1`,
       [id],
     )
     return {

@@ -26,6 +26,7 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertySchema,
   BlockData,
   BlockDataPatch,
   ChangeScope,
@@ -70,6 +71,12 @@ import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
+import { keyAtStart } from '@/data/orderKey'
+import {
+  isPropertyFieldInstance,
+  propertyFieldContent,
+  propertyValueToChildContent,
+} from '@/data/propertyChildren'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -83,6 +90,12 @@ export interface TxDb {
 
 const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): boolean => {
   if (patch.content !== undefined && patch.content !== before.content) return true
+  if (
+    patch.referenceTargetId !== undefined &&
+    patch.referenceTargetId !== before.referenceTargetId
+  ) {
+    return true
+  }
   if (
     patch.references !== undefined &&
     !jsonValuesEqual(before.references, normalizeReferences(patch.references))
@@ -145,6 +158,7 @@ export interface TxImplContext {
    *  fails the originating tx (clean rollback) instead of failing
    *  later at fire time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>
   /** UUID generator — injected for testability. */
   newId: () => string
 }
@@ -156,6 +170,13 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+const SELECT_PROPERTY_FIELD_CHILD_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks
+   WHERE workspace_id = ?
+     AND parent_id = ?
+     AND reference_target_id = ?
+     AND deleted = 0
+   ORDER BY order_key, id`
 /** Existence probes for `tx.hasChildren`. The live-only form keeps the
  *  `deleted = 0` clause so it stays served by the partial
  *  `idx_blocks_parent_order`; the `includeDeleted` form drops it (and so
@@ -201,6 +222,20 @@ const SELECT_PARENT_SQL =
 const SELECT_PARENT_WORKSPACE_SQL =
   `SELECT workspace_id, deleted FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
+const BULK_INSERT_ROWS_PER_STATEMENT = 200
+
+const chunkArray = <T,>(items: readonly T[], size: number): T[][] => {
+  const out: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    out.push(items.slice(index, index + size))
+  }
+  return out
+}
+
+const bulkInsertSql = (rowCount: number): string => {
+  const rowPlaceholders = Array.from({length: rowCount}, () => `(${COLUMN_PLACEHOLDERS})`).join(', ')
+  return `INSERT INTO blocks (${COLUMN_LIST}) VALUES ${rowPlaceholders}`
+}
 
 export class TxImpl implements Tx {
   readonly meta: TxMeta
@@ -330,6 +365,7 @@ export class TxImpl implements Tx {
       ...beforeData,
       deleted: false,
       ...(patch?.content !== undefined ? {content: patch.content} : {}),
+      ...(patch?.referenceTargetId !== undefined ? {referenceTargetId: patch.referenceTargetId} : {}),
       // Reference-array canonicalization runs as a same-tx processor
       // (`core.normalizeReferences`) after the user fn returns —
       // see src/data/internals/normalizeReferencesProcessor.ts.
@@ -338,9 +374,10 @@ export class TxImpl implements Tx {
       ...this.metadataPatch(id, beforeData, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET deleted = 0, content = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET deleted = 0, content = ?, reference_target_id = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
+        after.referenceTargetId,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -362,15 +399,17 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
+      ...(patch.referenceTargetId !== undefined ? {referenceTargetId: patch.referenceTargetId} : {}),
       // See note on `restore` above re: same-tx normalization.
       ...(patch.references !== undefined ? {references: patch.references} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(id, before, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET content = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET content = ?, reference_target_id = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
+        after.referenceTargetId,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -454,6 +493,7 @@ export class TxImpl implements Tx {
     this.checkWorkspace(before.workspaceId)
     const encoded = schema.codec.encode(value)
     if (jsonValuesEqual(before.properties[schema.name], encoded)) return
+    await this.writePropertyValueChild(before, schema, value, opts)
     const properties = {...before.properties, [schema.name]: encoded}
     const after: BlockData = {
       ...before,
@@ -505,7 +545,23 @@ export class TxImpl implements Tx {
 
   // ──── Within-tx tree primitives ────
 
-  async childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]> {
+  async childrenOf(
+    parentId: string | null,
+    workspaceId?: string,
+    options?: {includePropertyChildren?: boolean},
+  ): Promise<BlockData[]> {
+    // Default EXCLUDES property-field rows: the vast majority of callers are
+    // structural/outline operations (sibling lists, moves, paste, panel layout)
+    // that must see only visible children — a materialized hidden field (e.g.
+    // `types`) sorted before the content children would otherwise corrupt
+    // sibling-position math and navigation. The property-children machinery
+    // (materialization, backfill, delete-cascade, merge) opts IN explicitly.
+    const includePropertyChildren = options?.includePropertyChildren === true
+    const parseRows = (rows: BlockRow[]): BlockData[] => {
+      const data = rows.map(parseBlockRow)
+      if (includePropertyChildren) return data
+      return data.filter(row => !isPropertyFieldInstance(row, this.ctx.propertySchemas))
+    }
     if (parentId === null) {
       // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
       // a workspace by one of: explicit arg → pinned meta → throw.
@@ -521,11 +577,17 @@ export class TxImpl implements Tx {
       if (ws === null) {
         throw new WorkspaceNotPinnedError()
       }
-      const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_ROOT_SIBLINGS_SQL, [ws])
-      return rows.map(parseBlockRow)
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        SELECT_ROOT_SIBLINGS_SQL,
+        [ws],
+      )
+      return parseRows(rows)
     }
-    const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
-    return rows.map(parseBlockRow)
+    const rows = await this.ctx.txDb.getAll<BlockRow>(
+      SELECT_CHILDREN_SQL,
+      [parentId],
+    )
+    return parseRows(rows)
   }
 
   async hasChildren(parentId: string, opts?: {includeDeleted?: boolean}): Promise<boolean> {
@@ -555,6 +617,74 @@ export class TxImpl implements Tx {
   async parentOf(childId: string): Promise<BlockData | null> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_PARENT_SQL, [childId])
     return row === null ? null : parseBlockRow(row)
+  }
+
+  async liveRowsForKnownIds(workspaceId: string, ids: readonly string[]): Promise<BlockData[]> {
+    if (ids.length === 0) return []
+    const out: BlockData[] = []
+    for (const chunk of chunkArray(ids, 400)) {
+      const placeholders = chunk.map(() => '?').join(', ')
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        `SELECT ${COLUMN_LIST}
+         FROM blocks
+         WHERE workspace_id = ?
+           AND deleted = 0
+           AND id IN (${placeholders})`,
+        [workspaceId, ...chunk],
+      )
+      out.push(...rows.map(parseBlockRow))
+    }
+    return out
+  }
+
+  async livePropertyFieldRowsForKnownParents(
+    workspaceId: string,
+    parentIds: readonly string[],
+    fieldIds: readonly string[],
+  ): Promise<BlockData[]> {
+    if (parentIds.length === 0 || fieldIds.length === 0) return []
+    const out: BlockData[] = []
+    for (const parentChunk of chunkArray(parentIds, 400)) {
+      const parentPlaceholders = parentChunk.map(() => '?').join(', ')
+      const fieldPlaceholders = fieldIds.map(() => '?').join(', ')
+      const rows = await this.ctx.txDb.getAll<BlockRow>(
+        `SELECT ${COLUMN_LIST}
+         FROM blocks
+         WHERE workspace_id = ?
+           AND deleted = 0
+           AND parent_id IN (${parentPlaceholders})
+           AND reference_target_id IN (${fieldPlaceholders})`,
+        [workspaceId, ...parentChunk, ...fieldIds],
+      )
+      out.push(...rows.map(parseBlockRow))
+    }
+    return out
+  }
+
+  /** Bulk insert rows whose parent/workspace validity has already been
+   *  established by the caller's migration query. This still runs
+   *  inside repo.tx, so SQLite triggers produce row_events and ps_crud
+   *  upload envelopes, and snapshots are recorded for cache/invalidation
+   *  after commit. It deliberately skips per-row `tx.create` parent
+   *  SELECTs and collapses many INSERTs into fewer statements. */
+  async insertKnownValidRowsForBackfill(rows: readonly BlockData[]): Promise<number> {
+    if (rows.length === 0) return 0
+    let statements = 0
+    for (const row of rows) {
+      this.checkWorkspace(row.workspaceId)
+    }
+    for (const chunk of chunkArray(rows, BULK_INSERT_ROWS_PER_STATEMENT)) {
+      await this.ctx.txDb.execute(
+        bulkInsertSql(chunk.length),
+        chunk.flatMap(row => blockToRowParams(row)),
+      )
+      this.pinWorkspace(chunk[0]!.workspaceId)
+      for (const row of chunk) {
+        recordWrite(this.ctx.snapshots, row.id, null, row)
+      }
+      statements += 1
+    }
+    return statements
   }
 
   async isDescendantOf(id: string, potentialAncestorId: string): Promise<boolean> {
@@ -718,9 +848,10 @@ export class TxImpl implements Tx {
       updatedBy: userId,
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET parent_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET parent_id = ?, reference_target_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         target.parentId,
+        target.referenceTargetId,
         target.orderKey,
         target.content,
         JSON.stringify(target.properties),
@@ -827,6 +958,7 @@ export class TxImpl implements Tx {
       id,
       workspaceId: data.workspaceId,
       parentId: data.parentId,
+      referenceTargetId: data.referenceTargetId ?? null,
       orderKey: data.orderKey,
       content: data.content ?? '',
       properties: data.properties ?? {},
@@ -855,6 +987,56 @@ export class TxImpl implements Tx {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     return parseBlockRow(row)
+  }
+
+  private async writePropertyValueChild<T>(
+    parent: BlockData,
+    schema: PropertySchema<T>,
+    value: T,
+    opts: TxWriteOpts | undefined,
+  ): Promise<void> {
+    const content = propertyValueToChildContent(schema, value)
+    const fieldRows = await this.ctx.txDb.getAll<BlockRow>(
+      SELECT_PROPERTY_FIELD_CHILD_SQL,
+      [parent.workspaceId, parent.id, schema.fieldId],
+    )
+    const existing = fieldRows.length > 0 ? parseBlockRow(fieldRows[0]!) : undefined
+
+    if (existing) {
+      if (existing.content !== propertyFieldContent(schema)) {
+        await this.update(existing.id, {content: propertyFieldContent(schema)}, opts)
+      }
+      const values = await this.childrenOf(existing.id, undefined, {includePropertyChildren: true})
+      const [primary, ...duplicates] = values
+      if (primary) {
+        if (primary.content !== content) await this.update(primary.id, {content}, opts)
+      } else {
+        await this.create({
+          workspaceId: parent.workspaceId,
+          parentId: existing.id,
+          orderKey: keyAtStart(null),
+          content,
+        }, opts)
+      }
+      for (const duplicate of duplicates) {
+        await this.delete(duplicate.id)
+      }
+      return
+    }
+
+    const fieldRowId = await this.create({
+      workspaceId: parent.workspaceId,
+      parentId: parent.id,
+      referenceTargetId: schema.fieldId,
+      orderKey: keyAtStart(null),
+      content: propertyFieldContent(schema),
+    }, opts)
+    await this.create({
+      workspaceId: parent.workspaceId,
+      parentId: fieldRowId,
+      orderKey: keyAtStart(null),
+      content,
+    }, opts)
   }
 
   private async requireParentInWorkspace(

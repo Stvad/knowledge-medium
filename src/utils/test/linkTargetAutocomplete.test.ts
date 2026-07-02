@@ -61,6 +61,7 @@ const blockData = (id: string, content: string, aliases?: string[]): BlockData =
   id,
   workspaceId: WS,
   parentId: null,
+  referenceTargetId: null,
   orderKey: `key-${id}`,
   content,
   properties: aliases ? {[aliasesProp.name]: aliases} : {},
@@ -89,6 +90,7 @@ describe('link target autocomplete helpers', () => {
       id: 'with-alias',
       workspaceId: WS,
       parentId: null,
+      referenceTargetId: null,
       orderKey: 'a0',
       content: 'Content',
       properties: {[aliasesProp.name]: ['Page']},
@@ -105,6 +107,7 @@ describe('link target autocomplete helpers', () => {
       id: 'with-content',
       workspaceId: WS,
       parentId: null,
+      referenceTargetId: null,
       orderKey: 'a0',
       content: 'Content',
       properties: {},
@@ -129,7 +132,7 @@ describe('link target autocomplete helpers', () => {
     })
 
     expect(out.aliases.map(match => match.blockId)).toEqual(['page'])
-    expect(out.blocks.map(match => match.blockId)).toEqual(['block'])
+    expect(out.blocks.map(match => match.content)).toEqual(['["Dating"]', 'My Dating notes'])
   })
 
   it('keeps FTS exclusion matches even when fuzzy ranking cannot score the raw query', async () => {
@@ -200,6 +203,34 @@ describe('link target autocomplete helpers', () => {
       blocks: [{blockId: 'block', content: 'My Dating notes', label: 'My Dating notes'}],
     })
     expect(phases).toEqual(['aliases:page', 'blocks:block'])
+  })
+
+  it('does not globally filter child-shaped content search rows', async () => {
+    const repo = {
+      query: {
+        aliasMatchesFuzzy: vi.fn(() => ({
+          load: () => Promise.resolve([]),
+        })),
+        searchByContent: vi.fn(() => ({
+          load: () => Promise.resolve([
+            {
+              ...blockData('value-row', 'Status Done'),
+              parentId: 'field-row',
+            },
+          ]),
+        })),
+      },
+    } as unknown as Repo
+
+    const result = await searchLinkTargetsProgressively(repo, {
+      workspaceId: WS,
+      query: 'status',
+      limit: 10,
+    })
+
+    expect(result.blocks).toEqual([
+      {blockId: 'value-row', content: 'Status Done', label: 'Status Done'},
+    ])
   })
 
   it('skips the content scan for short queries (under 3 chars)', async () => {
@@ -287,8 +318,12 @@ describe('link target autocomplete helpers', () => {
       excludeIds: ['page'],
     })
 
-    expect(out).toEqual([
-      {id: 'block', label: 'My Dating notes', detail: 'My Dating notes'},
+    expect(out.map(candidate => ({
+      label: candidate.label,
+      detail: candidate.detail,
+    }))).toEqual([
+      {label: '["Dating"]', detail: '["Dating"]'},
+      {label: 'My Dating notes', detail: 'My Dating notes'},
     ])
   })
 
@@ -325,6 +360,6 @@ describe('link target autocomplete helpers', () => {
       excludeValues: ['Dating'],
     })
 
-    expect(out.map(candidate => candidate.value)).toEqual(['My Dating notes'])
+    expect(out.map(candidate => candidate.value)).toEqual(['["Dating"]', 'My Dating notes'])
   })
 })

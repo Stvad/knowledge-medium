@@ -64,7 +64,7 @@ The "immutability" assumption is load-bearing. Future you will be tempted to reu
 
 ---
 
-## Thread 2 — Properties as block children (deferred, larger)
+## Thread 2 — Properties as block children
 
 ### Motivation
 
@@ -72,7 +72,7 @@ Tana-style "properties are children of their parent" gives you, conceptually:
 
 - **Fields as first-class blocks.** Renamable, refable, queryable. No string-keyed schemas frozen in code.
 - **Block-valued properties.** A property value can have its own children, formatting, refs — currently codecs squeeze everything into primitives.
-- **Multi-value collapses with single-value.** `list` / `refList` codecs disappear; cardinality is "how many children with this field marker".
+- **Multi-value collapses with single-value.** `list` / `refList` codecs disappear; cardinality is "how many value children sit under this field row".
 - **One less data model.** The codec/preset machinery and `properties_json` projection partially fold into existing block CRUD.
 
 ### What it costs
@@ -90,28 +90,43 @@ Tana-style "properties are children of their parent" gives you, conceptually:
 | **A. Cache on parent** | `properties_json` becomes a derived scalar projection of the field-tagged children. Children are source of truth. | **Selected.** Reads stay sync and free. Writes pay 2× DB ops. Cross-block queries unchanged. Has prior art in `block_types`. |
 | B. In-memory derived index | Eagerly hydrate children, compute index in JS. | Forces eager hydration everywhere. Doesn't help cross-block queries. |
 | C. Per-field reactive query | Every `block.get` becomes a child subscription. | Subscription explosion, async UI patterns, same cross-block-query problem. |
-| **D. Hybrid system fields** | A small set of well-known fields (`types`, `title`, maybe `content`, `system:collapsed`) stays as cache-only system fields, never gets a child block. | **Selected as companion to A.** Honest about the asymmetry; matches what Tana-flavored systems do in practice. |
+| D. Hybrid system fields | A small set of well-known fields (`types`, `title`, maybe `content`, `system:collapsed`) stays as cache-only system fields, never gets a child block. | Rejected for now. It keeps implementation smaller short-term, but preserves two write models and makes "properties are children" false in the kernel/plugin paths that most need to exercise the invariant. |
 | E. SQL-side property-index table | A separate `block_properties` table maintained by triggers/mutators. | Possible later optimization, not needed in v1. |
 
-**Chosen direction: A + D.** Cache stays on the parent; user-defined fields project their scalar value into the cache; system fields live cache-only. Reads are always sync; cross-block queries don't change.
+**Chosen direction: A only.** Cache stays on the parent as a derived projection, but every registered property schema gets a stable `fieldId` and writes materialize a field child whose value(s) live under that field child. Reads are always sync; cross-block queries don't change. `content` remains a normal block column for now, not a property.
 
-### Dev UX of A + D
+### Implementation update — 2026-05-27
+
+- Every registered schema carries `PropertySchema.fieldId`. User-defined schemas produced by `'property-schema'` blocks use the schema block id; kernel/plugin schemas default to `property:${schema.name}`. `PropertySchema.name` remains the current display/cache key and can change for user-defined fields.
+- A property field instance is a normal `blocks` row under the value owner with `blocks.reference_target_id = PropertySchema.fieldId` and editable content shaped like `[[schema name]]`. The child or children of that field row are the value rows. There is no separate `blocks.field_id` path.
+- `core.deriveReferenceTarget` is a same-transaction processor. If a row's content is exactly one reference token, it derives `reference_target_id` before commit. For field rows it resolves directly through the registered property-schema map; for ordinary aliases it uses the transaction-aware alias lookup when a target already exists.
+- `tx.setProperty` / `block.set` still look uniform to call sites. They create or update the field-reference child, create/update its primary value child, and also write the parent `properties_json` projection in the same transaction.
+- `core.materializePropertyChildren` is a same-transaction processor. Raw parent `properties` writes for registered schemas create/update/delete the matching field-reference children, so imports and older call sites still converge on child-backed storage.
+- Pre-child data migrates through a runtime backfill from `properties_json`, not a Supabase SQL rewrite. The client already has the registered schema map, codecs, and user-field `fieldId`s, so it can safely materialize field/value children for historical rows while leaving the parent projection intact.
+- `core.projectPropertyChildren` is a same-transaction processor. If a field row or one of its value children is edited, deleted, moved, retargeted, or reordered, it recomputes the affected parent field before commit. That keeps manual child edits and higher-level property writes convergent.
+- User schema rebuilds reproject parent caches when a schema block is renamed or its codec type changes. The old cache key is removed and the new name is populated from the same field-id children.
+- Normal tree queries (`children`, `childIds`, `subtree`) include field rows and value rows. Transactional tree primitives include them by default too; callers with a domain-specific content-children contract can pass `{includePropertyChildren:false}`. The normal outline hides only the narrow hidden/internal subset (for example `system:*` and UI-state fields) as a presentation policy. Visible field rows render as field references, and their value rows render with the same codec/type-based property editors used by the property panel.
+- Semantic query/search/alias invalidation still primarily reads the parent `properties_json` projection. Field rows and values are ordinary blocks in the tree, but property predicates continue to use the parent projection while that remains the main query surface.
+
+This is intentionally still scalar-first. The current slice keeps one primary value child under each field row, and that value child's `content` encodes the scalar value (plain text for strings/refs/URLs/dates, JSON for structured values). Multi-value-as-many-children and block-valued fields are still deferred. The important foundation is now in place: child rows are the source for registered property values while hot reads and query predicates continue to use the parent projection.
+
+### Dev UX of A
 
 Call sites stay uniform — the asymmetry only shows up at schema-definition time and inside the mutator.
 
 ```ts
-// System field — value lives in properties_json, no child block exists.
-const collapsed = defineSystemField({ id: 'system:collapsed', codec: codecs.boolean })
+// Kernel/plugin field — static field id defaults to property:system:collapsed.
+const collapsed = defineProperty('system:collapsed', { codec: codecs.boolean })
 
 // User field — backed by a field-defining block (renamable, refable).
 const status = defineUserField({
-  fieldBlockId: 'status-field-id',
+  fieldId: 'status-field-id',
   shape: 'scalar',
   codec: codecs.string,
 })
 
 // Block-valued user field — projection into cache is the child block id.
-const note = defineUserField({ fieldBlockId: 'note-field-id', shape: 'block' })
+const note = defineUserField({ fieldId: 'note-field-id', shape: 'block' })
 
 // Reads (uniform — always sync, always from properties_json):
 block.get(collapsed)  // boolean
@@ -121,9 +136,9 @@ block.get(note)       // Block facade (resolved via cached childId; .load() to r
 
 Where the non-uniformity bites:
 
-- **Schema authoring:** two builders (system vs user). Mildly annoying but reflects real semantics.
+- **Schema authoring:** static schemas use deterministic field ids; user schemas use block ids.
 - **Field renaming:** only user fields support it.
-- **Migrations:** promoting a system field to a user field is a real migration. Demoting is rare. Fine while in alpha.
+- **Migrations:** changing a static schema name changes its default field id unless the schema pins `fieldId` explicitly. Pin it for any plugin field that needs rename compatibility.
 - **Querying:** unchanged — both are `json_extract` against the cache.
 - **Sync:** user fields ship parent + child rows. Slightly redundant on the wire; PowerSync handles it.
 
@@ -131,13 +146,13 @@ Where the non-uniformity bites:
 
 The cache stores the field's *denoted value*, never the subtree under that value:
 
-| Field shape | Field-value child looks like | Projection in `properties_json` |
+| Field shape | Field child looks like | Projection in `properties_json` |
 |---|---|---|
-| Scalar (text, number, date, url, ref) | child whose content encodes the value | the encoded scalar |
-| Multi-value | N field-tagged children | array of per-child projections |
-| Block-valued | child with rich content/subtree | `{childId}` only |
+| Scalar (text, number, date, url, ref) | `[[field]]` row, with one value child whose content encodes the value | the encoded scalar |
+| Multi-value | `[[field]]` row, with N value children | array of per-child projections |
+| Block-valued | `[[field]]` row, with child block(s) carrying rich content/subtree | `{childId}` or equivalent reference projection |
 
-This rule is load-bearing: **mutations deep in a subtree don't invalidate the cache** — only edits to the field-value child's own content/`field_id`/`parent_id`/`deleted` do. That's what keeps the consistency story tractable. It also means "is a property" stops being a passive query result and becomes a stateful relationship with explicit set/clear mutators.
+This rule is load-bearing: **mutations deep in a value subtree don't invalidate the cache** unless that value row is itself the projected scalar value. The projection watches field rows and their direct value rows. That's what keeps the consistency story tractable. It also means "is a property" stops being a passive query result and becomes a stateful relationship with explicit set/clear mutators.
 
 ### Consistency story (the cases that need to stay in sync)
 
@@ -150,7 +165,7 @@ This rule is load-bearing: **mutations deep in a subtree don't invalidate the ca
 7. Tagged child re-parented (drop from old parent, add to new)
 8. Remote sync apply (handled by atomic local write at origin)
 
-All eight reduce to: *any mutation to a row where `field_id IS NOT NULL` (before or after) must also patch the relevant parent's `properties_json` in the same transaction.* Implementable as a single helper invoked from the tail of each mutator. The kernel is already the only path to writes, so there's no back-door SQL write to worry about.
+All eight reduce to: *any mutation to a field-reference row or one of its value rows must also patch the relevant owner's `properties_json` in the same transaction.* Implemented as the `core.projectPropertyChildren` same-tx processor watching child `content`, `referenceTargetId`, `parentId`, `orderKey`, and `deleted`. Parent projection writes for registered schemas reduce in the other direction through `core.materializePropertyChildren`. The kernel is already the only path to local writes, so there is no local back-door SQL write to worry about.
 
 A SQLite trigger as a safety net is possible — preferably **invalidate-only** (set a `properties_dirty` flag, recompute in TS) rather than encoding projection logic in SQL twice. Skip in v1; add if drift is observed.
 
@@ -172,18 +187,19 @@ If thread 1 ever needs case 2 and thread 2 ever ships, they share a reverse-deps
 ## Decisions
 
 ### Now
-- Build `codecs.dateRef` (or whichever name) along the case-1.5 design above. Self-contained, useful, no architecture lock-in.
+- Registered fields are child-backed with parent-cache projection. This implements the A direction with a synced `blocks.reference_target_id` column for reference-only blocks and `PropertySchema.fieldId` as the stable identity. Kernel/plugin/user schemas share the same write model; the earlier `blocks.field_id` shape has been removed.
+- `codecs.dateRef` remains a separate near-term follow-up if a concrete daily-note-date UX needs it; it is no longer the only "now" item from this note.
 
 ### Defer
-- The full properties-as-children migration. Honest estimate is ~1–2 weeks when we do it later vs. ~1.5–3 weeks all-at-once now — the alpha posture and the existing codec abstraction make this an additive change rather than a rewrite. The expensive part is the design thinking, which this doc captures.
+- Block-valued fields and multi-value-as-many-children remain deferred. The dedicated synced `reference_target_id` column is now part of the block shape; projection still preserves the parent-cache read/query contract.
 
 ### Lock-in risks to actively avoid in the meantime
 
 These are the things that would make a later migration genuinely painful:
 
 1. **Don't let `properties_json` shape leak into user-facing surfaces.** No serialized JSON paths exposed in saved queries or user data. Query authoring stays above storage.
-2. **Don't add ETL/import paths that write `properties_json` directly.** Route everything through `tx.setProperty`.
-3. **Don't treat property-key strings as stable identifiers across renames or exports.** Field-block-id identity comes later; don't pre-bake the string-key assumption into externalized data.
+2. **Don't add new ETL/import paths that bypass registered schemas.** Raw `properties` writes are tolerated for compatibility and materialized for registered names, but new code should prefer `tx.setProperty` or an explicit schema reconciliation step first.
+3. **Don't treat property-key strings as stable identifiers across renames or exports.** `PropertySchema.fieldId` / field definition id is the stable identity; don't pre-bake the string-key assumption into externalized data.
 4. **Don't model rich/structured data as stringified-JSON inside a property.** If something genuinely wants to be block-valued, either keep it as a child block out of the property system, or wait for `shape: 'block'` user fields. Migrating *code* later is easy; migrating *encoded user content* out of stringified blobs is the painful kind of migration.
 
 None of these are hard to follow given current patterns.
@@ -193,4 +209,4 @@ None of these are hard to follow given current patterns.
 ## Honest caveats
 
 - "Tana-style" here is a conceptual reference to Tana's surface model (fields as first-class, properties as children). We have no ground-truth view of Tana's storage internals; specific claims about how Tana caches or indexes are inference, not fact. The design above is justified by *our* read/query workload, not by appeals to what Tana does.
-- The A + D plan assumes scalar projections are the common case. If users start wanting block-valued fields routinely, the cache buys less and the asymmetry between scalar and block-valued reads becomes more visible. That'd be a signal to revisit, not a problem at the start.
+- The A plan assumes scalar projections are the common case. If users start wanting block-valued fields routinely, the cache buys less and the asymmetry between scalar and block-valued reads becomes more visible. That'd be a signal to revisit, not a problem at the start.
