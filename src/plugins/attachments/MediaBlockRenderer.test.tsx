@@ -196,7 +196,7 @@ describe('MediaContentRenderer — audio branch', () => {
     expect(container.querySelector('audio')).toBeNull()
   })
 
-  it('reports a decode failure to the hook when the verified bytes are not decodable audio', () => {
+  it('reports a decode failure to the hook when the verified bytes are not decodable audio', async () => {
     // media:mime is attacker-influenceable — bytes that hash-verify but aren't real audio
     // make <audio> fire onError; the renderer must report it so the hook frees the Blob and
     // goes terminal (→ broken placeholder), never leaving a dead player.
@@ -204,8 +204,14 @@ describe('MediaContentRenderer — audio branch', () => {
     h.urlState = { status: 'ready', url: 'blob:audio/undecodable' }
     const { container } = renderContent()
     fireEvent.click(screen.getByTestId('media-audio-play'))
-    fireEvent.error(container.querySelector('audio')!)
-    expect(h.reportDecodeFailure).toHaveBeenCalledWith('blob:audio/undecodable')
+    // Wait for the armed <audio> to mount before firing on it (guards a cold-start race).
+    const audio = await waitFor(() => {
+      const el = container.querySelector('audio')
+      if (!el) throw new Error('audio not mounted yet')
+      return el
+    })
+    fireEvent.error(audio)
+    await waitFor(() => expect(h.reportDecodeFailure).toHaveBeenCalledWith('blob:audio/undecodable'))
   })
 
   it('downloads the VERIFIED bytes as a NEUTRAL octet-stream blob via the play-view download affordance', async () => {
