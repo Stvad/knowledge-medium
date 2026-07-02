@@ -13,10 +13,15 @@ typed-channel discipline (`architecture-audit-2026-06.md` §B3, `AGENTS.md`
 
 **Recommendation in one breath.** Build a small **typed, observe-only event bus**
 on `repo.events` (a declaration-merged `AppEventRegistry`, `emit`/`on`, a
-`useAppEvent` hook); **don't** widen the post-commit processor system; **bridge**
-data events into the bus from the existing commit choke. Ship **`workspace:ready`**
-(sticky replay) as the first thin slice — it closes gap I3 with one emit line and
-has no other observability today. Everything below §1 is the supporting evidence.
+`useAppEvent` hook) for **broadcast** events — `block:*`, `navigation:completed`,
+`sync:status`; **don't** widen the post-commit processor system; **bridge** data
+events in from the existing commit choke. But the original motivator, gap I3 ("run
+X when a workspace is ready"), turns out to be **effect-shaped, not event-shaped**:
+it's already served by a workspace-scoped `AppEffect` (the `EffectReconciler`
+restarts effects post-bootstrap, per workspace, on switch), so the thin slice is
+*that*, **not** a sticky `workspace:ready` event. **§5 is the load-bearing
+conclusion** — a review pass showed the sticky-event framing was the source of
+most of this doc's churn; everything between §1 and §5 is supporting evidence.
 
 ## The gap, precisely
 
@@ -71,7 +76,7 @@ already runs for that event.
 | `block:synced` (down-sync applied) | `{workspaceId, ids}` — **one emit per workspace** present in the window | `startBlocksSyncedObserver` → `applyOutcome` (`syncObserver/observer.ts:167`) — walks materialized snapshots | distinct from local-write `block:*`: these are *remote* rows landing. A drain window is **seq-ordered, not workspace-scoped** (`drainQueueOnce` reads `blocks_synced_changes ORDER BY seq`, `observer.ts:193`), so its `MaterializeOutcome.snapshots` can span workspaces — the bridge must **group by `after/before.workspaceId`** and emit one event per workspace, exactly as the observer already does for cycle scans (`cycleScanCandidatesByWorkspace`, `observer.ts:114`). A single `{ids, workspaceId}` payload would mislabel cross-workspace batches. Pairs with `invalidationRules`. |
 | `navigation:completed` | `{result: NavigationResult, input, origin}` | `navigationVerb.after` (`utils/navigation.ts:294`) — **already exists** as a Sum observer slot | bridge, don't re-emit: an internal `after` observer forwards onto the bus. But `after` fires for **every** outcome (`VerbOutcome<NavigationResult \| null>` — success, veto/`null`, throw), so emit `navigation:completed` **only when `outcome.ok && outcome.result !== null`**. A veto/`null`/failure becomes a separate `navigation:cancelled` (or is dropped) — never a `completed` carrying a missing/null result. |
 | `navigation:requested` (pre) | `{input}` | `navigationVerb.before` — **already exists** | optional; most demand is for `completed`. Fires *before* resolution for every gesture, so it does **not** imply the navigation will land (it may be vetoed/`null`) — purely an "about to attempt" hook. |
-| `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`workspaceBootstrap.ts`, after the page/ui-state writes, just before `return layoutSessionBlock` — equivalently the `{kind:'ready'}` branch of its caller `resolveInitialLayout`, `App.tsx:126`; `bootstrapWorkspace` itself returns a `Block`, not the layout union) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **Not** `setActiveWorkspaceId` — see the caveat below. **No `previousId`:** by this choke `setActiveWorkspaceId(new)` (early, `App.tsx:73`) has already overwritten the pin, so the prior id is gone; it belongs on `workspace:active-changed`, whose choke *is* the setter (both ids in hand). |
+| `workspace:ready` (a.k.a. switched-and-bootstrapped) | `{workspaceId, freshlyCreated}` | **end of `bootstrapWorkspace`** (`workspaceBootstrap.ts`, after the page/ui-state writes, just before `return layoutSessionBlock` — equivalently the `{kind:'ready'}` branch of its caller `resolveInitialLayout`, `App.tsx:126`; `bootstrapWorkspace` itself returns a `Block`, not the layout union) — past the access gate + bootstrap writes | the I3 lifecycle point: workspace is materializable, scoped pages exist. **⚠ See §5 — prefer a workspace-scoped `AppEffect` over this event for I3.** **Not** `setActiveWorkspaceId` — see the caveat below. **No `previousId`:** by this choke `setActiveWorkspaceId(new)` (early, `App.tsx:73`) has already overwritten the pin, so the prior id is gone; it belongs on `workspace:active-changed`, whose choke *is* the setter (both ids in hand). |
 | `workspace:active-changed` (low-level pin) | `{previousId, workspaceId}` | `Repo.setActiveWorkspaceId` (`repo.ts:951`) — **fires nothing today** | optional/secondary: reflects the *pin*, fires early (pre-gate, pre-bootstrap). For UI that just tracks "which workspace is selected", not for auto-create handlers. |
 | `workspace:created` | `{workspaceId}` | the actual **insert** sites — `ensurePersonalWorkspace`/`ensureLocalPersonalWorkspace` when `inserted` (`resolveWorkspace.ts:98/113`) **and** the dialog create path (`CreateWorkspaceDialog`); dedupe by id | ⚠️ **not** `freshlyCreated` at bootstrap: that flag is only true for the auto-created *personal* workspace. A **dialog-created** workspace is primed locally then navigated to, so `resolveWorkspace` returns it via the existing-local fast path with `freshlyCreated:false` (`resolveWorkspace.ts:40-44`) — gating on `freshlyCreated` would silently miss every user-created workspace. `workspace:ready` fires for *all* opens, so `workspace:created` is only worth it if a distinct "born now" signal matters. |
 | `sync:status` (online/offline/synced) | `{connected, hasSynced, uploading, downloading, …}` | PowerSync status listener — already consumed by `system-status` (`SyncIndicatorInput`) | the chip already derives this; the bus would expose the *transitions* to plugins. |
@@ -400,8 +405,12 @@ export interface AppEventBus {
   additionally carries `addedTypes`/`removedTypes` so a subscriber can react to a
   block *becoming* a `todo` (the membership delta), which an equality check on a
   single field would miss.
-- **Sticky ("current-state") events replay the last value on subscribe.** A small
-  set of events describe *current state* rather than a transient occurrence —
+- **Sticky ("current-state") events replay the last value on subscribe.**
+  (**§5 revises this**: `workspace:ready` should be a workspace-scoped effect, not
+  a sticky event — so the sticky machinery below applies to the genuine broadcast
+  current-state events, chiefly `sync:status`; it's retained here as the correct
+  design *if* a replayable broadcast is genuinely needed.) A small set of events
+  describe *current state* rather than a transient occurrence —
   `workspace:ready` (current workspace), `app:booted`, the latest `sync:status`.
   For these the bus retains the last payload and, when a handler subscribes,
   invokes it immediately with that retained value (if any) before any future
@@ -566,6 +575,107 @@ benefits from the bus contract being settled first.
 
 **Phase 0 (§4.2) is the thin slice** — `workspace:ready`, sticky, one emit line,
 closes I3, no other observability today. Everything after it is additive.
+
+> **Superseded by §5.** A design review kept surfacing bugs around
+> `workspace:ready` being sticky/replayable; §5 traces that to a root cause and
+> concludes the I3 slice should be a **workspace-scoped `AppEffect`, not a sticky
+> event**. Read §5 before implementing the thin slice.
+
+---
+
+## 5. Root-cause reflection (what the review churn revealed)
+
+A multi-agent + automated review pass produced ~20 findings on this doc. Almost
+none challenged the bus *concept*; they clustered into a few classes with three
+architectural roots. Naming the roots changes the recommendation — most usefully,
+it **removes the thin slice's hardest machinery entirely.**
+
+### 5.1 The dominant class was self-inflicted: `workspace:ready` should not be an event
+
+The majority of findings orbited one decision — making `workspace:ready` a
+**sticky, replayable** event: *previousId can't be sourced at the choke;
+sticky must be workspace-gated; gate mandatory vs defense-in-depth; cold-start
+emit precedes AppEffect registration; replay ordering (sync vs async);
+stale-workspace replay; app:booted fires per switch.* Every one is an
+impedance-matching artifact of forcing an **effect-shaped need through an
+event-shaped hole.**
+
+The need (I3) is "run X once, when a workspace is active **and** ready, and undo
+it on switch." That is the definition of a **scoped effect**, and the codebase
+already has the machinery:
+
+- `AppRuntimeProvider` — which drives `EffectReconciler.reconcile` — is rendered
+  **only** in the `{kind:'ready'}` branch of `resolveInitialLayout`
+  (`App.tsx:306`), never for `waiting`/`locked`, and only *after*
+  `bootstrapWorkspace` has resolved.
+- `EffectReconciler` restarts effects when `workspaceId` changes
+  (`liveRuntime.ts` `isColdFor` → `stopAll` → restart), passing the current
+  `workspaceId` into `start()`.
+
+So an `AppEffect.start({repo, workspaceId})` **already runs exactly once per
+active-and-ready workspace, post-bootstrap, and is torn down on switch.** That
+*is* the I3 signal — with no event, no sticky slot, no replay, no
+workspace-gate, and no cold-start ordering race, because the effect *lifecycle*
+is the subscription and the reconciler (which already keys on `workspaceId`)
+owns it. The whole sticky apparatus in §3.5 was reconstructing a signal the
+effect system hands over for free.
+
+→ **Revised recommendation.** The thin slice is **not** `workspace:ready`. It is:
+confirm/formalize that per-workspace lifecycle work belongs in a workspace-scoped
+`AppEffect`, and close any real gap by *tightening the effect contract* — a
+documented "runs post-bootstrap, once per ready workspace, torn down on switch"
+guarantee, and (optional sugar) a `workspaceEffectsFacet` over `appEffectsFacet`.
+This dissolves §3.5's sticky/gate/replay complexity. The **event bus keeps its
+value for genuine broadcast** — `block:*`, `navigation:completed`, `sync:status`
+— where many/unknown observers want notification and "replay last value" is
+either unneeded or (for `sync:status`) a deliberate, isolated choice.
+
+### 5.2 "Emit from any existing choke" is the wrong default — lifecycle has no owner
+
+The timing/scope/missing-path findings (workspace:ready pre-bootstrap;
+`runtime:swapped` too early; `workspace:created` misses the dialog path;
+`app:booted` per switch) share one cause: **non-data lifecycle has no single
+funnel.** Data events are reliable precisely because every mutation passes
+through `repo.tx` → one commit-dispatch chokepoint (§2a). Workspace/app lifecycle
+is smeared across `App.tsx`, `WorkspaceSwitcher`, `bootstrapWorkspace`,
+`resolveWorkspace`, and `CreateWorkspaceDialog` — so any *incidental* choke is
+partial (misses a creation path) or mistimed (fires pre-gate / refresh-requested
+vs installed). That absence of a lifecycle owner *is* gap I3.
+
+→ **Principle: emit from a canonical per-event chokepoint; where lifecycle has no
+owner, the fix is to give it one, not to piggyback an incidental choke** (cf. the
+codebase already funnels every content swap through `writePanelContent`). A single
+`activateWorkspace` owner that the switcher, URL nav, and create-then-open all
+route through is the same refactor that makes both the events *and* the
+effect-scoping in §5.1 clean — and it's the concrete form of I3's "workspace
+lifecycle hooks."
+
+### 5.3 Prose-over-a-matrix caused the consistency drift
+
+The "un-propagated fix" / "blanket rule contradicts a cell" findings (Phase 1 vs
+§1; "every event carries `workspaceId`" vs the global events; `sync:synced` vs
+`block:synced`; `type` vs `types`) are mechanical: an 11-event × {payload, choke,
+scope, sticky} matrix written as scattered prose can't stay consistent under
+edits.
+
+→ **Make the event set one structured source of truth** — a registry where each
+event's `{scope: 'workspace' | 'session' | 'connection', sticky, payload}` are
+typed fields, so "workspace-scoped ⇒ carries `workspaceId`" is *derived*, not
+restated — and **derive payloads from data-model types** (`Pick<BlockData, …>`,
+`ReturnType<typeof getBlockTypes>`) so "`types` is a list" is a compile error to
+get wrong, not a fact the author must remember. Likewise the async-delivery
+contract should be **one shared observer primitive** (verb `before`/`after`, the
+processor runner, and this bus each hand-roll the same await-loop today), not
+prose repeated three times.
+
+### 5.4 Net
+
+The bus concept survives, **narrowed to broadcast**. The original motivation (I3,
+"do X per workspace") is better served by the **existing workspace-scoped effect
+lifecycle** — which is why forcing it through a sticky event produced most of the
+review's findings. Two supporting refactors (a workspace-lifecycle owner §5.2; a
+structured, type-derived registry §5.3) remove the timing and consistency bug
+classes at their source rather than patching them per event.
 
 ---
 
