@@ -2,7 +2,10 @@ import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { SystemStatusHeaderItem } from './SystemStatusHeaderItem.tsx'
-import { runDataIntegrityAuditActionContribution } from './auditAction.ts'
+import {
+  runDataIntegrityAuditActionContribution,
+  viewDataIntegrityAuditActionContribution,
+} from './auditAction.ts'
 
 export const systemStatusHeaderItem: HeaderItemContribution = {
   id: 'system-status.header',
@@ -28,6 +31,9 @@ export const systemStatusPlugin: AppExtension = systemToggle({
     source: 'system-status',
     precedence: 40,
   }),
-  // "Run data integrity audit" — command palette + the dropdown's Re-run button.
+  // "Run data integrity audit" — command palette + a fresh run.
   runDataIntegrityAuditActionContribution,
+  // "View last data integrity audit" — command palette + the dropdown's
+  // "Inspect" button; re-opens the last results without re-scanning.
+  viewDataIntegrityAuditActionContribution,
 ])
