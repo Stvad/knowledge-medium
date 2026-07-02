@@ -10,6 +10,9 @@ import type { BlockRendererProps } from '@/types.js'
 const h = vi.hoisted(() => ({
   props: {} as Record<string, unknown>,
   urlState: { status: 'loading' } as { status: string; url?: string; reason?: string },
+  // Captured from the LAST render's useAssetObjectUrl call — asserts the renderer's
+  // per-viewer eager-resolve gate (image: always on; audio: off until play arms it).
+  enabledArg: undefined as boolean | undefined,
   reportDecodeFailure: vi.fn(),
   resolve: vi.fn(),
   downloadBlob: vi.fn(),
@@ -19,14 +22,22 @@ vi.mock('@/hooks/block.js', () => ({
   useWorkspaceId: () => 'ws-A',
 }))
 // The eager hook returns [state, reportDecodeFailure]; the renderer wires onError → the latter.
-vi.mock('./useAssetObjectUrl.js', () => ({ useAssetObjectUrl: () => [h.urlState, h.reportDecodeFailure] }))
+// The mock ignores `enabled` (it can't drive a real resolve), but records it so a test can
+// assert the renderer flipped the gate — the actual resolve is exercised in the hook's own test.
+vi.mock('./useAssetObjectUrl.js', () => ({
+  useAssetObjectUrl: (_a: unknown, _r: unknown, opts?: { enabled?: boolean }) => {
+    h.enabledArg = opts?.enabled ?? true
+    return [h.urlState, h.reportDecodeFailure]
+  },
+}))
 vi.mock('./assetResolver.js', () => ({ getAssetResolver: () => ({ resolve: h.resolve }) }))
 vi.mock('@/utils/downloadBlob.js', () => ({ downloadBlob: h.downloadBlob }))
-// The runtime resolves the media-viewer facet to just the (real) image viewer, so an
-// image mime dispatches to ImageViewer and everything else to the download fallback.
+// The runtime resolves the media-viewer facet to the (real) image + audio viewers, so an
+// image mime dispatches to ImageViewer, an audio mime to AudioViewer, everything else to the
+// download fallback.
 vi.mock('@/extensions/runtimeContext.js', async () => {
-  const { imageMediaViewer } = await import('./mediaViewers.js')
-  return { useAppRuntime: () => ({ read: () => [imageMediaViewer] }) }
+  const { imageMediaViewer, audioMediaViewer } = await import('./mediaViewers.js')
+  return { useAppRuntime: () => ({ read: () => [imageMediaViewer, audioMediaViewer] }) }
 })
 
 const { MediaBlockRenderer, MediaContentRenderer } = await import('./MediaBlockRenderer.js')
@@ -38,6 +49,7 @@ afterEach(cleanup)
 beforeEach(() => {
   h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'image/png', 'media:filename': 'cat.png' }
   h.urlState = { status: 'loading' }
+  h.enabledArg = undefined
   h.reportDecodeFailure.mockClear()
   h.resolve.mockReset()
   h.resolve.mockResolvedValue({ ok: true, bytes: new Uint8Array([1, 2, 3]) })
@@ -130,6 +142,83 @@ describe('MediaContentRenderer — non-image (file) branch', () => {
     fireEvent.click(btn)
     await waitFor(() => expect(h.downloadBlob).toHaveBeenCalled())
     expect(h.downloadBlob.mock.calls[0][1]).toBe('attachment') // generic download name
+  })
+})
+
+describe('MediaContentRenderer — audio branch', () => {
+  const audioProps = (extra: Record<string, unknown> = {}) => {
+    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'audio/mpeg', 'media:filename': 'song.mp3', ...extra }
+  }
+
+  it('renders a metadata-only PLAY affordance — no eager resolve — for an audio MIME', () => {
+    audioProps({ 'media:size': 2_100_000 })
+    h.urlState = { status: 'ready', url: 'blob:should-not-be-used-yet' } // eager state ignored until armed
+    const { container } = renderContent()
+    const play = screen.getByTestId('media-audio-play')
+    expect(play).toHaveTextContent('song.mp3')
+    expect(play).toHaveTextContent('2 MB')
+    // The <audio> element is NOT mounted, and the renderer did NOT arm the eager resolve —
+    // the (possibly large) bytes aren't fetched/decrypted until the user intends to play.
+    expect(container.querySelector('audio')).toBeNull()
+    expect(h.enabledArg).toBe(false)
+  })
+
+  it('arms the resolve and mounts <audio src=objectURL> on the first play click', () => {
+    audioProps()
+    h.urlState = { status: 'ready', url: 'blob:audio/1' } // what the hook resolves to once armed
+    const { container } = renderContent()
+    expect(container.querySelector('audio')).toBeNull() // gated until play
+
+    fireEvent.click(screen.getByTestId('media-audio-play'))
+    // The renderer flipped the eager gate on (play-gated resolve, §8/§11)…
+    expect(h.enabledArg).toBe(true)
+    // …and once resolved the native player renders at the VERIFIED object URL.
+    const audio = container.querySelector('audio')
+    expect(audio).toHaveAttribute('src', 'blob:audio/1')
+    expect(audio).toHaveAttribute('controls')
+  })
+
+  it('shows the loading placeholder while the armed resolve is in flight', () => {
+    audioProps()
+    h.urlState = { status: 'loading' }
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-audio-play'))
+    expect(screen.getByTestId('media-audio-loading')).toBeInTheDocument()
+  })
+
+  it('fails closed to the broken placeholder (NO <audio>) on a failed resolve after play', () => {
+    audioProps()
+    h.urlState = { status: 'error', reason: 'hash-mismatch' }
+    const { container } = renderContent()
+    fireEvent.click(screen.getByTestId('media-audio-play'))
+    expect(screen.getByTestId('media-audio-broken')).toBeInTheDocument()
+    // The load-bearing assertion: nothing is ever served for an unverified asset.
+    expect(container.querySelector('audio')).toBeNull()
+  })
+
+  it('reports a decode failure to the hook when the verified bytes are not decodable audio', () => {
+    // media:mime is attacker-influenceable — bytes that hash-verify but aren't real audio
+    // make <audio> fire onError; the renderer must report it so the hook frees the Blob and
+    // goes terminal (→ broken placeholder), never leaving a dead player.
+    audioProps()
+    h.urlState = { status: 'ready', url: 'blob:audio/undecodable' }
+    const { container } = renderContent()
+    fireEvent.click(screen.getByTestId('media-audio-play'))
+    fireEvent.error(container.querySelector('audio')!)
+    expect(h.reportDecodeFailure).toHaveBeenCalledWith('blob:audio/undecodable')
+  })
+
+  it('downloads the VERIFIED bytes as a NEUTRAL octet-stream blob via the play-view download affordance', async () => {
+    audioProps()
+    h.urlState = { status: 'ready', url: 'blob:audio/1' }
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-audio-play'))
+    fireEvent.click(screen.getByTestId('media-audio-download'))
+    await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
+    const [blob, name] = h.downloadBlob.mock.calls[0]
+    expect(name).toBe('song.mp3')
+    // Same security invariant as the file fallback: never the attacker-influenceable media:mime.
+    expect(blob.type).toBe('application/octet-stream')
   })
 })
 
