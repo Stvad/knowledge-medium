@@ -52,6 +52,7 @@ import {
 } from '@/shortcuts/types.js'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
+import { registerArmedHold } from '@/shortcuts/holdRegistry.js'
 
 /**
  * A non-hold keyboard binding's per-candidate tinykeys matcher. Fed every
@@ -598,11 +599,17 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     timer: ReturnType<typeof setTimeout>
     primaryKey: string
   } | null = null
+  // Armed timers are visible to keyboard-capture surfaces via the hold
+  // registry (see holdRegistry.ts) — they swallow the cancelling keyup, so
+  // they cancel armed holds explicitly instead.
+  let unregisterArmed: (() => void) | null = null
 
   const cancel = (): void => {
     if (!pending) return
     clearTimeout(pending.timer)
     pending = null
+    unregisterArmed?.()
+    unregisterArmed = null
   }
 
   const fire = (originalEvent: KeyboardEvent): void => {
@@ -650,12 +657,15 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     applyEventOptions(event, action, binding, contextConfigsByType)
 
     pending = {
+      // `cancel` does the disarm bookkeeping (timer, pending, registry);
+      // the clearTimeout on the just-fired timer is a no-op.
       timer: setTimeout(() => {
-        pending = null
+        cancel()
         fire(event)
       }, holdMs),
       primaryKey: event.key,
     }
+    unregisterArmed = registerArmedHold(cancel)
   }
 
   const onKeyup = (rawEvent: Event): void => {

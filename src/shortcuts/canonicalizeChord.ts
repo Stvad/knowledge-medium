@@ -42,24 +42,11 @@ export type PointerPhase = 'pointerdown' | 'pointerup' | 'click'
 export type TouchPhase = 'tap'
 
 /**
- * One keyboard press within a chord. A plain chord ('Cmd+K') is a single
- * descriptor; a sequence ('g g') is several.
- */
-export interface KeyChordDescriptor {
-  readonly kind: 'key'
-  /** Canonical final key, original case preserved ('k', 'K', 'Escape'). */
-  readonly key: string
-  /** Alias-folded and sorted into `MODIFIER_ORDER`. */
-  readonly mods: readonly Modifier[]
-  readonly phase: ChordPhase
-}
-
-/**
- * A single mouse/touch press. The pointer-side analogue of
- * {@link KeyChordDescriptor}: `button`/`detail` replace `key`, the modifier
- * model is shared (exact-set match — shift-click is `mods: ['Shift']` and does
- * NOT match a ctrl+shift-click). `role` optionally constrains which bound node
- * the press targets and is matched by the coordinator against the node, not by
+ * A single mouse/touch press. `button`/`detail` take the place of a
+ * keyboard key; the modifier model matches keyboard chords (exact-set
+ * match — shift-click is `mods: ['Shift']` and does NOT match a
+ * ctrl+shift-click). `role` optionally constrains which bound node the
+ * press targets and is matched by the coordinator against the node, not by
  * the pure matcher here.
  */
 export interface MouseChordDescriptor {
@@ -86,16 +73,6 @@ export interface TouchChordDescriptor {
   readonly kind: 'touch'
   readonly phase: TouchPhase
 }
-
-/**
- * One press within a chord. `kind` discriminates keyboard from pointer; the
- * field was left open in Phase 0 precisely so Phase 3 could add this variant
- * without a rewrite.
- */
-export type ChordDescriptor = KeyChordDescriptor | MouseChordDescriptor | TouchChordDescriptor
-
-/** A chord is a sequence of presses; an ordinary chord is length 1. */
-export type ChordSequence = readonly ChordDescriptor[]
 
 /** Stable modifier order, so the same physical chord always serialises
  *  identically. `$mod` first, then the literal modifiers. */
@@ -143,6 +120,12 @@ const parsePress = (press: string): ParsedPress => {
 const splitSequence = (raw: string): string[] =>
   raw.split(' ').map(p => p.trim()).filter(Boolean)
 
+/** Normalise a binding's `keys` field (one chord or a list) to a list.
+ *  The single shared copy — keybinding overrides, conflict detection, and
+ *  the shortcut-help model all expand bindings the same way. */
+export const toChordArray = (keys: string | readonly string[]): readonly string[] =>
+  typeof keys === 'string' ? [keys] : keys
+
 /** Serialise a parsed press back to its canonical chord string. */
 const formatPress = ({mods, key}: ParsedPress): string =>
   [...mods, key].filter(Boolean).join('+')
@@ -175,17 +158,14 @@ export const canonicalizeChord = (raw: string, phase?: ChordPhase): string => {
   return phase ? `${phase}:${canonical}` : canonical
 }
 
-/**
- * Parse a chord into an ordered sequence of descriptors for matching.
- * Splits on space first, so 'd d' / 'g g' become two presses instead of
- * one atomic key — the historical cause of dead sequence chords. Plain
- * chords yield a length-1 sequence.
- */
-export const parseChord = (raw: string, phase: ChordPhase = 'keydown'): ChordSequence =>
-  splitSequence(raw).map(press => {
-    const {mods, key} = parsePress(press)
-    return {kind: 'key', key, mods, phase}
-  })
+// NOTE: keyboard EVENT matching is deliberately NOT re-implemented here.
+// Matching a KeyboardEvent against a chord is tinykeys' job
+// (`parseKeybinding` / `matchKeybindingPress`) — a hand-rolled keyboard
+// descriptor family used to live in this module and diverged from
+// tinykeys' semantics (event.code fallback, $mod platform resolution),
+// which is exactly the bug class that got it removed. This module keeps
+// chord-STRING canonicalisation plus the pointer/touch descriptors, which
+// have no tinykeys equivalent.
 
 /** Platform-primary detection for `$mod` (Cmd on Apple, Ctrl elsewhere),
  *  mirroring tinykeys so keyboard and pointer agree on what `$mod` means. */
