@@ -62,7 +62,7 @@ var previewDbSuffix = (base) => {
 };
 var dbFilenameForUser = (userId, base = "/knowledge-medium/pr-preview/pr-292/") => {
 	const suffix = previewDbSuffix(base);
-	return `kmp-v6-${userId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_USER_SEGMENT - suffix.length)}${suffix}.db`;
+	return `kmp-v6-${userId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, Math.max(0, MAX_USER_SEGMENT - suffix.length))}${suffix}.db`;
 };
 var dbsByUser = /* @__PURE__ */ new Map();
 var initPromises = /* @__PURE__ */ new Map();
