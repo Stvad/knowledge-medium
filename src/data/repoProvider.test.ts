@@ -30,6 +30,10 @@ describe('dbFilenameForUser', () => {
     )
   })
 
+  it('keeps production capped at the full 40-char user segment', () => {
+    expect(dbFilenameForUser('a'.repeat(50), '/knowledge-medium/')).toBe(`kmp-v6-${'a'.repeat(40)}.db`)
+  })
+
   it('sanitizes and length-caps the user segment, reserving room for the suffix', () => {
     const long = 'a'.repeat(80)
     // '-pr-292' is 7 chars, taken out of the 40-char user budget → 33 kept.

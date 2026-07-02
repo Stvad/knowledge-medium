@@ -129,7 +129,7 @@ export const dbFilenameForUser = (
   // wa-sqlite pathname cap needs for the -journal/-wal/-shm derivatives.
   const sanitized = userId
     .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .slice(0, MAX_USER_SEGMENT - suffix.length)
+    .slice(0, Math.max(0, MAX_USER_SEGMENT - suffix.length))
   return `kmp-v6-${sanitized}${suffix}.db`
 }
 
