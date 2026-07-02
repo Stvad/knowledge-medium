@@ -1,0 +1,268 @@
+import { BlockNotFoundError, BlockNotLoadedError } from "./api/errors.js";
+import "./api/index.js";
+import { getBlockTypes } from "./properties.js";
+//#region src/data/block.ts
+/**
+* `Block` — sync facade + Handle<BlockData|null> for a single block row
+* (spec §5.1, §5.2).
+*
+* Block satisfies the Handle interface structurally (peek/load/subscribe/
+* read/status/key) AND adds the OO sugar that 95% of imperative call
+* sites use: `data` (sync, throws), `childIds` / `children` / `parent`
+* (sync tree relatives), `get` / `peekProperty` (typed property reads),
+* `set` / `setContent` / `delete` (single-block write sugar). Picking one
+* object that does both jobs (vs. a separate `Handle` and `Block`) keeps
+* the call-site surface uniform and unifies "row reactivity" with "row
+* imperative work" under one identity-stable instance — see the
+* data-layer-redesign task §13.2 design discussion.
+*
+* Identity: the same `Block` instance is returned from `repo.block(id)`
+* for a given id (Repo holds them in `blockFacades`). Block does NOT
+* register with `HandleStore` — its row-grain subscriptions go through
+* `BlockCache.subscribe(id, …)` (already in place from Phase 1) and the
+* cache fires whenever the snapshot changes. HandleStore is the registry
+* for *collection* handles (`repo.children/subtree/ancestors/backlinks`),
+* which need the dependency-shaped invalidation index that the row-grain
+* cache already provides for free.
+*/
+var liveSnapshot = (snapshot) => {
+	if (snapshot === void 0) return void 0;
+	return snapshot.deleted ? null : snapshot;
+};
+var Block = class {
+	id;
+	repo;
+	/** Inflight `load()` promise — dedup'd at the Block level so Suspense
+	*  paths can throw a stable promise across renders. Cleared once it
+	*  settles. This is the single load-dedup mechanism: `repo.load` is a
+	*  raw option-shaped loader that deliberately does NOT dedup (an
+	*  id-only cache would silently merge a plain `repo.load(id)` with a
+	*  concurrent `repo.load(id, {children})`), so the dedup lives here at
+	*  the facade — one Block per id — where `read()`/`status()` also need
+	*  the inflight/error state anyway. */
+	inflight = null;
+	/** Counts overlapping `load()` calls in flight. Drives `status()`'s
+	*  'loading' branch — needed since the cache itself doesn't know who
+	*  is currently loading what. */
+	loadingCount = 0;
+	/** Last error from a failed load. `status()` returns 'error' until the
+	*  next successful load clears it. */
+	lastError = void 0;
+	constructor(repo, id) {
+		this.repo = repo;
+		this.id = id;
+	}
+	/** Stable Handle key — namespaced so a handle store dedup index could
+	*  include Block (we don't currently register, but the key is part of
+	*  the contract so the option remains open). */
+	get key() {
+		return `block:${this.id}`;
+	}
+	/** Sync live read; throws BlockNotLoadedError if the row isn't
+	*  loaded, BlockNotFoundError if `repo.load` previously confirmed the
+	*  row doesn't exist (§5.2) OR the cache currently holds a soft-
+	*  deleted tombstone. The Block facade is the live-row surface; use
+	*  `peekRaw()` for tombstone-aware inspection. */
+	get data() {
+		const snap = this.peek();
+		if (snap !== void 0 && snap !== null) return snap;
+		if (snap === null) throw new BlockNotFoundError(this.id);
+		throw new BlockNotLoadedError(this.id);
+	}
+	/** Live soft access (§5.2):
+	*    undefined → not loaded yet
+	*    null      → confirmed missing OR loaded tombstone
+	*    BlockData → loaded live row */
+	peek() {
+		const snap = liveSnapshot(this.repo.cache.getSnapshot(this.id));
+		if (snap !== void 0) return snap;
+		if (this.repo.cache.isMissing(this.id)) return null;
+	}
+	/** Tombstone-aware cache access. Most UI and query code should use
+	*  `peek()`; this exists for lifecycle/debug paths that need to
+	*  inspect the raw cached row shape without forcing a SQL read. */
+	peekRaw() {
+		const snap = this.repo.cache.getSnapshot(this.id);
+		if (snap !== void 0) return snap;
+		if (this.repo.cache.isMissing(this.id)) return null;
+	}
+	/** Ensure loaded. Idempotent + dedup'd at the Block level so Suspense
+	*  paths can throw a stable promise across renders. Returns null when
+	*  the row doesn't exist.
+	*
+	*  Cache fast-path: if a live row is already in `BlockCache` we
+	*  return synchronously without going to SQL. The cache is the
+	*  source of truth post-tx (`repo.tx`'s commit pipeline writes it)
+	*  and post-sync (`rowEventsTail`'s `applyIfNewer` keeps it
+	*  current), so a redundant SQL read just costs a connection round-
+	*  trip that contends with PowerSync's upload/download work. The
+	*  hot path
+	*  (keyboard navigation through `nextVisibleBlock` /
+	*  `previousVisibleBlock`) does 2-3 of these per arrow press —
+	*  occasionally blocked behind a slow sync drain (p99 ~600 ms in a
+	*  big-DB profile). Mirrors `repo.exists`'s short-circuit and the
+	*  `block.peek() ?? await block.load()` idiom.
+	*
+	*  The `confirmed-missing` marker is NOT a fast-path — `load()` is an
+	*  "ensure loaded" operation, and a missing marker is just the cached
+	*  result of a prior load. A caller asking again means they want SQL
+	*  to re-verify; the marker may be stale relative to a sync that
+	*  hasn't drained yet. */
+	load() {
+		const cached = this.repo.cache.getSnapshot(this.id);
+		if (cached !== void 0 && !cached.deleted) {
+			this.lastError = void 0;
+			return Promise.resolve(cached);
+		}
+		if (this.inflight) return this.inflight;
+		this.loadingCount++;
+		const p = this.repo.load(this.id).then((value) => {
+			this.lastError = void 0;
+			return value;
+		}, (err) => {
+			this.lastError = err;
+			throw err;
+		}).finally(() => {
+			this.loadingCount = Math.max(0, this.loadingCount - 1);
+			if (this.inflight === p) this.inflight = null;
+		});
+		this.inflight = p;
+		return p;
+	}
+	/** Subscribe to cache mutations for this id. Listener fires with the
+	*  current live `BlockData | null` (null = confirmed missing, cached
+	*  tombstone, or hard-deleted/missing). */
+	subscribe(listener) {
+		return this.repo.cache.subscribe(this.id, () => {
+			listener(this.peek() ?? null);
+		});
+	}
+	/** Suspense-path read. Returns the value if loaded; throws a Promise
+	*  React can `await` if not loaded yet; throws the stored error if the
+	*  last load failed. (Spec §5.1.) */
+	read() {
+		const status = this.status();
+		if (status === "ready") return this.peek() ?? null;
+		if (status === "error") throw this.lastError;
+		throw this.load();
+	}
+	/** Handle lifecycle status (spec §5.1):
+	*    'ready'   — snapshot loaded OR row confirmed missing
+	*    'loading' — at least one `load()` call in flight, no value yet
+	*    'error'   — last load failed; cleared by the next successful load
+	*    'idle'    — no load attempted yet, no snapshot in cache */
+	status() {
+		if (this.repo.cache.hasSnapshot(this.id)) return "ready";
+		if (this.repo.cache.isMissing(this.id)) return "ready";
+		if (this.loadingCount > 0) return "loading";
+		if (this.lastError !== void 0) return "error";
+		return "idle";
+	}
+	/** Sync property read with codec.decode + schema defaultValue
+	*  fallback. Throws BlockNotLoadedError if the row isn't loaded. */
+	get(schema) {
+		const stored = this.data.properties[schema.name];
+		if (stored === void 0) return schema.defaultValue;
+		return schema.codec.decode(stored);
+	}
+	/** Like `get` but doesn't substitute the default — returns undefined
+	*  when the property is absent. */
+	peekProperty(schema) {
+		const snap = this.peek();
+		if (snap === void 0 || snap === null) return void 0;
+		const stored = snap.properties[schema.name];
+		if (stored === void 0) return void 0;
+		return schema.codec.decode(stored);
+	}
+	get types() {
+		const data = this.data;
+		return getBlockTypes(data);
+	}
+	hasType(typeId) {
+		return this.types.includes(typeId);
+	}
+	/** Reactive child-id list. Delegates to `repo.query.childIds({id})` —
+	*  the LoaderHandle owns SQL + caching + invalidation, so call sites
+	*  never need to ask the BlockCache about children directly.
+	*  Imperative call sites do `await block.childIds.load()`; reactive
+	*  ones use `useChildIds(block)` (which subscribes to the same
+	*  handle). */
+	get childIds() {
+		return this.repo.query.childIds({ id: this.id });
+	}
+	/** Reactive children-rows list. Same shape as `childIds` but loads
+	*  the full BlockData rows (per-row deps included), suitable for
+	*  imperative tree walks that need content / properties without an
+	*  extra `repo.block(id).load()` per child. Callers wanting Block
+	*  facades do `(await block.children.load()).map(d => repo.block(d.id))`. */
+	get children() {
+		return this.repo.query.children({ id: this.id });
+	}
+	/** Parent as Block, or null only if this block has no parent
+	*  (workspace root). Returns the identity-stable facade from
+	*  `repo.block(parentId)` regardless of whether the parent row is
+	*  in cache — call `.load()` on the result if you need data.
+	*
+	*  Note: requires this block's own row to be in cache (so we know
+	*  `parentId`). Returns null if this block isn't loaded yet — the
+	*  caller is expected to have awaited a prior `load()` if it's
+	*  reading parent imperatively. */
+	get parent() {
+		const data = this.peek();
+		if (data === void 0 || data === null) return null;
+		if (data.parentId === null) return null;
+		return this.repo.block(data.parentId);
+	}
+	async set(schema, valueOrUpdater) {
+		if (typeof valueOrUpdater !== "function") {
+			await this.repo.mutate.setProperty({
+				id: this.id,
+				schema,
+				value: valueOrUpdater
+			});
+			return;
+		}
+		const updater = valueOrUpdater;
+		await this.repo.tx(async (tx) => {
+			const raw = (await tx.get(this.id))?.properties[schema.name];
+			const current = raw === void 0 ? void 0 : schema.codec.decode(raw);
+			await tx.setProperty(this.id, schema, updater(current));
+		}, {
+			scope: schema.changeScope,
+			description: `update property ${schema.name} on ${this.id}`
+		});
+	}
+	async addType(typeId) {
+		await this.repo.addType(this.id, typeId);
+	}
+	async removeType(typeId) {
+		await this.repo.removeType(this.id, typeId);
+	}
+	async toggleType(typeId) {
+		await this.repo.toggleType(this.id, typeId);
+	}
+	/** Set the block's content. */
+	async setContent(content) {
+		await this.repo.mutate.setContent({
+			id: this.id,
+			content
+		});
+	}
+	/** Subtree-aware soft-delete (mirrors legacy `Block.delete`). */
+	async delete() {
+		await this.repo.mutate.delete({ id: this.id });
+	}
+};
+/** Internal helper: throw a typed error for "block confirmed missing
+*  by repo.load". Called by load paths to convert null returns into a
+*  thrown error when the caller wants strict behavior. */
+var requireLoadedBlock = (block) => {
+	const data = block.peek();
+	if (data === void 0) throw new BlockNotLoadedError(block.id);
+	if (data === null) throw new BlockNotFoundError(block.id);
+	return data;
+};
+//#endregion
+export { Block, requireLoadedBlock };
+
+//# sourceMappingURL=block.js.map
