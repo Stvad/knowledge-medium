@@ -1,7 +1,9 @@
 import { defineBlockType, type TypeContribution } from '@/data/api'
 import {
   aliasesProp,
+  blockTypeColorProp,
   blockTypeDescriptionProp,
+  blockTypeHideTagProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
   extensionDescriptionProp,
@@ -63,9 +65,16 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
     id: BLOCK_TYPE_TYPE,
     label: 'Type',
-    // Lift label / description / properties so the panel surfaces them
-    // through the type-section path when editing a block-type block.
-    properties: [blockTypeLabelProp, blockTypeDescriptionProp, blockTypePropertiesProp],
+    // Lift label / description / properties / tag-display fields so the
+    // panel surfaces them through the type-section path when editing a
+    // block-type block.
+    properties: [
+      blockTypeLabelProp,
+      blockTypeDescriptionProp,
+      blockTypePropertiesProp,
+      blockTypeHideTagProp,
+      blockTypeColorProp,
+    ],
   }),
   defineBlockType({
     id: TYPES_PAGE_TYPE,

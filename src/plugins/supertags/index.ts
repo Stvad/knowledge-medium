@@ -24,7 +24,7 @@ export { HIDDEN_TYPE_IDS } from './typeAutocomplete'
 export const supertagsPlugin: AppExtension = systemToggle({
   id: 'system:supertags',
   name: 'Type tags (#)',
-  description: 'Type # in a block to tag it with a type (or create one); a block\'s types show as #chips at the end of its content.',
+  description: 'Type # in a block to tag it with a type (or create one); a block\'s types show as #chips at the end of its content. Chip color and visibility are configured per type (on the type\'s definition block).',
 }).of([
   codeMirrorExtensionsFacet.of(supertagsCodeMirrorExtensions, {source: 'supertags'}),
   blockContentDecoratorsFacet.of(typeChipsDecoratorContribution, {source: 'supertags'}),
