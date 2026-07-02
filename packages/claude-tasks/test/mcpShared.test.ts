@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {findBlockedRef, isReadOnlySql} from '../src/mcpShared'
+import {findBlockedRef, findBlockedRefInProperties, isReadOnlySql} from '../src/mcpShared'
 
 describe('isReadOnlySql', () => {
   it.each([
@@ -23,6 +23,13 @@ describe('isReadOnlySql', () => {
     'SELECT 1; UPDATE blocks SET content = ?',
     'PRAGMA journal_mode = DELETE',
     'DROP TABLE blocks',
+    // Side-effecting PowerSync functions invoked from a SELECT prologue —
+    // the "SELECT ⇒ read-only" premise is false on this connection.
+    'SELECT powersync_clear(1)',
+    'select powersync_replace_schema(?)',
+    'SELECT powersync_control(?, ?)',
+    'WITH x AS (SELECT 1) SELECT powersync_clear(1)',
+    'SELECT b.id FROM blocks b WHERE powersync_clear(1)',
   ])('rejects mutating statement: %s', sql => {
     expect(isReadOnlySql(sql)).toBe(false)
   })
@@ -42,5 +49,25 @@ describe('findBlockedRef', () => {
     expect(findBlockedRef('embed !((page-id-123))', guard)).toBe('((page-id-123))')
     expect(findBlockedRef('aliased [label](((page-id-123)))', guard)).toBe('((page-id-123))')
     expect(findBlockedRef('other ((different-id))', guard)).toBeNull()
+  })
+})
+
+describe('findBlockedRefInProperties', () => {
+  const guard = {aliases: ['claude'], ids: ['page-id-123']}
+
+  it('catches a ref-typed property whose bare value is the target id', () => {
+    // A ref codec stores the raw id; projecting it creates a backlink
+    // with no [[...]] in content — the content guard would miss it.
+    expect(findBlockedRefInProperties({'some:ref': 'page-id-123'}, guard)).toBe('page-id-123')
+    expect(findBlockedRefInProperties({'some:reflist': ['x', 'page-id-123']}, guard)).toBe('page-id-123')
+  })
+
+  it('catches a wikilink smuggled through a property value', () => {
+    expect(findBlockedRefInProperties({note: 'see [[claude]]'}, guard)).toBe('[[claude]]')
+  })
+
+  it('passes clean property maps and undefined', () => {
+    expect(findBlockedRefInProperties({title: 'unrelated', count: 3}, guard)).toBeNull()
+    expect(findBlockedRefInProperties(undefined, guard)).toBeNull()
   })
 })

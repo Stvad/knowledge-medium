@@ -76,13 +76,17 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   return {graph, blocks, replies, propWrites}
 }
 
-const memoryState = (): StateStore & {cursors: Map<string, string[]>} => {
+const memoryState = (seedLaunchTimes: number[] = []): StateStore & {cursors: Map<string, string[]>, launches: number[]} => {
   const cursors = new Map<string, string[]>()
-  return {
+  const store = {
     cursors,
-    getCursor: async name => cursors.get(name) ?? null,
-    setCursor: async (name, ids) => { cursors.set(name, ids) },
+    launches: [...seedLaunchTimes],
+    getCursor: async (name: string) => cursors.get(name) ?? null,
+    setCursor: async (name: string, ids: string[]) => { cursors.set(name, ids) },
+    getLaunchTimes: async () => [...store.launches],
+    setLaunchTimes: async (times: number[]) => { store.launches = times },
   }
+  return store
 }
 
 const okRun = (overrides: Partial<ClaudeRunResult> = {}): ClaudeRunResult => ({
@@ -367,6 +371,35 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(runTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('carries the spend budget across a restart (persisted launch log)', async () => {
+    const build = (state: ReturnType<typeof memoryState>) => {
+      const {graph} = fakeGraph({
+        backlinks: [{id: 'b-1'}, {id: 'b-2'}, {id: 'b-3'}],
+        blocks: {
+          'b-1': {content: '[[claude]] 1'},
+          'b-2': {content: '[[claude]] 2'},
+          'b-3': {content: '[[claude]] 3'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun())
+      const engine = engineWith({graph, runTask, state, config: mentionConfig({runsPerHour: 2, maxConcurrent: 10})})
+      return {engine, runTask}
+    }
+
+    const state = memoryState()
+    const first = build(state)
+    await first.engine.tick()
+    await first.engine.drain()
+    expect(first.runTask).toHaveBeenCalledTimes(2)
+
+    // Fresh engine, SAME persisted state (simulates a restart): the
+    // budget must NOT re-arm — an in-memory-only cap would fire 2 more.
+    const second = build(state)
+    await second.engine.tick()
+    await second.engine.drain()
+    expect(second.runTask).not.toHaveBeenCalled()
   })
 
   it('passes the km MCP allowlist plus watcher extras to the run', async () => {

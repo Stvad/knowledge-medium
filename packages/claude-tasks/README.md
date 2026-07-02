@@ -12,7 +12,7 @@ Trigger Claude Code from your notes. Write `[[claude]] summarize the meeting not
                                               └──────────────────────────────────────┘
 ```
 
-Design notes: task state lives **in the graph** (`claude:*` block properties), so the daemon is stateless for mention watchers — restart-safe, multi-device-safe (a mention synced from your iPad triggers once the Mac client sees it). The bridge requires a live app tab; no tab → watchers idle.
+Design notes: task state lives **in the graph** (`claude:*` block properties), so the daemon is restart-safe for mention watchers — it re-derives pending work from block properties, and a mention synced from your iPad triggers once the Mac client sees it. **Run exactly one daemon per fleet**, though: the claim is a plain property write with no cross-device compare-and-swap, so two daemons on two machines can both claim the same mention within sync latency (the claim-verify and pidfile only prevent *same-machine* double-claims). The bridge requires a live app tab; no tab → watchers idle.
 
 ## Billing invariant (subscription, not API)
 
@@ -115,7 +115,7 @@ The same graph tools work from any MCP client — e.g. Claude Desktop / interact
 }
 ```
 
-Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement and `WITH … UPDATE` forms are rejected), `create_block`, `update_block`. Deliberately excluded: `eval`, `sql execute`, extension lifecycle.
+Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`. The write tools also refuse watcher-target references in **property values**, not just `content` (a ref-typed property whose value is the target id would otherwise project a backlink and re-trigger the loop). Deliberately excluded: `eval`, `sql execute`, extension lifecycle.
 
 ## Security posture
 

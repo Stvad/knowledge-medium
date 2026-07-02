@@ -140,6 +140,12 @@ export const createGraph = (client: BridgeClient) => {
     return Array.isArray(result) ? result as BlockData[] : []
   }
 
+  // KNOWN LIMITATION: this write goes through the bridge `update-block`
+  // command, which stamps user_updated_at/updatedBy like a user edit —
+  // so a claimed mention jumps to the top of "recently edited" views.
+  // It does NOT cause a re-trigger (decidePending only reads editedAtMs
+  // when status is unset, and this sets status). A clean fix needs the
+  // bridge to forward a skipMetadata flag to tx.update; not available yet.
   const setTaskProps = async (
     id: string,
     args: {status: TaskStatus, watcher?: string, session?: string | null, error?: string | null, attempts?: number, nowMs: number},

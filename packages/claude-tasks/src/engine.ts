@@ -47,18 +47,32 @@ export const createEngine = (deps: EngineDeps) => {
   const running = new Map<string, Promise<void>>()
   const pageIdCache = new Map<string, string>()
   /** Launch timestamps within the rolling hour — the global spend
-   *  circuit-breaker. Every hole elsewhere becomes a bounded bill. */
-  const launchTimes: number[] = []
+   *  circuit-breaker. PERSISTED (state.ts): an in-memory-only log would
+   *  re-arm a full budget on every crash/restart, unbounding the exact
+   *  trigger-loop the cap exists to stop. Seeded from disk on first tick. */
+  let launchTimes: number[] = []
+  let launchTimesLoaded = false
 
   const capacityLeft = () => config.maxConcurrent - running.size
 
-  const spendBudgetLeft = (): boolean => {
+  const pruneLaunchTimes = () => {
     const cutoff = now() - 60 * 60_000
     while (launchTimes.length > 0 && launchTimes[0] < cutoff) launchTimes.shift()
+  }
+
+  const spendBudgetLeft = (): boolean => {
+    pruneLaunchTimes()
     return launchTimes.length < config.runsPerHour
   }
 
-  const recordLaunch = () => launchTimes.push(now())
+  const recordLaunch = () => {
+    launchTimes.push(now())
+    pruneLaunchTimes()
+    // Fire-and-forget: the in-memory log already gates this tick; the
+    // write only needs to survive a later restart.
+    void state.setLaunchTimes(launchTimes).catch(error =>
+      log(`failed to persist spend log: ${errorMessage(error)}`))
+  }
 
   const launch = (key: string, work: () => Promise<void>) => {
     const promise = work()
@@ -112,9 +126,12 @@ export const createEngine = (deps: EngineDeps) => {
         status: 'running', watcher: watcher.name, attempts: attempt, nowMs: claimStamp,
       })
 
-      // Claim-verify: re-read and confirm OUR claim stuck. A concurrent
-      // daemon (launchd + a manual --once, or another machine racing
-      // within sync latency) that wrote after us wins; we back off.
+      // Claim-verify: re-read and confirm OUR claim stuck — defends only
+      // against a faster LOCAL overwrite (two daemons on one client, e.g.
+      // launchd + a manual --once). It does NOT make cross-machine safe:
+      // each daemon reads its own client, so two machines both see their
+      // own write and proceed. Cross-machine safety relies on the
+      // one-daemon-per-fleet constraint (README) + the pidfile.
       const verified = await graph.getBlock(sourceId)
       const props = verified?.properties ?? {}
       if (props['claude:watcher'] !== watcher.name || props['claude:updated-at'] !== claimStamp) {
@@ -270,6 +287,11 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   const tick = async () => {
+    if (!launchTimesLoaded) {
+      launchTimes = await state.getLaunchTimes()
+      pruneLaunchTimes()
+      launchTimesLoaded = true
+    }
     for (const watcher of config.watchers) {
       try {
         if (watcher.kind === 'backlinks') await tickBacklinksWatcher(watcher)

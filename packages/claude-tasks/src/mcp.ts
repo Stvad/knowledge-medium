@@ -33,7 +33,7 @@ import { z } from 'zod'
 import { createBridgeClient } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import { createGraph } from './graph.js'
-import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, findBlockedRef, isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
+import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, findBlockedRef, findBlockedRefInProperties, isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
 const client = createBridgeClient({
@@ -63,24 +63,34 @@ const guardSet = async (): Promise<RefGuardSet> => {
 
   const aliases = new Set(blockedNames)
   const ids = new Set<string>()
+  let complete = true
   for (const name of blockedNames) {
     try {
       const target = await graph.targetGuardSet(name)
       ids.add(target.id)
       for (const alias of target.aliases) aliases.add(alias)
     } catch {
-      // Page missing / bridge hiccup: keep the raw-name guard for now;
-      // TTL retries the full resolution.
+      // Page missing / bridge hiccup: fall back to the raw-name guard,
+      // but do NOT cache a partial fill — otherwise an id/alias bypass
+      // would be open for the whole TTL. Retry on the next call.
+      complete = false
     }
   }
   const set = {aliases: [...aliases], ids: [...ids]}
-  guardCache = {set, fetchedAt: Date.now()}
+  if (complete) guardCache = {set, fetchedAt: Date.now()}
   return set
 }
 
-const assertNoBlockedRefs = async (content: string | undefined) => {
-  if (!content || blockedNames.length === 0) return
-  const blocked = findBlockedRef(content, await guardSet())
+const assertNoBlockedRefs = async (
+  content: string | undefined,
+  properties?: Record<string, unknown>,
+) => {
+  if (blockedNames.length === 0) return
+  if (!content && !properties) return
+  const guard = await guardSet()
+  const blocked =
+    (content ? findBlockedRef(content, guard) : null)
+    ?? findBlockedRefInProperties(properties, guard)
   if (blocked) {
     throw new Error(
       `Refusing to write "${blocked}": it references a watcher-target page and would re-trigger the watcher that spawned this run. Refer to the page without linking it.`,
@@ -159,7 +169,7 @@ server.registerTool('create_block' satisfies KmMcpToolName, {
     properties: z.record(z.string(), z.unknown()).optional(),
   },
 }, async ({parentId, content, properties}) => {
-  await assertNoBlockedRefs(content)
+  await assertNoBlockedRefs(content, properties)
   return json(await client.runCommand({type: 'create-block', parentId, content, properties}))
 })
 
@@ -171,7 +181,7 @@ server.registerTool('update_block' satisfies KmMcpToolName, {
     properties: z.record(z.string(), z.unknown()).optional(),
   },
 }, async ({id, content, properties}) => {
-  await assertNoBlockedRefs(content)
+  await assertNoBlockedRefs(content, properties)
   return json(await client.runCommand({type: 'update-block', id, content, properties}))
 })
 

@@ -47,7 +47,9 @@ export interface RefGuardSet {
  *  `((id))` is a substring of the `!((id))` embed and `[label](((id)))`
  *  forms, so one check covers every block-ref syntax. */
 export const findBlockedRef = (content: string, guard: RefGuardSet): string | null => {
-  const lower = content.toLowerCase()
+  // NFC so a decomposed alias in the write can't slip past a composed
+  // alias in the guard (or vice-versa) — the app resolves them as equal.
+  const lower = content.normalize('NFC').toLowerCase()
   for (const alias of guard.aliases) {
     if (lower.includes(`[[${alias.toLowerCase()}]]`)) return `[[${alias}]]`
   }
@@ -57,16 +59,49 @@ export const findBlockedRef = (content: string, guard: RefGuardSet): string | nu
   return null
 }
 
+/** First blocked reference reachable through a properties map, or null.
+ *  A ref-typed property whose VALUE is a watched page's id projects a
+ *  backlink with no `[[...]]` in content (referenceProjection.ts), so
+ *  the content guard alone is bypassable. We don't have the property
+ *  schemas here, so scan every stringified value for a blocked id as a
+ *  bare substring (the raw form a ref codec stores) plus the content
+ *  ref forms — conservative on purpose: over-blocking a property that
+ *  merely contains the id as text is the safe direction for a
+ *  re-trigger guard. */
+export const findBlockedRefInProperties = (
+  properties: Record<string, unknown> | undefined,
+  guard: RefGuardSet,
+): string | null => {
+  if (!properties) return null
+  const blob = JSON.stringify(properties).normalize('NFC').toLowerCase()
+  const contentHit = findBlockedRef(blob, guard)
+  if (contentHit) return contentHit
+  for (const id of guard.ids) {
+    if (blob.includes(id.toLowerCase())) return id
+  }
+  return null
+}
+
+/** Side-effecting SQL functions PowerSync registers on the SAME wa-sqlite
+ *  connection the bridge uses — `SELECT powersync_clear(1)` wipes local
+ *  (incl. un-uploaded) data, `powersync_replace_schema` / `_control`
+ *  corrupt schema/sync state. A `SELECT` prologue does NOT make a
+ *  statement read-only here, so these must be denied by name regardless
+ *  of prologue. The app registers no other writable UDFs (verified), so
+ *  this family is the whole vector. */
+const SIDE_EFFECTING_FN = /\bpowersync_[a-z0-9_]*\s*\(/i
+
 /** The bridge's sql modes don't gate writes (an UPDATE "runs" under
- *  mode=all), so read-only is enforced textually: single statement, and
- *  either a SELECT/PRAGMA-info/EXPLAIN prologue (which SQLite cannot
- *  turn mutating) or a WITH containing no mutating keyword — CTEs can
- *  head `WITH … UPDATE/INSERT/DELETE`, so `with` alone proves nothing.
- *  The keyword scan can false-positive on string literals; rewrite the
- *  query (or use the write tools) in that case. */
+ *  mode=all), so read-only is enforced textually: single statement, no
+ *  side-effecting function call, and either a SELECT/PRAGMA-info/EXPLAIN
+ *  prologue or a WITH containing no mutating keyword — CTEs can head
+ *  `WITH … UPDATE/INSERT/DELETE`, so `with` alone proves nothing. The
+ *  keyword/function scan can false-positive on string literals; rewrite
+ *  the query (or use the write tools) in that case. */
 export const isReadOnlySql = (sql: string): boolean => {
   const body = sql.trim().replace(/;\s*$/, '')
   if (body.includes(';')) return false
+  if (SIDE_EFFECTING_FN.test(body)) return false
   if (/^(select|pragma table_info|explain)\b/i.test(body)) return true
   if (/^with\b/i.test(body)) {
     return !/\b(insert|update|delete|replace|drop|alter|create|vacuum|attach|detach|reindex)\b/i.test(body)

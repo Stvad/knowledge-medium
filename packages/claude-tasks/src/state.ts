@@ -1,7 +1,9 @@
 /**
- * Cursor persistence for query watchers. Backlink watchers deliberately
- * do NOT use this — their state lives on the blocks themselves — so the
- * file only holds "which row ids has each query watcher already seen".
+ * Persisted daemon state: query-watcher cursors and the spend-limiter's
+ * launch timestamps. Backlink watchers deliberately do NOT keep cursors
+ * here — their state lives on the blocks themselves — but the launch
+ * log MUST persist, otherwise the runsPerHour circuit-breaker re-arms on
+ * every crash/restart (the exact loop it exists to bound).
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -9,28 +11,40 @@ import { isErrnoException } from '@knowledge-medium/agent-cli/config'
 
 interface StateData {
   queryCursors: Record<string, string[]>
+  /** Epoch-ms of recent run launches; pruned to the rolling window. */
+  launchTimes: number[]
 }
 
-const emptyState = (): StateData => ({queryCursors: {}})
+const emptyState = (): StateData => ({queryCursors: {}, launchTimes: []})
 
 const normalizeState = (value: unknown): StateData => {
-  if (!value || typeof value !== 'object') return emptyState()
-  const cursors = (value as {queryCursors?: unknown}).queryCursors
-  if (!cursors || typeof cursors !== 'object') return emptyState()
+  const state = emptyState()
+  if (!value || typeof value !== 'object') return state
 
-  const queryCursors: Record<string, string[]> = {}
-  for (const [name, ids] of Object.entries(cursors as Record<string, unknown>)) {
-    if (Array.isArray(ids) && ids.every(id => typeof id === 'string')) {
-      queryCursors[name] = ids
+  const cursors = (value as {queryCursors?: unknown}).queryCursors
+  if (cursors && typeof cursors === 'object') {
+    for (const [name, ids] of Object.entries(cursors as Record<string, unknown>)) {
+      if (Array.isArray(ids) && ids.every(id => typeof id === 'string')) {
+        state.queryCursors[name] = ids
+      }
     }
   }
-  return {queryCursors}
+
+  const launches = (value as {launchTimes?: unknown}).launchTimes
+  if (Array.isArray(launches)) {
+    state.launchTimes = launches.filter((ms): ms is number => typeof ms === 'number' && Number.isFinite(ms))
+  }
+  return state
 }
 
 export interface StateStore {
   /** null = never seen (first run baselines without firing). */
   getCursor: (watcherName: string) => Promise<string[] | null>
   setCursor: (watcherName: string, ids: string[]) => Promise<void>
+  /** Launch timestamps within the retention window (persisted). */
+  getLaunchTimes: () => Promise<number[]>
+  /** Replace the persisted launch log (caller prunes to the window). */
+  setLaunchTimes: (times: number[]) => Promise<void>
 }
 
 export const createStateStore = (filePath: string): StateStore => {
@@ -62,6 +76,12 @@ export const createStateStore = (filePath: string): StateStore => {
     setCursor: async (name, ids) => {
       const state = await load()
       state.queryCursors[name] = ids
+      await persist(state)
+    },
+    getLaunchTimes: async () => [...(await load()).launchTimes],
+    setLaunchTimes: async times => {
+      const state = await load()
+      state.launchTimes = times
       await persist(state)
     },
   }
