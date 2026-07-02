@@ -95,7 +95,15 @@ const snapshotFromGroupedResult = (
  *  re-evaluates the gate as the (open) group's entries load, so the
  *  button appears reliably instead of only when the sources happened to
  *  already be cached. No load is forced here — the lazy entries own that;
- *  priming every source up front would defeat `LazyViewportMount`. */
+ *  priming every source up front would defeat `LazyViewportMount`.
+ *
+ *  Boundary (intentional): because nothing is forced, the gate resolves
+ *  only once a source actually hydrates. An open group's in-view entries
+ *  do that immediately; a group the user has collapsed (entries never
+ *  mount) — or a sole date-bearing source scrolled beyond the lazy-mount
+ *  overscan — keeps the button hidden until the group is expanded / that
+ *  entry scrolls in. Accepted for the reported default-open, all-dated
+ *  daily-notes case; forcing loads to close it would undo the laziness. */
 const useBlockCacheSignal = (blocks: readonly Block[]): void => {
   const versionRef = useRef(0)
   const subscribe = useCallback(

@@ -190,6 +190,41 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     )
   })
 
+  it('subscribes to every source in a group, not just the first', async () => {
+    // Guards `useBlockCacheSignal` subscribing across the whole source set
+    // (not only index 0): the gate is `sources.some(...)`, so a match that
+    // only hydrates on a *later* source must still surface the action.
+    state.headerActions = [{actionId: 'multi_select.block.date.spread'}]
+    const original = state.grouped
+    state.grouped = {
+      groups: [{groupId: 'topic', label: 'Topic', sourceIds: ['src-a', 'src-b'], fallback: false}],
+      total: 2,
+      unfilteredSourceIds: ['src-a', 'src-b'],
+      sourceParents: [
+        {sourceId: 'src-a', parentIds: []},
+        {sourceId: 'src-b', parentIds: []},
+      ],
+    }
+    try {
+      const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+
+      render(<GroupedLinkedReferences block={block} />)
+
+      await screen.findByTestId('backlink-src-a')
+      expect(screen.queryByTestId('header-action')).toBeNull()
+
+      // Only the second source carries the date reference; the first stays
+      // unhydrated. The button must still appear.
+      hydrateSource('src-b', 'todo [[2026-07-02]]')
+
+      await waitFor(() =>
+        expect(screen.getByTestId('header-action')).toBeInTheDocument(),
+      )
+    } finally {
+      state.grouped = original
+    }
+  })
+
   it('pauses the live subscription without remounting the visible backlink rows', async () => {
     const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
 
