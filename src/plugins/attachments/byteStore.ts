@@ -315,8 +315,12 @@ export class OpfsByteStore implements ByteStore {
     // COORDINATION CAVEAT for the §16 reference-GC job (its sole caller, `assetGc.
     // runMediaGcSweep`): a purge that races a concurrent down-lane `put` for the same
     // workspace can lose, because `put`'s retry re-creates the ws dir from a fresh resolve
-    // after this `removeEntry`. So the GC runs with the workspace quiescent — it holds the
-    // per-(user,workspace) down-lane lock (laneLock.runSingleOwner) so no `put` is in flight.
+    // after this `removeEntry`. The GC excludes the DOWN-LANE put by holding the same
+    // per-(user,workspace) down-lane lock (laneLock.runSingleOwner). Capture / demand-resolve
+    // puts are NOT under that lock — the GC is safe from them only because it purges a
+    // workspace orphaned past its grace window, which by construction isn't being captured
+    // into or viewed. A future reuse of purgeWorkspace on an ACCESSIBLE workspace (Branch B)
+    // would need its own exclusion for those callers.
     this.wsDirCache.delete(this.wsCacheKey(userId, workspaceId)) // the cached handle is about to go stale
     try {
       // Walk to the USER dir, then remove the workspace subtree from it.

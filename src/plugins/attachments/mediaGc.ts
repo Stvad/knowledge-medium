@@ -94,10 +94,12 @@ export const reclaimOrphanedWorkspaces = async (deps: MediaGcDeps): Promise<Medi
 
   for (const ws of stored) {
     if (accessible.has(ws)) {
-      // Still a member → not a candidate. Clear any stale marker so a transient orphaning
-      // that just resolved restarts the grace clock on any FUTURE orphaning. (Branch B —
-      // the per-content-key reap within an accessible workspace — slots in here.)
-      await deps.markers.clear(deps.userId, ws)
+      // Still a member → not a candidate. Clear a stale marker (a transient orphaning that
+      // just resolved) so the grace clock restarts on any FUTURE orphaning — but only when
+      // one actually exists, so the steady state (no marker) pays a cheap readonly `get`
+      // instead of a commit-durable readwrite delete per accessible workspace every sweep.
+      // (Branch B — the per-content-key reap within an accessible workspace — slots in here.)
+      if (await deps.markers.get(deps.userId, ws)) await deps.markers.clear(deps.userId, ws)
       continue
     }
 

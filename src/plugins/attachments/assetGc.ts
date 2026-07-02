@@ -7,9 +7,12 @@
  * leave / workspace delete): it gives `byteStore.purgeWorkspace` its first live caller.
  * The membership signal is the local synced `workspaces` table (`SELECT id FROM workspaces`
  * — revoke drops the row); a stored prefix absent from it, past the grace window, is
- * purged. Each purge runs under the SAME per-(user,workspace) down-lane lock the
- * replicator holds, so no in-flight `put` can re-create a just-purged dir (the coordination
- * caveat on `purgeWorkspace`).
+ * purged. Each purge runs under the SAME per-(user,workspace) down-lane lock the replicator
+ * holds, which excludes the DOWN-LANE `put` from re-creating a just-purged dir (the
+ * coordination caveat on `purgeWorkspace`). The other `put` callers — capture and
+ * demand-resolve — aren't under this lock, but they only ever write to an ACCESSIBLE
+ * workspace, and the GC only purges one that's been orphaned past its grace window (never
+ * accessible), so they can't target a purge candidate.
  *
  * The gate matters: `isRemoteSyncActive()` rules out a local-only session (where
  * `workspaces` is empty for an unrelated reason), and `hasSynced` rules out a not-yet-
@@ -82,7 +85,9 @@ export const runMediaGcSweep = async (): Promise<void> => {
     },
     markers: getGcMarkerStore(),
     hasUnUploadedBytes: async (ws) => (await unUploadedWorkspaces()).has(ws),
-    // Purge under the down-lane lock so no in-flight `put` for this workspace races it.
+    // Purge under the down-lane's own lock name, so it's mutually exclusive with an
+    // in-flight down-lane `put` for this workspace (capture/demand puts only hit accessible
+    // workspaces, which are never purge candidates — see the header).
     purgeWorkspace: (ws) =>
       runSingleOwner(downLaneLockName(userId, ws), () => byteStore.purgeWorkspace(userId, ws)),
     now: () => Date.now(),

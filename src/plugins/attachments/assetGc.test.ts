@@ -40,13 +40,7 @@ vi.mock('./byteStore.js', () => ({
 vi.mock('./uploadStore.js', () => ({
   getByteUploadStore: () => ({
     listByStatus: async (_u: string, status: string) =>
-      status === 'staged'
-        ? h.stagedRecs
-        : status === 'pending'
-          ? h.pendingRecs
-          : status === 'failed'
-            ? h.failedRecs
-            : [],
+      ({ staged: h.stagedRecs, pending: h.pendingRecs, failed: h.failedRecs })[status] ?? [],
   }),
 }))
 vi.mock('./laneLock.js', () => ({ runSingleOwner: h.runSingleOwner }))
