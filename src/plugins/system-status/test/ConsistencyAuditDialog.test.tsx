@@ -1,13 +1,16 @@
 // @vitest-environment jsdom
 /**
- * The on-demand audit results dialog. Covers the three UX contracts it owns:
+ * The on-demand audit results dialog. Covers the contracts it owns:
  *   1. offending block ids are shown IN FULL and are copy-to-clipboard,
  *   2. clicking an id opens it in the SIDE PANEL (sidebar-stack) and KEEPS the
- *      dialog open (no resolve/cancel),
- *   3. it reads the LAST published result from the store, so it can be re-opened
- *      without re-running (empty state when nothing has run).
+ *      dialog open,
+ *   3. it reads the target workspace's result from the per-workspace store, so it
+ *      re-opens without re-running (empty state when nothing has run) and a
+ *      foreign-workspace audit can't blank an open dialog,
+ *   4. the non-modal presentation renders NO dimming overlay but is still
+ *      closable.
  */
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConsistencyAuditResult } from '@/plugins/data-integrity/audit'
 import {
@@ -80,15 +83,25 @@ describe('ConsistencyAuditDialog', () => {
 
   it('opens a clicked id in the side panel WITHOUT closing the dialog', () => {
     publishConsistencyAudit(withSamples())
-    const { resolve, cancel } = renderDialog()
+    const { cancel } = renderDialog()
 
     fireEvent.click(screen.getByText(FULL_ID))
     expect(navigate).toHaveBeenCalledWith(
       expect.objectContaining({ blockId: FULL_ID, target: 'sidebar-stack' }),
     )
     // The dialog must stay open so the (expensive) audit results aren't discarded.
-    expect(resolve).not.toHaveBeenCalled()
     expect(cancel).not.toHaveBeenCalled()
+  })
+
+  it('renders NO dimming overlay (non-modal) but stays closable via ✕', () => {
+    publishConsistencyAudit(withSamples())
+    const { cancel } = renderDialog()
+    // hideOverlay: the app behind the dialog must stay visible/interactive, so the
+    // Radix overlay node (bg-black/80) must not be in the tree.
+    expect(document.querySelector('[class*="bg-black/80"]')).toBeNull()
+    // …and the ✕ still closes it (guards a regression where non-modal breaks close).
+    fireEvent.click(screen.getByRole('button', { name: /close/i }))
+    expect(cancel).toHaveBeenCalled()
   })
 
   it('shows an empty state (and no results) when nothing has run this session', () => {
@@ -131,15 +144,50 @@ describe('ConsistencyAuditDialog', () => {
     )
   })
 
-  it('re-runs on demand via the store engine (updating in place)', async () => {
-    runConsistencyAuditNow.mockResolvedValue(withSamples())
+  it('keeps an open dialog’s result when a DIFFERENT workspace’s audit publishes', () => {
+    // Regression: the store is per-workspace, so a cadenced/manual audit for
+    // another workspace completing while this dialog is open must NOT evict the
+    // (expensive) result it is showing.
+    publishConsistencyAudit(withSamples()) // ws-1 (active)
+    renderDialog()
+    expect(screen.getByText(FULL_ID)).toBeTruthy()
+
+    act(() => {
+      publishConsistencyAudit({ ...withSamples(), workspaceId: 'ws-OTHER', checkedAt: 2 })
+    })
+
+    expect(screen.getByText(FULL_ID)).toBeTruthy()
+    expect(screen.queryByText(/no audit has run/i)).toBeNull()
+  })
+
+  it('re-runs on demand and updates the shown result in place', async () => {
+    // A distinct, plainly-synthetic id (not UUID-shaped, to keep the repo's
+    // no-uuids-in-commits guard happy); the test only needs it to be findable.
+    const NEW_ID = 'rerun-sample-block-id'
+    // The engine publishes on success; the store-driven dialog re-renders.
+    runConsistencyAuditNow.mockImplementation(async () => {
+      const updated: ConsistencyAuditResult = {
+        workspaceId: 'ws-1',
+        checkedAt: 2_000_000_000_000,
+        anomalies: 1,
+        checks: {
+          references_index_mirror: { status: 'anomaly', missingIndexRows: 1, samples: [NEW_ID] },
+        },
+      }
+      publishConsistencyAudit(updated)
+      return updated
+    })
     publishConsistencyAudit(withSamples())
     renderDialog()
+    expect(screen.getByText(FULL_ID)).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: /re-run/i }))
     await waitFor(() => expect(runConsistencyAuditNow).toHaveBeenCalledWith(
       expect.objectContaining({ activeWorkspaceId: 'ws-1' }),
       'ws-1',
     ))
+    // In place: the fresh result's id replaces the old one — no re-open needed.
+    await waitFor(() => expect(screen.getByText(NEW_ID)).toBeTruthy())
+    expect(screen.queryByText(FULL_ID)).toBeNull()
   })
 })

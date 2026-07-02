@@ -22,7 +22,7 @@ import {
   type ActionConfig,
   type BaseShortcutDependencies,
 } from '@/shortcuts/types.js'
-import { openDialog } from '@/utils/dialogs.js'
+import { getDialogQueue, openDialog } from '@/utils/dialogs.js'
 import { showError, showProgress } from '@/utils/toast.js'
 import {
   RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
@@ -30,6 +30,14 @@ import {
 } from '@/plugins/data-integrity/store.js'
 import { runConsistencyAuditNow } from '@/plugins/data-integrity/schedule.js'
 import { ConsistencyAuditDialog } from './ConsistencyAuditDialog.tsx'
+
+/** True when a results dialog is already on screen. Used to keep the CHEAP,
+ *  repeatable "View last" / "Inspect" affordances from stacking identical copies —
+ *  an existing dialog already reflects the store, so re-viewing is a no-op. (A
+ *  deliberate "Run" is NOT gated on this: it just did expensive work and should
+ *  always surface its own result, pinned to the workspace it scanned.) */
+const isAuditDialogOpen = (): boolean =>
+  getDialogQueue().some((entry) => (entry.Component as unknown) === ConsistencyAuditDialog)
 
 export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
@@ -56,8 +64,7 @@ export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes
       // Always show the inspectable result (works clean or with findings). The
       // dialog reads the just-published result from the store; pin it to the
       // audited workspace so a mid-scan workspace switch can't make the fresh
-      // result read as "no audit" (the dialog scopes the store snapshot to its
-      // workspace).
+      // result read as "no audit" (the dialog scopes the store to its workspace).
       void openDialog(ConsistencyAuditDialog, { workspaceId })
     } catch (e) {
       progress.fail(`Data integrity audit failed: ${e instanceof Error ? e.message : String(e)}`)
@@ -74,6 +81,8 @@ export const viewDataIntegrityAuditAction: ActionConfig<typeof ActionContextType
   context: ActionContextTypes.GLOBAL,
   icon: ShieldCheck,
   handler: () => {
+    // Cheap + repeatable: don't stack a second identical dialog if one is open.
+    if (isAuditDialogOpen()) return
     void openDialog(ConsistencyAuditDialog)
   },
 }
