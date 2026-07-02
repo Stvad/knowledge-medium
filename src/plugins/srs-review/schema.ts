@@ -60,5 +60,6 @@ export const reviewProgressProp = defineProperty<ReviewProgress | null>('srs-rev
 export const srsReviewProgressType = defineBlockType({
   id: SRS_REVIEW_PROGRESS_TYPE,
   label: 'SRS review progress',
+  structural: true,
   properties: [reviewProgressProp],
 })

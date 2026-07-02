@@ -6,7 +6,9 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
+  blockTypeColorProp,
   blockTypeDescriptionProp,
+  blockTypeHideTagProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
 } from '@/data/properties'
@@ -72,7 +74,13 @@ const waitForTypeRegistration = async (
 
 const createBlockTypeBlock = async (
   repo: Repo,
-  args: {label: string; description?: string; properties?: readonly string[]},
+  args: {
+    label: string
+    description?: string
+    properties?: readonly string[]
+    hideTag?: boolean
+    color?: string
+  },
 ): Promise<string> => {
   const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
   await repo.tx(async tx => {
@@ -83,6 +91,12 @@ const createBlockTypeBlock = async (
     }
     if (args.properties !== undefined) {
       await tx.setProperty(id, blockTypePropertiesProp, args.properties)
+    }
+    if (args.hideTag !== undefined) {
+      await tx.setProperty(id, blockTypeHideTagProp, args.hideTag)
+    }
+    if (args.color !== undefined) {
+      await tx.setProperty(id, blockTypeColorProp, args.color)
     }
   }, {scope: ChangeScope.BlockDefault})
   if (args.label) await waitForTypeRegistration(repo, id, args.label)
@@ -98,6 +112,64 @@ describe('UserTypesService subscription', () => {
     expect(contribution!.label).toBe('Person')
     expect(contribution!.id).toBe(id)
     expect(env.service.getTypeBlockId(id)).toBe(id)
+  })
+
+  it('lifts hide-tag and color onto the contribution, and republishes on change', async () => {
+    env = await setup()
+    const id = await createBlockTypeBlock(env.repo, {
+      label: 'Recipe',
+      hideTag: true,
+      color: '#e11d48',
+    })
+    const contribution = env.repo.types.get(id)
+    expect(contribution).toMatchObject({hideTag: true, color: '#e11d48'})
+
+    // Display config is live-editable: a color change must survive the
+    // contributionsEqual dedup and reach the registry.
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, blockTypeColorProp, 'tomato')
+      await tx.setProperty(id, blockTypeHideTagProp, false)
+    }, {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => {
+      const updated = env.repo.types.get(id)
+      expect(updated?.color).toBe('tomato')
+      expect(updated?.hideTag).toBeUndefined()
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+  })
+
+  it('a malformed display-config value skips that row without freezing the registry', async () => {
+    env = await setup()
+    const good = await createBlockTypeBlock(env.repo, {label: 'Good'})
+    const bad = await createBlockTypeBlock(env.repo, {label: 'Bad'})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // Simulate a bridge/import writing a string into the boolean prop
+      // (bypassing the typed setter, as raw writers can).
+      await env.repo.tx(async tx => {
+        const row = await tx.get(bad)
+        await tx.update(bad, {
+          properties: {...row!.properties, [blockTypeHideTagProp.name]: 'true'},
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      // The bad row degrades to skipped; the good one must still update.
+      await env.repo.tx(async tx => {
+        await tx.setProperty(good, blockTypeLabelProp, 'Good v2')
+      }, {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(env.repo.types.get(good)?.label).toBe('Good v2')
+        expect(env.repo.types.get(bad)).toBeUndefined()
+      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('omits hide-tag and color when unset (defaults stay off the contribution)', async () => {
+    env = await setup()
+    const id = await createBlockTypeBlock(env.repo, {label: 'Plain'})
+    const contribution = env.repo.types.get(id)!
+    expect(contribution.hideTag).toBeUndefined()
+    expect(contribution.color).toBeUndefined()
   })
 
   it('skips a block with an empty label', async () => {

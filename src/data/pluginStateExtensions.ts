@@ -51,7 +51,9 @@ export const pluginPrefsExtension = (
   type: TypeContribution,
   source: string,
 ): readonly AppExtension[] => [
-  typesFacet.of(type, {source}),
+  // Prefs containers are plumbing, not tags — stamp `structural` so the
+  // tagging UX (# autocomplete, tag chips) never surfaces them.
+  typesFacet.of({...type, structural: true}, {source}),
   appEffectsFacet.of(pluginPrefsBootstrapEffect(type), {source}),
 ]
 
@@ -62,6 +64,7 @@ export const pluginUIStateExtension = (
   type: TypeContribution,
   source: string,
 ): readonly AppExtension[] => [
-  typesFacet.of(type, {source}),
+  // UI-state containers are plumbing, not tags — see pluginPrefsExtension.
+  typesFacet.of({...type, structural: true}, {source}),
   appEffectsFacet.of(pluginUIStateBootstrapEffect(type), {source}),
 ]

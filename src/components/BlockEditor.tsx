@@ -190,8 +190,18 @@ export const BlockEditor = ({
         } else if (selection.x !== undefined) {
           placeCursorAtX(editorView, selection.x, selection.line === 'last')
         } else if (selection.start !== undefined) {
+          // Clamp to the live doc, mirroring the adoption-path clamp
+          // above: the stored selection is debounce-persisted and can
+          // outlive a doc-shrinking dispatch (e.g. the supertags `#`
+          // autocomplete deleting its trigger text), and CodeMirror
+          // throws "Selection points outside of document" on a raw
+          // out-of-range anchor.
+          const docLength = editorView.state.doc.length
           const end = selection.end ?? selection.start
-          editorView.dispatch({selection: {anchor: selection.start, head: end}})
+          editorView.dispatch({selection: {
+            anchor: Math.min(selection.start, docLength),
+            head: Math.min(end, docLength),
+          }})
         }
       }
 

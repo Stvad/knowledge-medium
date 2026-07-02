@@ -11,6 +11,7 @@ interface TypeOption {
   id: string
   label: string
   description?: string
+  structural: boolean
 }
 
 const normalizedTypes = (value: readonly string[]): readonly string[] =>
@@ -43,6 +44,7 @@ export function TypesPropertyEditor({
     id: type.id,
     label: type.label ?? type.id,
     description: type.description,
+    structural: type.structural === true,
   })), [typesRegistry])
   const optionsById = useMemo(() => new Map(options.map(option => [option.id, option])), [options])
   const queryText = query.trim().toLowerCase()
@@ -70,9 +72,16 @@ export function TypesPropertyEditor({
   }
 
   const commitCurrentQuery = (): boolean => {
-    const exact = options.find(option =>
+    // A user-defined type can share a label with a structural kernel/
+    // plugin type ("page", "Media"). Typing that label into a TYPE
+    // picker almost always means the taggable one — and preferring it
+    // keeps this picker consistent with the `#` autocomplete and the
+    // ref-target picker, which both resolve label collisions to the
+    // non-structural type.
+    const exactMatches = options.filter(option =>
       option.id.toLowerCase() === queryText ||
       option.label.toLowerCase() === queryText)
+    const exact = exactMatches.find(option => !option.structural) ?? exactMatches[0]
     const option = exact && !selectedSet.has(exact.id)
       ? exact
       : filtered[activeIndex] ?? filtered[0]

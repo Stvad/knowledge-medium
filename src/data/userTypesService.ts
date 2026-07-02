@@ -27,7 +27,9 @@ import type {
   ProjectorHandle,
 } from '@/data/projectorRuntime'
 import {
+  blockTypeColorProp,
   blockTypeDescriptionProp,
+  blockTypeHideTagProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
 } from '@/data/properties'
@@ -55,6 +57,8 @@ const tryBuildType = (
     return null
   }
   const description = block.peekProperty(blockTypeDescriptionProp) ?? ''
+  const hideTag = block.peekProperty(blockTypeHideTagProp) ?? false
+  const color = (block.peekProperty(blockTypeColorProp) ?? '').trim()
   const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
   const properties: AnyPropertySchema[] = []
   for (const refId of refIds) {
@@ -65,6 +69,8 @@ const tryBuildType = (
     id: block.id,
     label,
     ...(description ? {description} : {}),
+    ...(hideTag ? {hideTag} : {}),
+    ...(color ? {color} : {}),
     properties,
   }
 }
@@ -83,6 +89,7 @@ const contributionsEqual = (
     const ac = a[i]
     const bc = b[i]
     if (ac.id !== bc.id || ac.label !== bc.label || ac.description !== bc.description) return false
+    if (ac.hideTag !== bc.hideTag || ac.color !== bc.color) return false
     const ap = ac.properties ?? []
     const bp = bc.properties ?? []
     if (ap.length !== bp.length) return false

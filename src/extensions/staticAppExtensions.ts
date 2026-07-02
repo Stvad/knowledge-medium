@@ -55,6 +55,7 @@ import { keybindingsSettingsPlugin } from '@/plugins/keybindings-settings'
 import { extractTypePlugin } from '@/plugins/extract-type'
 import { birthdayPlugin } from '@/plugins/birthday'
 import { characterCounterPlugin } from '@/plugins/character-counter'
+import { supertagsPlugin } from '@/plugins/supertags'
 import type { AppExtension } from '@/facets/facet.js'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -117,6 +118,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   referencesPlugin,
   geoPlugin,
   characterCounterPlugin,
+  supertagsPlugin,
   aliasPlugin,
   mergeBlocksPlugin,
   // The backlinks-view coordinator reads variants registered by
