@@ -208,28 +208,23 @@ const AudioViewer = ({
   reportDecodeFailure,
   resolveBytes,
   requestResolve,
+  armed,
   filename,
   size,
 }: MediaViewerProps) => {
-  // Local latch mirroring the renderer's arm: distinguishes the pre-play poster (state is
-  // loading because the resolve is gated) from the post-play resolving spinner (loading
-  // because the armed resolve is in flight).
-  const [armed, setArmed] = useState(false)
   const label = filename || 'Audio attachment'
 
-  const onPlay = () => {
-    setArmed(true)
-    requestResolve()
-  }
-
-  // Pre-play: a metadata-only poster. Clicking it arms the resolve (and, once ready, starts
-  // playback). Nothing is fetched/decrypted until this point.
+  // `armed` is renderer-owned (it gates the resolve) and content-scoped, so it doubles as
+  // this viewer's poster gate: while false the resolve hasn't been requested for this
+  // content (state is loading only because it's gated) → show the metadata poster; a click
+  // arms it, and once true `state` drives the spinner → player just like the image viewer.
+  // Nothing is fetched/decrypted until the click.
   if (!armed) {
     return (
       <button
         type="button"
         data-testid="media-audio-play"
-        onClick={onPlay}
+        onClick={requestResolve}
         aria-label={`Play ${label}`}
         className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground hover:bg-muted"
       >

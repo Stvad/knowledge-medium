@@ -56,9 +56,22 @@ export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
   // renderer never special-cases a mime (design §11).
   const viewer = pickMediaViewer(useAppRuntime().read(mediaViewersFacet), mime)
 
-  // A LAZY-INLINE viewer (audio) arms the eager resolve on demand via requestResolve — a
-  // one-way latch: bytes fetch on first play, never before, and never re-gate once armed.
+  // A LAZY-INLINE viewer (audio) arms the eager resolve on demand via requestResolve. The
+  // latch is owned HERE (single source of truth — it also gates the resolve hook, and the
+  // viewer reads it back via the `armed` prop) and is SCOPED TO THE CURRENT CONTENT: a
+  // content change (re-capture / synced edit / undo — all mutate the row in place WITHOUT
+  // remounting) disarms it, so a replaced attachment returns to its play-gated poster
+  // instead of surprise-resolving/autoplaying the new bytes, and never eager-fetches behind
+  // an un-played poster after a mime flip. contentKey mirrors the resolve hook's key so the
+  // two re-gate together. (setState-during-render is the React-blessed "reset on prop
+  // change" idiom — it re-renders in place before commit, no flash.)
+  const contentKey = `${workspaceId} ${hash} ${mime}`
   const [armed, setArmed] = useState(false)
+  const [armedFor, setArmedFor] = useState(contentKey)
+  if (armedFor !== contentKey) {
+    setArmedFor(contentKey)
+    if (armed) setArmed(false)
+  }
   const requestResolve = useCallback(() => setArmed(true), [])
 
   // Resolve on mount for an EAGER inline viewer (image); for a LAZY-INLINE viewer (audio)
@@ -83,6 +96,7 @@ export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
       reportDecodeFailure={reportDecodeFailure}
       resolveBytes={resolveBytes}
       requestResolve={requestResolve}
+      armed={armed}
       mime={mime}
       filename={filename}
       size={size}

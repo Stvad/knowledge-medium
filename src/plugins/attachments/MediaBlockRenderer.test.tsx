@@ -220,6 +220,28 @@ describe('MediaContentRenderer — audio branch', () => {
     // Same security invariant as the file fallback: never the attacker-influenceable media:mime.
     expect(blob.type).toBe('application/octet-stream')
   })
+
+  it('DISARMS on a content change under a live mount — no surprise autoplay/refetch of replaced bytes', () => {
+    // The block's media:hash can mutate in place (re-capture / synced edit / undo) WITHOUT a
+    // remount. A stale arm would auto-resolve + autoplay the new content behind the user's
+    // back; the arm is content-scoped, so it must fall back to the play-gated poster.
+    audioProps()
+    h.urlState = { status: 'ready', url: 'blob:audio/1' }
+    const { container, rerender } = renderContent()
+    fireEvent.click(screen.getByTestId('media-audio-play'))
+    expect(container.querySelector('audio')).not.toBeNull() // armed + playing the original bytes
+    expect(h.enabledArg).toBe(true)
+
+    // Mutate the block's content hash and re-render the SAME mounted instance (an in-place
+    // row change, not a remount) — this is what a synced re-capture / undo looks like.
+    h.props = { ...h.props, 'media:hash': 'sha256:cd' }
+    rerender(<MediaContentRenderer block={block} />)
+
+    expect(screen.getByTestId('media-audio-play')).toBeInTheDocument() // back to the poster…
+    expect(container.querySelector('audio')).toBeNull() // …NOT an auto-playing <audio> of new bytes
+    // The eager resolve is disarmed again — nothing fetched/decrypted until the user replays.
+    expect(h.enabledArg).toBe(false)
+  })
 })
 
 describe('MediaBlockRenderer.canRender', () => {

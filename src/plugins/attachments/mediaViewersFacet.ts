@@ -35,10 +35,17 @@ export interface MediaViewerProps {
   readonly resolveBytes: () => Promise<AssetResolveResult>
   /** LAZY-INLINE path: request that the (otherwise-gated) eager resolve of `state` BEGIN —
    *  for an inline viewer that shows the bytes but defers the fetch/decrypt until the user
-   *  intends to consume them (audio: on first play). Idempotent one-way latch. An EAGER
-   *  viewer (image) never calls it (its resolve is already live); a pure download viewer
-   *  (file) doesn't either (it uses {@link resolveBytes}). */
+   *  intends to consume them (audio: on first play). An EAGER viewer (image) never calls it
+   *  (its resolve is already live); a pure download viewer (file) doesn't either (it uses
+   *  {@link resolveBytes}). */
   readonly requestResolve: () => void
+  /** LAZY-INLINE path (the read-half of {@link requestResolve}): whether the resolve is
+   *  armed for the CURRENT content. A lazy-inline viewer shows its metadata affordance while
+   *  `false` and defers to `state` once `true`. The renderer OWNS this (single source of
+   *  truth — it also gates the resolve) and RESETS it when the block's content changes, so a
+   *  replaced/synced attachment returns to the un-armed affordance instead of auto-resolving
+   *  (or autoplaying) the new bytes. Ignored by eager/download viewers. */
+  readonly armed: boolean
   readonly mime: string
   readonly filename: string | undefined
   /** Plaintext byte length (`media:size`); `0` = unknown, then the size is omitted. */
