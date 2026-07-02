@@ -69,6 +69,14 @@ export const MEDIA_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
 export const isImageMime = (mime: string | undefined): boolean =>
   typeof mime === 'string' && mime.toLowerCase().startsWith('image/')
 
+/** The PDF MIME — its inline-preview viewer (§11 PDF branch). */
+export const PDF_MIME = 'application/pdf'
+
+/** Does a MIME type render as an inline PDF (§11 PDF branch)? Case-insensitive per
+ *  RFC 2045; an exact match — `application/pdf` has no sub-family the way `image/*` does. */
+export const isPdfMime = (mime: string | undefined): boolean =>
+  typeof mime === 'string' && mime.toLowerCase() === PDF_MIME
+
 /** The fallback MIME for a file with no declared type. */
 export const GENERIC_MIME = 'application/octet-stream'
 

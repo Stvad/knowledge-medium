@@ -1,24 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { FILE_VIEWER_FALLBACK, formatByteSize, imageMediaViewer, pickMediaViewer } from './mediaViewers.js'
-import type { MediaViewerContribution } from './mediaViewersFacet.js'
-
-const fakePdf: MediaViewerContribution = {
-  id: 'pdf',
-  match: (m) => m === 'application/pdf',
-  Component: () => null,
-  eager: true,
-}
+import { FILE_VIEWER_FALLBACK, formatByteSize, imageMediaViewer, pdfMediaViewer, pickMediaViewer } from './mediaViewers.js'
 
 describe('pickMediaViewer', () => {
   it('returns the first viewer whose match() accepts the mime (list is precedence-ordered)', () => {
-    const viewers = [imageMediaViewer, fakePdf]
+    const viewers = [imageMediaViewer, pdfMediaViewer]
     expect(pickMediaViewer(viewers, 'image/png')).toBe(imageMediaViewer)
     expect(pickMediaViewer(viewers, 'IMAGE/PNG')).toBe(imageMediaViewer) // MIME is case-insensitive (RFC 2045)
-    expect(pickMediaViewer(viewers, 'application/pdf')).toBe(fakePdf)
+    expect(pickMediaViewer(viewers, 'application/pdf')).toBe(pdfMediaViewer)
+    expect(pickMediaViewer(viewers, 'APPLICATION/PDF')).toBe(pdfMediaViewer) // case-insensitive too
   })
 
   it('falls back to the download viewer when no registered viewer claims the mime', () => {
-    expect(pickMediaViewer([imageMediaViewer], 'audio/mpeg')).toBe(FILE_VIEWER_FALLBACK)
+    expect(pickMediaViewer([imageMediaViewer, pdfMediaViewer], 'audio/mpeg')).toBe(FILE_VIEWER_FALLBACK)
     // Empty facet → still downloadable (the fallback is a hardcoded floor, not a contribution).
     expect(pickMediaViewer([], 'application/pdf')).toBe(FILE_VIEWER_FALLBACK)
   })

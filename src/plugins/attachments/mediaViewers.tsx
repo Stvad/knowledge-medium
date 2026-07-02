@@ -18,10 +18,11 @@
  */
 
 import { useCallback, useState } from 'react'
-import { Download, FileWarning, ImageOff, Loader2 } from 'lucide-react'
+import { Download, FileText, FileWarning, ImageOff, Loader2 } from 'lucide-react'
 import { MarkdownImage } from '@/markdown/MarkdownImage.js'
 import { downloadBlob } from '@/utils/downloadBlob.js'
-import { GENERIC_MIME, isImageMime } from './mediaBlock.js'
+import { GENERIC_MIME, PDF_MIME, isImageMime, isPdfMime } from './mediaBlock.js'
+import type { AssetResolveResult } from './resolver.js'
 import type { MediaViewerContribution, MediaViewerProps } from './mediaViewersFacet.js'
 
 /** A muted inline chip standing in for the real content: the loading spinner and the
@@ -85,21 +86,22 @@ const ImageViewer = ({ state, reportDecodeFailure, filename }: MediaViewerProps)
   return <Placeholder testid="media-broken" label="Image unavailable" icon={<ImageOff className="h-4 w-4" />} />
 }
 
-/** LAZY fallback viewer for any non-image (or as-yet-unhandled) mime: a download button
- *  rendered from METADATA — it resolves NO bytes until clicked. On click it fetches the
- *  verified bytes and hands them to {@link downloadBlob}, which saves them under the
- *  original filename via a transient, immediately-revoked anchor.
+type DownloadStatus = 'idle' | 'resolving' | 'error'
+
+/** Shared lazy-download control for the file + PDF viewers: fetch the block's VERIFIED
+ *  bytes on demand and save them via {@link downloadBlob}.
  *
- *  Security: the download bytes are wrapped as `application/octet-stream`, NOT the
- *  block's `media:mime`. `media:mime` is attacker-influenceable metadata; a persistent
+ *  Security: the saved bytes are wrapped as `application/octet-stream`, NOT the block's
+ *  `media:mime`. `media:mime` is attacker-influenceable metadata; a persistent
  *  `<a href="blob:…" download>` typed `text/html` is a same-origin XSS vector when opened
  *  in a new tab (the `download` hint is bypassed, and unreliable on iOS). A neutral
- *  content-type + a non-navigable transient anchor closes that off. A failed resolve is
- *  fail-closed (no bytes served) and the button reverts to a retryable error state. */
-const FileViewer = ({ resolveBytes, mime, filename, size }: MediaViewerProps) => {
-  const [status, setStatus] = useState<'idle' | 'resolving' | 'error'>('idle')
-  const label = filename || mime || 'Attachment'
-
+ *  content-type saved through a non-navigable transient anchor closes that off. A failed
+ *  resolve is fail-closed (no bytes served) and `status` reverts to a retryable `error`. */
+const useLazyDownload = (
+  resolveBytes: () => Promise<AssetResolveResult>,
+  filename: string | undefined,
+): { status: DownloadStatus; onDownload: () => void } => {
+  const [status, setStatus] = useState<DownloadStatus>('idle')
   const onDownload = useCallback(() => {
     setStatus('resolving')
     void resolveBytes()
@@ -113,6 +115,16 @@ const FileViewer = ({ resolveBytes, mime, filename, size }: MediaViewerProps) =>
       })
       .catch(() => setStatus('error')) // resolve() is fail-closed, but never leave it hanging
   }, [resolveBytes, filename])
+  return { status, onDownload }
+}
+
+/** LAZY fallback viewer for any non-image (or as-yet-unhandled) mime: a download button
+ *  rendered from METADATA — it resolves NO bytes until clicked, then saves the verified
+ *  bytes under the original filename via {@link useLazyDownload} (transient octet-stream
+ *  anchor — never a navigable `blob:` typed with the attacker-influenceable `media:mime`). */
+const FileViewer = ({ resolveBytes, mime, filename, size }: MediaViewerProps) => {
+  const { status, onDownload } = useLazyDownload(resolveBytes, filename)
+  const label = filename || mime || 'Attachment'
 
   return (
     <button
@@ -137,12 +149,81 @@ const FileViewer = ({ resolveBytes, mime, filename, size }: MediaViewerProps) =>
   )
 }
 
+/** EAGER inline PDF viewer: a bounded-height `<object>` of the verified object URL,
+ *  plus an always-visible download affordance (an inline preview isn't a substitute for
+ *  the file — and some browsers, e.g. iOS Safari, can't render a PDF in an `<object>` at
+ *  all; the `<object>` fallback content then points at the download).
+ *
+ *  Security: the object URL wraps the bytes as the block's `media:mime`, but this viewer
+ *  only matches `application/pdf` ({@link isPdfMime}), so the Blob's type is ALWAYS
+ *  `application/pdf` — never attacker-arbitrary. A `blob:` typed `application/pdf` is
+ *  handed to the browser's PDF viewer (a known non-`text/*` type isn't HTML-sniffed), so
+ *  even hash-verified-but-non-PDF bytes render as a broken PDF, never as executable HTML.
+ *  The download stays neutral octet-stream (see {@link useLazyDownload}). A failed resolve
+ *  is fail-closed → the broken-asset placeholder, never an unverified source (§5.1). */
+const PdfViewer = ({ state, resolveBytes, filename }: MediaViewerProps) => {
+  const { status, onDownload } = useLazyDownload(resolveBytes, filename)
+  const label = filename || 'PDF'
+
+  if (state.status === 'loading') {
+    return <Placeholder testid="media-loading" label="Loading PDF…" icon={<Loader2 className="h-4 w-4" />} spin />
+  }
+  // Fail-closed (deferred / hash-mismatch / decode / fetch / no-key / error): the
+  // broken-asset placeholder — never the object-URL of an unverified source (§5.1).
+  if (state.status !== 'ready') {
+    return <Placeholder testid="media-broken" label="PDF unavailable" icon={<FileWarning className="h-4 w-4" />} />
+  }
+
+  return (
+    <div data-testid="media-pdf" className="overflow-hidden rounded border border-border">
+      <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-1.5 text-sm">
+        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="truncate">{label}</span>
+        <button
+          type="button"
+          data-testid="media-pdf-download"
+          onClick={onDownload}
+          disabled={status === 'resolving'}
+          aria-label={status === 'error' ? `Download ${label} — failed, click to retry` : `Download ${label}`}
+          className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-xs text-foreground hover:bg-muted disabled:opacity-70"
+        >
+          {status === 'resolving' ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : status === 'error' ? (
+            <FileWarning className="h-3.5 w-3.5" />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
+          <span>{status === 'error' ? 'Retry' : 'Download'}</span>
+        </button>
+      </div>
+      {/* Bounded so a tall PDF doesn't take over the note; the native viewer scrolls
+          within. type is pinned to application/pdf — the Blob is that type by construction. */}
+      <object data={state.url} type={PDF_MIME} aria-label={label} className="block h-[60vh] max-h-[800px] w-full bg-muted/20">
+        <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+          This browser can’t preview PDFs inline — use Download above.
+        </div>
+      </object>
+    </div>
+  )
+}
+
 /** The image mime-family viewer — the attachments plugin's contribution to
  *  {@link mediaViewersFacet}. */
 export const imageMediaViewer: MediaViewerContribution = {
   id: 'image',
   match: isImageMime,
   Component: ImageViewer,
+  eager: true,
+}
+
+/** The inline-PDF viewer contribution — an eager viewer for `application/pdf`
+ *  ({@link mediaViewersFacet}). Sits alongside the image viewer; the mimes don't
+ *  overlap, so registration order doesn't matter. */
+export const pdfMediaViewer: MediaViewerContribution = {
+  id: 'pdf',
+  match: isPdfMime,
+  Component: PdfViewer,
   eager: true,
 }
 
