@@ -28,9 +28,12 @@ import { viewDataIntegrityAuditAction } from '../auditAction.ts'
 import { ConsistencyAuditDialog } from '../ConsistencyAuditDialog.tsx'
 
 const invokeView = (activeWorkspaceId: string | null) =>
-  viewDataIntegrityAuditAction.handler({
-    uiStateBlock: { repo: { activeWorkspaceId } },
-  } as never)
+  // handler is (dependencies, trigger, dispatch?); this action only reads
+  // dependencies.uiStateBlock, so the trigger is a throwaway.
+  viewDataIntegrityAuditAction.handler(
+    { uiStateBlock: { repo: { activeWorkspaceId } } } as never,
+    {} as never,
+  )
 
 afterEach(() => {
   openDialog.mockReset()
