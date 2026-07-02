@@ -37,8 +37,10 @@
   "exports": {
     ".": "./dist/cli.js",
     "./server": "./dist/server.js",
+    "./client": "./dist/client.js",
     "./config": "./dist/config.js",
-    "./protocol": "./dist/protocol.js"
+    "./protocol": "./dist/protocol.js",
+    "./subtreeOutline": "./dist/subtreeOutline.js"
   },
   "files": [
     "dist",
