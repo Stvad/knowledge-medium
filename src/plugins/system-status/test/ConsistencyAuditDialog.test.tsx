@@ -83,7 +83,9 @@ describe('ConsistencyAuditDialog', () => {
     const { resolve, cancel } = renderDialog()
 
     fireEvent.click(screen.getByText(FULL_ID))
-    expect(navigate).toHaveBeenCalledWith({ blockId: FULL_ID, target: 'sidebar-stack' })
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ blockId: FULL_ID, target: 'sidebar-stack' }),
+    )
     // The dialog must stay open so the (expensive) audit results aren't discarded.
     expect(resolve).not.toHaveBeenCalled()
     expect(cancel).not.toHaveBeenCalled()
@@ -92,8 +94,28 @@ describe('ConsistencyAuditDialog', () => {
   it('shows an empty state (and no results) when nothing has run this session', () => {
     resetConsistencyAuditStore()
     renderDialog()
-    expect(screen.getByText(/no audit has run yet/i)).toBeTruthy()
+    expect(screen.getByText(/no audit has run/i)).toBeTruthy()
     expect(screen.getByRole('button', { name: /run audit/i })).toBeTruthy()
+  })
+
+  it('ignores a snapshot from a different workspace (treats it as empty)', () => {
+    // Audit ran in another workspace; while ws-1 (the mocked active workspace) is
+    // active, its counts/ids must NOT show — else a click would open a foreign id.
+    publishConsistencyAudit({ ...withSamples(), workspaceId: 'ws-OTHER' })
+    renderDialog()
+    expect(screen.queryByText(FULL_ID)).toBeNull()
+    expect(screen.getByRole('button', { name: /run audit/i })).toBeTruthy()
+  })
+
+  it('pins the audited workspace when opening a sample', () => {
+    publishConsistencyAudit(withSamples())
+    renderDialog()
+    fireEvent.click(screen.getByText(FULL_ID))
+    expect(navigate).toHaveBeenCalledWith({
+      blockId: FULL_ID,
+      target: 'sidebar-stack',
+      workspaceId: 'ws-1',
+    })
   })
 
   it('re-runs on demand via the store engine (updating in place)', async () => {
