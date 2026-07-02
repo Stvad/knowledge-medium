@@ -35,18 +35,19 @@ import {
 import { runConsistencyAuditNow } from './schedule.js'
 import { ConsistencyAuditDialog } from './ConsistencyAuditDialog.tsx'
 
-/** True when an open results dialog would ALREADY show `workspaceId` — either
- *  pinned to it, or unpinned (an unpinned dialog tracks the active workspace, so
- *  it shows whatever `workspaceId` the caller is about to view). Used to keep the
- *  cheap, repeatable "View last" / "Inspect" affordances from stacking a second
- *  copy of the SAME thing, while still letting a view of a DIFFERENT workspace
- *  through (e.g. a run-dialog pinned to ws-A is open, but Inspect wants ws-B). A
- *  deliberate "Run" is never gated on this — it always surfaces its own result. */
+/** True when an open results dialog is ALREADY pinned to `workspaceId`. Both
+ *  actions pin the dialog at open (run → the scanned workspace, view → the active
+ *  one), so this is an EXACT prop match — the queue entry honestly records the
+ *  workspace it shows. It keeps the cheap, repeatable "View last" / "Inspect"
+ *  affordances from stacking a second copy for the SAME workspace, while still
+ *  letting a view of a DIFFERENT workspace through (a dialog pinned to ws-A must
+ *  not suppress an Inspect for ws-B). A deliberate "Run" is never gated on this —
+ *  it always surfaces its own result. */
 const auditDialogAlreadyShows = (workspaceId: string | null): boolean =>
   getDialogQueue().some(
     (entry) =>
       (entry.Component as unknown) === ConsistencyAuditDialog &&
-      ((entry.props.workspaceId as string | undefined) ?? workspaceId) === workspaceId,
+      (entry.props.workspaceId as string | undefined) === (workspaceId ?? undefined),
   )
 
 export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
@@ -91,11 +92,14 @@ export const viewDataIntegrityAuditAction: ActionConfig<typeof ActionContextType
   context: ActionContextTypes.GLOBAL,
   icon: ShieldCheck,
   handler: ({ uiStateBlock }: BaseShortcutDependencies) => {
-    // Cheap + repeatable: don't stack a second dialog that would show the SAME
-    // workspace as one already open — but a dialog pinned to a DIFFERENT
-    // workspace doesn't cover this request, so still open one for the active one.
-    if (auditDialogAlreadyShows(uiStateBlock.repo.activeWorkspaceId)) return
-    void openDialog(ConsistencyAuditDialog)
+    const workspaceId = uiStateBlock.repo.activeWorkspaceId
+    // Cheap + repeatable: don't stack a second dialog already pinned to this
+    // workspace — but a dialog pinned to a DIFFERENT workspace doesn't cover this
+    // request, so still open one. Pin the active workspace at open (like the run
+    // action pins the one it scanned) so the dialog shows a stable workspace and
+    // the guard above stays an exact match.
+    if (auditDialogAlreadyShows(workspaceId)) return
+    void openDialog(ConsistencyAuditDialog, { workspaceId: workspaceId ?? undefined })
   },
 }
 

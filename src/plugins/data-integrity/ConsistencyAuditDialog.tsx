@@ -150,10 +150,14 @@ const formatCheckedAt = (checkedAt: number): string => {
 }
 
 export interface ConsistencyAuditDialogProps {
-  /** Pin the dialog to a specific audited workspace instead of the active one.
-   *  The run action passes the workspace it just scanned so a mid-scan workspace
-   *  switch can't make the fresh result read as "no audit". Omitted by the "View
-   *  last" action → falls back to the active workspace. */
+  /** The workspace this dialog is pinned to. Both openers pass it: the run
+   *  action passes the workspace it just scanned; the "View last" action passes
+   *  the active workspace at open. Pinning at open (rather than tracking the
+   *  active workspace live) keeps the shown result stable across a later
+   *  workspace switch — the dialog is non-modal — and makes the dialog's queue
+   *  entry an honest record of which workspace it shows, so the re-open dedup
+   *  guard can match on it exactly. Omitted only when there's no active workspace
+   *  → falls back to the active workspace (null → the empty state). */
   workspaceId?: string
 }
 
@@ -164,19 +168,15 @@ export function ConsistencyAuditDialog({
   const repo = useRepo()
   const navigate = useNavigate()
   const [, setHash] = useHash()
-  // A workspace pinned by an IN-DIALOG run (empty-state "Run audit" / "Re-run").
-  // The run publishes for a specific workspace; if the active workspace changes
-  // before it lands, an unpinned "View last" dialog would resubscribe to the new
-  // active workspace and hide the fresh result as "no audit has run". Capturing
-  // the run's workspace here keeps the dialog showing what it just ran — the same
-  // guard the global run action applies via its `workspaceId` prop.
-  const [runPinnedWorkspaceId, setRunPinnedWorkspaceId] = useState<string | null>(null)
-  // The workspace whose results this dialog shows: an explicitly PINNED one (the
-  // run action passes the workspace it just scanned), else one pinned by an
-  // in-dialog run, else the active workspace (the "View last…" action). Pinning
-  // matters because a run publishes for a specific workspace — if the active
-  // workspace changes afterward, an unpinned view would stop matching it.
-  const targetWorkspaceId = pinnedWorkspaceId ?? runPinnedWorkspaceId ?? repo.activeWorkspaceId
+  // The workspace whose results this dialog shows: the one it was PINNED to at
+  // open (both openers pin — run → the scanned workspace, view → the active one),
+  // else the active workspace (only when opened with no active workspace).
+  // Pinning at open rather than following the active workspace live is what lets
+  // a later workspace switch (the dialog is non-modal) leave the shown result —
+  // and any in-dialog run/re-run, which targets this same workspace — intact. It
+  // also keeps the queue entry an honest record of the shown workspace, which the
+  // re-open dedup guard (auditAction.ts) relies on.
+  const targetWorkspaceId = pinnedWorkspaceId ?? repo.activeWorkspaceId
   // Read ONLY this workspace's result from the per-workspace store. Reading the
   // workspace-scoped entry means a cadenced/manual audit for a DIFFERENT
   // workspace can't blank an open dialog — its subscription value is unchanged by
@@ -205,16 +205,15 @@ export function ConsistencyAuditDialog({
   }
 
   const rerun = async () => {
-    // Re-run the SHOWN workspace (the pinned/target one), not just whatever is
-    // active now, so the refreshed result stays coherent with what's displayed.
+    // Re-run the SHOWN (pinned) workspace, not whatever is active now, so the
+    // refreshed result stays coherent with what's displayed. Because the dialog
+    // is pinned at open, a mid-run active-workspace switch can't hide the fresh
+    // result — it publishes under `ws`, which is still what this dialog shows.
     const ws = targetWorkspaceId
     if (!ws) {
       showError('Data integrity audit: no active workspace.')
       return
     }
-    // Pin the dialog to the workspace being run so a mid-run active-workspace
-    // switch can't hide the fresh result (it publishes under `ws`).
-    setRunPinnedWorkspaceId(ws)
     setRerunning(true)
     try {
       // Publishes to the audit store on success → this dialog re-renders with the

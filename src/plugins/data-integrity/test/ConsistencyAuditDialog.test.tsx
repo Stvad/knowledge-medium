@@ -245,14 +245,15 @@ describe('ConsistencyAuditDialog', () => {
     expect(screen.queryByText(FULL_ID)).toBeNull()
   })
 
-  it('keeps showing the workspace it ran even after the active workspace switches', async () => {
-    // An unpinned "View last" dialog follows the active workspace — but once you
-    // start an in-dialog run, it must PIN that workspace so a mid/post-run switch
-    // can't resubscribe the view and hide the fresh result as "no audit has run".
+  it('runs and shows its PINNED workspace (not the active one) and survives an active switch', async () => {
+    // Dialog pinned to ws-A while active is ws-1. An in-dialog run must target the
+    // pinned ws-A (the shown workspace), and a later switch to ws-2 must not blank
+    // it — pinning at open is what keeps the result coherent across the switch.
     const RUN_ID = 'run-pinned-sample-id'
-    runConsistencyAuditNow.mockImplementation(async () => {
+    runConsistencyAuditNow.mockImplementation(async (...args: unknown[]) => {
+      const ws = args[1] as string
       const updated: ConsistencyAuditResult = {
-        workspaceId: 'ws-1',
+        workspaceId: ws,
         checkedAt: 2_000_000_000_000,
         anomalies: 1,
         checks: {
@@ -262,15 +263,16 @@ describe('ConsistencyAuditDialog', () => {
       publishConsistencyAudit(updated)
       return updated
     })
-    // Nothing has run yet → empty state; the run happens from inside the dialog.
-    const { rerender } = render(<ConsistencyAuditDialog resolve={vi.fn()} cancel={vi.fn()} />)
+    const { rerender } = render(
+      <ConsistencyAuditDialog resolve={vi.fn()} cancel={vi.fn()} workspaceId="ws-A" />,
+    )
     fireEvent.click(screen.getByRole('button', { name: /run audit/i }))
+    // Targets the pinned workspace, not the mocked-active ws-1.
+    await waitFor(() => expect(runConsistencyAuditNow).toHaveBeenCalledWith(expect.anything(), 'ws-A'))
     await waitFor(() => expect(screen.getByText(RUN_ID)).toBeTruthy())
 
-    // User switches to ws-2 after the run. Without the run-pin, the dialog would
-    // resubscribe to ws-2 (empty) on the next render; with it, ws-1's result stays.
     repoState.activeWorkspaceId = 'ws-2'
-    rerender(<ConsistencyAuditDialog resolve={vi.fn()} cancel={vi.fn()} />)
+    rerender(<ConsistencyAuditDialog resolve={vi.fn()} cancel={vi.fn()} workspaceId="ws-A" />)
     expect(screen.getByText(RUN_ID)).toBeTruthy()
     expect(screen.queryByText(/no audit has run/i)).toBeNull()
   })
