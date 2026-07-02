@@ -27,10 +27,10 @@ import {
   defineProperty,
   defineSameTxProcessor,
 } from '@/data/api'
-import {addedTypes, hasBlockType, propertyNameProp} from '@/data/properties'
+import {addedTypes, aliasesProp, hasBlockType, propertyNameProp} from '@/data/properties'
 import {PAGE_TYPE, PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
 import {propertySchemasFacet, typesFacet} from '@/data/facets'
-import {createChild} from '@/data/internals/kernelMutators'
+import {createChild} from '@/data/mutators'
 
 // ──────────────────────────────────────────────────────────────────────
 // Phase 1 API addition: Repo.onTypesChange
@@ -531,6 +531,13 @@ export async function createTypeBlock(
     await repo.addTypeInTx(tx, newId, PAGE_TYPE, {}, typeSnapshot)
     await tx.setProperty(newId, blockTypeLabelProp, trimmedLabel)
     await tx.setProperty(newId, blockTypePropertiesProp, args.propertySchemaIds)
+    // The type doubles as its `[[label]]` page: claim the label as an
+    // alias so references resolve to THIS block (§3, block-id = type-id:
+    // the id `[[Person]]` resolves to). The label is therefore
+    // workspace-unique and this tx rejects (`alias.collision`) on a
+    // duplicate; rename parity is self-maintaining afterwards via the
+    // alias-sync same-tx processor (content → alias).
+    await tx.setProperty(newId, aliasesProp, [trimmedLabel])
   }, {scope: ChangeScope.BlockDefault, description: `createTypeBlock ${trimmedLabel}`})
 
   await waitForTypeRegistrationBounded(
