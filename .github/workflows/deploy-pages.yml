@@ -14,6 +14,7 @@ permissions:
   contents: write # push the built site to the gh-pages branch
   id-token: write # required by actions/attest-build-provenance
   attestations: write # required by actions/attest-build-provenance
+  pages: write # request a Pages rebuild if the auto-publish flakes (ensure-pages-published.sh)
 
 concurrency:
   # Production-only group. Kept SEPARATE from the per-PR preview group so a
@@ -100,3 +101,13 @@ jobs:
           folder: dist
           clean-exclude: pr-preview
           force: false
+
+      # The push above only updates the branch; GitHub's auto-triggered "pages
+      # build and deployment" is what actually publishes it, and that publisher
+      # is intermittently flaky ("Deployment failed, try again later."). Without
+      # this, a flaked publish leaves the new build un-served until the next
+      # push. This waits for the publish and re-requests it on failure.
+      - name: Ensure Pages published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ensure-pages-published.sh
