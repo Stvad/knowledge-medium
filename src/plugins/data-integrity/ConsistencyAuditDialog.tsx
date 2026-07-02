@@ -38,9 +38,9 @@ import type { DialogContextProps } from '@/utils/dialogs.js'
 import {
   getConsistencyAuditSnapshotFor,
   subscribeConsistencyAudit,
-} from '@/plugins/data-integrity/store.js'
-import { runConsistencyAuditNow } from '@/plugins/data-integrity/schedule.js'
-import type { ConsistencyCheckResult } from '@/plugins/data-integrity/audit.js'
+} from './store.js'
+import { runConsistencyAuditNow } from './schedule.js'
+import type { ConsistencyCheckResult } from './audit.js'
 
 const num = (c: ConsistencyCheckResult, key: string): number => Number(c[key] ?? 0)
 const samplesOf = (c: ConsistencyCheckResult): string[] =>

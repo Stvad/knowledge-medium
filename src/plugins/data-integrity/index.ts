@@ -4,10 +4,17 @@ import type { Repo } from '@/data/repo'
 import { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'
 import { createDataIntegrityDiagnosticSource } from './diagnosticsSource.ts'
 import { consistencyAuditEffectContribution } from './schedule.ts'
+import {
+  runDataIntegrityAuditActionContribution,
+  viewDataIntegrityAuditActionContribution,
+} from './auditAction.ts'
 
-/** Owns the built-in consistency audit (L3): the engine + cadenced scheduling
- *  (AppEffect) run here, and the result is surfaced via the diagnostics seam,
- *  which the system-status chip aggregates. */
+/** Owns the built-in consistency audit (L3) end to end: the engine + cadenced
+ *  scheduling (AppEffect), the on-demand run/view actions and their results
+ *  dialog, and the diagnostics-seam contribution the system-status chip
+ *  aggregates generically. Keeping the actions + dialog here (not in
+ *  system-status) means the chip has no data-integrity-specific knowledge — it
+ *  only knows the generic seam. */
 export const dataIntegrityPlugin = ({ repo }: { repo: Repo }): AppExtension =>
   systemToggle({
     id: 'system:data-integrity',
@@ -19,4 +26,10 @@ export const dataIntegrityPlugin = ({ repo }: { repo: Repo }): AppExtension =>
     diagnosticsFacet.of(createDataIntegrityDiagnosticSource(repo), {
       source: 'data-integrity',
     }),
+    // "Run data integrity audit" — command palette + a fresh run.
+    runDataIntegrityAuditActionContribution,
+    // "View last data integrity audit" — command palette + the status dropdown's
+    // generic "Inspect" button (routed here by the diagnostics snapshot's
+    // actionId); re-opens the last results without re-scanning.
+    viewDataIntegrityAuditActionContribution,
   ])

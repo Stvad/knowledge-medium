@@ -18,15 +18,16 @@ import { CallbackSet } from '@/utils/callbackSet.js'
 import type { ConsistencyAuditResult } from './audit.js'
 
 /** Id of the global action that runs the built-in audit on demand (registered by
- *  the system-status plugin in auditAction.ts, triggered from the command palette
- *  and the status dropdown via `runActionById`). Lives here so neither
- *  caller has to import the other's module graph. */
+ *  this plugin in auditAction.ts, triggered from the command palette). Lives here
+ *  as a plain constant so a caller can reference the id without importing the
+ *  action's (React/dialog) module graph. */
 export const RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = 'run_data_integrity_audit'
 
 /** Id of the global action that RE-OPENS the results dialog for the last audit
  *  WITHOUT re-running it — reading the snapshot below. Registered alongside the
- *  run action by the system-status plugin; the status dropdown's "Inspect" button
- *  points here so viewing last results is cheap (no expensive re-scan). */
+ *  run action by this plugin; the diagnostics snapshot routes the status
+ *  dropdown's generic "Inspect" button here so viewing last results is cheap (no
+ *  expensive re-scan). */
 export const VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID = 'view_data_integrity_audit'
 
 let latest: ConsistencyAuditResult | null = null

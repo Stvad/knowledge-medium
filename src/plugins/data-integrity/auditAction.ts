@@ -1,19 +1,23 @@
 /**
  * On-demand data-integrity audit (L3) as GLOBAL actions:
  *   - `run_data_integrity_audit` — RUN the audit, then show its results. In the
- *     command palette ("Run data integrity audit") and behind the status
- *     dropdown's "Re-run audit" affordance (via `runActionById`).
+ *     command palette ("Run data integrity audit"); the results dialog also
+ *     carries its own "Re-run" button.
  *   - `view_data_integrity_audit` — RE-OPEN the results dialog for the LAST run
  *     WITHOUT re-scanning (cheap). In the command palette ("View last data
- *     integrity audit") and behind the status dropdown's "Inspect" button.
+ *     integrity audit") and behind the status dropdown's generic "Inspect"
+ *     button — the diagnostics snapshot points that button here via `actionId`.
  *
  * Both open `ConsistencyAuditDialog`, which reads the last published result from
  * the audit store — so viewing the last run costs nothing, and a fresh run just
  * republishes into the same store.
  *
- * Lives in the system-status plugin (not core defaultShortcuts) so the action can
- * own its results UI — a progress toast while it runs, then the
- * ConsistencyAuditDialog — without core depending on a plugin component.
+ * Lives in the data-integrity plugin (which owns the audit engine, store, and
+ * scheduling) rather than core or system-status: the action owns its results UI
+ * — a progress toast while it runs, then the ConsistencyAuditDialog — and keeps
+ * every data-integrity concern under one plugin/toggle. The system-status chip
+ * stays generic, surfacing this (and any) source only through the diagnostics
+ * seam's `actionId`.
  */
 import { ShieldCheck } from 'lucide-react'
 import { actionsFacet } from '@/extensions/core.js'
@@ -27,8 +31,8 @@ import { showError, showProgress } from '@/utils/toast.js'
 import {
   RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
   VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID,
-} from '@/plugins/data-integrity/store.js'
-import { runConsistencyAuditNow } from '@/plugins/data-integrity/schedule.js'
+} from './store.js'
+import { runConsistencyAuditNow } from './schedule.js'
 import { ConsistencyAuditDialog } from './ConsistencyAuditDialog.tsx'
 
 /** True when an open results dialog would ALREADY show `workspaceId` — either
@@ -96,9 +100,9 @@ export const viewDataIntegrityAuditAction: ActionConfig<typeof ActionContextType
 }
 
 export const runDataIntegrityAuditActionContribution = actionsFacet.of(runDataIntegrityAuditAction, {
-  source: 'system-status',
+  source: 'data-integrity',
 })
 
 export const viewDataIntegrityAuditActionContribution = actionsFacet.of(viewDataIntegrityAuditAction, {
-  source: 'system-status',
+  source: 'data-integrity',
 })
