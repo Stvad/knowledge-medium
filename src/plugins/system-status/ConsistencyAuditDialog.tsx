@@ -30,12 +30,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog.js'
 import { Button } from '@/components/ui/button.js'
+import { cn } from '@/lib/utils.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { useRepo } from '@/context/repo.js'
 import { showError } from '@/utils/toast.js'
 import type { DialogContextProps } from '@/utils/dialogs.js'
 import {
-  getConsistencyAuditSnapshot,
+  getConsistencyAuditSnapshotFor,
   subscribeConsistencyAudit,
 } from '@/plugins/data-integrity/store.js'
 import { runConsistencyAuditNow } from '@/plugins/data-integrity/schedule.js'
@@ -107,11 +108,15 @@ function SampleRow({ id, onOpen }: { id: string; onOpen: (id: string) => void })
   const [copied, setCopied] = useState(false)
   const copy = async () => {
     try {
+      // Throws synchronously in an insecure context / older webview where
+      // `navigator.clipboard` is undefined — caught below.
       await navigator.clipboard.writeText(id)
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1200)
     } catch (error) {
+      // Don't fail silently on a feature whose whole point is copyable ids.
       console.error('Clipboard write failed', error)
+      showError("Couldn't copy id to the clipboard.")
     }
   }
   return (
@@ -156,33 +161,30 @@ export function ConsistencyAuditDialog({
 }: DialogContextProps<void> & ConsistencyAuditDialogProps) {
   const repo = useRepo()
   const navigate = useNavigate()
-  const snapshot = useSyncExternalStore(
-    subscribeConsistencyAudit,
-    getConsistencyAuditSnapshot,
-    getConsistencyAuditSnapshot,
-  )
   // The workspace whose results this dialog shows: the explicitly PINNED one (the
   // run action passes the workspace it just scanned) or, failing that, the active
   // workspace (the "View last…" action). Pinning matters because the run action
   // opens the store-driven dialog after the scan — if the user switched workspace
-  // mid-scan, the active workspace would no longer match the just-published
-  // result and it would wrongly read as "no audit".
+  // mid-scan, the active workspace would no longer match the just-audited result.
   const targetWorkspaceId = pinnedWorkspaceId ?? repo.activeWorkspaceId
-  // Scope the module-global snapshot to that workspace. The store holds the last
-  // audited workspace's result, and "View last…" can open this dialog directly
-  // (bypassing the diagnostics source's own gate) — so without this a result for
-  // workspace A would show A's counts/ids while B is active, and clicking a sample
-  // would try to open an A-id in B. A mismatch (or no run) reads as the empty
-  // state; a fresh Re-run repopulates for the target workspace.
-  const result =
-    snapshot && snapshot.workspaceId === targetWorkspaceId ? snapshot : null
+  // Read ONLY this workspace's result from the per-workspace store. Reading the
+  // scoped entry (not the global "latest") means a cadenced/manual audit for a
+  // DIFFERENT workspace can't blank an open dialog — its subscription value is
+  // unchanged by the foreign publish, so the (expensive) result stays put. No run
+  // for the target workspace → null → the empty state; a Re-run repopulates it.
+  const result = useSyncExternalStore(
+    subscribeConsistencyAudit,
+    () => getConsistencyAuditSnapshotFor(targetWorkspaceId),
+    () => getConsistencyAuditSnapshotFor(targetWorkspaceId),
+  )
   const [rerunning, setRerunning] = useState(false)
 
   // Open the block in the Roam-style side panel (sidebar-stack) and — crucially —
   // KEEP the dialog open, so a click no longer discards the (expensive) audit
-  // results. Pin the audited workspace (== target, given the gate above) so the id
-  // can't be resolved against a different workspace if it changes mid-dialog. No
-  // sourcePanelId: a fresh stack is appended at the end of the layout.
+  // results. Pin the audited workspace (`result.workspaceId` == targetWorkspaceId,
+  // since `result` is that workspace's scoped entry) so the id resolves against
+  // the workspace it belongs to, not a different active one. No sourcePanelId: a
+  // fresh stack is appended at the end of the layout.
   const open = (id: string) => {
     void navigate({ blockId: id, target: 'sidebar-stack', workspaceId: result?.workspaceId })
   }
@@ -239,7 +241,7 @@ export function ConsistencyAuditDialog({
               onClick={() => void rerun()}
               disabled={rerunning}
             >
-              <RefreshCw className={rerunning ? 'h-3 w-3 animate-spin' : 'h-3 w-3'} />
+              <RefreshCw className={cn('h-3 w-3', rerunning && 'animate-spin')} />
               {rerunning ? 'Re-running…' : 'Re-run'}
             </Button>
           </div>
@@ -286,7 +288,7 @@ export function ConsistencyAuditDialog({
               Run an audit to check data integrity for this workspace.
             </p>
             <Button type="button" onClick={() => void rerun()} disabled={rerunning}>
-              <RefreshCw className={rerunning ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
+              <RefreshCw className={cn('h-4 w-4', rerunning && 'animate-spin')} />
               {rerunning ? 'Running…' : 'Run audit'}
             </Button>
           </div>
