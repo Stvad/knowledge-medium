@@ -10,18 +10,18 @@
  *
  * The reconciler's `installHoldBinding` registers each armed press and
  * unregisters it on cancel/fire, so the set only ever holds in-flight
- * timers.
+ * timers. Backed by `CallbackSet` so one throwing cancel can't strand the
+ * remaining armed holds mid-fan-out.
  */
+import { CallbackSet } from '@/utils/callbackSet'
 
-const armed = new Set<() => void>()
+const armed = new CallbackSet('armed-holds')
 
 /** Track an armed hold's cancel. Returns the matching unregister. */
-export const registerArmedHold = (cancel: () => void): (() => void) => {
+export const registerArmedHold = (cancel: () => void): (() => void) =>
   armed.add(cancel)
-  return () => armed.delete(cancel)
-}
 
 /** Cancel every armed (not yet fired) hold binding. */
 export const cancelArmedHolds = (): void => {
-  for (const cancel of Array.from(armed)) cancel()
+  armed.notify()
 }

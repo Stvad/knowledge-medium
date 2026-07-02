@@ -111,16 +111,22 @@ export const buildShortcutHelpModel = (
         const binding = action.defaultBinding!
         const phase: ChordPhase = binding.phase ?? 'keydown'
         const source = sourceByActionKey?.get(actionRuntimeKey(action))
-        return toChordArray(binding.keys).map((chord): HelpBinding => ({
-          action,
-          contextConfig: config,
-          chord,
-          presses: parseKeybinding(chord),
-          phase,
-          ...(binding.phase === 'hold' ? {holdMs: binding.holdMs} : {}),
-          shadowed,
-          ...(source ? {source} : {}),
-        }))
+        return toChordArray(binding.keys).flatMap((chord): HelpBinding[] => {
+          const presses = parseKeybinding(chord)
+          // Mirror installHoldBinding: a hold binding with a sequence chord
+          // is rejected at install time, so don't list it as live.
+          if (phase === 'hold' && presses.length > 1) return []
+          return [{
+            action,
+            contextConfig: config,
+            chord,
+            presses,
+            phase,
+            ...(binding.phase === 'hold' ? {holdMs: binding.holdMs} : {}),
+            shadowed,
+            ...(source ? {source} : {}),
+          }]
+        })
       })
 
     groups.push({

@@ -138,6 +138,7 @@ describe('matchPressedSequence', () => {
       action('link', ActionContextTypes.GLOBAL, 'y l'),
       action('today', ActionContextTypes.GLOBAL, 'Control+Shift+Backquote'),
       action('scroll', ActionContextTypes.GLOBAL, 'Control+d'),
+      action('move', ActionContextTypes.GLOBAL, ['ArrowDown', 'j']),
     ],
     {active, contextConfigsByType: configsByType([global])},
   )
@@ -159,6 +160,13 @@ describe('matchPressedSequence', () => {
   it('matches literal-Control bindings on the platform where Control is primary', () => {
     const {exact} = matchPressedSequence(model.bindings, [press({key: 'd', ctrlKey: true})])
     expect(exact.map(b => b.action.id)).toEqual(['scroll'])
+  })
+
+  it('matches every chord of a multi-chord binding, not just the first', () => {
+    const {exact} = matchPressedSequence(model.bindings, [press({key: 'j', code: 'KeyJ'})])
+    expect(exact.map(b => b.action.id)).toEqual(['move'])
+    const arrows = matchPressedSequence(model.bindings, [press({key: 'ArrowDown', code: 'ArrowDown'})])
+    expect(arrows.exact.map(b => b.action.id)).toEqual(['move'])
   })
 
   it('matches code-form bindings via event.code when the key is a shifted glyph', () => {
@@ -206,23 +214,25 @@ describe('matchPressedSequence ↔ tinykeys parity', () => {
   }
 
   // Real keyboard events always carry `code` — tinykeys' handler rejects
-  // events without one (`isKeyboardEvent`), so the synthesized events do too.
-  const CASES: Array<{chord: string; events: KeyboardEventInit[]}> = [
-    {chord: '$mod+k', events: [{key: 'k', code: 'KeyK', ctrlKey: true}]},
-    {chord: '$mod+k', events: [{key: 'k', code: 'KeyK', metaKey: true}]},
-    {chord: 'Control+d', events: [{key: 'd', code: 'KeyD', ctrlKey: true}]},
-    {chord: 'Control+Shift+Backquote', events: [{key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true}]},
-    {chord: 'Control+Shift+BracketLeft', events: [{key: '{', code: 'BracketLeft', ctrlKey: true, shiftKey: true}]},
-    {chord: 'Shift+?', events: [{key: '?', code: 'Slash', shiftKey: true}]},
-    {chord: '?', events: [{key: '?', code: 'Slash', shiftKey: true}]},
-    {chord: 'g', events: [{key: 'g', code: 'KeyG', ctrlKey: true}]},
-    {chord: 'Space', events: [{key: ' ', code: 'Space'}]},
-    {chord: 'g g', events: [{key: 'g', code: 'KeyG'}, {key: 'g', code: 'KeyG'}]},
-    {chord: 'g g', events: [{key: 'g', code: 'KeyG'}, {key: 'h', code: 'KeyH'}]},
-    {chord: 'Control+Shift+Digit3', events: [{key: '#', code: 'Digit3', ctrlKey: true, shiftKey: true}]},
+  // events without one (`isKeyboardEvent`), so the synthesized events do
+  // too. `fires` pins the expected direction so matched double-breakage
+  // (both sides wrongly false/true) can't slip through as "agreement".
+  const CASES: Array<{chord: string; events: KeyboardEventInit[]; fires: boolean}> = [
+    {chord: '$mod+k', events: [{key: 'k', code: 'KeyK', ctrlKey: true}], fires: true},
+    {chord: '$mod+k', events: [{key: 'k', code: 'KeyK', metaKey: true}], fires: false},
+    {chord: 'Control+d', events: [{key: 'd', code: 'KeyD', ctrlKey: true}], fires: true},
+    {chord: 'Control+Shift+Backquote', events: [{key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true}], fires: true},
+    {chord: 'Control+Shift+BracketLeft', events: [{key: '{', code: 'BracketLeft', ctrlKey: true, shiftKey: true}], fires: true},
+    {chord: 'Shift+?', events: [{key: '?', code: 'Slash', shiftKey: true}], fires: true},
+    {chord: '?', events: [{key: '?', code: 'Slash', shiftKey: true}], fires: false},
+    {chord: 'g', events: [{key: 'g', code: 'KeyG', ctrlKey: true}], fires: false},
+    {chord: 'Space', events: [{key: ' ', code: 'Space'}], fires: true},
+    {chord: 'g g', events: [{key: 'g', code: 'KeyG'}, {key: 'g', code: 'KeyG'}], fires: true},
+    {chord: 'g g', events: [{key: 'g', code: 'KeyG'}, {key: 'h', code: 'KeyH'}], fires: false},
+    {chord: 'Control+Shift+Digit3', events: [{key: '#', code: 'Digit3', ctrlKey: true, shiftKey: true}], fires: true},
   ]
 
-  it.each(CASES)('agrees with tinykeys on %j', ({chord, events}) => {
+  it.each(CASES)('agrees with tinykeys on %j', ({chord, events, fires}) => {
     const global = contextConfig(ActionContextTypes.GLOBAL)
     const model = buildShortcutHelpModel(
       [action('probe', ActionContextTypes.GLOBAL, chord)],
@@ -233,7 +243,8 @@ describe('matchPressedSequence ↔ tinykeys parity', () => {
     )
     const pressedEvents = events.map(init => press(init))
     const {exact} = matchPressedSequence(model.bindings, pressedEvents)
-    expect(exact.length > 0).toBe(tinykeysFires(chord, pressedEvents))
+    expect(exact.length > 0).toBe(fires)
+    expect(tinykeysFires(chord, pressedEvents)).toBe(fires)
   })
 })
 
