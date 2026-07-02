@@ -64,8 +64,14 @@ export function useAssetObjectUrl(
   args: AssetUrlArgs,
   // The DEMAND lane — only ever `resolve` (the backlog `replicate` is the down-lane's).
   resolver: Pick<AssetResolver, 'resolve'>,
+  // `enabled: false` skips the eager resolve entirely (no fetch/decrypt, no object URL,
+  // no retry listeners) — for a viewer that fetches LAZILY on demand (the download
+  // fallback) rather than showing the bytes inline. The returned state stays `loading`
+  // and is simply ignored by such a viewer. Defaults to true (the inline/image path).
+  options: { readonly enabled?: boolean } = {},
 ): readonly [AssetUrlState, ReportDecodeFailure] {
   const { workspaceId, contentHash, mime } = args
+  const enabled = options.enabled ?? true
   // A settled result is tagged with the inputs it was resolved FOR. The derived
   // return (below) treats a result for STALE inputs as `loading`, so we never
   // have to setState('loading') synchronously inside the effect on a re-run.
@@ -75,6 +81,7 @@ export function useAssetObjectUrl(
   const [retryTick, setRetryTick] = useState(0)
 
   useEffect(() => {
+    if (!enabled) return // lazy viewer — the eager resolve/object-URL is skipped
     let cancelled = false
     let objectUrl: string | null = null
 
@@ -99,7 +106,7 @@ export function useAssetObjectUrl(
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [resolver, workspaceId, contentHash, mime, key, retryTick])
+  }, [enabled, resolver, workspaceId, contentHash, mime, key, retryTick])
 
   const state: AssetUrlState = settled?.key === key ? settled.state : { status: 'loading' }
 
