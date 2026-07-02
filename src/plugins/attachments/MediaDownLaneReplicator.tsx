@@ -26,9 +26,9 @@ import { useEffect } from 'react'
 import { useRepo } from '@/context/repo.js'
 import { getActiveUserId } from '@/data/repoProvider.js'
 import { useActiveWorkspaceId } from '@/hooks/useWorkspaces.js'
-import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { DOWN_LANE_SWEEP_INTERVAL_MS, runDownLaneReconcile } from './assetDownLane.js'
 import { armSharedLaneTriggers } from './laneArming.js'
+import { coalescedDeepIdlePass } from './laneSchedule.js'
 
 export const MediaDownLaneReplicator = (): null => {
   const repo = useRepo()
@@ -36,27 +36,14 @@ export const MediaDownLaneReplicator = (): null => {
 
   useEffect(() => {
     if (!workspaceId) return
-    let cancelled = false
-    const pass = (): void => {
-      if (cancelled) return // a workspace switch / unmount already tore this arming down
-      void runDownLaneReconcile(repo, workspaceId).catch((err) =>
-        console.warn('[media] down-lane reconcile failed', err),
-      )
-    }
-
-    // EVERY trigger goes through here: defer the pass to a genuine idle window (never the
-    // cold-start / navigation hot path) and COALESCE — the `scheduled` guard collapses
-    // overlapping triggers (notably a workspace switch's initial + the SYNCHRONOUS
-    // onFirstSync settle) into a single pass.
-    let scheduled = false
-    const schedulePass = (): void => {
-      if (scheduled) return
-      scheduled = true
-      scheduleDeepIdle(() => {
-        scheduled = false
-        pass()
-      }, CATCHUP_DEEP_IDLE)
-    }
+    // EVERY trigger runs the pass off the cold-start / navigation hot path (deep idle) and
+    // COALESCES overlapping ones (notably a workspace switch's initial pass + the SYNCHRONOUS
+    // onFirstSync settle) into a single walk; `cancel` drops a queued pass when a workspace
+    // switch / unmount tears this arming down.
+    const { schedulePass, cancel } = coalescedDeepIdlePass(
+      () => runDownLaneReconcile(repo, workspaceId),
+      '[media] down-lane reconcile failed',
+    )
 
     schedulePass() // initial catch-up
     // Shared lane triggers: re-run once initial sync settles (just-arrived blocks get
@@ -66,7 +53,7 @@ export const MediaDownLaneReplicator = (): null => {
     const sweep = setInterval(schedulePass, DOWN_LANE_SWEEP_INTERVAL_MS)
 
     return () => {
-      cancelled = true
+      cancel()
       disposeShared()
       clearInterval(sweep)
     }

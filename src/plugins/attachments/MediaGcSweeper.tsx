@@ -21,32 +21,21 @@
 
 import { useEffect } from 'react'
 import { getActiveUserId } from '@/data/repoProvider.js'
-import { CATCHUP_DEEP_IDLE, scheduleDeepIdle } from '@/utils/scheduleIdle.js'
 import { GC_SWEEP_INTERVAL_MS, runMediaGcSweep } from './assetGc.js'
 import { armSharedLaneTriggers } from './laneArming.js'
+import { coalescedDeepIdlePass } from './laneSchedule.js'
 
 export const MediaGcSweeper = (): null => {
   useEffect(() => {
     const userId = getActiveUserId()
     if (!userId) return
-    let cancelled = false
-    const pass = (): void => {
-      if (cancelled) return // unmount / account switch already tore this arming down
-      void runMediaGcSweep().catch((err) => console.warn('[media] byte GC sweep failed', err))
-    }
-
-    // Defer every trigger to a genuine idle window and COALESCE overlapping ones (the
+    // Every trigger runs the sweep off the hot path (deep idle) and coalesces (the
     // synchronous already-synced settle callback + a periodic tick that land together
-    // collapse into one pass).
-    let scheduled = false
-    const schedulePass = (): void => {
-      if (scheduled) return
-      scheduled = true
-      scheduleDeepIdle(() => {
-        scheduled = false
-        pass()
-      }, CATCHUP_DEEP_IDLE)
-    }
+    // collapse into one pass); `cancel` stops a queued pass once this effect tears down.
+    const { schedulePass, cancel } = coalescedDeepIdlePass(
+      runMediaGcSweep,
+      '[media] byte GC sweep failed',
+    )
 
     // Sweep once initial sync settles (also fires synchronously if already settled → the
     // initial pass) and on reconnect; both idle-deferred via schedulePass. The first-sync
@@ -58,7 +47,7 @@ export const MediaGcSweeper = (): null => {
     const sweep = setInterval(schedulePass, GC_SWEEP_INTERVAL_MS)
 
     return () => {
-      cancelled = true
+      cancel()
       disposeShared()
       clearInterval(sweep)
     }
