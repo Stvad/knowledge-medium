@@ -5,7 +5,7 @@
 > `src/data/projectorRuntime.ts`, `index.html` (importmap), `vite.config.ts` (preserveModules), and the
 > companion docs `plugin-module-url-sw-hybrid.md`, `extensibility-axes.md`, `extension-seam-gaps.md`,
 > `plugin-runtime-toggle/`. Related: issue #253 (SW `/module/` URLs, iceboxed).
-> Last verified against code: 2026-07-01.
+> Last verified against code: 2026-07-02.
 
 ## 0. TL;DR
 
@@ -16,8 +16,11 @@ materializing plugins into the DB and running the live version.
 
 The answer this doc argues for: **the two are separable, and the repo has already built most of both.**
 Materialization should be **on-demand** ("eject"), built on the existing user-extension pipeline
-(`type:'extension'` blocks → Babel → blob import), with one new first-class relation — an extension block
-that **`replaces`** a system toggle id. Retargeting splits by reference kind:
+(`type:'extension'` blocks → Babel → blob import), with two structural additions: a first-class
+**`replaces`** relation from an extension block to a system toggle id, and a **restaged boot —
+kernel → materialize → assemble** — so DB-loaded plugins are lifecycle peers of static ones: substituted
+*before* anything runs (the original never executes) and contributing schema/types/processors from the
+same position static plugins do. Retargeting splits by reference kind:
 
 - **String-keyed references** (actions, renderer ids, facet buckets, type membership, mutators/queries)
   retarget **for free** — the runtime substrate is already string-addressable. This covers most of what
@@ -33,7 +36,7 @@ Recommended staging:
 
 | Stage | What | Unlocks | Cost |
 |---|---|---|---|
-| 1 | **Eject & replace**: materialize a plugin's source into an extension block with `replaces: 'system:<id>'`; resolver splices it at the original's position | Edit/fork any non-essential plugin; replacement follows you across devices; built-in remains the fallback | Small — new property, eject action, one resolver rule, settings rows |
+| 1 | **Eject & replace**: materialize a plugin's source into an extension block with `replaces: 'system:<id>'`; boot restaged so materialized plugins load *before* assembly and substitute at the original's manifest position, with full schema-contribution parity | Edit/fork any non-essential plugin — data extension included; original never runs when replaced; replacement follows you across devices; built-in remains the fallback | Moderate — new property, eject action, boot restage + id-keyed manifest, settings rows |
 | 2 | **Seam hardening**: move cross-plugin *behavior* imports behind string-keyed seams | Faithful replacement — dependents actually hit your version | Incremental, per-seam |
 | 3 (gated) | **Module-URL override** via SW (extends #253) | Fork any *submodule*; retarget importers without seam migration | High — SW coordination, boot-path bytes-at-rest, E2EE surface |
 | parallel | **Declaration materialization**: seed `block-type`/`property-schema` blocks from system definitions | Edit types/properties without touching code | Small — the projector already exists |
@@ -196,7 +199,58 @@ the escalation, not the entry point.
 
 ## 5. Stage 1 — eject & replace
 
-### 5.1 Getting the source
+### 5.1 The boot model — kernel → materialize → assemble
+
+Today's boot makes any DB-loaded plugin structurally second-class:
+`staticDataExtensions` installs the built-ins' data facets (and applies their localSchema DDL) at Repo
+construction, pre-React (`src/data/repoProvider.ts:410-413`; `src/extensions/core.ts:33`), and
+`AppRuntimeProvider` paints the static runtime synchronously, merging the dynamic subtree in an async
+swap afterwards (`AppRuntimeProvider.tsx:79-172`). Under that ordering a replacement can only ever
+*displace* an original that has already run — its effects started, its landing resolvers consulted, its
+types already in the registries bootstrap seeded against. That is not proper ejection; it caps forks at
+UI-level changes.
+
+The design therefore restages boot so that materialized plugins load **before** plugin assembly, and
+everything downstream consumes one unified plugin set:
+
+- **Stage 0 — kernel.** Open the DB, apply kernel client schema + the static localSchema DDL, construct
+  the Repo with `kernelDataExtension`, read the overrides cache (localStorage,
+  `src/extensions/overridesCache.ts`) and the approval store (IndexedDB). This is the non-ejectable
+  floor — everything required to *decide* what to load: it must stay static for the same reason
+  `essential` toggles exist.
+- **Stage 1 — materialize.** After the active workspace resolves (already an async pre-mount step in
+  `App.tsx`), query the workspace's extension blocks; for each enabled-by-intent block with a
+  device-local approval, instantiate the **pinned compiled output**. Partition into *substitutions*
+  (blocks with `extension:replaces`) and *additions*. The enabler that keeps this off the slow path:
+  **approval pre-compiles** — `approveExtension` persists the transpiled output
+  (`compileExtensionModule.ts:331-364`) and `loadApprovedExtension` touches Babel only on a
+  compiler-version bump (`:380-401`) — so this stage is one SQL query + N IndexedDB reads + N blob-URL
+  imports whose `@/` dependencies are (for forks) modules the static bundle is loading anyway.
+- **Stage 2 — assemble.** Build the single plugin list: the static manifest with substitutions applied
+  in place, plus additions. Install **all** data extensions — forks' included — on the Repo at the same
+  point `staticDataExtensions` installs today (re-invoking the idempotent localSchema application for
+  fork contributions); run workspace bootstrap (backfills, seeding, landing) against the complete
+  registries; mount React and resolve the runtime **synchronously** — every module is already live, so
+  `resolveAppRuntimeSync` still works and the base/merged double-commit in `AppRuntimeProvider`
+  collapses to one commit. The warm-reload swap machinery (toggle/edit → `refreshAppRuntime`) is
+  unchanged; it just stops being the delivery mechanism for replacements at boot.
+
+**Schema parity is the point:** a stage-2 plugin — static or materialized — contributes types, property
+schemas, invalidation rules, processors, and localSchema from the same lifecycle position. The two v1
+compromises this doc previously accepted disappear: there is no flash-of-original (the replaced plugin
+never executes), and forks may change their data extension (bounded by §5.6's localSchema note).
+
+**Latency accounting.** Nothing ejected and nothing approved (including every fresh device before first
+sync/approval): stage 1 is one query returning nothing boot-relevant — effectively today's boot; on a
+fresh device the built-ins run regardless, which the #67 trust model requires anyway. With N materialized
+plugins: N approval reads + N blob imports of already-cached compiled strings, plausibly tens of
+milliseconds; the one expensive path is the first boot after a compiler-version bump (re-transpile from
+`approvedSource`), which an update hook can pre-warm in the background instead of paying at next paint.
+Additive (non-replacing) extensions move into stage 2 by default too — that is what lets a user extension
+define a type the bootstrap can see — with a per-block lazy opt-out as the escape hatch if a heavy
+extension shouldn't block paint (§12).
+
+### 5.2 Getting the source
 
 Zero-build-change path: fetch the plugin's emitted modules' `.js.map` files
 (`${base}src/plugins/<id>/*.js.map`, stable URLs per §2.2) and extract `sourcesContent` — the original
@@ -205,7 +259,7 @@ If sourcemap-scraping proves brittle, the fallback is a tiny Vite plugin emittin
 as build assets; both produce the same thing: **the authored source of any built-in, addressable at
 runtime.**
 
-### 5.2 Eject depths
+### 5.3 Eject depths
 
 An ejected block's imports must be absolute (`@/…`): blob modules have no usable base URL, so the eject
 step mechanically rewrites the entry's relative imports `./x` → `@/plugins/<id>/x.js`.
@@ -217,7 +271,7 @@ step mechanically rewrites the entry's relative imports `./x` → `@/plugins/<id
   default eject output: the generated block is the plugin's *composition root* (its `index.ts` shape) with
   every submodule still imported from the original.
 - **Entry fork.** Same block, but the user starts inlining: copy the body of the one function they want
-  to change into the block (source for any submodule is fetchable per §5.1), keep importing the rest.
+  to change into the block (source for any submodule is fetchable per §5.2), keep importing the rest.
   Progressive, no tooling needed, single block.
 - **Deep fork** (edit many submodules as separate blocks) needs cross-block imports — exactly the
   capability issue #253 icebox-gated. Ejection becomes the *second* trigger on that issue. Until then,
@@ -227,28 +281,32 @@ The wrapper default matters for upgrades (§9): a wrapper survives upstream refa
 untouched; only signature/shape changes break it — the same ABI-commitment logic the extensibility-axes
 doc applies to substrate seams.
 
-### 5.3 The `replaces` relation
+### 5.4 The `replaces` relation
 
 New property on extension blocks: `extension:replaces = 'system:<plugin-id>'` (a toggle id, §2.3),
 set by the eject action alongside `extension:name`/`description` and provenance (§9).
 
-Resolver rule (in the toggle-aware walk, `src/facets/resolveAppRuntime.ts`): after the dynamic subtree
-resolves, build `Map<togglableId, replacementSubtree>` from loaded extension blocks that (a) declare
-`replaces`, (b) are enabled by intent, **and (c) actually compiled from an approval on this device**.
-During the merged walk, a system boundary whose id has an entry is **substituted in place** — the
-replacement subtree occupies the original's position in the tree.
+Substitution happens at **assembly time** (stage 2 of §5.1), not in the resolver walk: stage 1 builds
+`Map<togglableId, replacement>` from extension blocks that (a) declare `replaces`, (b) are enabled by
+intent, **and (c) actually instantiated from a device-local approval**. Assembly looks up each manifest
+entry by its toggle id and swaps in the replacement — the fork occupies the original's slot in the plugin
+list (and in the data-extension installation) before anything resolves or runs. This requires the two
+hand-maintained arrays (`staticAppExtensions.ts`, `staticDataExtensions.ts`) to become one **id-keyed
+manifest** — plugin id → {app extension, data extension, order} — which is a prerequisite cleanup, not
+scope creep (§10).
 
 Why a first-class relation instead of "user disables built-in + enables replacement" as two toggles:
 
 - **Cross-device safety.** Intent syncs; approval doesn't. On a device that hasn't approved the fork yet,
   condition (c) fails → **the built-in keeps running** and settings shows the standard "Enable here"
   prompt. With two independent toggles, that device would run *neither* — a synced self-DoS. Same logic
-  covers compile failures (error shell + built-in stays). Safe mode needs no special case: it already
-  forces every non-essential boundary off — replacements and built-ins alike
-  (`resolveAppRuntime.ts:66-69`) — so recovery never depends on replacement machinery.
+  covers instantiation failures (error shell + built-in stays). Safe mode skips stage 1 outright (no
+  block is instantiated — the loader's existing safe-mode behavior), so assembly is pure-static and the
+  resolver additionally forces every non-essential boundary off (`resolveAppRuntime.ts:66-69`) —
+  recovery never depends on replacement machinery.
 - **Position preservation.** `staticAppExtensions.ts` ordering is load-bearing (landing-resolver
-  last-wins, app-intents last, etc. — see its comments). A replacement appended at the dynamic subtree's
-  position would resolve after everything; substitution at the boundary keeps the original's slot, so
+  last-wins, app-intents last, etc. — see its comments). A replacement appended after the static list
+  would register after everything; substitution at the manifest slot keeps the original's position, so
   order-sensitive facets behave identically.
 - **Attribution.** Settings can render one honest row — "Daily notes — replaced by *My daily notes*
   (block link)" — with un-eject as a single affordance (disable/delete the replacement → built-in
@@ -259,28 +317,33 @@ device's approval it doesn't satisfy (c), so it can neither run nor suppress the
 boundaries (`kernelDataExtension`, extensions-settings itself) are excluded from replacement in v1 for
 the same reason they're excluded from toggling.
 
-### 5.4 Factory plugins and context
+### 5.5 Factory plugins and context
 
 Plugins built as factories (`dailyNotesPlugin({repo})`) eject as function-valued extensions — the resolver
 passes `FacetResolveContext = {repo, workspaceId, safeMode, generation}`
 (`AppRuntimeProvider.tsx:70-75`), and `dynamicExtensions.ts` already supports function-valued default
 exports (`:263-271`). No new plumbing.
 
-### 5.5 Known sharp edges (accepted for v1, documented)
+### 5.6 Costs and constraints
 
-- **Cold-boot gap.** The static runtime paints first; the dynamic subtree lands one async tick later
-  (`AppRuntimeProvider.tsx:114-172`). With condition (c) unknowable until the dynamic resolve, the
-  built-in renders for that tick, then the replacement swaps in. That's a flash of *original* (not of
-  nothing), same class as user extensions appearing late today. Acceptable; if it grates, a
-  localStorage hint ("replacement was active here last session") could suppress the original's UI mounts
-  for the gap — deferred.
-- **Pre-React data extensions.** `staticDataExtensions.ts` installs type/schema/localSchema contributions
-  before React mounts, so bootstrap/seeding can rely on them. A replacement's data-layer changes only land
-  at the async resolve. v1 rule: **forks must keep type ids, property schemas, and localSchema
-  contributions semantically identical** — and the right home for *changing* those is the declarations
-  track (§8), where a `block-type` block shadows the static definition deterministically. Deep
-  data-extension forks (changing invalidation rules, processors) are the riskiest category; the eject UI
-  should say so.
+- **localSchema depth.** A fork's localSchema contributions apply by re-invoking the existing
+  application step after stage 1 (`applyLocalSchemaContributions`, called with the static set at
+  `repoProvider.ts:410-413`); contributions must stay idempotent, which is already the house style the
+  kernel's own statements model (`CREATE … IF NOT EXISTS`, probe-gated backfills,
+  `repoProvider.ts:387-409`). What a fork *cannot* do is retroactively reshape kernel-created tables —
+  the same limit static plugins live with across app versions (they use backfills).
+- **Dragged-along composition.** Some plugins compose another plugin's data extension by direct import
+  (`srs-review/index.ts:14` pulls `dailyNotesDataExtension`). With daily-notes replaced, the *original's*
+  data contributions still enter assembly through srs-review's subtree while the fork's enter at
+  daily-notes' slot — keyed registries collide, and since the dragging plugin sits later in the manifest,
+  last-wins would favor the **dragged original** over the fork. v1 must prune dragged contributions whose
+  owning plugin is replaced (which requires data extensions to carry owning-plugin provenance), and the
+  §6 seam work should retire cross-plugin data-extension composition in favor of manifest
+  `requires` edges — composition-by-import is precisely the coupling this design exists to remove.
+- **Per-workspace scope.** Extension blocks and overrides are per-workspace, so a fork's data extension
+  installs per-workspace where static ones are global today. Semantically right — blocks are workspace
+  data — but a stated behavior difference: switching to a workspace without the fork reverts to the
+  built-in, data facets included.
 - **No sandboxing.** A fork runs in-realm with full app authority, like any user extension. The approval
   gate is the security model (`docs/plugin-module-url-sw-hybrid.md` §5; `compileExtensionModule.ts`
   #67 commentary). Ejecting doesn't widen the surface — it's the same pipeline — but "edit a system
@@ -288,7 +351,7 @@ exports (`:263-271`). No new plumbing.
 - **React-compiler delta.** Runtime-compiled forks skip the build-time react-compiler pass — a fork is
   marginally less render-optimized than the built-in it replaces. Cosmetic at plugin scale.
 
-### 5.6 Trust flow
+### 5.7 Trust flow
 
 Eject is an explicit local gesture, and the content written is the authored source of code this device
 already runs (as its built form) from the trusted bundle — so the eject action calls `approveExtension`
@@ -362,8 +425,8 @@ The projector (§2.4) means "materialize declarations" is a seeding feature, not
 - Same divergence problem as code (§9), so the same base-hash provenance applies: on app update, "the
   built-in definition of `todo` changed since you materialized it" is a settings-surface diff, not a
   silent fork.
-- v1 constraint mirroring §5.5: shadowing should *extend* (add properties, change labels/defaults), not
-  repurpose ids — kernel invariants (e.g. `'extension'`, `'page'`) stay essential/non-materializable.
+- v1 constraint: shadowing should *extend* (add properties, change labels/defaults), not repurpose ids —
+  kernel invariants (e.g. `'extension'`, `'page'`) stay essential/non-materializable.
 
 This track also sets the pattern for the next declaration kinds the projector header already anticipates
 (commands / saved queries): each new projectable meta-type makes more of a "plugin" expressible as data,
@@ -381,10 +444,10 @@ Every materialized artifact (code block or declaration block) carries provenance
 
 On app update, a cheap maintenance check (the db-maintenance / extensions-settings effect family)
 compares each materialized artifact's `base-hash` against the current upstream hash (recomputed from
-§5.1 sources): mismatch → settings status **"upstream changed since your fork"** with a diff view
+§5.2 sources): mismatch → settings status **"upstream changed since your fork"** with a diff view
 (base vs current upstream; the user's edits are visible as block content vs base). v1 offers *awareness +
 manual re-eject/merge*; automated three-way merge is explicitly out of scope until the manual flow shows
-demand. Wrappers (§5.2) mostly never trip this — they have no copied bodies to go stale, only the
+demand. Wrappers (§5.3) mostly never trip this — they have no copied bodies to go stale, only the
 import-surface contract.
 
 Un-eject is total and safe in both tracks: the upstream artifact never left the bundle.
@@ -397,30 +460,40 @@ Un-eject is total and safe in both tracks: the upstream artifact never left the 
 - **Module system first** (SW or importmap override as the prerequisite abstraction layer) — §3/§7: the
   string-keyed substrate already retargets most references; the residue is better served by seam
   migration; byte-level override stays available as the gated escalation.
-- **A `provides`/capability manifest registry replacing `staticAppExtensions.ts`** — attractive
-  eventually (it's the missing id-keyed plugin registry the coupling inventory names), but Stage 1 needs
-  only the `replaces` relation against toggle ids that already exist; a full manifest is scope creep
-  until multiple plugins want to satisfy shared capabilities.
+- **A full `provides`/capability layer** — the *id-keyed manifest itself* is no longer deferred: assembly
+  substitution (§5.4) needs a lookup target, so folding `staticAppExtensions.ts` +
+  `staticDataExtensions.ts` into one manifest (plugin id → {app extension, data extension, order}) is a
+  Stage-1 prerequisite, and `requires` edges are the designated successor to composition-by-import
+  (§5.6). What stays deferred is the general capability marketplace — arbitrary providers satisfying
+  shared capability ids — until multiple plugins actually want to satisfy the same contract.
 
 ## 11. Implementation sketch (Stage 1)
 
-1. **Source provider** (`src/extensions/pluginSources.ts`): resolve a plugin id → entry + submodule
+1. **Manifest unification** (independently landable, pure refactor): fold `staticAppExtensions.ts` +
+   `staticDataExtensions.ts` into one id-keyed manifest — plugin id → {app extension, data extension,
+   order} — preserving today's ordering and its comments. The two current arrays become derived views.
+2. **Boot restage** (§5.1): hoist extension-block loading out of `AppRuntimeProvider`'s async effect
+   into the pre-mount sequence (after workspace resolution in `App.tsx`); assemble the unified plugin
+   set; install all data extensions + re-apply localSchema for forks; `AppRuntimeProvider` consumes the
+   assembled set and drops the cold-start base/merged double-commit (warm-reload swap machinery stays).
+   Safe mode short-circuits stage 1.
+3. **Source provider** (`src/extensions/pluginSources.ts`): resolve a plugin id → entry + submodule
    sources (prod: fetch `.js.map` `sourcesContent`; dev: Vite `?raw`), plus the relative→`@/` import
    rewrite. Pure, unit-testable.
-2. **Properties** (`src/data/properties.ts`): `extension:replaces`, `extension:base-version`,
+4. **Properties** (`src/data/properties.ts`): `extension:replaces`, `extension:base-version`,
    `extension:base-hash` (+ base-source storage decision).
-3. **Eject action** (new small plugin or extensions-settings): create block (content = wrapper-style
+5. **Eject action** (new small plugin or extensions-settings): create block (content = wrapper-style
    composition root by default), set properties, `approveExtension`, enable intent, `refreshAppRuntime()`.
    Agent-bridge command `eject-plugin <id>` alongside.
-4. **Resolver substitution** (`src/facets/resolveAppRuntime.ts` + `dynamicExtensions.ts`): loader tags
-   each loaded block with its `replaces` target + "running" status. Note the current merged pass resolves
-   the dynamic function *during* the walk (`AppRuntimeProvider.tsx:136-162`), i.e. after the static
-   boundaries have been visited — substitution therefore needs the dynamic subtree resolved *first*
-   (a separate await before the merged walk, or a second pass), then the map threaded into the walk.
-5. **Settings UI**: "Replaced by …" row state, un-eject, upstream-changed badge (§9 check).
-6. **Tests**: substitution preserves position (order-sensitive facet before/after); unapproved device
-   keeps built-in; compile failure keeps built-in + shell; safe mode restores built-in; eject rewrite
-   idempotence; provenance round-trip; keyedMapFacet shadowing (fork mutator wins over static).
+6. **Assembly substitution + dragged-contribution pruning** (§5.4, §5.6): loader tags each instantiated
+   block with its `replaces` target; assembly swaps manifest entries and prunes data contributions whose
+   owning plugin is replaced (requires owning-plugin provenance on data extensions).
+7. **Settings UI**: "Replaced by …" row state, un-eject, upstream-changed badge (§9 check).
+8. **Tests**: substitution preserves manifest position (order-sensitive facet before/after); unapproved
+   device keeps built-in; instantiation failure keeps built-in + shell; safe mode boots pure-static; a
+   fork's data extension contributes a type visible to bootstrap/seeding (the schema-parity property);
+   dragged-composition pruning (fork mutator wins over a composed original); eject rewrite idempotence;
+   provenance round-trip.
 
 ## 12. Open questions
 
@@ -434,7 +507,10 @@ Un-eject is total and safe in both tracks: the upstream artifact never left the 
 - **Per-workspace vs per-user semantics.** Extension blocks and overrides are per-workspace today;
   ejection inherits that. Is "replace daily-notes everywhere" a want? (Defer; consistent with existing
   extension semantics.)
-- **Flash-of-original suppression** (§5.5) — worth a hint cache, or live with it?
+- **Boot-blocking policy for additive extensions.** Stage-2-by-default gives every extension schema
+  parity, but lets one heavy user extension delay first paint. Per-block opt-out
+  (`extension:boot-phase: lazy` keeps today's post-paint behavior), a time budget, or measure first and
+  do nothing? Leaning: default stage 2, opt-out property, add a budget only if real extensions hurt.
 - **When does #253 fire?** Deep forks (multi-block plugins with cross-block imports) are the cleanest
   trigger this repo has produced for the SW `/module/` work; ejection telemetry (how often users inline
   past the wrapper stage) is the signal to watch.
