@@ -218,6 +218,24 @@ export const blockTypePropertiesProp = defineProperty<readonly string[]>('block-
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** Hide this type from a block's trailing tag-chip display (the
+ *  supertags `#type` row). Display-only — the type stays taggable and
+ *  visible in pickers/panel. Lifted onto `TypeContribution.hideTag`. */
+export const blockTypeHideTagProp = defineProperty<boolean>('block-type:hide-tag', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** CSS color for this type's tag chip (any `color`-property value:
+ *  `#e11d48`, `tomato`, `hsl(…)`, …). Empty = default chip styling.
+ *  Lifted onto `TypeContribution.color`. */
+export const blockTypeColorProp = defineProperty<string>('block-type:color', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── user page kernel fields ────
 
 /** Opaque user id (the value stored in `created_by` / `updated_by`) on a
@@ -462,6 +480,8 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   blockTypeLabelProp,
   blockTypeDescriptionProp,
   blockTypePropertiesProp,
+  blockTypeHideTagProp,
+  blockTypeColorProp,
   // user page fields
   userIdProp,
 ] as ReadonlyArray<PropertySchema<unknown>>

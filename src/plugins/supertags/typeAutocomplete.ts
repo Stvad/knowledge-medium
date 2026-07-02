@@ -59,6 +59,18 @@ export const HIDDEN_TYPE_IDS: ReadonlySet<string> = new Set([
   USER_TYPE,
 ])
 
+/** Which of a block's types display as trailing tag chips: everything
+ *  except structural kernel types and types whose contribution opts
+ *  out via `hideTag` (`block-type:hide-tag` on user-defined types).
+ *  Display-only policy — `buildTypeTagCandidates` deliberately does
+ *  NOT consult `hideTag`, so a chip-hidden type stays taggable. */
+export const visibleTagTypeIds = (
+  typeIds: readonly string[],
+  registry: ReadonlyMap<string, TypeContribution>,
+): readonly string[] =>
+  typeIds.filter(typeId =>
+    !HIDDEN_TYPE_IDS.has(typeId) && registry.get(typeId)?.hideTag !== true)
+
 export interface TypeTagCandidate {
   kind: 'existing' | 'create'
   /** For `existing`, the registered type id (what `addType` takes).

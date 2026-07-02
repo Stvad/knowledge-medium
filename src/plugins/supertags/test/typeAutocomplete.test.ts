@@ -9,6 +9,7 @@ import {
   buildTypeTagCandidates,
   matchHashTrigger,
   typeTagCompletionSource,
+  visibleTagTypeIds,
   type TypeTagCandidate,
 } from '../typeAutocomplete'
 
@@ -172,6 +173,30 @@ describe('buildTypeTagCandidates', () => {
       query: 'trip',
     })
     expect(out[0].detail).toBe('A journey')
+  })
+})
+
+describe('visibleTagTypeIds', () => {
+  const HIDDEN: TypeContribution = {id: 'uuid-secret', label: 'Secret', hideTag: true}
+
+  it('drops structural kernel types and hideTag opt-outs, keeps the rest in order', () => {
+    const registry = registryOf(TASK, TRIP, PAGE, HIDDEN)
+    expect(visibleTagTypeIds(
+      ['uuid-task', PAGE_TYPE, 'uuid-secret', 'uuid-trip'], registry))
+      .toEqual(['uuid-task', 'uuid-trip'])
+  })
+
+  it('keeps types missing from the registry (label falls back to the id)', () => {
+    expect(visibleTagTypeIds(['uuid-unknown'], registryOf())).toEqual(['uuid-unknown'])
+  })
+
+  it('hideTag types stay offerable in the # autocomplete', () => {
+    const out = buildTypeTagCandidates({
+      registry: registryOf(HIDDEN),
+      currentTypeIds: [],
+      query: 'sec',
+    })
+    expect(out[0]).toMatchObject({kind: 'existing', id: 'uuid-secret'})
   })
 })
 
