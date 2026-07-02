@@ -31,13 +31,19 @@ import {
 import { runConsistencyAuditNow } from '@/plugins/data-integrity/schedule.js'
 import { ConsistencyAuditDialog } from './ConsistencyAuditDialog.tsx'
 
-/** True when a results dialog is already on screen. Used to keep the CHEAP,
- *  repeatable "View last" / "Inspect" affordances from stacking identical copies —
- *  an existing dialog already reflects the store, so re-viewing is a no-op. (A
- *  deliberate "Run" is NOT gated on this: it just did expensive work and should
- *  always surface its own result, pinned to the workspace it scanned.) */
-const isAuditDialogOpen = (): boolean =>
-  getDialogQueue().some((entry) => (entry.Component as unknown) === ConsistencyAuditDialog)
+/** True when an open results dialog would ALREADY show `workspaceId` — either
+ *  pinned to it, or unpinned (an unpinned dialog tracks the active workspace, so
+ *  it shows whatever `workspaceId` the caller is about to view). Used to keep the
+ *  cheap, repeatable "View last" / "Inspect" affordances from stacking a second
+ *  copy of the SAME thing, while still letting a view of a DIFFERENT workspace
+ *  through (e.g. a run-dialog pinned to ws-A is open, but Inspect wants ws-B). A
+ *  deliberate "Run" is never gated on this — it always surfaces its own result. */
+const auditDialogAlreadyShows = (workspaceId: string | null): boolean =>
+  getDialogQueue().some(
+    (entry) =>
+      (entry.Component as unknown) === ConsistencyAuditDialog &&
+      ((entry.props.workspaceId as string | undefined) ?? workspaceId) === workspaceId,
+  )
 
 export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
@@ -80,9 +86,11 @@ export const viewDataIntegrityAuditAction: ActionConfig<typeof ActionContextType
   description: 'View last data integrity audit',
   context: ActionContextTypes.GLOBAL,
   icon: ShieldCheck,
-  handler: () => {
-    // Cheap + repeatable: don't stack a second identical dialog if one is open.
-    if (isAuditDialogOpen()) return
+  handler: ({ uiStateBlock }: BaseShortcutDependencies) => {
+    // Cheap + repeatable: don't stack a second dialog that would show the SAME
+    // workspace as one already open — but a dialog pinned to a DIFFERENT
+    // workspace doesn't cover this request, so still open one for the active one.
+    if (auditDialogAlreadyShows(uiStateBlock.repo.activeWorkspaceId)) return
     void openDialog(ConsistencyAuditDialog)
   },
 }

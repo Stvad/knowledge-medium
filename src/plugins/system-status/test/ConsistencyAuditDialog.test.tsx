@@ -147,16 +147,24 @@ describe('ConsistencyAuditDialog', () => {
   it('keeps an open dialog’s result when a DIFFERENT workspace’s audit publishes', () => {
     // Regression: the store is per-workspace, so a cadenced/manual audit for
     // another workspace completing while this dialog is open must NOT evict the
-    // (expensive) result it is showing.
+    // (expensive) result it is showing — nor swap in the foreign result.
+    const OTHER_ID = 'foreign-workspace-sample-id'
     publishConsistencyAudit(withSamples()) // ws-1 (active)
     renderDialog()
     expect(screen.getByText(FULL_ID)).toBeTruthy()
 
     act(() => {
-      publishConsistencyAudit({ ...withSamples(), workspaceId: 'ws-OTHER', checkedAt: 2 })
+      publishConsistencyAudit({
+        workspaceId: 'ws-OTHER',
+        checkedAt: 2,
+        anomalies: 1,
+        checks: { references_index_mirror: { status: 'anomaly', missingIndexRows: 1, samples: [OTHER_ID] } },
+      })
     })
 
+    // Still ws-1's result — not blanked, and not swapped to the foreign one.
     expect(screen.getByText(FULL_ID)).toBeTruthy()
+    expect(screen.queryByText(OTHER_ID)).toBeNull()
     expect(screen.queryByText(/no audit has run/i)).toBeNull()
   })
 
