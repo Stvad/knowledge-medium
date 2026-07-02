@@ -6,21 +6,25 @@
  * It reads the block's metadata and dispatches to a viewer chosen from the
  * {@link mediaViewersFacet} registry ({@link pickMediaViewer}). Byte access is
  * per-viewer (§7.3):
- *  - an EAGER viewer (image today; inline PDF/audio later) gets the bytes resolved
- *    once into a verified object URL ({@link useAssetObjectUrl}: fetch →
- *    decrypt/passthrough → HASH-VERIFY → Blob of the block's `media:mime` → object URL,
- *    revoked on unmount). A fail-closed resolve (§5.1) surfaces as `error` → the
- *    broken-asset placeholder, NEVER a raw/unverified source.
- *  - the LAZY download fallback resolves NOTHING on mount; it gets a `resolveBytes`
+ *  - an EAGER viewer (image; inline PDF later) gets the bytes resolved once on mount
+ *    into a verified object URL ({@link useAssetObjectUrl}: fetch → decrypt/passthrough →
+ *    HASH-VERIFY → Blob of the block's `media:mime` → object URL, revoked on unmount). A
+ *    fail-closed resolve (§5.1) surfaces as `error` → the broken-asset placeholder, NEVER
+ *    a raw/unverified source.
+ *  - a LAZY-INLINE viewer (audio) renders from metadata and resolves NOTHING on mount; it
+ *    arms the SAME object-URL resolve via `requestResolve` on the first play intent, then
+ *    reads the resulting `state` exactly like an eager viewer (same fail-closed guarantee).
+ *  - the LAZY download fallback resolves NOTHING on mount either; it gets a `resolveBytes`
  *    thunk and fetches the verified bytes only when the user clicks download.
- * The eager resolve is gated on `viewer.eager`. The down-lane already replicates every
- * media block (incl. non-image) to local disk for offline (§8), so this isn't about
- * saving egress — staying lazy avoids holding a decrypted object-URL Blob in memory for
- * a download nobody opened, and avoids un-throttled demand-fetching ahead of that
+ * The mount-time resolve is gated on `viewer.eager || armed` (armed = a lazy-inline viewer
+ * called requestResolve). The down-lane already replicates every media block (incl.
+ * non-image) to local disk for offline (§8), so deferring the resolve isn't about saving
+ * egress — it avoids holding a decrypted object-URL Blob in memory for media nobody opened
+ * (a page of large audio files), and avoids un-throttled demand-fetching ahead of that
  * budgeted background lane.
  */
 
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { usePropertyValue, useWorkspaceId } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
@@ -52,16 +56,36 @@ export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
   // renderer never special-cases a mime (design §11).
   const viewer = pickMediaViewer(useAppRuntime().read(mediaViewersFacet), mime)
 
-  // Resolve eagerly ONLY for an inline viewer (image now; PDF/audio later). The
-  // download fallback stays metadata-only and resolves lazily via resolveBytes.
+  // A LAZY-INLINE viewer (audio) arms the eager resolve on demand via requestResolve. The
+  // latch is owned HERE (single source of truth — it also gates the resolve hook, and the
+  // viewer reads it back via the `armed` prop) and is SCOPED TO THE CURRENT CONTENT: `armed`
+  // is CLEARED whenever the content key transitions (re-capture / synced edit / undo — all
+  // mutate the row in place WITHOUT remounting), so a replaced attachment returns to its
+  // play-gated poster instead of surprise-resolving/autoplaying the new bytes, and never
+  // eager-fetches behind an un-played poster after a mime flip. It re-arms ONLY on a fresh
+  // play gesture — crucially NOT a derived `armedFor === contentKey`, which would spuriously
+  // re-arm when the key RETURNS to a previously-armed value (undo a re-capture: A→B→A).
+  // `contentKey` mirrors the resolve hook's key so the latch and the resolve re-gate
+  // together. (setState-during-render is the React-blessed "reset on prop change" idiom.)
+  const contentKey = `${workspaceId} ${hash} ${mime}`
+  const [armed, setArmed] = useState(false)
+  const [armedFor, setArmedFor] = useState(contentKey)
+  if (armedFor !== contentKey) {
+    setArmedFor(contentKey)
+    if (armed) setArmed(false)
+  }
+  const requestResolve = useCallback(() => setArmed(true), [])
+
+  // Resolve on mount for an EAGER inline viewer (image); for a LAZY-INLINE viewer (audio)
+  // only once armed; never for the pure download fallback (it uses resolveBytes on click).
   const [state, reportDecodeFailure] = useAssetObjectUrl(
     { workspaceId, contentHash: hash, mime },
     resolver,
-    { enabled: viewer.eager },
+    { enabled: viewer.eager || armed },
   )
 
-  // The lazy path: a bound "give me the VERIFIED bytes" thunk for the download
-  // fallback — fail-closed like the eager path (resolve() discards unverified bytes).
+  // The lazy path: a bound "give me the VERIFIED bytes" thunk for the download affordance
+  // (file fallback + audio) — fail-closed like the eager path (resolve() discards unverified).
   const resolveBytes = useCallback(
     () => resolver.resolve({ workspaceId, contentHash: hash }),
     [resolver, workspaceId, hash],
@@ -73,6 +97,8 @@ export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
       state={state}
       reportDecodeFailure={reportDecodeFailure}
       resolveBytes={resolveBytes}
+      requestResolve={requestResolve}
+      armed={armed}
       mime={mime}
       filename={filename}
       size={size}
