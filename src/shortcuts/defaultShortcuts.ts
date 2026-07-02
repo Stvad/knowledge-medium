@@ -45,6 +45,7 @@ import {
 } from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
+import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
 import {
   isOnFirstVisualLine,
   isOnLastVisualLine,
@@ -676,6 +677,39 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
+
+        // With an autocomplete popup open, Enter belongs to the popup — accept
+        // the highlighted completion; NEVER split the block. On desktop CM's
+        // completion keymap normally accepts and `stopPropagation`s before the
+        // event reaches this window-level shortcut. But it accepts via the same
+        // `acceptCompletion`, which no-ops during CM's brief post-open
+        // `interactionDelay` (default 75ms) — and a no-op accept doesn't
+        // stopPropagation, so a fast Return bubbles here. On iOS Safari the *real*
+        // Enter keydown reaches this shortcut regardless (CM defers it as a
+        // pendingIOSKey and runs its own keymap only on the later synthetic Enter
+        // from flushIOSKey, which is non-bubbling and never reaches us). Either
+        // way, if a popup is active we swallow the key: `acceptCompletion` applies
+        // the option when CM allows it and is a no-op inside the interactionDelay
+        // window — but we return unconditionally so the key can't fall through to
+        // a mid-completion split.
+        //
+        // Inside the delay window we swallow without accepting; the accept then
+        // lands a beat later on its own — on desktop when the user presses Return
+        // again (past the delay), on iOS via CM's deferred synthetic Enter
+        // (~250ms) hitting the completion keymap. No second manual press needed on
+        // iOS. The only split path is this window shortcut on the real keydown, so
+        // swallowing here is sufficient to prevent the split; the synthetic Enter
+        // can't split (it never reaches this window listener).
+        //
+        // At most one accept happens per press: CM's keymap and this guard both
+        // *call* acceptCompletion, but they're exclusive by state — a successful
+        // keymap accept stopPropagations so we never run; a failed one (delay)
+        // can't succeed on the retry within the same synchronous keystroke.
+        if (completionStatus(editorView.state) === 'active') {
+          acceptCompletion(editorView)
+          return
+        }
+
         if (!scopeRootId) return
 
         const policy = await structuralEditPolicyForBlock(block, scopeRootId)
