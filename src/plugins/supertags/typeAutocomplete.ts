@@ -142,22 +142,74 @@ export const buildTypeTagCandidates = (args: {
   }]
 }
 
+/** Everything a pick implementation needs to mirror (or undo) the
+ *  view-side trigger deletion against the block's STORED content
+ *  without ever guessing at positions: full doc snapshots from the
+ *  moment of the pick. Deleting by text search (`indexOf`) is not
+ *  safe — the trigger text can occur earlier in the block (`#recipe`
+ *  contains `#rec`), and matching the wrong occurrence corrupts user
+ *  content permanently once the tag-triggered editor remount seeds
+ *  from it. */
+export interface TypeTagPickContext {
+  /** The deleted `#query` span. */
+  triggerText: string
+  /** Doc offset of the trigger's `#` at pick time. */
+  at: number
+  /** Full doc content immediately BEFORE the trigger deletion. */
+  docBefore: string
+  /** Full doc content immediately AFTER the trigger deletion
+   *  (`docBefore` minus the trigger span). */
+  docAfter: string
+}
+
+/** How `pickType` should mirror the view's trigger deletion into the
+ *  block's stored content. Strict snapshot equality — anything else
+ *  (unflushed keystrokes, concurrent edits) returns null and the
+ *  caller skips the content edit: the editor's own debounced
+ *  `setContent` carries the deletion in those cases, and a wrong guess
+ *  here would destroy user text. Pure; exported for direct testing. */
+export const planTriggerStrip = (
+  storedContent: string,
+  ctx: TypeTagPickContext,
+): string | null => {
+  if (storedContent === ctx.docBefore) return ctx.docAfter
+  return null
+}
+
+/** How a FAILED pick's fallback should put the trigger text back into
+ *  stored content (the view path is preferred; this runs only when the
+ *  view is unmounted). Exact inverse when the stored content matches
+ *  the post-deletion snapshot; no-op when the text is demonstrably
+ *  already there at its spot; best-effort positional insert otherwise
+ *  (drifted content — restoring the user's text imperfectly placed
+ *  beats dropping it). Pure; exported for direct testing. */
+export const planTriggerRestore = (
+  storedContent: string,
+  ctx: TypeTagPickContext,
+): string | null => {
+  if (storedContent === ctx.docAfter) return ctx.docBefore
+  if (storedContent.slice(ctx.at, ctx.at + ctx.triggerText.length) === ctx.triggerText) return null
+  const pos = Math.min(ctx.at, storedContent.length)
+  return storedContent.slice(0, pos) + ctx.triggerText + storedContent.slice(pos)
+}
+
 export interface TypeTagAutocompleteOptions {
   /** Candidates for the current query, in display order. */
   getCandidates: (query: string) => TypeTagCandidate[] | Promise<TypeTagCandidate[]>
   /** Called when the user picks a candidate, after the `#query`
-   *  trigger text has been deleted from the view. `triggerText` is the
-   *  deleted span — implementations MUST also remove it from the
-   *  block's stored content in the SAME tx as the tag write: adding a
-   *  type remounts the per-block editor (types participate in the
-   *  renderer's slot identity), and the remounted editor seeds from
-   *  the cache, so a cache row that still holds the trigger text
-   *  resurrects it under the user's cursor. */
-  pickType: (candidate: TypeTagCandidate, ctx: {triggerText: string}) => Promise<void>
+   *  trigger text has been deleted from the view. Implementations MUST
+   *  also remove it from the block's stored content in the SAME tx as
+   *  the tag write (via `planTriggerStrip`): adding a type remounts
+   *  the per-block editor (types participate in the renderer's slot
+   *  identity), and the remounted editor seeds from the cache, so a
+   *  cache row that still holds the trigger text resurrects it under
+   *  the user's cursor. */
+  pickType: (candidate: TypeTagCandidate, ctx: TypeTagPickContext) => Promise<void>
   /** Persistence fallback for a FAILED pick: re-insert the trigger
-   *  text into the block's stored content when the editor view can no
-   *  longer take the restore (unmounted / navigated away). */
-  restoreTrigger?: (args: {triggerText: string}) => Promise<void>
+   *  text into the block's stored content (via `planTriggerRestore`)
+   *  when the editor view can no longer take the restore (unmounted /
+   *  navigated away). */
+  restoreTrigger?: (ctx: TypeTagPickContext) => Promise<void>
 }
 
 /** Put a failed pick's trigger text back into the editor at (or as
@@ -190,23 +242,31 @@ const candidateToOption = (
   detail: candidate.detail,
   type: candidate.kind === 'create' ? 'keyword' : 'class',
   apply: (view, _completion, applyFrom, applyTo) => {
-    // Delete the trigger text synchronously while the view is
-    // guaranteed alive; pickType mirrors the deletion into the stored
-    // content (see TypeTagAutocompleteOptions.pickType).
+    // Snapshot the doc around the deletion while the view is
+    // guaranteed alive — pickType mirrors the deletion into the stored
+    // content by snapshot equality, never by text search (see
+    // TypeTagPickContext).
+    const docBefore = view.state.doc.toString()
     const triggerText = view.state.doc.sliceString(applyFrom, applyTo)
     view.dispatch({
       changes: {from: applyFrom, to: applyTo, insert: ''},
       selection: EditorSelection.cursor(applyFrom),
     })
+    const ctx: TypeTagPickContext = {
+      triggerText,
+      at: applyFrom,
+      docBefore,
+      docAfter: view.state.doc.toString(),
+    }
     void (async () => {
       try {
-        await options.pickType(candidate, {triggerText})
+        await options.pickType(candidate, ctx)
       } catch (err) {
         // The user's text was deleted optimistically — a failed pick
         // must give it back, not just log.
         console.warn('[supertags] failed to apply type', candidate.label, err)
         if (!restoreTriggerToView(view, applyFrom, triggerText)) {
-          await options.restoreTrigger?.({triggerText}).catch((restoreErr: unknown) => {
+          await options.restoreTrigger?.(ctx).catch((restoreErr: unknown) => {
             console.warn('[supertags] failed to restore trigger text', restoreErr)
           })
         }
