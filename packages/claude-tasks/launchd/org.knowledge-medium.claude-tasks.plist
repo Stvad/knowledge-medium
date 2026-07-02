@@ -32,6 +32,15 @@
   <key>ThrottleInterval</key>
   <integer>30</integer>
 
+  <!-- On stop/reboot the daemon drains in-flight runs before exiting; a
+       run can legitimately take minutes (watcher timeoutMs, up to 25m).
+       Give it room before launchd SIGKILLs (default is ~20s, which would
+       orphan the claude child). Graceful drain still only covers runs
+       that finish within this window; longer ones degrade to the
+       requeue-after-stale-sweep path. -->
+  <key>ExitTimeOut</key>
+  <integer>120</integer>
+
   <key>StandardOutPath</key>
   <string>__HOME__/Library/Logs/km-claude-daemon.log</string>
   <key>StandardErrorPath</key>

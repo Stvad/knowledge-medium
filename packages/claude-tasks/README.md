@@ -50,7 +50,7 @@ Runs execute via `claude -p` on a machine authenticated with `claude login`. The
        {
          "kind": "query",
          "name": "stale-actions",
-         "sql": "SELECT id, content FROM blocks WHERE json_extract(properties_json, '$.\"action:status\"') = 'open'",
+         "sql": "SELECT id, content FROM blocks WHERE workspace_id = 'YOUR_WORKSPACE_ID' AND json_extract(properties_json, '$.\"action:status\"') = 'open'",
          "prompt": "New open action items appeared:\n{{newRows}}\nTriage them: add a priority property to each via update_block."
        }
      ]
@@ -58,6 +58,8 @@ Runs execute via `claude -p` on a machine authenticated with `claude login`. The
    ```
 
    The `claude` page must exist (type `[[claude]]` once and click it).
+
+   **Always scope query watchers to a `workspace_id`** — the local `blocks` table holds *every* synced workspace, so an unscoped query fires runs (and their `update_block` writes) against workspaces you aren't working in. Get yours from `yarn agent runtime-summary`. Backlink watchers don't need this (a page alias resolves within the active workspace).
 
 3. **Build + run once by hand:**
 

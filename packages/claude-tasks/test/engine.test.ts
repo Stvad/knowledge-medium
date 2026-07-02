@@ -228,6 +228,108 @@ describe('mention lifecycle', () => {
     expect(replies).toHaveLength(1)
   })
 
+  it('parks props-FIRST so a failed reply write cannot spam ⚠️ blocks', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {
+        content: '[[claude]] cursed',
+        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 60 * 60_000, [PROPS.attempts]: MAX_ATTEMPTS},
+      }},
+    })
+    // Reply write is broken; the terminal status must still land so the
+    // block isn't re-parked (and re-replied) every tick.
+    graph.createReply = vi.fn(async () => { throw new Error('reply write failed') })
+    const engine = engineWith({graph})
+
+    await engine.tick()
+    await engine.drain()
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+
+    await engine.tick()
+    await engine.drain()
+    expect((graph.createReply as ReturnType<typeof vi.fn>).mock.calls.length).toBeLessThanOrEqual(1)
+    expect(replies).toHaveLength(0)
+  })
+
+  it('does not re-park a task the channel session already closed (fresh re-read)', async () => {
+    const {graph, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {
+        content: '[[claude]] cursed',
+        properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 60 * 60_000, [PROPS.attempts]: MAX_ATTEMPTS},
+      }},
+    })
+    // Between the tick snapshot and the park, the ambient session marks it done.
+    const realGetBlock = graph.getBlock
+    graph.getBlock = async id => {
+      const block = await realGetBlock(id)
+      if (block) block.properties = {...block.properties, [PROPS.status]: 'done'}
+      return block
+    }
+    const engine = engineWith({graph})
+
+    await engine.tick()
+    await engine.drain()
+    expect(replies).toHaveLength(0)
+  })
+
+  it('does not count a resumed-thread placeholder against maxConcurrent', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-follow'}, {id: 'b-other'}],
+      blocks: {
+        'b-root': {content: 'root', properties: {[PROPS.status]: 'done', [PROPS.session]: 'sess-root'}},
+        'b-follow': {content: '[[claude]] follow up', parentId: 'b-root'},
+        'b-other': {content: '[[claude]] unrelated'},
+      },
+    })
+    let live = 0
+    let peak = 0
+    const runTask = vi.fn(async () => {
+      live += 1; peak = Math.max(peak, live)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      live -= 1
+      return okRun()
+    })
+    // maxConcurrent 2: the follow-up's session placeholder must NOT eat a
+    // second slot and block the unrelated mention.
+    const engine = engineWith({graph, runTask, config: mentionConfig({maxConcurrent: 2})})
+
+    await engine.tick()
+    await engine.drain()
+    expect(peak).toBe(2)
+    expect(runTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-resolves the target page id after the TTL (deleted+recreated page)', async () => {
+    const {graph} = fakeGraph({blocks: {'b-new': {content: '[[claude]] x'}}})
+    let currentPageId = 'page-v1'
+    graph.resolvePageId = vi.fn(async () => currentPageId)
+    const backlinksByPage: Record<string, Array<{id: string, deepLink: string}>> = {
+      'page-v1': [],
+      'page-v2': [{id: 'b-new', deepLink: 'link'}],
+    }
+    graph.backlinkSources = vi.fn(async (id: string) =>
+      (backlinksByPage[id] ?? []).map(({id: sid, deepLink}) => ({id: sid, content: '[[claude]] x', types: [], deepLink, sourceFields: ['content']})))
+
+    let clock = NOW
+    const runTask = vi.fn(async () => okRun())
+    const engine = createEngine({
+      config: mentionConfig(), graph, state: memoryState(), runTask,
+      deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
+    })
+
+    await engine.tick()          // resolves page-v1, no backlinks
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+
+    currentPageId = 'page-v2'     // page deleted + recreated
+    clock += 11 * 60_000         // past the 10-min TTL
+    await engine.tick()
+    await engine.drain()
+    expect(graph.resolvePageId).toHaveBeenCalledTimes(2)
+    expect(runTask).toHaveBeenCalledTimes(1)
+  })
+
   it('backs off when another daemon wins the claim race', async () => {
     const {graph, replies} = fakeGraph({
       backlinks: [{id: 'b-1'}],

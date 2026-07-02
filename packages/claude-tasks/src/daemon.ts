@@ -17,8 +17,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createBridgeClient, errorMessage, sleep, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
-import { agentRuntimeConfigDir, isErrnoException } from '@knowledge-medium/agent-cli/config'
+import { createBridgeClient, errorMessage, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
+import { agentRuntimeConfigDir, bridgeUrl as resolveBridgeUrl, isErrnoException, isLocalBridgeUrl } from '@knowledge-medium/agent-cli/config'
 import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
 import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
@@ -48,27 +48,39 @@ const parseArgs = (argv: string[]) => {
 
 const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'claude-tasks.pid')
 
+const isProcessAlive = (pid: number): boolean => {
+  if (!(pid > 0)) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM = alive but not ours to signal; ESRCH = gone.
+    return isErrnoException(error) && error.code === 'EPERM'
+  }
+}
+
 const acquirePidfile = async (): Promise<void> => {
   const file = pidfilePath()
-  try {
-    const existing = Number((await fs.readFile(file, 'utf8')).trim())
-    if (existing > 0) {
-      try {
-        process.kill(existing, 0)
-        throw new Error(`Another km-claude-daemon is already running (pid ${existing}). Stop it first — two daemons double-claim tasks.`)
-      } catch (error) {
-        if (isErrnoException(error) && error.code === 'ESRCH') {
-          // Stale pidfile from a dead process — take over.
-        } else {
-          throw error
-        }
-      }
-    }
-  } catch (error) {
-    if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
-  }
   await fs.mkdir(path.dirname(file), {recursive: true})
-  await fs.writeFile(file, `${process.pid}\n`)
+
+  // `wx` is the atomic create — no read-check-write TOCTOU where two
+  // daemons starting at once both pass. On EEXIST, decide against the
+  // existing pid and, if it's stale, replace it and retry once.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await fs.writeFile(file, `${process.pid}\n`, {flag: 'wx'})
+      return
+    } catch (error) {
+      if (!isErrnoException(error) || error.code !== 'EEXIST') throw error
+    }
+
+    const existing = Number((await fs.readFile(file, 'utf8').catch(() => '')).trim())
+    if (isProcessAlive(existing) && existing !== process.pid) {
+      throw new Error(`Another km-claude-daemon is already running (pid ${existing}). Stop it first — two daemons double-claim tasks.`)
+    }
+    await fs.rm(file, {force: true}) // stale pidfile — take over
+  }
+  throw new Error('Could not acquire the daemon pidfile (lost a startup race).')
 }
 
 const releasePidfile = async (): Promise<void> => {
@@ -129,12 +141,26 @@ const main = async () => {
   await acquirePidfile()
 
   let stopping = false
+  const wake = new AbortController()
   const stop = (signal: string) => {
     log(`${signal} received — draining in-flight runs`)
     stopping = true
+    wake.abort() // cut any in-progress poll/preflight sleep short
   }
   process.on('SIGINT', () => stop('SIGINT'))
   process.on('SIGTERM', () => stop('SIGTERM'))
+
+  // Interruptible sleep: resolves on timeout OR immediately when stop()
+  // fires, so shutdown isn't stuck behind a full poll/retry interval.
+  const nap = (ms: number) => new Promise<void>(resolve => {
+    if (stopping) return resolve()
+    const timer = setTimeout(() => {
+      wake.signal.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => { clearTimeout(timer); resolve() }
+    wake.signal.addEventListener('abort', onAbort, {once: true})
+  })
 
   const client = createBridgeClient({profile: config.profile, timeoutMs: 60_000})
 
@@ -153,17 +179,20 @@ const main = async () => {
         await releasePidfile()
         process.exit(1)
       }
-      if (!bridgeStartAttempted) {
+      if (!bridgeStartAttempted && !process.env.AGENT_RUNTIME_URL && isLocalBridgeUrl(resolveBridgeUrl())) {
         bridgeStartAttempted = true
         log(`bridge not reachable (${errorMessage(error)}) — starting it`)
         // The daemon runs unattended (launchd, post-reboot), so it must
         // be able to start the bridge itself — otherwise a reboot leaves
-        // it waiting until the user happens to run `yarn agent`.
+        // it waiting until the user happens to run `yarn agent`. Only for
+        // a LOCAL bridge — a configured AGENT_RUNTIME_URL is someone
+        // else's process to manage.
         await startBridgeInBackground().catch(startError => log(`bridge start failed: ${errorMessage(startError)}`))
-      } else {
-        log(`waiting for bridge/pairing (${errorMessage(error)}) — retrying in 30s; if never paired, run: yarn agent --profile ${config.profile} connect`)
+        await nap(1_000) // brief recheck right after starting it
+        continue
       }
-      await sleep(bridgeStartAttempted ? 30_000 : 1_000)
+      log(`waiting for bridge/pairing (${errorMessage(error)}) — retrying in 30s; if never paired, run: yarn agent --profile ${config.profile} connect`)
+      await nap(30_000)
     }
   }
 
@@ -202,7 +231,7 @@ const main = async () => {
   while (!stopping) {
     await engine.tick()
     if (args.once) break
-    await sleep(config.pollIntervalMs)
+    await nap(config.pollIntervalMs)
   }
 
   await engine.drain()

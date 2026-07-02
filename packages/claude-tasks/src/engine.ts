@@ -45,7 +45,12 @@ export const createEngine = (deps: EngineDeps) => {
    *  One structure serves the double-claim guard, the capacity gate,
    *  and drain(). */
   const running = new Map<string, Promise<void>>()
-  const pageIdCache = new Map<string, string>()
+  /** target alias → {id, resolvedAt}. TTL'd: a page deleted-then-
+   *  recreated gets a NEW id, and a stale id doesn't error (backlinks of
+   *  a missing target just return []), so an unbounded cache would
+   *  silently poll a dead id forever. */
+  const pageIdCache = new Map<string, {id: string, resolvedAt: number}>()
+  const PAGE_ID_TTL_MS = 10 * 60_000
   /** Launch timestamps within the rolling hour — the global spend
    *  circuit-breaker. PERSISTED (state.ts): an in-memory-only log would
    *  re-arm a full budget on every crash/restart, unbounding the exact
@@ -53,7 +58,15 @@ export const createEngine = (deps: EngineDeps) => {
   let launchTimes: number[] = []
   let launchTimesLoaded = false
 
-  const capacityLeft = () => config.maxConcurrent - running.size
+  // `session:` placeholders (thread-dedup, added in processMention) share
+  // the `running` map but are NOT launches — exclude them so one --resume
+  // follow-up doesn't consume two of maxConcurrent's slots.
+  const activeRuns = () => {
+    let count = 0
+    for (const key of running.keys()) if (!key.startsWith('session:')) count += 1
+    return count
+  }
+  const capacityLeft = () => config.maxConcurrent - activeRuns()
 
   const pruneLaunchTimes = () => {
     const cutoff = now() - 60 * 60_000
@@ -95,12 +108,19 @@ export const createEngine = (deps: EngineDeps) => {
     timeoutMs: watcher.timeoutMs,
   })
 
-  /** Park a task that exhausted its retries — one terminal write so the
-   *  pre-filter skips it forever after. */
+  /** Park a task that exhausted its retries. Re-read + re-decide first
+   *  (the pre-filter used a tick-start snapshot; the ambient session may
+   *  have closed it since), then write the terminal `error` props FIRST
+   *  so the state sticks even if the reply write fails — otherwise a
+   *  createReply-succeeds / setTaskProps-fails split would re-enter every
+   *  tick and spam ⚠️ blocks into the user's notes (the one write path
+   *  with no billed-run circuit breaker). */
   const parkExhausted = async (watcher: BacklinksWatcher, sourceId: string) => {
+    const fresh = await graph.getBlock(sourceId)
+    if (decidePending({source: fresh ?? {id: sourceId}, nowMs: now()}).reason !== 'attempts-exhausted') return
     const reason = `gave up after ${MAX_ATTEMPTS} attempts (runs kept crashing or the channel session never closed the task)`
-    await graph.createReply(sourceId, `⚠️ claude-tasks: ${reason}. Delete the claude:* properties to retry.`)
     await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()})
+    await graph.createReply(sourceId, `⚠️ claude-tasks: ${reason}. Delete the claude:* properties to retry.`).catch(() => {})
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
 
@@ -191,10 +211,11 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   const tickBacklinksWatcher = async (watcher: BacklinksWatcher) => {
-    let targetId = pageIdCache.get(watcher.target)
+    const cached = pageIdCache.get(watcher.target)
+    let targetId = cached && now() - cached.resolvedAt < PAGE_ID_TTL_MS ? cached.id : undefined
     if (!targetId) {
       targetId = await graph.resolvePageId(watcher.target)
-      pageIdCache.set(watcher.target, targetId)
+      pageIdCache.set(watcher.target, {id: targetId, resolvedAt: now()})
     }
 
     const sources = await graph.backlinkSources(targetId)

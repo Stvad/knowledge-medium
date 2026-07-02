@@ -114,11 +114,11 @@ export const createGraph = (client: BridgeClient) => {
       `WITH RECURSIVE anc(id, parent_id, content, properties_json, depth) AS (
          SELECT b.id, b.parent_id, b.content, b.properties_json, 0
            FROM blocks b
-           WHERE b.id = (SELECT parent_id FROM blocks WHERE id = ?)
+           WHERE b.id = (SELECT parent_id FROM blocks WHERE id = ?) AND b.deleted = 0
          UNION ALL
          SELECT p.id, p.parent_id, p.content, p.properties_json, anc.depth + 1
            FROM blocks p JOIN anc ON p.id = anc.parent_id
-           WHERE anc.depth < ?
+           WHERE anc.depth < ? AND p.deleted = 0
        )
        SELECT id, parent_id, content, properties_json FROM anc ORDER BY depth`,
       [id, maxDepth],
@@ -182,7 +182,7 @@ export const createGraph = (client: BridgeClient) => {
       const placeholders = chunk.map(() => '?').join(', ')
       const rows = await sqlAll(
         `SELECT id, properties_json, coalesce(user_updated_at, updated_at) AS edited_at
-           FROM blocks WHERE id IN (${placeholders})`,
+           FROM blocks WHERE deleted = 0 AND id IN (${placeholders})`,
         chunk,
       )
       for (const row of rows) {
