@@ -10,23 +10,32 @@
  *    truthful mirror of what a keypress would actually do, not a separate
  *    hand-maintained cheat sheet.
  *
- *  - `matchPressedSequence` — sequence-aware lookup of a pressed-chords
+ *  - `matchPressedSequence` — sequence-aware lookup of a pressed-events
  *    buffer against those bindings: exact completions plus the bindings the
  *    buffer is a proper prefix of (the which-key narrowing for `g g`-style
  *    sequence chords).
  *
- * Matching approximates tinykeys with the shared chord canonicaliser
- * (`parseChord`) over the canonical chord strings `chordFromEvent` emits.
- * It deliberately ignores the dispatch-time gates that need live deps
- * (`canDispatch`, per-context `eventFilter`) — the popup answers "what is
- * this chord bound to", not "would it no-op right now".
+ * Matching runs each binding through tinykeys' OWN `parseKeybinding` /
+ * `matchKeybindingPress` against the real KeyboardEvents — the same parser
+ * and matcher the coordinator's installed matchers use — so chord identity
+ * agrees with dispatch by construction (`event.code` fallback for
+ * `Backquote`-style bindings, `$mod` platform resolution, exact modifier
+ * sets). Canonical chord strings (`chordFromEvent`) are display-only.
+ *
+ * Deliberate approximations, documented rather than simulated: dispatch-time
+ * gates that need live deps (`canDispatch`, deps resolution, a handler's
+ * sync-`false` decline) and per-context `eventFilter`s are ignored — the
+ * popup answers "what is this chord bound to", not "would it no-op right
+ * now". The inspector also holds a sequence prefix indefinitely while the
+ * real dispatcher times sequences out after ~1s: the popup exists to let
+ * you READ the continuations, so it deliberately does not race you.
  */
+import { toChordArray, type ChordPhase } from '@/shortcuts/canonicalizeChord.js'
 import {
-  parseChord,
-  type ChordPhase,
-  type ChordSequence,
-  type KeyChordDescriptor,
-} from '@/shortcuts/canonicalizeChord.js'
+  matchKeybindingPress,
+  parseKeybinding,
+  type KeybindingPress,
+} from 'tinykeys'
 import { actionRuntimeKey } from '@/shortcuts/effectiveActions.js'
 import {
   compareContexts,
@@ -46,8 +55,8 @@ export interface HelpBinding {
   /** One chord as authored on the binding ('$mod+k', 'g g'). An action
    *  whose binding lists several keys yields one HelpBinding per chord. */
   readonly chord: string
-  /** Parsed presses — length > 1 for sequence chords. */
-  readonly sequence: ChordSequence
+  /** tinykeys-parsed presses — length > 1 for sequence chords. */
+  readonly presses: readonly KeybindingPress[]
   readonly phase: ChordPhase
   /** Hold threshold, present exactly when `phase === 'hold'`. */
   readonly holdMs?: number
@@ -73,9 +82,6 @@ export interface ShortcutHelpModel {
   /** All groups' bindings flattened in group order. */
   readonly bindings: readonly HelpBinding[]
 }
-
-const toChordList = (keys: string | readonly string[]): readonly string[] =>
-  typeof keys === 'string' ? [keys] : keys
 
 export const buildShortcutHelpModel = (
   actions: readonly ActionConfig[],
@@ -104,17 +110,16 @@ export const buildShortcutHelpModel = (
       .flatMap(action => {
         const binding = action.defaultBinding!
         const phase: ChordPhase = binding.phase ?? 'keydown'
-        return toChordList(binding.keys).map((chord): HelpBinding => ({
+        const source = sourceByActionKey?.get(actionRuntimeKey(action))
+        return toChordArray(binding.keys).map((chord): HelpBinding => ({
           action,
           contextConfig: config,
           chord,
-          sequence: parseChord(chord, phase),
+          presses: parseKeybinding(chord),
           phase,
           ...(binding.phase === 'hold' ? {holdMs: binding.holdMs} : {}),
           shadowed,
-          ...(sourceByActionKey?.has(actionRuntimeKey(action))
-            ? {source: sourceByActionKey.get(actionRuntimeKey(action))}
-            : {}),
+          ...(source ? {source} : {}),
         }))
       })
 
@@ -132,7 +137,9 @@ export const buildShortcutHelpModel = (
 /** `actionRuntimeKey` → contributing plugin id, from the raw `actionsFacet`
  *  contributions. Effective actions are rewritten copies (transform +
  *  override passes), so attribution matches on the context-qualified id,
- *  not object identity. */
+ *  not object identity. Known limits: last write wins if two plugins
+ *  contribute the same context:id, and a transform that REWRITES an
+ *  action's id/context loses attribution (no in-tree transform does). */
 export const actionSourcesFromRuntime = (runtime: FacetRuntime): ReadonlyMap<string, string> => {
   const out = new Map<string, string>()
   for (const contribution of runtime.contributionsById(actionsFacet.id)) {
@@ -142,26 +149,12 @@ export const actionSourcesFromRuntime = (runtime: FacetRuntime): ReadonlyMap<str
   return out
 }
 
-/** Strip tinykeys' `KeyX`/`DigitN` physical-code prefixes so a code-form
- *  chord ('Shift+Digit3') and a key-form one compare on the same token. */
-const keyToken = (key: string): string => {
-  const letter = key.match(/^Key([A-Z])$/)
-  if (letter) return letter[1]!.toLowerCase()
-  const digit = key.match(/^Digit(\d)$/)
-  if (digit) return digit[1]!
-  return key.toLowerCase()
-}
-
-const pressesMatch = (a: KeyChordDescriptor, b: KeyChordDescriptor): boolean =>
-  a.mods.length === b.mods.length &&
-  // Both sides are canonicalised into the same stable modifier order.
-  a.mods.every((mod, i) => b.mods[i] === mod) &&
-  keyToken(a.key) === keyToken(b.key)
-
 export interface KeyLookupResult {
   /** Bindings whose whole sequence equals the pressed buffer, best-first
    *  (the flat model order = dispatcher precedence). The first non-shadowed
-   *  entry is what the coordinator would actually run. */
+   *  entry is the candidate the coordinator would dispatch FIRST — it can
+   *  still fall through to the next one at dispatch time (deps fail,
+   *  `canDispatch` declines, handler returns the not-handled sentinel). */
   readonly exact: readonly HelpBinding[]
   /** Bindings the pressed buffer is a proper prefix of — the which-key
    *  continuation set. */
@@ -169,28 +162,27 @@ export interface KeyLookupResult {
 }
 
 /**
- * Look up a buffer of pressed chords (canonical strings from
- * `chordFromEvent`) against the model's bindings, sequence-aware.
+ * Look up a buffer of pressed KEY EVENTS against the model's bindings,
+ * sequence-aware. Events should be pre-processed with
+ * `withRecoveredLetterKey`, mirroring what the coordinator feeds its own
+ * matchers. Matching delegates to tinykeys' `matchKeybindingPress`, so a
+ * verdict here is the verdict the dispatcher's matcher would reach.
  */
 export const matchPressedSequence = (
   bindings: readonly HelpBinding[],
-  pressed: readonly string[],
+  pressed: readonly KeyboardEvent[],
 ): KeyLookupResult => {
-  const pressedDescriptors = pressed
-    .map(chord => parseChord(chord)[0])
-    .filter((d): d is KeyChordDescriptor => d !== undefined && d.kind === 'key')
-  if (pressedDescriptors.length === 0) return {exact: [], pending: []}
+  if (pressed.length === 0) return {exact: [], pending: []}
 
   const exact: HelpBinding[] = []
   const pending: HelpBinding[] = []
   for (const binding of bindings) {
-    if (binding.sequence.length < pressedDescriptors.length) continue
-    const head = binding.sequence.slice(0, pressedDescriptors.length)
-    const matches = head.every((press, i) =>
-      press.kind === 'key' && pressesMatch(press, pressedDescriptors[i]!),
+    if (binding.presses.length < pressed.length) continue
+    const matches = pressed.every((event, i) =>
+      matchKeybindingPress(event, binding.presses[i]!),
     )
     if (!matches) continue
-    if (binding.sequence.length === pressedDescriptors.length) exact.push(binding)
+    if (binding.presses.length === pressed.length) exact.push(binding)
     else pending.push(binding)
   }
   return {exact, pending}

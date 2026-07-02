@@ -1,4 +1,7 @@
+// @vitest-environment jsdom
+
 import { describe, expect, it } from 'vitest'
+import { createKeybindingsHandler } from 'tinykeys'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { actionsFacet } from '@/extensions/core.js'
 import type { ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
@@ -43,6 +46,9 @@ const DEPS: BaseShortcutDependencies = {uiStateBlock: {} as never}
 
 const configsByType = (configs: readonly ActionContextConfig[]) =>
   new Map(configs.map(c => [c.type, c]))
+
+const press = (init: KeyboardEventInit): KeyboardEvent =>
+  new KeyboardEvent('keydown', init)
 
 describe('buildShortcutHelpModel', () => {
   const global = contextConfig(ActionContextTypes.GLOBAL)
@@ -114,7 +120,7 @@ describe('buildShortcutHelpModel', () => {
     })
 
     const seq = model.bindings.find(b => b.action.id === 'seq')!
-    expect(seq.sequence).toHaveLength(2)
+    expect(seq.presses).toHaveLength(2)
     const held = model.bindings.find(b => b.action.id === 'held')!
     expect(held.phase).toBe('hold')
     expect(held.holdMs).toBe(400)
@@ -126,42 +132,108 @@ describe('matchPressedSequence', () => {
   const active: ActiveContextsMap = new Map([[ActionContextTypes.GLOBAL, DEPS]])
   const model = buildShortcutHelpModel(
     [
-      action('save', ActionContextTypes.GLOBAL, 'Cmd+k'),
+      action('palette', ActionContextTypes.GLOBAL, '$mod+k'),
       action('bare', ActionContextTypes.GLOBAL, 'g'),
       action('top', ActionContextTypes.GLOBAL, 'g g'),
       action('link', ActionContextTypes.GLOBAL, 'y l'),
+      action('today', ActionContextTypes.GLOBAL, 'Control+Shift+Backquote'),
+      action('scroll', ActionContextTypes.GLOBAL, 'Control+d'),
     ],
     {active, contextConfigsByType: configsByType([global])},
   )
 
-  it('folds modifier aliases so a captured $mod chord matches a Cmd binding', () => {
-    const {exact, pending} = matchPressedSequence(model.bindings, ['$mod+k'])
-    expect(exact.map(b => b.action.id)).toEqual(['save'])
+  // jsdom's navigator.platform is non-Mac, so tinykeys resolves $mod → Control.
+
+  it('matches a $mod chord pressed with the platform-primary modifier', () => {
+    const {exact, pending} = matchPressedSequence(model.bindings, [press({key: 'k', ctrlKey: true})])
+    expect(exact.map(b => b.action.id)).toEqual(['palette'])
     expect(pending).toHaveLength(0)
   })
 
+  it('does not match $mod against the non-primary modifier (Win+K ≠ Ctrl+K)', () => {
+    const {exact, pending} = matchPressedSequence(model.bindings, [press({key: 'k', metaKey: true})])
+    expect(exact).toHaveLength(0)
+    expect(pending).toHaveLength(0)
+  })
+
+  it('matches literal-Control bindings on the platform where Control is primary', () => {
+    const {exact} = matchPressedSequence(model.bindings, [press({key: 'd', ctrlKey: true})])
+    expect(exact.map(b => b.action.id)).toEqual(['scroll'])
+  })
+
+  it('matches code-form bindings via event.code when the key is a shifted glyph', () => {
+    const {exact} = matchPressedSequence(model.bindings, [
+      press({key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true}),
+    ])
+    expect(exact.map(b => b.action.id)).toEqual(['today'])
+  })
+
   it('requires the exact modifier set', () => {
-    const {exact, pending} = matchPressedSequence(model.bindings, ['$mod+g'])
+    const {exact, pending} = matchPressedSequence(model.bindings, [press({key: 'g', ctrlKey: true})])
     expect(exact).toHaveLength(0)
     expect(pending).toHaveLength(0)
   })
 
   it('reports sequence continuations for a live prefix alongside exact hits', () => {
-    const {exact, pending} = matchPressedSequence(model.bindings, ['g'])
+    const {exact, pending} = matchPressedSequence(model.bindings, [press({key: 'g'})])
     expect(exact.map(b => b.action.id)).toEqual(['bare'])
     expect(pending.map(b => b.action.id)).toEqual(['top'])
   })
 
   it('completes a sequence chord', () => {
-    const {exact, pending} = matchPressedSequence(model.bindings, ['g', 'g'])
+    const {exact, pending} = matchPressedSequence(model.bindings, [press({key: 'g'}), press({key: 'g'})])
     expect(exact.map(b => b.action.id)).toEqual(['top'])
     expect(pending).toHaveLength(0)
   })
 
   it('drops a buffer that diverges from every sequence', () => {
-    const {exact, pending} = matchPressedSequence(model.bindings, ['y', 'x'])
+    const {exact, pending} = matchPressedSequence(model.bindings, [press({key: 'y'}), press({key: 'x'})])
     expect(exact).toHaveLength(0)
     expect(pending).toHaveLength(0)
+  })
+})
+
+describe('matchPressedSequence ↔ tinykeys parity', () => {
+  // The inspector's verdict must agree with what the dispatcher's own
+  // matcher would do for the same events. Table covers the chord shapes in
+  // the real binding corpus: $mod, literal Control, code-form keys, shifted
+  // glyphs, sequences, and exact-modifier-set negatives.
+  const tinykeysFires = (chord: string, events: readonly KeyboardEvent[]): boolean => {
+    let fired = false
+    const handler = createKeybindingsHandler({[chord]: () => { fired = true }}, {ignore: () => false})
+    for (const event of events) handler(event)
+    return fired
+  }
+
+  // Real keyboard events always carry `code` — tinykeys' handler rejects
+  // events without one (`isKeyboardEvent`), so the synthesized events do too.
+  const CASES: Array<{chord: string; events: KeyboardEventInit[]}> = [
+    {chord: '$mod+k', events: [{key: 'k', code: 'KeyK', ctrlKey: true}]},
+    {chord: '$mod+k', events: [{key: 'k', code: 'KeyK', metaKey: true}]},
+    {chord: 'Control+d', events: [{key: 'd', code: 'KeyD', ctrlKey: true}]},
+    {chord: 'Control+Shift+Backquote', events: [{key: '~', code: 'Backquote', ctrlKey: true, shiftKey: true}]},
+    {chord: 'Control+Shift+BracketLeft', events: [{key: '{', code: 'BracketLeft', ctrlKey: true, shiftKey: true}]},
+    {chord: 'Shift+?', events: [{key: '?', code: 'Slash', shiftKey: true}]},
+    {chord: '?', events: [{key: '?', code: 'Slash', shiftKey: true}]},
+    {chord: 'g', events: [{key: 'g', code: 'KeyG', ctrlKey: true}]},
+    {chord: 'Space', events: [{key: ' ', code: 'Space'}]},
+    {chord: 'g g', events: [{key: 'g', code: 'KeyG'}, {key: 'g', code: 'KeyG'}]},
+    {chord: 'g g', events: [{key: 'g', code: 'KeyG'}, {key: 'h', code: 'KeyH'}]},
+    {chord: 'Control+Shift+Digit3', events: [{key: '#', code: 'Digit3', ctrlKey: true, shiftKey: true}]},
+  ]
+
+  it.each(CASES)('agrees with tinykeys on %j', ({chord, events}) => {
+    const global = contextConfig(ActionContextTypes.GLOBAL)
+    const model = buildShortcutHelpModel(
+      [action('probe', ActionContextTypes.GLOBAL, chord)],
+      {
+        active: new Map([[ActionContextTypes.GLOBAL, DEPS]]),
+        contextConfigsByType: configsByType([global]),
+      },
+    )
+    const pressedEvents = events.map(init => press(init))
+    const {exact} = matchPressedSequence(model.bindings, pressedEvents)
+    expect(exact.length > 0).toBe(tinykeysFires(chord, pressedEvents))
   })
 })
 

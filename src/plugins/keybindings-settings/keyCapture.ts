@@ -30,7 +30,10 @@ const KEY_ALIASES: Record<string, string> = {
   'delete': 'Delete',
 }
 
-const MODIFIER_KEYS = new Set(['control', 'meta', 'os', 'alt', 'shift'])
+// Includes lock/AltGr/dead keys: they never resolve a chord on their own,
+// and treating e.g. AltGraph (ordinary typing on many European layouts) as
+// a key would commit bogus captures and reset pending sequence buffers.
+const MODIFIER_KEYS = new Set(['control', 'meta', 'os', 'alt', 'shift', 'altgraph', 'capslock', 'numlock', 'dead'])
 
 /** True when the event only carries a modifier — no useful chord yet,
  *  the capture input should wait for a real key. */
