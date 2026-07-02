@@ -4,25 +4,19 @@ import {
   audioMediaViewer,
   formatByteSize,
   imageMediaViewer,
+  pdfMediaViewer,
   pickMediaViewer,
 } from './mediaViewers.js'
-import type { MediaViewerContribution } from './mediaViewersFacet.js'
-
-const fakePdf: MediaViewerContribution = {
-  id: 'pdf',
-  match: (m) => m === 'application/pdf',
-  Component: () => null,
-  eager: true,
-}
 
 describe('pickMediaViewer', () => {
   it('returns the first viewer whose match() accepts the mime (list is precedence-ordered)', () => {
-    const viewers = [imageMediaViewer, audioMediaViewer, fakePdf]
+    const viewers = [imageMediaViewer, audioMediaViewer, pdfMediaViewer]
     expect(pickMediaViewer(viewers, 'image/png')).toBe(imageMediaViewer)
     expect(pickMediaViewer(viewers, 'IMAGE/PNG')).toBe(imageMediaViewer) // MIME is case-insensitive (RFC 2045)
     expect(pickMediaViewer(viewers, 'audio/mpeg')).toBe(audioMediaViewer)
     expect(pickMediaViewer(viewers, 'AUDIO/OGG')).toBe(audioMediaViewer)
-    expect(pickMediaViewer(viewers, 'application/pdf')).toBe(fakePdf)
+    expect(pickMediaViewer(viewers, 'application/pdf')).toBe(pdfMediaViewer)
+    expect(pickMediaViewer(viewers, 'APPLICATION/PDF')).toBe(pdfMediaViewer) // case-insensitive too
   })
 
   it('falls back to the download viewer when no registered viewer claims the mime', () => {
@@ -39,6 +33,16 @@ describe('audioMediaViewer', () => {
     // Not eager: the renderer must NOT resolve the (possibly large) bytes on mount — the
     // AudioViewer arms the resolve itself on the first play intent (§8/§11).
     expect(audioMediaViewer.eager).toBe(false)
+  })
+})
+
+describe('pdfMediaViewer', () => {
+  it('claims application/pdf and resolves LAZILY (eager: false) — bytes are fetched on first preview, not on mount', () => {
+    expect(pdfMediaViewer.match('application/pdf')).toBe(true)
+    expect(pdfMediaViewer.match('image/png')).toBe(false)
+    // Like audio: a (possibly large) PDF isn't fetched/decrypted on mount — the PdfViewer arms
+    // the resolve on the first preview intent (§8/§11), and iOS can't inline-render it anyway.
+    expect(pdfMediaViewer.eager).toBe(false)
   })
 })
 

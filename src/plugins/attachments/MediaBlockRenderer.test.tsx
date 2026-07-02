@@ -31,12 +31,12 @@ vi.mock('./useAssetObjectUrl.js', () => ({
 }))
 vi.mock('./assetResolver.js', () => ({ getAssetResolver: () => ({ resolve: h.resolve }) }))
 vi.mock('@/utils/downloadBlob.js', () => ({ downloadBlob: h.downloadBlob }))
-// The runtime resolves the media-viewer facet to the (real) image + audio viewers, so an
-// image mime dispatches to ImageViewer, an audio mime to AudioViewer, everything else to the
-// download fallback.
+// The runtime resolves the media-viewer facet to the (real) image + audio + PDF viewers, so an
+// image mime dispatches to ImageViewer, an audio mime to AudioViewer, application/pdf to
+// PdfViewer, everything else to the download fallback.
 vi.mock('@/extensions/runtimeContext.js', async () => {
-  const { imageMediaViewer, audioMediaViewer } = await import('./mediaViewers.js')
-  return { useAppRuntime: () => ({ read: () => [imageMediaViewer, audioMediaViewer] }) }
+  const { imageMediaViewer, audioMediaViewer, pdfMediaViewer } = await import('./mediaViewers.js')
+  return { useAppRuntime: () => ({ read: () => [imageMediaViewer, audioMediaViewer, pdfMediaViewer] }) }
 })
 
 const { MediaBlockRenderer, MediaContentRenderer } = await import('./MediaBlockRenderer.js')
@@ -93,8 +93,10 @@ describe('MediaContentRenderer — image branch', () => {
 })
 
 describe('MediaContentRenderer — non-image (file) branch', () => {
+  // A mime claimed by NO registered viewer (not image/*, audio/*, or application/pdf) so it
+  // hits the download fallback — PDF now has its own inline viewer and can't stand in here.
   const fileProps = (extra: Record<string, unknown> = {}) => {
-    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/pdf', 'media:filename': 'doc.pdf', ...extra }
+    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/zip', 'media:filename': 'doc.zip', ...extra }
   }
 
   it('renders a METADATA-ONLY download button — no eager resolve — for a non-image MIME', () => {
@@ -103,7 +105,7 @@ describe('MediaContentRenderer — non-image (file) branch', () => {
     renderContent()
     const btn = screen.getByTestId('media-file')
     expect(btn.tagName).toBe('BUTTON')
-    expect(btn).toHaveTextContent('doc.pdf')
+    expect(btn).toHaveTextContent('doc.zip')
     expect(btn).toHaveTextContent('2 MB')
     expect(screen.queryByRole('img')).toBeNull() // not the image lightbox
     // The download fallback is LAZY: the renderer must gate the eager resolve OFF for it,
@@ -118,7 +120,7 @@ describe('MediaContentRenderer — non-image (file) branch', () => {
     fireEvent.click(screen.getByTestId('media-file'))
     await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
     const [blob, name] = h.downloadBlob.mock.calls[0]
-    expect(name).toBe('doc.pdf')
+    expect(name).toBe('doc.zip')
     // NEVER the attacker-influenceable media:mime — a neutral type so a navigated blob URL
     // downloads instead of rendering (no same-origin XSS via media:mime = text/html).
     expect(blob.type).toBe('application/octet-stream')
@@ -295,6 +297,125 @@ describe('MediaContentRenderer — audio branch', () => {
     await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
     expect(h.downloadBlob.mock.calls[0][0].type).toBe('application/octet-stream')
     // download did not arm the (large-file) inline resolve
+    expect(h.useAssetObjectUrl).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { enabled: false })
+  })
+})
+
+describe('MediaContentRenderer — PDF branch', () => {
+  const pdfProps = (extra: Record<string, unknown> = {}) => {
+    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/pdf', 'media:filename': 'doc.pdf', ...extra }
+  }
+
+  it('renders a metadata-only PREVIEW affordance — no eager resolve — for application/pdf', () => {
+    pdfProps({ 'media:size': 2_100_000 })
+    h.urlState = { status: 'ready', url: 'blob:should-not-be-used-yet' } // eager state ignored until armed
+    const { container } = renderContent()
+    const preview = screen.getByTestId('media-pdf-preview')
+    expect(preview).toHaveTextContent('doc.pdf')
+    expect(preview).toHaveTextContent('2 MB')
+    expect(preview).toHaveTextContent('Preview') // an explicit affordance — clearly opens the PDF
+    // The <object> is NOT mounted, and the renderer did NOT arm the resolve — the (possibly
+    // large) bytes aren't fetched/decrypted until the user intends to preview.
+    expect(container.querySelector('object')).toBeNull()
+    expect(h.useAssetObjectUrl).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { enabled: false })
+  })
+
+  it('arms the resolve and mounts a bounded <object> of the VERIFIED url (typed application/pdf) on preview click', () => {
+    pdfProps()
+    h.urlState = { status: 'ready', url: 'blob:pdf/1' } // what the hook resolves to once armed
+    const { container } = renderContent()
+    expect(container.querySelector('object')).toBeNull() // gated until preview
+
+    fireEvent.click(screen.getByTestId('media-pdf-preview'))
+    // The renderer flipped the eager gate on (preview-gated resolve, §8/§11)…
+    expect(h.useAssetObjectUrl).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { enabled: true })
+    // …and once resolved the inline preview renders at the VERIFIED object URL (with the native-viewer
+    // chrome fragment appended — the pages sidebar is hidden by default).
+    const object = container.querySelector('object')
+    expect(object?.getAttribute('data')).toMatch(/^blob:pdf\/1(#|$)/) // the verified url is the base
+    expect(object?.getAttribute('data')).toContain('navpanes=0')
+    // Pinned to application/pdf so the browser hands it to its PDF viewer, never HTML-sniffs it.
+    expect(object).toHaveAttribute('type', 'application/pdf')
+  })
+
+  it('collapses the preview back to the poster, and re-expands instantly (armed — no refetch)', () => {
+    pdfProps()
+    h.urlState = { status: 'ready', url: 'blob:pdf/1' }
+    const { container } = renderContent()
+    fireEvent.click(screen.getByTestId('media-pdf-preview')) // arm → preview
+    expect(container.querySelector('object')).not.toBeNull()
+
+    fireEvent.click(screen.getByTestId('media-pdf-collapse'))
+    expect(container.querySelector('object')).toBeNull() // collapsed → no <object>, back to the bar
+    expect(screen.getByTestId('media-pdf-preview')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('media-pdf-preview')) // re-expand
+    // Straight back to the <object> with NO loading spinner — the resolve stayed armed, nothing refetched.
+    expect(container.querySelector('object')).not.toBeNull()
+    expect(screen.queryByTestId('media-pdf-loading')).toBeNull()
+  })
+
+  it('shows the loading placeholder while the armed resolve is in flight', () => {
+    pdfProps()
+    h.urlState = { status: 'loading' }
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-pdf-preview'))
+    expect(screen.getByTestId('media-pdf-loading')).toBeInTheDocument()
+  })
+
+  it('fails closed to the broken indicator (NO <object>) on a failed resolve after preview', () => {
+    pdfProps()
+    h.urlState = { status: 'error', reason: 'hash-mismatch' }
+    const { container } = renderContent()
+    fireEvent.click(screen.getByTestId('media-pdf-preview'))
+    expect(screen.getByTestId('media-pdf-broken')).toBeInTheDocument()
+    // The load-bearing assertion: nothing is ever served for an unverified asset.
+    expect(container.querySelector('object')).toBeNull()
+  })
+
+  it('offers download from the poster WITHOUT previewing (savable without arming the inline resolve)', async () => {
+    pdfProps()
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-pdf-download')) // no preview click
+    await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
+    const [blob, name] = h.downloadBlob.mock.calls[0]
+    expect(name).toBe('doc.pdf')
+    // Same security invariant as the file fallback: never the attacker-influenceable media:mime.
+    expect(blob.type).toBe('application/octet-stream')
+    // download did NOT arm the (large-file) inline resolve
+    expect(h.useAssetObjectUrl).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { enabled: false })
+  })
+
+  it('keeps the verified bytes downloadable when the preview fails (the downloadable floor holds)', async () => {
+    // application/pdf no longer falls through to the file download fallback, so a broken preview
+    // must STILL be downloadable — not stranded behind a dead <object>.
+    pdfProps()
+    h.urlState = { status: 'error', reason: 'fetch-failed' }
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-pdf-preview')) // arm → error branch
+    expect(screen.getByTestId('media-pdf-broken')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('media-pdf-download'))
+    await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
+    expect(h.downloadBlob.mock.calls[0][0].type).toBe('application/octet-stream')
+  })
+
+  it('DISARMS on a content change under a live mount — no surprise refetch/preview of replaced bytes', () => {
+    // The block's media:hash can mutate in place (re-capture / synced edit / undo) WITHOUT a
+    // remount; the content-scoped arm must fall back to the preview poster, not auto-resolve the
+    // new bytes. (The A→B→A restore edge is covered by the shared renderer latch's audio test.)
+    pdfProps()
+    h.urlState = { status: 'ready', url: 'blob:pdf/1' }
+    const { container, rerender } = renderContent()
+    fireEvent.click(screen.getByTestId('media-pdf-preview'))
+    expect(container.querySelector('object')).not.toBeNull() // armed + previewing the original bytes
+    expect(h.useAssetObjectUrl).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { enabled: true })
+
+    // In-place content-hash change (synced re-capture / undo) — same mounted instance.
+    h.props = { ...h.props, 'media:hash': 'sha256:cd' }
+    rerender(<MediaContentRenderer block={block} />)
+
+    expect(screen.getByTestId('media-pdf-preview')).toBeInTheDocument() // back to the poster…
+    expect(container.querySelector('object')).toBeNull() // …NOT an <object> of the new bytes
     expect(h.useAssetObjectUrl).toHaveBeenLastCalledWith(expect.anything(), expect.anything(), { enabled: false })
   })
 })

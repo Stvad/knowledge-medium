@@ -74,6 +74,17 @@ export const isImageMime = (mime: string | undefined): boolean =>
 export const isAudioMime = (mime: string | undefined): boolean =>
   typeof mime === 'string' && mime.toLowerCase().startsWith('audio/')
 
+/** The PDF MIME — its inline-preview viewer (§11 PDF branch). */
+export const PDF_MIME = 'application/pdf'
+
+/** Does a MIME type render through the inline PDF preview (§11 PDF branch)?
+ *  Case-insensitive per RFC 2045; an EXACT match — `application/pdf` has no sub-family the
+ *  way `image/*` / `audio/*` do, and the exactness is load-bearing for the viewer's XSS
+ *  posture (the object URL's Blob is typed this same mime, so pinning it to `application/pdf`
+ *  keeps a browser from HTML-sniffing hash-verified-but-non-PDF bytes — see {@link PdfViewer}). */
+export const isPdfMime = (mime: string | undefined): boolean =>
+  typeof mime === 'string' && mime.toLowerCase() === PDF_MIME
+
 /** The fallback MIME for a file with no declared type. */
 export const GENERIC_MIME = 'application/octet-stream'
 

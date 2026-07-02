@@ -5,6 +5,7 @@ import {
   MEDIA_TYPE_CONTRIBUTION,
   isAudioMime,
   isImageMime,
+  isPdfMime,
   mediaHashProp,
   resolveCaptureMime,
   sniffImageMime,
@@ -52,6 +53,17 @@ describe('isAudioMime', () => {
   it('is case-insensitive (MIME types are, even if File.type is lowercased)', () => {
     expect(isAudioMime('AUDIO/MPEG')).toBe(true)
     expect(isAudioMime('Audio/Ogg')).toBe(true)
+  })
+})
+
+describe('isPdfMime', () => {
+  it('is true only for application/pdf, case-insensitively', () => {
+    expect(isPdfMime('application/pdf')).toBe(true)
+    expect(isPdfMime('APPLICATION/PDF')).toBe(true)
+    expect(isPdfMime('image/png')).toBe(false)
+    expect(isPdfMime('application/x-pdf')).toBe(false) // not the registered type
+    expect(isPdfMime('')).toBe(false)
+    expect(isPdfMime(undefined)).toBe(false)
   })
 })
 

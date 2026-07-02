@@ -82,7 +82,7 @@
   now has per-workspace opt-in end-to-end encryption. 2026-06-21.</p>
 
 <aside class="doc-status" style="border:1px solid var(--line); border-left:3px solid var(--info); background:var(--info-soft); border-radius:0 6px 6px 0; padding:8px 14px; margin:12px 0 18px; font-size:0.9em;">
-<strong>Status:</strong> partially implemented — phases 1–6, plus the inline-audio increment (§15), have landed on branch
+<strong>Status:</strong> partially implemented — phases 1–6, plus the inline-audio and inline-PDF increments (§15), have landed on branch
 <code>feat/media-attachments</code>. Phase 1 = the byte-crypto seam (§5/§5.1:
 the <code>encb:v1:</code> binary envelope, <code>encodeBytes</code>/<code>decodeBytes</code>, the
 read-side content-hash verify) in <code>src/sync/</code>. Phase 2 = the <code>attachments</code> bucket
@@ -97,17 +97,22 @@ store</strong>, fail-closed on every error, the read-side check now the sole byt
 (returns verified bytes). Phase 4 = the <code>media</code> block type + property schemas and the
 <code>MediaBlockRenderer</code> (§11, <code>src/attachments/</code>) — it dispatches a block's
 <code>media:mime</code> through a mime→viewer FACET (<code>mediaViewersFacet</code>) that plugins contribute a
-viewer to — one per mime family. An EAGER inline viewer (image; PDF later, <code>eager: true</code>)
+viewer to — one per mime family. An EAGER inline viewer (image, <code>eager: true</code>)
 gets the bytes resolved once on mount into a verified object URL (fetch → verify → Blob → object URL, revoked
 on unmount) and a fail-closed resolve shows a broken-asset placeholder, never an unverified source. Audio
-(<code>audio/*</code>) is a LAZY-INLINE viewer: it renders a metadata play affordance, resolves nothing on
-mount, and arms that SAME object-URL path only on the first play (audio files can be large), then renders a
-native <code>&lt;audio controls&gt;</code> at the verified <code>blob:</code> url with a filename + octet-stream
-download affordance beside it — same fail-closed guarantee, deferred fetch. The remaining non-image fallback is
+(<code>audio/*</code>) and PDF (<code>application/pdf</code>) are LAZY-INLINE viewers: each renders a metadata
+poster (play / preview), resolves nothing on mount, and arms that SAME object-URL path only on the first
+play/preview intent (audio and PDFs can be large; iOS can't inline-render a PDF at all), then renders a native
+<code>&lt;audio controls&gt;</code> / a bounded <code>&lt;object type="application/pdf"&gt;</code> at the verified
+<code>blob:</code> url with a filename + octet-stream download affordance beside it — same fail-closed guarantee,
+deferred fetch. The PDF blob is typed <code>application/pdf</code> (pinned by the mime that selected the viewer),
+so the browser routes it to its PDF viewer and never HTML-sniffs hash-verified-but-non-PDF bytes into a
+same-origin navigation; a <code>sandbox</code>ed iframe is not used because an opaque-origin frame can't load a
+parent-origin <code>blob:</code> URL (§11). The remaining non-image fallback is
 a LAZY download button: it resolves nothing on mount and, on click, fetches the verified bytes and saves them
 via a transient, immediately-revoked <em>octet-stream</em> anchor — never a persistent navigable
 <code>blob:</code> URL typed with the attacker-influenceable <code>media:mime</code> (a same-origin XSS vector).
-Deferring the resolve (audio / download) isn't to save egress (the down-lane replicates every media block for
+Deferring the resolve (audio / PDF / download) isn't to save egress (the down-lane replicates every media block for
 offline regardless, §8) but to avoid holding a decrypted object-URL Blob in memory for media nobody opened. <code>canRender</code> reads a <code>peek()</code> snapshot so it never throws above the block
 ErrorBoundary. Phase 5 = capture + the up-lane (§9/§11): paste/drop mints the asset block,
 stages bytes in a durable IndexedDB queue (stage-before-tx / promote-after-commit), and a
@@ -178,15 +183,16 @@ produce an object URL, §7.3 / §8). A service-worker variant that would make
 
 <p>The app cannot currently insert images. We want paste / drop / file-pick of an image to render
   inline, work offline, and sync across a user's devices — and we want the same machinery to extend
-  to PDFs, audio, video, and generic files later without a content migration.</p>
+  to audio, video, and other file types later without a content migration.</p>
 
 <p><strong>In scope (v1):</strong> images, via paste / drop / file picker; inline render with a
   lightbox; offline-first local caching; cross-device sync; correctness under E2EE workspaces.</p>
 
 <p><strong>Built on the image foundation (§11 / §15):</strong> arbitrary non-image files render a
-  download affordance through the same content-addressed resolve + a mime→viewer facet, and
-  <code>audio/*</code> renders an inline <code>&lt;audio&gt;</code> player — each a facet contribution, not a
-  schema change. A richer viewer (PDF preview, video) is the same shape.</p>
+  download affordance through the same content-addressed resolve + a mime→viewer facet;
+  <code>audio/*</code> renders an inline <code>&lt;audio&gt;</code> player and <code>application/pdf</code> a
+  bounded inline <code>&lt;object&gt;</code> preview — each a facet contribution, not a schema change. A further
+  viewer (video) is the same shape.</p>
 
 <p><strong>Designed-for but not built (vNext):</strong> the remaining richer inline viewers for non-image
   mimes (PDF preview / video); thumbnails / transforms; resumable uploads for large media; public sharing.</p>
@@ -1235,21 +1241,42 @@ hand-roll is now the platform's.)</div>
     type and a <code>priority</code> above the default. It dispatches the block's <code>media:mime</code>
     through a mime→viewer FACET (<code>mediaViewersFacet</code>) that plugins contribute a viewer to — one per
     mime family — so the renderer never special-cases a mime; byte access is <em>per-viewer</em>. An EAGER
-    inline viewer (image via the <code>MarkdownImage</code> lightbox; PDF later, <code>eager: true</code>)
+    inline viewer (image via the <code>MarkdownImage</code> lightbox, <code>eager: true</code>)
     gets the bytes resolved once on mount into the verified object URL the in-thread resolver
-    produces (§7.3, revoked on unmount). <code>audio/*</code> is a <strong>LAZY-INLINE</strong> viewer
-    (<code>eager: false</code>): it renders a metadata play affordance, resolves nothing on mount, and arms
-    that SAME object-URL resolve only on the first play (audio files can be large) — via a one-way
-    <code>requestResolve</code> latch the renderer exposes — then renders a native
-    <code>&lt;audio controls&gt;</code> at the verified <code>blob:</code> url (typed the block's
-    <code>audio/*</code> mime, safe to render, revoked on unmount) with a filename + an octet-stream download
-    affordance beside it; bytes that hash-verify but aren't decodable audio fall to the same broken placeholder
-    via <code>onError</code>. The remaining non-image fallback is <strong>LAZY</strong> — a metadata-only
+    produces (§7.3, revoked on unmount). <code>audio/*</code> and <code>application/pdf</code> are
+    <strong>LAZY-INLINE</strong> viewers (<code>eager: false</code>): each renders a metadata poster
+    (play / preview), resolves nothing on mount, and arms that SAME object-URL resolve only on the first
+    play/preview intent (audio and PDFs can be large; iOS can't inline-render a PDF at all) — via a one-way
+    <code>requestResolve</code> latch the renderer exposes and content-scopes (it clears on any content-key
+    change so a synced re-capture / undo returns to the poster, never a surprise autoplay/refetch). Audio then
+    renders a native <code>&lt;audio controls&gt;</code> at the verified <code>blob:</code> url (typed the block's
+    <code>audio/*</code> mime, safe to render, revoked on unmount); bytes that hash-verify but aren't decodable
+    audio fall to the same broken placeholder via <code>onError</code>. PDF renders a bounded-height
+    <code>&lt;object type="application/pdf"&gt;</code> of the verified url — the Blob is typed
+    <code>application/pdf</code> (pinned by the <code>isPdfMime</code> match that selected the viewer), so the
+    browser routes it to its native PDF viewer (which sandboxes any PDF-level JS itself) and never HTML-sniffs
+    hash-verified-but-non-PDF bytes into an executable same-origin document. A <code>sandbox</code>ed iframe is
+    deliberately <em>not</em> used and is <em>not an option</em> for a <code>blob:</code> source: Chromium blocks
+    a sandboxed frame from loading a <em>parent-origin</em> <code>blob:</code> URL — verified empirically, and
+    <em>not</em> a flag-tuning fix. Even <em>with</em> <code>allow-same-origin</code> (which IS honored for an
+    http document — the frame reads the parent origin) a separate blob-navigation block still fires
+    (<code>ERR_BLOCKED_BY_CLIENT</code>, frame stays opaque), so any sandbox flag breaks the preview while buying
+    nothing the type-pin doesn't already give. (What sandbox <em>would</em> add for a native PDF — blocking a
+    malicious PDF's launch-actions / form-POST / popups — it can't, given the blob block; the real path to that
+    is pdf.js with scripting off, deferred on bundle cost.) The strongest form of the "sandbox untrusted HTML"
+    rule <em>is</em> applied here, elsewhere: we never inline-render <code>text/html</code> (or any unclaimed
+    mime) at all — it goes to the octet-stream download. The preview is collapsible back to the poster (the
+    resolve stays armed, so re-opening is instant), and the object URL carries <code>#navpanes=0</code> to hide
+    the native viewer's page sidebar by default (Chromium best-effort). Both lazy-inline viewers keep a filename
+    + an octet-stream download affordance in <em>every</em> state
+    (poster, player/preview, broken), because <code>audio/*</code> and <code>application/pdf</code> no longer
+    fall through to the file download fallback and must each hold the "every attachment is at least
+    downloadable" floor. The remaining non-image fallback is <strong>LAZY</strong> — a metadata-only
     download button that resolves the verified bytes only on click and saves them through a transient,
     immediately-revoked <em>octet-stream</em> anchor, <em>not</em> a persistent navigable <code>blob:</code>
     URL typed with the attacker-controlled <code>media:mime</code> (that would be same-origin XSS on
     open-in-new-tab, with no CSP backstop, and unreliable-<code>download</code> on iOS). Deferring the
-    mount-time resolve (audio / download) is <em>not</em> about egress — the down-lane already replicates every
+    mount-time resolve (audio / PDF / download) is <em>not</em> about egress — the down-lane already replicates every
     media block (incl. non-image) to local disk for offline (§8) — but about not holding a decrypted
     object-URL Blob in
     memory for media nobody opened, and not un-throttled demand-fetching ahead of that budgeted lane. A
@@ -1496,8 +1523,22 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       fetched / decrypted only on the first play — same fail-closed object-URL path as the image viewer
       (<code>onError</code> → broken placeholder), plus a filename + octet-stream download affordance. No
       renderer branch — a pure facet contribution.</td></tr>
+<tr><td>8 — inline PDF (increment)</td>
+    <td>a second lazy-inline viewer on the same facility: an <code>application/pdf</code> viewer that renders a
+      bounded-height <code>&lt;object type="application/pdf"&gt;</code> of the verified object URL.
+      <strong>Preview-gated</strong> (<code>eager: false</code> + the shared <code>requestResolve</code> latch),
+      because PDFs can be large and iOS can't inline-render them anyway — the metadata poster resolves nothing on
+      mount; a preview click arms the same fail-closed object-URL path. The Blob type is pinned to
+      <code>application/pdf</code> by the viewer's exact-match (no HTML-sniff of hash-verified-but-non-PDF bytes);
+      a <code>sandbox</code>ed iframe is not usable (Chromium blocks a sandboxed frame from loading a
+      parent-origin <code>blob:</code> URL — even with <code>allow-same-origin</code>, verified). The preview
+      hides the native viewer's sidebar (<code>#navpanes=0</code>) and is collapsible back to the poster.
+      Filename + octet-stream download beside every state (poster / preview / broken) —
+      the downloadable floor, since <code>application/pdf</code> no longer hits the file fallback. No renderer
+      branch — a pure facet contribution reusing the audio increment's facilities
+      (<code>useMediaDownload</code>, <code>DownloadIconButton</code>, the play/preview latch).</td></tr>
 <tr><td>vNext</td>
-    <td>the remaining richer inline viewers for non-image mimes (PDF preview, video) atop the
+    <td>the remaining richer inline viewer for non-image mimes (video) atop the
       §11 <code>mediaViewersFacet</code>; thumbnails / transforms; resumable upload; the
       <code>effective_share_ids</code> storage-RLS branch when subtree sharing ships; public-share
       (export / key-in-fragment).</td></tr>
