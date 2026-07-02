@@ -145,18 +145,27 @@ const formatCheckedAt = (checkedAt: number): string => {
 export function ConsistencyAuditDialog({ cancel }: DialogContextProps<void>) {
   const repo = useRepo()
   const navigate = useNavigate()
-  const result = useSyncExternalStore(
+  const snapshot = useSyncExternalStore(
     subscribeConsistencyAudit,
     getConsistencyAuditSnapshot,
     getConsistencyAuditSnapshot,
   )
+  // Scope the module-global snapshot to the ACTIVE workspace. The store holds the
+  // last audited workspace's result, and the "View last…" palette action can open
+  // this dialog directly (bypassing the diagnostics source's own gate) — so
+  // without this a result for workspace A would show A's counts/ids while B is
+  // active, and clicking a sample would try to open an A-id in B. A mismatch (or
+  // no run) reads as the empty state; a fresh Re-run repopulates for B.
+  const result = snapshot && snapshot.workspaceId === repo.activeWorkspaceId ? snapshot : null
   const [rerunning, setRerunning] = useState(false)
 
   // Open the block in the Roam-style side panel (sidebar-stack) and — crucially —
   // KEEP the dialog open, so a click no longer discards the (expensive) audit
-  // results. No sourcePanelId: a fresh stack is appended at the end of the layout.
+  // results. Pin the audited workspace (== active, given the gate above) so the id
+  // can't be resolved against a different workspace if it changes mid-dialog. No
+  // sourcePanelId: a fresh stack is appended at the end of the layout.
   const open = (id: string) => {
-    void navigate({ blockId: id, target: 'sidebar-stack' })
+    void navigate({ blockId: id, target: 'sidebar-stack', workspaceId: result?.workspaceId })
   }
 
   const rerun = async () => {
@@ -195,7 +204,7 @@ export function ConsistencyAuditDialog({ cancel }: DialogContextProps<void>) {
               ? result.anomalies > 0
                 ? `${result.anomalies} ${result.anomalies === 1 ? 'check' : 'checks'} flagged an anomaly above the alert threshold.`
                 : 'No anomalies above the alert threshold.'
-              : 'No audit has run yet this session.'}
+              : 'No audit has run for this workspace yet.'}
           </DialogDescription>
         </DialogHeader>
 
