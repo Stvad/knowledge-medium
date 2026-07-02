@@ -1,6 +1,6 @@
 # PR preview deployments
 
-> **Status:** current — last verified against code 2026-07-02 (`.github/workflows/deploy-pages.yml`, `.github/workflows/pr-preview.yml`).
+> **Status:** current — last verified against code 2026-07-02 (`.github/workflows/deploy-pages.yml`, `.github/workflows/pr-preview.yml`, `scripts/ensure-pages-published.sh`).
 
 Every pull request gets its own live, clickable build of the app so you can
 open it and click around before merging:
@@ -56,6 +56,24 @@ deploy: `clean-exclude: pr-preview` (production never wipes live preview
 subtrees) and `force: false` (a normal fetch+rebase push, so a concurrent
 preview deploy isn't force-overwritten). The two workflows also use separate
 concurrency groups so a queued preview can't cancel a queued production deploy.
+
+### Publish reliability (retry the flaky publisher)
+
+A push to `gh-pages` only updates the branch. What actually *serves* it is
+GitHub's own auto-triggered **"pages build and deployment"** run (a dynamic
+workflow we don't author), and that publisher is intermittently flaky — its
+deploy step returns `Deployment failed, try again later.` or stalls in
+`deployment_queued`. When a push's publish flakes, that push's content stays
+**404 until the next successful publish sweeps it in** (any later build rebuilds
+the whole branch HEAD). This bit the first production cutover and early previews.
+
+Both workflows therefore end with an **`Ensure Pages published`** step
+(`scripts/ensure-pages-published.sh`, needs `pages: write`): after the push it
+watches the latest Pages build and, on error/stall, re-requests one via
+`POST /pages/builds` (a few rounds) — automating the "try again later" retry we
+used to do by hand. It only accepts a build **newer** than the one present
+before the push, so a stale pre-push `built` can't be mistaken for our publish.
+This is also what makes a routine `master` merge reliably go live.
 
 ### Why same-origin matters here
 

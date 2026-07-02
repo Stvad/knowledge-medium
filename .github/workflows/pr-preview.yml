@@ -23,6 +23,7 @@ concurrency:
 permissions:
   contents: write # push the preview subtree to the gh-pages branch
   pull-requests: write # post/update the sticky preview-URL comment
+  pages: write # request a Pages rebuild if the auto-publish flakes (ensure-pages-published.sh)
 
 jobs:
   preview:
@@ -85,3 +86,16 @@ jobs:
           preview-branch: gh-pages
           umbrella-dir: pr-preview
           action: auto
+
+      # The push above only updates gh-pages; GitHub's auto-triggered "pages
+      # build and deployment" is what actually serves it, and that publisher is
+      # intermittently flaky ("Deployment failed, try again later."). Without
+      # this, a flaked publish leaves the preview 404 until some later push
+      # happens to sweep it live. This waits for the publish and re-requests it
+      # on failure. Skipped on `closed`: a failed *removal* self-heals on the
+      # next publish and isn't worth failing the teardown run over.
+      - name: Ensure Pages published
+        if: github.event.action != 'closed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ensure-pages-published.sh
