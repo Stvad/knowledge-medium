@@ -12,6 +12,7 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.js'
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
+import { shortcutHelpPlugin } from '@/plugins/shortcut-help'
 import { dailyNotesPlugin } from '@/plugins/daily-notes'
 import { findReplacePlugin } from '@/plugins/find-replace'
 import { quickFindPlugin } from '@/plugins/quick-find'
@@ -102,6 +103,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   leftSidebarPlugin,
   workspaceHeaderPlugin,
   commandPalettePlugin,
+  shortcutHelpPlugin,
   quickFindPlugin,
   recentsPlugin({repo}),
   findReplacePlugin,
