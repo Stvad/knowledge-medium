@@ -36,6 +36,7 @@ import {
   PROPERTY_SCHEMA_TYPE,
 } from '@/data/blockTypes'
 import {
+  aliasesProp,
   blockTypeColorProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
@@ -115,7 +116,10 @@ export interface CreateTypeBlockArgs {
 /** Create a fresh `block-type` block on the workspace's Types page.
  *  Returns the new block id (== type id once registered). The
  *  returned id is in the live `repo.types` registry by the time the
- *  promise resolves. */
+ *  promise resolves. The block also claims its label as an `alias`, so
+ *  it doubles as the `[[label]]` page — meaning the label is
+ *  workspace-unique and this rejects (`alias.collision`) when a live
+ *  block already claims it. */
 export async function createTypeBlock(
   repo: Repo,
   args: CreateTypeBlockArgs,
@@ -236,6 +240,19 @@ export async function createTypeBlock(
     await tx.setProperty(newId, blockTypeLabelProp, trimmedLabel)
     await tx.setProperty(newId, blockTypePropertiesProp, args.propertySchemaIds)
     if (color) await tx.setProperty(newId, blockTypeColorProp, color)
+    // A defined type doubles as its `[[label]]` page: claim the label as
+    // an alias so references resolve to THIS block instead of minting a
+    // duplicate alias-seat page (design.html — the type id is the same id
+    // `[[Person]]` references resolve to). Parity is self-maintaining
+    // afterwards: `writeBlockTypeLabel` keeps `content` in lockstep with
+    // the label, and `aliasSyncProcessor` reconciles `content → alias` on
+    // rename, so the alias tracks the label without extra wiring here.
+    //
+    // A type's name is therefore workspace-unique: the
+    // `block_aliases_workspace_alias_unique` trigger rejects this tx (as a
+    // structured `alias.collision`) if a live block already claims the
+    // label — a duplicate-named type is ambiguous for `[[label]]` anyway.
+    await tx.setProperty(newId, aliasesProp, [trimmedLabel])
   }, {scope: ChangeScope.BlockDefault, description: `createTypeBlock ${trimmedLabel}`})
 
   await waitForTypeRegistrationBounded(

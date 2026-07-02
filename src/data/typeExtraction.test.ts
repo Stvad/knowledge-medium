@@ -7,6 +7,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
+  aliasesProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
   getBlockTypes,
@@ -131,6 +132,43 @@ describe('createTypeBlock', () => {
     expect(row!.properties[blockTypePropertiesProp.name]).toEqual([schemaBlockId])
     expect(row!.parentId).toBe(env.repo.typesPageId)
     expect(row!.content).toBe('Task')
+    // The type doubles as its `[[Task]]` page — it claims the label as
+    // an alias.
+    expect(row!.properties[aliasesProp.name]).toEqual(['Task'])
+  })
+
+  it('claims the label as an alias so [[label]] resolves to the type block', async () => {
+    env = await setup()
+    const typeId = await createTypeBlock(env.repo, {
+      workspaceId: WS,
+      label: 'Task',
+      propertySchemaIds: [],
+    })
+
+    // The alias index is trigger-maintained; `[[Task]]` resolution
+    // (aliasLookup) must land on the type-definition block rather than
+    // minting a separate alias-seat page.
+    const resolved = await env.repo.query
+      .aliasLookup({workspaceId: WS, alias: 'Task'})
+      .load()
+    expect(resolved?.id).toBe(typeId)
+  })
+
+  it('rejects when the label collides with an existing page alias', async () => {
+    env = await setup()
+    // A prior `[[Task]]` reference (or create-page UI) already left a
+    // live block claiming the alias in this workspace.
+    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await env.repo.tx(async tx => {
+      await tx.update(pageId, {content: 'Task'})
+      await tx.setProperty(pageId, aliasesProp, ['Task'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(createTypeBlock(env.repo, {
+      workspaceId: WS,
+      label: 'Task',
+      propertySchemaIds: [],
+    })).rejects.toMatchObject({code: 'alias.collision'})
   })
 
   it('returns a typeId that is registered in repo.types by the time the promise resolves', async () => {
@@ -146,8 +184,12 @@ describe('createTypeBlock', () => {
 
   it('returns distinct ids on repeat calls (no in-place collision)', async () => {
     env = await setup()
+    // Distinct labels: each type claims its label as a workspace-unique
+    // alias, so two same-named types can't coexist (covered separately).
+    // The property under test is that repeat calls mint fresh block ids
+    // rather than reusing a deterministic one.
     const a = await createTypeBlock(env.repo, {workspaceId: WS, label: 'Task', propertySchemaIds: []})
-    const b = await createTypeBlock(env.repo, {workspaceId: WS, label: 'Task', propertySchemaIds: []})
+    const b = await createTypeBlock(env.repo, {workspaceId: WS, label: 'Project', propertySchemaIds: []})
     expect(a).not.toBe(b)
     expect(env.repo.types.has(a)).toBe(true)
     expect(env.repo.types.has(b)).toBe(true)
