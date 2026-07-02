@@ -1082,6 +1082,51 @@ describe('default CodeMirror shortcuts', () => {
     view.destroy()
   })
 
+  it('swallows Enter (no split) while an async completion is still pending', async () => {
+    // The `[[`/`((` sources are async: while one is in flight, the (visible)
+    // dropdown sits in the 'pending' state, not 'active'. Enter must still be
+    // swallowed — not fall through and split under the open popup. A never-
+    // resolving source pins 'pending' deterministically.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: '[[Fo'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'current')
+
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '[[Fo',
+        selection: {anchor: 4},
+        extensions: [
+          autocompletion({
+            defaultKeymap: false,
+            override: [() => new Promise(() => {})], // never resolves → stays pending
+          }),
+        ],
+      }),
+    })
+    startCompletion(view)
+    await vi.waitFor(() => expect(completionStatus(view.state)).toBe('pending'))
+
+    const childrenBefore = await childIds('root')
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView: view,
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    // Consumed: no sibling (no split), doc untouched (nothing to accept yet).
+    expect(view.state.doc.toString()).toBe('[[Fo')
+    expect(await childIds('root')).toEqual(childrenBefore)
+    view.destroy()
+  })
+
   // Scope-root behaviour: when the focused block is the root of the
   // surface's visible subtree (e.g. a backlink entry's shown block,
   // where scopeRootId === the block's own id) a "new block below" must

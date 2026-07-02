@@ -688,24 +688,28 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Enter keydown reaches this shortcut regardless (CM defers it as a
         // pendingIOSKey and runs its own keymap only on the later synthetic Enter
         // from flushIOSKey, which is non-bubbling and never reaches us). Either
-        // way, if a popup is active we swallow the key: `acceptCompletion` applies
-        // the option when CM allows it and is a no-op inside the interactionDelay
-        // window — but we return unconditionally so the key can't fall through to
-        // a mid-completion split.
+        // way, whenever completion UI is present we swallow the key:
+        // `acceptCompletion` applies the option when CM allows it, and otherwise
+        // we still return, so the key can't fall through to a mid-completion split.
+        // We gate on `!== null`, i.e. BOTH 'active' AND 'pending' — the `[[`/`((`/
+        // place sources are async, so every keystroke re-queries and leaves the
+        // (still-visible) dropdown in the 'pending' state until data arrives; a
+        // Return during that refresh must not split under the open popup.
         //
-        // Inside the delay window we swallow without accepting; the accept then
-        // lands a beat later on its own — on desktop when the user presses Return
-        // again (past the delay), on iOS via CM's deferred synthetic Enter
-        // (~250ms) hitting the completion keymap. No second manual press needed on
-        // iOS. The only split path is this window shortcut on the real keydown, so
-        // swallowing here is sufficient to prevent the split; the synthetic Enter
-        // can't split (it never reaches this window listener).
+        // When we swallow without accepting (interactionDelay window, or a pending
+        // refresh where the popup is disabled), the accept lands a beat later on
+        // its own — on desktop when the user presses Return again, on iOS via CM's
+        // deferred synthetic Enter (~250ms) hitting the completion keymap once the
+        // popup is 'active' again. No second manual press needed on iOS. The only
+        // split path is this window shortcut on the real keydown, so swallowing
+        // here is sufficient; the synthetic Enter can't split (non-bubbling, it
+        // never reaches this window listener).
         //
         // At most one accept happens per press: CM's keymap and this guard both
         // *call* acceptCompletion, but they're exclusive by state — a successful
-        // keymap accept stopPropagations so we never run; a failed one (delay)
-        // can't succeed on the retry within the same synchronous keystroke.
-        if (completionStatus(editorView.state) === 'active') {
+        // keymap accept stopPropagations so we never run; a failed one (delay /
+        // pending) can't succeed on the retry within the same synchronous keystroke.
+        if (completionStatus(editorView.state) !== null) {
           acceptCompletion(editorView)
           return
         }
