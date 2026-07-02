@@ -58,17 +58,23 @@ export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
 
   // A LAZY-INLINE viewer (audio) arms the eager resolve on demand via requestResolve. The
   // latch is owned HERE (single source of truth — it also gates the resolve hook, and the
-  // viewer reads it back via the `armed` prop) and is SCOPED TO THE CURRENT CONTENT: we store
-  // the key the resolve was armed FOR and DERIVE `armed` from it, so a content change
-  // (re-capture / synced edit / undo — all mutate the row in place WITHOUT remounting) makes
-  // the stored key stale and `armed` derives false. A replaced attachment thus returns to its
+  // viewer reads it back via the `armed` prop) and is SCOPED TO THE CURRENT CONTENT: `armed`
+  // is CLEARED whenever the content key transitions (re-capture / synced edit / undo — all
+  // mutate the row in place WITHOUT remounting), so a replaced attachment returns to its
   // play-gated poster instead of surprise-resolving/autoplaying the new bytes, and never
-  // eager-fetches behind an un-played poster after a mime flip. `contentKey` changes on the
-  // same inputs as the resolve hook's own key, so the latch and the resolve re-gate together.
+  // eager-fetches behind an un-played poster after a mime flip. It re-arms ONLY on a fresh
+  // play gesture — crucially NOT a derived `armedFor === contentKey`, which would spuriously
+  // re-arm when the key RETURNS to a previously-armed value (undo a re-capture: A→B→A).
+  // `contentKey` mirrors the resolve hook's key so the latch and the resolve re-gate
+  // together. (setState-during-render is the React-blessed "reset on prop change" idiom.)
   const contentKey = `${workspaceId} ${hash} ${mime}`
-  const [armedFor, setArmedFor] = useState<string | null>(null)
-  const armed = armedFor === contentKey
-  const requestResolve = useCallback(() => setArmedFor(contentKey), [contentKey])
+  const [armed, setArmed] = useState(false)
+  const [armedFor, setArmedFor] = useState(contentKey)
+  if (armedFor !== contentKey) {
+    setArmedFor(contentKey)
+    if (armed) setArmed(false)
+  }
+  const requestResolve = useCallback(() => setArmed(true), [])
 
   // Resolve on mount for an EAGER inline viewer (image); for a LAZY-INLINE viewer (audio)
   // only once armed; never for the pure download fallback (it uses resolveBytes on click).

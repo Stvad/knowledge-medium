@@ -200,9 +200,11 @@ const DownloadIconButton = ({
  *     on unmount by {@link useAssetObjectUrl}). Bytes that hash-verify but aren't decodable
  *     audio (an untrusted `media:mime` over other bytes) fall to the SAME broken placeholder
  *     via `onError → reportDecodeFailure`, never a dead player.
- *   - `error` ⇒ fail-closed broken placeholder (§5.1/§7.3), NEVER an unverified source.
- *  The filename + a secondary download affordance ({@link DownloadIconButton}, octet-stream)
- *  sit alongside the player. */
+ *   - `error` ⇒ fail-closed broken indicator (§5.1/§7.3), NEVER an unverified source.
+ *  A filename + a download affordance ({@link DownloadIconButton}, octet-stream) sit alongside
+ *  EVERY state (poster, player, broken) — because `audio/*` no longer falls through to the
+ *  file download fallback, the viewer itself must hold the "every attachment is at least
+ *  downloadable" floor (§11), including when playback fails or before the user ever plays. */
 const AudioViewer = ({
   state,
   reportDecodeFailure,
@@ -218,24 +220,45 @@ const AudioViewer = ({
   // this viewer's poster gate: while false the resolve hasn't been requested for this
   // content (state is loading only because it's gated) → show the metadata poster; a click
   // arms it, and once true `state` drives the spinner → player just like the image viewer.
-  // Nothing is fetched/decrypted until the click.
+  // Nothing is fetched/decrypted until the click. The poster carries a DOWNLOAD affordance
+  // too: audio/* no longer falls through to the download fallback, so this viewer must keep
+  // the "every attachment is at least downloadable" floor (§11) — savable without playing.
   if (!armed) {
     return (
-      <button
-        type="button"
-        data-testid="media-audio-play"
-        onClick={requestResolve}
-        aria-label={`Play ${label}`}
-        className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground hover:bg-muted"
-      >
-        <Play className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate">{label}</span>
-        {size > 0 && <span className="shrink-0 text-muted-foreground">{formatByteSize(size)}</span>}
-      </button>
+      <div className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground">
+        <button
+          type="button"
+          data-testid="media-audio-play"
+          onClick={requestResolve}
+          aria-label={`Play ${label}`}
+          className="inline-flex min-w-0 items-center gap-2 hover:opacity-80"
+        >
+          <Play className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <span className="truncate">{label}</span>
+          {size > 0 && <span className="shrink-0 text-muted-foreground">{formatByteSize(size)}</span>}
+        </button>
+        <DownloadIconButton resolveBytes={resolveBytes} filename={filename} label={label} className="ml-auto" />
+      </div>
     )
   }
+  // Fail-closed: bytes that don't resolve/verify — or verify but the browser can't DECODE as
+  // audio (an untrusted media:mime over other bytes) — render a broken indicator, NEVER an
+  // <audio> at an unverified source (§5.1/§7.3). The download stays reachable: resolveBytes
+  // re-verifies independently of the (now-terminal) playback resolve, so a mislabeled/
+  // undecodable-but-verified file is still savable and a transient failure can still recover
+  // — keeping the downloadable floor the file fallback used to provide for audio.
   if (state.status === 'error') {
-    return <Placeholder testid="media-audio-broken" label="Audio unavailable" icon={<VolumeX className="h-4 w-4" />} />
+    return (
+      <div
+        data-testid="media-audio-broken"
+        className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
+      >
+        <VolumeX className="h-4 w-4 shrink-0" />
+        <span className="truncate">{label} — unavailable</span>
+        {size > 0 && <span className="shrink-0">{formatByteSize(size)}</span>}
+        <DownloadIconButton resolveBytes={resolveBytes} filename={filename} label={label} className="ml-auto" />
+      </div>
+    )
   }
   if (state.status === 'loading') {
     return <Placeholder testid="media-audio-loading" label="Loading audio…" icon={<Loader2 className="h-4 w-4" />} spin />

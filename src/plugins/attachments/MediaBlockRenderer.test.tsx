@@ -248,6 +248,51 @@ describe('MediaContentRenderer — audio branch', () => {
     // The eager resolve is disarmed again — nothing fetched/decrypted until the user replays.
     expect(h.enabledArg).toBe(false)
   })
+
+  it('stays disarmed when the content RETURNS to a previously-played key (A→B→A, e.g. undo a re-capture)', () => {
+    // Regression guard: a content-keyed latch must clear on any change, NOT re-arm just
+    // because the key equals one it was armed for before (an `armed = armedFor === key`
+    // derivation would surprise-autoplay the restored content).
+    audioProps() // hash sha256:ab  (content A)
+    h.urlState = { status: 'ready', url: 'blob:audio/1' }
+    const { container, rerender } = renderContent()
+    fireEvent.click(screen.getByTestId('media-audio-play')) // arm + play A
+    expect(container.querySelector('audio')).not.toBeNull()
+
+    h.props = { ...h.props, 'media:hash': 'sha256:cd' } // → content B
+    rerender(<MediaContentRenderer block={block} />)
+    expect(screen.getByTestId('media-audio-play')).toBeInTheDocument() // disarmed
+
+    h.props = { ...h.props, 'media:hash': 'sha256:ab' } // undo → back to content A
+    rerender(<MediaContentRenderer block={block} />)
+    // Must NOT re-arm/autoplay the restored content without a fresh play gesture.
+    expect(screen.getByTestId('media-audio-play')).toBeInTheDocument()
+    expect(container.querySelector('audio')).toBeNull()
+    expect(h.enabledArg).toBe(false)
+  })
+
+  it('keeps the verified bytes downloadable when playback fails (undecodable audio → the floor holds)', async () => {
+    // audio/* no longer falls through to the file download fallback, so a verify-but-can't-
+    // decode file (mislabeled/unsupported codec) must STILL be downloadable from the broken
+    // state — not stranded behind a dead player.
+    audioProps()
+    h.urlState = { status: 'error', reason: 'media-undecodable' }
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-audio-play')) // arm → error branch
+    expect(screen.getByTestId('media-audio-broken')).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId('media-audio-download'))
+    await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
+    expect(h.downloadBlob.mock.calls[0][0].type).toBe('application/octet-stream')
+  })
+
+  it('offers download from the poster WITHOUT playing (savable without arming the inline resolve)', async () => {
+    audioProps()
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-audio-download')) // no play click
+    await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
+    expect(h.downloadBlob.mock.calls[0][0].type).toBe('application/octet-stream')
+    expect(h.enabledArg).toBe(false) // download did not arm the (large-file) inline resolve
+  })
 })
 
 describe('MediaBlockRenderer.canRender', () => {
