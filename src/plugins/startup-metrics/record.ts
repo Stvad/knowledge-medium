@@ -79,6 +79,7 @@ export const startupRecordProp = defineProperty<StartupRecordData | undefined>('
 export const startupMetricsUIStateType = defineBlockType({
   id: 'startup-metrics',
   label: 'Startup metrics',
+  structural: true,
   properties: [],
 })
 

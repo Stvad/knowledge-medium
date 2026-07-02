@@ -7,7 +7,9 @@ import type { TypeContribution } from '@/data/api'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import {
   buildTypeTagCandidates,
+  findTaggableTypeByName,
   matchHashTrigger,
+  restoreTriggerToView,
   typeTagCompletionSource,
   visibleTagTypeIds,
   type TypeTagCandidate,
@@ -79,10 +81,14 @@ describe('matchHashTrigger', () => {
 const registryOf = (...types: TypeContribution[]): ReadonlyMap<string, TypeContribution> =>
   new Map(types.map(t => [t.id, t]))
 
+const existingIds = (out: readonly TypeTagCandidate[]): string[] =>
+  out.flatMap(c => c.kind === 'existing' ? [c.id] : [])
+
 const TASK: TypeContribution = {id: 'uuid-task', label: 'Task'}
 const TRIP: TypeContribution = {id: 'uuid-trip', label: 'Trip', description: 'A journey'}
 const TODO: TypeContribution = {id: 'todo', label: 'Todo'}
-const PAGE: TypeContribution = {id: PAGE_TYPE, label: 'Page'}
+const PAGE: TypeContribution = {id: PAGE_TYPE, label: 'Page', structural: true}
+const PREFS: TypeContribution = {id: 'quick-find-ui-state', label: 'Quick find', structural: true}
 
 describe('buildTypeTagCandidates', () => {
   it('lists all visible types for an empty query, without a create sentinel', () => {
@@ -91,7 +97,7 @@ describe('buildTypeTagCandidates', () => {
       currentTypeIds: [],
       query: '',
     })
-    expect(out.map(c => c.id)).toEqual(['uuid-task', 'uuid-trip'])
+    expect(existingIds(out)).toEqual(['uuid-task', 'uuid-trip'])
     expect(out.every(c => c.kind === 'existing')).toBe(true)
   })
 
@@ -101,7 +107,7 @@ describe('buildTypeTagCandidates', () => {
       currentTypeIds: [],
       query: 'tA',
     })
-    expect(byLabel.filter(c => c.kind === 'existing').map(c => c.id)).toEqual(['uuid-task'])
+    expect(existingIds(byLabel)).toEqual(['uuid-task'])
 
     const byId = buildTypeTagCandidates({
       registry: registryOf(TODO, TRIP),
@@ -117,16 +123,16 @@ describe('buildTypeTagCandidates', () => {
       currentTypeIds: ['uuid-task'],
       query: '',
     })
-    expect(out.map(c => c.id)).toEqual(['uuid-trip'])
+    expect(existingIds(out)).toEqual(['uuid-trip'])
   })
 
-  it('excludes structural kernel types like page', () => {
+  it('excludes structural contributions — kernel structure and plugin plumbing alike', () => {
     const out = buildTypeTagCandidates({
-      registry: registryOf(PAGE, TASK),
+      registry: registryOf(PAGE, PREFS, TASK),
       currentTypeIds: [],
-      query: 'pa',
+      query: '',
     })
-    expect(out.filter(c => c.kind === 'existing')).toEqual([])
+    expect(existingIds(out)).toEqual(['uuid-task'])
   })
 
   it('ranks prefix matches above contains matches', () => {
@@ -150,20 +156,25 @@ describe('buildTypeTagCandidates', () => {
     expect(out[out.length - 1]).toMatchObject({kind: 'create', label: 'Recipe'})
   })
 
-  it('offers no create sentinel when the query exactly matches a label — even a hidden or already-applied one', () => {
-    const hidden = buildTypeTagCandidates({
-      registry: registryOf(PAGE),
-      currentTypeIds: [],
-      query: 'page',
-    })
-    expect(hidden).toEqual([])
-
+  it('offers no create sentinel when the query exactly matches a taggable label — even an already-applied one', () => {
     const applied = buildTypeTagCandidates({
       registry: registryOf(TASK),
       currentTypeIds: ['uuid-task'],
       query: 'task',
     })
     expect(applied).toEqual([])
+  })
+
+  it('an exact match on a STRUCTURAL label is not a dead end — create is offered', () => {
+    // Without this, `#page` / `#user` would silently show nothing:
+    // the structural type never appears as a candidate, and its label
+    // suppressing the sentinel would leave zero options.
+    const out = buildTypeTagCandidates({
+      registry: registryOf(PAGE),
+      currentTypeIds: [],
+      query: 'page',
+    })
+    expect(out).toEqual([{kind: 'create', label: 'page', detail: 'Create new type'}])
   })
 
   it('carries the type description as detail', () => {
@@ -204,12 +215,7 @@ describe('typeTagCompletionSource', () => {
   const contextFor = (doc: string, pos: number, explicit = false): CompletionContext =>
     new CompletionContext(EditorState.create({doc}), pos, explicit)
 
-  const candidate = (over: Partial<TypeTagCandidate> = {}): TypeTagCandidate => ({
-    kind: 'existing',
-    id: 'uuid-task',
-    label: 'Task',
-    ...over,
-  })
+  const candidate = (): TypeTagCandidate => ({kind: 'existing', id: 'uuid-task', label: 'Task'})
 
   it('returns null when there is no # trigger at the cursor', async () => {
     const source = typeTagCompletionSource({
@@ -221,7 +227,7 @@ describe('typeTagCompletionSource', () => {
 
   it('anchors the result at the # and labels the create sentinel', async () => {
     const source = typeTagCompletionSource({
-      getCandidates: () => [candidate(), candidate({kind: 'create', id: 'create:Recipe', label: 'Recipe'})],
+      getCandidates: () => [candidate(), {kind: 'create', label: 'Recipe'}],
       pickType: async () => {},
     })
     const result = await source(contextFor('note #rec', 9))
@@ -262,7 +268,7 @@ describe('typeTagCompletionSource', () => {
     }
   })
 
-  it('surfaces a failed pick as a console warning, not an unhandled rejection', async () => {
+  it('a failed pick restores the deleted trigger text into the view and warns', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const source = typeTagCompletionSource({
@@ -278,15 +284,79 @@ describe('typeTagCompletionSource', () => {
         const option = result!.options[0]
         const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
         apply(view, option, result!.from, 3)
+        expect(view.state.doc.toString()).toBe('')
         await vi.waitFor(() => {
           expect(warn).toHaveBeenCalledWith(
-            '[supertags] failed to apply type', 'uuid-task', expect.any(Error))
+            '[supertags] failed to apply type', 'Task', expect.any(Error))
+          expect(view.state.doc.toString()).toBe('#ta')
         })
+        expect(view.state.selection.main.head).toBe(3)
       } finally {
         view.destroy()
       }
     } finally {
       warn.mockRestore()
     }
+  })
+
+  it('falls back to restoreTrigger when the view is unmounted at failure time', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const restored: string[] = []
+      let failPick: () => void = () => {}
+      const source = typeTagCompletionSource({
+        getCandidates: () => [candidate()],
+        pickType: () => new Promise((_, reject) => {
+          failPick = () => reject(new Error('too late'))
+        }),
+        restoreTrigger: async ({triggerText}) => { restored.push(triggerText) },
+      })
+      const view = new EditorView({
+        state: EditorState.create({doc: '#ta'}),
+        parent: document.body,
+      })
+      const result = await source(new CompletionContext(view.state, 3, false))
+      const option = result!.options[0]
+      const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
+      apply(view, option, result!.from, 3)
+      view.destroy()
+      failPick()
+      await vi.waitFor(() => {
+        expect(restored).toEqual(['#ta'])
+      })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('findTaggableTypeByName', () => {
+  it('matches label and id case-insensitively, skipping structural types', () => {
+    const registry = registryOf(TASK, PAGE)
+    expect(findTaggableTypeByName(registry, 'tAsK')).toBe(TASK)
+    expect(findTaggableTypeByName(registry, 'uuid-task')).toBe(TASK)
+    expect(findTaggableTypeByName(registry, 'Page')).toBeUndefined()
+    expect(findTaggableTypeByName(registry, '')).toBeUndefined()
+  })
+})
+
+describe('restoreTriggerToView', () => {
+  it('re-inserts at the original spot, clamped to the live doc', () => {
+    const view = new EditorView({
+      state: EditorState.create({doc: 'ab'}),
+      parent: document.body,
+    })
+    try {
+      expect(restoreTriggerToView(view, 9, '#ta')).toBe(true)
+      expect(view.state.doc.toString()).toBe('ab#ta')
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('returns false for an unmounted view', () => {
+    const view = new EditorView({state: EditorState.create({doc: 'ab'})})
+    view.destroy()
+    expect(restoreTriggerToView(view, 0, '#ta')).toBe(false)
   })
 })

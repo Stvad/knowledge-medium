@@ -61,6 +61,7 @@ export const srsSnapshotHistoryProp = defineProperty<SrsReviewSnapshot[]>('snaps
 export const srsSm25Type = defineBlockType({
   id: SRS_SM25_TYPE,
   label: 'SRS SM-2.5',
+  structural: true,
   properties: [
     srsIntervalProp,
     srsFactorProp,

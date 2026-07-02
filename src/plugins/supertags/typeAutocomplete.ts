@@ -12,7 +12,11 @@
  *  On select the trigger text (`#query`) is deleted from the doc
  *  immediately — the tag lives in the block's `types` property and is
  *  rendered as a trailing chip by `TypeChipsDecorator`, not as text —
- *  and the (async) type write is fired through `pickType`.
+ *  and the (async) type write is fired through `pickType`, which also
+ *  mirrors the deletion into the block's stored content (same tx as
+ *  the tag) so the editor remount that a types change triggers seeds
+ *  from a cache row without the trigger text. A failed pick restores
+ *  the deleted text (view first, stored content as fallback).
  *
  *  The source is pure w.r.t. data access: it takes already-resolved
  *  candidates and a `pickType` callback. Wiring to the repo (the live
@@ -20,6 +24,7 @@
  *  plugin's CodeMirror extension. */
 
 import { EditorSelection } from '@codemirror/state'
+import type { EditorView } from '@codemirror/view'
 import type {
   Completion,
   CompletionContext,
@@ -27,61 +32,41 @@ import type {
   CompletionSource,
 } from '@codemirror/autocomplete'
 import type { TypeContribution } from '@/data/api'
-import {
-  BLOCK_TYPE_TYPE,
-  EXTENSION_TYPE,
-  PAGE_TYPE,
-  PANEL_STACK_TYPE,
-  PANEL_TYPE,
-  PROPERTIES_PAGE_TYPE,
-  PROPERTY_SCHEMA_TYPE,
-  RECENTS_PAGE_TYPE,
-  TYPES_PAGE_TYPE,
-  USER_TYPE,
-} from '@/data/blockTypes'
 
-/** Kernel types that are structural plumbing rather than user-facing
- *  tags: offering `#page` / `#panel` in the dropdown invites corrupting
- *  UI-state blocks, and chip-rendering them would stamp `#Page` on
- *  every page title. Plugin-contributed and user-defined types are all
- *  visible. Shared by the autocomplete and the chip decorator so the
- *  two surfaces stay consistent. */
-export const HIDDEN_TYPE_IDS: ReadonlySet<string> = new Set([
-  BLOCK_TYPE_TYPE,
-  EXTENSION_TYPE,
-  PAGE_TYPE,
-  PANEL_STACK_TYPE,
-  PANEL_TYPE,
-  PROPERTIES_PAGE_TYPE,
-  PROPERTY_SCHEMA_TYPE,
-  RECENTS_PAGE_TYPE,
-  TYPES_PAGE_TYPE,
-  USER_TYPE,
-])
+/** The tagging UX hides `structural` contributions (kernel structure
+ *  like page/panel, plugin prefs/ui-state plumbing — see
+ *  `TypeContribution.structural`) everywhere, and `hideTag` ones from
+ *  the chip display only. Unknown ids (type not in the registry, e.g.
+ *  mid-load) stay visible so a tag never silently disappears. */
+const isTaggable = (type: TypeContribution | undefined): boolean =>
+  type === undefined || type.structural !== true
 
 /** Which of a block's types display as trailing tag chips: everything
- *  except structural kernel types and types whose contribution opts
- *  out via `hideTag` (`block-type:hide-tag` on user-defined types).
- *  Display-only policy — `buildTypeTagCandidates` deliberately does
- *  NOT consult `hideTag`, so a chip-hidden type stays taggable. */
+ *  except `structural` contributions and types that opt out via
+ *  `hideTag` (`block-type:hide-tag` on user-defined types). Display-
+ *  only policy — `buildTypeTagCandidates` deliberately does NOT
+ *  consult `hideTag`, so a chip-hidden type stays taggable. Dedups:
+ *  a malformed `types` array (importer/bridge writes) must not render
+ *  duplicate React keys. */
 export const visibleTagTypeIds = (
   typeIds: readonly string[],
   registry: ReadonlyMap<string, TypeContribution>,
-): readonly string[] =>
-  typeIds.filter(typeId =>
-    !HIDDEN_TYPE_IDS.has(typeId) && registry.get(typeId)?.hideTag !== true)
-
-export interface TypeTagCandidate {
-  kind: 'existing' | 'create'
-  /** For `existing`, the registered type id (what `addType` takes).
-   *  For `create`, a `create:<label>` marker — the real id is the
-   *  type-definition block id minted at pick time. */
-  id: string
-  /** Display label: the type's label for `existing`, the to-be-created
-   *  label (trimmed query) for `create`. */
-  label: string
-  detail?: string
+): readonly string[] => {
+  const seen = new Set<string>()
+  return typeIds.filter(typeId => {
+    if (seen.has(typeId)) return false
+    seen.add(typeId)
+    const type = registry.get(typeId)
+    return isTaggable(type) && type?.hideTag !== true
+  })
 }
+
+export type TypeTagCandidate =
+  /** A registered type; `id` is what `addType` takes. */
+  | {kind: 'existing', id: string, label: string, detail?: string}
+  /** The "Create type" sentinel; the real id is the type-definition
+   *  block id minted at pick time. `label` is the trimmed query. */
+  | {kind: 'create', label: string, detail?: string}
 
 interface TriggerMatch {
   /** Position in the line where the `#` sits. The trigger span
@@ -160,15 +145,32 @@ export const matchHashTrigger = (text: string, pos: number): TriggerMatch | null
 
 const labelOf = (type: TypeContribution): string => type.label ?? type.id
 
+/** Case-insensitive exact label/id lookup among TAGGABLE types.
+ *  Exported for the create flow's just-before-create re-check (the
+ *  sentinel can be picked before an earlier create publishes). */
+export const findTaggableTypeByName = (
+  registry: ReadonlyMap<string, TypeContribution>,
+  name: string,
+): TypeContribution | undefined => {
+  const q = name.trim().toLowerCase()
+  if (q === '') return undefined
+  for (const type of registry.values()) {
+    if (!isTaggable(type)) continue
+    if (labelOf(type).toLowerCase() === q || type.id.toLowerCase() === q) return type
+  }
+  return undefined
+}
+
 /** Pure candidate builder over a registry snapshot. Exported for
  *  direct testing; the plugin extension feeds it `repo.types` and the
  *  block's current `types` property.
  *
- *  The `create` sentinel appears for any non-empty query that isn't an
- *  exact label/id match against the FULL registry (hidden and
- *  already-applied types included) — offering to create a second
- *  "Task" because the first is hidden from the dropdown would mint
- *  duplicate labels. */
+ *  The `create` sentinel appears for any non-empty query with no exact
+ *  label/id match among the TAGGABLE types (already-applied ones
+ *  included, so you can't mint a second "Task" from a block that
+ *  already carries the first). Structural types deliberately don't
+ *  suppress it: `#page` should offer to create the user's own "page"
+ *  type rather than dead-end with an empty dropdown. */
 export const buildTypeTagCandidates = (args: {
   registry: ReadonlyMap<string, TypeContribution>
   currentTypeIds: readonly string[]
@@ -180,7 +182,7 @@ export const buildTypeTagCandidates = (args: {
   const all = Array.from(args.registry.values())
 
   const matches = all.filter(type =>
-    !HIDDEN_TYPE_IDS.has(type.id) &&
+    isTaggable(type) &&
     !current.has(type.id) &&
     (q === '' ||
       labelOf(type).toLowerCase().includes(q) ||
@@ -198,13 +200,10 @@ export const buildTypeTagCandidates = (args: {
     detail: type.description,
   }))
 
-  const exactExists = q !== '' && all.some(type =>
-    labelOf(type).toLowerCase() === q || type.id.toLowerCase() === q)
-  if (trimmed === '' || exactExists) return existing
+  if (trimmed === '' || findTaggableTypeByName(args.registry, trimmed)) return existing
 
   return [...existing, {
     kind: 'create',
-    id: `create:${trimmed}`,
     label: trimmed,
     detail: 'Create new type',
   }]
@@ -214,10 +213,40 @@ export interface TypeTagAutocompleteOptions {
   /** Candidates for the current query, in display order. */
   getCandidates: (query: string) => TypeTagCandidate[] | Promise<TypeTagCandidate[]>
   /** Called when the user picks a candidate, after the `#query`
-   *  trigger text has been deleted from the doc. Async — the tag write
-   *  (and for `create`, the type-definition materialization) settles
-   *  in the background while the user keeps typing. */
-  pickType: (candidate: TypeTagCandidate) => Promise<void>
+   *  trigger text has been deleted from the view. `triggerText` is the
+   *  deleted span — implementations MUST also remove it from the
+   *  block's stored content in the SAME tx as the tag write: adding a
+   *  type remounts the per-block editor (types participate in the
+   *  renderer's slot identity), and the remounted editor seeds from
+   *  the cache, so a cache row that still holds the trigger text
+   *  resurrects it under the user's cursor. */
+  pickType: (candidate: TypeTagCandidate, ctx: {triggerText: string}) => Promise<void>
+  /** Persistence fallback for a FAILED pick: re-insert the trigger
+   *  text into the block's stored content when the editor view can no
+   *  longer take the restore (unmounted / navigated away). */
+  restoreTrigger?: (args: {triggerText: string}) => Promise<void>
+}
+
+/** Put a failed pick's trigger text back into the editor at (or as
+ *  near as the doc allows) its original spot. False when the view is
+ *  unmounted — the caller falls back to `restoreTrigger`. Exported for
+ *  direct testing. */
+export const restoreTriggerToView = (
+  view: EditorView,
+  at: number,
+  triggerText: string,
+): boolean => {
+  if (!view.dom.isConnected) return false
+  try {
+    const pos = Math.min(at, view.state.doc.length)
+    view.dispatch({
+      changes: {from: pos, insert: triggerText},
+      selection: EditorSelection.cursor(pos + triggerText.length),
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
 const candidateToOption = (
@@ -229,16 +258,27 @@ const candidateToOption = (
   type: candidate.kind === 'create' ? 'keyword' : 'class',
   apply: (view, _completion, applyFrom, applyTo) => {
     // Delete the trigger text synchronously while the view is
-    // guaranteed alive; the tag itself lands on the block's `types`
-    // property, not in the content. No text survives to need a
-    // persistence fallback if the pick's async half fails.
+    // guaranteed alive; pickType mirrors the deletion into the stored
+    // content (see TypeTagAutocompleteOptions.pickType).
+    const triggerText = view.state.doc.sliceString(applyFrom, applyTo)
     view.dispatch({
       changes: {from: applyFrom, to: applyTo, insert: ''},
       selection: EditorSelection.cursor(applyFrom),
     })
-    options.pickType(candidate).catch((err: unknown) => {
-      console.warn('[supertags] failed to apply type', candidate.id, err)
-    })
+    void (async () => {
+      try {
+        await options.pickType(candidate, {triggerText})
+      } catch (err) {
+        // The user's text was deleted optimistically — a failed pick
+        // must give it back, not just log.
+        console.warn('[supertags] failed to apply type', candidate.label, err)
+        if (!restoreTriggerToView(view, applyFrom, triggerText)) {
+          await options.restoreTrigger?.({triggerText}).catch((restoreErr: unknown) => {
+            console.warn('[supertags] failed to restore trigger text', restoreErr)
+          })
+        }
+      }
+    })()
   },
 })
 

@@ -45,14 +45,16 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
     id: EXTENSION_TYPE,
     label: 'Extension',
+    structural: true,
     properties: [extensionNameProp, extensionDescriptionProp],
   }),
-  defineBlockType({id: PAGE_TYPE, label: 'Page', properties: [aliasesProp]}),
-  defineBlockType({id: PANEL_TYPE, label: 'Panel'}),
-  defineBlockType({id: PANEL_STACK_TYPE, label: 'Panel stack'}),
+  defineBlockType({id: PAGE_TYPE, label: 'Page', structural: true, properties: [aliasesProp]}),
+  defineBlockType({id: PANEL_TYPE, label: 'Panel', structural: true}),
+  defineBlockType({id: PANEL_STACK_TYPE, label: 'Panel stack', structural: true}),
   defineBlockType({
     id: PROPERTY_SCHEMA_TYPE,
     label: 'Property schema',
+    structural: true,
     // Lift these so addType('property-schema') auto-materialises them
     // and the panel surfaces them through the type-section path.
     properties: [propertyNameProp, presetIdProp, presetConfigProp],
@@ -60,11 +62,13 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
     id: PROPERTIES_PAGE_TYPE,
     label: 'Properties page',
+    structural: true,
     properties: [aliasesProp],
   }),
   defineBlockType({
     id: BLOCK_TYPE_TYPE,
     label: 'Type',
+    structural: true,
     // Lift label / description / properties / tag-display fields so the
     // panel surfaces them through the type-section path when editing a
     // block-type block.
@@ -79,16 +83,19 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
     id: TYPES_PAGE_TYPE,
     label: 'Types page',
+    structural: true,
     properties: [aliasesProp],
   }),
   defineBlockType({
     id: RECENTS_PAGE_TYPE,
     label: 'Recents page',
+    structural: true,
     properties: [aliasesProp],
   }),
   defineBlockType({
     id: USER_TYPE,
     label: 'User',
+    structural: true,
     // Lift aliases + id so the property panel surfaces them and the id
     // auto-materialises when `addType('user')` runs.
     properties: [aliasesProp, userIdProp],

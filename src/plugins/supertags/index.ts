@@ -9,8 +9,9 @@
  *   - a block's types render as trailing `#label` chips after its
  *     content, each with a remove button.
  *
- *  Structural kernel types (page, panel, …) are hidden from both
- *  surfaces — see `HIDDEN_TYPE_IDS`. */
+ *  `structural` contributions (kernel structure, plugin plumbing) are
+ *  hidden from both surfaces; `hideTag` types from chips only — see
+ *  `TypeContribution`. */
 
 import { codeMirrorExtensionsFacet } from '@/editor/codeMirrorExtensions.js'
 import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
@@ -18,8 +19,6 @@ import type { AppExtension } from '@/facets/facet'
 import { systemToggle } from '@/facets/togglable'
 import { supertagsCodeMirrorExtensions } from './codeMirrorExtensions'
 import { typeChipsDecoratorContribution } from './TypeChipsDecorator'
-
-export { HIDDEN_TYPE_IDS } from './typeAutocomplete'
 
 export const supertagsPlugin: AppExtension = systemToggle({
   id: 'system:supertags',
