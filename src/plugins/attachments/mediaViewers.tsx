@@ -1,22 +1,20 @@
 /**
- * The `media`-block mime→viewer dispatch (design §11).
+ * The media-block viewer components + the picker over the {@link mediaViewersFacet}
+ * registry (design §11).
  *
- * Maps a block's `media:mime` to the component that presents its bytes — so the
- * renderer ({@link MediaBlockRenderer}) never special-cases a mime and a richer viewer
- * (PDF inline preview, `<audio>`, …) is added by dropping an entry into
- * {@link MEDIA_VIEWERS}, not by editing the renderer.
- *
- * Two byte-access shapes, declared per viewer by {@link MediaViewer.eager}:
- *   - EAGER (image today; inline PDF/audio later): the renderer resolves the bytes once
- *     into a verified object URL (via {@link useAssetObjectUrl}, §7.3) and the viewer
- *     renders that url. Fail-closed by construction — a `ready` url wraps ONLY
- *     hash-verified bytes (§5.1); a failed resolve is `error` → the broken placeholder,
- *     never an unverified source.
+ * The renderer resolves a block's bytes per-viewer and hands them here:
+ *   - EAGER (image today; inline PDF/audio later): the bytes are resolved once into a
+ *     verified object URL (via {@link useAssetObjectUrl}, §7.3) and the viewer renders
+ *     that url. Fail-closed by construction — a `ready` url wraps ONLY hash-verified
+ *     bytes (§5.1); a failed resolve is `error` → the broken placeholder, never an
+ *     unverified source.
  *   - LAZY (the download fallback): the viewer resolves NOTHING on mount — it renders
  *     from metadata (filename/size/mime) and fetches the verified bytes only when the
  *     user clicks download, then triggers a transient octet-stream download (never a
- *     navigable `blob:` URL — see {@link FileViewer}). This keeps a page of large file
- *     attachments from eagerly fetching/decrypting/retaining bytes nobody opened (§8).
+ *     navigable `blob:` URL — see {@link FileViewer}). The bytes are already on local
+ *     disk in the common case (the down-lane replicates every media block for offline,
+ *     §8), so the click is a fast local read; staying lazy avoids retaining a decrypted
+ *     object-URL Blob in memory for a download nobody opened.
  */
 
 import { useCallback, useState } from 'react'
@@ -24,8 +22,7 @@ import { Download, FileWarning, ImageOff, Loader2 } from 'lucide-react'
 import { MarkdownImage } from '@/markdown/MarkdownImage.js'
 import { downloadBlob } from '@/utils/downloadBlob.js'
 import { GENERIC_MIME, isImageMime } from './mediaBlock.js'
-import type { AssetResolveResult } from './resolver.js'
-import type { AssetUrlState, ReportDecodeFailure } from './useAssetObjectUrl.js'
+import type { MediaViewerContribution, MediaViewerProps } from './mediaViewersFacet.js'
 
 /** A muted inline chip standing in for the real content: the loading spinner and the
  *  fail-closed broken/unavailable placeholder. `role="img"` + `aria-label` so a
@@ -65,26 +62,6 @@ export const formatByteSize = (bytes: number): string => {
   }
   const rounded = unit === 0 ? value : value < 10 ? Math.round(value * 10) / 10 : Math.round(value)
   return `${rounded} ${units[unit]}`
-}
-
-/** What every viewer receives. An EAGER viewer reads `state`/`reportDecodeFailure`; a
- *  LAZY one reads `resolveBytes` — each ignores the props it doesn't use, so the
- *  renderer stays a pure dispatch and never special-cases a mime. */
-export interface MediaViewerProps {
-  /** EAGER path: the resolve of the block's bytes to a verified object URL (§7.3).
-   *  `ready` ⇒ the url wraps hash-verified bytes; `error` ⇒ fail-closed placeholder.
-   *  For a LAZY viewer this is left `loading` (the renderer skips the eager resolve). */
-  readonly state: AssetUrlState
-  /** EAGER path: report that the verified bytes at `state.url` couldn't be DECODED (the
-   *  <img> onError) — frees the Blob + goes terminal. Ignored by lazy viewers. */
-  readonly reportDecodeFailure: ReportDecodeFailure
-  /** LAZY path: fetch the block's VERIFIED bytes on demand (fail-closed — discards
-   *  unverified bytes, §5.1). Resolves the same content as the eager path, on click. */
-  readonly resolveBytes: () => Promise<AssetResolveResult>
-  readonly mime: string
-  readonly filename: string | undefined
-  /** Plaintext byte length (`media:size`); `0` = unknown, then the size is omitted. */
-  readonly size: number
 }
 
 /** EAGER image viewer — the object URL feeds the existing {@link MarkdownImage} lightbox.
@@ -160,30 +137,31 @@ const FileViewer = ({ resolveBytes, mime, filename, size }: MediaViewerProps) =>
   )
 }
 
-/** A mime→viewer entry. `match` is tried in order (first hit wins), so a specific viewer
- *  (e.g. `application/pdf`) can sit ABOVE the image / file fallbacks. */
-export interface MediaViewer {
-  readonly match: (mime: string) => boolean
-  readonly Component: React.ComponentType<MediaViewerProps>
-  /** Does this viewer render the EAGERLY-resolved object URL (inline image/PDF/audio)?
-   *  false ⇒ the renderer skips the eager resolve and the viewer fetches lazily on
-   *  demand (the download fallback resolves only on click). Default-false at the
-   *  fallback keeps a mime nobody registered a viewer for from eagerly fetching bytes. */
-  readonly eager: boolean
+/** The image mime-family viewer — the attachments plugin's contribution to
+ *  {@link mediaViewersFacet}. */
+export const imageMediaViewer: MediaViewerContribution = {
+  id: 'image',
+  match: isImageMime,
+  Component: ImageViewer,
+  eager: true,
 }
 
-/** The ordered dispatch table. Register a richer viewer (PDF inline preview, `<audio>`)
- *  by inserting it ABOVE {@link FILE_VIEWER_FALLBACK} with `eager: true` — the renderer
- *  needs no change. */
-export const MEDIA_VIEWERS: ReadonlyArray<MediaViewer> = [
-  { match: (mime) => isImageMime(mime), Component: ImageViewer, eager: true },
-  // ↑ richer inline viewers register here (PDF, audio, …); the file download catches the rest ↓
-]
+/** The built-in floor: every attachment is at least downloadable. Returned by
+ *  {@link pickMediaViewer} when no registered viewer claims the mime — NOT itself a
+ *  facet contribution, so it can't be dropped and a page always has a working affordance
+ *  even if the viewer facet is empty. A plugin CAN still override it with a match-all
+ *  contribution (which `find` reaches first). */
+export const FILE_VIEWER_FALLBACK: MediaViewerContribution = {
+  id: 'file',
+  match: () => true,
+  Component: FileViewer,
+  eager: false,
+}
 
-/** The last-resort viewer for any mime no registered viewer claims: the lazy download. */
-export const FILE_VIEWER_FALLBACK: MediaViewer = { match: () => true, Component: FileViewer, eager: false }
-
-/** Pick the viewer for a mime — first registered match, else the file-download fallback.
- *  Total: always returns a viewer, so the renderer never branches on mime itself. */
-export const pickMediaViewer = (mime: string): MediaViewer =>
-  MEDIA_VIEWERS.find((viewer) => viewer.match(mime)) ?? FILE_VIEWER_FALLBACK
+/** Pick the viewer for `mime` from the facet-resolved list — first match (the list is
+ *  precedence-ordered), else the download fallback. Total: always returns a viewer, so
+ *  the renderer never branches on mime itself. */
+export const pickMediaViewer = (
+  viewers: readonly MediaViewerContribution[],
+  mime: string,
+): MediaViewerContribution => viewers.find((viewer) => viewer.match(mime)) ?? FILE_VIEWER_FALLBACK

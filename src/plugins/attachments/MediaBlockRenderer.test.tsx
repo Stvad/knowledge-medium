@@ -22,6 +22,12 @@ vi.mock('@/hooks/block.js', () => ({
 vi.mock('./useAssetObjectUrl.js', () => ({ useAssetObjectUrl: () => [h.urlState, h.reportDecodeFailure] }))
 vi.mock('./assetResolver.js', () => ({ getAssetResolver: () => ({ resolve: h.resolve }) }))
 vi.mock('@/utils/downloadBlob.js', () => ({ downloadBlob: h.downloadBlob }))
+// The runtime resolves the media-viewer facet to just the (real) image viewer, so an
+// image mime dispatches to ImageViewer and everything else to the download fallback.
+vi.mock('@/extensions/runtimeContext.js', async () => {
+  const { imageMediaViewer } = await import('./mediaViewers.js')
+  return { useAppRuntime: () => ({ read: () => [imageMediaViewer] }) }
+})
 
 const { MediaBlockRenderer, MediaContentRenderer } = await import('./MediaBlockRenderer.js')
 

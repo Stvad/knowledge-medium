@@ -3,8 +3,9 @@
  * wiring: a {@link BlockRenderer} that renders blocks carrying the `media` type
  * (gated on a loaded snapshot, see canRender) at a priority above the default.
  *
- * It reads the block's metadata and dispatches to a mime→viewer
- * ({@link pickMediaViewer}). Byte access is per-viewer (§7.3):
+ * It reads the block's metadata and dispatches to a viewer chosen from the
+ * {@link mediaViewersFacet} registry ({@link pickMediaViewer}). Byte access is
+ * per-viewer (§7.3):
  *  - an EAGER viewer (image today; inline PDF/audio later) gets the bytes resolved
  *    once into a verified object URL ({@link useAssetObjectUrl}: fetch →
  *    decrypt/passthrough → HASH-VERIFY → Blob of the block's `media:mime` → object URL,
@@ -12,13 +13,17 @@
  *    broken-asset placeholder, NEVER a raw/unverified source.
  *  - the LAZY download fallback resolves NOTHING on mount; it gets a `resolveBytes`
  *    thunk and fetches the verified bytes only when the user clicks download.
- * The eager resolve is gated on `viewer.eager`, so a page of large file attachments
- * doesn't eagerly fetch/decrypt/retain bytes nobody opened (§8 budgeted egress).
+ * The eager resolve is gated on `viewer.eager`. The down-lane already replicates every
+ * media block (incl. non-image) to local disk for offline (§8), so this isn't about
+ * saving egress — staying lazy avoids holding a decrypted object-URL Blob in memory for
+ * a download nobody opened, and avoids un-throttled demand-fetching ahead of that
+ * budgeted background lane.
  */
 
 import { useCallback } from 'react'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { usePropertyValue, useWorkspaceId } from '@/hooks/block.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { getAssetResolver } from './assetResolver.js'
 import {
@@ -29,6 +34,7 @@ import {
   mediaSizeProp,
 } from './mediaBlock.js'
 import { pickMediaViewer } from './mediaViewers.js'
+import { mediaViewersFacet } from './mediaViewersFacet.js'
 import { useAssetObjectUrl } from './useAssetObjectUrl.js'
 
 export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
@@ -42,7 +48,9 @@ export const MediaContentRenderer = ({ block }: BlockRendererProps) => {
   // the UI's active one. '' (while loading / missing) fails closed (deferred).
   const workspaceId = useWorkspaceId(block, '')
   const resolver = getAssetResolver()
-  const viewer = pickMediaViewer(mime)
+  // The viewer registry is a facet — plugins contribute a viewer per mime family; the
+  // renderer never special-cases a mime (design §11).
+  const viewer = pickMediaViewer(useAppRuntime().read(mediaViewersFacet), mime)
 
   // Resolve eagerly ONLY for an inline viewer (image now; PDF/audio later). The
   // download fallback stays metadata-only and resolves lazily via resolveBytes.
