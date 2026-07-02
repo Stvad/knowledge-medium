@@ -30,6 +30,11 @@ describe('isReadOnlySql', () => {
     'SELECT powersync_control(?, ?)',
     'WITH x AS (SELECT 1) SELECT powersync_clear(1)',
     'SELECT b.id FROM blocks b WHERE powersync_clear(1)',
+    // Comment between the fn name and its ( — SQLite treats the comment
+    // as whitespace, so these are valid calls that a `\\s*\\(` guard missed.
+    'SELECT powersync_clear/**/(1)',
+    'SELECT powersync_clear /**/ (1)',
+    'SELECT powersync_clear-- x\n(1)',
   ])('rejects mutating statement: %s', sql => {
     expect(isReadOnlySql(sql)).toBe(false)
   })

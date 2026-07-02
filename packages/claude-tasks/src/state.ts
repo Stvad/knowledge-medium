@@ -62,13 +62,26 @@ export const createStateStore = (filePath: string): StateStore => {
     return cache
   }
 
-  const persist = async (state: StateData): Promise<void> => {
-    await fs.mkdir(path.dirname(filePath), {recursive: true})
-    // tmp + rename: a crash mid-write must not leave truncated JSON
-    // (which load() would silently treat as "never seen anything").
-    const tmpPath = `${filePath}.tmp`
-    await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`)
-    await fs.rename(tmpPath, filePath)
+  // Serialize writes: launch-log and cursor persists both fire (some
+  // fire-and-forget) and share one `.tmp` path — concurrent writes to it
+  // could interleave into truncated JSON. A promise chain makes them
+  // strictly sequential without a lock library.
+  let writeChain: Promise<void> = Promise.resolve()
+
+  const persist = (state: StateData): Promise<void> => {
+    const snapshot = `${JSON.stringify(state, null, 2)}\n`
+    const result = writeChain.then(async () => {
+      await fs.mkdir(path.dirname(filePath), {recursive: true})
+      // tmp + rename: a crash mid-write must not leave truncated JSON
+      // (which load() would silently treat as "never seen anything").
+      const tmpPath = `${filePath}.tmp`
+      await fs.writeFile(tmpPath, snapshot)
+      await fs.rename(tmpPath, filePath)
+    })
+    // The chain swallows failures so one bad write doesn't wedge every
+    // later persist; the caller still sees the real outcome via `result`.
+    writeChain = result.catch(() => {})
+    return result
   }
 
   return {

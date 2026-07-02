@@ -86,10 +86,15 @@ export const findBlockedRefInProperties = (
  *  connection the bridge uses — `SELECT powersync_clear(1)` wipes local
  *  (incl. un-uploaded) data, `powersync_replace_schema` / `_control`
  *  corrupt schema/sync state. A `SELECT` prologue does NOT make a
- *  statement read-only here, so these must be denied by name regardless
- *  of prologue. The app registers no other writable UDFs (verified), so
- *  this family is the whole vector. */
-const SIDE_EFFECTING_FN = /\bpowersync_[a-z0-9_]*\s*\(/i
+ *  statement read-only here, so these must be denied regardless of
+ *  prologue. Match the bare `powersync_` TOKEN, not `powersync_` + `(`:
+ *  a SQLite comment counts as whitespace, so a comment wedged between the
+ *  name and its paren makes a valid call that a `\s*\(` guard would miss
+ *  — but the function name itself must appear as one contiguous
+ *  identifier to be callable (a comment can't split it), so the bare
+ *  token match is comment-proof. The app registers no other writable
+ *  UDFs (verified), so this family is the whole vector. */
+const SIDE_EFFECTING_FN = /\bpowersync_/i
 
 /** The bridge's sql modes don't gate writes (an UPDATE "runs" under
  *  mode=all), so read-only is enforced textually: single statement, no

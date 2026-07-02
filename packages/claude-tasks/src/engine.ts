@@ -82,8 +82,9 @@ export const createEngine = (deps: EngineDeps) => {
     launchTimes.push(now())
     pruneLaunchTimes()
     // Fire-and-forget: the in-memory log already gates this tick; the
-    // write only needs to survive a later restart.
-    void state.setLaunchTimes(launchTimes).catch(error =>
+    // write only needs to survive a later restart. Pass a COPY — the
+    // live array keeps mutating (prune/push) while the async write runs.
+    void state.setLaunchTimes([...launchTimes]).catch(error =>
       log(`failed to persist spend log: ${errorMessage(error)}`))
   }
 
