@@ -544,10 +544,15 @@ var AudioViewer = (t0) => {
 	return t7;
 };
 /** LAZY-INLINE PDF viewer for `application/pdf` (§11). Like {@link AudioViewer} it renders
-*  from METADATA as a poster and resolves NOTHING on mount — PDFs can be large, and on a
-*  browser that can't inline-render one (e.g. iOS Safari) an eager resolve would fetch +
-*  decrypt bytes that never display. On the first "preview" intent it arms the SAME object-URL
-*  resolve via `requestResolve`, then reads `state` like the eager path:
+*  from METADATA as a poster and resolves NOTHING on mount. The down-lane already replicates
+*  every media block to the local plaintext byte store (§8), so an eager resolve is usually a
+*  local HIT — NOT a re-download or re-decrypt (see resolver step 3) — but it still reads the
+*  full (possibly large) bytes into a decrypted object-URL Blob and PINS it in memory for the
+*  block's whole lifetime; a note of large PDFs would hold them all, even un-viewed ones, and
+*  on a browser that can't inline-render a PDF (e.g. iOS Safari) that Blob is pure waste.
+*  Deferring to the first "preview" intent avoids that (and the rarer not-yet-replicated
+*  network fetch). On the click it arms the SAME object-URL resolve via `requestResolve`, then
+*  reads `state` like the eager path:
 *   - `ready` ⇒ a bounded-height `<object type="application/pdf">` at the VERIFIED object URL
 *     (a `blob:` of the decrypted-at-rest plaintext — works offline once the down-lane has
 *     replicated it, §8; revoked on unmount by {@link useAssetObjectUrl}). Browsers that can't
