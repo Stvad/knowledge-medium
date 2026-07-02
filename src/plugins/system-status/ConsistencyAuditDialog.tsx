@@ -142,7 +142,18 @@ const formatCheckedAt = (checkedAt: number): string => {
   return Number.isNaN(d.getTime()) ? 'unknown time' : d.toLocaleString()
 }
 
-export function ConsistencyAuditDialog({ cancel }: DialogContextProps<void>) {
+export interface ConsistencyAuditDialogProps {
+  /** Pin the dialog to a specific audited workspace instead of the active one.
+   *  The run action passes the workspace it just scanned so a mid-scan workspace
+   *  switch can't make the fresh result read as "no audit". Omitted by the "View
+   *  last" action → falls back to the active workspace. */
+  workspaceId?: string
+}
+
+export function ConsistencyAuditDialog({
+  cancel,
+  workspaceId: pinnedWorkspaceId,
+}: DialogContextProps<void> & ConsistencyAuditDialogProps) {
   const repo = useRepo()
   const navigate = useNavigate()
   const snapshot = useSyncExternalStore(
@@ -150,18 +161,26 @@ export function ConsistencyAuditDialog({ cancel }: DialogContextProps<void>) {
     getConsistencyAuditSnapshot,
     getConsistencyAuditSnapshot,
   )
-  // Scope the module-global snapshot to the ACTIVE workspace. The store holds the
-  // last audited workspace's result, and the "View last…" palette action can open
-  // this dialog directly (bypassing the diagnostics source's own gate) — so
-  // without this a result for workspace A would show A's counts/ids while B is
-  // active, and clicking a sample would try to open an A-id in B. A mismatch (or
-  // no run) reads as the empty state; a fresh Re-run repopulates for B.
-  const result = snapshot && snapshot.workspaceId === repo.activeWorkspaceId ? snapshot : null
+  // The workspace whose results this dialog shows: the explicitly PINNED one (the
+  // run action passes the workspace it just scanned) or, failing that, the active
+  // workspace (the "View last…" action). Pinning matters because the run action
+  // opens the store-driven dialog after the scan — if the user switched workspace
+  // mid-scan, the active workspace would no longer match the just-published
+  // result and it would wrongly read as "no audit".
+  const targetWorkspaceId = pinnedWorkspaceId ?? repo.activeWorkspaceId
+  // Scope the module-global snapshot to that workspace. The store holds the last
+  // audited workspace's result, and "View last…" can open this dialog directly
+  // (bypassing the diagnostics source's own gate) — so without this a result for
+  // workspace A would show A's counts/ids while B is active, and clicking a sample
+  // would try to open an A-id in B. A mismatch (or no run) reads as the empty
+  // state; a fresh Re-run repopulates for the target workspace.
+  const result =
+    snapshot && snapshot.workspaceId === targetWorkspaceId ? snapshot : null
   const [rerunning, setRerunning] = useState(false)
 
   // Open the block in the Roam-style side panel (sidebar-stack) and — crucially —
   // KEEP the dialog open, so a click no longer discards the (expensive) audit
-  // results. Pin the audited workspace (== active, given the gate above) so the id
+  // results. Pin the audited workspace (== target, given the gate above) so the id
   // can't be resolved against a different workspace if it changes mid-dialog. No
   // sourcePanelId: a fresh stack is appended at the end of the layout.
   const open = (id: string) => {
@@ -169,8 +188,9 @@ export function ConsistencyAuditDialog({ cancel }: DialogContextProps<void>) {
   }
 
   const rerun = async () => {
-    const workspaceId = repo.activeWorkspaceId
-    if (!workspaceId) {
+    // Re-run the SHOWN workspace (the pinned/target one), not just whatever is
+    // active now, so the refreshed result stays coherent with what's displayed.
+    if (!targetWorkspaceId) {
       showError('Data integrity audit: no active workspace.')
       return
     }
@@ -178,7 +198,7 @@ export function ConsistencyAuditDialog({ cancel }: DialogContextProps<void>) {
     try {
       // Publishes to the audit store on success → this dialog re-renders with the
       // fresh result via its store subscription.
-      await runConsistencyAuditNow(repo, workspaceId)
+      await runConsistencyAuditNow(repo, targetWorkspaceId)
     } catch (e) {
       showError(`Data integrity audit failed: ${e instanceof Error ? e.message : String(e)}`)
     } finally {

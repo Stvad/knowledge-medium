@@ -54,8 +54,11 @@ export const runDataIntegrityAuditAction: ActionConfig<typeof ActionContextTypes
         progress.done('Data integrity audit: no issues found.')
       }
       // Always show the inspectable result (works clean or with findings). The
-      // dialog reads the just-published result from the store.
-      void openDialog(ConsistencyAuditDialog)
+      // dialog reads the just-published result from the store; pin it to the
+      // audited workspace so a mid-scan workspace switch can't make the fresh
+      // result read as "no audit" (the dialog scopes the store snapshot to its
+      // workspace).
+      void openDialog(ConsistencyAuditDialog, { workspaceId })
     } catch (e) {
       progress.fail(`Data integrity audit failed: ${e instanceof Error ? e.message : String(e)}`)
     }
