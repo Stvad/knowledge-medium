@@ -657,10 +657,10 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     applyEventOptions(event, action, binding, contextConfigsByType)
 
     pending = {
+      // `cancel` does the disarm bookkeeping (timer, pending, registry);
+      // the clearTimeout on the just-fired timer is a no-op.
       timer: setTimeout(() => {
-        pending = null
-        unregisterArmed?.()
-        unregisterArmed = null
+        cancel()
         fire(event)
       }, holdMs),
       primaryKey: event.key,
