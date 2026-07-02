@@ -9,6 +9,8 @@ import {
   buildTypeTagCandidates,
   findTaggableTypeByName,
   matchHashTrigger,
+  planTriggerRestore,
+  planTriggerStrip,
   restoreTriggerToView,
   typeTagCompletionSource,
   visibleTagTypeIds,
@@ -16,24 +18,11 @@ import {
 } from '../typeAutocomplete'
 
 describe('matchHashTrigger', () => {
-  it('matches # at start of line', () => {
-    expect(matchHashTrigger('#task', 5)).toEqual({from: 0, query: 'task'})
-  })
-
-  it('matches # after whitespace', () => {
+  // Char-generic behavior (whitespace/word-cap/wikilink/… guards) is
+  // covered in src/editor/test/triggerMatch.test.ts against the shared
+  // matcher; this suite pins only the #-specific wiring.
+  it('matches a basic tag query', () => {
     expect(matchHashTrigger('call mom #todo', 14)).toEqual({from: 9, query: 'todo'})
-  })
-
-  it('matches # with an empty query (right after the #)', () => {
-    expect(matchHashTrigger('call mom #', 10)).toEqual({from: 9, query: ''})
-  })
-
-  it('matches after non-word punctuation', () => {
-    expect(matchHashTrigger('(#task', 6)).toEqual({from: 1, query: 'task'})
-  })
-
-  it('matches multi-word queries across single spaces', () => {
-    expect(matchHashTrigger('#meeting note', 13)).toEqual({from: 0, query: 'meeting note'})
   })
 
   it('does NOT match a markdown heading (query starts with a space)', () => {
@@ -44,37 +33,8 @@ describe('matchHashTrigger', () => {
     expect(matchHashTrigger('##task', 6)).toBeNull()
   })
 
-  it('does NOT match with a word char before the # (URL anchors, a#b)', () => {
+  it('does NOT match with a word char before the # (URL anchors)', () => {
     expect(matchHashTrigger('example.com/page#section', 24)).toBeNull()
-    expect(matchHashTrigger('a#b', 3)).toBeNull()
-  })
-
-  it('does NOT match inside [[wikilink]] brackets', () => {
-    expect(matchHashTrigger('[[#foo', 6)).toBeNull()
-    expect(matchHashTrigger('[[foo #bar', 10)).toBeNull()
-  })
-
-  it('does NOT match when there is no # in the current token', () => {
-    expect(matchHashTrigger('plain prose', 11)).toBeNull()
-  })
-
-  it('does NOT match across a double space (query over, prose resumed)', () => {
-    expect(matchHashTrigger('#home  later that day', 21)).toBeNull()
-  })
-
-  it('does NOT match across tabs', () => {
-    expect(matchHashTrigger('#foo\tbar', 8)).toBeNull()
-  })
-
-  it('does NOT match once the query exceeds the word cap', () => {
-    expect(matchHashTrigger('#one two three four five six', 28))
-      .toEqual({from: 0, query: 'one two three four five six'})
-    expect(matchHashTrigger('#one two three four five six seven', 34)).toBeNull()
-  })
-
-  it('does NOT match once the query exceeds the length cap', () => {
-    const long = `#${'a'.repeat(60)}`
-    expect(matchHashTrigger(long, long.length)).toBeNull()
   })
 })
 
@@ -358,5 +318,39 @@ describe('restoreTriggerToView', () => {
     const view = new EditorView({state: EditorState.create({doc: 'ab'})})
     view.destroy()
     expect(restoreTriggerToView(view, 0, '#ta')).toBe(false)
+  })
+})
+
+describe('planTriggerStrip', () => {
+  const ctx = {triggerText: '#re', at: 18, docBefore: 'see #recipe notes #re', docAfter: 'see #recipe notes '}
+
+  it('strips exactly the picked span when the stored content matches the pick-time doc', () => {
+    expect(planTriggerStrip('see #recipe notes #re', ctx)).toBe('see #recipe notes ')
+  })
+
+  it('never strips by text search — drifted content is left alone', () => {
+    // The round-2 corruption case: the debounce already persisted the
+    // view deletion; an indexOf-based strip would eat the `#re` inside
+    // `#recipe`. Strict snapshot equality must refuse instead.
+    expect(planTriggerStrip('see #recipe notes ', ctx)).toBeNull()
+    // Unflushed keystrokes elsewhere → refuse too.
+    expect(planTriggerStrip('see #recipe notes #re!', ctx)).toBeNull()
+  })
+})
+
+describe('planTriggerRestore', () => {
+  const ctx = {triggerText: '#ta', at: 5, docBefore: 'call #ta mom', docAfter: 'call  mom'}
+
+  it('restores the exact pre-pick doc when content matches the post-deletion snapshot', () => {
+    expect(planTriggerRestore('call  mom', ctx)).toBe('call #ta mom')
+  })
+
+  it('no-ops when the trigger text is demonstrably back at its spot', () => {
+    expect(planTriggerRestore('call #ta mom', ctx)).toBeNull()
+  })
+
+  it('falls back to a clamped positional insert on drifted content', () => {
+    expect(planTriggerRestore('call', ctx)).toBe('call#ta')
+    expect(planTriggerRestore('call  mom and dad', ctx)).toBe('call #ta mom and dad')
   })
 })

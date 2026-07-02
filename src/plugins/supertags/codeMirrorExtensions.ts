@@ -39,8 +39,11 @@ import { showError } from '@/utils/toast'
 import {
   buildTypeTagCandidates,
   findTaggableTypeByName,
+  planTriggerRestore,
+  planTriggerStrip,
   typeTagCompletionSource,
   type TypeTagCandidate,
+  type TypeTagPickContext,
 } from './typeAutocomplete'
 
 /** Exported for the integration test — production wiring goes through
@@ -59,32 +62,31 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
   }
 
   /** Tag + trigger-text removal in one tx (see module doc for why the
-   *  atomicity matters). The content edit mirrors what the view already
-   *  did: remove the first occurrence of the trigger text if the cached
-   *  content still carries it (it won't if the editor's debounced
-   *  `setContent` won the race — that's fine, the deletion already
-   *  persisted). */
-  const applyTag = async (typeId: string, triggerText: string): Promise<void> => {
+   *  atomicity matters). The content edit mirrors what the view
+   *  already did, gated on strict snapshot equality
+   *  (`planTriggerStrip`): when the stored content has moved on —
+   *  unflushed keystrokes, a debounce flush that already carries the
+   *  deletion — we write nothing and let the editor's own persistence
+   *  own the content. */
+  const applyTag = async (typeId: string, ctx: TypeTagPickContext): Promise<void> => {
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
       if (!data || data.deleted) return
       await repo.addTypeInTx(tx, block.id, typeId)
-      const idx = data.content.indexOf(triggerText)
-      if (idx !== -1) {
-        await tx.update(block.id, {
-          content: data.content.slice(0, idx) + data.content.slice(idx + triggerText.length),
-        })
+      const stripped = planTriggerStrip(data.content, ctx)
+      if (stripped !== null) {
+        await tx.update(block.id, {content: stripped})
       }
     }, {scope: ChangeScope.BlockDefault, description: `tag type ${typeId}`})
   }
 
   const pickType = async (
     candidate: TypeTagCandidate,
-    {triggerText}: {triggerText: string},
+    ctx: TypeTagPickContext,
   ): Promise<void> => {
     try {
       if (candidate.kind === 'existing') {
-        await applyTag(candidate.id, triggerText)
+        await applyTag(candidate.id, ctx)
         return
       }
       // Create flow — reuse a same-named type that published since the
@@ -102,25 +104,28 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
           propertySchemaIds: [],
         })
       }
-      await applyTag(typeId, triggerText)
+      await applyTag(typeId, ctx)
     } catch (err) {
+      // "Couldn't finish": the create flow can fail AFTER the
+      // definition block committed (registration timeout) — the type
+      // may still appear moments later, and re-picking then reuses it
+      // via the registry re-check above.
       showError(candidate.kind === 'create'
-        ? `Couldn't create type "${candidate.label}"`
+        ? `Couldn't finish creating type "${candidate.label}"`
         : `Couldn't tag with "${candidate.label}"`)
       throw err
     }
   }
 
-  // Unmounted-view fallback for a failed pick's trigger-text restore:
-  // read-modify-write the stored content, appending the text back where
-  // the (already persisted) deletion left off — i.e. at the end of what
-  // the user had typed before the pick.
-  const restoreTrigger = async ({triggerText}: {triggerText: string}): Promise<void> => {
+  // Unmounted-view fallback for a failed pick's trigger-text restore.
+  const restoreTrigger = async (ctx: TypeTagPickContext): Promise<void> => {
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
       if (!data || data.deleted) return
-      if (data.content.includes(triggerText)) return
-      await tx.update(block.id, {content: data.content + triggerText})
+      const restored = planTriggerRestore(data.content, ctx)
+      if (restored !== null) {
+        await tx.update(block.id, {content: restored})
+      }
     }, {scope: ChangeScope.BlockDefault, description: 'restore type-tag trigger text'})
   }
 

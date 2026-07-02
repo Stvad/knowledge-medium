@@ -106,31 +106,50 @@ describe('supertags pick integration', () => {
     expect(data!.content).toBe('dinner ')
   })
 
-  it('after a create publishes, the sentinel is suppressed and the existing type reused on another block', async () => {
+  it('strips the picked occurrence, not an earlier identical one (positional, never indexOf)', async () => {
+    env = await setup()
+    const blockId = await makeBlock(env.repo, 'see #ta note #ta')
+    await pickAt(env.repo, blockId, 'see #ta note #ta', 'Task')
+    const data = await env.repo.load(blockId)
+    expect(getBlockTypes(data!)).toEqual(['task'])
+    // An indexOf-based strip would produce 'see  note #ta'.
+    expect(data!.content).toBe('see #ta note ')
+  })
+
+  it('a STALE create sentinel picked after the type published reuses it — no duplicate-label mint', async () => {
     env = await setup()
     const first = await makeBlock(env.repo, 'a #recipe')
-    await pickAt(env.repo, first, 'a #recipe', 'Create type "recipe"')
-    const firstTypeId = getBlockTypes((await env.repo.load(first))!)[0]
-
     const second = await makeBlock(env.repo, 'b #recipe')
-    const block = env.repo.block(second)
-    await block.load()
-    const source = buildTypeTagSource({repo: env.repo, block})
-    const view = new EditorView({state: EditorState.create({doc: 'b #recipe'}), parent: document.body})
+
+    // Capture BOTH dropdowns before any create publishes — both offer
+    // the create sentinel.
+    const blockB = env.repo.block(second)
+    await blockB.load()
+    const sourceB = buildTypeTagSource({repo: env.repo, block: blockB})
+    const viewB = new EditorView({state: EditorState.create({doc: 'b #recipe'}), parent: document.body})
     try {
-      const result = await source(new CompletionContext(view.state, 9, false))
-      const labels = result!.options.map(o => o.label)
-      expect(labels).toContain('recipe')
-      expect(labels).not.toContain('Create type "recipe"')
-      const option = result!.options.find(o => o.label === 'recipe')!
-      const apply = option.apply as (v: EditorView, c: unknown, from: number, to: number) => void
-      apply(view, option, result!.from, 9)
+      const staleResultB = await sourceB(new CompletionContext(viewB.state, 9, false))
+      const staleCreateB = staleResultB!.options.find(o => o.label === 'Create type "recipe"')
+      expect(staleCreateB).toBeDefined()
+
+      // First create runs to completion (registered + applied).
+      await pickAt(env.repo, first, 'a #recipe', 'Create type "recipe"')
+      const firstTypeId = getBlockTypes((await env.repo.load(first))!)[0]
+
+      // Now apply the STALE sentinel on block B — pickType's registry
+      // re-check must reuse the published type instead of minting a
+      // second "recipe".
+      const apply = staleCreateB!.apply as (v: EditorView, c: unknown, from: number, to: number) => void
+      apply(viewB, staleCreateB, staleResultB!.from, 9)
       await vi.waitFor(async () => {
         const data = await env.repo.load(second)
         expect(getBlockTypes(data!)).toEqual([firstTypeId])
       }, {timeout: TIMEOUT_MS})
+      const recipeTypes = Array.from(env.repo.types.values())
+        .filter(t => t.label === 'recipe')
+      expect(recipeTypes).toHaveLength(1)
     } finally {
-      view.destroy()
+      viewB.destroy()
     }
   })
 })
