@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -7,12 +7,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Kbd } from '@/components/ui/kbd'
-import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { useEditModeYieldKeepalive } from '@/components/useEditModeYieldKeepalive.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import {
-  editorViewFromActiveContexts,
-  useActiveContextsState,
-} from '@/shortcuts/ActiveContexts.js'
+import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import { contextConfigsByTypeFrom } from '@/shortcuts/runAction.js'
 import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
@@ -135,7 +132,10 @@ const MatchPanel = ({matches}: {matches: readonly HelpBinding[]}) => {
       </details>
       {others.length > 0 && (
         <div className="mt-2 border-t pt-2 text-xs text-muted-foreground">
-          <div className="mb-1">Also bound to this chord (lower precedence):</div>
+          {/* Not "lower precedence": a phase-different twin (hold vs press) is a
+              different lifecycle moment, and the dispatcher can also fall through
+              to these when the first candidate declines at dispatch time. */}
+          <div className="mb-1">Also bound to this chord:</div>
           {others.map((binding, index) => (
             <div key={`${binding.action.id}:${index}`} className="flex items-center justify-between gap-2 py-0.5">
               <span className="truncate">
@@ -161,27 +161,11 @@ export function ShortcutHelpOverlay() {
   const runtime = useAppRuntime()
   const active = useActiveContextsState()
 
-  // Same edit-mode keepalive dance as the command palette: opening the
-  // overlay moves focus off the editor, which would exit edit mode and
-  // deactivate EDIT_MODE_CM — making the overlay list the wrong contexts
-  // for "what can I press right now". Hold edit mode without stealing
-  // focus back, and return focus to the editor on close if it's still the
-  // live edit context.
-  const activeRef = useRef(active)
-  useLayoutEffect(() => {
-    activeRef.current = active
-  }, [active])
-  useLayoutEffect(() => {
-    if (!open) return
-    const editorView = editorViewFromActiveContexts(activeRef.current)
-    if (!editorView) return
-    const release = acquireEditModeKeepalive('yield-focus')
-    return () => {
-      const liveView = editorViewFromActiveContexts(activeRef.current)
-      if (liveView === editorView && editorView.dom.isConnected) editorView.focus()
-      release()
-    }
-  }, [open])
+  // Same edit-mode keepalive dance as the command palette: without it,
+  // opening from edit mode would exit edit mode and deactivate
+  // EDIT_MODE_CM — making the overlay list the wrong contexts for "what
+  // can I press right now".
+  useEditModeYieldKeepalive(open)
 
   const model = useMemo(() => {
     if (!open) return null
@@ -210,7 +194,7 @@ export function ShortcutHelpOverlay() {
     <span>Holding <Kbd>{formatChord(state.partial)}</Kbd>…</span>
   ) : state.pressed.length > 0 ? (
     <span>
-      Pending sequence <Kbd>{state.pressed.map(formatChord).join(' ')}</Kbd> — showing continuations
+      Pending sequence <Kbd>{state.pressed.map(p => formatChord(p.display)).join(' ')}</Kbd> — showing continuations
     </span>
   ) : state.unmatched ? (
     <span>Nothing bound to <Kbd>{state.unmatched.map(formatChord).join(' ')}</Kbd></span>

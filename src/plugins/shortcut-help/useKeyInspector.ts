@@ -2,36 +2,59 @@
  * Key interception for the shortcut-help overlay.
  *
  * While the overlay is open a capture-phase window listener swallows every
- * keydown/keyup (`stopPropagation` before the coordinator's bubble-phase
+ * keydown (`stopPropagation` before the coordinator's bubble-phase
  * listeners, `preventDefault` against native fallbacks), so pressing a
  * chord INSPECTS it instead of running it — including chords the modal
  * shadowing would otherwise let through (global Cmd+K etc.). This is the
  * same "raw window listener for a keyboard-capture surface" pattern the
  * reconciler's hold-binding observer uses; it is not a new UI event bus.
  *
- * Pressed chords accumulate into a sequence buffer matched via
- * `matchPressedSequence`: exact completions surface as `matches`, live
- * prefixes narrow the overlay to `pendingMatches` (which-key), and a chord
- * bound to nothing flashes as `unmatched`. Escape clears any of that
- * first, then closes the overlay.
+ * Keyups are swallowed ONLY for keys pressed while the overlay was open.
+ * A release of a key held from BEFORE opening propagates on purpose: it
+ * terminates a gesture already in flight — a `phase: 'keyup'` commit (date
+ * scrub) or a hold observer's cancel-on-release — which would otherwise
+ * wedge. Armed-but-unfired hold timers can't be cancelled by a keyup we
+ * never see, so opening also cancels them explicitly via the reconciler's
+ * hold registry.
+ *
+ * Pressed events accumulate into a sequence buffer matched via
+ * `matchPressedSequence` (tinykeys' own matcher, for dispatch parity):
+ * exact completions surface as `matches`, live prefixes narrow the overlay
+ * to `pendingMatches` (which-key), and a chord bound to nothing flashes as
+ * `unmatched`. Escape clears any of that first, then closes. The buffer is
+ * held indefinitely (no 1s dispatch-style timeout) — the popup exists to
+ * let you read the continuations.
+ *
+ * One escape hatch from the swallow: the platform copy chord with a live
+ * text selection keeps its native default, so the handler-source panel is
+ * copyable.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   chordFromEvent,
   isMacPlatform,
   isModifierOnly,
+  modifierPreview,
 } from '@/plugins/keybindings-settings/keyCapture.ts'
+import { cancelArmedHolds } from '@/shortcuts/holdRegistry.js'
 import { withRecoveredLetterKey } from '@/shortcuts/utils.js'
 import { matchPressedSequence, type HelpBinding } from './model.ts'
 
+/** One captured press: the (recovered) event for matching, and its
+ *  canonical chord string for display. */
+export interface PressedKey {
+  readonly event: KeyboardEvent
+  readonly display: string
+}
+
 export interface InspectorState {
-  /** Canonical chords pressed so far that form a live sequence prefix. */
-  readonly pressed: readonly string[]
+  /** Presses so far that form a live sequence prefix. */
+  readonly pressed: readonly PressedKey[]
   /** Exact matches of the last completed lookup, best-first. */
   readonly matches: readonly HelpBinding[] | null
   /** Bindings the pressed buffer is a prefix of (narrows the list). */
   readonly pendingMatches: readonly HelpBinding[] | null
-  /** Chord buffer that matched nothing (feedback until the next press). */
+  /** Chords (display form) that matched nothing — feedback until the next press. */
   readonly unmatched: readonly string[] | null
   /** Modifier-only preview ('$mod+Shift') while modifiers are held. */
   readonly partial: string | null
@@ -49,22 +72,23 @@ export interface KeyInspector {
   readonly state: InspectorState
   /** Show the detail panel for a binding picked by pointer instead of keys. */
   readonly selectBinding: (binding: HelpBinding) => void
-  readonly reset: () => void
 }
 
-/** Mirrors `chordFromEvent`'s $mod/Control/Meta normalisation for the
- *  held-modifier preview (same shape KeyCaptureInput shows). */
-const modifierPreview = (event: KeyboardEvent): string | null => {
-  const onMac = isMacPlatform()
-  const primary = onMac ? event.metaKey : event.ctrlKey
-  const secondary = onMac ? event.ctrlKey : event.metaKey
-  const parts: string[] = []
-  if (primary) parts.push('$mod')
-  if (secondary) parts.push(onMac ? 'Control' : 'Meta')
-  if (event.altKey) parts.push('Alt')
-  if (event.shiftKey) parts.push('Shift')
-  return parts.length ? parts.join('+') : null
+/** The platform copy chord (⌘C / Ctrl+C), with no other modifiers. */
+const isCopyChord = (event: KeyboardEvent): boolean =>
+  event.key.toLowerCase() === 'c' &&
+  !event.shiftKey && !event.altKey &&
+  (isMacPlatform() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
+
+const hasTextSelection = (): boolean => {
+  const selection = window.getSelection()
+  return Boolean(selection && !selection.isCollapsed)
 }
+
+/** Stable physical id for pairing a keyup with its keydown. `code` is
+ *  layout- and modifier-independent; `key` is the fallback where `code`
+ *  is unavailable (some test environments). */
+const physicalKeyId = (event: KeyboardEvent): string => event.code || event.key
 
 export const useKeyInspector = (
   open: boolean,
@@ -82,23 +106,48 @@ export const useKeyInspector = (
     stateRef.current = state
   }, [state])
 
-  // Reset synchronously during render when the overlay opens/closes —
-  // setState in the effect body below would be the cascading-render
-  // anti-pattern `react-hooks/set-state-in-effect` forbids.
+  // Keys pressed while the overlay is open, so keyups can be swallowed
+  // selectively (see module header). Cleared on each open.
+  const downWhileOpenRef = useRef<Set<string>>(new Set())
+
+  // Reset synchronously during render when the overlay opens/closes or the
+  // binding set is rebuilt (active contexts / runtime changed) — pending
+  // matches hold model objects by identity, so a stale buffer would filter
+  // the new model to nothing. setState in the effect body below would be
+  // the cascading-render anti-pattern `react-hooks/set-state-in-effect`
+  // forbids.
   const [prevOpen, setPrevOpen] = useState(open)
-  if (prevOpen !== open) {
+  const [prevBindings, setPrevBindings] = useState(bindings)
+  if (prevOpen !== open || prevBindings !== bindings) {
     setPrevOpen(open)
+    setPrevBindings(bindings)
     setState(EMPTY)
   }
+
+  // Opening takes over the keyboard: cancel any armed-but-unfired hold
+  // timers (their cancelling keyup would be swallowed) and start a fresh
+  // pressed-while-open ledger.
+  useEffect(() => {
+    if (!open) return
+    downWhileOpenRef.current = new Set()
+    cancelArmedHolds()
+  }, [open])
 
   useEffect(() => {
     if (!open) return
 
     const onKeydown = (rawEvent: KeyboardEvent): void => {
-      // Swallow everything: inspection replaces dispatch while open.
-      rawEvent.preventDefault()
+      // Always keep the app's handlers out; inspection replaces dispatch.
       rawEvent.stopPropagation()
+      // Copy with a live selection keeps its native default (and is not
+      // treated as an inspected chord) so the handler source is copyable.
+      if (isCopyChord(rawEvent) && hasTextSelection()) return
+      rawEvent.preventDefault()
+      // OS auto-repeat: not a new press. Also keeps keys held from BEFORE
+      // opening out of the pressed-while-open ledger, so their release
+      // still propagates (see keyup below).
       if (rawEvent.repeat) return
+      downWhileOpenRef.current.add(physicalKeyId(rawEvent))
 
       const event = withRecoveredLetterKey(rawEvent)
       if (isModifierOnly(event)) {
@@ -115,12 +164,12 @@ export const useKeyInspector = (
         return
       }
 
-      const chord = chordFromEvent(event)
-      if (!chord) return
-      const nextPressed = [...stateRef.current.pressed, chord]
-      const {exact, pending} = matchPressedSequence(bindings, nextPressed)
+      const display = chordFromEvent(event)
+      if (!display) return
+      const nextPressed = [...stateRef.current.pressed, {event, display}]
+      const {exact, pending} = matchPressedSequence(bindings, nextPressed.map(p => p.event))
       if (exact.length === 0 && pending.length === 0) {
-        setState({...EMPTY, unmatched: nextPressed})
+        setState({...EMPTY, unmatched: nextPressed.map(p => p.display)})
         return
       }
       setState({
@@ -133,18 +182,31 @@ export const useKeyInspector = (
     }
 
     const onKeyup = (event: KeyboardEvent): void => {
-      // Keep keyup-phase bindings from firing off releases we captured.
-      event.stopPropagation()
+      // Swallow releases of keys pressed while open (keeps keyup-phase
+      // bindings from firing off inspected presses). A release of a key
+      // held from before opening propagates — it terminates a gesture
+      // already in flight (keyup-phase commit, hold cancel).
+      if (downWhileOpenRef.current.delete(physicalKeyId(event))) {
+        event.stopPropagation()
+      }
       if (isModifierOnly(event)) {
         setState(s => (s.partial ? {...s, partial: null} : s))
       }
     }
 
+    // Modifier releases are delivered elsewhere when the window loses
+    // focus mid-hold (Cmd+Tab); drop the preview so it can't stick.
+    const onBlur = (): void => {
+      setState(s => (s.partial ? {...s, partial: null} : s))
+    }
+
     window.addEventListener('keydown', onKeydown, {capture: true})
     window.addEventListener('keyup', onKeyup, {capture: true})
+    window.addEventListener('blur', onBlur)
     return () => {
       window.removeEventListener('keydown', onKeydown, {capture: true})
       window.removeEventListener('keyup', onKeyup, {capture: true})
+      window.removeEventListener('blur', onBlur)
     }
   }, [open, bindings, onClose])
 
@@ -152,7 +214,5 @@ export const useKeyInspector = (
     setState({...EMPTY, matches: [binding]})
   }, [])
 
-  const reset = useCallback(() => setState(EMPTY), [])
-
-  return {state, selectBinding, reset}
+  return {state, selectBinding}
 }

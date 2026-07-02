@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import type { ActiveContextsMap } from '@/shortcuts/ActiveContexts.js'
+import { registerArmedHold } from '@/shortcuts/holdRegistry.js'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -42,6 +43,15 @@ const press = (init: KeyboardEventInit): KeyboardEvent => {
   return event
 }
 
+const release = (init: KeyboardEventInit): KeyboardEvent => {
+  const event = new KeyboardEvent('keyup', {bubbles: true, cancelable: true, ...init})
+  window.dispatchEvent(event)
+  return event
+}
+
+const pressedDisplays = (state: {pressed: readonly {display: string}[]}) =>
+  state.pressed.map(p => p.display)
+
 describe('useKeyInspector', () => {
   it('swallows captured keydowns before window bubble listeners (the coordinator path)', () => {
     const bubbleListener = vi.fn()
@@ -50,17 +60,49 @@ describe('useKeyInspector', () => {
 
     let event!: KeyboardEvent
     act(() => {
-      event = press({key: 'k', metaKey: true})
+      event = press({key: 'k', ctrlKey: true})
     })
     expect(bubbleListener).not.toHaveBeenCalled()
     expect(event.defaultPrevented).toBe(true)
 
     unmount()
     act(() => {
-      press({key: 'k', metaKey: true})
+      press({key: 'k', ctrlKey: true})
     })
     expect(bubbleListener).toHaveBeenCalledTimes(1)
     window.removeEventListener('keydown', bubbleListener)
+  })
+
+  it('swallows keyups only for keys pressed while open', () => {
+    const bubbleKeyup = vi.fn()
+    window.addEventListener('keyup', bubbleKeyup)
+    renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
+
+    // A release of a key held from BEFORE opening (no keydown seen while
+    // open — only OS repeats, which don't count) must propagate, so
+    // keyup-phase commits / hold cancels still terminate.
+    act(() => {
+      press({key: 's', code: 'KeyS', repeat: true})
+      release({key: 's', code: 'KeyS'})
+    })
+    expect(bubbleKeyup).toHaveBeenCalledTimes(1)
+
+    // A key pressed while open has its release swallowed — keyup-phase
+    // bindings must not fire off inspected presses.
+    act(() => {
+      press({key: 'g', code: 'KeyG'})
+      release({key: 'g', code: 'KeyG'})
+    })
+    expect(bubbleKeyup).toHaveBeenCalledTimes(1)
+    window.removeEventListener('keyup', bubbleKeyup)
+  })
+
+  it('cancels armed hold timers when opening', () => {
+    const cancel = vi.fn()
+    const unregister = registerArmedHold(cancel)
+    renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
+    expect(cancel).toHaveBeenCalledTimes(1)
+    unregister()
   })
 
   it('resolves an exact chord to its matches', () => {
@@ -79,7 +121,7 @@ describe('useKeyInspector', () => {
     act(() => {
       press({key: 'g'})
     })
-    expect(result.current.state.pressed).toEqual(['g'])
+    expect(pressedDisplays(result.current.state)).toEqual(['g'])
     expect(result.current.state.pendingMatches?.map(b => b.action.id)).toEqual(['top'])
     expect(result.current.state.matches).toBeNull()
 
@@ -100,13 +142,34 @@ describe('useKeyInspector', () => {
     expect(result.current.state.pressed).toEqual([])
   })
 
+  it('resets inspector state when the binding set is rebuilt', () => {
+    const {result, rerender} = renderHook(
+      ({bindings}) => useKeyInspector(true, bindings, vi.fn()),
+      {initialProps: {bindings: model.bindings}},
+    )
+    act(() => {
+      press({key: 'g'})
+    })
+    expect(result.current.state.pendingMatches).not.toBeNull()
+
+    // A rebuilt model hands over NEW binding objects; stale pending matches
+    // would filter the new groups to nothing, so the state must reset.
+    const rebuilt = buildShortcutHelpModel(
+      [action('palette', '$mod+k'), action('top', 'g g')],
+      {active, contextConfigsByType: new Map([[globalConfig.type, globalConfig]])},
+    )
+    rerender({bindings: rebuilt.bindings})
+    expect(result.current.state.pressed).toEqual([])
+    expect(result.current.state.pendingMatches).toBeNull()
+  })
+
   it('Escape clears inspector state first, then closes', () => {
     const onClose = vi.fn()
     const {result} = renderHook(() => useKeyInspector(true, model.bindings, onClose))
     act(() => {
       press({key: 'g'})
     })
-    expect(result.current.state.pressed).toEqual(['g'])
+    expect(pressedDisplays(result.current.state)).toEqual(['g'])
 
     act(() => {
       press({key: 'Escape'})
