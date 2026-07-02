@@ -193,8 +193,7 @@ function ConsistencyAuditDialog({ cancel, workspaceId: pinnedWorkspaceId }) {
 	const repo = useRepo();
 	const navigate = useNavigate();
 	const [, setHash] = useHash();
-	const [runPinnedWorkspaceId, setRunPinnedWorkspaceId] = useState(null);
-	const targetWorkspaceId = pinnedWorkspaceId ?? runPinnedWorkspaceId ?? repo.activeWorkspaceId;
+	const targetWorkspaceId = pinnedWorkspaceId ?? repo.activeWorkspaceId;
 	const getSnapshot = () => getConsistencyAuditSnapshotFor(targetWorkspaceId);
 	const result = useSyncExternalStore(subscribeConsistencyAudit, getSnapshot, getSnapshot);
 	const [rerunning, setRerunning] = useState(false);
@@ -216,7 +215,6 @@ function ConsistencyAuditDialog({ cancel, workspaceId: pinnedWorkspaceId }) {
 			showError("Data integrity audit: no active workspace.");
 			return;
 		}
-		setRunPinnedWorkspaceId(ws_0);
 		setRerunning(true);
 		try {
 			await runConsistencyAuditNow(repo, ws_0);

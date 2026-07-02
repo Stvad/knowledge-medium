@@ -28,14 +28,15 @@ import { ConsistencyAuditDialog } from "./ConsistencyAuditDialog.js";
 * stays generic, surfacing this (and any) source only through the diagnostics
 * seam's `actionId`.
 */
-/** True when an open results dialog would ALREADY show `workspaceId` — either
-*  pinned to it, or unpinned (an unpinned dialog tracks the active workspace, so
-*  it shows whatever `workspaceId` the caller is about to view). Used to keep the
-*  cheap, repeatable "View last" / "Inspect" affordances from stacking a second
-*  copy of the SAME thing, while still letting a view of a DIFFERENT workspace
-*  through (e.g. a run-dialog pinned to ws-A is open, but Inspect wants ws-B). A
-*  deliberate "Run" is never gated on this — it always surfaces its own result. */
-var auditDialogAlreadyShows = (workspaceId) => getDialogQueue().some((entry) => entry.Component === ConsistencyAuditDialog && (entry.props.workspaceId ?? workspaceId) === workspaceId);
+/** True when an open results dialog is ALREADY pinned to `workspaceId`. Both
+*  actions pin the dialog at open (run → the scanned workspace, view → the active
+*  one), so this is an EXACT prop match — the queue entry honestly records the
+*  workspace it shows. It keeps the cheap, repeatable "View last" / "Inspect"
+*  affordances from stacking a second copy for the SAME workspace, while still
+*  letting a view of a DIFFERENT workspace through (a dialog pinned to ws-A must
+*  not suppress an Inspect for ws-B). A deliberate "Run" is never gated on this —
+*  it always surfaces its own result. */
+var auditDialogAlreadyShows = (workspaceId) => getDialogQueue().some((entry) => entry.Component === ConsistencyAuditDialog && entry.props.workspaceId === (workspaceId ?? void 0));
 var runDataIntegrityAuditAction = {
 	id: RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,
 	description: "Run data integrity audit",
@@ -68,8 +69,9 @@ var viewDataIntegrityAuditAction = {
 	context: ActionContextTypes.GLOBAL,
 	icon: ShieldCheck,
 	handler: ({ uiStateBlock }) => {
-		if (auditDialogAlreadyShows(uiStateBlock.repo.activeWorkspaceId)) return;
-		openDialog(ConsistencyAuditDialog);
+		const workspaceId = uiStateBlock.repo.activeWorkspaceId;
+		if (auditDialogAlreadyShows(workspaceId)) return;
+		openDialog(ConsistencyAuditDialog, { workspaceId: workspaceId ?? void 0 });
 	}
 };
 var runDataIntegrityAuditActionContribution = actionsFacet.of(runDataIntegrityAuditAction, { source: "data-integrity" });

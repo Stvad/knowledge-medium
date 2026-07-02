@@ -4,6 +4,8 @@ import { actionsFacet, appMountsFacet, blockRenderersFacet } from "../../extensi
 import { diagnosticsFacet } from "../diagnostics/facet.js";
 import { mobileKeyboardToolbarItemsFacet } from "../mobile-keyboard-toolbar/facet.js";
 import { ASSETS_TYPE_CONTRIBUTION, MEDIA_PROPERTY_SCHEMAS, MEDIA_TYPE_CONTRIBUTION } from "./mediaBlock.js";
+import { imageMediaViewer } from "./mediaViewers.js";
+import { mediaViewersFacet } from "./mediaViewersFacet.js";
 import { MediaBlockRenderer } from "./MediaBlockRenderer.js";
 import { MediaDownLaneReplicator } from "./MediaDownLaneReplicator.js";
 import { uploadLaneDiagnosticSource } from "./uploadLaneStatus.js";
@@ -34,6 +36,7 @@ var attachmentsPlugin = systemToggle({
 		id: "media",
 		renderer: MediaBlockRenderer
 	}, { source: "attachments" }),
+	mediaViewersFacet.of(imageMediaViewer, { source: "attachments" }),
 	mediaPasteDecisionContribution,
 	captureMediaContribution,
 	actionsFacet.of(insertImageAction, { source: "attachments" }),
