@@ -9,6 +9,13 @@ export interface TypeContribution {
   readonly label?: string
   /** Optional longer description for tooltips / section headers. */
   readonly description?: string
+  /** Infrastructure type — kernel structure (page, panel, …) or plugin
+   *  plumbing (prefs / ui-state containers, auto-managed state tags).
+   *  Hidden from the whole tagging UX: the `#` autocomplete never
+   *  offers it and tag chips never render it. It stays fully visible
+   *  and removable in the property panel. `pluginPrefsExtension` /
+   *  `pluginUIStateExtension` stamp this automatically. */
+  readonly structural?: boolean
   /** Hide this type from a block's trailing `#type` tag-chip display.
    *  Display-only: the type stays taggable (pickers, `#` autocomplete)
    *  and manageable in the property panel. User-defined types set this

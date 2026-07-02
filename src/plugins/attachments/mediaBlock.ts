@@ -58,6 +58,7 @@ export const MEDIA_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
 export const MEDIA_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
   id: MEDIA_TYPE,
   label: 'Media',
+  structural: true,
   description: 'An image or file attachment, stored content-addressed and embedded via !((id)).',
   // Lift the media:* fields so addType('media') materialises their defaults and
   // the property panel surfaces them.
@@ -127,5 +128,6 @@ export const ASSETS_ALIAS = 'Assets'
 export const ASSETS_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
   id: ASSETS_TYPE,
   label: 'Assets',
+  structural: true,
   description: 'The workspace-level container that holds content-addressed media attachment blocks.',
 })

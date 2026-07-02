@@ -137,6 +137,33 @@ describe('UserTypesService subscription', () => {
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
+  it('a malformed display-config value skips that row without freezing the registry', async () => {
+    env = await setup()
+    const good = await createBlockTypeBlock(env.repo, {label: 'Good'})
+    const bad = await createBlockTypeBlock(env.repo, {label: 'Bad'})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      // Simulate a bridge/import writing a string into the boolean prop
+      // (bypassing the typed setter, as raw writers can).
+      await env.repo.tx(async tx => {
+        const row = await tx.get(bad)
+        await tx.update(bad, {
+          properties: {...row!.properties, [blockTypeHideTagProp.name]: 'true'},
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      // The bad row degrades to skipped; the good one must still update.
+      await env.repo.tx(async tx => {
+        await tx.setProperty(good, blockTypeLabelProp, 'Good v2')
+      }, {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(env.repo.types.get(good)?.label).toBe('Good v2')
+        expect(env.repo.types.get(bad)).toBeUndefined()
+      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('omits hide-tag and color when unset (defaults stay off the contribution)', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {label: 'Plain'})

@@ -228,7 +228,22 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
     const nextByKey = new Map<string, string>()
     const nextByBlockId = new Map<string, Contribution>()
     for (const row of rows) {
-      const built = this.descriptor.project(row, this.ctx)
+      // Per-row isolation: project() decodes user-writable properties
+      // (codec throws on malformed values — e.g. a string written into
+      // a boolean prop via the agent bridge or an import). One bad
+      // definition block must degrade to "that row is skipped", not
+      // freeze the whole registry with an exception in the
+      // subscription callback.
+      let built: Contribution | null | undefined
+      try {
+        built = this.descriptor.project(row, this.ctx)
+      } catch (err) {
+        console.warn(
+          `[projector ${this.descriptor.id}] project() failed for block ${row.id}; skipping row`,
+          err,
+        )
+        continue
+      }
       if (built) {
         next.push(built)
         nextByKey.set(this.descriptor.keyOf(built), row.id)
