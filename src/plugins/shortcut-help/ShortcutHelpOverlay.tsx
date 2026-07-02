@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -11,6 +11,7 @@ import { useEditModeYieldKeepalive } from '@/components/useEditModeYieldKeepaliv
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { keybindingOverridesFacet } from '@/shortcuts/keybindingOverrides.js'
 import { contextConfigsByTypeFrom } from '@/shortcuts/runAction.js'
 import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
 import type { ActionConfig } from '@/shortcuts/types.js'
@@ -167,6 +168,17 @@ export function ShortcutHelpOverlay() {
   // can I press right now".
   useEditModeYieldKeepalive(open)
 
+  // Keybinding overrides are pushed in place via setRuntimeContributions
+  // (no runtime identity change), so subscribe to the facet's change
+  // listener — same reason HotkeyReconciler does — or the overlay would
+  // keep listing/matching stale chords after a mid-open remap.
+  const [overridesGeneration, setOverridesGeneration] = useState(0)
+  useEffect(() => {
+    return runtime.onFacetChange(keybindingOverridesFacet.id, () => {
+      setOverridesGeneration(g => g + 1)
+    })
+  }, [runtime])
+
   const model = useMemo(() => {
     if (!open) return null
     return buildShortcutHelpModel(
@@ -174,7 +186,9 @@ export function ShortcutHelpOverlay() {
       {active, contextConfigsByType: contextConfigsByTypeFrom(runtime)},
       actionSourcesFromRuntime(runtime),
     )
-  }, [open, runtime, active])
+    // overridesGeneration re-runs the memo on in-place override updates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, runtime, active, overridesGeneration])
 
   const bindings = model?.bindings ?? NO_BINDINGS
   const {state, selectBinding} = useKeyInspector(open, bindings, shortcutHelpToggle.close)

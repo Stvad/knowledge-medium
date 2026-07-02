@@ -136,18 +136,24 @@ export const useKeyInspector = (
   useEffect(() => {
     if (!open) return
 
+    const clearPartial = (): void => {
+      setState(s => (s.partial ? {...s, partial: null} : s))
+    }
+
     const onKeydown = (rawEvent: KeyboardEvent): void => {
       // Always keep the app's handlers out; inspection replaces dispatch.
       rawEvent.stopPropagation()
+      // Ledger every fresh press BEFORE any early-return below, so the
+      // matching keyup is swallowed no matter how the keydown was handled.
+      // OS auto-repeats are not new presses — and skipping them keeps keys
+      // held from BEFORE opening out of the ledger, so their release still
+      // propagates (see keyup below).
+      if (!rawEvent.repeat) downWhileOpenRef.current.add(physicalKeyId(rawEvent))
       // Copy with a live selection keeps its native default (and is not
       // treated as an inspected chord) so the handler source is copyable.
       if (isCopyChord(rawEvent) && hasTextSelection()) return
       rawEvent.preventDefault()
-      // OS auto-repeat: not a new press. Also keeps keys held from BEFORE
-      // opening out of the pressed-while-open ledger, so their release
-      // still propagates (see keyup below).
       if (rawEvent.repeat) return
-      downWhileOpenRef.current.add(physicalKeyId(rawEvent))
 
       const event = withRecoveredLetterKey(rawEvent)
       if (isModifierOnly(event)) {
@@ -167,13 +173,24 @@ export const useKeyInspector = (
       const display = chordFromEvent(event)
       if (!display) return
       const nextPressed = [...stateRef.current.pressed, {event, display}]
-      const {exact, pending} = matchPressedSequence(bindings, nextPressed.map(p => p.event))
+      // The dispatcher keeps PER-BINDING sequence state: a press that breaks
+      // one binding's pending sequence can still fire another binding fresh
+      // (press `g`, then `$mod+k` — the palette opens). Approximate that by
+      // retrying progressively shorter suffixes of the buffer (drop-oldest)
+      // before declaring the press unbound.
+      let attempt = nextPressed
+      let lookup = matchPressedSequence(bindings, attempt.map(p => p.event))
+      while (lookup.exact.length === 0 && lookup.pending.length === 0 && attempt.length > 1) {
+        attempt = attempt.slice(1)
+        lookup = matchPressedSequence(bindings, attempt.map(p => p.event))
+      }
+      const {exact, pending} = lookup
       if (exact.length === 0 && pending.length === 0) {
         setState({...EMPTY, unmatched: nextPressed.map(p => p.display)})
         return
       }
       setState({
-        pressed: pending.length > 0 ? nextPressed : [],
+        pressed: pending.length > 0 ? attempt : [],
         matches: exact.length > 0 ? exact : null,
         pendingMatches: pending.length > 0 ? pending : null,
         unmatched: null,
@@ -189,16 +206,12 @@ export const useKeyInspector = (
       if (downWhileOpenRef.current.delete(physicalKeyId(event))) {
         event.stopPropagation()
       }
-      if (isModifierOnly(event)) {
-        setState(s => (s.partial ? {...s, partial: null} : s))
-      }
+      if (isModifierOnly(event)) clearPartial()
     }
 
     // Modifier releases are delivered elsewhere when the window loses
     // focus mid-hold (Cmd+Tab); drop the preview so it can't stick.
-    const onBlur = (): void => {
-      setState(s => (s.partial ? {...s, partial: null} : s))
-    }
+    const onBlur = (): void => clearPartial()
 
     window.addEventListener('keydown', onKeydown, {capture: true})
     window.addEventListener('keyup', onKeyup, {capture: true})
