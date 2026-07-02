@@ -49,6 +49,21 @@ const parseProps = (value: unknown): Record<string, unknown> => {
   }
 }
 
+/** Property values arrive either as a real array or as a JSON-encoded
+ *  string depending on the write path; accept both, keep only strings. */
+const decodeStringList = (raw: unknown): string[] => {
+  const keepStrings = (values: unknown[]) =>
+    values.filter((entry): entry is string => typeof entry === 'string')
+  if (Array.isArray(raw)) return keepStrings(raw)
+  if (typeof raw !== 'string') return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? keepStrings(parsed) : []
+  } catch {
+    return []
+  }
+}
+
 export const createGraph = (client: BridgeClient) => {
   const sqlAll = async (sql: string, params: unknown[] = []): Promise<unknown[]> => {
     const result = await client.runCommand({type: 'sql', mode: 'all', sql, params})
@@ -71,12 +86,7 @@ export const createGraph = (client: BridgeClient) => {
   const targetGuardSet = async (alias: string): Promise<{id: string, aliases: string[]}> => {
     const id = await resolvePageId(alias)
     const block = await getBlock(id)
-    const raw = block?.properties?.['alias']
-    const decoded = Array.isArray(raw)
-      ? raw.filter((entry): entry is string => typeof entry === 'string')
-      : typeof raw === 'string'
-        ? (() => { try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.filter((entry: unknown): entry is string => typeof entry === 'string') : [] } catch { return [] } })()
-        : []
+    const decoded = decodeStringList(block?.properties?.['alias'])
     return {id, aliases: [...new Set([alias, ...decoded])]}
   }
 

@@ -60,13 +60,11 @@ export const createEngine = (deps: EngineDeps) => {
 
   const recordLaunch = () => launchTimes.push(now())
 
-  const launch = (keys: string[], work: () => Promise<void>) => {
+  const launch = (key: string, work: () => Promise<void>) => {
     const promise = work()
-      .catch(error => log(`[${keys[0]}] run crashed: ${errorMessage(error)}`))
-      .finally(() => {
-        for (const key of keys) running.delete(key)
-      })
-    for (const key of keys) running.set(key, promise)
+      .catch(error => log(`[${key}] run crashed: ${errorMessage(error)}`))
+      .finally(() => running.delete(key))
+    running.set(key, promise)
   }
 
   const runOptionsFor = (watcher: Watcher, prompt: string, resumeSessionId?: string): ClaudeRunOptions => ({
@@ -95,9 +93,9 @@ export const createEngine = (deps: EngineDeps) => {
   const processMention = async (watcher: BacklinksWatcher, sourceId: string, deepLink: string) => {
     const block = await graph.getBlock(sourceId)
     if (!block) return
-    const ancestorBlocks = await graph.ancestors(sourceId)
     const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs})
     if (!decision.pending) return
+    const ancestorBlocks = await graph.ancestors(sourceId)
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
@@ -197,7 +195,7 @@ export const createEngine = (deps: EngineDeps) => {
 
       if (preview.reason === 'attempts-exhausted') {
         // Terminal write (once) so the pre-filter skips it forever.
-        launch([source.id], () => parkExhausted(watcher, source.id))
+        launch(source.id, () => parkExhausted(watcher, source.id))
         continue
       }
       if (!preview.pending) continue
@@ -211,7 +209,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Conservative direction: a launch that then loses its claim race
       // still counts against the hour.
       recordLaunch()
-      launch([source.id], () => processMention(watcher, source.id, source.deepLink))
+      launch(source.id, () => processMention(watcher, source.id, source.deepLink))
     }
   }
 
@@ -261,7 +259,7 @@ export const createEngine = (deps: EngineDeps) => {
     await state.setCursor(watcher.name, diff.seenIds)
     recordLaunch()
     log(`[${watcher.name}] firing for ${batch.length} new row(s)${overflow > 0 ? ` (+${overflow} truncated)` : ''}`)
-    launch([key], async () => {
+    launch(key, async () => {
       const result = await runTask(runOptionsFor(watcher, prompt))
       if (result.ok) {
         log(`[${watcher.name}] done: ${truncate(result.resultText.trim(), 200)}`)

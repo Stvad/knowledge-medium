@@ -518,7 +518,6 @@ describe('query watcher lifecycle', () => {
 
     // Listener comes back: the same row fires now.
     const delivered: unknown[] = []
-    engine.running.clear()
     const engine2 = engineWith({
       graph,
       deliverToChannel: vi.fn(async event => { delivered.push(event) }),

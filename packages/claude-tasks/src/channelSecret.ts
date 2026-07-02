@@ -13,7 +13,7 @@ import { agentRuntimeConfigDir, isErrnoException } from '@knowledge-medium/agent
 
 export const CHANNEL_SECRET_HEADER = 'x-km-channel-secret'
 
-export const channelSecretPath = () =>
+const channelSecretPath = () =>
   path.join(agentRuntimeConfigDir(), 'claude-tasks-channel.secret')
 
 export const loadOrCreateChannelSecret = async (): Promise<string> => {

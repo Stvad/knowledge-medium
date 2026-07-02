@@ -33,7 +33,7 @@ import { z } from 'zod'
 import { createBridgeClient } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import { createGraph } from './graph.js'
-import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, findBlockedRef, isReadOnlySql, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
+import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, findBlockedRef, isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
 const client = createBridgeClient({
@@ -110,38 +110,38 @@ const server = new McpServer(
     : undefined,
 )
 
-server.registerTool('get_block', {
+server.registerTool('get_block' satisfies KmMcpToolName, {
   description: 'Fetch a single block (content, properties, parentId) by id. For its children, use the subtree tool.',
   inputSchema: {id: z.string()},
 }, async ({id}) => json(await graph.getBlock(id)))
 
-server.registerTool('subtree', {
+server.registerTool('subtree' satisfies KmMcpToolName, {
   description: 'Fetch the subtree under a block as a depth-indented outline (one line per block: `- [<id>] <content>`).',
   inputSchema: {rootId: z.string()},
 }, async ({rootId}) =>
   text(renderSubtreeOutline(await graph.getSubtree(rootId) as SubtreeOutlineRow[])))
 
-server.registerTool('backlinks', {
+server.registerTool('backlinks' satisfies KmMcpToolName, {
   description: 'List blocks that reference the given block/page (hydrated: id, content, deepLink).',
   inputSchema: {id: z.string()},
 }, async ({id}) => json(await graph.backlinkSources(id)))
 
-server.registerTool('page', {
+server.registerTool('page' satisfies KmMcpToolName, {
   description: 'Resolve a page by alias/title. Returns the exact match (if any) plus substring candidates.',
   inputSchema: {name: z.string()},
 }, async ({name}) => json(await client.runCommand({type: 'page', name})))
 
-server.registerTool('daily_note', {
+server.registerTool('daily_note' satisfies KmMcpToolName, {
   description: 'Resolve a date expression (today | yesterday | ISO date | natural language) to its daily-note block.',
   inputSchema: {date: z.string()},
 }, async ({date}) => json(await client.runCommand({type: 'daily-note', date})))
 
-server.registerTool('search', {
+server.registerTool('search' satisfies KmMcpToolName, {
   description: 'Full-text search over block content.',
   inputSchema: {query: z.string(), limit: z.number().int().positive().optional()},
 }, async ({query, limit}) => json(await client.runCommand({type: 'search', query, limit})))
 
-server.registerTool('sql_query', {
+server.registerTool('sql_query' satisfies KmMcpToolName, {
   description: 'Run a read-only SQL query (single SELECT/WITH statement) against the client database. Key tables: blocks(id, content, properties_json, parent_id, workspace_id).',
   inputSchema: {sql: z.string(), params: z.array(z.unknown()).optional()},
 }, async ({sql, params}) => {
@@ -151,7 +151,7 @@ server.registerTool('sql_query', {
   return json(await graph.sqlAll(sql, params ?? []))
 })
 
-server.registerTool('create_block', {
+server.registerTool('create_block' satisfies KmMcpToolName, {
   description: 'Create a new block under a parent. Content is markdown; [[Page]] wikilinks create references.',
   inputSchema: {
     parentId: z.string(),
@@ -163,7 +163,7 @@ server.registerTool('create_block', {
   return json(await client.runCommand({type: 'create-block', parentId, content, properties}))
 })
 
-server.registerTool('update_block', {
+server.registerTool('update_block' satisfies KmMcpToolName, {
   description: 'Update a block\'s content and/or merge properties.',
   inputSchema: {
     id: z.string(),

@@ -1,7 +1,8 @@
 /**
  * Names shared between the MCP server (registration) and the daemon
  * (--allowedTools allowlist + generated --mcp-config). One list so the
- * allowlist can never drift from what the server actually exposes.
+ * allowlist can never drift from what the server actually exposes —
+ * mcp.ts pins every registration with `satisfies KmMcpToolName`.
  */
 export const MCP_SERVER_NAME = 'km'
 

@@ -55,7 +55,7 @@ const watcherBase = {
   delivery: z.enum(['spawn', 'channel']).default('spawn'),
 }
 
-export const backlinksWatcherSchema = z.strictObject({
+const backlinksWatcherSchema = z.strictObject({
   ...watcherBase,
   kind: z.literal('backlinks'),
   /** Page alias whose NEW backlinks become tasks (e.g. "claude"). */
@@ -67,7 +67,7 @@ export const backlinksWatcherSchema = z.strictObject({
   quietMs: z.number().int().nonnegative().default(15_000),
 })
 
-export const queryWatcherSchema = z.strictObject({
+const queryWatcherSchema = z.strictObject({
   ...watcherBase,
   kind: z.literal('query'),
   /** Read-only SQL run through the bridge; rows must expose an `id`

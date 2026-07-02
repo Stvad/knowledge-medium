@@ -30,7 +30,7 @@ export interface PendingDecision {
 const prop = (block: BlockView | undefined, key: string): unknown =>
   block?.properties?.[key]
 
-export const taskStatus = (block: BlockView | undefined): TaskStatus | null => {
+const taskStatus = (block: BlockView | undefined): TaskStatus | null => {
   const value = prop(block, PROPS.status)
   return value === 'queued' || value === 'running' || value === 'done' || value === 'error'
     ? value
@@ -107,7 +107,7 @@ export interface QueryRow {
   [key: string]: unknown
 }
 
-export const rowId = (row: unknown): string | null => {
+const rowId = (row: unknown): string | null => {
   if (!row || typeof row !== 'object') return null
   const id = (row as {id?: unknown}).id
   return typeof id === 'string' && id ? id : null

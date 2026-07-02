@@ -14,12 +14,11 @@
  * A missing bridge/tab does NOT exit at all — the daemon waits and
  * retries, so it survives reboots and app restarts.
  */
-import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createBridgeClient, errorMessage, sleep } from '@knowledge-medium/agent-cli/client'
-import { agentRuntimeConfigDir, bridgeLogPath, isErrnoException } from '@knowledge-medium/agent-cli/config'
+import { createBridgeClient, errorMessage, sleep, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
+import { agentRuntimeConfigDir, isErrnoException } from '@knowledge-medium/agent-cli/config'
 import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
 import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
@@ -78,28 +77,6 @@ const releasePidfile = async (): Promise<void> => {
     if (existing === process.pid) await fs.unlink(pidfilePath())
   } catch {
     // best-effort
-  }
-}
-
-// ----- bridge availability ---------------------------------------------
-// Unlike the CLI, the daemon runs unattended (launchd, post-reboot), so
-// it must be able to start the bridge itself — otherwise a reboot
-// leaves it crash-looping until the user happens to run `yarn agent`.
-
-const startBridge = async (): Promise<void> => {
-  const serverScript = fileURLToPath(import.meta.resolve('@knowledge-medium/agent-cli/server'))
-  const logPath = bridgeLogPath()
-  await fs.mkdir(path.dirname(logPath), {recursive: true})
-  const logFile = await fs.open(logPath, 'a')
-  try {
-    const child = spawn(process.execPath, [serverScript], {
-      detached: true,
-      env: process.env,
-      stdio: ['ignore', logFile.fd, logFile.fd],
-    })
-    child.unref()
-  } finally {
-    await logFile.close()
   }
 }
 
@@ -179,7 +156,10 @@ const main = async () => {
       if (!bridgeStartAttempted) {
         bridgeStartAttempted = true
         log(`bridge not reachable (${errorMessage(error)}) — starting it`)
-        await startBridge().catch(startError => log(`bridge start failed: ${errorMessage(startError)}`))
+        // The daemon runs unattended (launchd, post-reboot), so it must
+        // be able to start the bridge itself — otherwise a reboot leaves
+        // it waiting until the user happens to run `yarn agent`.
+        await startBridgeInBackground().catch(startError => log(`bridge start failed: ${errorMessage(startError)}`))
       } else {
         log(`waiting for bridge/pairing (${errorMessage(error)}) — retrying in 30s; if never paired, run: yarn agent --profile ${config.profile} connect`)
       }

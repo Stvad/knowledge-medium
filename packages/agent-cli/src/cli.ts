@@ -2,7 +2,6 @@
 import {readFileSync} from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import { cac } from 'cac'
@@ -27,6 +26,7 @@ import {
   createBridgeClient,
   defaultProfileName,
   errorMessage,
+  startBridgeInBackground,
   listStoredProfiles as listProfilesInStore,
   loadStoredToken as loadStoredTokenFor,
   normalizeProfileName,
@@ -42,7 +42,6 @@ import {
 import {renderSubtreeOutline} from './subtreeOutline.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const serverScript = path.join(here, 'server.js')
 const kernelTypesDir = path.join(here, 'kernel-types')
 
 // Read our own version from package.json at startup so `--version`
@@ -272,26 +271,6 @@ const waitForBridgeReady = async () => {
   )
 }
 
-const startBridgeInBackground = async () => {
-  const logPath = bridgeLogPath()
-  await resolveBridgeSecret()
-  await fs.mkdir(path.dirname(logPath), {recursive: true})
-  const logFile = await fs.open(logPath, 'a')
-
-  try {
-    const child = spawn(process.execPath, [serverScript], {
-      detached: true,
-      env: process.env,
-      stdio: ['ignore', logFile.fd, logFile.fd],
-    })
-    child.unref()
-  } finally {
-    await logFile.close()
-  }
-
-  process.stderr.write(`Started agent runtime bridge in the background at ${bridgeUrl}. Logs: ${logPath}\n`)
-}
-
 const ensureBridgeRunning = async () => {
   try {
     await fetchBridgeHealth()
@@ -303,6 +282,7 @@ const ensureBridgeRunning = async () => {
   }
 
   await startBridgeInBackground()
+  process.stderr.write(`Started agent runtime bridge in the background at ${bridgeUrl}. Logs: ${bridgeLogPath()}\n`)
   await waitForBridgeReady()
 }
 

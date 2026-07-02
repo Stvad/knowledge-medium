@@ -7,9 +7,13 @@
  * cli.ts remains the interactive surface (pairing, printing, bridge
  * auto-start); everything here is side-effect-free library code.
  */
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
+  bridgeLogPath,
+  bridgeSecret as resolveBridgeSecret,
   bridgeUrl as resolveBridgeUrl,
   isErrnoException,
   tokenStorePath as resolveTokenStorePath,
@@ -198,6 +202,30 @@ export const isTransientTokenError = (error: unknown): boolean => {
 const authedRetryTotalMs = 15_000
 const authedRetryStartDelayMs = 200
 const authedRetryMaxDelayMs = 1_000
+
+/** Spawn the bridge server detached, logging to the shared bridge log.
+ *  Pre-creates the bridge secret so the server and later pairing agree
+ *  on it. Shared by the CLI's ensureBridgeRunning and the claude-tasks
+ *  daemon's unattended preflight (which must survive reboots without a
+ *  human running `yarn agent`). */
+export const startBridgeInBackground = async (): Promise<void> => {
+  const serverScript = path.join(path.dirname(fileURLToPath(import.meta.url)), 'server.js')
+  const logPath = bridgeLogPath()
+  await resolveBridgeSecret()
+  await fs.mkdir(path.dirname(logPath), {recursive: true})
+  const logFile = await fs.open(logPath, 'a')
+
+  try {
+    const child = spawn(process.execPath, [serverScript], {
+      detached: true,
+      env: process.env,
+      stdio: ['ignore', logFile.fd, logFile.fd],
+    })
+    child.unref()
+  } finally {
+    await logFile.close()
+  }
+}
 
 // ----- Bridge client -------------------------------------------------
 
