@@ -1,0 +1,2 @@
+var e=()=>new Map,t=(e,t,n,r)=>{let i=e.get(t);i?e.set(t,{before:i.before,after:r}):e.set(t,{before:n,after:r})},n=(e,t)=>{let n=e.get(t);return n===void 0?void 0:n.after};export{e as newSnapshotsMap,n as peekSnapshot,t as recordWrite};
+//# sourceMappingURL=txSnapshots.js.map

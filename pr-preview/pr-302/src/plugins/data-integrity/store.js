@@ -1,0 +1,2 @@
+import{CallbackSet as e}from"../../utils/callbackSet.js";var t=`run_data_integrity_audit`,n=null,r=new e(`data-integrity-audit`),i=e=>{n=e,r.notify()},a=()=>n,o=e=>r.add(e),s=()=>{n=null,r.clear()};export{t as RUN_DATA_INTEGRITY_AUDIT_ACTION_ID,a as getConsistencyAuditSnapshot,i as publishConsistencyAudit,s as resetConsistencyAuditStore,o as subscribeConsistencyAudit};
+//# sourceMappingURL=store.js.map

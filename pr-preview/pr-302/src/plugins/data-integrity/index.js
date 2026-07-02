@@ -1,0 +1,2 @@
+import{systemToggle as e}from"../../facets/togglable.js";import{diagnosticsFacet as t}from"../diagnostics/facet.js";import{consistencyAuditEffectContribution as n}from"./schedule.js";import{createDataIntegrityDiagnosticSource as r}from"./diagnosticsSource.js";var i=({repo:i})=>e({id:`system:data-integrity`,name:`Data integrity`,description:`Runs the built-in consistency audit and surfaces its health in the system-status indicator.`}).of([n,t.of(r(i),{source:`data-integrity`})]);export{i as dataIntegrityPlugin};
+//# sourceMappingURL=index.js.map
