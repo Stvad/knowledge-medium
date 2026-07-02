@@ -3,40 +3,10 @@ import {
   canonicalizeChord,
   matchesMouseEvent,
   normalizeChord,
-  parseChord,
   pointerBindingDescriptor,
   type MouseChordDescriptor,
   type MouseEventLike,
 } from './canonicalizeChord.ts'
-
-describe('parseChord', () => {
-  it('splits a sequence chord into one descriptor per press', () => {
-    // The historical gap: 'g g' / 'd d' were treated as a single atomic
-    // key because the splitter only split on '+'. They must become an
-    // ordered list of presses.
-    expect(parseChord('g g')).toEqual([
-      {kind: 'key', key: 'g', mods: [], phase: 'keydown'},
-      {kind: 'key', key: 'g', mods: [], phase: 'keydown'},
-    ])
-  })
-
-  it('keeps a modifier press whole within a sequence', () => {
-    expect(parseChord('Cmd+K Cmd+S')).toEqual([
-      {kind: 'key', key: 'K', mods: ['$mod'], phase: 'keydown'},
-      {kind: 'key', key: 'S', mods: ['$mod'], phase: 'keydown'},
-    ])
-  })
-
-  it('alias-folds and orders modifiers on a plain chord', () => {
-    expect(parseChord('Shift+Cmd+k')).toEqual([
-      {kind: 'key', key: 'k', mods: ['$mod', 'Shift'], phase: 'keydown'},
-    ])
-  })
-
-  it('stamps the requested phase onto every press', () => {
-    expect(parseChord('s', 'keyup').map(d => d.phase)).toEqual(['keyup'])
-  })
-})
 
 describe('canonicalizeChord', () => {
   it('canonicalises each press of a sequence instead of mangling on "+"', () => {

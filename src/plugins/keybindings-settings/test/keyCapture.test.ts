@@ -132,6 +132,19 @@ describe('formatChord', () => {
     expect(formatChord('Shift+Digit3')).toBe('⇧3')
   })
 
+  it('maps punctuation code names to their glyphs', () => {
+    stubPlatform('MacIntel')
+    expect(formatChord('Control+Shift+Backquote')).toBe('⌃⇧`')
+    expect(formatChord('Control+Shift+BracketLeft')).toBe('⌃⇧[')
+  })
+
+  it('spells Control out off-Mac, where ⌃ reads as noise', () => {
+    stubPlatform('Win32')
+    expect(formatChord('Control+d')).toBe('CtrlD')
+    stubPlatform('MacIntel')
+    expect(formatChord('Control+d')).toBe('⌃D')
+  })
+
   it('preserves multi-char keys with title casing', () => {
     expect(formatChord('$mod+Enter')).toBe('⌘⏎')
     expect(formatChord('f5')).toBe('F5')

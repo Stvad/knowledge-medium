@@ -124,7 +124,7 @@ export const compareContexts = (
  * Order the actions a trigger could fire, best-first.
  *
  * For `{kind:'action'}` the input is the full effective-action list and
- * `resolve` filters to the matching id. For a keyboard `ChordDescriptor`
+ * `resolve` filters to the matching id. For a keyboard chord
  * the coordinator passes the candidates that already completed a match, so
  * the only filtering left is "is this context still active + installable".
  * Either way the result is ordered by `compareContexts`; the caller takes

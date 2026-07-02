@@ -4,17 +4,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { shortcutHelpAction } from '../index.ts'
 import { shortcutHelpToggle } from '../toggleStore.ts'
 
-/** Dispatch a keydown on `target` and hand back the event as a listener
- *  saw it (so `event.target` is populated, as it is for the coordinator). */
+/** Dispatch a keydown on `target` and hand the event back — `event.target`
+ *  stays populated after dispatch, as the coordinator's handlers see it. */
 const keydownOn = (target: EventTarget, init: KeyboardEventInit): KeyboardEvent => {
-  let seen: KeyboardEvent | null = null
-  const capture = (event: Event) => {
-    seen = event as KeyboardEvent
-  }
-  target.addEventListener('keydown', capture)
-  target.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true, ...init}))
-  target.removeEventListener('keydown', capture)
-  return seen!
+  const event = new KeyboardEvent('keydown', {bubbles: true, ...init})
+  target.dispatchEvent(event)
+  return event
 }
 
 describe('shortcutHelpAction', () => {

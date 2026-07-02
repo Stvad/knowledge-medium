@@ -91,11 +91,12 @@ const letterFromKeyCode = (keyCode: number | undefined): string | null => {
   return String.fromCharCode(keyCode).toLowerCase()
 }
 
-/** Build a tinykeys chord string from a KeyboardEvent. Returns null
- *  when the event is modifier-only (no actionable chord yet). */
-export const chordFromEvent = (event: ChordEventShape): string | null => {
-  if (isModifierOnly(event)) return null
-
+/** Held modifiers as ordered canonical tokens — the platform-swapped
+ *  primary/secondary rules shared by `chordFromEvent` and
+ *  `modifierPreview`, so the two can't drift. */
+const modifierParts = (
+  event: Pick<ChordEventShape, 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,
+): string[] => {
   const onMac = isMacPlatform()
   const parts: string[] = []
   const isPrimaryMod = onMac ? event.metaKey : event.ctrlKey
@@ -104,6 +105,15 @@ export const chordFromEvent = (event: ChordEventShape): string | null => {
   if (isSecondaryMod) parts.push(onMac ? 'Control' : 'Meta')
   if (event.altKey) parts.push('Alt')
   if (event.shiftKey) parts.push('Shift')
+  return parts
+}
+
+/** Build a tinykeys chord string from a KeyboardEvent. Returns null
+ *  when the event is modifier-only (no actionable chord yet). */
+export const chordFromEvent = (event: ChordEventShape): string | null => {
+  if (isModifierOnly(event)) return null
+
+  const parts = modifierParts(event)
 
   // For digit + punctuation under Shift, prefer the physical-key code
   // — otherwise shift+3 captures as "Shift+#" on a US keyboard and
@@ -132,23 +142,15 @@ export const chordFromEvent = (event: ChordEventShape): string | null => {
   return parts.join('+')
 }
 
-/** Preview chord for held modifiers only ('$mod+Shift'), mirroring
- *  `chordFromEvent`'s $mod/Control/Meta normalisation so the preview
- *  glyphs match what a completed chord will capture. Null when no
- *  modifier is held. Shared by every surface that shows a "⌘…" style
- *  hint (KeyCaptureInput, shortcut-help's inspector) so the non-obvious
- *  platform-swapped primary/secondary rules live in one place. */
+/** Preview chord for held modifiers only ('$mod+Shift'), built from the
+ *  same `modifierParts` core as `chordFromEvent` so the preview glyphs
+ *  match what a completed chord will capture. Null when no modifier is
+ *  held. Shared by every surface that shows a "⌘…" style hint
+ *  (KeyCaptureInput, shortcut-help's inspector). */
 export const modifierPreview = (
   event: Pick<ChordEventShape, 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,
 ): string | null => {
-  const onMac = isMacPlatform()
-  const primary = onMac ? event.metaKey : event.ctrlKey
-  const secondary = onMac ? event.ctrlKey : event.metaKey
-  const parts: string[] = []
-  if (primary) parts.push('$mod')
-  if (secondary) parts.push(onMac ? 'Control' : 'Meta')
-  if (event.altKey) parts.push('Alt')
-  if (event.shiftKey) parts.push('Shift')
+  const parts = modifierParts(event)
   return parts.length ? parts.join('+') : null
 }
 
@@ -163,8 +165,6 @@ const platformModGlyph = (): string =>
 const GLYPH_BY_TOKEN: Record<string, string> = {
   cmd: '⌘',
   meta: '⌘',
-  ctrl: '⌃',
-  control: '⌃',
   alt: '⌥',
   option: '⌥',
   shift: '⇧',
@@ -185,14 +185,32 @@ const GLYPH_BY_TOKEN: Record<string, string> = {
   tab: '⇥',
 }
 
+/** `KeyboardEvent.code` names for punctuation keys, mapped to their US
+ *  glyph for display — bindings authored code-form ('Control+Shift+
+ *  Backquote') would otherwise render the raw code word. */
+const CODE_KEY_GLYPHS: Record<string, string> = {
+  Backquote: '`',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  Comma: ',',
+  Period: '.',
+  Slash: '/',
+  Minus: '-',
+  Equal: '=',
+}
+
 /** Strip tinykeys' `KeyX`/`DigitN` code prefixes for display, so
- *  `KeyY` shows as `Y` and `Digit3` as `3`. */
+ *  `KeyY` shows as `Y` and `Digit3` as `3`; punctuation code names map
+ *  to their glyph. */
 const stripCodePrefix = (part: string): string => {
   const letter = part.match(/^Key([A-Z])$/)
   if (letter) return letter[1]!
   const digit = part.match(/^Digit(\d)$/)
   if (digit) return digit[1]!
-  return part
+  return CODE_KEY_GLYPHS[part] ?? part
 }
 
 /** Render a chord string ('$mod+Shift+k') as display glyphs ('⌘⇧K' on
@@ -209,6 +227,11 @@ export const formatChord = (chord: string): string => {
       .map(part => {
         if (part === '$mod') return platformModGlyph()
         const lower = part.toLowerCase()
+        // Literal Control matches ctrlKey on EVERY platform, but the ⌃
+        // glyph only reads as "Ctrl" to Mac users — elsewhere spell it
+        // out, matching how `$mod` renders (a list would otherwise show
+        // the same physical key two ways: 'CtrlK' and '⌃D').
+        if (lower === 'ctrl' || lower === 'control') return isMacPlatform() ? '⌃' : 'Ctrl'
         const glyph = GLYPH_BY_TOKEN[lower]
         if (glyph) return glyph
         const stripped = stripCodePrefix(part)
