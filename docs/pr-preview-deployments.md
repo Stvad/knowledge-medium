@@ -29,27 +29,27 @@ that path (`src/registerServiceWorker.ts`), and `inject-sw-build-id.mjs`
 base-prefixes precache URLs. So each preview's assets and its *own* service
 worker are scoped to its subpath.
 
-> **⚠️ Previews are NOT isolated from production at the browser-storage layer.**
-> They share production's origin (`stvad.github.io`), and several client stores
-> are keyed per-*origin*, not per-*deploy*, so preview and production state
-> overlap in one browser profile:
->
-> - **Service-worker caches** are namespaced only by build id (`public/sw.js`),
->   and Cache Storage is per-origin: a preview SW's `activate` GC can evict
->   production's cached generation (and vice-versa). And production's SW — whose
->   scope `/knowledge-medium/` *encloses* every preview path — can cache a
->   preview's shell/assets under production's own keys, so an **offline**
->   production load could boot an unmerged preview build against live data.
-> - **The local SQLite database** (`kmp-v6-<user>.db`, `src/data/repoProvider.ts`)
->   is per-origin too: opening a preview *signed in* uses your **real** local DB.
->   A preview whose PR changes the client DB schema, runs a migration, or bumps
->   PowerSync migrates that shared local store — which production (older code)
->   then reads. The app is offline-first, so the local store is authoritative.
->
-> Until this is hardened (namespace per-deploy — see *Follow-up* below), **open
-> previews in a separate browser profile or a private window from your
-> production PWA, and don't sign in to a preview that carries a client-DB
-> migration.**
+Previews share production's **origin** (`stvad.github.io`), so per-origin client
+state (Cache Storage, OPFS, IndexedDB, localStorage) is a shared namespace with
+production. The two riskiest overlaps are handled explicitly (namespaced per
+deploy):
+
+- **Service-worker caches / offline shell** (`public/sw.js`) — production's SW no
+  longer intercepts or caches `/pr-preview/…` requests (so an offline production
+  load can't boot a preview build), and each SW's `activate` GC deletes only its
+  own deploy's generations, so a preview SW no longer evicts production's caches
+  (and vice-versa). Verified in a real browser (both directions).
+- **Local SQLite DB** (`kmp-v6-<user>.db`, `src/data/repoProvider.ts`) — preview
+  builds suffix the filename with `-pr-<n>`, so a preview gets its **own** local
+  DB and a preview PR's client migration can't touch production's real store.
+  Production's filename is unchanged.
+
+> **⚠️ Still shared with production:** the **remote backend** (same Supabase /
+> PowerSync — a preview reads/writes real synced data) and a few minor
+> per-origin `localStorage` keys (e.g. the e2ee mode pin, last-workspace). So a
+> preview is a preview of the *frontend* against live data — for anything that
+> writes, use a scratch page (and, if you want belt-and-braces, a separate
+> browser profile).
 
 Coexistence on the shared branch is kept safe by two settings on the production
 deploy: `clean-exclude: pr-preview` (production never wipes live preview
@@ -111,10 +111,11 @@ permissions → **Read and write permissions**.
 - **Forks are skipped by design.** Fork PRs get neither the `VITE_*` secrets nor
   write access to `gh-pages`, so the preview job is gated to same-repo PRs. All
   PRs to this repo come from same-repo branches.
-- **Shared backend + shared local state.** Previews use the same Supabase /
-  PowerSync as production (same `VITE_*`) *and* the same per-origin browser state
-  (see the ⚠️ box above). A preview is a preview of the *frontend*; use a scratch
-  page, and a separate browser profile, for anything that writes.
+- **Shared backend.** Previews use the same Supabase / PowerSync as production
+  (same `VITE_*`); the SW caches and local DB are isolated per deploy, but the
+  remote data and a few minor `localStorage` keys are shared (see the ⚠️ box). A
+  preview is a preview of the *frontend* against live data — use a scratch page
+  for anything that writes.
 - **Merge-time branch race (self-limiting).** Merging a PR fires the production
   deploy (push→`master`) and the preview removal (`closed`) concurrently — they
   use separate concurrency groups and both push to `gh-pages`. `force: false`
@@ -128,20 +129,24 @@ permissions → **Read and write permissions**.
   otherwise drop the `_virtual/` chunks `preserveModules` emits). It must sit at
   the branch **root**; the copy in each preview subtree is inert.
 
-## Follow-up (not in this change)
+## Same-origin isolation (implemented)
 
-Same-origin previews contaminate production's client state (the ⚠️ box). The fix
-is to namespace the per-origin stores by deploy so previews are sandboxed:
+Because previews share production's origin, per-origin client state is
+namespaced by deploy so a preview can't corrupt production:
 
-- **`public/sw.js`** — (a) make production's SW ignore `/pr-preview/…` paths so it
-  can't cache preview content under production's keys; (b) scope the `activate`
-  cache-GC to this deploy's own generations (delete only this scope's expired
-  ledger ids) instead of blanket-deleting every `km-*` cache on the origin.
-- **`src/data/repoProvider.ts`** — suffix `dbFilenameForUser` with a base-derived
-  token **only** for preview builds (`BASE_URL` contains `/pr-preview/`), leaving
-  production's filename byte-for-byte unchanged, so previews get an isolated local
-  DB. (Mind the 64-char wa-sqlite pathname cap.)
+- **`public/sw.js`** — (a) production's SW ignores `/pr-preview/…` requests
+  (`isForeignPreviewRequest`), so it can't cache preview content under
+  production's keys; (b) each SW's `activate` GC deletes only its own deploy's
+  expired ledger generations rather than blanket-deleting every `km-*` cache on
+  the origin, so a preview SW can't evict production's caches. Verified in a real
+  browser (both directions).
+- **`src/data/repoProvider.ts`** — `dbFilenameForUser` suffixes the local DB
+  filename with `-pr-<n>` for preview builds only (`BASE_URL` under
+  `/pr-preview/`); production's filename is byte-for-byte unchanged. The suffix
+  is carved out of the user-segment budget to stay under wa-sqlite's 64-char
+  pathname cap (covered by `repoProvider.test.ts`).
 
-These touch load-bearing offline / data-layer code that isn't exercised by
-`yarn run check`, so they want real-browser verification and belong in their own
-reviewed change rather than this deploy-plumbing PR.
+**Residual (not namespaced):** a few per-origin `localStorage` keys (the e2ee
+mode pin `kmp-e2ee-mode:*`, last-workspace) remain shared. They're per-user and
+low-risk for a same-user preview; namespacing them by deploy is a possible
+future hardening if fuller isolation is wanted.
