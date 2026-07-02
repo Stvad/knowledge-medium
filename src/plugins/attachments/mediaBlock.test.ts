@@ -4,6 +4,7 @@ import {
   MEDIA_TYPE,
   MEDIA_TYPE_CONTRIBUTION,
   isImageMime,
+  isPdfMime,
   mediaHashProp,
   resolveCaptureMime,
   sniffImageMime,
@@ -30,6 +31,17 @@ describe('isImageMime', () => {
   it('is case-insensitive (MIME types are, even if File.type is lowercased)', () => {
     expect(isImageMime('IMAGE/PNG')).toBe(true)
     expect(isImageMime('Image/Gif')).toBe(true)
+  })
+})
+
+describe('isPdfMime', () => {
+  it('is true only for application/pdf, case-insensitively', () => {
+    expect(isPdfMime('application/pdf')).toBe(true)
+    expect(isPdfMime('APPLICATION/PDF')).toBe(true)
+    expect(isPdfMime('image/png')).toBe(false)
+    expect(isPdfMime('application/x-pdf')).toBe(false) // not the registered type
+    expect(isPdfMime('')).toBe(false)
+    expect(isPdfMime(undefined)).toBe(false)
   })
 })
 

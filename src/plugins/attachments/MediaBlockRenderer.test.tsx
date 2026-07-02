@@ -30,11 +30,12 @@ vi.mock('./useAssetObjectUrl.js', () => ({
 }))
 vi.mock('./assetResolver.js', () => ({ getAssetResolver: () => ({ resolve: h.resolve }) }))
 vi.mock('@/utils/downloadBlob.js', () => ({ downloadBlob: h.downloadBlob }))
-// The runtime resolves the media-viewer facet to just the (real) image viewer, so an
-// image mime dispatches to ImageViewer and everything else to the download fallback.
+// The runtime resolves the media-viewer facet to the (real) image + PDF viewers, so an
+// image mime dispatches to ImageViewer, application/pdf to PdfViewer, and everything
+// else to the download fallback.
 vi.mock('@/extensions/runtimeContext.js', async () => {
-  const { imageMediaViewer } = await import('./mediaViewers.js')
-  return { useAppRuntime: () => ({ read: () => [imageMediaViewer] }) }
+  const { imageMediaViewer, pdfMediaViewer } = await import('./mediaViewers.js')
+  return { useAppRuntime: () => ({ read: () => [imageMediaViewer, pdfMediaViewer] }) }
 })
 
 const { MediaBlockRenderer, MediaContentRenderer } = await import('./MediaBlockRenderer.js')
@@ -91,8 +92,10 @@ describe('MediaContentRenderer — image branch', () => {
 })
 
 describe('MediaContentRenderer — non-image (file) branch', () => {
+  // A mime claimed by NO registered viewer (not image/*, not application/pdf) so it hits
+  // the download fallback — PDF now has its own inline viewer, so it can't stand in here.
   const fileProps = (extra: Record<string, unknown> = {}) => {
-    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/pdf', 'media:filename': 'doc.pdf', ...extra }
+    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/zip', 'media:filename': 'doc.zip', ...extra }
   }
 
   it('renders a METADATA-ONLY download button — no eager resolve — for a non-image MIME', () => {
@@ -101,7 +104,7 @@ describe('MediaContentRenderer — non-image (file) branch', () => {
     renderContent()
     const btn = screen.getByTestId('media-file')
     expect(btn.tagName).toBe('BUTTON')
-    expect(btn).toHaveTextContent('doc.pdf')
+    expect(btn).toHaveTextContent('doc.zip')
     expect(btn).toHaveTextContent('2 MB')
     expect(screen.queryByRole('img')).toBeNull() // not the image lightbox
     // The download fallback is LAZY: the renderer must gate the eager resolve OFF for it,
@@ -116,7 +119,7 @@ describe('MediaContentRenderer — non-image (file) branch', () => {
     fireEvent.click(screen.getByTestId('media-file'))
     await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
     const [blob, name] = h.downloadBlob.mock.calls[0]
-    expect(name).toBe('doc.pdf')
+    expect(name).toBe('doc.zip')
     // NEVER the attacker-influenceable media:mime — a neutral type so a navigated blob URL
     // downloads instead of rendering (no same-origin XSS via media:mime = text/html).
     expect(blob.type).toBe('application/octet-stream')
@@ -143,6 +146,65 @@ describe('MediaContentRenderer — non-image (file) branch', () => {
     fireEvent.click(btn)
     await waitFor(() => expect(h.downloadBlob).toHaveBeenCalled())
     expect(h.downloadBlob.mock.calls[0][1]).toBe('attachment') // generic download name
+  })
+})
+
+describe('MediaContentRenderer — PDF branch', () => {
+  const pdfProps = (extra: Record<string, unknown> = {}) => {
+    h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/pdf', 'media:filename': 'doc.pdf', ...extra }
+  }
+
+  it('renders a bounded inline <object> of the VERIFIED object URL, typed application/pdf', () => {
+    pdfProps()
+    h.urlState = { status: 'ready', url: 'blob:pdf/1' }
+    const { container } = renderContent()
+    expect(screen.getByTestId('media-pdf')).toBeInTheDocument()
+    const object = container.querySelector('object')
+    expect(object).toHaveAttribute('data', 'blob:pdf/1')
+    // Pinned to application/pdf so the browser hands it to its PDF viewer, never HTML-sniffs it.
+    expect(object).toHaveAttribute('type', 'application/pdf')
+    // The PDF viewer is EAGER: the renderer resolves the object URL up front for the inline preview.
+    expect(h.useAssetObjectUrl).toHaveBeenCalledWith(expect.anything(), expect.anything(), { enabled: true })
+  })
+
+  it('shows the loading placeholder while resolving', () => {
+    pdfProps()
+    h.urlState = { status: 'loading' }
+    renderContent()
+    expect(screen.getByTestId('media-loading')).toBeInTheDocument()
+  })
+
+  it('shows the broken-asset placeholder (and NO object) on a fail-closed resolve', () => {
+    pdfProps()
+    h.urlState = { status: 'error', reason: 'hash-mismatch' }
+    const { container } = renderContent()
+    expect(screen.getByTestId('media-broken')).toBeInTheDocument()
+    // The load-bearing assertion: nothing is ever served for an unverified asset.
+    expect(container.querySelector('object')).toBeNull()
+  })
+
+  it('downloads the VERIFIED bytes as a NEUTRAL octet-stream blob on the download click', async () => {
+    pdfProps()
+    h.urlState = { status: 'ready', url: 'blob:pdf/1' }
+    renderContent()
+    fireEvent.click(screen.getByTestId('media-pdf-download'))
+    await waitFor(() => expect(h.downloadBlob).toHaveBeenCalledTimes(1))
+    const [blob, name] = h.downloadBlob.mock.calls[0]
+    expect(name).toBe('doc.pdf')
+    // NEVER a navigable blob typed with the attacker-influenceable media:mime.
+    expect(blob.type).toBe('application/octet-stream')
+  })
+
+  it('fails the download closed on a failed resolve — nothing downloaded, retryable', async () => {
+    pdfProps()
+    h.urlState = { status: 'ready', url: 'blob:pdf/1' }
+    h.resolve.mockResolvedValue({ ok: false, reason: 'fetch-failed' })
+    renderContent()
+    const btn = screen.getByTestId('media-pdf-download')
+    fireEvent.click(btn)
+    await waitFor(() => expect(btn).toHaveTextContent('Retry'))
+    expect(h.downloadBlob).not.toHaveBeenCalled()
+    expect(btn).toBeEnabled() // still clickable to retry a transient failure
   })
 })
 

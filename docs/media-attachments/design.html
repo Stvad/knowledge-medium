@@ -97,9 +97,13 @@ store</strong>, fail-closed on every error, the read-side check now the sole byt
 (returns verified bytes). Phase 4 = the <code>media</code> block type + property schemas and the
 <code>MediaBlockRenderer</code> (§11, <code>src/attachments/</code>) — it dispatches a block's
 <code>media:mime</code> through a mime→viewer FACET (<code>mediaViewersFacet</code>) that plugins contribute a
-viewer to — one per mime family. An INLINE viewer (image today; PDF/audio later, <code>eager: true</code>)
-gets the bytes resolved once into a verified object URL (fetch → verify → Blob → object URL, revoked on
-unmount) and a fail-closed resolve shows a broken-asset placeholder, never an unverified source. The
+viewer to — one per mime family. An INLINE viewer (image + inline PDF today; audio/video later,
+<code>eager: true</code>) gets the bytes resolved once into a verified object URL (fetch → verify → Blob →
+object URL, revoked on unmount) and a fail-closed resolve shows a broken-asset placeholder, never an
+unverified source. The PDF viewer renders a bounded-height <code>&lt;object type="application/pdf"&gt;</code>
+of that object URL (the Blob's type is pinned to <code>application/pdf</code> by the mime that selected the
+viewer, so a known non-<code>text/*</code> type is handed to the browser's PDF viewer and never HTML-sniffed
+into an executable navigation) with an always-visible neutral octet-stream download. The
 non-image fallback is a LAZY download button: it resolves nothing on mount and, on click, fetches the
 verified bytes and saves them via a transient, immediately-revoked <em>octet-stream</em> anchor — never a
 persistent navigable <code>blob:</code> URL typed with the attacker-influenceable <code>media:mime</code> (a
@@ -121,7 +125,7 @@ reconnect / a slow sweep. Durable origin storage (§8) is the boot-time origin-w
 deferred</strong> — until it lands, a never-promoted <code>staged</code> orphan and its OPFS bytes are
 retained (never reaped), and a <code>failed</code> upload record is recoverable only by re-paste (no §9
 recovery actor yet).
-Last verified against code 2026-07-01. Treat as current intent. The least-settled part is the byte-lane
+Last verified against code 2026-07-02. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
 solid; the recovery edges are where the spec is still hardening.
 </aside>
@@ -175,17 +179,18 @@ produce an object URL, §7.3 / §8). A service-worker variant that would make
 
 <p>The app cannot currently insert images. We want paste / drop / file-pick of an image to render
   inline, work offline, and sync across a user's devices — and we want the same machinery to extend
-  to PDFs, audio, video, and generic files later without a content migration.</p>
+  to audio, video, and other file types later without a content migration.</p>
 
 <p><strong>In scope (v1):</strong> images, via paste / drop / file picker; inline render with a
   lightbox; offline-first local caching; cross-device sync; correctness under E2EE workspaces.</p>
 
 <p><strong>Built on the image foundation (§11 / §15):</strong> arbitrary non-image files render a
-  download affordance through the same content-addressed resolve + a mime→viewer facet — so a richer
-  inline viewer (PDF preview, <code>&lt;audio&gt;</code>) is a new facet contribution, not a schema change.</p>
+  download affordance through the same content-addressed resolve + a mime→viewer facet, and
+  <code>application/pdf</code> renders an inline bounded-height preview — each a facet contribution, not a
+  schema change, so a further inline viewer (<code>&lt;audio&gt;</code>, video) is the same one-viewer add.</p>
 
-<p><strong>Designed-for but not built (vNext):</strong> those richer inline viewers for non-image mimes
-  (PDF / audio / video); thumbnails / transforms; resumable uploads for large media; public sharing.</p>
+<p><strong>Designed-for but not built (vNext):</strong> inline viewers for the remaining non-image mimes
+  (audio / video); thumbnails / transforms; resumable uploads for large media; public sharing.</p>
 
 <p><strong>Explicitly out of scope:</strong> server-side media features for E2EE workspaces (OCR,
   thumbnails, transcode) — the server has no key; this is the existing E2EE tradeoff
@@ -1231,9 +1236,15 @@ hand-roll is now the platform's.)</div>
     type and a <code>priority</code> above the default. It dispatches the block's <code>media:mime</code>
     through a mime→viewer FACET (<code>mediaViewersFacet</code>) that plugins contribute a viewer to — one per
     mime family — so the renderer never special-cases a mime; byte access is <em>per-viewer</em>. An EAGER
-    inline viewer (image via the <code>MarkdownImage</code> lightbox today; PDF/audio later,
-    <code>eager: true</code>) gets the bytes resolved once into the verified object URL the in-thread resolver
-    produces (§7.3, revoked on unmount). The non-image fallback is <strong>LAZY</strong> — a metadata-only
+    inline viewer (<code>eager: true</code>) gets the bytes resolved once into the verified object URL the
+    in-thread resolver produces (§7.3, revoked on unmount): today the <code>image</code> viewer feeds it to the
+    <code>MarkdownImage</code> lightbox and the <code>pdf</code> viewer renders it in a bounded-height
+    <code>&lt;object type="application/pdf"&gt;</code> (audio/video later). The PDF <code>&lt;object&gt;</code>
+    is safe because the object URL's Blob type is pinned to <code>application/pdf</code> — the very mime that
+    selected the viewer — so the browser hands a known non-<code>text/*</code> type to its PDF viewer and never
+    HTML-sniffs hash-verified-but-non-PDF bytes into an executable navigation; its download affordance (and the
+    <code>&lt;object&gt;</code> can't-preview fallback, e.g. iOS Safari) reuses the same neutral octet-stream
+    path as the fallback below. The non-image fallback is <strong>LAZY</strong> — a metadata-only
     download button that resolves the verified bytes only on click and saves them through a transient,
     immediately-revoked <em>octet-stream</em> anchor, <em>not</em> a persistent navigable <code>blob:</code>
     URL typed with the attacker-controlled <code>media:mime</code> (that would be same-origin XSS on
@@ -1465,7 +1476,10 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       <code>mediaViewersFacet</code> registry: an EAGER image viewer contribution resolves the verified
       object URL for the lightbox; the built-in fallback is a LAZY, metadata-only download button that
       resolves on click and saves via a transient octet-stream anchor (filename/size from metadata). External
-      <code>![](url)</code> images keep the existing <code>MarkdownImage</code>, §11.</td></tr>
+      <code>![](url)</code> images keep the existing <code>MarkdownImage</code>, §11. A second EAGER
+      contribution — the <code>pdf</code> viewer — landed on this foundation with no renderer change: a
+      bounded-height <code>&lt;object type="application/pdf"&gt;</code> of the object URL + a neutral
+      octet-stream download (and a can't-preview fallback), §11.</td></tr>
 <tr><td>5 — capture + up-lane</td>
     <td>paste / drop / file-pick arms (through <code>pasteDecisionVerb</code>); deterministic content-derived
       block id via <code>createOrRestoreTargetBlock</code> (dedup is automatic, §11); optimistic write to the durable byte
@@ -1477,7 +1491,7 @@ vNext; the v1 commitment is only the reserved property + audience flag.
       <em>budget</em> / active-workspace <em>scope</em> / <em>politeness</em> controls; and
       <code>navigator.storage.persist()</code> so the byte store isn't best-effort-evicted.</td></tr>
 <tr><td>vNext</td>
-    <td>richer inline viewers for non-image mimes (PDF preview, <code>&lt;audio&gt;</code>, video) atop the
+    <td>inline viewers for the remaining non-image mimes (<code>&lt;audio&gt;</code>, video) atop the
       §11 <code>mediaViewersFacet</code>; thumbnails / transforms; resumable upload; the
       <code>effective_share_ids</code> storage-RLS branch when subtree sharing ships; public-share
       (export / key-in-fragment).</td></tr>
