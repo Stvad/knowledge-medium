@@ -26,8 +26,30 @@ GitHub Pages serves a single site per repo:
 The build is already base-path aware: Vite's `base` comes from `APP_BASE_PATH`
 (`vite.config.ts`), the service worker registers at `${BASE_URL}sw.js` scoped to
 that path (`src/registerServiceWorker.ts`), and `inject-sw-build-id.mjs`
-base-prefixes precache URLs. So a subpath preview is fully self-contained and
-its service worker is scoped to its own path — it never touches production's.
+base-prefixes precache URLs. So each preview's assets and its *own* service
+worker are scoped to its subpath.
+
+> **⚠️ Previews are NOT isolated from production at the browser-storage layer.**
+> They share production's origin (`stvad.github.io`), and several client stores
+> are keyed per-*origin*, not per-*deploy*, so preview and production state
+> overlap in one browser profile:
+>
+> - **Service-worker caches** are namespaced only by build id (`public/sw.js`),
+>   and Cache Storage is per-origin: a preview SW's `activate` GC can evict
+>   production's cached generation (and vice-versa). And production's SW — whose
+>   scope `/knowledge-medium/` *encloses* every preview path — can cache a
+>   preview's shell/assets under production's own keys, so an **offline**
+>   production load could boot an unmerged preview build against live data.
+> - **The local SQLite database** (`kmp-v6-<user>.db`, `src/data/repoProvider.ts`)
+>   is per-origin too: opening a preview *signed in* uses your **real** local DB.
+>   A preview whose PR changes the client DB schema, runs a migration, or bumps
+>   PowerSync migrates that shared local store — which production (older code)
+>   then reads. The app is offline-first, so the local store is authoritative.
+>
+> Until this is hardened (namespace per-deploy — see *Follow-up* below), **open
+> previews in a separate browser profile or a private window from your
+> production PWA, and don't sign in to a preview that carries a client-DB
+> migration.**
 
 Coexistence on the shared branch is kept safe by two settings on the production
 deploy: `clean-exclude: pr-preview` (production never wipes live preview
@@ -54,7 +76,13 @@ change, and the order matters so production is never dark:
    This runs the new production workflow, which creates/populates the
    `gh-pages` branch with an identical build. The live site is still served by
    the previous artifact deploy at this point, so nothing changes yet.
-2. Confirm the `gh-pages` branch now exists and has the built site at its root.
+2. Confirm the built site is at the branch **root** — both `index.html` **and**
+   `.nojekyll` at `gh-pages` `/`. The branch may **already exist** from a preview
+   run, containing only `pr-preview/pr-<n>/` and *no root build* — mere existence
+   is NOT readiness. Flipping the source before a production deploy populates the
+   root would 404 production and leave Jekyll active site-wide (a root
+   `.nojekyll` is what disables it; without it Jekyll strips the `_virtual/`
+   chunks `preserveModules` emits, breaking previews too).
 3. **Settings → Pages → Build and deployment → Source → "Deploy from a
    branch"**, branch **`gh-pages`**, folder **`/ (root)`**, Save. The live site
    is now served from the branch — the same build — so the cutover is seamless.
@@ -83,11 +111,37 @@ permissions → **Read and write permissions**.
 - **Forks are skipped by design.** Fork PRs get neither the `VITE_*` secrets nor
   write access to `gh-pages`, so the preview job is gated to same-repo PRs. All
   PRs to this repo come from same-repo branches.
-- **Shared backend.** Previews point at the same Supabase / PowerSync as
-  production (same `VITE_*`). A preview is a preview of the *frontend*; a PR that
-  changes data shapes can read/write real data. Use a scratch page.
+- **Shared backend + shared local state.** Previews use the same Supabase /
+  PowerSync as production (same `VITE_*`) *and* the same per-origin browser state
+  (see the ⚠️ box above). A preview is a preview of the *frontend*; use a scratch
+  page, and a separate browser profile, for anything that writes.
+- **Merge-time branch race (self-limiting).** Merging a PR fires the production
+  deploy (push→`master`) and the preview removal (`closed`) concurrently — they
+  use separate concurrency groups and both push to `gh-pages`. `force: false`
+  makes each fetch+rebase+retry, so production never goes dark; the worst case is
+  a removed preview subtree that lingers (re-runnable, or cleared by a later
+  branch squash). Not worth serializing given the low PR volume.
 - **`gh-pages` history grows** (no `single-commit`, since squashing the branch
   would drop live preview subtrees). Squash the branch manually if it ever gets
   unwieldy.
 - `public/.nojekyll` disables Jekyll on the branch-served site (Jekyll would
-  otherwise drop `_`-prefixed paths).
+  otherwise drop the `_virtual/` chunks `preserveModules` emits). It must sit at
+  the branch **root**; the copy in each preview subtree is inert.
+
+## Follow-up (not in this change)
+
+Same-origin previews contaminate production's client state (the ⚠️ box). The fix
+is to namespace the per-origin stores by deploy so previews are sandboxed:
+
+- **`public/sw.js`** — (a) make production's SW ignore `/pr-preview/…` paths so it
+  can't cache preview content under production's keys; (b) scope the `activate`
+  cache-GC to this deploy's own generations (delete only this scope's expired
+  ledger ids) instead of blanket-deleting every `km-*` cache on the origin.
+- **`src/data/repoProvider.ts`** — suffix `dbFilenameForUser` with a base-derived
+  token **only** for preview builds (`BASE_URL` contains `/pr-preview/`), leaving
+  production's filename byte-for-byte unchanged, so previews get an isolated local
+  DB. (Mind the 64-char wa-sqlite pathname cap.)
+
+These touch load-bearing offline / data-layer code that isn't exercised by
+`yarn run check`, so they want real-browser verification and belong in their own
+reviewed change rather than this deploy-plumbing PR.
