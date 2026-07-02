@@ -504,7 +504,7 @@ function getDefaultActionGroups({ repo }) {
 				handler: async (deps) => {
 					const { block, editorView, uiStateBlock, scopeRootId } = deps;
 					if (!block || !editorView || !uiStateBlock) return;
-					if (completionStatus(editorView.state) !== null) {
+					if (completionStatus(editorView.state) === "active" || editorView.dom.querySelector(".cm-tooltip-autocomplete")) {
 						acceptCompletion(editorView);
 						return;
 					}
