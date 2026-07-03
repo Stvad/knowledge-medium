@@ -5,6 +5,7 @@ import { autocompletion, completionKeymap, completionStatus, startCompletion } f
 import { describe, expect, it, vi } from 'vitest'
 import {
   acceptCompletionOnEnterCapture,
+  clampSelectionToLength,
   createMinimalMarkdownConfig,
   toggleMarkdownBold,
   toggleMarkdownInlineCode,
@@ -63,6 +64,23 @@ const collectThemeRules = (extensions: readonly Extension[]) => {
 
   return rules
 }
+
+describe('clampSelectionToLength', () => {
+  it('clamps both bounds, keeps direction and mainIndex', () => {
+    // Backwards range (anchor > head) past the doc end, plus a corrupt
+    // negative range — persisted selections are bridge-writable synced
+    // data, so both corruptions are reachable.
+    const clamped = clampSelectionToLength(
+      EditorSelection.create(
+        [EditorSelection.range(-3, -1), EditorSelection.range(9, 4)],
+        1,
+      ),
+      6,
+    )
+    expect(clamped.ranges.map(r => [r.anchor, r.head])).toEqual([[0, 0], [6, 4]])
+    expect(clamped.mainIndex).toBe(1)
+  })
+})
 
 describe('markdown formatting CodeMirror commands', () => {
   it('wraps selected text in bold markers and keeps the text selected', () => {
