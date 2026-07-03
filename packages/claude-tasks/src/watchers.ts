@@ -134,6 +134,8 @@ export interface QueryDiff {
   seenIds: string[]
   /** Rows without a usable id (skipped, surfaced for logging). */
   invalidRows: number
+  /** Result set exceeds the cursor bound — diffing refused (see below). */
+  oversized: boolean
 }
 
 /** Cursor retention bound. Oldest ids are forgotten past this, which
@@ -149,6 +151,12 @@ export const MAX_CURSOR_IDS = 20_000
  * The cursor is a union, not the current id set: with a LIMIT'd or
  * ordered query, rows rotate out and back in as other rows churn —
  * a current-set cursor would re-fire (and re-bill) on every rotation.
+ *
+ * A result set larger than MAX_CURSOR_IDS is refused outright
+ * (`oversized`, no diff, cursor untouched): the baseline could only
+ * store a truncated window, so every later tick would see the dropped
+ * ids as "new" and fire until runsPerHour drains — a stable oversized
+ * query must be narrowed, not diffed.
  */
 export const diffQueryRows = (rows: unknown[], prevIds: string[] | null): QueryDiff => {
   const valid: QueryRow[] = []
@@ -159,12 +167,16 @@ export const diffQueryRows = (rows: unknown[], prevIds: string[] | null): QueryD
     else invalidRows += 1
   }
 
+  if (valid.length > MAX_CURSOR_IDS) {
+    return {newRows: [], seenIds: prevIds ?? [], invalidRows, oversized: true}
+  }
+
   if (prevIds === null) {
-    return {newRows: [], seenIds: valid.map(row => row.id).slice(-MAX_CURSOR_IDS), invalidRows}
+    return {newRows: [], seenIds: valid.map(row => row.id), invalidRows, oversized: false}
   }
 
   const prev = new Set(prevIds)
   const newRows = valid.filter(row => !prev.has(row.id))
   const seenIds = [...prevIds, ...newRows.map(row => row.id)].slice(-MAX_CURSOR_IDS)
-  return {newRows, seenIds, invalidRows}
+  return {newRows, seenIds, invalidRows, oversized: false}
 }

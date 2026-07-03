@@ -4,7 +4,7 @@ import {parseConfig, PROPS} from '../src/config'
 import type {BlockData, Graph} from '../src/graph'
 import type {ClaudeRunResult} from '../src/runner'
 import type {StateStore} from '../src/state'
-import {MAX_ATTEMPTS} from '../src/watchers'
+import {MAX_ATTEMPTS, MAX_CURSOR_IDS} from '../src/watchers'
 
 const NOW = 1_800_000_000_000
 
@@ -681,7 +681,7 @@ describe('query watcher lifecycle', () => {
     expect(state.cursors.get('inbox')).toHaveLength(5)
   })
 
-  it('channel delivery: keeps the cursor when delivery fails so rows re-fire later', async () => {
+  it('channel delivery: keeps the cursor AND the spend budget when delivery fails', async () => {
     const {graph} = fakeGraph()
     graph.sqlAll = vi.fn(async () => [{id: 'a'}])
     const state = memoryState()
@@ -697,8 +697,11 @@ describe('query watcher lifecycle', () => {
     await engine.tick()
     await engine.drain()
     expect(state.cursors.get('inbox')).toEqual([])   // NOT advanced
+    // A failed POST bills nothing — it must not consume runsPerHour,
+    // or a down listener drains the whole budget in ten polls.
+    expect(state.launches).toHaveLength(0)
 
-    // Listener comes back: the same row fires now.
+    // Listener comes back: the same row fires now, and THAT counts.
     const delivered: unknown[] = []
     const engine2 = engineWith({
       graph,
@@ -710,5 +713,24 @@ describe('query watcher lifecycle', () => {
     await engine2.drain()
     expect(delivered).toHaveLength(1)
     expect(state.cursors.get('inbox')).toEqual(['a'])
+    expect(state.launches).toHaveLength(1)
+  })
+
+  it('refuses an oversized query result instead of firing every tick', async () => {
+    const {graph} = fakeGraph()
+    graph.sqlAll = vi.fn(async () => Array.from({length: MAX_CURSOR_IDS + 1}, (_, index) => ({id: `r-${index}`})))
+    const state = memoryState()
+    const runTask = vi.fn(async () => okRun())
+    const logs: string[] = []
+    const engine = engineWith({graph, runTask, state, config: queryConfig(), log: line => logs.push(line)})
+
+    await engine.tick()
+    await engine.drain()
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask).not.toHaveBeenCalled()
+    expect(state.cursors.has('inbox')).toBe(false)
+    expect(logs.some(line => line.includes('rows'))).toBe(true)
   })
 })

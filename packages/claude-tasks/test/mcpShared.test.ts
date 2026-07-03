@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'vitest'
-import {findBlockedRef, findBlockedRefInProperties, isReadOnlySql} from '../src/mcpShared'
+import {
+  decodeBlockedWikilinks,
+  encodeBlockedWikilinks,
+  findBlockedRef,
+  findBlockedRefInProperties,
+  isReadOnlySql,
+} from '../src/mcpShared'
 
 describe('isReadOnlySql', () => {
   it.each([
@@ -49,11 +55,35 @@ describe('findBlockedRef', () => {
     expect(findBlockedRef('plain claude mention without link', guard)).toBeNull()
   })
 
+  it('blocks aliases in either Unicode normalization form (app resolves them as equal)', () => {
+    const composed = 'café'        // é as one code point
+    const decomposed = 'café'     // e + combining accent
+    expect(findBlockedRef(`see [[${composed}]]`, {aliases: [decomposed], ids: []})).not.toBeNull()
+    expect(findBlockedRef(`see [[${decomposed}]]`, {aliases: [composed], ids: []})).not.toBeNull()
+  })
+
   it('blocks block-refs to the target id in every syntax form', () => {
     expect(findBlockedRef('ref ((page-id-123))', guard)).toBe('((page-id-123))')
     expect(findBlockedRef('embed !((page-id-123))', guard)).toBe('((page-id-123))')
     expect(findBlockedRef('aliased [label](((page-id-123)))', guard)).toBe('((page-id-123))')
     expect(findBlockedRef('other ((different-id))', guard)).toBeNull()
+  })
+})
+
+describe('blocked-wikilinks env encoding', () => {
+  it('round-trips names containing commas and padding (comma-join would corrupt them)', () => {
+    const names = ['claude', 'to review, later', ' spaced ']
+    expect(decodeBlockedWikilinks(encodeBlockedWikilinks(names))).toEqual(names)
+  })
+
+  it('still decodes the legacy comma-separated form', () => {
+    expect(decodeBlockedWikilinks('claude, browser emacs')).toEqual(['claude', 'browser emacs'])
+  })
+
+  it('handles empty and undefined values', () => {
+    expect(decodeBlockedWikilinks(undefined)).toEqual([])
+    expect(decodeBlockedWikilinks('')).toEqual([])
+    expect(decodeBlockedWikilinks('[]')).toEqual([])
   })
 })
 

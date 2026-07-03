@@ -11,9 +11,10 @@
  *
  * Env:
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
- * - KM_MCP_BLOCKED_WIKILINKS: comma-separated page aliases the write
- *   tools refuse to reference (watcher re-trigger guard, set by the
- *   daemon). Enforced against ALL reference syntaxes: each name is
+ * - KM_MCP_BLOCKED_WIKILINKS: page aliases the write tools refuse to
+ *   reference (watcher re-trigger guard, set by the daemon). JSON
+ *   array; legacy comma-separated also accepted. Enforced against ALL
+ *   reference syntaxes: each name is
  *   resolved to its page, and that page's full alias set plus its id
  *   ([[any-alias]], ((id)), (((id))) embeds/labels) is blocked.
  * - KM_MCP_CHANNEL_PORT (EXPERIMENTAL): when set, the server also
@@ -33,7 +34,7 @@ import { z } from 'zod'
 import { createBridgeClient } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import { createGraph } from './graph.js'
-import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, findBlockedRef, findBlockedRefInProperties, isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
+import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, decodeBlockedWikilinks, findBlockedRef, findBlockedRefInProperties, isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
 const client = createBridgeClient({
@@ -44,10 +45,7 @@ const graph = createGraph(client)
 
 // ----- write guard: watcher re-trigger prevention ---------------------
 
-const blockedNames = (process.env[BLOCKED_WIKILINKS_ENV] ?? '')
-  .split(',')
-  .map(alias => alias.trim())
-  .filter(Boolean)
+const blockedNames = decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
 
 let guardCache: {set: RefGuardSet, fetchedAt: number} | null = null
 const GUARD_TTL_MS = 10 * 60_000

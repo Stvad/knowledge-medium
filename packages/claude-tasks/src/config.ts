@@ -10,6 +10,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { z } from 'zod'
 import { agentRuntimeConfigDir, isErrnoException } from '@knowledge-medium/agent-cli/config'
+import { normalizeProfileName } from '@knowledge-medium/agent-cli/client'
+import { isReadOnlySql } from './mcpShared.js'
 
 /** Block-property namespace the daemon owns. Kept short and stable —
  *  these live on user blocks and act as the durable task state. */
@@ -71,8 +73,12 @@ const queryWatcherSchema = z.strictObject({
   ...watcherBase,
   kind: z.literal('query'),
   /** Read-only SQL run through the bridge; rows must expose an `id`
-   *  column — new ids (vs the state file) trigger a run. */
-  sql: z.string().min(1),
+   *  column — new ids (vs the state file) trigger a run. Enforced at
+   *  parse time: the bridge's sql mode doesn't gate writes, so a
+   *  mutating statement here would EXECUTE on every poll. */
+  sql: z.string().min(1).refine(isReadOnlySql, {
+    message: 'watcher SQL must be a single read-only statement (SELECT, or WITH without mutating keywords); it runs on every poll',
+  }),
   params: z.array(z.unknown()).default([]),
   /** Cap on rows folded into one prompt; overflow is summarized. */
   maxRowsPerFire: z.number().int().positive().default(100),
@@ -89,8 +95,18 @@ export type Watcher = z.infer<typeof watcherSchema>
 
 export const configSchema = z.strictObject({
   /** kmagent token profile the daemon pairs under. Keep it dedicated
-   *  (not "default") so its access can be revoked independently. */
-  profile: z.string().default('claude-tasks'),
+   *  (not "default") so its access can be revoked independently.
+   *  Validated here with the bridge client's own rules — an invalid
+   *  name must be a CONFIG error (clean exit 0) rather than a later
+   *  client throw that launchd restart-loops on. */
+  profile: z.string().default('claude-tasks').refine(name => {
+    try {
+      normalizeProfileName(name)
+      return true
+    } catch {
+      return false
+    }
+  }, {message: 'profile names may only contain letters, numbers, underscores, dots, and dashes'}),
   pollIntervalMs: z.number().int().positive().default(5_000),
   claudeBin: z.string().default('claude'),
   maxConcurrent: z.number().int().positive().default(2),

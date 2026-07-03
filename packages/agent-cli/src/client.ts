@@ -256,7 +256,9 @@ export interface BridgeClient {
 
 export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeClient => {
   const bridgeUrl = (options.bridgeUrl ?? resolveBridgeUrl()).replace(/\/+$/, '')
-  const profileName = normalizeProfileName(options.profile ?? '')
+  // AGENT_RUNTIME_PROFILE is the documented shell default; non-CLI
+  // consumers (daemon, MCP server) must honor it too, not just cli.ts.
+  const profileName = normalizeProfileName(options.profile ?? process.env.AGENT_RUNTIME_PROFILE ?? '')
   const defaultTimeoutMs = options.timeoutMs ?? 30_000
   const pollIntervalMs = options.pollIntervalMs ?? 100
 

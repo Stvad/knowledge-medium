@@ -156,6 +156,22 @@ describe('diffQueryRows', () => {
     expect(diff.seenIds).not.toContain('old-0')
   })
 
+  it('refuses to diff an oversized result set instead of flapping the cursor window', () => {
+    const rows = Array.from({length: MAX_CURSOR_IDS + 1}, (_, index) => ({id: `r-${index}`}))
+
+    // First run: the full set can't be baselined — stay unbaselined, fire nothing.
+    const first = diffQueryRows(rows, null)
+    expect(first.oversized).toBe(true)
+    expect(first.newRows).toEqual([])
+
+    // Later runs: keep the existing cursor untouched, fire nothing —
+    // a truncated-window diff would mark dropped ids "new" every tick.
+    const later = diffQueryRows(rows, ['r-0'])
+    expect(later.oversized).toBe(true)
+    expect(later.newRows).toEqual([])
+    expect(later.seenIds).toEqual(['r-0'])
+  })
+
   it('counts and skips rows without a stable id', () => {
     const diff = diffQueryRows([{id: 'a'}, {name: 'no-id'}, 42], [])
     expect(diff.newRows).toEqual([{id: 'a'}])

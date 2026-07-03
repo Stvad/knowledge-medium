@@ -11,7 +11,7 @@ import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './co
 import type { Graph } from './graph.js'
 import type { ClaudeRunOptions, ClaudeRunResult } from './runner.js'
 import type { StateStore } from './state.js'
-import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, taskAttempts } from './watchers.js'
+import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
 import { KM_MCP_ALLOWED_TOOLS } from './mcpShared.js'
 
@@ -275,6 +275,10 @@ export const createEngine = (deps: EngineDeps) => {
     if (diff.invalidRows > 0) {
       log(`[${watcher.name}] skipped ${diff.invalidRows} row(s) without a string id — the watcher SQL must select an id column`)
     }
+    if (diff.oversized) {
+      log(`[${watcher.name}] query returned ${rows.length} rows (cursor bound ${MAX_CURSOR_IDS}) — refusing to diff; narrow the watcher SQL`)
+      return
+    }
 
     if (prev === null) {
       await state.setCursor(watcher.name, diff.seenIds)
@@ -298,9 +302,13 @@ export const createEngine = (deps: EngineDeps) => {
     if (watcher.delivery === 'channel') {
       // Deliver FIRST, cursor after: a cheap POST has no re-bill risk,
       // and advancing the cursor before a failed delivery would lose
-      // these rows permanently (no graph-side state to sweep).
-      recordLaunch()
+      // these rows permanently (no graph-side state to sweep). The
+      // launch is counted only AFTER delivery succeeds — a failed POST
+      // bills nothing, and counting it would let a down listener drain
+      // the hourly budget in ten polls and defer the rows even once
+      // it's back up.
       await deliverToChannel({content: prompt, meta: {watcher: watcher.name}})
+      recordLaunch()
       await state.setCursor(watcher.name, diff.seenIds)
       log(`[${watcher.name}] delivered ${batch.length} new row(s) to the ambient channel session`)
       return

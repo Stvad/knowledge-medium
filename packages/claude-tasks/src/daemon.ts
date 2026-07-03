@@ -24,7 +24,7 @@ import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
 import { createEngine } from './engine.js'
 import { runClaude } from './runner.js'
-import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, MCP_SERVER_NAME } from './mcpShared.js'
+import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, encodeBlockedWikilinks, MCP_SERVER_NAME } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
 const log = (message: string) =>
@@ -99,10 +99,9 @@ const releasePidfile = async (): Promise<void> => {
 const writeMcpConfig = async (config: DaemonConfig): Promise<string> => {
   const here = path.dirname(fileURLToPath(import.meta.url))
   const mcpServerScript = path.join(here, 'mcp.js')
-  const blockedWikilinks = config.watchers
+  const blockedTargets = config.watchers
     .filter(watcher => watcher.kind === 'backlinks')
     .map(watcher => watcher.target)
-    .join(',')
 
   const mcpConfig = {
     mcpServers: {
@@ -111,7 +110,7 @@ const writeMcpConfig = async (config: DaemonConfig): Promise<string> => {
         args: [mcpServerScript],
         env: {
           AGENT_RUNTIME_PROFILE: config.profile,
-          ...(blockedWikilinks ? {[BLOCKED_WIKILINKS_ENV]: blockedWikilinks} : {}),
+          ...(blockedTargets.length > 0 ? {[BLOCKED_WIKILINKS_ENV]: encodeBlockedWikilinks(blockedTargets)} : {}),
         },
       },
     },

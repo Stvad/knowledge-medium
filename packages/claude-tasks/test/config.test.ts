@@ -26,6 +26,18 @@ describe('parseConfig', () => {
     expect(() => parseConfig({watchers: [{kind: 'query', name: 'q'}]})).toThrow()
   })
 
+  it('rejects query-watcher SQL that is not read-only (would execute on every poll)', () => {
+    const query = (sql: string) => ({watchers: [{kind: 'query', name: 'q', sql}]})
+    expect(() => parseConfig(query('UPDATE blocks SET content = ? RETURNING id'))).toThrow(/read-only/)
+    expect(() => parseConfig(query('WITH c AS (SELECT 1) UPDATE blocks SET content = ? RETURNING id'))).toThrow(/read-only/)
+    expect(() => parseConfig(query('SELECT powersync_clear(1)'))).toThrow(/read-only/)
+    expect(parseConfig(query('SELECT id FROM blocks')).watchers).toHaveLength(1)
+  })
+
+  it('rejects an invalid profile name at parse time (config error, not a launchd crash-loop)', () => {
+    expect(() => parseConfig({profile: 'bad name', watchers: []})).toThrow(/[Pp]rofile/)
+  })
+
   it('rejects misspelled keys instead of silently dropping them', () => {
     expect(() => parseConfig({maxconcurrent: 5, watchers: []})).toThrow()
     expect(() => parseConfig({

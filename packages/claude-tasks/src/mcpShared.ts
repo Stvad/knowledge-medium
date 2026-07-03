@@ -25,10 +25,32 @@ export const KM_MCP_ALLOWED_TOOLS = KM_MCP_TOOL_NAMES.map(
   name => `mcp__${MCP_SERVER_NAME}__${name}`,
 )
 
-/** Env var the daemon sets in the generated MCP config: comma-separated
- *  page aliases whose wikilinks the MCP write tools must refuse to
- *  create (defense-in-depth against watcher re-trigger loops). */
+/** Env var the daemon sets in the generated MCP config: page aliases
+ *  whose wikilinks the MCP write tools must refuse to create
+ *  (defense-in-depth against watcher re-trigger loops). JSON-array
+ *  encoded; a legacy comma-separated value is also accepted. */
 export const BLOCKED_WIKILINKS_ENV = 'KM_MCP_BLOCKED_WIKILINKS'
+
+export const encodeBlockedWikilinks = (names: string[]): string => JSON.stringify(names)
+
+/** Decode the env value. JSON-array form is lossless; the legacy
+ *  comma-separated form can't represent names containing commas (they
+ *  split into fragments and the guard resolves the wrong pages). */
+export const decodeBlockedWikilinks = (value: string | undefined): string[] => {
+  const raw = (value ?? '').trim()
+  if (!raw) return []
+  if (raw.startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        return parsed.filter((name): name is string => typeof name === 'string' && name.length > 0)
+      }
+    } catch {
+      // fall through to the legacy form
+    }
+  }
+  return raw.split(',').map(name => name.trim()).filter(Boolean)
+}
 
 /** EXPERIMENTAL (Claude Code channels research preview): when set, the
  *  km MCP server declares the channel capability and binds a loopback
@@ -47,11 +69,11 @@ export interface RefGuardSet {
  *  `((id))` is a substring of the `!((id))` embed and `[label](((id)))`
  *  forms, so one check covers every block-ref syntax. */
 export const findBlockedRef = (content: string, guard: RefGuardSet): string | null => {
-  // NFC so a decomposed alias in the write can't slip past a composed
-  // alias in the guard (or vice-versa) — the app resolves them as equal.
+  // NFC on BOTH sides so normalization form can't split the comparison —
+  // the app resolves composed and decomposed aliases as the same page.
   const lower = content.normalize('NFC').toLowerCase()
   for (const alias of guard.aliases) {
-    if (lower.includes(`[[${alias.toLowerCase()}]]`)) return `[[${alias}]]`
+    if (lower.includes(`[[${alias.normalize('NFC').toLowerCase()}]]`)) return `[[${alias}]]`
   }
   for (const id of guard.ids) {
     if (lower.includes(`((${id.toLowerCase()}))`)) return `((${id}))`
