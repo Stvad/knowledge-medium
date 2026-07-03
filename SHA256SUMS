@@ -1774,7 +1774,7 @@ f16e9971146d48b76d4fbc30b61f9d1ab4aadc494c9b524dee4509975c1df235  ./packages/age
 18aabf81d0c4b3cded487d51c02da2aec6006d0eab7285bc52e908566c40e3f0  ./src/App.js.map
 61b90e46eb39d3c5ada10d31bb02480a0ebd1111d51fe6fc83f66a41b3ab9739  ./src/appUpdate.js
 ec221cb7326986225f426b1c97fc69f978da1fa59ad9f6e849afa8546f48fffa  ./src/appUpdate.js.map
-dfa15b824b58a6322e8627c17c90e1c03f33c34fefc8e326e29f802ac72cdba7  ./src/appVersion.js
+4b9ba163b6aa145f050063f9273cc39c64ef4f9917a14101ea7a3f7cbe2e99e8  ./src/appVersion.js
 badea40e3a2f25c706fa0a69c7992a7c23bbee5dff5f90694ccba337522b642f  ./src/appVersion.js.map
 2785a7e859130bfb20f02330698115054a4f2c651229e4e0d0cc8e0dc63d9d71  ./src/bootstrap/resolveWorkspace.js
 7c9320e40827e13c4b05cee2a6bb5cfacbe74d53992921ffd343a41acee39400  ./src/bootstrap/resolveWorkspace.js.map
@@ -3066,8 +3066,8 @@ e32dc5e94c1b30b6f081d6cbfec017fd25adc79d145cf8acd0b64060cefb3de5  ./src/utils/la
 45e7ee5a43558cdda083d00617d5b878b22343d211d4df84ea3348d783334259  ./src/utils/layoutSessionId.js.map
 c5ceba89793a1f030744c8e1571264439e82e64b34f56e78625ed5456c7ced40  ./src/utils/linkTargetAutocomplete.js
 92298e54365148b15e576414d53922e457bb2b5dd0d9eea770906209c70156f6  ./src/utils/linkTargetAutocomplete.js.map
-db3ae9c3067c19831ec9bd8690e37c092462196e89f54ad1211ca2382beef84e  ./src/utils/localDbCorruption.js
-32369e9856f0ae6d53eee14f737920a45759705ac8dafc505ff7c8be62a90794  ./src/utils/localDbCorruption.js.map
+7878382786104539ceaa501a30c58311811e4ade2e061e8b5bcd9123da87a756  ./src/utils/localDbCorruption.js
+6370a64c456b87cc53f204e55e3c6037151899d7c412749710b47b7158d0db28  ./src/utils/localDbCorruption.js.map
 fc1aed7904b0ebd5700745c4d13fc933771713d9bcd43e9df92c3d91b56bfde9  ./src/utils/localDbRecovery.js
 a9477d534344b1ebbfd9e6c6d8db42efe6947e102c0ce969dc2a65b301096872  ./src/utils/localDbRecovery.js.map
 7414003987f3a58b71c470ee1db067356c73a259257e40239c617dcb8fd87693  ./src/utils/markdownParser.js
@@ -3118,8 +3118,8 @@ b376bddab3b5216fe9432c87b48fc1cc10b5160e56ef53ff6f58e397d01b1f69  ./src/utils/ty
 d06f256a0e4b1b67457ef0f1ab7afce2587a3245e38d90877fc7d9b9cb0ca541  ./src/utils/types.js.map
 6ffa3b6e699af00d51d101e34fbeffaa1d4f709ced257e731f91b4ba19ad9240  ./src/utils/viewTransition.js
 04d072422318bc0807e75afa8216320c6eb46a096b13caba198834f39ac3fc2a  ./src/utils/viewTransition.js.map
-0b2b10692d73ce066a5044cf498aa175cc1560f0c8824fad3959d525a1727f1f  ./sw.js
-a00a02a9da0301a210613ba64027427c10dbe744656dae443d7929c809f9a2ff  ./version.json
+9ccab32146a87400c6d9ed50e63ec71e93c98a88b85dd6ff71e2fe998359fe7e  ./sw.js
+7ecc1b3e3ce79a58f7042d4085fecfc1d513a17692ba61ae4fe74c3b948502b0  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
