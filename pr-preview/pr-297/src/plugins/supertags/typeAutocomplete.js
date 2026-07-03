@@ -1,5 +1,6 @@
 import { EditorSelection } from "../../../node_modules/@codemirror/state/dist/index.js";
 import { matchCharTrigger } from "../../editor/triggerMatch.js";
+import { isInsideMarkdownCode } from "../../editor/syntaxContext.js";
 //#region src/plugins/supertags/typeAutocomplete.ts
 /** CodeMirror CompletionSource for the `#` type-tag trigger (Tana-style
 *  supertags).
@@ -174,6 +175,7 @@ var typeTagCompletionSource = (options) => {
 		const line = state.doc.lineAt(pos);
 		const match = matchHashTrigger(line.text, pos - line.from);
 		if (!match) return null;
+		if (isInsideMarkdownCode(state, pos)) return null;
 		const candidates = await options.getCandidates(match.query);
 		if (candidates.length === 0 && !explicit) return null;
 		return {

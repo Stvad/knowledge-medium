@@ -4,8 +4,8 @@ import { useProperty, useWorkspaceId } from "../../hooks/block.js";
 import { X } from "../../../node_modules/lucide-react/dist/esm/icons/x.js";
 import { buildAppHash } from "../../utils/routing.js";
 import { useBlockOpener } from "../../utils/navigation.js";
-import { visibleTagTypeIds } from "./typeAutocomplete.js";
 import { useTypes } from "../../hooks/typeRegistry.js";
+import { visibleTagTypeIds } from "./typeAutocomplete.js";
 import { chipStyle } from "./chipStyle.js";
 import { c } from "react/compiler-runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
@@ -96,6 +96,7 @@ var TypeChips = (t0) => {
 	let t2;
 	if ($[15] !== t1) {
 		t2 = /* @__PURE__ */ jsx("span", {
+			role: "group",
 			className: "flex min-w-0 flex-wrap items-center gap-1",
 			"aria-label": "Block types",
 			children: t1
