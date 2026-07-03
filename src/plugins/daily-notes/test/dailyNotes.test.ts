@@ -265,3 +265,33 @@ describe('idx_blocks_daily_note_date', () => {
     expect(detail).toContain('idx_blocks_daily_note_date')
   })
 })
+
+describe('undo grouping (issue #306)', () => {
+  it('cold-path getOrCreateDailyNote (journal + note txs) records ONE undo entry', async () => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    const iso = '2026-04-28'
+    const note = await getOrCreateDailyNote(repo, WS, iso)
+
+    // Fresh workspace: journal bootstrap + note creation are two txs —
+    // merged into a single entry, so one cmd-Z removes both.
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    const isDeleted = async (id: string) =>
+      (await repo.db.getOptional<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id]))?.deleted === 1
+    expect(await repo.undo()).toBe(true)
+    expect(await isDeleted(note.id)).toBe(true)
+    expect(await isDeleted(journalBlockId(WS))).toBe(true)
+  })
+
+  it('warm-path getOrCreateDailyNote (note exists, no repair) records nothing', async () => {
+    const {repo} = env
+    repo.setActiveWorkspaceId(WS)
+    const iso = '2026-04-28'
+    await getOrCreateDailyNote(repo, WS, iso)
+    repo.undoManager.clear()
+
+    await getOrCreateDailyNote(repo, WS, iso)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
+  })
+})

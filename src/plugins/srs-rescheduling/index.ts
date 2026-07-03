@@ -272,13 +272,7 @@ export const applySrsReschedulePlan = async (
 ): Promise<boolean> => {
   if (block.repo.isReadOnly) return false
 
-  // One undo group for the whole perceived action (issue #306): the
-  // daily-note lookups below can each open their own txs (daily note +
-  // journal block creation on a fresh workspace day), historically
-  // leaving 2-4 entries on the undo stack — so cmd-Z (or the toast's
-  // Undo) only reverted the property write and left the new daily
-  // notes behind. Routing every tx through the grouped facade merges
-  // them into a single entry.
+  // One undo entry for the whole action, daily-note creation included.
   return block.repo.undoGroup(async repo => {
     const nextReviewDaily = await getOrCreateDailyNote(
       repo,
@@ -422,9 +416,6 @@ const runRescheduleWithFeedback = async (
   const workspaceId = block.peek()?.workspaceId
   if (!workspaceId) return
   const top = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault)
-  // The reschedule runs under `repo.undoGroup` (issue #306), so the top
-  // entry carries its group token — the toast matches by that, staying
-  // valid across same-group merges and going stale on any foreign entry.
   const groupId = top?.groupId
   if (!groupId) return
   const message = formatRescheduleToastMessage(result)

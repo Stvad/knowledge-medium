@@ -68,21 +68,24 @@ export const srsBlockDateAdapter: BlockDateAdapter = {
     const data = block.peek() ?? await block.load()
     if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
 
-    const targetDaily = await getOrCreateDailyNote(block.repo, data.workspaceId, iso)
+    // One undo entry for the whole action, daily-note creation included.
+    return block.repo.undoGroup(async repo => {
+      const targetDaily = await getOrCreateDailyNote(repo, data.workspaceId, iso)
 
-    let written = false
-    await block.repo.tx(async tx => {
-      const row = await tx.get(block.id)
-      if (!row || !getBlockTypes(row).includes(SRS_SM25_TYPE)) return
-      await tx.update(block.id, {
-        properties: {
-          ...row.properties,
-          [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(targetDaily.id),
-        },
-      })
-      written = true
-    }, {scope: ChangeScope.BlockDefault, description: 'set srs next review date'})
+      let written = false
+      await repo.tx(async tx => {
+        const row = await tx.get(block.id)
+        if (!row || !getBlockTypes(row).includes(SRS_SM25_TYPE)) return
+        await tx.update(block.id, {
+          properties: {
+            ...row.properties,
+            [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(targetDaily.id),
+          },
+        })
+        written = true
+      }, {scope: ChangeScope.BlockDefault, description: 'set srs next review date'})
 
-    return written
+      return written
+    })
   },
 }

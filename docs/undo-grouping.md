@@ -122,13 +122,35 @@ it; the CREATE statements carry the column (appended last, so fresh and
 ALTER-upgraded layouts match). No backfill: NULL means "ungrouped", which
 is correct for all pre-existing history. `row_events` is never dropped.
 
-### Reschedule rollout
+### Rollout
 
 `applySrsReschedulePlan` wraps its whole body in `block.repo.undoGroup`
 (covering both the review-button path and the date-scrub commit path).
 `RescheduleToast` matches the top entry by `groupId` instead of `txId`,
 so a trailing same-group merge keeps the Undo button live while any
 foreign entry disables it.
+
+A follow-up audit (PR #308) grouped the other multi-tx composites:
+
+- **`getOrCreateDailyNote`** groups internally (journal bootstrap +
+  note create/repair can be two txs) — this fixes every pure caller at
+  once (open-today/prev/next actions, QuickFind, DailyNotePicker, the
+  daily-note landing). Callers that hand it their own facade fold it
+  into their group via nested-join.
+- **`appendTodayDailyBlockInStack`** (note + appended child),
+  **`srsBlockDateAdapter.setIso`** (daily note + property write),
+  **`createOrFindPlace`** (Locations-page bootstrap + place create),
+  **`captureMedia`** (ASSETS-page bootstrap + asset mint) each wrap
+  their composite in a caller-level group.
+
+Audited and deliberately NOT grouped: the geo editor place-insert (the
+link text lands via the editor's own flush pipeline in the common path
+— cross-system, only the collision-toast fallback writes directly);
+onboarding landing seeds (bootstrap, not an interactive action);
+left-sidebar shortcuts bootstrap (cross-scope: UserPrefs +
+BlockDefault can't merge); extract-type create/retag (two separate
+dialogs = two intentional entries); Roam import (bulk, per-date
+failure-isolated by design).
 
 ## Invariants (test coverage)
 
