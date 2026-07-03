@@ -60,7 +60,7 @@ var showPromptToast = (repo, prompt) => {
 	});
 };
 var ExtensionPromptSurface = () => {
-	const $ = c(12);
+	const $ = c(13);
 	const repo = useRepo();
 	const statuses = useExtensionApprovalStatuses();
 	const dismissals = useExtensionPromptDismissals();
@@ -89,20 +89,14 @@ var ExtensionPromptSurface = () => {
 	useEffect(t1, t2);
 	let t3;
 	if ($[6] === Symbol.for("react.memo_cache_sentinel")) {
-		t3 = [];
+		t3 = /* @__PURE__ */ new Map();
 		$[6] = t3;
 	} else t3 = $[6];
-	useEffect(_temp2, t3);
+	const shown = useRef(t3);
 	let t4;
-	if ($[7] === Symbol.for("react.memo_cache_sentinel")) {
-		t4 = /* @__PURE__ */ new Map();
-		$[7] = t4;
-	} else t4 = $[7];
-	const shown = useRef(t4);
 	let t5;
-	let t6;
-	if ($[8] !== active || $[9] !== repo) {
-		t5 = () => {
+	if ($[7] !== active || $[8] !== repo) {
+		t4 = () => {
 			const next = /* @__PURE__ */ new Map();
 			for (const prompt of active) {
 				const id = toastId(prompt.blockId);
@@ -113,16 +107,32 @@ var ExtensionPromptSurface = () => {
 			for (const id_0 of shown.current.keys()) if (!next.has(id_0)) dismissToast(id_0);
 			shown.current = next;
 		};
-		t6 = [active, repo];
-		$[8] = active;
-		$[9] = repo;
+		t5 = [active, repo];
+		$[7] = active;
+		$[8] = repo;
+		$[9] = t4;
 		$[10] = t5;
-		$[11] = t6;
 	} else {
+		t4 = $[9];
 		t5 = $[10];
-		t6 = $[11];
 	}
-	useEffect(t5, t6);
+	useEffect(t4, t5);
+	let t6;
+	let t7;
+	if ($[11] === Symbol.for("react.memo_cache_sentinel")) {
+		t6 = () => () => {
+			extensionPromptStore.set([]);
+			for (const id_1 of shown.current.keys()) dismissToast(id_1);
+			shown.current.clear();
+		};
+		t7 = [];
+		$[11] = t6;
+		$[12] = t7;
+	} else {
+		t6 = $[11];
+		t7 = $[12];
+	}
+	useEffect(t6, t7);
 	return null;
 };
 var extensionPromptsExtension = systemToggle({
@@ -133,12 +143,6 @@ var extensionPromptsExtension = systemToggle({
 	id: "core.extension-prompts",
 	component: ExtensionPromptSurface
 }, { source: "core" }), extensionPromptDiagnosticContribution]);
-function _temp() {
-	return extensionPromptStore.set([]);
-}
-function _temp2() {
-	return _temp;
-}
 //#endregion
 export { ExtensionPromptSurface, extensionPromptsExtension };
 
