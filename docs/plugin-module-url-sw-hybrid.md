@@ -172,11 +172,13 @@ Babel from cache, and even a **miss** falls through to a plain network fetch (`a
 liveness: the `respondWith` promise must carry a **bounded timeout** so a stuck produce (e.g. an offline cold
 compile with Babel absent) fails the import (→ shell) rather than hanging it forever.
 
-**Offline cold-compile depends on Babel being precached** (`@babel/standalone/babel.js` in `PRECACHE_LAZY_ASSETS`,
-injected by `scripts/inject-sw-build-id.mjs`). This is in tension with §4.2's "slim the `install` `waitUntil`":
-slimming must keep Babel in precache (or move it off the activate-gating path while still caching it), else an
-offline cold compile of a brand-new extension can't run. Modules are otherwise only requested by a live page (the
-producer is always present), so there's no "serve a module without the producer" offline gap.
+**Offline cold-compile depends on Babel being precached** (`@babel/standalone/babel.js`, now covered by the
+full-graph `PRECACHE_REST_ASSETS` list injected by `scripts/inject-sw-build-id.mjs` — which precaches the whole
+emitted asset graph, superseding the earlier babel-only closure). This is in tension with §4.2's "slim the
+`install` `waitUntil`": full precache deliberately makes `install` heavier so each generation's cache is complete
+(the fix for the cross-generation module-skew described in `public/sw.js`'s header). Modules are otherwise only
+requested by a live page (the producer is always present), so there's no "serve a module without the producer"
+offline gap.
 
 **No *additional* plaintext at rest.** Under on-demand the compiled bytes never land in a Cache — they transit the
 message port and live only in the realm module map (memory, gone on reload). But the design **keeps** the existing

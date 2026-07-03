@@ -10,22 +10,27 @@
  *      install handler can fetch them up front; without it a first-time
  *      offline reload would fail to boot. Installed `{ cache: 'default' }`
  *      (the page just fetched these exact URLs).
- *   3. The must-be-offline LAZY asset list (`__PRECACHE_LAZY_ASSETS__`) —
- *      chunks not in the first-paint graph but needed offline, plus their
- *      transitive deps (`@babel/standalone` — see
- *      scripts/precache-lazy-assets.mjs). Kept SEPARATE because the SW
- *      installs them `{ cache: 'reload' }`: they weren't first-painted and
- *      their unhashed URLs carry per-deploy-varying bytes, so a default
- *      fetch could copy a stale prior-deploy entry into this generation.
+ *   3. The REST asset list (`__PRECACHE_REST_ASSETS__` placeholder) — every
+ *      OTHER same-origin runtime asset the SW serves cache-first (the full
+ *      emitted module graph minus first-paint: lazy chunks, `@babel/standalone`,
+ *      wasm, fonts — see scripts/precache-assets.mjs). Precaching the whole set
+ *      is what makes each generation's cache SELF-CONTAINED: `assetCacheFirst`
+ *      never has to fall through to the network (which would serve the newest,
+ *      possibly-different generation and graft mismatched module bytes onto an
+ *      old page — the `does not provide an export named …` skew). It also makes
+ *      the app fully offline. Kept SEPARATE from first-paint because the SW
+ *      installs it `{ cache: 'reload' }`: these unhashed URLs carry
+ *      per-deploy-varying bytes, so a `default` fetch could copy a stale
+ *      prior-deploy entry into this generation.
  *
  * Fails the build if any placeholder is missing — all are required for the
  * SW to behave correctly.
  */
 import {readFileSync, writeFileSync, existsSync, readdirSync} from 'node:fs'
 import {execSync} from 'node:child_process'
-import {dirname, resolve, relative, sep} from 'node:path'
+import {dirname, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
-import {transitiveClosure} from './precache-lazy-assets.mjs'
+import {collectRestAssets} from './precache-assets.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = resolve(__dirname, '..', 'dist')
@@ -76,14 +81,6 @@ const collectPrecacheAssets = () => {
   return [...hrefs].sort()
 }
 
-// Lazy chunks that are NOT in the first-paint HTML graph but must be
-// offline-available — and their transitive sibling-chunk deps. Today this
-// is `@babel/standalone`, dynamically imported by compileExtensionModule
-// on a compile-cache miss; without re-precaching it, a cold offline
-// compile would fail (see scripts/precache-lazy-assets.mjs). Paths are
-// dist-relative (POSIX), stable + unhashed thanks to preserveModules.
-const LAZY_PRECACHE_ENTRYPOINTS = ['node_modules/@babel/standalone/babel.js']
-
 // Base-prefix a dist-relative path the same way Vite emits the
 // index.html-derived precache URLs (absolute, under the configured base),
 // so the two sets dedupe and the SW resolves them against its scope. Base
@@ -96,11 +93,24 @@ const base = (() => {
 })()
 const toBaseUrl = (rel) => `${base}${rel.replace(/^\/+/, '')}`
 
-const collectLazyPrecacheAssets = () =>
-  transitiveClosure(LAZY_PRECACHE_ENTRYPOINTS, {
-    exists: (rel) => existsSync(resolve(distDir, rel)),
-    readFile: (rel) => readFileSync(resolve(distDir, rel), 'utf8'),
-  }).map(toBaseUrl)
+// Every emitted file under dist/, as dist-relative POSIX paths. The full set
+// is what `collectRestAssets` filters down to the SW-cacheable assets — no
+// static import walk needed (or possible: user extensions import `@/…` modules
+// at runtime, which the bundler's graph can't see), so we precache the whole
+// emitted graph rather than a reachable closure.
+const walkDistFiles = () => {
+  const out = []
+  const walk = (absDir, relDir) => {
+    for (const entry of readdirSync(absDir, {withFileTypes: true})) {
+      const abs = resolve(absDir, entry.name)
+      const rel = relDir ? `${relDir}/${entry.name}` : entry.name
+      if (entry.isDirectory()) walk(abs, rel)
+      else if (entry.isFile()) out.push(rel)
+    }
+  }
+  walk(distDir, '')
+  return out
+}
 
 const buildId = resolveBuildId()
 
@@ -108,18 +118,19 @@ const buildId = resolveBuildId()
 //   - first-paint assets → { cache: 'default' }: the page just fetched these
 //     exact (unhashed) URLs, so the browser HTTP cache holds THIS generation's
 //     bytes — copying them into Cache Storage is near-free and correct.
-//   - lazy assets (Babel) → { cache: 'reload' }: these were NOT first-painted,
-//     and their URLs are unhashed with bytes that vary per deploy, so a
-//     { cache: 'default' } fetch could copy a STALE prior-deploy entry out of
-//     the HTTP cache into this generation's cache. 'reload' forces the network
-//     so the generation always gets its own bytes.
-// A chunk that IS first-painted (e.g. the shared rolldown runtime that Babel
-// also imports) stays in the first-paint list only — no double fetch.
+//   - rest assets (the full emitted graph minus first-paint) → { cache: 'reload' }:
+//     unhashed URLs whose bytes vary per deploy, so a { cache: 'default' } fetch
+//     could copy a STALE prior-deploy entry out of the HTTP cache into this
+//     generation — reintroducing the cross-generation skew this precache exists
+//     to prevent. 'reload' forces the network so the generation gets its own
+//     bytes. `collectRestAssets` drops any URL already in first-paint (no double
+//     fetch) and everything the SW wouldn't serve cache-first (maps, sw.js, …).
 const firstPaintAssets = collectPrecacheAssets()
-const firstPaintSet = new Set(firstPaintAssets)
-const lazyPrecacheAssets = [
-  ...new Set(collectLazyPrecacheAssets().filter((u) => !firstPaintSet.has(u))),
-].sort()
+const {restAssets} = collectRestAssets({
+  allFiles: walkDistFiles(),
+  firstPaint: firstPaintAssets,
+  toBaseUrl,
+})
 
 let source = readFileSync(swPath, 'utf8')
 
@@ -131,7 +142,7 @@ const requirePlaceholder = (placeholder) => {
 }
 requirePlaceholder('__BUILD_ID__')
 requirePlaceholder('__PRECACHE_ASSETS__')
-requirePlaceholder('__PRECACHE_LAZY_ASSETS__')
+requirePlaceholder('__PRECACHE_REST_ASSETS__')
 
 // Embed as a JSON string then JSON.parse at runtime so the array can
 // contain any number of entries without breaking the surrounding source.
@@ -140,9 +151,9 @@ const encodeArray = (arr) =>
 
 source = source.split('__BUILD_ID__').join(buildId)
 source = source.split('__PRECACHE_ASSETS__').join(encodeArray(firstPaintAssets))
-source = source.split('__PRECACHE_LAZY_ASSETS__').join(encodeArray(lazyPrecacheAssets))
+source = source.split('__PRECACHE_REST_ASSETS__').join(encodeArray(restAssets))
 writeFileSync(swPath, source)
 console.log(
   `[inject-sw-build-id] stamped sw.js with ${buildId}, ` +
-  `${firstPaintAssets.length} first-paint + ${lazyPrecacheAssets.length} lazy precache assets`,
+  `${firstPaintAssets.length} first-paint + ${restAssets.length} rest precache assets`,
 )

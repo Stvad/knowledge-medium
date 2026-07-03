@@ -1,0 +1,79 @@
+/**
+ * Enumerate every same-origin runtime asset the service worker serves
+ * cache-first, so `inject-sw-build-id.mjs` can precache the WHOLE emitted
+ * module graph into each generation's cache — not just the first-paint set.
+ *
+ * Why full precache (supersedes the old babel-only `precache-lazy-assets`
+ * closure): the prod build ships modules at UNHASHED, stable URLs
+ * (`preserveModules` + `[name].js`), so cross-build consistency rests
+ * entirely on `public/sw.js` pinning each deploy to its own generation cache
+ * and never grafting foreign-generation bytes onto a page. That invariant
+ * only holds for assets that are actually IN the generation cache. Anything
+ * lazy — e.g. the extension surface `src/extensions/api.js`, imported only at
+ * runtime by user-extension blocks and therefore never first-painted — was
+ * NOT precached, so on a cache miss the SW's network fallback
+ * (`assetCacheFirst`) served the NEWEST generation's copy, grafting new bytes
+ * onto an old page. When the new copy's exports drifted from the old page's
+ * already-resolved siblings, the browser threw
+ * `does not provide an export named …`. Precaching the full asset set closes
+ * that gap (each page only ever reads its own complete generation) and, as a
+ * bonus, makes the app fully offline-capable — every module it can lazily
+ * import is already in Cache Storage.
+ *
+ * The extension set MIRRORS `public/sw.js`'s `ASSET_EXTENSION` /
+ * `isCacheableAsset`: we precache EXACTLY what the SW serves from the
+ * generation cache — no more. That deliberately excludes:
+ *   - `*.map`   — dev/DevTools only (~30 MB), never fetched by the running app;
+ *   - `sw.js`   — the worker itself, managed by the SW lifecycle, not imported;
+ *   - `version.json`, `*.html`, `*.webmanifest` — not asset-typed; the shell is
+ *     handled separately (network-first) and `version.json` must stay fresh.
+ *
+ * Pure + dependency-injected (`allFiles` / `toBaseUrl`) so it unit-tests
+ * without touching a real dist tree.
+ */
+import {posix} from 'node:path'
+
+// Keep in sync with ASSET_EXTENSION in public/sw.js — the set of same-origin
+// files the SW serves cache-first from the generation cache.
+export const ASSET_EXTENSION =
+  /\.(?:js|mjs|css|wasm|woff2?|ttf|otf|png|svg|jpe?g|webp|gif|ico)$/
+
+// The service worker file is same-origin JS but must never be cached as an app
+// asset: it's fetched + version-checked by the SW machinery, never `import`ed.
+const EXCLUDE_BASENAMES = new Set(['sw.js'])
+
+/** True for a dist-relative path the SW would serve from the generation cache. */
+export const isPrecacheableAsset = (relPath) =>
+  ASSET_EXTENSION.test(relPath) && !EXCLUDE_BASENAMES.has(posix.basename(relPath))
+
+/**
+ * Partition the emitted graph into the "rest" precache list — every
+ * precacheable asset that is NOT already in the first-paint set. The SW
+ * installs the two lists with different cache modes (see `public/sw.js`):
+ * first-paint with `{cache:'default'}` (the page just fetched those exact
+ * URLs, so the HTTP cache holds this generation's bytes), and `rest` with
+ * `{cache:'reload'}` (these unhashed URLs can hold a PRIOR deploy's bytes in
+ * the HTTP cache, so a `default` fetch could copy stale cross-generation bytes
+ * into this generation and reintroduce the very skew we're closing).
+ *
+ * Excluding first-paint keeps the SW from re-fetching (with `reload`) the URLs
+ * `default` already covered for free. Output is base-prefixed to match the
+ * first-paint URLs and how the SW resolves entries against its scope.
+ *
+ * @param {object} p
+ * @param {string[]} p.allFiles  dist-relative POSIX paths of every emitted file
+ * @param {string[]} p.firstPaint base-prefixed first-paint URLs (from the HTML)
+ * @param {(rel: string) => string} p.toBaseUrl dist-rel → base-prefixed URL
+ * @returns {{restAssets: string[]}} base-prefixed, deduped, sorted
+ */
+export const collectRestAssets = ({allFiles, firstPaint, toBaseUrl}) => {
+  const firstPaintSet = new Set(firstPaint)
+  const rest = new Set()
+  for (const rel of allFiles) {
+    if (!isPrecacheableAsset(rel)) continue
+    const url = toBaseUrl(rel)
+    if (firstPaintSet.has(url)) continue
+    rest.add(url)
+  }
+  return {restAssets: [...rest].sort()}
+}
