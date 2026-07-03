@@ -227,9 +227,13 @@ const AudioViewer = ({
   // too: audio/* no longer falls through to the download fallback, so this viewer must keep
   // the "every attachment is at least downloadable" floor (§11) — savable without playing.
   return (
+    // inline-flex + align-top (NOT block `flex`): a `((id))` reference renders this widget INSIDE the
+    // inline <a> citation link (referenceLayout.tsx), so a block-level container would sit on the host
+    // line's baseline and drop ~1 line-height below the block's top. An inline-flex box with
+    // vertical-align:top hugs the line top → flush in a reference AND unchanged standalone (measured).
     <div
       data-testid="media-audio"
-      className="flex w-fit max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 text-sm"
+      className="inline-flex max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 align-top text-sm"
     >
       {/* Stable header — same box in every state (poster / loading / player / broken), so the widget
           doesn't shift down when the player opens (matches the PDF viewer). Holds the downloadable
@@ -352,9 +356,13 @@ const PdfViewer = ({ state, resolveBytes, requestResolve, armed, filename, size 
   }
 
   return (
+    // inline-flex + align-top (NOT block `flex`): a `((id))` reference renders this widget INSIDE the
+    // inline <a> citation link (referenceLayout.tsx), so a block-level container would sit on the host
+    // line's baseline and drop ~1 line-height below the block's top. An inline-flex box with
+    // vertical-align:top hugs the line top → flush in a reference AND unchanged standalone (measured).
     <div
       data-testid="media-pdf"
-      className="flex w-fit max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 text-sm"
+      className="inline-flex max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 align-top text-sm"
     >
       {/* The STABLE header — identical in every state (poster / loading / preview / broken), so the
           widget never shifts down when the preview opens. Holds the downloadable floor (§11):
