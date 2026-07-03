@@ -140,6 +140,22 @@ var blockTypePropertiesProp = defineProperty("block-type:properties", {
 	defaultValue: [],
 	changeScope: ChangeScope.BlockDefault
 });
+/** Don't render this type's chip on blocks (the supertags `#type`
+*  row). Display-only — the type stays taggable and visible in
+*  pickers/panel. Lifted onto `TypeContribution.hideFromBlockDisplay`. */
+var blockTypeHideFromBlockDisplayProp = defineProperty("block-type:hide-from-block-display", {
+	codec: codecs.boolean,
+	defaultValue: false,
+	changeScope: ChangeScope.BlockDefault
+});
+/** CSS color for this type's tag chip (any `color`-property value:
+*  `#e11d48`, `tomato`, `hsl(…)`, …). Empty = default chip styling.
+*  Lifted onto `TypeContribution.color`. */
+var blockTypeColorProp = defineProperty("block-type:color", {
+	codec: codecs.string,
+	defaultValue: "",
+	changeScope: ChangeScope.BlockDefault
+});
 /** Opaque user id (the value stored in `created_by` / `updated_by`) on a
 *  `'user'` user-page block. Gives the page a structured, queryable link
 *  between the id and the display name (the block's content) alongside
@@ -320,9 +336,11 @@ var KERNEL_PROPERTY_SCHEMAS = [
 	blockTypeLabelProp,
 	blockTypeDescriptionProp,
 	blockTypePropertiesProp,
+	blockTypeHideFromBlockDisplayProp,
+	blockTypeColorProp,
 	userIdProp
 ];
 //#endregion
-export { KERNEL_PROPERTY_SCHEMAS, activePanelIdProp, addBlockTypeToProperties, addedTypes, aliasesProp, blockTypeDescriptionProp, blockTypeLabelProp, blockTypePropertiesProp, createdAtProp, editorFocusRequestProp, editorSelection, exitEditModeForBlock, extensionDescriptionProp, extensionNameProp, focusBlock, focusedBlockLocationFromProperties, focusedBlockLocationProp, getBlockTypes, hasBlockType, isCollapsedProp, isEditingProp, isFocusedBlock, peekFocusedBlockLocation, presetConfigProp, presetIdProp, propertyNameProp, removedTypes, rendererNameProp, rendererProp, requestEditorFocus, sameFocusedBlockLocation, scrollTopProp, selectionStateProp, setIsEditing, showPropertiesProp, sourceBlockIdProp, topLevelBlockIdProp, typesProp, userIdProp };
+export { KERNEL_PROPERTY_SCHEMAS, activePanelIdProp, addBlockTypeToProperties, addedTypes, aliasesProp, blockTypeColorProp, blockTypeDescriptionProp, blockTypeHideFromBlockDisplayProp, blockTypeLabelProp, blockTypePropertiesProp, createdAtProp, editorFocusRequestProp, editorSelection, exitEditModeForBlock, extensionDescriptionProp, extensionNameProp, focusBlock, focusedBlockLocationFromProperties, focusedBlockLocationProp, getBlockTypes, hasBlockType, isCollapsedProp, isEditingProp, isFocusedBlock, peekFocusedBlockLocation, presetConfigProp, presetIdProp, propertyNameProp, removedTypes, rendererNameProp, rendererProp, requestEditorFocus, sameFocusedBlockLocation, scrollTopProp, selectionStateProp, setIsEditing, showPropertiesProp, sourceBlockIdProp, topLevelBlockIdProp, typesProp, userIdProp };
 
 //# sourceMappingURL=properties.js.map

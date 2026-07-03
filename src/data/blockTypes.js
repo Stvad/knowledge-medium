@@ -1,6 +1,6 @@
-import { defineBlockType } from "./api/blockType.js";
+import { INFRASTRUCTURE_TYPE_DISPLAY, defineBlockType } from "./api/blockType.js";
 import "./api/index.js";
-import { aliasesProp, blockTypeDescriptionProp, blockTypeLabelProp, blockTypePropertiesProp, extensionDescriptionProp, extensionNameProp, presetConfigProp, presetIdProp, propertyNameProp, userIdProp } from "./properties.js";
+import { aliasesProp, blockTypeColorProp, blockTypeDescriptionProp, blockTypeHideFromBlockDisplayProp, blockTypeLabelProp, blockTypePropertiesProp, extensionDescriptionProp, extensionNameProp, presetConfigProp, presetIdProp, propertyNameProp, userIdProp } from "./properties.js";
 //#region src/data/blockTypes.ts
 var EXTENSION_TYPE = "extension";
 var PAGE_TYPE = "page";
@@ -32,24 +32,29 @@ var KERNEL_TYPE_CONTRIBUTIONS = [
 	defineBlockType({
 		id: EXTENSION_TYPE,
 		label: "Extension",
+		...INFRASTRUCTURE_TYPE_DISPLAY,
 		properties: [extensionNameProp, extensionDescriptionProp]
 	}),
 	defineBlockType({
 		id: PAGE_TYPE,
 		label: "Page",
+		...INFRASTRUCTURE_TYPE_DISPLAY,
 		properties: [aliasesProp]
 	}),
 	defineBlockType({
 		id: PANEL_TYPE,
-		label: "Panel"
+		label: "Panel",
+		hideFromCompletion: true
 	}),
 	defineBlockType({
 		id: PANEL_STACK_TYPE,
-		label: "Panel stack"
+		label: "Panel stack",
+		hideFromCompletion: true
 	}),
 	defineBlockType({
 		id: PROPERTY_SCHEMA_TYPE,
 		label: "Property schema",
+		...INFRASTRUCTURE_TYPE_DISPLAY,
 		properties: [
 			propertyNameProp,
 			presetIdProp,
@@ -59,30 +64,37 @@ var KERNEL_TYPE_CONTRIBUTIONS = [
 	defineBlockType({
 		id: PROPERTIES_PAGE_TYPE,
 		label: "Properties page",
+		...INFRASTRUCTURE_TYPE_DISPLAY,
 		properties: [aliasesProp]
 	}),
 	defineBlockType({
 		id: BLOCK_TYPE_TYPE,
 		label: "Type",
+		...INFRASTRUCTURE_TYPE_DISPLAY,
 		properties: [
 			blockTypeLabelProp,
 			blockTypeDescriptionProp,
-			blockTypePropertiesProp
+			blockTypePropertiesProp,
+			blockTypeHideFromBlockDisplayProp,
+			blockTypeColorProp
 		]
 	}),
 	defineBlockType({
 		id: TYPES_PAGE_TYPE,
 		label: "Types page",
+		...INFRASTRUCTURE_TYPE_DISPLAY,
 		properties: [aliasesProp]
 	}),
 	defineBlockType({
 		id: RECENTS_PAGE_TYPE,
 		label: "Recents page",
+		...INFRASTRUCTURE_TYPE_DISPLAY,
 		properties: [aliasesProp]
 	}),
 	defineBlockType({
 		id: USER_TYPE,
 		label: "User",
+		hideFromCompletion: true,
 		properties: [aliasesProp, userIdProp]
 	})
 ];

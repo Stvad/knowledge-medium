@@ -53,6 +53,7 @@ import { keybindingsSettingsPlugin } from "../plugins/keybindings-settings/index
 import { extractTypePlugin } from "../plugins/extract-type/index.js";
 import { birthdayPlugin } from "../plugins/birthday/index.js";
 import { characterCounterPlugin } from "../plugins/character-counter/index.js";
+import { supertagsPlugin } from "../plugins/supertags/index.js";
 //#region src/extensions/staticAppExtensions.ts
 var staticAppExtensions = ({ repo }) => [
 	extensionsSettingsPlugin,
@@ -89,6 +90,7 @@ var staticAppExtensions = ({ repo }) => [
 	referencesPlugin,
 	geoPlugin,
 	characterCounterPlugin,
+	supertagsPlugin,
 	aliasPlugin,
 	mergeBlocksPlugin,
 	backlinksPlugin,

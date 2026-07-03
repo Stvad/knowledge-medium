@@ -1,4 +1,6 @@
 import { EditorSelection } from "../../../node_modules/@codemirror/state/dist/index.js";
+import { isInsideLiteralMarkdown } from "../../editor/syntaxContext.js";
+import { matchCharTrigger } from "../../editor/triggerMatch.js";
 //#region src/plugins/geo/placeAutocomplete.ts
 /** CodeMirror CompletionSource for the `@` place trigger.
 *
@@ -29,54 +31,11 @@ import { EditorSelection } from "../../../node_modules/@codemirror/state/dist/in
 *  candidates and a `resolvePlace` callback. Wiring to the repo, the
 *  Google client, and `createOrFindPlace` happens in the geo plugin's
 *  CodeMirror extension. */
-var isInsideUnclosedWikilink = (text, beforePos) => {
-	let opens = 0;
-	let closes = 0;
-	for (let i = 0; i < beforePos - 1; i++) if (text[i] === "[" && text[i + 1] === "[") {
-		opens += 1;
-		i += 1;
-	} else if (text[i] === "]" && text[i + 1] === "]") {
-		closes += 1;
-		i += 1;
-	}
-	return opens > closes;
-};
-/** Place names routinely contain spaces ("Blue Bottle Coffee"), so the
-*  query may span words. The caps below decide when an `@` earlier in
-*  the line stops owning what the user types: a double space or any
-*  non-space whitespace ends the query immediately, and a query longer
-*  than this many chars/words is prose, not a place name. Without the
-*  caps, every sentence containing a bare `@word` would re-open the
-*  dropdown on each keystroke until end of line. */
-var MAX_QUERY_LEN = 50;
-var MAX_QUERY_WORDS = 6;
-/** Pure trigger-detection helper. Exported for direct testing — the
-*  CompletionSource glue just adapts to CodeMirror's call shape. */
-var matchAtTrigger = (text, pos) => {
-	let i = pos;
-	while (i > 0) {
-		const c = text[i - 1];
-		if (c === "@") break;
-		if (c === " ") {
-			if (i >= 2 && text[i - 2] === " ") return null;
-		} else if (/\s/.test(c)) return null;
-		if (c === "[" || c === "]") return null;
-		if (pos - i >= MAX_QUERY_LEN) return null;
-		i -= 1;
-	}
-	if (i === 0 || text[i - 1] !== "@") return null;
-	const query = text.slice(i, pos);
-	if (query.startsWith(" ")) return null;
-	if (query.split(" ").filter((w) => w.length > 0).length > MAX_QUERY_WORDS) return null;
-	const atPos = i - 1;
-	if (atPos > 0 && /\w/.test(text[atPos - 1])) return null;
-	if (atPos > 0 && text[atPos - 1] === "[") return null;
-	if (isInsideUnclosedWikilink(text, atPos)) return null;
-	return {
-		from: atPos,
-		query
-	};
-};
+/** `@` trigger detection — the shared matcher (see
+*  `src/editor/triggerMatch.ts` for the query/guard semantics: single
+*  spaces allowed for multi-word place names, email guard, wikilink
+*  ownership, length/word caps). Exported for direct testing. */
+var matchAtTrigger = (text, pos) => matchCharTrigger(text, pos, "@");
 /** Where to apply the trigger-text → wikilink replacement once the
 *  resolution settles. Prefers the recorded span if the text is still
 *  there; re-locates by content when the doc drifted around it (other
@@ -153,6 +112,7 @@ var placeCompletionSource = (options) => {
 		const lineText = line.text;
 		const match = matchAtTrigger(lineText, pos - line.from);
 		if (!match) return null;
+		if (isInsideLiteralMarkdown(state, pos)) return null;
 		const candidates = await options.getCandidates(match.query);
 		if (candidates.length === 0 && !explicit) return null;
 		return {
