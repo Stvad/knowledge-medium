@@ -64,4 +64,23 @@ describe('ExtensionPromptDismissalStore', () => {
     store.dismiss('matrix', 'hm')
     expect(fired).toBe(1)
   })
+
+  it('reloadFromStorage notifies only when the stored value actually changed', () => {
+    store.dismiss('matrix', 'hm')
+    let fired = 0
+    store.subscribe(() => fired++)
+
+    // A cross-tab `storage` event that wrote an identical value must not churn.
+    store.reloadFromStorage()
+    expect(fired).toBe(0)
+
+    // A genuine external change does notify.
+    storage.setItem(
+      'extensions.prompt-dismissals',
+      JSON.stringify({matrix: 'hm', readwise: 'hr'}),
+    )
+    store.reloadFromStorage()
+    expect(fired).toBe(1)
+    expect(store.isDismissed('readwise', 'hr')).toBe(true)
+  })
 })

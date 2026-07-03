@@ -42,6 +42,13 @@ const decode = (raw: unknown): Record<string, string> => {
   return out
 }
 
+const sameDismissals = (a: DismissalMap, b: DismissalMap): boolean => {
+  const aKeys = Object.keys(a)
+  if (aKeys.length !== Object.keys(b).length) return false
+  for (const key of aKeys) if (a[key] !== b[key]) return false
+  return true
+}
+
 export class ExtensionPromptDismissalStore {
   private state: DismissalMap
   private readonly listeners = new CallbackSet('ExtensionPromptDismissals')
@@ -81,9 +88,14 @@ export class ExtensionPromptDismissalStore {
   }
 
   /** Re-read from storage. Used by the cross-tab `storage` listener (and
-   *  tests) so a dismissal in another tab reflects here. */
+   *  tests) so a dismissal in another tab reflects here. No-ops (no notify,
+   *  no fresh snapshot) when the stored value is unchanged — mirrors the
+   *  equality guards in `dismiss`/`clear` so a redundant `storage` event
+   *  doesn't churn subscribers. */
   reloadFromStorage = (): void => {
-    this.state = decode(this.storage.get<unknown>(STORAGE_KEY, null))
+    const next = decode(this.storage.get<unknown>(STORAGE_KEY, null))
+    if (sameDismissals(next, this.state)) return
+    this.state = next
     this.notify()
   }
 

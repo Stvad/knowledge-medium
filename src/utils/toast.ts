@@ -20,9 +20,20 @@
 import type React from 'react'
 import { toast as sonnerToast } from 'sonner'
 
+/** The click event handed to a toast action's `onClick`. Call
+ *  `preventDefault()` to KEEP the toast open after the action fires — the
+ *  underlying toast lib (sonner) otherwise dismisses the toast on any action
+ *  click. Handlers that don't need this can ignore the argument. */
+export interface ToastActionEvent {
+  preventDefault: () => void
+}
+
 export interface ToastAction {
   label: string
-  onClick: () => void
+  /** `event` is present when the toast lib invokes the handler on a real
+   *  click (optional so call sites/tests can invoke without one). Call
+   *  `event?.preventDefault()` to keep the toast open. */
+  onClick: (event?: ToastActionEvent) => void
 }
 
 export interface ToastOptions {
@@ -43,7 +54,9 @@ export interface ToastOptions {
 }
 
 const buildAction = (action: ToastAction | undefined) =>
-  action ? {label: action.label, onClick: () => action.onClick()} : undefined
+  action
+    ? {label: action.label, onClick: (event: ToastActionEvent) => action.onClick(event)}
+    : undefined
 
 export const showError = (message: string, opts: ToastOptions = {}): string | number =>
   sonnerToast.error(message, {

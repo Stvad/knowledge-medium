@@ -43,6 +43,15 @@ const optsFor = (blockId: string): ToastOptions => {
   return call[1] as ToastOptions
 }
 
+/** Click a toast's action button with a fake event (as sonner would), and
+ *  return the event so the caller can assert `preventDefault` — the mechanism
+ *  that keeps the toast open instead of letting sonner dismiss it. */
+const clickAction = (blockId: string): {preventDefault: ReturnType<typeof vi.fn>} => {
+  const event = {preventDefault: vi.fn()}
+  optsFor(blockId).action?.onClick(event)
+  return event
+}
+
 const renderSurface = (store: ExtensionApprovalStatusStore) =>
   render(
     <ExtensionApprovalStatusProvider store={store}>
@@ -140,11 +149,14 @@ describe('ExtensionPromptSurface', () => {
 
     await waitFor(() => expect(showInfo).toHaveBeenCalledTimes(2))
 
+    let event!: {preventDefault: ReturnType<typeof vi.fn>}
     await act(async () => {
-      optsFor('matrix').action?.onClick()
+      event = clickAction('matrix')
       await Promise.resolve()
     })
 
+    // preventDefault keeps the toast open; we own dismissal (via the refresh).
+    expect(event.preventDefault).toHaveBeenCalledTimes(1)
     expect(approveExtensionHere).toHaveBeenCalledWith(repo, 'matrix', 'Matrix')
     expect(approveExtensionHere).not.toHaveBeenCalledWith(
       repo,
@@ -154,7 +166,7 @@ describe('ExtensionPromptSurface', () => {
     await waitFor(() => expect(refreshAppRuntime).toHaveBeenCalledTimes(1))
   })
 
-  it('keeps the toast (retry affordance) when the approval fails', async () => {
+  it('keeps the toast open (no re-show, no dismiss) when the approval fails', async () => {
     approveExtensionHere.mockResolvedValueOnce(false)
     const store = new ExtensionApprovalStatusStore()
     store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
@@ -162,18 +174,21 @@ describe('ExtensionPromptSurface', () => {
 
     await waitFor(() => expect(showInfo).toHaveBeenCalledTimes(1))
 
-    // Sonner auto-dismisses the toast on action click; a failed approval must
-    // re-show it (the status is unchanged, so the reconcile effect won't).
+    // preventDefault keeps the toast mounted, so a failed approval needs no
+    // re-show (re-showing under the same id loses sonner's ~200ms id-removal
+    // race). The toast just stays as the retry affordance.
+    let event!: {preventDefault: ReturnType<typeof vi.fn>}
     await act(async () => {
-      optsFor('matrix').action?.onClick()
+      event = clickAction('matrix')
       await Promise.resolve()
     })
 
+    expect(event.preventDefault).toHaveBeenCalledTimes(1)
     expect(refreshAppRuntime).not.toHaveBeenCalled()
-    await waitFor(() =>
-      expect(
-        showInfo.mock.calls.filter((c) => c[1]?.id === 'ext-approval:matrix'),
-      ).toHaveLength(2),
-    )
+    // No teardown and no re-show — the single original toast is left in place.
+    expect(dismissToast).not.toHaveBeenCalledWith('ext-approval:matrix')
+    expect(
+      showInfo.mock.calls.filter((c) => c[1]?.id === 'ext-approval:matrix'),
+    ).toHaveLength(1)
   })
 })
