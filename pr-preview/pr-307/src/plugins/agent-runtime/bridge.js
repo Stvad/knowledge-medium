@@ -1,4 +1,4 @@
-import { blockEditSettled } from "../../editor/editSettleSignal.js";
+import { blockEditResumed, blockEditSettled } from "../../editor/editSettleSignal.js";
 import { openDialog } from "../../utils/dialogs.js";
 import { agentTokenStore, agentTokensChangedEvent } from "./tokens.js";
 import { AgentTokensDialog } from "./AgentTokensDialog.js";
@@ -193,6 +193,7 @@ var startAgentRuntimeBridge = (options) => {
 		await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId);
 	});
 	const offEditSettled = blockEditSettled.add((blockId) => watchEventsRegistry.notifyBlockSettled(blockId));
+	const offEditResumed = blockEditResumed.add((blockId) => watchEventsRegistry.notifyBlockEditing(blockId));
 	window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart);
 	window.addEventListener(agentTokensChangedEvent, handleTokensChanged);
 	window.addEventListener("focus", handleWakeEvent);
@@ -200,7 +201,7 @@ var startAgentRuntimeBridge = (options) => {
 	window.addEventListener("online", handleWakeEvent);
 	document.addEventListener("visibilitychange", handleVisibilityChanged);
 	const maxConcurrentCommands = 4;
-	const saturatedParkMs = 6e4;
+	const saturatedParkMs = 45e3;
 	const inFlightCommands = /* @__PURE__ */ new Set();
 	const runCommand = async (command, baseUrl) => {
 		let payload;
@@ -285,6 +286,7 @@ var startAgentRuntimeBridge = (options) => {
 		watchEventsRegistry.setTransport(null);
 		watchEventsRegistry.disposeAll();
 		offEditSettled();
+		offEditResumed();
 		window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart);
 		window.removeEventListener(agentTokensChangedEvent, handleTokensChanged);
 		window.removeEventListener("focus", handleWakeEvent);

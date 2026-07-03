@@ -256,7 +256,7 @@ var watchEventsWatcherSchema = discriminatedUnion("kind", [looseObject({
 var watchEventsCommandSchema = looseObject({
 	type: literal("watch-events"),
 	consumer: string().min(1),
-	watchers: array(watchEventsWatcherSchema).max(64),
+	watchers: array(watchEventsWatcherSchema).max(64).refine((watchers) => new Set(watchers.map((watcher) => watcher.name)).size === watchers.length, { message: "watcher names must be unique within a registration" }),
 	ttlMs: number().int().min(1e3).max(24 * 36e5).optional(),
 	...commandIdField
 });

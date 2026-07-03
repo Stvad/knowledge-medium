@@ -11,7 +11,7 @@ import { shouldExitEditModeAfterBlur } from "../utils/dom.js";
 import { keyboardAwareScroll } from "../utils/keyboardAwareScroll.js";
 import { useShortcutSurfaceActivations } from "../extensions/useShortcutSurfaceActivations.js";
 import { resolveEditModeKeepalive } from "./editModeKeepalive.js";
-import { notifyBlockEditSettled } from "../editor/editSettleSignal.js";
+import { notifyBlockEditResumed, notifyBlockEditSettled } from "../editor/editSettleSignal.js";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { jsx } from "react/jsx-runtime";
 //#region src/components/BlockEditor.tsx
@@ -40,7 +40,10 @@ var BlockEditor = ({ block, ref, ...codeMirrorProps }) => {
 		pushSelection.flush();
 	}, [pushChange, pushSelection]);
 	useLayoutEffect(() => flushDebouncers, [flushDebouncers]);
-	useEffect(() => () => notifyBlockEditSettled(block.id), [block.id]);
+	useEffect(() => {
+		notifyBlockEditResumed(block.id);
+		return () => notifyBlockEditSettled(block.id);
+	}, [block.id]);
 	useEffect(() => {
 		if (!blockEditData || !editorView) return;
 		const incomingUpdatedAt = blockEditData.updatedAt;
