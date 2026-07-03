@@ -11,7 +11,7 @@ import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePair
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
-import { knownAgentCommandSchema } from '@knowledge-medium/agent-cli/protocol'
+import { knownAgentCommandSchema, type KnownAgentCommand } from '@knowledge-medium/agent-cli/protocol'
 
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
@@ -339,6 +339,34 @@ export const startAgentRuntimeBridge = (
   window.addEventListener('online', handleWakeEvent)
   document.addEventListener('visibilitychange', handleVisibilityChanged)
 
+  // Commands run DETACHED from the poll loop: a slow command (a hung
+  // eval, a long SQL) must not stall delivery of everything queued
+  // behind it — the daemon's polls, other CLI calls. Bounded so a
+  // command flood can't pile up unboundedly; the loop parks on a free
+  // slot instead of on completion of the command it just delivered.
+  const maxConcurrentCommands = 4
+  const inFlightCommands = new Set<Promise<void>>()
+
+  const runCommand = async (command: KnownAgentCommand, baseUrl: string) => {
+    let payload: unknown
+    try {
+      const value = await executeCommand(command, createAgentRuntimeContext(options))
+      payload = {ok: true, value: serializeValue(value)}
+    } catch (error) {
+      payload = {ok: false, error: serializeError(error)}
+    }
+    try {
+      await reportResult(command.commandId!, payload, baseUrl)
+    } catch (reportError) {
+      // No result channel left (bridge restarted / page going away). The
+      // submitter's own request times out; the poll loop's fetches carry
+      // the reconnect/backoff, so just surface it for debugging.
+      if (!abortController.signal.aborted) {
+        console.warn('Agent runtime: failed to report a command result.', reportError)
+      }
+    }
+  }
+
   const poll = async () => {
     while (!abortController.signal.aborted) {
       // Read the endpoint live each iteration so a pairing the user
@@ -392,17 +420,13 @@ export const startAgentRuntimeBridge = (
         }
 
         const command = parsed.data
-        try {
-          const value = await executeCommand(command, createAgentRuntimeContext(options))
-          await reportResult(command.commandId!, {
-            ok: true,
-            value: serializeValue(value),
-          }, baseUrl)
-        } catch (error) {
-          await reportResult(command.commandId!, {
-            ok: false,
-            error: serializeError(error),
-          }, baseUrl)
+        const execution = runCommand(command, baseUrl).finally(() => {
+          inFlightCommands.delete(execution)
+        })
+        inFlightCommands.add(execution)
+        if (inFlightCommands.size >= maxConcurrentCommands) {
+          // Saturated: wait for A slot, not for THIS command.
+          await Promise.race(inFlightCommands)
         }
       } catch {
         if (abortController.signal.aborted) return
