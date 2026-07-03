@@ -318,10 +318,17 @@ export const isReadOnlySql = (sql: string): boolean => {
 
 // ----- watch-events (push detection) ----------------------------------
 
+/** Schema bounds, exported so consumers building registrations (e.g.
+ *  the claude-tasks daemon's config) can validate against the SAME
+ *  limits — an over-cap value fails the tab's schema at registration
+ *  time, where it's indistinguishable from an old bundle. */
+export const WATCH_EVENTS_MAX_SETTLE_MS = 600_000
+export const WATCH_EVENTS_MAX_TABLES = 8
+
 const watcherSettleMsField = {
   /** Quiet window: the result set must be stable this long before an
    *  event is emitted (restarted on every further change). */
-  settleMs: z.number().int().min(0).max(600_000).optional(),
+  settleMs: z.number().int().min(0).max(WATCH_EVENTS_MAX_SETTLE_MS).optional(),
 }
 
 /** Watch an arbitrary read-only query: the tab re-runs it on changes to
@@ -334,7 +341,7 @@ export const watchEventsSqlWatcherSchema = z.looseObject({
   }),
   params: z.array(z.unknown()).optional(),
   /** Tables whose changes re-run the query (default: blocks). */
-  tables: z.array(z.string().min(1)).max(8).optional(),
+  tables: z.array(z.string().min(1)).max(WATCH_EVENTS_MAX_TABLES).optional(),
   ...watcherSettleMsField,
 })
 
@@ -359,7 +366,13 @@ export type WatchEventsWatcher = z.infer<typeof watchEventsWatcherSchema>
 export const watchEventsCommandSchema = z.looseObject({
   type: z.literal('watch-events'),
   consumer: z.string().min(1),
-  watchers: z.array(watchEventsWatcherSchema).max(64),
+  watchers: z.array(watchEventsWatcherSchema).max(64)
+    // Names key the consumer's exemption pools — duplicates would merge
+    // two watchers' settle semantics under one name.
+    .refine(
+      watchers => new Set(watchers.map(watcher => watcher.name)).size === watchers.length,
+      {message: 'watcher names must be unique within a registration'},
+    ),
   ttlMs: z.number().int().min(1_000).max(24 * 3_600_000).optional(),
   ...commandIdField,
 })

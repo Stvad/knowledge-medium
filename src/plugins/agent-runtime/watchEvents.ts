@@ -73,10 +73,10 @@ interface WatcherRuntime {
   pendingSettledIds: Set<string>
   settleTimer: ReturnType<typeof setTimeout> | null
   computing: boolean
-  recheck: boolean
-  /** A change signal arrived that no compute has consumed yet — the only
-   *  case where a blur flush needs to re-run the query itself. */
-  dirty: boolean
+  /** A change signal arrived that no compute has consumed yet. Makes an
+   *  in-progress computeLoop re-iterate, and is the only case where a
+   *  blur flush needs to re-run the query itself. */
+  pendingChange: boolean
   /** Set on dispose. In-flight computeLoops / armed timers hold direct
    *  runtime references across awaits; once disposed nothing observes
    *  changes anymore, so acting on the stale reference would emit
@@ -104,8 +104,7 @@ const watcherRuntimeFor = (spec: WatchEventsWatcher): WatcherRuntime => ({
   pendingSettledIds: new Set(),
   settleTimer: null,
   computing: false,
-  recheck: false,
-  dirty: false,
+  pendingChange: false,
   disposed: false,
   disposeOnChange: null,
 })
@@ -221,8 +220,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     runtime.computing = true
     try {
       do {
-        runtime.recheck = false
-        runtime.dirty = false
+        runtime.pendingChange = false
         const rows = await db.getAll(runtime.sql, runtime.params)
         // Disposed while the query was in flight (registration replaced,
         // TTL expiry): this runtime no longer observes changes, so any
@@ -247,29 +245,30 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
           runtime.lastEmittedById = new Map(runtime.currentById)
         }
         runtime.fingerprint = fingerprint
-      } while (runtime.recheck)
+      } while (runtime.pendingChange)
     } finally {
       runtime.computing = false
     }
   }
 
+  /** Expired registrations self-clean on their next signal — a dead
+   *  consumer must not keep the tab re-running queries forever. */
+  const pruneIfExpired = (consumer: string, entry: ConsumerEntry): boolean => {
+    if (now() - entry.lastRefreshedMs <= entry.ttlMs) return false
+    disposeConsumer(consumer)
+    return true
+  }
+
   const requestCompute = (db: PowerSyncDb, consumer: string, runtime: WatcherRuntime) => {
     if (runtime.disposed) return
-    runtime.dirty = true
+    runtime.pendingChange = true
     const entry = entries.get(consumer)
     // Only the runtime's OWN entry may vouch for its freshness — after a
     // replace-registration, `entries` holds the successor's entry.
     if (!entry || !entry.runtimes.includes(runtime)) return
-    // Expired registrations self-clean on their next signal — a dead
-    // consumer must not keep the tab re-running queries forever.
-    if (now() - entry.lastRefreshedMs > entry.ttlMs) {
-      disposeConsumer(consumer)
-      return
-    }
-    if (runtime.computing) {
-      runtime.recheck = true
-      return
-    }
+    if (pruneIfExpired(consumer, entry)) return
+    // An in-progress computeLoop re-iterates on pendingChange.
+    if (runtime.computing) return
     void computeLoop(db, consumer, runtime).catch(error => {
       console.warn(`watch-events: ${consumer}/${runtime.name} query failed`, error)
     })
@@ -358,15 +357,12 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
 
     const flushPass = async () => {
       for (const [consumer, entry] of [...entries]) {
-        if (now() - entry.lastRefreshedMs > entry.ttlMs) {
-          disposeConsumer(consumer)
-          continue
-        }
+        if (pruneIfExpired(consumer, entry)) continue
         for (const runtime of entry.runtimes) {
           // Re-run the query only when a change signal arrived that no
           // compute consumed yet — an edit-free navigation must not turn
           // into a per-watcher query storm.
-          if (!runtime.computing && runtime.dirty) {
+          if (!runtime.computing && runtime.pendingChange) {
             await computeLoop(entry.db, consumer, runtime).catch(error => {
               console.warn(`watch-events: ${consumer}/${runtime.name} query failed`, error)
             })

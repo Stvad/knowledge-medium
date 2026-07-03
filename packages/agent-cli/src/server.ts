@@ -117,8 +117,6 @@ interface ParkedWaiter {
   timeout?: NodeJS.Timeout
 }
 
-type Waiter = ParkedWaiter
-
 const removeWaiter = <K, W>(map: Map<K, Set<W>>, key: K, waiter: W): void => {
   const set = map.get(key)
   if (!set) return
@@ -138,7 +136,11 @@ const parkWaiter = <K, W extends ParkedWaiter>(
 ): void => {
   waiter.timeout = setTimeout(() => {
     removeWaiter(map, key, waiter)
-    onTimeout()
+    try {
+      onTimeout()
+    } catch {
+      /* socket closed in the same tick */
+    }
   }, timeoutMs)
   request.on('close', () => {
     removeWaiter(map, key, waiter)
@@ -173,8 +175,8 @@ const clients = new Map<ClientId, ClientRecord>()
 const commands = new Map<CommandId, CommandRecord>()
 // clientId -> [commandId, ...] — per-client FIFO of pending commands
 const pendingByClient = new Map<ClientId, CommandId[]>()
-// clientId -> Set<Waiter>
-const waitersByClient = new Map<ClientId, Set<Waiter>>()
+// clientId -> Set<ParkedWaiter>
+const waitersByClient = new Map<ClientId, Set<ParkedWaiter>>()
 // token -> token record
 const tokens = new Map<Token, TokenRecord>()
 const responseRequests = new WeakMap<http.ServerResponse, http.IncomingMessage>()
@@ -509,7 +511,7 @@ interface EventWaiter extends ParkedWaiter {
 const audienceKey = (audience: Audience | TokenAudience | null): string | null => {
   if (!audience) return null
   if (!audience.userId && !audience.workspaceId) return null
-  return `${audience.userId ?? ''} ${audience.workspaceId ?? ''}`
+  return `${audience.userId ?? ''}\u0000${audience.workspaceId ?? ''}`
 }
 
 // audience key -> ring buffer / parked long-polls
@@ -617,7 +619,7 @@ const waitForNextCommand = (
     return
   }
 
-  const waiter: Waiter = {response}
+  const waiter: ParkedWaiter = {response}
   parkWaiter(waitersByClient, clientId, request, waiter, timeoutMs, () => {
     sendJson(response, 200, null)
   })

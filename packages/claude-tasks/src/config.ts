@@ -11,6 +11,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { agentRuntimeConfigDir, isErrnoException } from '@knowledge-medium/agent-cli/config'
 import { normalizeProfileName } from '@knowledge-medium/agent-cli/client'
+import { WATCH_EVENTS_MAX_SETTLE_MS, WATCH_EVENTS_MAX_TABLES } from '@knowledge-medium/agent-cli/protocol'
 import { isReadOnlySql } from './mcpShared.js'
 
 /** Block-property namespace the daemon owns. Kept short and stable —
@@ -66,10 +67,12 @@ const backlinksWatcherSchema = z.strictObject({
   resume: z.boolean().default(true),
   /** Don't claim a mention until the block has been quiet this long —
    *  otherwise the daemon snapshots (and bills) a half-typed request.
-   *  Capped at the tab-side settleMs bound (10min): the push watcher
-   *  registers with settleMs = quietMs, and an over-cap value would
-   *  fail the tab's schema — misdiagnosed as an unsupported bundle. */
-  quietMs: z.number().int().nonnegative().max(600_000, 'quietMs above 600000 (10min) is not supported').default(15_000),
+   *  Capped at the tab-side settleMs bound: the push watcher registers
+   *  with settleMs = quietMs, and an over-cap value would fail the
+   *  tab's schema — misdiagnosed as an unsupported bundle. */
+  quietMs: z.number().int().nonnegative()
+    .max(WATCH_EVENTS_MAX_SETTLE_MS, `quietMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
+    .default(15_000),
 })
 
 const queryWatcherSchema = z.strictObject({
@@ -88,7 +91,7 @@ const queryWatcherSchema = z.strictObject({
   /** Tables whose changes re-run the query for PUSH detection (the
    *  in-tab watch-events registration; default: blocks). The polling
    *  sweep ignores this. */
-  tables: z.array(z.string().min(1)).max(8).optional(),
+  tables: z.array(z.string().min(1)).max(WATCH_EVENTS_MAX_TABLES).optional(),
 })
 
 export const watcherSchema = z.discriminatedUnion('kind', [
