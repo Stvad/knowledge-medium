@@ -177,6 +177,12 @@ export const diffQueryRows = (rows: unknown[], prevIds: string[] | null): QueryD
 
   const prev = new Set(prevIds)
   const newRows = valid.filter(row => !prev.has(row.id))
-  const seenIds = [...prevIds, ...newRows.map(row => row.id)].slice(-MAX_CURSOR_IDS)
+  // Currently-visible ids go LAST so the bound evicts only ids that
+  // have left the result set — evicting a visible id re-fires (and
+  // re-bills) it on the very next poll. Visible count ≤ the bound
+  // (oversized was rejected above), so every visible id survives.
+  const currentIds = valid.map(row => row.id)
+  const currentSet = new Set(currentIds)
+  const seenIds = [...prevIds.filter(id => !currentSet.has(id)), ...currentIds].slice(-MAX_CURSOR_IDS)
   return {newRows, seenIds, invalidRows, oversized: false}
 }

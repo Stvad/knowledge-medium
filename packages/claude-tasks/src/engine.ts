@@ -212,6 +212,10 @@ export const createEngine = (deps: EngineDeps) => {
   }
 
   const tickBacklinksWatcher = async (watcher: BacklinksWatcher) => {
+    // Baseline stamp is taken BEFORE any awaited scan: a mention typed
+    // while the first resolve/scan is in flight must not end up with
+    // editedAtMs < baseline (it would be classed pre-baseline forever).
+    const tickStartMs = now()
     const cached = pageIdCache.get(watcher.target)
     let targetId = cached && now() - cached.resolvedAt < PAGE_ID_TTL_MS ? cached.id : undefined
     if (!targetId) {
@@ -228,7 +232,7 @@ export const createEngine = (deps: EngineDeps) => {
     // to re-baseline deliberately.
     const baselineMs = await state.getBaseline(watcher.name)
     if (baselineMs === null) {
-      await state.setBaseline(watcher.name, now())
+      await state.setBaseline(watcher.name, tickStartMs)
       log(`[${watcher.name}] baseline established — ${sources.length} pre-existing backlink(s) will never fire; blocks edited from now on will`)
       return
     }

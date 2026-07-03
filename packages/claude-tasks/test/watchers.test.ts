@@ -134,7 +134,8 @@ describe('diffQueryRows', () => {
   it('fires only for ids not previously seen', () => {
     const diff = diffQueryRows([{id: 'a'}, {id: 'c', extra: 1}], ['a', 'b'])
     expect(diff.newRows).toEqual([{id: 'c', extra: 1}])
-    expect(diff.seenIds).toEqual(['a', 'b', 'c'])
+    // Cursor is a set; ordering is eviction priority (visible ids last).
+    expect([...diff.seenIds].sort()).toEqual(['a', 'b', 'c'])
   })
 
   it('keeps the cursor a UNION: rows rotating out of a LIMIT window are not re-fired on re-entry', () => {
@@ -154,6 +155,22 @@ describe('diffQueryRows', () => {
     expect(diff.seenIds).toHaveLength(MAX_CURSOR_IDS)
     expect(diff.seenIds.at(-1)).toBe('brand-new')
     expect(diff.seenIds).not.toContain('old-0')
+  })
+
+  it('never evicts currently-visible ids from the cursor (they would re-fire next poll)', () => {
+    const prev = Array.from({length: MAX_CURSOR_IDS}, (_, index) => `old-${index}`)
+    // Half the old ids still visible + an equal batch of new ids — the
+    // total is exactly the cap, so this is NOT oversized, but a naive
+    // append+slice would evict visible old ids from the front.
+    const rows = [
+      ...Array.from({length: MAX_CURSOR_IDS / 2}, (_, index) => ({id: `old-${index}`})),
+      ...Array.from({length: MAX_CURSOR_IDS / 2}, (_, index) => ({id: `new-${index}`})),
+    ]
+    const diff = diffQueryRows(rows, prev)
+    expect(diff.newRows).toHaveLength(MAX_CURSOR_IDS / 2)
+    expect(diff.seenIds).toContain('old-0')
+    // A re-poll of the identical result set must fire nothing.
+    expect(diffQueryRows(rows, diff.seenIds).newRows).toEqual([])
   })
 
   it('refuses to diff an oversized result set instead of flapping the cursor window', () => {

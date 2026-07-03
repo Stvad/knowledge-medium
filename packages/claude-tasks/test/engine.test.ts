@@ -574,6 +574,38 @@ describe('backlink watcher baseline', () => {
   })
 })
 
+describe('backlink watcher baseline (stamp timing)', () => {
+  it('stamps the baseline BEFORE the first scan so mid-scan edits still fire', async () => {
+    let clock = NOW
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-mid'}],
+      // Edited DURING the first scan (after tick start, before the
+      // baseline write) — a post-scan stamp would orphan it forever.
+      blocks: {'b-mid': {content: '[[claude]] typed mid-scan', editedAtMs: NOW + 500}},
+    })
+    const innerSources = graph.backlinkSources
+    graph.backlinkSources = vi.fn(async (id: string) => {
+      clock += 1_000 // the bridge scan takes a while
+      return innerSources(id)
+    })
+    const state = memoryState([], {armBaselines: false})
+    const runTask = vi.fn(async () => okRun())
+    const engine = createEngine({
+      config: mentionConfig(), graph, state, runTask,
+      deliverToChannel: vi.fn(async () => {}), mcpConfigPath: '/tmp/mcp.json', log: () => {}, now: () => clock,
+    })
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(state.baselines.get('mentions')).toBe(NOW) // tick start, not post-scan
+
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('channel delivery (experimental)', () => {
   const channelConfig = () => parseConfig({
     watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, delivery: 'channel'}],
