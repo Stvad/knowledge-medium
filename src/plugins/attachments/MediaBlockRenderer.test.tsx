@@ -306,14 +306,16 @@ describe('MediaContentRenderer — PDF branch', () => {
     h.props = { 'media:hash': 'sha256:ab', 'media:mime': 'application/pdf', 'media:filename': 'doc.pdf', ...extra }
   }
 
-  it('renders a metadata-only PREVIEW affordance — no eager resolve — for application/pdf', () => {
+  it('renders a metadata-only header with a PREVIEW affordance — no eager resolve — for application/pdf', () => {
     pdfProps({ 'media:size': 2_100_000 })
     h.urlState = { status: 'ready', url: 'blob:should-not-be-used-yet' } // eager state ignored until armed
     const { container } = renderContent()
-    const preview = screen.getByTestId('media-pdf-preview')
-    expect(preview).toHaveTextContent('doc.pdf')
-    expect(preview).toHaveTextContent('2 MB')
-    expect(preview).toHaveTextContent('Preview') // an explicit affordance — clearly opens the PDF
+    // The stable header carries the filename/size; the toggle button carries the explicit "Preview"
+    // affordance (so it clearly opens the PDF, not a static chip).
+    const widget = screen.getByTestId('media-pdf')
+    expect(widget).toHaveTextContent('doc.pdf')
+    expect(widget).toHaveTextContent('2 MB')
+    expect(screen.getByTestId('media-pdf-preview')).toHaveTextContent('Preview')
     // The <object> is NOT mounted, and the renderer did NOT arm the resolve — the (possibly
     // large) bytes aren't fetched/decrypted until the user intends to preview.
     expect(container.querySelector('object')).toBeNull()

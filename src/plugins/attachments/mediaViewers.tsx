@@ -226,66 +226,72 @@ const AudioViewer = ({
   // Nothing is fetched/decrypted until the click. The poster carries a DOWNLOAD affordance
   // too: audio/* no longer falls through to the download fallback, so this viewer must keep
   // the "every attachment is at least downloadable" floor (§11) — savable without playing.
-  if (!armed) {
-    return (
-      <div className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground">
-        <button
-          type="button"
-          data-testid="media-audio-play"
-          onClick={requestResolve}
-          aria-label={`Play ${label}`}
-          className="inline-flex min-w-0 items-center gap-2 hover:opacity-80"
-        >
-          <Play className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span className="truncate">{label}</span>
-          {size > 0 && <span className="shrink-0 text-muted-foreground">{formatByteSize(size)}</span>}
-        </button>
-        <DownloadIconButton resolveBytes={resolveBytes} filename={filename} label={label} testid="media-audio-download" className="ml-auto" />
-      </div>
-    )
-  }
-  // Fail-closed: bytes that don't resolve/verify — or verify but the browser can't DECODE as
-  // audio (an untrusted media:mime over other bytes) — render a broken indicator, NEVER an
-  // <audio> at an unverified source (§5.1/§7.3). The download stays reachable: resolveBytes
-  // re-verifies independently of the (now-terminal) playback resolve, so a mislabeled/
-  // undecodable-but-verified file is still savable and a transient failure can still recover
-  // — keeping the downloadable floor the file fallback used to provide for audio.
-  if (state.status === 'error') {
-    return (
-      <div
-        data-testid="media-audio-broken"
-        className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
-      >
-        <VolumeX className="h-4 w-4 shrink-0" />
-        <span className="truncate">{label} — unavailable</span>
-        {size > 0 && <span className="shrink-0">{formatByteSize(size)}</span>}
-        <DownloadIconButton resolveBytes={resolveBytes} filename={filename} label={label} testid="media-audio-download" className="ml-auto" />
-      </div>
-    )
-  }
-  if (state.status === 'loading') {
-    return <Placeholder testid="media-audio-loading" label="Loading audio…" icon={<Loader2 className="h-4 w-4" />} spin />
-  }
   return (
     <div
       data-testid="media-audio"
-      className="flex max-w-full flex-col gap-1 rounded border border-border bg-muted/40 p-2"
+      className="flex w-fit max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 text-sm"
     >
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <span className="truncate">{label}</span>
-        {size > 0 && <span className="shrink-0">{formatByteSize(size)}</span>}
+      {/* Stable header — same box in every state (poster / loading / player / broken), so the widget
+          doesn't shift down when the player opens (matches the PDF viewer). Holds the downloadable
+          floor (§11): audio/* no longer falls through to the file download fallback, so download lives
+          here and is savable without playing. Unarmed: a Play affordance (filename+size) arms the
+          resolve; once armed the native <audio controls> below owns playback so the header is just
+          filename + download. `armed` is content-scoped (the renderer clears it on a content-key
+          change), so a synced re-capture / undo returns to the un-armed play poster. */}
+      <div className="flex items-center gap-2 px-3 py-2 text-muted-foreground">
+        {armed ? (
+          <>
+            <span className="truncate text-foreground">{label}</span>
+            {size > 0 && <span className="shrink-0">{formatByteSize(size)}</span>}
+          </>
+        ) : (
+          <button
+            type="button"
+            data-testid="media-audio-play"
+            onClick={requestResolve}
+            aria-label={`Play ${label}`}
+            className="inline-flex min-w-0 items-center gap-2 text-foreground hover:opacity-80"
+          >
+            <Play className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="truncate">{label}</span>
+            {size > 0 && <span className="shrink-0 text-muted-foreground">{formatByteSize(size)}</span>}
+          </button>
+        )}
         <DownloadIconButton resolveBytes={resolveBytes} filename={filename} label={label} testid="media-audio-download" className="ml-auto" />
       </div>
-      {/* autoPlay: the user already clicked play, so start once the (now verified) src is set;
-          if the browser's autoplay policy blocks it, the ready controls let them click play. */}
-      <audio
-        controls
-        autoPlay
-        src={state.url}
-        onError={() => reportDecodeFailure(state.url)}
-        className="w-full"
-        aria-label={label}
-      />
+      {/* Fail-closed body below the stable header. Bytes that don't resolve/verify — or verify but
+          the browser can't DECODE as audio (an untrusted media:mime over other bytes, onError) — show
+          a broken NOTE, NEVER an <audio> at an unverified source (§5.1/§7.3); the file stays
+          downloadable from the header above. */}
+      {armed &&
+        (state.status === 'error' ? (
+          <div
+            data-testid="media-audio-broken"
+            className="flex items-center gap-2 border-t border-border px-3 py-2 text-muted-foreground"
+          >
+            <VolumeX className="h-4 w-4 shrink-0" />
+            <span className="truncate">Playback unavailable — the file is still downloadable above.</span>
+          </div>
+        ) : state.status === 'loading' ? (
+          <div
+            data-testid="media-audio-loading"
+            className="flex items-center gap-2 border-t border-border px-3 py-2 text-muted-foreground"
+          >
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+            <span>Loading audio…</span>
+          </div>
+        ) : (
+          /* autoPlay: the user already clicked play, so start once the (now verified) src is set;
+             if the browser's autoplay policy blocks it, the ready controls let them click play. */
+          <audio
+            controls
+            autoPlay
+            src={state.url}
+            onError={() => reportDecodeFailure(state.url)}
+            className="w-[min(28rem,86vw)] max-w-full border-t border-border"
+            aria-label={label}
+          />
+        ))}
     </div>
   )
 }
@@ -329,109 +335,88 @@ const PDF_VIEWER_HASH = '#navpanes=0'
  *  stays neutral octet-stream ({@link useMediaDownload}). */
 const PdfViewer = ({ state, resolveBytes, requestResolve, armed, filename, size }: MediaViewerProps) => {
   const label = filename || 'PDF attachment'
-  // Local collapse toggle for the expanded preview. `armed` (renderer-owned) stays true, so
-  // collapsing KEEPS the resolved bytes — re-expanding is instant with no refetch; the Blob is
-  // freed on unmount either way. Local (not renderer-owned) because it's a pure view toggle that
-  // must not fight the content-scoped arm latch.
+  // Local collapse toggle. `armed` (renderer-owned, content-scoped) stays true while collapsed, so
+  // re-expanding is instant with no refetch; the Blob frees on unmount either way. `expanded` gates
+  // the preview BODY; the header row is rendered IDENTICALLY in every state (same container, same
+  // first child) so toggling never repositions it — the top of the widget is a stable anchor
+  // instead of the poster→player layout jump. Content-scoped arming (armed resets on a content-key
+  // change) collapses us back to the header automatically on a synced re-capture / undo.
   const [collapsed, setCollapsed] = useState(false)
-  const download = (
-    <DownloadIconButton
-      resolveBytes={resolveBytes}
-      filename={filename}
-      label={label}
-      testid="media-pdf-download"
-      className="ml-auto"
-    />
-  )
-
-  // The metadata bar: shown when the preview is un-armed (the poster) OR armed+ready+collapsed.
-  // Its button ARMS the resolve (via requestResolve) AND expands — idempotent once armed — so one
-  // affordance covers both "preview" and "re-open after collapse". `armed` is content-scoped
-  // (the renderer clears it on any content-key change), so a synced re-capture / undo returns
-  // here instead of surprise-resolving the new bytes. A leading file icon + an explicit
-  // Eye "Preview" pill makes it obvious the row OPENS the PDF, not a static file chip. The bar
-  // also carries the download — application/pdf no longer falls through to the file download
-  // fallback, so this viewer holds the "downloadable floor" (§11): savable without ever previewing.
-  const previewBar = (
-    <div className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground">
-      <button
-        type="button"
-        data-testid="media-pdf-preview"
-        onClick={() => {
-          requestResolve()
-          setCollapsed(false)
-        }}
-        aria-label={`Preview ${label}`}
-        className="inline-flex min-w-0 items-center gap-2 hover:opacity-80"
-      >
-        <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate">{label}</span>
-        {size > 0 && <span className="shrink-0 text-muted-foreground">{formatByteSize(size)}</span>}
-        <span className="inline-flex shrink-0 items-center gap-1 rounded bg-background px-1.5 py-0.5 text-xs text-foreground">
-          <Eye className="h-3.5 w-3.5" />
-          Preview
-        </span>
-      </button>
-      {download}
-    </div>
-  )
-
-  if (!armed) return previewBar
-  // Fail-closed: bytes that don't resolve/verify render a broken indicator, NEVER an <object> at
-  // an unverified source (§5.1/§7.3). Download stays reachable (resolveBytes re-verifies
-  // independently) so a transient failure can still recover and the file stays savable.
-  if (state.status === 'error') {
-    return (
-      <div
-        data-testid="media-pdf-broken"
-        className="inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
-      >
-        <FileWarning className="h-4 w-4 shrink-0" />
-        <span className="truncate">{label} — unavailable</span>
-        {size > 0 && <span className="shrink-0">{formatByteSize(size)}</span>}
-        {download}
-      </div>
-    )
+  const expanded = armed && !collapsed
+  const onToggle = () => {
+    if (expanded) setCollapsed(true)
+    else {
+      requestResolve() // arm the resolve (idempotent once armed) …
+      setCollapsed(false) // … and open
+    }
   }
-  if (state.status === 'loading') {
-    return <Placeholder testid="media-pdf-loading" label="Loading PDF…" icon={<Loader2 className="h-4 w-4" />} spin />
-  }
-  if (collapsed) return previewBar
+
   return (
     <div
       data-testid="media-pdf"
-      className="flex max-w-full flex-col gap-1 overflow-hidden rounded border border-border bg-muted/40"
+      className="flex w-fit max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 text-sm"
     >
-      <div className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground">
+      {/* The STABLE header — identical in every state (poster / loading / preview / broken), so the
+          widget never shifts down when the preview opens. Holds the downloadable floor (§11):
+          application/pdf no longer falls through to the file download fallback, so download lives
+          here and is reachable without ever previewing. The toggle ARMS + opens (or collapses); an
+          explicit Eye "Preview" label makes it obvious the row opens the PDF, not a static chip. */}
+      <div className="flex items-center gap-2 px-3 py-2 text-muted-foreground">
         <FileText className="h-4 w-4 shrink-0" />
-        <span className="truncate">{label}</span>
+        <span className="truncate text-foreground">{label}</span>
         {size > 0 && <span className="shrink-0">{formatByteSize(size)}</span>}
         <button
           type="button"
-          data-testid="media-pdf-collapse"
-          onClick={() => setCollapsed(true)}
-          aria-label="Collapse preview"
-          className="ml-auto shrink-0 rounded p-1 hover:bg-muted"
+          data-testid={expanded ? 'media-pdf-collapse' : 'media-pdf-preview'}
+          onClick={onToggle}
+          aria-label={expanded ? `Collapse ${label} preview` : `Preview ${label}`}
+          className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-foreground hover:bg-muted"
         >
-          <ChevronUp className="h-4 w-4" />
+          {expanded ? (
+            <ChevronUp className="h-4 w-4" />
+          ) : (
+            <>
+              <Eye className="h-3.5 w-3.5" />
+              Preview
+            </>
+          )}
         </button>
         <DownloadIconButton resolveBytes={resolveBytes} filename={filename} label={label} testid="media-pdf-download" />
       </div>
-      {/* Bounded so a tall PDF doesn't take over the note; the native viewer scrolls within. type
-          is pinned to application/pdf — the Blob is that type by construction (above). `#navpanes=0`
-          is a Chrome PDFium open-param that hides the pages sidebar by DEFAULT (best-effort: honored
-          by Chromium's viewer, ignored by browsers that don't inline-render anyway). The fragment
-          doesn't affect the object-URL lifecycle — useAssetObjectUrl revokes the base `state.url`. */}
-      <object
-        data={`${state.url}${PDF_VIEWER_HASH}`}
-        type={PDF_MIME}
-        aria-label={label}
-        className="block h-[60vh] max-h-[800px] w-full bg-background"
-      >
-        <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-          This browser can’t preview PDFs inline — use the download button above.
-        </div>
-      </object>
+      {/* The BODY toggles below the stable header. Fail-closed: a failed/unverified resolve renders a
+          broken NOTE, NEVER an <object> at an unverified source (§5.1/§7.3) — and the file stays
+          downloadable from the header above. `#navpanes=0` is a Chrome PDFium open-param that hides the
+          pages sidebar by DEFAULT (best-effort: honored by Chromium's viewer, ignored elsewhere). The
+          fragment doesn't affect the object-URL lifecycle — useAssetObjectUrl revokes the base url. */}
+      {expanded &&
+        (state.status === 'error' ? (
+          <div
+            data-testid="media-pdf-broken"
+            className="flex items-center gap-2 border-t border-border px-3 py-2 text-muted-foreground"
+          >
+            <FileWarning className="h-4 w-4 shrink-0" />
+            <span className="truncate">Preview unavailable — the file is still downloadable above.</span>
+          </div>
+        ) : state.status === 'loading' ? (
+          <div
+            data-testid="media-pdf-loading"
+            className="flex items-center gap-2 border-t border-border px-3 py-2 text-muted-foreground"
+          >
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+            <span>Loading PDF…</span>
+          </div>
+        ) : (
+          <object
+            data={`${state.url}${PDF_VIEWER_HASH}`}
+            type={PDF_MIME}
+            aria-label={label}
+            className="block h-[60vh] max-h-[800px] w-[min(44rem,86vw)] max-w-full border-t border-border bg-background"
+          >
+            <div className="px-3 py-8 text-center text-muted-foreground">
+              This browser can’t preview PDFs inline — use the download button above.
+            </div>
+          </object>
+        ))}
     </div>
   )
 }
