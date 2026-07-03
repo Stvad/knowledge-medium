@@ -1,4 +1,4 @@
-import { isLocalDbCorruptionError } from "./localDbCorruption.js";
+import { isLocalDbCorruptionError, isRuntimeDbCorruptionError } from "./localDbCorruption.js";
 import { dbForensics } from "./dbForensics.js";
 import { reportRuntimeLocalDbCorruption } from "../data/localDbCorruptionSignal.js";
 //#region src/utils/dbForensicsHooks.ts
@@ -57,7 +57,7 @@ var watchForRuntimeCorruption = (db, userId, dbFilename, forensics = dbForensics
 	runtimeCorruptionCaptured = false;
 	const check = (status) => {
 		const err = downloadErrorOf(status);
-		if (err === void 0 || err === null || !isLocalDbCorruptionError(err)) return;
+		if (err === void 0 || err === null || !isRuntimeDbCorruptionError(err)) return;
 		if (!runtimeCorruptionCaptured) {
 			runtimeCorruptionCaptured = true;
 			forensics.captureCorruptionSnapshot({

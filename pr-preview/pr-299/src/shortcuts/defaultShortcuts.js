@@ -7,7 +7,6 @@ import { systemToggle } from "../facets/togglable.js";
 import { actionContextsFacet, actionsFacet } from "../extensions/core.js";
 import { getLayoutSessionBlock, getUserPrefsBlock } from "../data/stateBlocks.js";
 import { EditorSelection } from "../../node_modules/@codemirror/state/dist/index.js";
-import { acceptCompletion, completionStatus } from "../../node_modules/@codemirror/autocomplete/dist/index.js";
 import { showProgress } from "../utils/toast.js";
 import { refreshAppRuntime } from "../facets/runtimeEvents.js";
 import { KeyboardOff } from "../../node_modules/lucide-react/dist/esm/icons/keyboard-off.js";
@@ -505,10 +504,6 @@ function getDefaultActionGroups({ repo }) {
 				handler: async (deps) => {
 					const { block, editorView, uiStateBlock, scopeRootId } = deps;
 					if (!block || !editorView || !uiStateBlock) return;
-					if (completionStatus(editorView.state) === "active") {
-						acceptCompletion(editorView);
-						return;
-					}
 					if (!scopeRootId) return;
 					const policy = await structuralEditPolicyForBlock(block, scopeRootId);
 					const selection = editorView.state.selection.main;
