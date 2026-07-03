@@ -188,7 +188,9 @@ const main = async () => {
   // snapshotted state from before that event's write.
   let tickRequested = false
   const tickWaiters = new Set<() => void>()
-  const requestTick = () => {
+  const pendingExemptBlockIds = new Set<string>()
+  const requestTick = (settledBlockIds?: readonly string[]) => {
+    for (const id of settledBlockIds ?? []) pendingExemptBlockIds.add(id)
     tickRequested = true
     for (const waiter of [...tickWaiters]) waiter()
     tickWaiters.clear()
@@ -221,7 +223,11 @@ const main = async () => {
 
   while (!stopping) {
     tickRequested = false
-    await engine.tick()
+    // Drain the exemptions INTO this tick — ids arriving mid-tick stay
+    // pending and re-tick immediately via tickRequested.
+    const quietExemptBlockIds = new Set(pendingExemptBlockIds)
+    pendingExemptBlockIds.clear()
+    await engine.tick({quietExemptBlockIds})
     if (args.once) break
     await napOrTick(config.pollIntervalMs)
   }

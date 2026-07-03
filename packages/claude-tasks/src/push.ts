@@ -38,8 +38,10 @@ export interface PushDeps {
   client: Pick<BridgeClient, 'runCommand' | 'nextEvents'>
   config: DaemonConfig
   graph: Pick<Graph, 'resolvePageId'>
-  /** Ask the main loop for an immediate tick (coalesced there). */
-  requestTick: () => void
+  /** Ask the main loop for an immediate tick (coalesced there).
+   *  `settledBlockIds` are quiet-exempt: their quiet period was
+   *  confirmed at the source (blur / explicit ask). */
+  requestTick: (settledBlockIds?: readonly string[]) => void
   log: (message: string) => void
   isStopping: () => boolean
   /** Interruptible sleep (resolves early on shutdown). */
@@ -121,9 +123,15 @@ export const startPushLoop = async (deps: PushDeps): Promise<void> => {
         requestTick()
         continue
       }
-      const relevant = response.events.some(entry =>
+      const relevant = response.events.filter(entry =>
         entry.event['type'] === 'watcher-settled' && entry.event['consumer'] === PUSH_CONSUMER)
-      if (relevant) requestTick()
+      if (relevant.length > 0) {
+        const settledBlockIds = relevant.flatMap(entry => {
+          const blocks = entry.event['settledBlocks']
+          return Array.isArray(blocks) ? blocks.filter((id): id is string => typeof id === 'string') : []
+        })
+        requestTick(settledBlockIds)
+      }
     } catch (error) {
       if (isStopping()) return
       registeredAt = null // whatever broke, re-register once it heals

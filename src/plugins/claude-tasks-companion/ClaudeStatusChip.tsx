@@ -6,7 +6,7 @@
  *
  *  Same gutter pattern as the inline backlink count badge: with no
  *  chip, content renders untouched (no wrapper). */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
 import {
@@ -15,6 +15,7 @@ import {
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
 import { chipStateFor, chipTitle, type ChipState } from './chipState.ts'
+import { clearAskedClaude, isAskedClaude, subscribeAskedClaude } from './askedStore.ts'
 
 /** Ticks once a second while mounted — only running chips mount it. */
 const useElapsedLabel = (sinceMs: number | null): string | null => {
@@ -67,6 +68,10 @@ const chipBody = (chip: ChipState) => {
   }
 }
 
+/** Optimistic "queued" shown between the Ask Claude action and the
+ *  daemon's claim writing real props. */
+const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', updatedAtMs: null, attempts: 1, errorMessage: ''}
+
 const ClaudeStatusChipRow = ({
   block,
   Inner,
@@ -74,10 +79,17 @@ const ClaudeStatusChipRow = ({
   block: Block
   Inner: BlockRenderer
 }) => {
-  const chip = useHandle(block, {
+  const propsChip = useHandle(block, {
     selector: doc => chipStateFor(doc?.properties as Record<string, unknown> | undefined),
   })
+  const asked = useSyncExternalStore(subscribeAskedClaude, () => isAskedClaude(block.id))
 
+  // Real lifecycle props supersede the optimistic mark.
+  useEffect(() => {
+    if (propsChip) clearAskedClaude(block.id)
+  }, [propsChip, block.id])
+
+  const chip = propsChip ?? (asked ? OPTIMISTIC_QUEUED : null)
   if (!chip) return <Inner block={block} />
 
   return (

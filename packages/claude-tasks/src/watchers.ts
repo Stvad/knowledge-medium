@@ -62,6 +62,10 @@ export interface PendingArgs {
   /** Watcher's first-tick timestamp: unclaimed blocks last edited before
    *  it are pre-existing content, never tasks. null/undefined = no gate. */
   baselineMs?: number | null
+  /** The quiet period was already confirmed at the SOURCE (the tab saw
+   *  the user leave the block, or its settle window elapsed) — skip the
+   *  clock-based still-typing gate. Baseline/status gates still apply. */
+  quietExempt?: boolean
 }
 
 /**
@@ -76,7 +80,7 @@ export interface PendingArgs {
  *   watcher at an established page must not claim (and bill) its history;
  * - wait out the quiet period so half-typed requests aren't claimed.
  */
-export const decidePending = ({source, nowMs, quietMs = 0, baselineMs}: PendingArgs): PendingDecision => {
+export const decidePending = ({source, nowMs, quietMs = 0, baselineMs, quietExempt = false}: PendingArgs): PendingDecision => {
   if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
 
   const status = taskStatus(source)
@@ -98,7 +102,7 @@ export const decidePending = ({source, nowMs, quietMs = 0, baselineMs}: PendingA
     return {pending: false, reason: 'pre-baseline'}
   }
 
-  if (quietMs > 0 && typeof source.editedAtMs === 'number' && nowMs - source.editedAtMs < quietMs) {
+  if (!quietExempt && quietMs > 0 && typeof source.editedAtMs === 'number' && nowMs - source.editedAtMs < quietMs) {
     return {pending: false, reason: 'still-typing'}
   }
 

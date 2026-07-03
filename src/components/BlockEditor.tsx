@@ -19,6 +19,7 @@ import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -102,6 +103,12 @@ export const BlockEditor = ({
   }, [pushChange, pushSelection])
 
   useEffect(() => flushDebouncers, [flushDebouncers])
+
+  // Leaving this block's editor (unmount / block switch) is the "done
+  // editing" signal — consumers like watch-events short-circuit their
+  // settle window on it. The debounced content commit above may still
+  // be in flight when this fires; subscribers re-check after a beat.
+  useEffect(() => () => notifyBlockEditSettled(block.id), [block.id])
 
   useEffect(() => {
     if (!blockEditData || !editorView) return

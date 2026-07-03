@@ -144,12 +144,13 @@ export const createEngine = (deps: EngineDeps) => {
 
   const processMention = async (
     watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
+    quietExempt: boolean,
   ) => {
     // Pre-claim bails spawned nothing — refund the budget slot recorded
     // at the launch decision so phantom launches can't defer real work.
     const block = await graph.getBlock(sourceId)
     if (!block) return refundLaunch(launchStamp)
-    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs})
+    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
     if (!decision.pending) return refundLaunch(launchStamp)
     const ancestorBlocks = await graph.ancestors(sourceId)
 
@@ -233,7 +234,7 @@ export const createEngine = (deps: EngineDeps) => {
     }
   }
 
-  const tickBacklinksWatcher = async (watcher: BacklinksWatcher) => {
+  const tickBacklinksWatcher = async (watcher: BacklinksWatcher, quietExemptBlockIds: ReadonlySet<string>) => {
     // Baseline stamp is taken BEFORE any awaited scan: a mention typed
     // while the first resolve/scan is in flight must not end up with
     // editedAtMs < baseline (it would be classed pre-baseline forever).
@@ -269,7 +270,8 @@ export const createEngine = (deps: EngineDeps) => {
     for (const source of sources) {
       if (running.has(source.id)) continue
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
-      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs})
+      const quietExempt = quietExemptBlockIds.has(source.id)
+      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
 
       if (preview.reason === 'attempts-exhausted') {
         // Terminal write (once) so the pre-filter skips it forever.
@@ -287,7 +289,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Bails that provably spawned nothing (duplicate session, lost
       // claim, block gone) refund their slot inside processMention.
       const launchStamp = recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp))
+      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt))
     }
   }
 
@@ -355,7 +357,13 @@ export const createEngine = (deps: EngineDeps) => {
     })
   }
 
-  const tick = async () => {
+  const NO_EXEMPTIONS: ReadonlySet<string> = new Set()
+
+  /** `quietExemptBlockIds`: blocks whose quiet period was confirmed at
+   *  the source (blur / explicit ask) — the push loop collects them from
+   *  event payloads; sweep ticks pass nothing. */
+  const tick = async (options: {quietExemptBlockIds?: ReadonlySet<string>} = {}) => {
+    const quietExemptBlockIds = options.quietExemptBlockIds ?? NO_EXEMPTIONS
     if (!launchTimesLoaded) {
       launchTimes = await state.getLaunchTimes()
       pruneLaunchTimes()
@@ -363,7 +371,7 @@ export const createEngine = (deps: EngineDeps) => {
     }
     for (const watcher of config.watchers) {
       try {
-        if (watcher.kind === 'backlinks') await tickBacklinksWatcher(watcher)
+        if (watcher.kind === 'backlinks') await tickBacklinksWatcher(watcher, quietExemptBlockIds)
         else await tickQueryWatcher(watcher)
       } catch (error) {
         // Drop cached page ids on failure — the page may have been

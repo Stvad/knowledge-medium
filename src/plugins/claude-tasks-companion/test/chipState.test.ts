@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import { chipStateFor, chipTitle } from '../chipState.ts'
 import { claudeStatusChipContribution } from '../ClaudeStatusChip.tsx'
+import { contentWithClaudeMention } from '../askClaude.ts'
 
 describe('chipStateFor', () => {
   it('returns null without a claude:status (including reply blocks and junk values)', () => {
@@ -42,6 +43,15 @@ describe('chipTitle', () => {
       .toContain('exit 1: boom')
     expect(chipTitle(chipStateFor({'claude:status': 'running', 'claude:attempts': 3})!))
       .toContain('attempt 3')
+  })
+})
+
+describe('contentWithClaudeMention', () => {
+  it('appends the mention once, preserving existing content', () => {
+    expect(contentWithClaudeMention('')).toBe('[[claude]]')
+    expect(contentWithClaudeMention('summarize this  ')).toBe('summarize this [[claude]]')
+    expect(contentWithClaudeMention('already [[claude]] here')).toBe('already [[claude]] here')
+    expect(contentWithClaudeMention('case [[CLAUDE]] variant')).toBe('case [[CLAUDE]] variant')
   })
 })
 

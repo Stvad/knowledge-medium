@@ -10,6 +10,7 @@ import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDia
 import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePairingDialog.tsx'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
+import { blockEditSettled } from '@/editor/editSettleSignal.js'
 import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
 import { knownAgentCommandSchema, type KnownAgentCommand } from '@knowledge-medium/agent-cli/protocol'
@@ -339,6 +340,10 @@ export const startAgentRuntimeBridge = (
   watchEventsRegistry.setTransport(async event => {
     await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId)
   })
+  // Editor blur short-circuits the settle window for that block —
+  // typed mentions fire the moment the user leaves them.
+  const offEditSettled = blockEditSettled.add(blockId =>
+    watchEventsRegistry.notifyBlockSettled(blockId))
 
   window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
   window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
@@ -468,6 +473,7 @@ export const startAgentRuntimeBridge = (
     // watchers don't keep re-running queries against a stopped bridge.
     watchEventsRegistry.setTransport(null)
     watchEventsRegistry.disposeAll()
+    offEditSettled()
     window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
     window.removeEventListener('focus', handleWakeEvent)

@@ -85,6 +85,20 @@ describe('startPushLoop', () => {
     expect(requestTick).toHaveBeenCalledTimes(1)
   })
 
+  it('forwards settledBlocks as quiet-exemptions to requestTick', async () => {
+    const {requestTick} = await runLoop([
+      {events: [], nextSeq: 0},
+      {
+        events: [{
+          seq: 1, receivedAt: 0, clientId: 'tab',
+          event: {type: 'watcher-settled', consumer: PUSH_CONSUMER, watcher: 'claude-mentions', settledBlocks: ['block-1', 'block-2']},
+        }],
+        nextSeq: 1,
+      },
+    ])
+    expect(requestTick).toHaveBeenCalledWith(['block-1', 'block-2'])
+  })
+
   it('ignores events for other consumers', async () => {
     const {requestTick} = await runLoop([
       {events: [], nextSeq: 0},
