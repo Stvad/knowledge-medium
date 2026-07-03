@@ -1,7 +1,10 @@
+// @vitest-environment jsdom
 import { EditorSelection, EditorState, type Extension, type StateCommand, type Transaction } from '@codemirror/state'
-import { completionKeymap } from '@codemirror/autocomplete'
-import { describe, expect, it } from 'vitest'
+import { EditorView } from '@codemirror/view'
+import { autocompletion, completionKeymap, completionStatus, startCompletion } from '@codemirror/autocomplete'
+import { describe, expect, it, vi } from 'vitest'
 import {
+  acceptCompletionOnEnterCapture,
   createMinimalMarkdownConfig,
   toggleMarkdownBold,
   toggleMarkdownInlineCode,
@@ -148,5 +151,67 @@ describe('completion keymap behavior', () => {
     expect(completionKeymapWithEscapeFallthrough).toContainEqual(
       expect.objectContaining({key: 'ArrowDown', stopPropagation: true}),
     )
+  })
+})
+
+// The capture-phase interceptor that lets iOS accept a completion on Enter before
+// CodeMirror defers the key to the window-level split shortcut. On iOS the shipped
+// extension is gated behind `isIOS`; here we exercise the plugin directly. It runs
+// on `view.dom` in the capture phase, so a keydown dispatched on the contentDOM is
+// swallowed before it can bubble out (which is what stops the block split on iOS).
+describe('acceptCompletionOnEnterCapture', () => {
+  const makeView = () =>
+    new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: '[[Fo',
+        selection: {anchor: 4},
+        extensions: [
+          autocompletion({
+            defaultKeymap: false,
+            interactionDelay: 0,
+            override: [() => ({from: 2, options: [{label: 'Foo', apply: 'Foo]]'}]})],
+          }),
+          acceptCompletionOnEnterCapture,
+        ],
+      }),
+    })
+
+  const pressEnter = (view: EditorView) => {
+    const event = new KeyboardEvent('keydown', {key: 'Enter', keyCode: 13, bubbles: true, cancelable: true})
+    view.contentDOM.dispatchEvent(event)
+    return event
+  }
+
+  it('accepts an open completion and swallows the Enter before it can bubble out', async () => {
+    const view = makeView()
+    startCompletion(view)
+    await vi.waitFor(() => expect(completionStatus(view.state)).toBe('active'))
+
+    let bubbledToDocument = false
+    const onBubble = () => { bubbledToDocument = true }
+    document.addEventListener('keydown', onBubble)
+    const event = pressEnter(view)
+    document.removeEventListener('keydown', onBubble)
+
+    expect(view.state.doc.toString()).toBe('[[Foo]]')  // completion applied, not split
+    expect(event.defaultPrevented).toBe(true)          // native paragraph suppressed
+    expect(bubbledToDocument).toBe(false)              // stopImmediatePropagation: never reaches the window
+    view.destroy()
+  })
+
+  it('leaves Enter untouched when no completion is open', () => {
+    const view = makeView()
+
+    let bubbledToDocument = false
+    const onBubble = () => { bubbledToDocument = true }
+    document.addEventListener('keydown', onBubble)
+    const event = pressEnter(view)
+    document.removeEventListener('keydown', onBubble)
+
+    expect(completionStatus(view.state)).toBe(null)
+    expect(event.defaultPrevented).toBe(false)  // interceptor stood aside
+    expect(bubbledToDocument).toBe(true)         // Enter is free to reach the split shortcut
+    view.destroy()
   })
 })

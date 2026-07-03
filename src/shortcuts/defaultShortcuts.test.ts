@@ -3,8 +3,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'
-import { EditorState } from '@codemirror/state'
-import { autocompletion, completionStatus, startCompletion } from '@codemirror/autocomplete'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -109,11 +107,6 @@ const codeMirrorEditorView = (
         toString: () => text,
         sliceString: (from: number, to = text.length) => text.slice(from, to),
       },
-      // Faithful to EditorState.field(field, false): return undefined when the
-      // field isn't installed (this fake has no autocomplete state) rather than
-      // throwing. Lets split_block_cm's `completionStatus` guard resolve to
-      // "no completion active" and fall through to the split.
-      field: () => undefined,
     }),
   })
 
@@ -986,151 +979,6 @@ describe('default CodeMirror shortcuts', () => {
       blockId: 'current',
       start: 0,
     })
-  })
-
-  // The iPad bug: with a `[[ ]]` / `(( ))` autocomplete popup open, Enter must
-  // accept the highlighted completion, not split the block. On desktop CM's
-  // completion keymap stops the event before this shortcut; on iOS CM defers the
-  // real Enter and runs its keymap only on a later, non-bubbling synthetic Enter,
-  // so the real keydown bubbles straight here and the shortcut itself must defer
-  // to the popup (verified on-device). Uses a real EditorView (the fake view
-  // can't carry a completion state) with a trivial source; interactionDelay:0
-  // lets acceptCompletion fire immediately.
-  it('accepts an open autocomplete popup instead of splitting the block', async () => {
-    await env.repo.tx(async tx => {
-      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
-      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
-    }, {scope: ChangeScope.BlockDefault})
-    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: '[[Fo'})
-
-    const uiStateBlock = env.repo.block('ui')
-    await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await focusBlock(uiStateBlock, 'current')
-
-    const view = new EditorView({
-      state: EditorState.create({
-        doc: '[[Fo',
-        selection: {anchor: 4},
-        extensions: [
-          autocompletion({
-            defaultKeymap: false,
-            interactionDelay: 0,
-            override: [() => ({from: 2, options: [{label: 'Foo', apply: 'Foo]]'}]})],
-          }),
-        ],
-      }),
-    })
-    startCompletion(view)
-    await vi.waitFor(() => expect(completionStatus(view.state)).toBe('active'))
-
-    const childrenBefore = await childIds('root')
-    const action = findEditModeAction(env.repo, 'split_block_cm')
-    await action.handler({
-      block: env.repo.block('current'),
-      editorView: view,
-      uiStateBlock,
-      scopeRootId: 'root',
-    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
-
-    // Completion applied into the editor; NO sibling created (no split).
-    expect(view.state.doc.toString()).toBe('[[Foo]]')
-    expect(await childIds('root')).toEqual(childrenBefore)
-    view.destroy()
-  })
-
-  it('swallows Enter (no split, no accept) while a completion is active but within interactionDelay', async () => {
-    // During CM's post-open interactionDelay, acceptCompletion no-ops even though
-    // completionStatus is already 'active'. A large delay makes that deterministic.
-    // This pins the guard IN ISOLATION: it must consume the key (no split) even
-    // when it can't yet accept. The actual accept then lands a beat later through
-    // a path outside this handler — on desktop the user's next Return, on iOS CM's
-    // deferred synthetic Enter (~250ms) hitting the completion keymap — neither of
-    // which is exercised here; this test only asserts "no split, no synchronous
-    // accept".
-    await env.repo.tx(async tx => {
-      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
-      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
-    }, {scope: ChangeScope.BlockDefault})
-    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: '[[Fo'})
-
-    const uiStateBlock = env.repo.block('ui')
-    await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await focusBlock(uiStateBlock, 'current')
-
-    const view = new EditorView({
-      state: EditorState.create({
-        doc: '[[Fo',
-        selection: {anchor: 4},
-        extensions: [
-          autocompletion({
-            defaultKeymap: false,
-            interactionDelay: 100_000, // effectively "always within the delay"
-            override: [() => ({from: 2, options: [{label: 'Foo', apply: 'Foo]]'}]})],
-          }),
-        ],
-      }),
-    })
-    startCompletion(view)
-    await vi.waitFor(() => expect(completionStatus(view.state)).toBe('active'))
-
-    const childrenBefore = await childIds('root')
-    const action = findEditModeAction(env.repo, 'split_block_cm')
-    await action.handler({
-      block: env.repo.block('current'),
-      editorView: view,
-      uiStateBlock,
-      scopeRootId: 'root',
-    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
-
-    // Consumed: doc unchanged (accept no-opped in the delay) AND no sibling (no split).
-    expect(view.state.doc.toString()).toBe('[[Fo')
-    expect(await childIds('root')).toEqual(childrenBefore)
-    view.destroy()
-  })
-
-  it('STILL splits on Enter when a query is pending (ordinary typing)', async () => {
-    // Async sources report completionStatus 'pending' after any keystroke while
-    // the query is in flight — even for ordinary prose that opens no dropdown. A
-    // never-resolving source with no options pins 'pending'. Enter here must
-    // behave normally and split the block; gating strictly on
-    // completionStatus === 'active' ('pending' is not 'active') is what preserves
-    // that.
-    await env.repo.tx(async tx => {
-      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
-      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
-    }, {scope: ChangeScope.BlockDefault})
-    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'hello'})
-
-    const uiStateBlock = env.repo.block('ui')
-    await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await focusBlock(uiStateBlock, 'current')
-
-    const view = new EditorView({
-      state: EditorState.create({
-        doc: 'hello',
-        selection: {anchor: 5},
-        extensions: [
-          autocompletion({
-            defaultKeymap: false,
-            override: [() => new Promise(() => {})], // never resolves → stays pending, no options
-          }),
-        ],
-      }),
-    })
-    startCompletion(view)
-    await vi.waitFor(() => expect(completionStatus(view.state)).toBe('pending'))
-
-    const action = findEditModeAction(env.repo, 'split_block_cm')
-    await action.handler({
-      block: env.repo.block('current'),
-      editorView: view,
-      uiStateBlock,
-      scopeRootId: 'root',
-    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
-
-    // Split happened: a sibling was created under root (Enter was NOT swallowed).
-    expect((await childIds('root')).length).toBe(2)
-    view.destroy()
   })
 
   // Scope-root behaviour: when the focused block is the root of the

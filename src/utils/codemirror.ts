@@ -1,8 +1,9 @@
 import { EditorSelection, type EditorState, type Extension, type SelectionRange, type StateCommand } from '@codemirror/state'
-import { EditorView, keymap, type KeyBinding } from '@codemirror/view'
+import { EditorView, ViewPlugin, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { insertNewline } from '@codemirror/commands'
+import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
 
 /** Produce the change/range spec for one selection range that either
  *  inserts an empty `open`/`close` pair at the cursor or wraps the
@@ -125,6 +126,68 @@ export const softLineBreakOnBeforeInput = EditorView.domEventHandlers({
   },
 })
 
+// iOS-only: accept an open autocomplete on Enter BEFORE CodeMirror defers the key.
+//
+// On iOS, CM's InputState.keydown defers Enter/Backspace/Delete (`pendingIOSKey`)
+// and runs its keymap only on a later, non-bubbling synthetic Enter — a workaround
+// for a WebKit bug where preventDefaulting these keys freezes the *software*
+// keyboard's autocapitalization. Side effect: the real Enter bubbles past CM
+// (unhandled, un-stopped) to the window-level `split_block_cm` shortcut, so with a
+// completion open the block splits instead of accepting. We can't reconfigure the
+// deferral, and no keymap / domEventHandler can run ahead of it — they're all
+// dispatched by `runHandlers`, which the deferral short-circuits (handleEvent runs
+// InputState.keydown first and returns early when it defers). CM's own keydown
+// listener is a BUBBLE-phase handler on contentDOM, so a CAPTURE-phase listener on
+// the editor wrapper (an ancestor) runs first: we accept the completion there and
+// stop the event dead, so CM never defers it and no window shortcut sees it.
+// This preventDefault is the very thing CM's deferral avoids — but verified
+// on-device (iPad, iOS 26): accepting a completion this way does NOT disturb
+// software-keyboard autocapitalization (and hardware presses, the common case that
+// reaches here, never involved autocaps anyway). So no keyboard-type gate is needed.
+const isIOS =
+  typeof navigator !== 'undefined' &&
+  /Apple/.test(navigator.vendor) &&
+  (navigator.maxTouchPoints > 2 || /Mobile\//.test(navigator.userAgent))
+
+class AcceptCompletionOnEnterCapture {
+  private readonly onKeydown: (event: KeyboardEvent) => void
+  constructor(private readonly view: EditorView) {
+    this.onKeydown = (event) => {
+      if (
+        event.key !== 'Enter' ||
+        event.isComposing ||
+        event.keyCode === 229 ||
+        event.shiftKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.ctrlKey
+      )
+        return
+      if (completionStatus(this.view.state) !== 'active') return
+      // Accept (a no-op inside CM's brief post-open interactionDelay) and swallow
+      // the key: preventDefault stops the native paragraph; stopImmediatePropagation
+      // stops both CM's deferral (its listener is on contentDOM, a descendant) and
+      // the window-level split shortcut (bubble phase).
+      acceptCompletion(this.view)
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    view.dom.addEventListener('keydown', this.onKeydown, true)
+  }
+
+  destroy() {
+    this.view.dom.removeEventListener('keydown', this.onKeydown, true)
+  }
+}
+
+/** The capture-phase completion-accept plugin. Exported so tests can force it on
+ *  regardless of platform (the shipped extension below only attaches it on iOS). */
+export const acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptCompletionOnEnterCapture)
+
+/** iOS-only; empty elsewhere (off iOS, CM's completion keymap accepts + stops
+ *  Enter before it can reach a window shortcut). */
+export const acceptCompletionBeforeIOSDefer: Extension = isIOS ? acceptCompletionOnEnterCapture : []
+
 export const createMinimalMarkdownConfig = (
   pluginExtensions: readonly Extension[] = [],
 ): Extension[] => {
@@ -132,6 +195,7 @@ export const createMinimalMarkdownConfig = (
     markdown({addKeymap: false, base: markdownLanguage}),
     keymap.of(markdownFormattingKeymap),
     softLineBreakOnBeforeInput,
+    acceptCompletionBeforeIOSDefer,
     mdNoQuoteClose,
     EditorView.theme({
       '&': {

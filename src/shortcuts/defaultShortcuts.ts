@@ -45,7 +45,6 @@ import {
 } from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
-import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
 import {
   isOnFirstVisualLine,
   isOnLastVisualLine,
@@ -678,25 +677,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        // An open autocomplete popup owns Enter: accept the highlighted
-        // completion instead of splitting. On desktop CM's completion keymap
-        // accepts and stopPropagations before Enter reaches this window-level
-        // shortcut; on iOS CM defers the real Enter (pendingIOSKey) and runs its
-        // keymap only on a later, NON-bubbling synthetic Enter — so the real
-        // keydown bubbles straight to this shortcut and would split. Guarding on
-        // the public completion status covers it (verified on-device: the popup
-        // is 'active' when this fires). We return even when acceptCompletion
-        // no-ops inside CM's brief post-open interactionDelay, so a fast Return
-        // can't fall through to a split; the accept lands a beat later (desktop:
-        // next Return; iOS: the deferred synthetic Enter once past the delay).
-        // A popup mid-async-refresh reports 'pending', not 'active', so pressing
-        // Enter in that narrow window still splits — accepted as a rare edge in
-        // exchange for not coupling this shortcut to CM's tooltip DOM.
-        if (completionStatus(editorView.state) === 'active') {
-          acceptCompletion(editorView)
-          return
-        }
-
+        // NOTE: Enter-accepts-an-open-completion is handled INSIDE the editor
+        // (acceptCompletionBeforeIOSDefer capture handler + CM's completion
+        // keymap), which swallow the key before it reaches this window-level
+        // shortcut. So this shortcut stays completion-unaware and just splits.
         if (!scopeRootId) return
 
         const policy = await structuralEditPolicyForBlock(block, scopeRootId)
