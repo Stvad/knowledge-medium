@@ -76,22 +76,12 @@ const makeSelection = (from: number, to = from) => ({
 const codeMirrorEditorView = (
   content: string,
   cursor: number,
-  opts: {completionTooltipOpen?: boolean} = {},
 ): EditorView => {
   let text = content
   let selection = makeSelection(cursor)
 
-  // Real EditorView.dom, where the completion tooltip mounts. The split guard
-  // queries it for `.cm-tooltip-autocomplete` to detect a visible popup.
-  const dom = document.createElement('div')
-  if (opts.completionTooltipOpen) {
-    const tooltip = document.createElement('div')
-    tooltip.className = 'cm-tooltip cm-tooltip-autocomplete'
-    dom.appendChild(tooltip)
-  }
-
   const view = {
-    dom,
+    dom: document.createElement('div'),
     dispatch: vi.fn((spec: FakeEditorDispatchSpec) => {
       if (spec.changes) {
         text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
@@ -1000,10 +990,12 @@ describe('default CodeMirror shortcuts', () => {
 
   // The iPad bug: with a `[[ ]]` / `(( ))` autocomplete popup open, Enter must
   // accept the highlighted completion, not split the block. On desktop CM's
-  // completion keymap stops the event before this shortcut; on iOS soft-keyboard
-  // Return reaches it anyway, so the shortcut itself has to defer to the popup.
-  // Uses a real EditorView (the fake view can't carry a completion state) with a
-  // trivial source; interactionDelay:0 lets acceptCompletion fire immediately.
+  // completion keymap stops the event before this shortcut; on iOS CM defers the
+  // real Enter and runs its keymap only on a later, non-bubbling synthetic Enter,
+  // so the real keydown bubbles straight here and the shortcut itself must defer
+  // to the popup (verified on-device). Uses a real EditorView (the fake view
+  // can't carry a completion state) with a trivial source; interactionDelay:0
+  // lets acceptCompletion fire immediately.
   it('accepts an open autocomplete popup instead of splitting the block', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
@@ -1096,12 +1088,13 @@ describe('default CodeMirror shortcuts', () => {
     view.destroy()
   })
 
-  it('STILL splits on Enter when a query is pending but NO popup is shown (ordinary typing)', async () => {
+  it('STILL splits on Enter when a query is pending (ordinary typing)', async () => {
     // Async sources report completionStatus 'pending' after any keystroke while
     // the query is in flight — even for ordinary prose that opens no dropdown. A
-    // never-resolving source with no options pins 'pending' with NO rendered
-    // tooltip. Enter here must behave normally and split the block; gating on the
-    // visible tooltip (not on completionStatus) is what preserves that.
+    // never-resolving source with no options pins 'pending'. Enter here must
+    // behave normally and split the block; gating strictly on
+    // completionStatus === 'active' ('pending' is not 'active') is what preserves
+    // that.
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -1126,8 +1119,6 @@ describe('default CodeMirror shortcuts', () => {
     })
     startCompletion(view)
     await vi.waitFor(() => expect(completionStatus(view.state)).toBe('pending'))
-    // No options ever arrive → no popup is rendered.
-    expect(view.dom.querySelector('.cm-tooltip-autocomplete')).toBeNull()
 
     const action = findEditModeAction(env.repo, 'split_block_cm')
     await action.handler({
@@ -1140,35 +1131,6 @@ describe('default CodeMirror shortcuts', () => {
     // Split happened: a sibling was created under root (Enter was NOT swallowed).
     expect((await childIds('root')).length).toBe(2)
     view.destroy()
-  })
-
-  it('swallows Enter (no split) when a completion popup is visible even if not active', async () => {
-    // The disabled-refresh case: an already-open dropdown is greyed while an async
-    // requery is in flight — completionStatus is 'pending' (not 'active') but the
-    // `.cm-tooltip-autocomplete` element is still mounted. Enter must not split
-    // under it. Modeled with the fake view carrying a rendered tooltip.
-    await env.repo.tx(async tx => {
-      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
-      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
-    }, {scope: ChangeScope.BlockDefault})
-    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: '[[Fo'})
-
-    const uiStateBlock = env.repo.block('ui')
-    await focusBlock(uiStateBlock, 'current')
-
-    // Fake view: completionStatus resolves to null (no field), but a tooltip is in the DOM.
-    const editorView = codeMirrorEditorView('[[Fo', 4, {completionTooltipOpen: true})
-    const childrenBefore = await childIds('root')
-    const action = findEditModeAction(env.repo, 'split_block_cm')
-    await action.handler({
-      block: env.repo.block('current'),
-      editorView,
-      uiStateBlock,
-      scopeRootId: 'root',
-    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
-
-    // Swallowed on the visible-tooltip signal: no sibling created.
-    expect(await childIds('root')).toEqual(childrenBefore)
   })
 
   // Scope-root behaviour: when the focused block is the root of the

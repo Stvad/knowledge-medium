@@ -105,50 +105,18 @@ const mdNoQuoteClose = markdownLanguage.data.of({
   }
 });
 
-// The block editor (CodeMirrorContentRenderer) disables CM's defaultKeymap and
-// binds no Enter/Shift-Enter handler in CM itself, so both Enter variants would
-// otherwise be produced by the browser's native `beforeinput`. We take both
-// over here because `preventDefault` on `beforeinput` IS honoured on iOS (unlike
-// on keydown, which iOS silently ignores for these keys — verified on-device):
-//
-//   • Shift+Enter → `insertLineBreak`: one soft line break inside the block.
-//     iOS WebKit applies the native break TWICE in a contentEditable (CM then
-//     observes "\n\n") while desktop applies it once — the iPad double-newline
-//     bug. Insert exactly one break ourselves and preventDefault so no engine
-//     can double it.
-//
-//   • Plain Enter → `insertParagraph`: a block split or completion-accept, never
-//     a literal newline in this single-line editor. The behaviour is driven from
-//     the keydown layer — the `split_block_cm` Enter shortcut, which accepts an
-//     open autocomplete popup instead of splitting. But that shortcut's own
-//     keydown `preventDefault` is ignored on iOS, so without intercepting here
-//     the native paragraph still lands: it (a) leaves a stray newline and, worse,
-//     (b) mutates the doc, which closes an open `[[ ]]` / `(( ))` completion
-//     BEFORE the shortcut's completion-aware guard runs — so Enter splits the
-//     block instead of accepting the completion. Prevent it (doc untouched, the
-//     popup stays alive for the guard); we deliberately do NOT accept the
-//     completion here, keeping a single accept path so we can't both accept and
-//     split for one press.
-//
-//     Scope: this popup-stays-alive reasoning is iOS-Safari-specific, where
-//     `preventDefault` on beforeinput actually cancels the native paragraph. On
-//     Chromium (incl. Android soft keyboards / GBoard) beforeinput
-//     `preventDefault` is a NO-OP (see CM's own note in @codemirror/view's
-//     beforeinput handler), so the native "\n" still lands, closes the popup, and
-//     the block still splits on a soft-keyboard Return mid-completion. That
-//     Android gap is pre-existing and NOT addressed here — fixing it needs the
-//     accept to happen synchronously in this handler, which reopens the
-//     double-fire problem on iOS. `preventDefault` here is still harmless on
-//     Chromium (the `return true` only suppresses CM's built-in beforeinput for
-//     insertParagraph, whose Android Enter synthesis is covered by the observed
-//     DOM-mutation path), and on desktop the branch is inert because the shortcut
-//     preventDefaults the keydown before any beforeinput fires.
+// Shift+Enter inserts a single soft line break inside the block. The block
+// editor (CodeMirrorContentRenderer) disables CM's defaultKeymap and binds no
+// Enter/Shift-Enter handler, so the break is produced by the native
+// `insertLineBreak` beforeinput. iOS WebKit applies that native break TWICE
+// inside a contentEditable (CM then observes "\n\n"), while desktop applies it
+// once — the source of the iPad double-newline bug. Take the input over: insert
+// exactly one line break and preventDefault so no engine can double it.
+// preventDefault on `beforeinput` IS honoured on iOS (unlike on keydown),
+// verified on-device. Plain Enter (block split) arrives as `insertParagraph`
+// and is owned by the Enter shortcut, so we don't touch it.
 export const softLineBreakOnBeforeInput = EditorView.domEventHandlers({
   beforeinput(event, view) {
-    if (event.inputType === 'insertParagraph') {
-      event.preventDefault()
-      return true
-    }
     if (event.inputType !== 'insertLineBreak') return false
     if (view.state.readOnly) return false // insertNewline has no read-only guard of its own
     insertNewline(view)

@@ -4,16 +4,10 @@ import {EditorState} from '@codemirror/state'
 import {EditorView} from '@codemirror/view'
 import {softLineBreakOnBeforeInput} from './codemirror'
 
-// Regression for two iPad native-input bugs the handler owns at the beforeinput
-// layer (where iOS honours preventDefault, unlike keydown):
-//   • Shift+Enter double-newline: iOS WebKit applies the native `insertLineBreak`
-//     twice in a contentEditable — take it over, insert exactly one break, and
-//     preventDefault so no engine can double it.
-//   • Plain Enter (`insertParagraph`): must never mutate the doc in this
-//     single-line editor. Splitting / completion-accept is driven from the Enter
-//     shortcut on the keydown layer; the native paragraph is prevented here so it
-//     can't leave a stray newline or close an open completion before the
-//     shortcut's completion-aware guard runs.
+// Regression for the iPad Shift+Enter double-newline bug: iOS WebKit applies a
+// native `insertLineBreak` twice in a contentEditable. Our handler must take it
+// over and insert exactly one break (and preventDefault so the engine can't
+// double it). insertParagraph (plain Enter / block split) must be left alone.
 const editorAt = (doc: string, cursor: number) => {
   const view = new EditorView({
     state: EditorState.create({doc, extensions: [softLineBreakOnBeforeInput]}),
@@ -37,13 +31,10 @@ describe('softLineBreakOnBeforeInput', () => {
     view.destroy()
   })
 
-  test('insertParagraph (plain Enter) is prevented and never mutates the doc', () => {
-    // The split / completion-accept happens on the keydown layer (the Enter
-    // shortcut). Here we only stop the native paragraph so it can't leave a
-    // stray newline or close an open completion first.
+  test('insertParagraph (plain Enter / block split) is left to the Enter shortcut', () => {
     const view = editorAt('ab', 1)
     const event = fireBeforeInput(view, 'insertParagraph')
-    expect(event.defaultPrevented).toBe(true)
+    expect(event.defaultPrevented).toBe(false)
     expect(view.state.doc.toString()).toBe('ab')
     view.destroy()
   })

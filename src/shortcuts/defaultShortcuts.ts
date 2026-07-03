@@ -678,47 +678,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        // With an autocomplete popup ON SCREEN, Enter belongs to the popup —
-        // accept the highlighted completion; NEVER split the block. On desktop CM's
-        // completion keymap normally accepts and `stopPropagation`s before the
-        // event reaches this window-level shortcut. But it accepts via the same
-        // `acceptCompletion`, which no-ops during CM's brief post-open
-        // `interactionDelay` (default 75ms) — and a no-op accept doesn't
-        // stopPropagation, so a fast Return bubbles here. On iOS Safari the *real*
-        // Enter keydown reaches this shortcut regardless (CM defers it as a
-        // pendingIOSKey and runs its own keymap only on the later synthetic Enter
-        // from flushIOSKey, which is non-bubbling and never reaches us).
-        //
-        // We gate on a VISIBLE popup, not on `completionStatus`. The `[[`/`((`/
-        // place sources are async, so CM reports `completionStatus === 'pending'`
-        // in two very different situations: (a) an already-open dropdown refreshing
-        // after a keystroke (popup still shown, greyed/disabled) — Enter must NOT
-        // split under it; and (b) a background query kicked off by ordinary typing
-        // BEFORE any popup opens — here Enter must still split the block, or normal
-        // prose editing breaks. `completionStatus` can't tell them apart, so we key
-        // off the rendered tooltip instead: CM keeps `.cm-tooltip-autocomplete`
-        // mounted (adding a `-disabled` modifier) for case (a) and renders nothing
-        // for case (b). The tooltip lives under `view.dom` (no tooltip parent is
-        // configured), so the query is scoped to THIS block's editor. The
-        // `=== 'active'` arm is a fast path / guard against the sub-tick where the
-        // popup is logically active but the tooltip DOM hasn't mounted yet.
-        //
-        // When we swallow without accepting (interactionDelay window, or a disabled
-        // refresh), the accept lands a beat later on its own — on desktop when the
-        // user presses Return again, on iOS via CM's deferred synthetic Enter
-        // (~250ms) hitting the completion keymap once the popup is 'active' again.
-        // No second manual press needed on iOS. The only split path is this window
-        // shortcut on the real keydown, so swallowing here is sufficient; the
-        // synthetic Enter can't split (non-bubbling, it never reaches this listener).
-        //
-        // At most one accept happens per press: CM's keymap and this guard both
-        // *call* acceptCompletion, but they're exclusive by state — a successful
-        // keymap accept stopPropagations so we never run; a failed one (delay /
-        // pending) can't succeed on the retry within the same synchronous keystroke.
-        if (
-          completionStatus(editorView.state) === 'active' ||
-          editorView.dom.querySelector('.cm-tooltip-autocomplete')
-        ) {
+        // An open autocomplete popup owns Enter: accept the highlighted
+        // completion instead of splitting. On desktop CM's completion keymap
+        // accepts and stopPropagations before Enter reaches this window-level
+        // shortcut; on iOS CM defers the real Enter (pendingIOSKey) and runs its
+        // keymap only on a later, NON-bubbling synthetic Enter — so the real
+        // keydown bubbles straight to this shortcut and would split. Guarding on
+        // the public completion status covers it (verified on-device: the popup
+        // is 'active' when this fires). We return even when acceptCompletion
+        // no-ops inside CM's brief post-open interactionDelay, so a fast Return
+        // can't fall through to a split; the accept lands a beat later (desktop:
+        // next Return; iOS: the deferred synthetic Enter once past the delay).
+        // A popup mid-async-refresh reports 'pending', not 'active', so pressing
+        // Enter in that narrow window still splits — accepted as a rare edge in
+        // exchange for not coupling this shortcut to CM's tooltip DOM.
+        if (completionStatus(editorView.state) === 'active') {
           acceptCompletion(editorView)
           return
         }
