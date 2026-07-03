@@ -1,9 +1,10 @@
 import { ChangeScope } from "./api/changeScope.js";
 import "./api/index.js";
-import { blockTypeLabelProp, blockTypePropertiesProp, hasBlockType, propertyNameProp } from "./properties.js";
+import { blockTypeColorProp, blockTypeLabelProp, blockTypePropertiesProp, hasBlockType, propertyNameProp } from "./properties.js";
 import { BLOCK_TYPE_TYPE, PAGE_TYPE, PROPERTY_SCHEMA_TYPE } from "./blockTypes.js";
 import { typesPageBlockId } from "./typesPage.js";
 import { createChild } from "./mutators.js";
+import { pickLeastUsedTypeColor } from "./typeColors.js";
 //#region src/data/typeExtraction.ts
 /** Extract-type-from-prototype primitives.
 *
@@ -72,6 +73,7 @@ async function createTypeBlock(repo, args) {
 		if (!repo.userSchemas.getSchemaForBlockId(schemaId)) throw new Error(`createTypeBlock: property-schema block ${schemaId} ("${name}") isn't published by UserSchemasService — e.g. its preset isn't loaded, its config didn't validate, or the block hasn't synced yet. Fix the schema block before retrying.`);
 	}
 	args.signal?.throwIfAborted();
+	const color = args.color ?? pickLeastUsedTypeColor(repo.types.values());
 	const typeSnapshot = repo.snapshotTypeRegistries();
 	let newId = "";
 	await repo.tx(async (tx) => {
@@ -89,6 +91,7 @@ async function createTypeBlock(repo, args) {
 		await repo.addTypeInTx(tx, newId, PAGE_TYPE, {}, typeSnapshot);
 		await tx.setProperty(newId, blockTypeLabelProp, trimmedLabel);
 		await tx.setProperty(newId, blockTypePropertiesProp, args.propertySchemaIds);
+		if (color) await tx.setProperty(newId, blockTypeColorProp, color);
 	}, {
 		scope: ChangeScope.BlockDefault,
 		description: `createTypeBlock ${trimmedLabel}`

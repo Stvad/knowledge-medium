@@ -4,7 +4,7 @@ import { getBlockTypes } from "../../data/properties.js";
 import { EditorState } from "../../../node_modules/@codemirror/state/dist/index.js";
 import { showError } from "../../utils/toast.js";
 import { createTypeBlock } from "../../data/typeExtraction.js";
-import { buildTypeTagCandidates, findTaggableTypeByName, planTriggerRestore, planTriggerStrip, typeTagCompletionSource } from "./typeAutocomplete.js";
+import { buildTypeTagCandidates, findCompletableTypeByName, planTriggerRestore, planTriggerStrip, typeTagCompletionSource } from "./typeAutocomplete.js";
 //#region src/plugins/supertags/codeMirrorExtensions.ts
 /** CodeMirror surface for the supertags plugin: the `#` completion
 *  source contributed via `EditorState.languageData`, picked up by the
@@ -12,7 +12,8 @@ import { buildTypeTagCandidates, findTaggableTypeByName, planTriggerRestore, pla
 *  `src/editor/autocomplete.ts` (which also themes the dropdown).
 *
 *  Candidates come from the live merged type registry (`repo.types` —
-*  kernel + plugin + user-defined, minus `structural` plumbing).
+*  kernel + plugin + user-defined, minus `hideFromCompletion`
+*  plumbing).
 *
 *  Pick semantics: the source deletes the `#query` trigger text from
 *  the view optimistically; `pickType` here commits the tag AND the
@@ -69,7 +70,7 @@ var buildTypeTagSource = ({ repo, block }) => {
 				await applyTag(candidate.id, ctx);
 				return;
 			}
-			let typeId = findTaggableTypeByName(repo.types, candidate.label)?.id;
+			let typeId = findCompletableTypeByName(repo.types, candidate.label)?.id;
 			if (!typeId) {
 				const workspaceId = block.peek()?.workspaceId ?? repo.activeWorkspaceId;
 				if (!workspaceId) throw new Error("no workspace to create the type in");

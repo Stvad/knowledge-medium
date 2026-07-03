@@ -1,4 +1,4 @@
-import { defineBlockType } from "../../data/api/blockType.js";
+import { INFRASTRUCTURE_TYPE_DISPLAY, defineBlockType } from "../../data/api/blockType.js";
 import { ChangeScope } from "../../data/api/changeScope.js";
 import { codecs } from "../../data/api/codecs.js";
 import { defineProperty } from "../../data/api/propertySchema.js";
@@ -44,7 +44,7 @@ var srsSnapshotHistoryProp = defineProperty("snapshot-history", {
 var srsSm25Type = defineBlockType({
 	id: SRS_SM25_TYPE,
 	label: "SRS SM-2.5",
-	structural: true,
+	...INFRASTRUCTURE_TYPE_DISPLAY,
 	properties: [
 		srsIntervalProp,
 		srsFactorProp,

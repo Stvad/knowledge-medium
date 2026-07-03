@@ -21,7 +21,8 @@ import { jsx, jsxs } from "react/jsx-runtime";
 *  resolve-context and slot identity (the `#` pick flow stays correct
 *  across that remount because its tag write is cache-coherent — see
 *  codeMirrorExtensions.ts). What the unconditional wrap DOES buy:
-*  chip visibility driven by the registry (`hideTag` edits, late type
+*  chip visibility driven by the registry (`hideFromBlockDisplay`
+*  edits, late type
 *  publication) re-renders in place instead of re-resolving decorator
 *  gates, and if the renderer's slot identity is ever stabilized the
 *  no-remount invariant holds here without changes. The WeakMap cache
@@ -124,7 +125,7 @@ var TypeChipsDecorator = (t0) => {
 		$[2] = t1;
 	} else t1 = $[2];
 	const visible = t1;
-	const t2 = visible.length > 0 ? "min-w-8 max-w-full" : "w-full";
+	const t2 = visible.length > 0 ? "min-w-8 max-w-full has-[iframe]:w-full has-[video]:w-full" : "w-full";
 	let t3;
 	if ($[3] !== Inner || $[4] !== block) {
 		t3 = /* @__PURE__ */ jsx(Inner, { block });

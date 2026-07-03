@@ -1,4 +1,4 @@
-import { blockTypeColorProp, blockTypeDescriptionProp, blockTypeHideTagProp, blockTypeLabelProp, blockTypePropertiesProp } from "./properties.js";
+import { blockTypeColorProp, blockTypeDescriptionProp, blockTypeHideFromBlockDisplayProp, blockTypeLabelProp, blockTypePropertiesProp } from "./properties.js";
 import { typesFacet } from "./facets.js";
 import { BLOCK_TYPE_TYPE } from "./blockTypes.js";
 import { USER_SCHEMAS_PROJECTOR_ID } from "./userSchemasService.js";
@@ -26,7 +26,7 @@ var tryBuildType = (block, schemas) => {
 		return null;
 	}
 	const description = block.peekProperty(blockTypeDescriptionProp) ?? "";
-	const hideTag = safeDisplayProp(block, blockTypeHideTagProp, false);
+	const hideFromBlockDisplay = safeDisplayProp(block, blockTypeHideFromBlockDisplayProp, false);
 	const color = safeDisplayProp(block, blockTypeColorProp, "").trim();
 	const refIds = block.peekProperty(blockTypePropertiesProp) ?? [];
 	const properties = [];
@@ -38,7 +38,7 @@ var tryBuildType = (block, schemas) => {
 		id: block.id,
 		label,
 		...description ? { description } : {},
-		...hideTag ? { hideTag } : {},
+		...hideFromBlockDisplay ? { hideFromBlockDisplay } : {},
 		...color ? { color } : {},
 		properties
 	};
@@ -54,7 +54,7 @@ var contributionsEqual = (a, b) => {
 		const ac = a[i];
 		const bc = b[i];
 		if (ac.id !== bc.id || ac.label !== bc.label || ac.description !== bc.description) return false;
-		if (ac.hideTag !== bc.hideTag || ac.color !== bc.color) return false;
+		if (ac.hideFromBlockDisplay !== bc.hideFromBlockDisplay || ac.color !== bc.color) return false;
 		const ap = ac.properties ?? [];
 		const bp = bc.properties ?? [];
 		if (ap.length !== bp.length) return false;

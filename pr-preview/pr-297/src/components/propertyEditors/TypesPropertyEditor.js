@@ -342,7 +342,7 @@ function _temp4(index_0) {
 	return Math.max(index_0 - 1, 0);
 }
 function _temp3(option_2) {
-	return !option_2.structural;
+	return !option_2.hideFromCompletion;
 }
 function _temp2(option) {
 	return [option.id, option];
@@ -352,7 +352,7 @@ function _temp(type) {
 		id: type.id,
 		label: type.label ?? type.id,
 		description: type.description,
-		structural: type.structural === true
+		hideFromCompletion: type.hideFromCompletion === true
 	};
 }
 //#endregion

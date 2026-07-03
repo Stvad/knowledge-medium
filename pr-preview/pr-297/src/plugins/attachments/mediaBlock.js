@@ -1,4 +1,4 @@
-import { defineBlockType } from "../../data/api/blockType.js";
+import { INFRASTRUCTURE_TYPE_DISPLAY, defineBlockType } from "../../data/api/blockType.js";
 import { ChangeScope } from "../../data/api/changeScope.js";
 import { codecs } from "../../data/api/codecs.js";
 import { defineProperty } from "../../data/api/propertySchema.js";
@@ -54,7 +54,7 @@ var MEDIA_PROPERTY_SCHEMAS = [
 var MEDIA_TYPE_CONTRIBUTION = defineBlockType({
 	id: MEDIA_TYPE,
 	label: "Media",
-	structural: true,
+	...INFRASTRUCTURE_TYPE_DISPLAY,
 	description: "An image or file attachment, stored content-addressed and embedded via !((id)).",
 	properties: [...MEDIA_PROPERTY_SCHEMAS]
 });
@@ -99,7 +99,7 @@ var ASSETS_ALIAS = "Assets";
 var ASSETS_TYPE_CONTRIBUTION = defineBlockType({
 	id: ASSETS_TYPE,
 	label: "Assets",
-	structural: true,
+	...INFRASTRUCTURE_TYPE_DISPLAY,
 	description: "The workspace-level container that holds content-addressed media attachment blocks."
 });
 //#endregion

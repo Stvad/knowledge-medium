@@ -22,26 +22,25 @@ import { matchCharTrigger } from "../../editor/triggerMatch.js";
 *  candidates and a `pickType` callback. Wiring to the repo (the live
 *  `typesFacet` registry, `addType`, `createTypeBlock`) happens in the
 *  plugin's CodeMirror extension. */
-/** The tagging UX hides `structural` contributions (kernel structure
-*  like page/panel, plugin prefs/ui-state plumbing — see
-*  `TypeContribution.structural`) everywhere, and `hideTag` ones from
-*  the chip display only. Unknown ids (type not in the registry, e.g.
-*  mid-load) stay visible so a tag never silently disappears. */
-var isTaggable = (type) => type === void 0 || type.structural !== true;
+/** Whether the `#` autocomplete offers this type — everything except
+*  `hideFromCompletion` opt-outs (kernel structure like page/panel,
+*  plugin prefs/ui-state plumbing — see `TypeContribution`). */
+var offeredInCompletion = (type) => type === void 0 || type.hideFromCompletion !== true;
 /** Which of a block's types display as trailing tag chips: everything
-*  except `structural` contributions and types that opt out via
-*  `hideTag` (`block-type:hide-tag` on user-defined types). Display-
-*  only policy — `buildTypeTagCandidates` deliberately does NOT
-*  consult `hideTag`, so a chip-hidden type stays taggable. Dedups:
-*  a malformed `types` array (importer/bridge writes) must not render
-*  duplicate React keys. */
+*  except `hideFromBlockDisplay` opt-outs
+*  (`block-type:hide-from-block-display` on user-defined types). The
+*  two display flags are orthogonal — a chip-hidden type stays offered
+*  in the completion and vice versa; infrastructure types set both.
+*  Unknown ids (type not in the registry, e.g. mid-load) stay visible
+*  so a tag never silently disappears. Dedups: a malformed `types`
+*  array (importer/bridge writes) must not render duplicate React
+*  keys. */
 var visibleTagTypeIds = (typeIds, registry) => {
 	const seen = /* @__PURE__ */ new Set();
 	return typeIds.filter((typeId) => {
 		if (seen.has(typeId)) return false;
 		seen.add(typeId);
-		const type = registry.get(typeId);
-		return isTaggable(type) && type?.hideTag !== true;
+		return registry.get(typeId)?.hideFromBlockDisplay !== true;
 	});
 };
 /** Dropdown length cap. Typing narrows the list, so truncation only
@@ -52,14 +51,14 @@ var RESULT_CAP = 12;
 *  direct testing. */
 var matchHashTrigger = (text, pos) => matchCharTrigger(text, pos, "#", { rejectDoubledTrigger: true });
 var labelOf = (type) => type.label ?? type.id;
-/** Case-insensitive exact label/id lookup among TAGGABLE types.
-*  Exported for the create flow's just-before-create re-check (the
-*  sentinel can be picked before an earlier create publishes). */
-var findTaggableTypeByName = (registry, name) => {
+/** Case-insensitive exact label/id lookup among completion-offered
+*  types. Exported for the create flow's just-before-create re-check
+*  (the sentinel can be picked before an earlier create publishes). */
+var findCompletableTypeByName = (registry, name) => {
 	const q = name.trim().toLowerCase();
 	if (q === "") return void 0;
 	for (const type of registry.values()) {
-		if (!isTaggable(type)) continue;
+		if (!offeredInCompletion(type)) continue;
 		if (labelOf(type).toLowerCase() === q || type.id.toLowerCase() === q) return type;
 	}
 };
@@ -68,16 +67,16 @@ var findTaggableTypeByName = (registry, name) => {
 *  block's current `types` property.
 *
 *  The `create` sentinel appears for any non-empty query with no exact
-*  label/id match among the TAGGABLE types (already-applied ones
-*  included, so you can't mint a second "Task" from a block that
-*  already carries the first). Structural types deliberately don't
-*  suppress it: `#page` should offer to create the user's own "page"
-*  type rather than dead-end with an empty dropdown. */
+*  label/id match among the completion-offered types (already-applied
+*  ones included, so you can't mint a second "Task" from a block that
+*  already carries the first). `hideFromCompletion` types deliberately
+*  don't suppress it: `#page` should offer to create the user's own
+*  "page" type rather than dead-end with an empty dropdown. */
 var buildTypeTagCandidates = (args) => {
 	const trimmed = args.query.trim();
 	const q = trimmed.toLowerCase();
 	const current = new Set(args.currentTypeIds);
-	const matches = Array.from(args.registry.values()).filter((type) => isTaggable(type) && !current.has(type.id) && (q === "" || labelOf(type).toLowerCase().includes(q) || type.id.toLowerCase().includes(q)));
+	const matches = Array.from(args.registry.values()).filter((type) => offeredInCompletion(type) && !current.has(type.id) && (q === "" || labelOf(type).toLowerCase().includes(q) || type.id.toLowerCase().includes(q)));
 	const rank = (type) => labelOf(type).toLowerCase().startsWith(q) ? 0 : 1;
 	matches.sort((a, b) => rank(a) - rank(b) || labelOf(a).localeCompare(labelOf(b)));
 	const existing = matches.slice(0, RESULT_CAP).map((type) => ({
@@ -86,7 +85,7 @@ var buildTypeTagCandidates = (args) => {
 		label: labelOf(type),
 		detail: type.description
 	}));
-	if (trimmed === "" || findTaggableTypeByName(args.registry, trimmed)) return existing;
+	if (trimmed === "" || findCompletableTypeByName(args.registry, trimmed)) return existing;
 	return [...existing, {
 		kind: "create",
 		label: trimmed,
@@ -186,6 +185,6 @@ var typeTagCompletionSource = (options) => {
 	};
 };
 //#endregion
-export { buildTypeTagCandidates, findTaggableTypeByName, matchHashTrigger, planTriggerRestore, planTriggerStrip, restoreTriggerToView, typeTagCompletionSource, visibleTagTypeIds };
+export { buildTypeTagCandidates, findCompletableTypeByName, matchHashTrigger, planTriggerRestore, planTriggerStrip, restoreTriggerToView, typeTagCompletionSource, visibleTagTypeIds };
 
 //# sourceMappingURL=typeAutocomplete.js.map

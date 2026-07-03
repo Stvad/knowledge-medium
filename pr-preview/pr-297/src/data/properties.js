@@ -140,10 +140,10 @@ var blockTypePropertiesProp = defineProperty("block-type:properties", {
 	defaultValue: [],
 	changeScope: ChangeScope.BlockDefault
 });
-/** Hide this type from a block's trailing tag-chip display (the
-*  supertags `#type` row). Display-only — the type stays taggable and
-*  visible in pickers/panel. Lifted onto `TypeContribution.hideTag`. */
-var blockTypeHideTagProp = defineProperty("block-type:hide-tag", {
+/** Don't render this type's chip on blocks (the supertags `#type`
+*  row). Display-only — the type stays taggable and visible in
+*  pickers/panel. Lifted onto `TypeContribution.hideFromBlockDisplay`. */
+var blockTypeHideFromBlockDisplayProp = defineProperty("block-type:hide-from-block-display", {
 	codec: codecs.boolean,
 	defaultValue: false,
 	changeScope: ChangeScope.BlockDefault
@@ -336,11 +336,11 @@ var KERNEL_PROPERTY_SCHEMAS = [
 	blockTypeLabelProp,
 	blockTypeDescriptionProp,
 	blockTypePropertiesProp,
-	blockTypeHideTagProp,
+	blockTypeHideFromBlockDisplayProp,
 	blockTypeColorProp,
 	userIdProp
 ];
 //#endregion
-export { KERNEL_PROPERTY_SCHEMAS, activePanelIdProp, addBlockTypeToProperties, addedTypes, aliasesProp, blockTypeColorProp, blockTypeDescriptionProp, blockTypeHideTagProp, blockTypeLabelProp, blockTypePropertiesProp, createdAtProp, editorFocusRequestProp, editorSelection, exitEditModeForBlock, extensionDescriptionProp, extensionNameProp, focusBlock, focusedBlockLocationFromProperties, focusedBlockLocationProp, getBlockTypes, hasBlockType, isCollapsedProp, isEditingProp, isFocusedBlock, peekFocusedBlockLocation, presetConfigProp, presetIdProp, propertyNameProp, removedTypes, rendererNameProp, rendererProp, requestEditorFocus, sameFocusedBlockLocation, scrollTopProp, selectionStateProp, setIsEditing, showPropertiesProp, sourceBlockIdProp, topLevelBlockIdProp, typesProp, userIdProp };
+export { KERNEL_PROPERTY_SCHEMAS, activePanelIdProp, addBlockTypeToProperties, addedTypes, aliasesProp, blockTypeColorProp, blockTypeDescriptionProp, blockTypeHideFromBlockDisplayProp, blockTypeLabelProp, blockTypePropertiesProp, createdAtProp, editorFocusRequestProp, editorSelection, exitEditModeForBlock, extensionDescriptionProp, extensionNameProp, focusBlock, focusedBlockLocationFromProperties, focusedBlockLocationProp, getBlockTypes, hasBlockType, isCollapsedProp, isEditingProp, isFocusedBlock, peekFocusedBlockLocation, presetConfigProp, presetIdProp, propertyNameProp, removedTypes, rendererNameProp, rendererProp, requestEditorFocus, sameFocusedBlockLocation, scrollTopProp, selectionStateProp, setIsEditing, showPropertiesProp, sourceBlockIdProp, topLevelBlockIdProp, typesProp, userIdProp };
 
 //# sourceMappingURL=properties.js.map

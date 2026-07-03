@@ -15,14 +15,17 @@ import { typeChipsDecoratorContribution } from "./TypeChipsDecorator.js";
 *   - a block's types render as trailing `#label` chips after its
 *     content, each with a remove button.
 *
-*  `structural` contributions (kernel structure, plugin plumbing) are
-*  hidden from both surfaces; `hideTag` types from chips only — see
-*  `TypeContribution`. */
+*  Display opt-outs: `hideFromCompletion` keeps a type out of the `#`
+*  dropdown, `hideFromBlockDisplay` out of the chip row; infrastructure
+*  types set both — see `TypeContribution`. */
 var supertagsPlugin = systemToggle({
 	id: "system:supertags",
 	name: "Type tags (#)",
 	description: "Type # in a block to tag it with a type (or create one); a block's types show as #chips at the end of its content. For your own types, chip color and visibility live on the type's definition block; built-in types declare them in code."
-}).of([codeMirrorExtensionsFacet.of(supertagsCodeMirrorExtensions, { source: "supertags" }), blockContentDecoratorsFacet.of(typeChipsDecoratorContribution, { source: "supertags" })]);
+}).of([codeMirrorExtensionsFacet.of(supertagsCodeMirrorExtensions, { source: "supertags" }), blockContentDecoratorsFacet.of(typeChipsDecoratorContribution, {
+	source: "supertags",
+	precedence: -100
+})]);
 //#endregion
 export { supertagsPlugin };
 

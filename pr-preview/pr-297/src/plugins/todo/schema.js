@@ -18,7 +18,7 @@ var roamTodoStateProp = defineProperty("roam:todo-state", {
 var todoType = defineBlockType({
 	id: TODO_TYPE,
 	label: "Todo",
-	hideTag: true,
+	hideFromBlockDisplay: true,
 	properties: [statusProp]
 });
 //#endregion

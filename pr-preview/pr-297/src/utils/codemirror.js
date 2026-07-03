@@ -4,6 +4,15 @@ import { markdown, markdownLanguage } from "../../node_modules/@codemirror/lang-
 import { javascript } from "../../node_modules/@codemirror/lang-javascript/dist/index.js";
 import { insertNewline } from "../../node_modules/@codemirror/commands/dist/index.js";
 //#region src/utils/codemirror.ts
+/** Clamp every range of a selection into `[0, docLength]`. For
+*  dispatching a REMEMBERED selection against a doc that may have
+*  shrunk since it was captured — a debounce-persisted selection
+*  restored on focus, or a selection carried across an external
+*  content adoption. CodeMirror throws "Selection points outside of
+*  document" on a raw out-of-range anchor, and (for adoption) omitting
+*  the selection instead would let default mapping collapse the cursor
+*  to 0. */
+var clampSelectionToLength = (selection, docLength) => EditorSelection.create(selection.ranges.map((range) => EditorSelection.range(Math.min(range.anchor, docLength), Math.min(range.head, docLength))), selection.mainIndex);
 /** Produce the change/range spec for one selection range that either
 *  inserts an empty `open`/`close` pair at the cursor or wraps the
 *  selection with them, keeping the selection inside the wrappers.
@@ -187,6 +196,6 @@ var getCaretRect = (editorView) => {
 var cursorIsAtEnd = (editorView) => editorView.state.selection.main.head === editorView.state.doc.length;
 var cursorIsAtStart = (editorView) => editorView.state.selection.main.head === 0;
 //#endregion
-export { createMinimalMarkdownConfig, createTypeScriptConfig, cursorIsAtEnd, cursorIsAtStart, getCaretRect, getVisualColumn, isOnFirstVisualLine, isOnLastVisualLine, markdownFormattingKeymap, placeCursorAtCoords, placeCursorAtX, softLineBreakOnBeforeInput, toggleMarkdownBold, toggleMarkdownInlineCode, toggleMarkdownItalic, toggleMarkdownStrikethrough, wrapRangeWithPair };
+export { clampSelectionToLength, createMinimalMarkdownConfig, createTypeScriptConfig, cursorIsAtEnd, cursorIsAtStart, getCaretRect, getVisualColumn, isOnFirstVisualLine, isOnLastVisualLine, markdownFormattingKeymap, placeCursorAtCoords, placeCursorAtX, softLineBreakOnBeforeInput, toggleMarkdownBold, toggleMarkdownInlineCode, toggleMarkdownItalic, toggleMarkdownStrikethrough, wrapRangeWithPair };
 
 //# sourceMappingURL=codemirror.js.map
