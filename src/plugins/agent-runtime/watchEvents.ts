@@ -110,13 +110,20 @@ const watcherRuntimeFor = (spec: WatchEventsWatcher): WatcherRuntime => ({
   disposeOnChange: null,
 })
 
-const rowsById = (rows: unknown[]): Map<string, string> => {
+/** One serialization pass serves both the change fingerprint and the
+ *  per-id diff state — this runs on every (throttled) table change.
+ *  The joined fingerprint is byte-identical to JSON.stringify(rows)
+ *  and is only ever compared to itself. */
+const serializeRows = (rows: unknown[]): {fingerprint: string, byId: Map<string, string>} => {
   const byId = new Map<string, string>()
+  const rowJsons: string[] = []
   for (const row of rows) {
+    const json = JSON.stringify(row) ?? 'null' // array-position semantics for non-serializable rows
+    rowJsons.push(json)
     const id = (row as {id?: unknown} | null)?.id
-    if (typeof id === 'string' && id) byId.set(id, JSON.stringify(row))
+    if (typeof id === 'string' && id) byId.set(id, json)
   }
-  return byId
+  return {fingerprint: `[${rowJsons.join(',')}]`, byId}
 }
 
 const watchTablesFor = (spec: WatchEventsWatcher): string[] =>
@@ -221,8 +228,8 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
         // TTL expiry): this runtime no longer observes changes, so any
         // settle it armed would be a false "quiet" confirmation.
         if (runtime.disposed) return
-        const fingerprint = JSON.stringify(rows)
-        runtime.currentById = rowsById(rows)
+        const {fingerprint, byId} = serializeRows(rows)
+        runtime.currentById = byId
         if (runtime.fingerprint !== null && fingerprint !== runtime.fingerprint) {
           // Record which ids drifted from the last-emitted state — they
           // become the event's settledBlocks (quiet-exemption hints).

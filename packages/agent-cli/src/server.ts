@@ -106,9 +106,65 @@ interface CommandRecord {
   result: unknown
 }
 
-interface Waiter {
+// ----- long-poll waiter plumbing ---------------------------------------
+//
+// Shared by the command queue (clientId-keyed) and the events channel
+// (audience-keyed): a parked waiter holds an open response, expires
+// after timeoutMs, and is dropped when the request closes.
+
+interface ParkedWaiter {
   response: http.ServerResponse
-  timeout: NodeJS.Timeout
+  timeout?: NodeJS.Timeout
+}
+
+type Waiter = ParkedWaiter
+
+const removeWaiter = <K, W>(map: Map<K, Set<W>>, key: K, waiter: W): void => {
+  const set = map.get(key)
+  if (!set) return
+  set.delete(waiter)
+  if (set.size === 0) map.delete(key)
+}
+
+/** Arm the waiter's expiry (answering via `onTimeout`), clean it up on
+ *  request close, and register it under `key`. */
+const parkWaiter = <K, W extends ParkedWaiter>(
+  map: Map<K, Set<W>>,
+  key: K,
+  request: http.IncomingMessage,
+  waiter: W,
+  timeoutMs: number,
+  onTimeout: () => void,
+): void => {
+  waiter.timeout = setTimeout(() => {
+    removeWaiter(map, key, waiter)
+    onTimeout()
+  }, timeoutMs)
+  request.on('close', () => {
+    removeWaiter(map, key, waiter)
+    clearTimeout(waiter.timeout)
+  })
+  let set = map.get(key)
+  if (!set) {
+    set = new Set<W>()
+    map.set(key, set)
+  }
+  set.add(waiter)
+}
+
+/** Cancel every parked waiter and close its response (test reset). */
+const drainWaiters = <K, W extends ParkedWaiter>(map: Map<K, Set<W>>): void => {
+  for (const set of map.values()) {
+    for (const waiter of set) {
+      clearTimeout(waiter.timeout)
+      try {
+        waiter.response.end()
+      } catch {
+        /* response already closed */
+      }
+    }
+  }
+  map.clear()
 }
 
 // clientId -> client record
@@ -330,8 +386,7 @@ const tryDeliverToClient = (clientId: ClientId): void => {
   for (const waiter of Array.from(waiters)) {
     const command = takePendingForClient(clientId)
     if (!command) return
-    waiters.delete(waiter)
-    if (waiters.size === 0) waitersByClient.delete(clientId)
+    removeWaiter(waitersByClient, clientId, waiter)
     command.status = 'delivered'
     command.deliveredAt = now()
     command.clientId = clientId
@@ -444,9 +499,7 @@ interface EventBuffer {
   events: BridgeEventRecord[]
 }
 
-interface EventWaiter {
-  response: http.ServerResponse
-  timeout: NodeJS.Timeout
+interface EventWaiter extends ParkedWaiter {
   afterSeq: number
 }
 
@@ -466,13 +519,6 @@ const eventWaitersByAudience = new Map<string, Set<EventWaiter>>()
 const eventsAfter = (buffer: EventBuffer, afterSeq: number): BridgeEventRecord[] =>
   buffer.events.filter(event => event.seq > afterSeq)
 
-const removeEventWaiter = (key: string, waiter: EventWaiter): void => {
-  const set = eventWaitersByAudience.get(key)
-  if (!set) return
-  set.delete(waiter)
-  if (set.size === 0) eventWaitersByAudience.delete(key)
-}
-
 const appendEvent = (key: string, clientId: ClientId, event: Record<string, unknown>): BridgeEventRecord => {
   let buffer = eventBuffers.get(key)
   if (!buffer) {
@@ -489,7 +535,7 @@ const appendEvent = (key: string, clientId: ClientId, event: Record<string, unkn
     for (const waiter of Array.from(waiters)) {
       const pending = eventsAfter(buffer, waiter.afterSeq)
       if (pending.length === 0) continue
-      removeEventWaiter(key, waiter)
+      removeWaiter(eventWaitersByAudience, key, waiter)
       clearTimeout(waiter.timeout)
       sendJson(waiter.response, 200, {events: pending, nextSeq: buffer.tail})
     }
@@ -542,27 +588,11 @@ const waitForNextEvents = (
     return
   }
 
-  const waiter: EventWaiter = {
-    response,
-    afterSeq,
-    timeout: setTimeout(() => {
-      removeEventWaiter(key, waiter)
-      const current = eventBuffers.get(key)
-      sendJson(response, 200, {events: [], nextSeq: current?.tail ?? buffer.tail})
-    }, timeoutMs),
-  }
-
-  request.on('close', () => {
-    removeEventWaiter(key, waiter)
-    clearTimeout(waiter.timeout)
+  const waiter: EventWaiter = {response, afterSeq}
+  parkWaiter(eventWaitersByAudience, key, request, waiter, timeoutMs, () => {
+    const current = eventBuffers.get(key)
+    sendJson(response, 200, {events: [], nextSeq: current?.tail ?? buffer.tail})
   })
-
-  let set = eventWaitersByAudience.get(key)
-  if (!set) {
-    set = new Set()
-    eventWaitersByAudience.set(key, set)
-  }
-  set.add(waiter)
 }
 
 const waitForNextCommand = (
@@ -587,33 +617,10 @@ const waitForNextCommand = (
     return
   }
 
-  const waiter: Waiter = {
-    response,
-    timeout: setTimeout(() => {
-      const set = waitersByClient.get(clientId)
-      if (set) {
-        set.delete(waiter)
-        if (set.size === 0) waitersByClient.delete(clientId)
-      }
-      sendJson(response, 200, null)
-    }, timeoutMs),
-  }
-
-  request.on('close', () => {
-    const set = waitersByClient.get(clientId)
-    if (set) {
-      set.delete(waiter)
-      if (set.size === 0) waitersByClient.delete(clientId)
-    }
-    clearTimeout(waiter.timeout)
+  const waiter: Waiter = {response}
+  parkWaiter(waitersByClient, clientId, request, waiter, timeoutMs, () => {
+    sendJson(response, 200, null)
   })
-
-  let set = waitersByClient.get(clientId)
-  if (!set) {
-    set = new Set()
-    waitersByClient.set(clientId, set)
-  }
-  set.add(waiter)
 }
 
 const setCommandResult = async (
@@ -663,33 +670,13 @@ const getStatus = () => ({
 // (see `testResetEnabled`). Pending long-poll waiters carry a timeout and
 // an open response, so cancel + close those before dropping the maps.
 const resetState = (): void => {
-  for (const set of waitersByClient.values()) {
-    for (const waiter of set) {
-      clearTimeout(waiter.timeout)
-      try {
-        waiter.response.end()
-      } catch {
-        /* response already closed */
-      }
-    }
-  }
-  for (const set of eventWaitersByAudience.values()) {
-    for (const waiter of set) {
-      clearTimeout(waiter.timeout)
-      try {
-        waiter.response.end()
-      } catch {
-        /* response already closed */
-      }
-    }
-  }
+  drainWaiters(waitersByClient)
+  drainWaiters(eventWaitersByAudience)
   clients.clear()
   commands.clear()
   pendingByClient.clear()
-  waitersByClient.clear()
   tokens.clear()
   eventBuffers.clear()
-  eventWaitersByAudience.clear()
 }
 
 const handleRequest = async (

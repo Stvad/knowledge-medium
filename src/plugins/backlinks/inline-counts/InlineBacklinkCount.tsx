@@ -18,7 +18,7 @@ import type { Block } from '@/data/block'
 import { useRepo } from '@/context/repo.js'
 import { useWorkspaceId } from '@/hooks/block.js'
 import {
-  type BlockContentDecorator,
+  cachedContentDecorator,
   type BlockContentDecoratorContribution,
   type BlockChildrenFooterContribution,
   type BlockResolveContext,
@@ -71,18 +71,7 @@ const InlineBacklinkCountBadge = ({
   )
 }
 
-const decoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-const decorate: BlockContentDecorator = (inner) => {
-  const existing = decoratorCache.get(inner)
-  if (existing) return existing
-  const Decorated: BlockRenderer = ({ block }) => (
-    <InlineBacklinkCountBadge block={block} Inner={inner} />
-  )
-  Decorated.displayName = 'WithInlineBacklinkCount'
-  decoratorCache.set(inner, Decorated)
-  return Decorated
-}
+const decorate = cachedContentDecorator(InlineBacklinkCountBadge, 'WithInlineBacklinkCount')
 
 export const inlineBacklinkCountDecoratorContribution: BlockContentDecoratorContribution = (ctx) =>
   inlineBacklinksApplies(ctx) ? decorate : null

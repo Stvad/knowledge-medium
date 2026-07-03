@@ -102,17 +102,30 @@ const main = async () => {
   process.on('SIGINT', () => stop('SIGINT'))
   process.on('SIGTERM', () => stop('SIGTERM'))
 
+  // Push events request an immediate tick; requests are COALESCED into
+  // the single main loop (never concurrent with the sweep tick) and a
+  // request landing mid-tick re-ticks right after — the tick may have
+  // snapshotted state from before that event's write.
+  let tickRequested = false
+  const tickWaiters = new Set<() => void>()
+
   // Interruptible sleep: resolves on timeout OR immediately when stop()
-  // fires, so shutdown isn't stuck behind a full poll/retry interval.
-  const nap = (ms: number) => new Promise<void>(resolve => {
-    if (stopping) return resolve()
-    const timer = setTimeout(() => {
-      wake.signal.removeEventListener('abort', onAbort)
+  // fires (and, with wakeOnTick, when a push event requests a tick), so
+  // shutdown isn't stuck behind a full poll/retry interval.
+  const sleep = (ms: number, opts: {wakeOnTick?: boolean} = {}) => new Promise<void>(resolve => {
+    if (stopping || (opts.wakeOnTick && tickRequested)) return resolve()
+    const timer = setTimeout(finish, ms)
+    function finish() {
+      clearTimeout(timer)
+      wake.signal.removeEventListener('abort', finish)
+      tickWaiters.delete(finish)
       resolve()
-    }, ms)
-    const onAbort = () => { clearTimeout(timer); resolve() }
-    wake.signal.addEventListener('abort', onAbort, {once: true})
+    }
+    wake.signal.addEventListener('abort', finish, {once: true})
+    if (opts.wakeOnTick) tickWaiters.add(finish)
   })
+  const nap = (ms: number) => sleep(ms)
+  const napOrTick = (ms: number) => sleep(ms, {wakeOnTick: true})
 
   const client = createBridgeClient({profile: config.profile, timeoutMs: 60_000})
 
@@ -182,12 +195,6 @@ const main = async () => {
 
   log(`watching: ${config.watchers.map(watcher => `${watcher.name}(${watcher.kind})`).join(', ')} every ${config.pollIntervalMs}ms (max ${config.runsPerHour} runs/hour)`)
 
-  // Push events request an immediate tick; requests are COALESCED into
-  // the single main loop (never concurrent with the sweep tick) and a
-  // request landing mid-tick re-ticks right after — the tick may have
-  // snapshotted state from before that event's write.
-  let tickRequested = false
-  const tickWaiters = new Set<() => void>()
   // Exemptions are keyed by the EMITTING watcher — only that watcher's
   // tick may skip its still-typing gate for these blocks. Bounded: a
   // flood of settled ids degrades to un-exempted ticks (sweep-latency
@@ -211,19 +218,6 @@ const main = async () => {
     for (const waiter of [...tickWaiters]) waiter()
     tickWaiters.clear()
   }
-  const napOrTick = (ms: number) => new Promise<void>(resolve => {
-    if (stopping || tickRequested) return resolve()
-    const timer = setTimeout(finish, ms)
-    function finish() {
-      clearTimeout(timer)
-      wake.signal.removeEventListener('abort', finish)
-      tickWaiters.delete(finish)
-      resolve()
-    }
-    wake.signal.addEventListener('abort', finish, {once: true})
-    tickWaiters.add(finish)
-  })
-
   if (config.push && !args.once) {
     void startPushLoop({
       client,

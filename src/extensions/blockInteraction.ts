@@ -1,3 +1,4 @@
+import { createElement } from 'react'
 import type {
   ClipboardEvent,
   ComponentType,
@@ -108,6 +109,25 @@ export type BlockContentRendererResolver =
 
 export type BlockContentDecorator =
   (innerRenderer: BlockRenderer) => BlockRenderer
+
+/** Build a content decorator that renders `Wrapper` around each inner
+ *  renderer. The per-inner cache is correctness, not a perf nicety:
+ *  decorators resolve during render, and a fresh component identity on
+ *  every pass would remount the block's whole content subtree. */
+export const cachedContentDecorator = (
+  Wrapper: ComponentType<{block: Block, Inner: BlockRenderer}>,
+  displayName: string,
+): BlockContentDecorator => {
+  const cache = new WeakMap<BlockRenderer, BlockRenderer>()
+  return inner => {
+    const existing = cache.get(inner)
+    if (existing) return existing
+    const Decorated: BlockRenderer = ({block}) => createElement(Wrapper, {block, Inner: inner})
+    Decorated.displayName = displayName
+    cache.set(inner, Decorated)
+    return Decorated
+  }
+}
 
 export type BlockContentDecoratorContribution =
   (context: BlockResolveContext) => BlockContentDecorator | null | undefined | false

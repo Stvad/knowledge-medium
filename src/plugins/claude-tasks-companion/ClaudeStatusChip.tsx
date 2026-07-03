@@ -10,7 +10,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
 import {
-  type BlockContentDecorator,
+  cachedContentDecorator,
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
@@ -108,18 +108,7 @@ const ClaudeStatusChipRow = ({
   )
 }
 
-const decoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
-
-const decorate: BlockContentDecorator = (inner) => {
-  const existing = decoratorCache.get(inner)
-  if (existing) return existing
-  const Decorated: BlockRenderer = ({ block }) => (
-    <ClaudeStatusChipRow block={block} Inner={inner} />
-  )
-  Decorated.displayName = 'WithClaudeStatusChip'
-  decoratorCache.set(inner, Decorated)
-  return Decorated
-}
+const decorate = cachedContentDecorator(ClaudeStatusChipRow, 'WithClaudeStatusChip')
 
 /** Chips attach everywhere except nested surfaces (embeds, backlink
  *  entries, breadcrumbs) — a status pill repeated through every embed
