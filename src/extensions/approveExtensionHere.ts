@@ -24,12 +24,17 @@ export const approveExtensionHere = async (
   blockId: string,
   name: string,
 ): Promise<boolean> => {
-  const block = await repo.load(blockId)
-  if (!block) {
-    showError(`Couldn't enable "${name}" — its definition block wasn't found.`)
-    return false
-  }
   try {
+    // The block load is inside the try too: a transient DB read failure must
+    // resolve to `false` + a toast like every other failure, not reject —
+    // callers only handle the resolved-false path (the global prompt's
+    // `void approve(...).then(...)` would otherwise turn it into an unhandled
+    // rejection and drop the retry affordance).
+    const block = await repo.load(blockId)
+    if (!block) {
+      showError(`Couldn't enable "${name}" — its definition block wasn't found.`)
+      return false
+    }
     await approveExtension(blockId, block.content ?? '')
     return true
   } catch (error) {
