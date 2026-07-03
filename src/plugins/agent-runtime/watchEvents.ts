@@ -74,6 +74,9 @@ interface WatcherRuntime {
   settleTimer: ReturnType<typeof setTimeout> | null
   computing: boolean
   recheck: boolean
+  /** A change signal arrived that no compute has consumed yet — the only
+   *  case where a blur flush needs to re-run the query itself. */
+  dirty: boolean
   /** Set on dispose. In-flight computeLoops / armed timers hold direct
    *  runtime references across awaits; once disposed nothing observes
    *  changes anymore, so acting on the stale reference would emit
@@ -102,6 +105,7 @@ const watcherRuntimeFor = (spec: WatchEventsWatcher): WatcherRuntime => ({
   settleTimer: null,
   computing: false,
   recheck: false,
+  dirty: false,
   disposed: false,
   disposeOnChange: null,
 })
@@ -211,6 +215,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     try {
       do {
         runtime.recheck = false
+        runtime.dirty = false
         const rows = await db.getAll(runtime.sql, runtime.params)
         // Disposed while the query was in flight (registration replaced,
         // TTL expiry): this runtime no longer observes changes, so any
@@ -243,6 +248,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
 
   const requestCompute = (db: PowerSyncDb, consumer: string, runtime: WatcherRuntime) => {
     if (runtime.disposed) return
+    runtime.dirty = true
     const entry = entries.get(consumer)
     // Only the runtime's OWN entry may vouch for its freshness — after a
     // replace-registration, `entries` holds the successor's entry.
@@ -327,7 +333,20 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
    *  now, flush any pending settle that involves this block, and look
    *  once more shortly after — the editor's debounced content commit
    *  usually lands just AFTER the blur signal. */
+  const recheckTimers = new Set<ReturnType<typeof setTimeout>>()
+
   const notifyBlockSettled = (blockId: string) => {
+    // The blur signal fires on EVERY block-editor unmount (any block-to-
+    // block navigation) and the bridge wires it whenever it runs — with
+    // no registrations there is nothing to flush, and recording blurs
+    // would only grow state.
+    if (entries.size === 0) return
+
+    // Opportunistic prune keeps the map proportional to blurs inside the
+    // exempt window instead of growing per block ever visited.
+    for (const [id, until] of blurredUntil) {
+      if (now() > until) blurredUntil.delete(id)
+    }
     blurredUntil.set(blockId, now() + BLUR_EXEMPT_MS)
 
     const flushPass = async () => {
@@ -337,7 +356,10 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
           continue
         }
         for (const runtime of entry.runtimes) {
-          if (!runtime.computing) {
+          // Re-run the query only when a change signal arrived that no
+          // compute consumed yet — an edit-free navigation must not turn
+          // into a per-watcher query storm.
+          if (!runtime.computing && runtime.dirty) {
             await computeLoop(entry.db, consumer, runtime).catch(error => {
               console.warn(`watch-events: ${consumer}/${runtime.name} query failed`, error)
             })
@@ -355,11 +377,18 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     }
 
     void flushPass()
-    setTimeout(() => { void flushPass() }, BLUR_RECHECK_MS)
+    const timer = setTimeout(() => {
+      recheckTimers.delete(timer)
+      void flushPass()
+    }, BLUR_RECHECK_MS)
+    recheckTimers.add(timer)
   }
 
   const disposeAll = () => {
     for (const consumer of [...entries.keys()]) disposeConsumer(consumer)
+    for (const timer of recheckTimers) clearTimeout(timer)
+    recheckTimers.clear()
+    blurredUntil.clear()
   }
 
   return {register, setTransport, notifyBlockSettled, disposeAll}

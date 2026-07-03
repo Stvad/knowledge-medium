@@ -358,6 +358,7 @@ export const startAgentRuntimeBridge = (
   // command flood can't pile up unboundedly; the loop parks on a free
   // slot instead of on completion of the command it just delivered.
   const maxConcurrentCommands = 4
+  const saturatedParkMs = 60_000
   const inFlightCommands = new Set<Promise<void>>()
 
   const runCommand = async (command: KnownAgentCommand, baseUrl: string) => {
@@ -438,8 +439,15 @@ export const startAgentRuntimeBridge = (
         })
         inFlightCommands.add(execution)
         if (inFlightCommands.size >= maxConcurrentCommands) {
-          // Saturated: wait for A slot, not for THIS command.
-          await Promise.race(inFlightCommands)
+          // Saturated: wait for A slot, not for THIS command. The park
+          // also resolves on teardown (cleanup fires the wake) and after
+          // a generous cap — commands have no tab-side execution timeout,
+          // so a fleet of hung evals must degrade to a SOFT concurrency
+          // bound rather than stalling command delivery until reload.
+          await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)])
+          if (inFlightCommands.size >= maxConcurrentCommands) {
+            console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`)
+          }
         }
       } catch {
         if (abortController.signal.aborted) return

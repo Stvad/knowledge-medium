@@ -57,8 +57,16 @@ export const askClaude = async (block: Block): Promise<void> => {
   await block.repo.tx(async tx => {
     const fresh = await tx.get(block.id)
     if (!fresh) return
-    const properties = {...fresh.properties, [CLAUDE_PROPS.askedAt]: Date.now()}
-    for (const key of REQUEUE_CLEARED_PROPS) delete properties[key]
+    const properties: Record<string, unknown> = {...fresh.properties, [CLAUDE_PROPS.askedAt]: Date.now()}
+    // Clear lifecycle props only from TERMINAL states. An in-flight
+    // claim (queued/running) is the daemon already doing what this
+    // gesture asks for — deleting it would orphan the running task
+    // (tx.update replaces the whole properties map, so the claim that
+    // synced in between would be gone).
+    const status = fresh.properties[CLAUDE_PROPS.status]
+    if (status !== 'queued' && status !== 'running') {
+      for (const key of REQUEUE_CLEARED_PROPS) delete properties[key]
+    }
     await tx.update(block.id, {
       content: contentWithClaudeMention(fresh.content ?? ''),
       properties,

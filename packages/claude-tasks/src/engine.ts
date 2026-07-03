@@ -359,11 +359,14 @@ export const createEngine = (deps: EngineDeps) => {
 
   const NO_EXEMPTIONS: ReadonlySet<string> = new Set()
 
-  /** `quietExemptBlockIds`: blocks whose quiet period was confirmed at
-   *  the source (blur / explicit ask) — the push loop collects them from
-   *  event payloads; sweep ticks pass nothing. */
-  const tick = async (options: {quietExemptBlockIds?: ReadonlySet<string>} = {}) => {
-    const quietExemptBlockIds = options.quietExemptBlockIds ?? NO_EXEMPTIONS
+  /** `quietExemptByWatcher`: blocks whose quiet period was confirmed at
+   *  the source (blur / settle), keyed by the EMITTING watcher — only
+   *  that watcher may skip its still-typing gate for them, so a query
+   *  watcher's short settle can't vouch against a backlinks watcher's
+   *  longer quietMs. The push loop collects these from event payloads;
+   *  sweep ticks pass nothing. */
+  const tick = async (options: {quietExemptByWatcher?: ReadonlyMap<string, ReadonlySet<string>>} = {}) => {
+    const quietExemptByWatcher = options.quietExemptByWatcher
     if (!launchTimesLoaded) {
       launchTimes = await state.getLaunchTimes()
       pruneLaunchTimes()
@@ -371,8 +374,11 @@ export const createEngine = (deps: EngineDeps) => {
     }
     for (const watcher of config.watchers) {
       try {
-        if (watcher.kind === 'backlinks') await tickBacklinksWatcher(watcher, quietExemptBlockIds)
-        else await tickQueryWatcher(watcher)
+        if (watcher.kind === 'backlinks') {
+          await tickBacklinksWatcher(watcher, quietExemptByWatcher?.get(watcher.name) ?? NO_EXEMPTIONS)
+        } else {
+          await tickQueryWatcher(watcher)
+        }
       } catch (error) {
         // Drop cached page ids on failure — the page may have been
         // deleted/recreated; the next tick re-resolves.

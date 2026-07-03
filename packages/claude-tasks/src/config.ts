@@ -65,8 +65,11 @@ const backlinksWatcherSchema = z.strictObject({
   /** Resume the nearest ancestor thread session when present. */
   resume: z.boolean().default(true),
   /** Don't claim a mention until the block has been quiet this long —
-   *  otherwise the daemon snapshots (and bills) a half-typed request. */
-  quietMs: z.number().int().nonnegative().default(15_000),
+   *  otherwise the daemon snapshots (and bills) a half-typed request.
+   *  Capped at the tab-side settleMs bound (10min): the push watcher
+   *  registers with settleMs = quietMs, and an over-cap value would
+   *  fail the tab's schema — misdiagnosed as an unsupported bundle. */
+  quietMs: z.number().int().nonnegative().max(600_000, 'quietMs above 600000 (10min) is not supported').default(15_000),
 })
 
 const queryWatcherSchema = z.strictObject({

@@ -30,18 +30,31 @@ const QUERY_SETTLE_MS = 1_000
 
 const EVENTS_TIMEOUT_MS = 25_000
 const ERROR_BACKOFF_MS = 15_000
-/** An old tab bundle rejects the watch-events command outright; retry
- *  slowly — a reload may bring the new bundle. */
+/** An old tab bundle rejects the watch-events command outright, and a
+ *  read-only-scoped token can never register — retrying fast can't fix
+ *  either; retry slowly (a reload/re-pair may). */
 const UNSUPPORTED_BACKOFF_MS = 5 * 60_000
+
+/** Exemptions ride only FRESH events. A replayed/delayed event (error
+ *  backoff + ring-buffer catch-up) may describe a quiet the user has
+ *  since broken by re-entering the block — stale settledBlocks degrade
+ *  to a plain (un-exempted) tick. Bridge and daemon share the machine
+ *  clock, so receivedAt is directly comparable. */
+export const MAX_EXEMPTION_AGE_MS = 10_000
+
+/** Per-watcher quiet exemptions from one batch of events. Keyed by the
+ *  EMITTING watcher: a query watcher's 1s settle must not vouch for a
+ *  backlinks watcher's much longer quietMs on the same block. */
+export type QuietExemptions = ReadonlyMap<string, ReadonlySet<string>>
 
 export interface PushDeps {
   client: Pick<BridgeClient, 'runCommand' | 'nextEvents'>
   config: DaemonConfig
   graph: Pick<Graph, 'resolvePageId'>
   /** Ask the main loop for an immediate tick (coalesced there).
-   *  `settledBlockIds` are quiet-exempt: their quiet period was
-   *  confirmed at the source (blur / explicit ask). */
-  requestTick: (settledBlockIds?: readonly string[]) => void
+   *  `exemptions` are quiet-exempt block ids per emitting watcher:
+   *  their quiet period was confirmed at the source (blur / settle). */
+  requestTick: (exemptions?: QuietExemptions) => void
   log: (message: string) => void
   isStopping: () => boolean
   /** Interruptible sleep (resolves early on shutdown). */
@@ -51,10 +64,11 @@ export interface PushDeps {
   now?: () => number
 }
 
-const isUnsupportedCommand = (error: unknown): boolean => {
+const isPermanentRejection = (error: unknown): boolean => {
   const message = errorMessage(error)
-  return message.includes('Unknown agent runtime command')
-    || message.includes('Invalid command body')
+  return message.includes('Unknown agent runtime command') // old tab bundle
+    || message.includes('Invalid command body') // schema mismatch (old bundle / bad config)
+    || message.includes('Token scope') // read-only token can't register watchers
 }
 
 export const buildRegistrationWatchers = async (
@@ -126,17 +140,23 @@ export const startPushLoop = async (deps: PushDeps): Promise<void> => {
       const relevant = response.events.filter(entry =>
         entry.event['type'] === 'watcher-settled' && entry.event['consumer'] === PUSH_CONSUMER)
       if (relevant.length > 0) {
-        const settledBlockIds = relevant.flatMap(entry => {
+        const exemptions = new Map<string, Set<string>>()
+        for (const entry of relevant) {
+          const watcher = entry.event['watcher']
           const blocks = entry.event['settledBlocks']
-          return Array.isArray(blocks) ? blocks.filter((id): id is string => typeof id === 'string') : []
-        })
-        requestTick(settledBlockIds)
+          if (typeof watcher !== 'string' || !Array.isArray(blocks)) continue
+          if (now() - entry.receivedAt > MAX_EXEMPTION_AGE_MS) continue // stale: tick, but don't exempt
+          const ids = exemptions.get(watcher) ?? new Set<string>()
+          for (const id of blocks) if (typeof id === 'string') ids.add(id)
+          if (ids.size > 0) exemptions.set(watcher, ids)
+        }
+        requestTick(exemptions)
       }
     } catch (error) {
       if (isStopping()) return
       registeredAt = null // whatever broke, re-register once it heals
-      if (isUnsupportedCommand(error)) {
-        log(`push: tab does not support watch-events (${errorMessage(error)}) — polling only; retrying in ${UNSUPPORTED_BACKOFF_MS / 60_000}min`)
+      if (isPermanentRejection(error)) {
+        log(`push: tab/bridge rejected watch-events (${errorMessage(error)}) — polling only; retrying in ${UNSUPPORTED_BACKOFF_MS / 60_000}min`)
         await nap(UNSUPPORTED_BACKOFF_MS)
       } else {
         log(`push: ${errorMessage(error)} — retrying in ${ERROR_BACKOFF_MS / 1000}s`)

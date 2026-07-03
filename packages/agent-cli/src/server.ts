@@ -497,13 +497,21 @@ const appendEvent = (key: string, clientId: ClientId, event: Record<string, unkn
   return record
 }
 
+/** Long-poll park duration. Clamped, and NaN (`?timeoutMs=abc`) falls
+ *  back to the default instead of `setTimeout(…, NaN)` firing instantly
+ *  and degenerating the long-poll into a hot poll. */
+const parseTimeoutMs = (requestUrl: URL): number => {
+  const raw = Number(requestUrl.searchParams.get('timeoutMs') ?? 25_000)
+  return Number.isFinite(raw) ? Math.min(Math.max(raw, 0), 60_000) : 25_000
+}
+
 const waitForNextEvents = (
   request: http.IncomingMessage,
   requestUrl: URL,
   response: http.ServerResponse,
   key: string,
 ): void => {
-  const timeoutMs = Math.min(Number(requestUrl.searchParams.get('timeoutMs') ?? 25_000), 60_000)
+  const timeoutMs = parseTimeoutMs(requestUrl)
   const buffer = eventBuffers.get(key) ?? {tail: 0, events: []}
   const afterSeqRaw = requestUrl.searchParams.get('afterSeq')
 
@@ -563,10 +571,7 @@ const waitForNextCommand = (
   response: http.ServerResponse,
 ): void => {
   const clientId = requestUrl.searchParams.get('clientId') || 'anonymous-client'
-  const timeoutMs = Math.min(
-    Number(requestUrl.searchParams.get('timeoutMs') ?? 25_000),
-    60_000,
-  )
+  const timeoutMs = parseTimeoutMs(requestUrl)
 
   // Touch lastSeen so an active long-poll keeps the client alive even
   // between explicit /clients re-registrations.

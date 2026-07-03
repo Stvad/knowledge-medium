@@ -188,9 +188,25 @@ const main = async () => {
   // snapshotted state from before that event's write.
   let tickRequested = false
   const tickWaiters = new Set<() => void>()
-  const pendingExemptBlockIds = new Set<string>()
-  const requestTick = (settledBlockIds?: readonly string[]) => {
-    for (const id of settledBlockIds ?? []) pendingExemptBlockIds.add(id)
+  // Exemptions are keyed by the EMITTING watcher — only that watcher's
+  // tick may skip its still-typing gate for these blocks. Bounded: a
+  // flood of settled ids degrades to un-exempted ticks (sweep-latency
+  // cost), never to unbounded daemon memory.
+  const MAX_PENDING_EXEMPT_IDS = 2_048
+  let pendingExemptCount = 0
+  const pendingExempt = new Map<string, Set<string>>()
+  const requestTick: Parameters<typeof startPushLoop>[0]['requestTick'] = exemptions => {
+    for (const [watcher, ids] of exemptions ?? []) {
+      const pool = pendingExempt.get(watcher) ?? new Set<string>()
+      for (const id of ids) {
+        if (pendingExemptCount >= MAX_PENDING_EXEMPT_IDS) break
+        if (!pool.has(id)) {
+          pool.add(id)
+          pendingExemptCount += 1
+        }
+      }
+      if (pool.size > 0) pendingExempt.set(watcher, pool)
+    }
     tickRequested = true
     for (const waiter of [...tickWaiters]) waiter()
     tickWaiters.clear()
@@ -225,9 +241,10 @@ const main = async () => {
     tickRequested = false
     // Drain the exemptions INTO this tick — ids arriving mid-tick stay
     // pending and re-tick immediately via tickRequested.
-    const quietExemptBlockIds = new Set(pendingExemptBlockIds)
-    pendingExemptBlockIds.clear()
-    await engine.tick({quietExemptBlockIds})
+    const quietExemptByWatcher = new Map(pendingExempt)
+    pendingExempt.clear()
+    pendingExemptCount = 0
+    await engine.tick({quietExemptByWatcher})
     if (args.once) break
     await napOrTick(config.pollIntervalMs)
   }

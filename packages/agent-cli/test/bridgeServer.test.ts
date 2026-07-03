@@ -411,6 +411,26 @@ describe('agent runtime bridge', () => {
       expect(response.status, sql).toBe(403)
     }
   })
+
+  it('blocks watch-events registration for read-only tokens', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1', scope: 'read-only'}],
+    })
+
+    // The registry marks watch-events readOnly: false — the watcher SQL
+    // is read-only but the tab EXECUTES it repeatedly on every change,
+    // which a read-scoped token must not be able to install.
+    const response = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({
+        type: 'watch-events',
+        consumer: 'snoop',
+        watchers: [{kind: 'sql', name: 'w', sql: 'SELECT id FROM blocks'}],
+      }),
+    })
+    expect(response.status).toBe(403)
+  })
 })
 
 describe('events channel', () => {

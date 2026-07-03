@@ -3,6 +3,7 @@ import type {EventsNextResponse} from '@knowledge-medium/agent-cli/protocol'
 import {parseConfig} from '../src/config'
 import {
   buildRegistrationWatchers,
+  MAX_EXEMPTION_AGE_MS,
   PUSH_CONSUMER,
   REGISTRATION_REFRESH_MS,
   REGISTRATION_TTL_MS,
@@ -85,18 +86,48 @@ describe('startPushLoop', () => {
     expect(requestTick).toHaveBeenCalledTimes(1)
   })
 
-  it('forwards settledBlocks as quiet-exemptions to requestTick', async () => {
+  it('forwards settledBlocks as per-watcher quiet-exemptions to requestTick', async () => {
+    const {requestTick} = await runLoop([
+      {events: [], nextSeq: 0},
+      {
+        events: [
+          {
+            seq: 1, receivedAt: 0, clientId: 'tab',
+            event: {type: 'watcher-settled', consumer: PUSH_CONSUMER, watcher: 'claude-mentions', settledBlocks: ['block-1', 'block-2']},
+          },
+          {
+            seq: 2, receivedAt: 0, clientId: 'tab',
+            // A DIFFERENT watcher's settle must not merge into the same
+            // exemption pool — its (possibly much shorter) settle window
+            // can't vouch for another watcher's quietMs.
+            event: {type: 'watcher-settled', consumer: PUSH_CONSUMER, watcher: 'inbox', settledBlocks: ['block-3']},
+          },
+        ],
+        nextSeq: 2,
+      },
+    ])
+    expect(requestTick).toHaveBeenCalledWith(new Map([
+      ['claude-mentions', new Set(['block-1', 'block-2'])],
+      ['inbox', new Set(['block-3'])],
+    ]))
+  })
+
+  it('drops exemptions (but still ticks) from stale replayed events', async () => {
     const {requestTick} = await runLoop([
       {events: [], nextSeq: 0},
       {
         events: [{
-          seq: 1, receivedAt: 0, clientId: 'tab',
-          event: {type: 'watcher-settled', consumer: PUSH_CONSUMER, watcher: 'claude-mentions', settledBlocks: ['block-1', 'block-2']},
+          // Replayed after a backoff: received long before the loop saw
+          // it. The user may have re-entered the block since — exempting
+          // it now would claim mid-typing content.
+          seq: 1, receivedAt: -(MAX_EXEMPTION_AGE_MS + 1), clientId: 'tab',
+          event: {type: 'watcher-settled', consumer: PUSH_CONSUMER, watcher: 'claude-mentions', settledBlocks: ['block-1']},
         }],
         nextSeq: 1,
       },
     ])
-    expect(requestTick).toHaveBeenCalledWith(['block-1', 'block-2'])
+    expect(requestTick).toHaveBeenCalledTimes(1)
+    expect(requestTick).toHaveBeenCalledWith(new Map())
   })
 
   it('ignores events for other consumers', async () => {
@@ -145,6 +176,14 @@ describe('startPushLoop', () => {
     const {naps} = await runLoop([
       {events: [], nextSeq: 0},
       new Error('Unknown agent runtime command: watch-events'),
+      {events: [], nextSeq: 0},
+    ])
+    expect(naps).toEqual([5 * 60_000])
+  })
+
+  it('a read-only token scope rejection also backs off long — retrying cannot fix it', async () => {
+    const {naps} = await runLoop([
+      new Error('Token scope read-only does not permit command watch-events'),
       {events: [], nextSeq: 0},
     ])
     expect(naps).toEqual([5 * 60_000])
