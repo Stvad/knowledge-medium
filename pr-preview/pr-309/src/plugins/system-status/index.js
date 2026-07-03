@@ -1,21 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { headerItemsFacet } from "../../extensions/core.js";
-import { SystemStatusHeaderItem } from "./SystemStatusHeaderItem.js";
-//#region src/plugins/system-status/index.ts
-var systemStatusHeaderItem = {
-	id: "system-status.header",
-	region: "end",
-	component: SystemStatusHeaderItem
-};
-var systemStatusPlugin = systemToggle({
-	id: "system:sync-status",
-	name: "System status",
-	description: "Header status indicator — sync state plus health signals (data integrity, storage, app updates)."
-}).of([headerItemsFacet.of(systemStatusHeaderItem, {
-	source: "system-status",
-	precedence: 40
-})]);
-//#endregion
-export { systemStatusHeaderItem, systemStatusPlugin };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{headerItemsFacet as t}from"../../extensions/core.js";import{SystemStatusHeaderItem as n}from"./SystemStatusHeaderItem.js";var r={id:`system-status.header`,region:`end`,component:n},i=e({id:`system:sync-status`,name:`System status`,description:`Header status indicator — sync state plus health signals (data integrity, storage, app updates).`}).of([t.of(r,{source:`system-status`,precedence:40})]);export{r as systemStatusHeaderItem,i as systemStatusPlugin};
 //# sourceMappingURL=index.js.map

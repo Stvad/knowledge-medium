@@ -1,20 +1,2 @@
-//#region src/utils/safeMode.ts
-var hasSafeModeSearchParam = (value) => value !== null;
-var searchHasSafeModeFlag = (search) => new URLSearchParams(search).has("safeMode");
-var buildSafeModeUrl = (href) => {
-	const url = new URL(href);
-	url.searchParams.set("safeMode", "");
-	return url.toString();
-};
-var reloadInSafeMode = (location = window.location) => {
-	const next = buildSafeModeUrl(location.href);
-	if (next === location.href) {
-		location.reload();
-		return;
-	}
-	location.assign(next);
-};
-//#endregion
-export { buildSafeModeUrl, hasSafeModeSearchParam, reloadInSafeMode, searchHasSafeModeFlag };
-
+var e=e=>e!==null,t=e=>new URLSearchParams(e).has(`safeMode`),n=e=>{let t=new URL(e);return t.searchParams.set(`safeMode`,``),t.toString()},r=(e=window.location)=>{let t=n(e.href);if(t===e.href){e.reload();return}e.assign(t)};export{n as buildSafeModeUrl,e as hasSafeModeSearchParam,r as reloadInSafeMode,t as searchHasSafeModeFlag};
 //# sourceMappingURL=safeMode.js.map

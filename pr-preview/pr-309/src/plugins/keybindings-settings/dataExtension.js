@@ -1,19 +1,2 @@
-import { propertyEditorOverridesFacet, propertySchemasFacet } from "../../data/facets.js";
-import { actionsFacet, appEffectsFacet } from "../../extensions/core.js";
-import { pluginPrefsExtension } from "../../data/pluginStateExtensions.js";
-import { keybindingOverridesProp, keybindingsPrefsType } from "./config.js";
-import { openKeybindingsSettingsAction } from "./actions.js";
-import { keybindingsSyncEffect } from "./effect.js";
-import { keybindingsOverridesUi } from "./propertyEditorOverride.js";
-//#region src/plugins/keybindings-settings/dataExtension.ts
-var keybindingsSettingsDataExtension = [
-	propertySchemasFacet.of(keybindingOverridesProp, { source: "keybindings-settings" }),
-	propertyEditorOverridesFacet.of(keybindingsOverridesUi, { source: "keybindings-settings" }),
-	...pluginPrefsExtension(keybindingsPrefsType, "keybindings-settings"),
-	appEffectsFacet.of(keybindingsSyncEffect, { source: "keybindings-settings" }),
-	actionsFacet.of(openKeybindingsSettingsAction, { source: "keybindings-settings" })
-];
-//#endregion
-export { keybindingsSettingsDataExtension };
-
+import{propertyEditorOverridesFacet as e,propertySchemasFacet as t}from"../../data/facets.js";import{actionsFacet as n,appEffectsFacet as r}from"../../extensions/core.js";import{pluginPrefsExtension as i}from"../../data/pluginStateExtensions.js";import{keybindingOverridesProp as a,keybindingsPrefsType as o}from"./config.js";import{openKeybindingsSettingsAction as s}from"./actions.js";import{keybindingsSyncEffect as c}from"./effect.js";import{keybindingsOverridesUi as l}from"./propertyEditorOverride.js";var u=[t.of(a,{source:`keybindings-settings`}),e.of(l,{source:`keybindings-settings`}),...i(o,`keybindings-settings`),r.of(c,{source:`keybindings-settings`}),n.of(s,{source:`keybindings-settings`})];export{u as keybindingsSettingsDataExtension};
 //# sourceMappingURL=dataExtension.js.map

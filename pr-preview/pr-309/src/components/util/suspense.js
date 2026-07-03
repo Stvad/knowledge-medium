@@ -1,16 +1,2 @@
-import { c } from "react/compiler-runtime";
-import { jsx } from "react/jsx-runtime";
-//#region src/components/util/suspense.tsx
-var SuspenseFallback = () => {
-	const $ = c(1);
-	let t0;
-	if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
-		t0 = /* @__PURE__ */ jsx("div", { children: "Loading..." });
-		$[0] = t0;
-	} else t0 = $[0];
-	return t0;
-};
-//#endregion
-export { SuspenseFallback };
-
+import{c as e}from"react/compiler-runtime";import{jsx as t}from"react/jsx-runtime";var n=()=>{let n=e(1),r;return n[0]===Symbol.for(`react.memo_cache_sentinel`)?(r=t(`div`,{children:`Loading...`}),n[0]=r):r=n[0],r};export{n as SuspenseFallback};
 //# sourceMappingURL=suspense.js.map

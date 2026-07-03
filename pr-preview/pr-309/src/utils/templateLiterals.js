@@ -1,14 +1,2 @@
-//#region src/utils/templateLiterals.ts
-/**
-* It reconstructs the string from its parts (strings and values).
-*/
-var reassembleTag = (strings, ...values) => {
-	return values.reduce((result, currentValue, index) => {
-		return result + String(currentValue) + strings[index + 1];
-	}, strings[0]);
-};
-var reassembleTagProducer = (consumer) => (strings, ...values) => consumer(reassembleTag(strings, ...values));
-//#endregion
-export { reassembleTag, reassembleTagProducer };
-
+var e=(e,...t)=>t.reduce((t,n,r)=>t+String(n)+e[r+1],e[0]),t=t=>(n,...r)=>t(e(n,...r));export{e as reassembleTag,t as reassembleTagProducer};
 //# sourceMappingURL=templateLiterals.js.map

@@ -1,16 +1,2 @@
-import { definePropertyEditorOverride } from "../../data/api/propertySchema.js";
-import "../../data/api/index.js";
-import { keybindingOverridesProp } from "./config.js";
-import { KeybindingsEditor } from "./KeybindingsEditor.js";
-import { createElement } from "react";
-//#region src/plugins/keybindings-settings/propertyEditorOverride.ts
-var KeybindingsEditorEntry = (props) => createElement(KeybindingsEditor, props);
-var keybindingsOverridesUi = definePropertyEditorOverride({
-	name: keybindingOverridesProp.name,
-	label: "Keyboard shortcuts",
-	Editor: KeybindingsEditorEntry
-});
-//#endregion
-export { keybindingsOverridesUi };
-
+import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{keybindingOverridesProp as t}from"./config.js";import{KeybindingsEditor as n}from"./KeybindingsEditor.js";import{createElement as r}from"react";var i=e({name:t.name,label:`Keyboard shortcuts`,Editor:e=>r(n,e)});export{i as keybindingsOverridesUi};
 //# sourceMappingURL=propertyEditorOverride.js.map

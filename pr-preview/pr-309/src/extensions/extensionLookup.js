@@ -1,36 +1,5 @@
-import { EXTENSION_TYPE } from "../data/blockTypes.js";
-import { extensionName } from "./extensionToggles.js";
-//#region src/extensions/extensionLookup.ts
-var findExtensionBlock = async (repo, workspaceId, handle) => {
-	const idHint = handle.id?.trim();
-	const labelHint = handle.label?.trim();
-	if (!idHint && !labelHint) throw new Error("findExtensionBlock requires `id` or `label`");
-	const candidates = (await repo.db.getAll(`SELECT b.id, b.content, b.properties_json
+import{EXTENSION_TYPE as e}from"../data/blockTypes.js";import{extensionName as t}from"./extensionToggles.js";var n=async(n,r,i)=>{let a=i.id?.trim(),o=i.label?.trim();if(!a&&!o)throw Error("findExtensionBlock requires `id` or `label`");let s=(await n.db.getAll(`SELECT b.id, b.content, b.properties_json
        FROM blocks b
        JOIN block_types bt ON bt.block_id = b.id AND bt.workspace_id = b.workspace_id
-      WHERE b.workspace_id = ? AND b.deleted = 0 AND bt.type = ?`, [workspaceId, EXTENSION_TYPE])).map((row) => {
-		const properties = (() => {
-			try {
-				return JSON.parse(row.properties_json);
-			} catch {
-				return {};
-			}
-		})();
-		return {
-			id: row.id,
-			workspaceId,
-			content: row.content ?? "",
-			properties
-		};
-	});
-	const match = idHint ? candidates.find((block) => block.id === idHint) ?? null : candidates.find((block) => extensionName(block) === labelHint) ?? null;
-	if (!match) return null;
-	return {
-		block: match,
-		label: extensionName(match) ?? null
-	};
-};
-//#endregion
-export { findExtensionBlock };
-
+      WHERE b.workspace_id = ? AND b.deleted = 0 AND bt.type = ?`,[r,e])).map(e=>{let t=(()=>{try{return JSON.parse(e.properties_json)}catch{return{}}})();return{id:e.id,workspaceId:r,content:e.content??``,properties:t}}),c=a?s.find(e=>e.id===a)??null:s.find(e=>t(e)===o)??null;return c?{block:c,label:t(c)??null}:null};export{n as findExtensionBlock};
 //# sourceMappingURL=extensionLookup.js.map

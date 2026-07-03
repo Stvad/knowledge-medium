@@ -1,14 +1,4 @@
-import { ChangeScope } from "../data/api/changeScope.js";
-import "../data/api/index.js";
-import { extensionDescriptionProp, extensionNameProp } from "../data/properties.js";
-import { EXTENSION_TYPE } from "../data/blockTypes.js";
-import { createChild } from "../data/mutators.js";
-var exampleExtensions = [
-	{
-		id: "hello-renderer",
-		name: "Hello renderer",
-		description: "Content-renderer variant gated by 'user:hello = true'.",
-		source: `import {
+import{ChangeScope as e}from"../data/api/changeScope.js";import"../data/api/index.js";import{extensionDescriptionProp as t,extensionNameProp as n}from"../data/properties.js";import{EXTENSION_TYPE as r}from"../data/blockTypes.js";import{createChild as i}from"../data/mutators.js";var a=[{id:`hello-renderer`,name:`Hello renderer`,description:`Content-renderer variant gated by 'user:hello = true'.`,source:`import {
   blockContentRendererFacet,
   ChangeScope,
   codecs,
@@ -49,13 +39,7 @@ export default [
     return defineVariant('user.hello', 'Hello', HelloContent)
   }),
 ]
-`
-	},
-	{
-		id: "fold-all-action",
-		name: "Fold all",
-		description: "Action that folds/unfolds every block in the current view (Cmd+Shift+F).",
-		source: `import {
+`},{id:`fold-all-action`,name:`Fold all`,description:`Action that folds/unfolds every block in the current view (Cmd+Shift+F).`,source:`import {
   actionsFacet,
   ActionContextTypes,
   ChangeScope,
@@ -102,13 +86,7 @@ export default actionsFacet.of({
     }, { scope: ChangeScope.BlockDefault, description: 'fold all' })
   },
 })
-`
-	},
-	{
-		id: "emoji-react",
-		name: "Emoji reactions",
-		description: "Multi-facet plugin: content decorator + click handler + keyboard action for adding emoji reactions to blocks.",
-		source: `import {
+`},{id:`emoji-react`,name:`Emoji reactions`,description:`Multi-facet plugin: content decorator + click handler + keyboard action for adding emoji reactions to blocks.`,source:`import {
   actionsFacet,
   ActionContextTypes,
   blockClickHandlersFacet,
@@ -189,13 +167,7 @@ export default [
     }
   }),
 ]
-`
-	},
-	{
-		id: "kudos-facet",
-		name: "Kudos facet",
-		description: "Defines a brand-new facet and registers a property-keyed 'kudos-banner' renderer that other extensions can contribute to.",
-		source: `import { defineFacet, blockRenderersFacet } from '@/extensions/api.js'
+`},{id:`kudos-facet`,name:`Kudos facet`,description:`Defines a brand-new facet and registers a property-keyed 'kudos-banner' renderer that other extensions can contribute to.`,source:`import { defineFacet, blockRenderersFacet } from '@/extensions/api.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
 // Demonstrates defining a brand-new facet inside an extension block,
@@ -233,13 +205,7 @@ export default [
     renderer: KudosBannerRenderer,
   }),
 ]
-`
-	},
-	{
-		id: "split-layout",
-		name: "Split layout",
-		description: "Block-layout variant for blocks tagged 'user:layout = split' — places content and children side by side.",
-		source: `import {
+`},{id:`split-layout`,name:`Split layout`,description:`Block-layout variant for blocks tagged 'user:layout = split' — places content and children side by side.`,source:`import {
   blockLayoutFacet,
   ChangeScope,
   codecs,
@@ -297,13 +263,7 @@ export default [
     return defineVariant('split', 'Split (content / children)', SplitLayout)
   }),
 ]
-`
-	},
-	{
-		id: "layout-renderer-override",
-		name: "Layout renderer override",
-		description: "Overrides the app-wide 'layout' renderer id and wraps the normal panel layout with a custom frame.",
-		source: `import { blockRenderersFacet } from '@/extensions/api.js'
+`},{id:`layout-renderer-override`,name:`Layout renderer override`,description:`Overrides the app-wide 'layout' renderer id and wraps the normal panel layout with a custom frame.`,source:`import { blockRenderersFacet } from '@/extensions/api.js'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
 
 // Replaces the app-wide renderer registered under id 'layout', so
@@ -337,13 +297,7 @@ export default blockRenderersFacet.of({
   id: 'layout',
   renderer: DemoLayoutRenderer,
 })
-`
-	},
-	{
-		id: "default-renderer-placeholder",
-		name: "Default renderer placeholder",
-		description: "Overrides the fallback 'default' renderer id so ordinary empty blocks show a muted read-mode placeholder.",
-		source: `import { blockRenderersFacet } from '@/extensions/api.js'
+`},{id:`default-renderer-placeholder`,name:`Default renderer placeholder`,description:`Overrides the fallback 'default' renderer id so ordinary empty blocks show a muted read-mode placeholder.`,source:`import { blockRenderersFacet } from '@/extensions/api.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 
@@ -375,38 +329,5 @@ export default blockRenderersFacet.of({
   id: 'default',
   renderer: PlaceholderDefaultRenderer,
 })
-`
-	}
-];
-/**
-* Append the example-extension blocks under `parentBlock`. Used by the
-* `insert_example_extensions` command to re-seed examples in any
-* workspace without rebuilding the user.
-*/
-var insertExampleExtensionsUnder = async (parentBlock) => {
-	const repo = parentBlock.repo;
-	const created = [];
-	const typeSnapshot = repo.snapshotTypeRegistries();
-	for (const example of exampleExtensions) {
-		const id = await repo.tx(async (tx) => {
-			const childId = await tx.run(createChild, {
-				parentId: parentBlock.id,
-				content: example.source
-			});
-			await repo.addTypeInTx(tx, childId, EXTENSION_TYPE, {
-				[extensionNameProp.name]: example.name,
-				[extensionDescriptionProp.name]: example.description
-			}, typeSnapshot);
-			return childId;
-		}, {
-			scope: ChangeScope.BlockDefault,
-			description: "insert example extension"
-		});
-		created.push(repo.block(id));
-	}
-	return created;
-};
-//#endregion
-export { exampleExtensions, insertExampleExtensionsUnder };
-
+`}],o=async o=>{let s=o.repo,c=[],l=s.snapshotTypeRegistries();for(let u of a){let a=await s.tx(async e=>{let a=await e.run(i,{parentId:o.id,content:u.source});return await s.addTypeInTx(e,a,r,{[n.name]:u.name,[t.name]:u.description},l),a},{scope:e.BlockDefault,description:`insert example extension`});c.push(s.block(a))}return c};export{a as exampleExtensions,o as insertExampleExtensionsUnder};
 //# sourceMappingURL=exampleExtensions.js.map

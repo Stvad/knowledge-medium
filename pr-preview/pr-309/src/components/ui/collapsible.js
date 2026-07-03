@@ -1,16 +1,2 @@
-"use client";
-import { __exportAll } from "../../../_virtual/_rolldown/runtime.js";
-import { Content, Root, Trigger } from "../../../node_modules/@radix-ui/react-collapsible/dist/index.js";
-//#region src/components/ui/collapsible.tsx
-var collapsible_exports = /* @__PURE__ */ __exportAll({
-	Collapsible: () => Collapsible,
-	CollapsibleContent: () => CollapsibleContent,
-	CollapsibleTrigger: () => CollapsibleTrigger
-});
-var Collapsible = Root;
-var CollapsibleTrigger = Trigger;
-var CollapsibleContent = Content;
-//#endregion
-export { Collapsible, CollapsibleContent, CollapsibleTrigger, collapsible_exports };
-
+"use client";import{__exportAll as e}from"../../../_virtual/_rolldown/runtime.js";import{Content as t,Root as n,Trigger as r}from"../../../node_modules/@radix-ui/react-collapsible/dist/index.js";var i=e({Collapsible:()=>a,CollapsibleContent:()=>s,CollapsibleTrigger:()=>o}),a=n,o=r,s=t;export{a as Collapsible,s as CollapsibleContent,o as CollapsibleTrigger,i as collapsible_exports};
 //# sourceMappingURL=collapsible.js.map

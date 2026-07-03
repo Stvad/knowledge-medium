@@ -1,21 +1,2 @@
-import { defineFacet } from "../../facets/facet.js";
-//#region src/plugins/daily-notes/blockDateAdapter.ts
-var isBlockDateAdapter = (value) => typeof value === "object" && value !== null && typeof value.id === "string" && typeof value.canHandle === "function" && typeof value.getCurrentIso === "function" && typeof value.setIso === "function";
-var blockDateAdapterFacet = defineFacet({
-	id: "daily-notes.block-date-adapter",
-	validate: isBlockDateAdapter
-});
-/** First adapter (in precedence order) whose `canHandle` returns true,
-*  or null if none apply. The picker / scrub gesture call this once
-*  when they activate; the chosen adapter handles both the initial read
-*  and the eventual commit. */
-var pickBlockDateAdapter = (runtime, block) => {
-	const adapters = runtime.read(blockDateAdapterFacet);
-	for (const adapter of adapters) if (adapter.canHandle(block)) return adapter;
-	return null;
-};
-var hasAnyBlockDateAdapter = (runtime, block) => pickBlockDateAdapter(runtime, block) !== null;
-//#endregion
-export { blockDateAdapterFacet, hasAnyBlockDateAdapter, pickBlockDateAdapter };
-
+import{defineFacet as e}from"../../facets/facet.js";var t=e({id:`daily-notes.block-date-adapter`,validate:e=>typeof e==`object`&&!!e&&typeof e.id==`string`&&typeof e.canHandle==`function`&&typeof e.getCurrentIso==`function`&&typeof e.setIso==`function`}),n=(e,n)=>{let r=e.read(t);for(let e of r)if(e.canHandle(n))return e;return null},r=(e,t)=>n(e,t)!==null;export{t as blockDateAdapterFacet,r as hasAnyBlockDateAdapter,n as pickBlockDateAdapter};
 //# sourceMappingURL=blockDateAdapter.js.map
