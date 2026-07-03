@@ -25,6 +25,7 @@ export interface PendingDecision {
     | 'still-typing'
     | 'stale-running'
     | 'attempts-exhausted'
+    | 'pre-baseline'
 }
 
 const prop = (block: BlockView | undefined, key: string): unknown =>
@@ -58,6 +59,9 @@ export interface PendingArgs {
   nowMs: number
   /** Minimum quiet time since the last user edit before claiming. */
   quietMs?: number
+  /** Watcher's first-tick timestamp: unclaimed blocks last edited before
+   *  it are pre-existing content, never tasks. null/undefined = no gate. */
+  baselineMs?: number | null
 }
 
 /**
@@ -68,9 +72,11 @@ export interface PendingArgs {
  *   tools refusing watcher-target links/ids, not from a blanket subtree ban;
  * - skip anything already claimed, except a stale `running` (crashed or
  *   dropped run) which re-queues until MAX_ATTEMPTS, then parks;
+ * - skip unclaimed blocks that predate the watcher baseline — pointing a
+ *   watcher at an established page must not claim (and bill) its history;
  * - wait out the quiet period so half-typed requests aren't claimed.
  */
-export const decidePending = ({source, nowMs, quietMs = 0}: PendingArgs): PendingDecision => {
+export const decidePending = ({source, nowMs, quietMs = 0, baselineMs}: PendingArgs): PendingDecision => {
   if (prop(source, PROPS.reply)) return {pending: false, reason: 'is-reply'}
 
   const status = taskStatus(source)
@@ -82,6 +88,15 @@ export const decidePending = ({source, nowMs, quietMs = 0}: PendingArgs): Pendin
     return {pending: true, reason: 'stale-running'}
   }
   if (status) return {pending: false, reason: 'already-processed'}
+
+  // Baseline gate only for UNCLAIMED blocks (a claim implies the block
+  // already passed it). Unknown edit time counts as old: every real row
+  // carries updated_at, and firing on "can't tell" is the direction
+  // that claims — and bills — a page's entire history.
+  if (typeof baselineMs === 'number'
+    && !(typeof source.editedAtMs === 'number' && source.editedAtMs >= baselineMs)) {
+    return {pending: false, reason: 'pre-baseline'}
+  }
 
   if (quietMs > 0 && typeof source.editedAtMs === 'number' && nowMs - source.editedAtMs < quietMs) {
     return {pending: false, reason: 'still-typing'}

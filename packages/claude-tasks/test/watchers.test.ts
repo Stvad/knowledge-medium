@@ -81,6 +81,29 @@ describe('decidePending', () => {
     const source = block({properties: {[PROPS.status]: 'weird-user-value'}})
     expect(decidePending({source, nowMs: NOW}).pending).toBe(true)
   })
+
+  it('skips unclaimed blocks last edited before the watcher baseline (history is not a backlog)', () => {
+    const old = block({editedAtMs: NOW - 60_000})
+    expect(decidePending({source: old, nowMs: NOW, baselineMs: NOW - 30_000}))
+      .toEqual({pending: false, reason: 'pre-baseline'})
+
+    const edited = block({editedAtMs: NOW - 10_000})
+    expect(decidePending({source: edited, nowMs: NOW, baselineMs: NOW - 30_000}).pending).toBe(true)
+  })
+
+  it('with a baseline set, an UNKNOWN edit time is treated as old (firing on "cannot tell" is the billed direction)', () => {
+    expect(decidePending({source: block(), nowMs: NOW, baselineMs: NOW - 30_000}))
+      .toEqual({pending: false, reason: 'pre-baseline'})
+  })
+
+  it('the baseline never gates claimed lifecycle: a stale running block still re-queues', () => {
+    const stale = block({
+      editedAtMs: NOW - STALE_RUNNING_MS * 2,
+      properties: {[PROPS.status]: 'running', [PROPS.updatedAt]: NOW - STALE_RUNNING_MS},
+    })
+    expect(decidePending({source: stale, nowMs: NOW, baselineMs: NOW}))
+      .toEqual({pending: true, reason: 'stale-running'})
+  })
 })
 
 describe('findThreadSession', () => {

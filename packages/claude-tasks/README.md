@@ -80,6 +80,7 @@ Runs execute via `claude -p` on a machine authenticated with `claude login`. The
 
 ## How a mention task runs
 
+0. A watcher's **first tick establishes a baseline without firing**: pre-existing backlinks to `target` are history, not a backlog — pointing a watcher at an established page (hundreds of old mentions) must not claim and bill them. Only blocks **edited after** the baseline become tasks; editing an old mention deliberately re-surfaces it. Baselines persist in the state file — delete the watcher's `backlinkBaselines` entry there to re-baseline.
 1. Watcher sees a new backlink to `target` whose source block has no `claude:status` property (one batched SQL per tick — processed mentions stay cheap forever). Blocks edited in the last `quietMs` (default 15 s) wait — the daemon shouldn't claim (and bill) a half-typed request.
 2. Claim: `claude:status=running` + `claude:watcher` + `claude:attempts` + `claude:updated-at` written to the block, then **claim-verified** (re-read; if a competing daemon overwrote it, this one backs off).
 3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped).
@@ -99,7 +100,7 @@ Failures reply visibly (`⚠️ …`) and set `claude:status=error` + `claude:er
 
 ## Query watchers
 
-Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in `~/.config/knowledge-medium/claude-tasks-state.json`; the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).
+Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in `~/.config/knowledge-medium/claude-tasks-state.json` (alongside the backlink-watcher baselines); the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).
 
 ## km MCP server standalone
 

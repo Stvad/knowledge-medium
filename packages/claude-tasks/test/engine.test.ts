@@ -17,7 +17,9 @@ interface FakeGraphSeed {
 /** Minimal in-memory graph double tracking writes. */
 const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const blocks = new Map<string, BlockData>(
-    Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, ...data}]),
+    // editedAtMs defaults to NOW: most tests exercise the post-baseline
+    // lifecycle, where a candidate block was just edited.
+    Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, editedAtMs: NOW, ...data}]),
   )
   const replies: Array<{parentId: string, content: string}> = []
   const propWrites: Array<{id: string, status: string}> = []
@@ -76,13 +78,23 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   return {graph, blocks, replies, propWrites}
 }
 
-const memoryState = (seedLaunchTimes: number[] = []): StateStore & {cursors: Map<string, string[]>, launches: number[]} => {
+const memoryState = (
+  seedLaunchTimes: number[] = [],
+  opts: {armBaselines?: boolean} = {},
+): StateStore & {cursors: Map<string, string[]>, baselines: Map<string, number>, launches: number[]} => {
   const cursors = new Map<string, string[]>()
+  const baselines = new Map<string, number>()
+  // Armed (epoch-0) baseline by default so most tests exercise the
+  // post-baseline lifecycle; {armBaselines: false} tests establishment.
+  const armed = opts.armBaselines ?? true
   const store = {
     cursors,
+    baselines,
     launches: [...seedLaunchTimes],
     getCursor: async (name: string) => cursors.get(name) ?? null,
     setCursor: async (name: string, ids: string[]) => { cursors.set(name, ids) },
+    getBaseline: async (name: string) => baselines.get(name) ?? (armed ? 0 : null),
+    setBaseline: async (name: string, ms: number) => { baselines.set(name, ms) },
     getLaunchTimes: async () => [...store.launches],
     setLaunchTimes: async (times: number[]) => { store.launches = times },
   }
@@ -524,6 +536,41 @@ describe('mention lifecycle', () => {
     const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
     expect(tools).toContain('mcp__km__get_block')
     expect(tools).toContain('Bash(git:*)')
+  })
+})
+
+describe('backlink watcher baseline', () => {
+  it('first tick baselines without firing; history never fires, later edits do', async () => {
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-old'}, {id: 'b-new'}],
+      blocks: {
+        'b-old': {content: '[[claude]] ancient note', editedAtMs: NOW - 100_000},
+        'b-new': {content: '[[claude]] typed after install', editedAtMs: NOW - 100_000},
+      },
+    })
+    const runTask = vi.fn(async () => okRun())
+    const state = memoryState([], {armBaselines: false})
+    const engine = engineWith({graph, runTask, state})
+
+    // First tick: establish the baseline, fire nothing — pointing a
+    // watcher at an established page must not claim its history.
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+    expect(state.baselines.get('mentions')).toBe(NOW)
+
+    // Second tick: both blocks predate the baseline — still nothing.
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).not.toHaveBeenCalled()
+
+    // The user now edits one of them: that one (and only that one) fires.
+    blocks.get('b-new')!.editedAtMs = NOW
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(blocks.get('b-new')?.properties?.[PROPS.status]).toBe('done')
+    expect(blocks.get('b-old')?.properties?.[PROPS.status]).toBeUndefined()
   })
 })
 

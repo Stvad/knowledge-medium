@@ -1,9 +1,11 @@
 /**
- * Persisted daemon state: query-watcher cursors and the spend-limiter's
- * launch timestamps. Backlink watchers deliberately do NOT keep cursors
- * here — their state lives on the blocks themselves — but the launch
- * log MUST persist, otherwise the runsPerHour circuit-breaker re-arms on
- * every crash/restart (the exact loop it exists to bound).
+ * Persisted daemon state: query-watcher cursors, backlink-watcher
+ * baselines, and the spend-limiter's launch timestamps. Backlink
+ * watchers keep per-TASK state on the blocks themselves (restart
+ * re-derives the queue), but their first-tick baseline lives here —
+ * and the launch log MUST persist, otherwise the runsPerHour
+ * circuit-breaker re-arms on every crash/restart (the exact loop it
+ * exists to bound).
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -13,9 +15,12 @@ interface StateData {
   queryCursors: Record<string, string[]>
   /** Epoch-ms of recent run launches; pruned to the rolling window. */
   launchTimes: number[]
+  /** Per-backlink-watcher first-tick timestamp: blocks edited before it
+   *  are pre-existing content and never become tasks. */
+  backlinkBaselines: Record<string, number>
 }
 
-const emptyState = (): StateData => ({queryCursors: {}, launchTimes: []})
+const emptyState = (): StateData => ({queryCursors: {}, launchTimes: [], backlinkBaselines: {}})
 
 const normalizeState = (value: unknown): StateData => {
   const state = emptyState()
@@ -34,6 +39,13 @@ const normalizeState = (value: unknown): StateData => {
   if (Array.isArray(launches)) {
     state.launchTimes = launches.filter((ms): ms is number => typeof ms === 'number' && Number.isFinite(ms))
   }
+
+  const baselines = (value as {backlinkBaselines?: unknown}).backlinkBaselines
+  if (baselines && typeof baselines === 'object') {
+    for (const [name, ms] of Object.entries(baselines as Record<string, unknown>)) {
+      if (typeof ms === 'number' && Number.isFinite(ms)) state.backlinkBaselines[name] = ms
+    }
+  }
   return state
 }
 
@@ -41,6 +53,9 @@ export interface StateStore {
   /** null = never seen (first run baselines without firing). */
   getCursor: (watcherName: string) => Promise<string[] | null>
   setCursor: (watcherName: string, ids: string[]) => Promise<void>
+  /** null = watcher never ticked (first tick sets it without firing). */
+  getBaseline: (watcherName: string) => Promise<number | null>
+  setBaseline: (watcherName: string, ms: number) => Promise<void>
   /** Launch timestamps within the retention window (persisted). */
   getLaunchTimes: () => Promise<number[]>
   /** Replace the persisted launch log (caller prunes to the window). */
@@ -89,6 +104,12 @@ export const createStateStore = (filePath: string): StateStore => {
     setCursor: async (name, ids) => {
       const state = await load()
       state.queryCursors[name] = ids
+      await persist(state)
+    },
+    getBaseline: async name => (await load()).backlinkBaselines[name] ?? null,
+    setBaseline: async (name, ms) => {
+      const state = await load()
+      state.backlinkBaselines[name] = ms
       await persist(state)
     },
     getLaunchTimes: async () => [...(await load()).launchTimes],

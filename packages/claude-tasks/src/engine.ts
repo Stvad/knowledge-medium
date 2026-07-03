@@ -125,10 +125,10 @@ export const createEngine = (deps: EngineDeps) => {
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
 
-  const processMention = async (watcher: BacklinksWatcher, sourceId: string, deepLink: string) => {
+  const processMention = async (watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number) => {
     const block = await graph.getBlock(sourceId)
     if (!block) return
-    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs})
+    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs})
     if (!decision.pending) return
     const ancestorBlocks = await graph.ancestors(sourceId)
 
@@ -220,6 +220,19 @@ export const createEngine = (deps: EngineDeps) => {
     }
 
     const sources = await graph.backlinkSources(targetId)
+
+    // First sight of this watcher: record the baseline and fire nothing.
+    // Pointing a watcher at an established page must not claim (and
+    // bill) its historical backlinks — only blocks edited after this
+    // moment become tasks. Delete the watcher's entry in the state file
+    // to re-baseline deliberately.
+    const baselineMs = await state.getBaseline(watcher.name)
+    if (baselineMs === null) {
+      await state.setBaseline(watcher.name, now())
+      log(`[${watcher.name}] baseline established — ${sources.length} pre-existing backlink(s) will never fire; blocks edited from now on will`)
+      return
+    }
+
     if (sources.length === 0) return
 
     // Cheap pre-filter (one batched query): already-processed mentions
@@ -230,7 +243,7 @@ export const createEngine = (deps: EngineDeps) => {
     for (const source of sources) {
       if (running.has(source.id)) continue
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
-      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs})
+      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs})
 
       if (preview.reason === 'attempts-exhausted') {
         // Terminal write (once) so the pre-filter skips it forever.
@@ -248,7 +261,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Conservative direction: a launch that then loses its claim race
       // still counts against the hour.
       recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink))
+      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs))
     }
   }
 
