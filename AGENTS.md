@@ -8,6 +8,11 @@ inner loop (this repo is built primarily by agents — keep the edit→verify cy
 - the data layer lives in `src/data/` (`Repo`: `query` / `tx` / `mutate` over blocks); prefer the bridge's `describe-runtime` over inferring internal shapes from memory.
 - `yarn run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`yarn agent types`).
 
+use your judgement — and delegate code to cheaper models (see https://simonwillison.net/2026/Jul/3/judgement/):
+- prefer exercising your own judgement about *how* to work over waiting for a rule for every case: decide whether a change warrants an automated test from its risk and blast radius, how much to verify from how reversible it is, when a doc is worth updating, etc. Treat the "prefer X" / "usually X" defaults in this file as starting points to deviate from when the case in front of you clearly warrants it — and say why when you do.
+- this does NOT loosen the safety / data-integrity rules: secret handling, Supabase RLS, preserving live user data (name a recovery path), never auto-wipe on DB corruption, scoping global `blocks` writes to the active workspace. Those are firm; judgement is for process, not for those.
+- top-tier context is the scarce resource here (this repo is built primarily by agents). Spend it on judgement, review, and synthesis. When a task is primarily *writing / editing* code, delegate it to a lower-power model in a subagent — the Agent tool with `model:` set, or `agent(prompt, {model})` in a Workflow — and keep the deciding / auditing / data-synthesis in the main loop. Rough default (your call per task): `sonnet` for substantive implementation, `haiku` for trivial / mechanical edits. Don't delegate the parts where a subtle mistake is expensive to catch later — data-layer invariants, tricky concurrency, security-sensitive paths.
+
 secret handling:
 - do not read `.env`, `.env.*`, or other local secret files unless the user explicitly asks for it
 - do not print, echo, cat, grep, or otherwise reveal secrets or secret-bearing files in chat or command output
