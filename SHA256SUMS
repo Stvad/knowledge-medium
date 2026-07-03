@@ -1774,7 +1774,7 @@ f16e9971146d48b76d4fbc30b61f9d1ab4aadc494c9b524dee4509975c1df235  ./packages/age
 18aabf81d0c4b3cded487d51c02da2aec6006d0eab7285bc52e908566c40e3f0  ./src/App.js.map
 61b90e46eb39d3c5ada10d31bb02480a0ebd1111d51fe6fc83f66a41b3ab9739  ./src/appUpdate.js
 ec221cb7326986225f426b1c97fc69f978da1fa59ad9f6e849afa8546f48fffa  ./src/appUpdate.js.map
-adbebc99f6969bf476a912dbb6009c4a9a870425ac1f83e88181668f2aa64e24  ./src/appVersion.js
+387f0633b8802bd766ccc164b27d96282e132990a696d33886eed2da9b49f1f1  ./src/appVersion.js
 badea40e3a2f25c706fa0a69c7992a7c23bbee5dff5f90694ccba337522b642f  ./src/appVersion.js.map
 2785a7e859130bfb20f02330698115054a4f2c651229e4e0d0cc8e0dc63d9d71  ./src/bootstrap/resolveWorkspace.js
 7c9320e40827e13c4b05cee2a6bb5cfacbe74d53992921ffd343a41acee39400  ./src/bootstrap/resolveWorkspace.js.map
@@ -1906,8 +1906,8 @@ e01a12c8ce3db827aea4e79fbd9843a6c63502ae89c1db443cf087ca9385acd6  ./src/componen
 8d451cf1a5678b06469b62507316cb18ab36f1abd4d2f4c0bed6f8b6b0b12549  ./src/components/ui/textarea.js.map
 c5cc65b32408893fd3a6a635e77a4ba6242b7a60b769ae46811817deae2fba93  ./src/components/util/LazyViewportMount.js
 d3dbaebda3fa1dcb73d7fd586f746865aa4a343c8af7ee58f6e582abc9e35e98  ./src/components/util/LazyViewportMount.js.map
-3950a2a3f74f5701ede586f4280ae149025b681f6d7f6f8da60ead9e343cc1a4  ./src/components/util/LocalDbCorruptionFallback.js
-80e0a581be1f06ac19603c30793a6328d1f5d1ff6be629c29c9e61318b3fc782  ./src/components/util/LocalDbCorruptionFallback.js.map
+2768658e4cf7a372d3d4308be1a961ed5c08a81a112311cf3f44a3cfd8b8cdb7  ./src/components/util/LocalDbCorruptionFallback.js
+c2fb6e8554195c4d92fbacf1c2e90af73ed6c9c7904e87e674272af675e97d18  ./src/components/util/LocalDbCorruptionFallback.js.map
 8f37f73b42bc05b4b008876d3d8bbc09aa8acbcd38adb6dc523ede4617d4986e  ./src/components/util/error.js
 195d3fe7bb4011d758ccf28e7be3e8c05a487cd4d0e68f818cf8acfc49415bca  ./src/components/util/error.js.map
 d8ef606dedb312e7291e8795df9502ae92e572e008f3188eda9ddf64a4490e11  ./src/components/util/suspense.js
@@ -3042,8 +3042,8 @@ b38f60deb7237825fd4371c8e2d1a5d924c0cd35e0b906658126c660c8a7970e  ./src/utils/co
 110d85daa5e4b8d3d12d98f4df6f3cedefd05346dee08aa54f52676511b114c0  ./src/utils/dailyPage.js.map
 bbd0c8ff1d3cead40d2e5cab52fd0d1ff4578a7a246932d5fe38566bbfa9a43f  ./src/utils/dbForensics.js
 5c351ce2a98397b364cd5d176d47e7982c6f7db006e1ad26947e60fa3adde81a  ./src/utils/dbForensics.js.map
-ccf3c54a2e4c98158e2245c57c9848f96b51ae5e31f9334e2bfaeba4f10fc63c  ./src/utils/dbForensicsHooks.js
-7d6401840a242bb7309caf673707cb10120af4745232302d33548cbbde11b518  ./src/utils/dbForensicsHooks.js.map
+03980e9698838ff8057388f7dfdaa4000c2acb0659b776901d03908a1cffee7e  ./src/utils/dbForensicsHooks.js
+c29fc456998490206ef341d687695356b989106198902bb0b49ed3e95b896613  ./src/utils/dbForensicsHooks.js.map
 c39125d237a12e785c7717a83a8be48303c30f4456db6b5d76c7137b9d568d85  ./src/utils/dialogs.js
 9f33dbed231b788b50bb2b479b1916cb6cffc4398902fbce1e8a343aee6201c0  ./src/utils/dialogs.js.map
 be0c038e695619bf55fe52e9c3fad22e53e525cc64a1f1fa26af52d878cbd121  ./src/utils/dom.js
@@ -3066,8 +3066,8 @@ e32dc5e94c1b30b6f081d6cbfec017fd25adc79d145cf8acd0b64060cefb3de5  ./src/utils/la
 45e7ee5a43558cdda083d00617d5b878b22343d211d4df84ea3348d783334259  ./src/utils/layoutSessionId.js.map
 c5ceba89793a1f030744c8e1571264439e82e64b34f56e78625ed5456c7ced40  ./src/utils/linkTargetAutocomplete.js
 92298e54365148b15e576414d53922e457bb2b5dd0d9eea770906209c70156f6  ./src/utils/linkTargetAutocomplete.js.map
-7878382786104539ceaa501a30c58311811e4ade2e061e8b5bcd9123da87a756  ./src/utils/localDbCorruption.js
-6370a64c456b87cc53f204e55e3c6037151899d7c412749710b47b7158d0db28  ./src/utils/localDbCorruption.js.map
+53a17363d1e4b6e12c1e81c2354661c2140b3c2c6ab0155d81f185d1ebd8bd0e  ./src/utils/localDbCorruption.js
+b94dfcdf5dc826130294c7fe77f26b5639473d5ea4beb14a0941e18bfc2ab35f  ./src/utils/localDbCorruption.js.map
 fc1aed7904b0ebd5700745c4d13fc933771713d9bcd43e9df92c3d91b56bfde9  ./src/utils/localDbRecovery.js
 a9477d534344b1ebbfd9e6c6d8db42efe6947e102c0ce969dc2a65b301096872  ./src/utils/localDbRecovery.js.map
 7414003987f3a58b71c470ee1db067356c73a259257e40239c617dcb8fd87693  ./src/utils/markdownParser.js
@@ -3118,8 +3118,8 @@ b376bddab3b5216fe9432c87b48fc1cc10b5160e56ef53ff6f58e397d01b1f69  ./src/utils/ty
 d06f256a0e4b1b67457ef0f1ab7afce2587a3245e38d90877fc7d9b9cb0ca541  ./src/utils/types.js.map
 6ffa3b6e699af00d51d101e34fbeffaa1d4f709ced257e731f91b4ba19ad9240  ./src/utils/viewTransition.js
 04d072422318bc0807e75afa8216320c6eb46a096b13caba198834f39ac3fc2a  ./src/utils/viewTransition.js.map
-93fe355a8e8d43e1085f4c5356455f86b2eb819ff06247b1e424d5e1fdb9b649  ./sw.js
-e791388021f7948980d26be10059f54ffd8a3b7ad9109b5deaffb9cbf78e34e7  ./version.json
+542dced9cbd93685a865d22fca690a170a84f04fd9fadd6bb57ebce95eea16d9  ./sw.js
+9691462acc31bf475cd1b47d4f68f774a5c4b4c1fcea474e29a5ee74947ba607  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
