@@ -409,7 +409,7 @@ var AudioViewer = (t0) => {
 	if ($[17] !== t3 || $[18] !== t4) {
 		t5 = /* @__PURE__ */ jsxs("div", {
 			"data-testid": "media-audio",
-			className: "flex w-fit max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 text-sm",
+			className: "inline-flex max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 align-top text-sm",
 			children: [t3, t4]
 		});
 		$[17] = t3;
@@ -584,7 +584,7 @@ var PdfViewer = (t0) => {
 	if ($[28] !== t10 || $[29] !== t11) {
 		t12 = /* @__PURE__ */ jsxs("div", {
 			"data-testid": "media-pdf",
-			className: "flex w-fit max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 text-sm",
+			className: "inline-flex max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 align-top text-sm",
 			children: [t10, t11]
 		});
 		$[28] = t10;

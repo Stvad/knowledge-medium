@@ -117,13 +117,13 @@ function LocalDbCorruptionFallback({ userId, detail }) {
 					children: [/* @__PURE__ */ jsx(Button, {
 						onClick: () => void handleExport(),
 						disabled: busy !== null,
-						className: "flex-1",
+						className: "flex-1 min-w-0",
 						children: busy === "export" ? "Downloading…" : "Download backup (.db)"
 					}), /* @__PURE__ */ jsx(Button, {
 						variant: "destructive",
 						onClick: () => setConfirming(true),
 						disabled: busy !== null,
-						className: "flex-1",
+						className: "flex-1 min-w-0",
 						children: localOnly ? "Reset (delete local data)…" : "Reset & re-sync…"
 					})]
 				}), /* @__PURE__ */ jsxs("div", {
@@ -132,13 +132,13 @@ function LocalDbCorruptionFallback({ userId, detail }) {
 						variant: "outline",
 						onClick: () => window.location.reload(),
 						disabled: busy !== null,
-						className: "flex-1",
+						className: "flex-1 min-w-0",
 						children: "Reload"
 					}), /* @__PURE__ */ jsx(Button, {
 						variant: "outline",
 						onClick: () => void handleSignOut(),
 						disabled: busy !== null,
-						className: "flex-1",
+						className: "flex-1 min-w-0",
 						children: "Sign out"
 					})]
 				})] }) : /* @__PURE__ */ jsxs("div", {
@@ -175,31 +175,28 @@ function LocalDbCorruptionFallback({ userId, detail }) {
 							className: "w-full",
 							children: "I've saved the backup file"
 						}),
+						!downloaded && /* @__PURE__ */ jsx(Button, {
+							variant: "outline",
+							onClick: () => void handleExport(),
+							disabled: busy !== null,
+							className: "w-full",
+							children: busy === "export" ? "Downloading…" : backupFailed ? "Try backup again" : downloadStarted ? "Download again" : "Download backup first"
+						}),
 						/* @__PURE__ */ jsxs("div", {
 							className: "flex flex-col gap-2 sm:flex-row",
-							children: [
-								!downloaded && /* @__PURE__ */ jsx(Button, {
-									variant: "outline",
-									onClick: () => void handleExport(),
-									disabled: busy !== null,
-									className: "flex-1",
-									children: busy === "export" ? "Downloading…" : backupFailed ? "Try backup again" : downloadStarted ? "Download again" : "Download backup first"
-								}),
-								/* @__PURE__ */ jsx(Button, {
-									variant: "destructive",
-									onClick: () => void handleReset(),
-									disabled: busy !== null || !resetUnlocked,
-									className: "flex-1",
-									children: busy === "reset" ? "Resetting…" : "Delete local data & reload"
-								}),
-								/* @__PURE__ */ jsx(Button, {
-									variant: "outline",
-									onClick: () => setConfirming(false),
-									disabled: busy !== null,
-									className: "flex-1",
-									children: "Cancel"
-								})
-							]
+							children: [/* @__PURE__ */ jsx(Button, {
+								variant: "destructive",
+								onClick: () => void handleReset(),
+								disabled: busy !== null || !resetUnlocked,
+								className: "flex-1 min-w-0",
+								children: busy === "reset" ? "Resetting…" : "Delete local data & reload"
+							}), /* @__PURE__ */ jsx(Button, {
+								variant: "outline",
+								onClick: () => setConfirming(false),
+								disabled: busy !== null,
+								className: "flex-1 min-w-0",
+								children: "Cancel"
+							})]
 						})
 					]
 				})
