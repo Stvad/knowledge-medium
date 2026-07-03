@@ -1,4 +1,4 @@
-import { CallbackSet } from "../utils/callbackSet.js";
+import { BatchableKeyedStore } from "./batchableKeyedStore.js";
 import { createContext, useContext, useSyncExternalStore } from "react";
 import { c } from "react/compiler-runtime";
 import { jsx } from "react/jsx-runtime";
@@ -6,58 +6,15 @@ import { jsx } from "react/jsx-runtime";
 /**
 * Plain non-React store for extension load errors. The React provider
 * is a thin wrapper around this so the state machine itself is unit-
-* testable without mounting a component tree.
+* testable without mounting a component tree. Batch mode (used by the
+* runtime resolve to publish atomically) lives in the shared base.
 */
-var ExtensionLoadErrorStore = class {
-	errors = /* @__PURE__ */ new Map();
-	batch = null;
-	listeners = new CallbackSet("ExtensionLoadErrors");
-	getSnapshot = () => this.errors;
-	subscribe = (listener) => this.listeners.add(listener);
-	/** Open a batch. Subsequent reportError/clearError buffer without notifying
-	*  until commitBatch. The buffer starts EMPTY (like reset()) and is rebuilt
-	*  from this resolve's reports. Discards any in-progress batch. */
-	beginBatch = () => {
-		this.batch = /* @__PURE__ */ new Map();
-	};
-	/** Publish the buffered batch as ONE notification. No-op if none open. */
-	commitBatch = () => {
-		if (this.batch === null) return;
-		this.errors = this.batch;
-		this.batch = null;
-		this.listeners.notify();
-	};
-	/** Drop the buffer without publishing (cancelled / errored resolve). */
-	abandonBatch = () => {
-		this.batch = null;
-	};
-	reportError = (blockId, error) => {
-		if (this.batch !== null) {
-			this.batch.set(blockId, error);
-			return;
-		}
-		const next = new Map(this.errors);
-		next.set(blockId, error);
-		this.errors = next;
-		this.listeners.notify();
-	};
-	clearError = (blockId) => {
-		if (this.batch !== null) {
-			this.batch.delete(blockId);
-			return;
-		}
-		if (!this.errors.has(blockId)) return;
-		const next = new Map(this.errors);
-		next.delete(blockId);
-		this.errors = next;
-		this.listeners.notify();
-	};
-	reset = () => {
-		this.batch = null;
-		if (this.errors.size === 0) return;
-		this.errors = /* @__PURE__ */ new Map();
-		this.listeners.notify();
-	};
+var ExtensionLoadErrorStore = class extends BatchableKeyedStore {
+	constructor() {
+		super("ExtensionLoadErrors");
+	}
+	reportError = (blockId, error) => this.set(blockId, error);
+	clearError = (blockId) => this.delete(blockId);
 };
 var ExtensionLoadErrorsContext = createContext({ store: new ExtensionLoadErrorStore() });
 var ExtensionLoadErrorsProvider = (t0) => {
