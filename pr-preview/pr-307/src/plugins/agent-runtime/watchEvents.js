@@ -59,8 +59,13 @@ var watchTablesFor = (spec) => spec.kind === "backlinks" ? BACKLINKS_WATCH_TABLE
 var createWatchEventsRegistry = (now = Date.now) => {
 	const entries = /* @__PURE__ */ new Map();
 	let transport = null;
+	let active = true;
 	const setTransport = (next) => {
 		transport = next;
+		if (next) active = true;
+	};
+	const assertActive = () => {
+		if (!active) throw new Error("watch-events registry stopped (bridge torn down)");
 	};
 	/** blockId → exempt-until. Blocks the user explicitly left (blur /
 	*  action) — the only ids a flush emit may report as settled. */
@@ -156,10 +161,14 @@ var createWatchEventsRegistry = (now = Date.now) => {
 		}
 	};
 	/** Expired registrations self-clean on their next signal — a dead
-	*  consumer must not keep the tab re-running queries forever. */
+	*  consumer must not keep the tab re-running queries forever.
+	*  Disposes only the SPECIFIC entry it judged expired: callers may
+	*  hold a stale snapshot (the blur flush iterates `[...entries]`
+	*  across awaits), and a by-name dispose would kill a fresh successor
+	*  registered mid-flush. */
 	const pruneIfExpired = (consumer, entry) => {
 		if (now() - entry.lastRefreshedMs <= entry.ttlMs) return false;
-		disposeConsumer(consumer);
+		disposeEntry(consumer, entry);
 		return true;
 	};
 	const requestCompute = (db, consumer, runtime) => {
@@ -179,6 +188,7 @@ var createWatchEventsRegistry = (now = Date.now) => {
 	*  after the baseline query of every NEW watcher, so a successful
 	*  response means the watchers are armed. */
 	const register = async (db, registration) => {
+		assertActive();
 		const { consumer, watchers } = registration;
 		const ttlMs = registration.ttlMs ?? DEFAULT_TTL_MS;
 		const specJson = JSON.stringify({
@@ -202,6 +212,7 @@ var createWatchEventsRegistry = (now = Date.now) => {
 				registered: [],
 				unchanged: false
 			};
+			assertActive();
 		}
 		disposeConsumer(consumer);
 		if (watchers.length === 0) return {
@@ -232,8 +243,9 @@ var createWatchEventsRegistry = (now = Date.now) => {
 			disposeEntry(consumer, entry);
 			throw error;
 		}
-		if (entries.get(consumer) !== entry) {
+		if (!active || entries.get(consumer) !== entry) {
 			disposeEntry(consumer, entry);
+			assertActive();
 			return {
 				consumer,
 				registered: [],
@@ -300,6 +312,7 @@ var createWatchEventsRegistry = (now = Date.now) => {
 		blurredUntil.delete(blockId);
 	};
 	const disposeAll = () => {
+		active = false;
 		for (const consumer of [...entries.keys()]) disposeConsumer(consumer);
 		for (const timer of recheckTimers) clearTimeout(timer);
 		recheckTimers.clear();
