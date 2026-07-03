@@ -7,7 +7,7 @@
  *
  * Mirrors the app-BUILD update surface (`appUpdateMount.tsx` +
  * `appUpdateStatus.ts`): a loud, dismissible toast paired with an always-
- * there chip fallback. The difference is that there are N extensions, so:
+ * there chip indicator. The difference is that there are N extensions, so:
  *
  *   - Each toast is keyed by `ext-approval:<blockId>` and its Enable/Update
  *     and Dismiss buttons act on THAT block only — fixing the reported bug
@@ -16,9 +16,14 @@
  *     hash) so it survives reloads; the extension still shows in settings
  *     with a working Enable/Update button.
  *
+ * Dismiss model (design C): a toast renders only for NON-dismissed prompts,
+ * so Dismiss silences the loud nag. But the chip diagnostic is fed the FULL
+ * pending set (dismissed included) — dismissing drops the toast and the
+ * chip's ambient dot, yet leaves a quiet "Review" row as a breadcrumb.
+ *
  * The driver reads the per-provider approval store (via context) — so it
- * lives under `AppRuntimeProvider` — and publishes the active set into the
- * `extensionPromptStore` singleton the chip diagnostic reads.
+ * lives under `AppRuntimeProvider` — and publishes the full pending set into
+ * the `extensionPromptStore` singleton the chip diagnostic reads.
  */
 import {useEffect, useMemo, useRef} from 'react'
 import {useRepo} from '@/context/repo.js'
@@ -29,7 +34,7 @@ import {
   useExtensionPromptDismissals,
 } from '@/extensions/extensionPromptDismissals.js'
 import {
-  activeExtensionPrompts,
+  pendingExtensionPrompts,
   extensionPromptStore,
   type PendingExtensionPrompt,
 } from '@/extensions/extensionPromptStore.js'
@@ -96,24 +101,28 @@ export const ExtensionPromptSurface = () => {
   const statuses = useExtensionApprovalStatuses()
   const dismissals = useExtensionPromptDismissals()
 
-  const active = useMemo(
-    () => activeExtensionPrompts(statuses, dismissals),
+  // Every pending prompt, tagged with whether it's been dismissed.
+  const pending = useMemo(
+    () => pendingExtensionPrompts(statuses, dismissals),
     [statuses, dismissals],
   )
+  // Toasts are the loud nag — only the non-dismissed prompts get one.
+  const toasts = useMemo(() => pending.filter((p) => !p.dismissed), [pending])
 
   // Feed the status-chip diagnostic (which has no React context to reach the
-  // per-provider approval store).
+  // per-provider approval store) the FULL set: a dismissed prompt still shows
+  // as a quiet row, it just stops nudging (see extensionPromptStatus.ts).
   useEffect(() => {
-    extensionPromptStore.set(active)
-  }, [active])
+    extensionPromptStore.set(pending)
+  }, [pending])
 
-  // Reconcile toasts against the active set: (re)show each pending prompt
-  // whose content changed, dismiss toasts whose prompt is gone (enabled or
+  // Reconcile toasts against the non-dismissed set: (re)show each prompt whose
+  // content changed, dismiss toasts whose prompt is gone (enabled or
   // dismissed). `shown` maps toast id → last-shown signature.
   const shown = useRef<Map<string, string>>(new Map())
   useEffect(() => {
     const next = new Map<string, string>()
-    for (const prompt of active) {
+    for (const prompt of toasts) {
       const id = toastId(prompt.blockId)
       const signature = toastSignature(prompt)
       next.set(id, signature)
@@ -123,7 +132,7 @@ export const ExtensionPromptSurface = () => {
       if (!next.has(id)) dismissToast(id)
     }
     shown.current = next
-  }, [active, repo])
+  }, [toasts, repo])
 
   // On unmount (plugin toggled off), clear the published set AND dismiss any
   // still-open toasts. They have infinite duration and live in Sonner's

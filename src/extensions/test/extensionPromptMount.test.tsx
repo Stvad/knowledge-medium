@@ -18,6 +18,7 @@ import {
 } from '@/extensions/extensionApprovalStatus.js'
 import {extensionPromptDismissals} from '@/extensions/extensionPromptDismissals.js'
 import {ExtensionPromptSurface} from '@/extensions/extensionPromptMount.js'
+import {extensionPromptStore} from '@/extensions/extensionPromptStore.js'
 import type {ToastOptions} from '@/utils/toast.js'
 
 const showInfo = vi.hoisted(() => vi.fn())
@@ -103,6 +104,16 @@ describe('ExtensionPromptSurface', () => {
     // The dismissal is persisted for Matrix only (survives a reload).
     expect(extensionPromptDismissals.isDismissed('matrix', 'hm')).toBe(true)
     expect(extensionPromptDismissals.isDismissed('readwise', 'hr')).toBe(false)
+
+    // Design C: Matrix still sits in the chip's published set (a quiet row),
+    // now flagged dismissed — the toast is gone but it stays discoverable.
+    const published = extensionPromptStore.getSnapshot()
+    expect(published.find((p) => p.blockId === 'matrix')).toMatchObject({
+      dismissed: true,
+    })
+    expect(published.find((p) => p.blockId === 'readwise')).toMatchObject({
+      dismissed: false,
+    })
   })
 
   it('dismisses open toasts when the surface unmounts (plugin toggled off)', async () => {
