@@ -1,3 +1,4 @@
+import { blockEditSettled } from "../../editor/editSettleSignal.js";
 import { openDialog } from "../../utils/dialogs.js";
 import { agentTokenStore, agentTokensChangedEvent } from "./tokens.js";
 import { AgentTokensDialog } from "./AgentTokensDialog.js";
@@ -191,6 +192,7 @@ var startAgentRuntimeBridge = (options) => {
 	watchEventsRegistry.setTransport(async (event) => {
 		await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId);
 	});
+	const offEditSettled = blockEditSettled.add((blockId) => watchEventsRegistry.notifyBlockSettled(blockId));
 	window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart);
 	window.addEventListener(agentTokensChangedEvent, handleTokensChanged);
 	window.addEventListener("focus", handleWakeEvent);
@@ -278,6 +280,7 @@ var startAgentRuntimeBridge = (options) => {
 		abortController.abort();
 		watchEventsRegistry.setTransport(null);
 		watchEventsRegistry.disposeAll();
+		offEditSettled();
 		window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart);
 		window.removeEventListener(agentTokensChangedEvent, handleTokensChanged);
 		window.removeEventListener("focus", handleWakeEvent);

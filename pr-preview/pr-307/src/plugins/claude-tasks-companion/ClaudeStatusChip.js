@@ -1,6 +1,7 @@
 import { useHandle } from "../../hooks/block.js";
 import { chipStateFor, chipTitle } from "./chipState.js";
-import { useEffect, useState } from "react";
+import { clearAskedClaude, isAskedClaude, subscribeAskedClaude } from "./askedStore.js";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { c } from "react/compiler-runtime";
 import { Fragment as Fragment$1, jsx, jsxs } from "react/jsx-runtime";
 //#region src/plugins/claude-tasks-companion/ClaudeStatusChip.tsx
@@ -87,72 +88,104 @@ var chipBody = (chip) => {
 		}), /* @__PURE__ */ jsx("span", { children: "Claude" })] });
 	}
 };
+/** Optimistic "queued" shown between the Ask Claude action and the
+*  daemon's claim writing real props. */
+var OPTIMISTIC_QUEUED = {
+	kind: "queued",
+	updatedAtMs: null,
+	attempts: 1,
+	errorMessage: ""
+};
 var ClaudeStatusChipRow = (t0) => {
-	const $ = c(18);
+	const $ = c(24);
 	const { block, Inner } = t0;
 	let t1;
 	if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
 		t1 = { selector: _temp2 };
 		$[0] = t1;
 	} else t1 = $[0];
-	const chip = useHandle(block, t1);
-	if (!chip) {
-		let t2;
-		if ($[1] !== Inner || $[2] !== block) {
-			t2 = /* @__PURE__ */ jsx(Inner, { block });
-			$[1] = Inner;
-			$[2] = block;
-			$[3] = t2;
-		} else t2 = $[3];
-		return t2;
-	}
+	const propsChip = useHandle(block, t1);
 	let t2;
-	if ($[4] !== Inner || $[5] !== block) {
-		t2 = /* @__PURE__ */ jsx("div", {
+	if ($[1] !== block.id) {
+		t2 = () => isAskedClaude(block.id);
+		$[1] = block.id;
+		$[2] = t2;
+	} else t2 = $[2];
+	const asked = useSyncExternalStore(subscribeAskedClaude, t2);
+	let t3;
+	let t4;
+	if ($[3] !== block.id || $[4] !== propsChip) {
+		t3 = () => {
+			if (propsChip) clearAskedClaude(block.id);
+		};
+		t4 = [propsChip, block.id];
+		$[3] = block.id;
+		$[4] = propsChip;
+		$[5] = t3;
+		$[6] = t4;
+	} else {
+		t3 = $[5];
+		t4 = $[6];
+	}
+	useEffect(t3, t4);
+	const chip = propsChip ?? (asked ? OPTIMISTIC_QUEUED : null);
+	if (!chip) {
+		let t5;
+		if ($[7] !== Inner || $[8] !== block) {
+			t5 = /* @__PURE__ */ jsx(Inner, { block });
+			$[7] = Inner;
+			$[8] = block;
+			$[9] = t5;
+		} else t5 = $[9];
+		return t5;
+	}
+	let t5;
+	if ($[10] !== Inner || $[11] !== block) {
+		t5 = /* @__PURE__ */ jsx("div", {
 			className: "min-w-0 flex-1",
 			children: /* @__PURE__ */ jsx(Inner, { block })
 		});
-		$[4] = Inner;
-		$[5] = block;
-		$[6] = t2;
-	} else t2 = $[6];
-	let t3;
-	if ($[7] !== chip) {
-		t3 = chipTitle(chip);
-		$[7] = chip;
-		$[8] = t3;
-	} else t3 = $[8];
-	const t4 = chip.kind;
-	let t5;
-	if ($[9] !== chip) {
-		t5 = chipBody(chip);
-		$[9] = chip;
-		$[10] = t5;
-	} else t5 = $[10];
+		$[10] = Inner;
+		$[11] = block;
+		$[12] = t5;
+	} else t5 = $[12];
 	let t6;
-	if ($[11] !== chip.kind || $[12] !== t3 || $[13] !== t5) {
-		t6 = /* @__PURE__ */ jsx("span", {
-			title: t3,
-			"data-claude-chip": t4,
-			className: "mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground",
-			children: t5
-		});
-		$[11] = chip.kind;
-		$[12] = t3;
-		$[13] = t5;
+	if ($[13] !== chip) {
+		t6 = chipTitle(chip);
+		$[13] = chip;
 		$[14] = t6;
 	} else t6 = $[14];
-	let t7;
-	if ($[15] !== t2 || $[16] !== t6) {
-		t7 = /* @__PURE__ */ jsxs("div", {
-			className: "flex w-full items-start gap-1",
-			children: [t2, t6]
+	const t7 = chip.kind;
+	let t8;
+	if ($[15] !== chip) {
+		t8 = chipBody(chip);
+		$[15] = chip;
+		$[16] = t8;
+	} else t8 = $[16];
+	let t9;
+	if ($[17] !== chip.kind || $[18] !== t6 || $[19] !== t8) {
+		t9 = /* @__PURE__ */ jsx("span", {
+			title: t6,
+			"data-claude-chip": t7,
+			className: "mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground",
+			children: t8
 		});
-		$[15] = t2;
-		$[16] = t6;
-		$[17] = t7;
-	} else t7 = $[17];
-	return t7;
+		$[17] = chip.kind;
+		$[18] = t6;
+		$[19] = t8;
+		$[20] = t9;
+	} else t9 = $[20];
+	let t10;
+	if ($[21] !== t5 || $[22] !== t9) {
+		t10 = /* @__PURE__ */ jsxs("div", {
+			className: "flex w-full items-start gap-1",
+			children: [t5, t9]
+		});
+		$[21] = t5;
+		$[22] = t9;
+		$[23] = t10;
+	} else t10 = $[23];
+	return t10;
 };
 var decoratorCache = /* @__PURE__ */ new WeakMap();
 var decorate = (inner) => {
