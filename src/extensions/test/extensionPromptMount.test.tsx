@@ -142,4 +142,27 @@ describe('ExtensionPromptSurface', () => {
     )
     await waitFor(() => expect(refreshAppRuntime).toHaveBeenCalledTimes(1))
   })
+
+  it('keeps the toast (retry affordance) when the approval fails', async () => {
+    approveExtensionHere.mockResolvedValueOnce(false)
+    const store = new ExtensionApprovalStatusStore()
+    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
+    renderSurface(store)
+
+    await waitFor(() => expect(showInfo).toHaveBeenCalledTimes(1))
+
+    // Sonner auto-dismisses the toast on action click; a failed approval must
+    // re-show it (the status is unchanged, so the reconcile effect won't).
+    await act(async () => {
+      optsFor('matrix').action?.onClick()
+      await Promise.resolve()
+    })
+
+    expect(refreshAppRuntime).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(
+        showInfo.mock.calls.filter((c) => c[1]?.id === 'ext-approval:matrix'),
+      ).toHaveLength(2),
+    )
+  })
 })

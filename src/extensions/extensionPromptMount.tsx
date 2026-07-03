@@ -64,7 +64,15 @@ const showPromptToast = (repo: Repo, prompt: PendingExtensionPrompt): void => {
       label: primaryLabel(prompt),
       onClick: () => {
         void approveExtensionHere(repo, prompt.blockId, prompt.name).then((ok) => {
-          if (!ok) return
+          if (!ok) {
+            // Sonner dismisses the toast when its action button is clicked;
+            // on a failed approval (block missing, compile/write error) the
+            // status is unchanged, so the reconcile effect won't bring it
+            // back. Re-show so the retry affordance survives — the error
+            // itself was already surfaced by approveExtensionHere.
+            showPromptToast(repo, prompt)
+            return
+          }
           // A fresh approval supersedes any earlier dismissal so a future
           // update can nudge again (and localStorage stays tidy).
           extensionPromptDismissals.clear(prompt.blockId)
