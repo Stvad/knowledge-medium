@@ -55,6 +55,7 @@ import {
   backfillBlocksFtsIfEmpty,
   backfillBlockTypesIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureUndoGroupIdColumns,
 } from '@/data/internals/clientSchema'
 import { runAnalyzeIfStale } from '@/data/maintenance'
 import { onFirstSync } from '@/data/internals/firstSync.js'
@@ -408,6 +409,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
   // TRIGGER IF NOT EXISTS so re-running is a no-op against an
   // already-bootstrapped dev database.
+  //
+  // Idempotent local migration FIRST: add `group_id` to an existing
+  // tx_context / row_events (undo grouping, issue #306) — the trigger
+  // recreation below compiles bodies that reference the column. Fresh
+  // DBs skip it (tables don't exist yet; the CREATEs carry the column).
+  await ensureUndoGroupIdColumns(powerSyncDb)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await powerSyncDb.execute(stmt)
   }

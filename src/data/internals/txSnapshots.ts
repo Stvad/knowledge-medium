@@ -44,6 +44,26 @@ export const recordWrite = (
   }
 }
 
+/** Fold a later tx's snapshots into an earlier one, in place — the
+ *  cross-tx analog of {@link recordWrite}'s within-tx rule: per block,
+ *  keep the EARLIEST `before` (target's, when both touched the id) and
+ *  take the LATEST `after` (incoming's). Used by `UndoManager.record`
+ *  to merge same-group entries (issue #306) so one undo entry reverts
+ *  a whole multi-tx composite operation. */
+export const mergeSnapshotsInto = (
+  target: SnapshotsMap,
+  incoming: SnapshotsMap,
+): void => {
+  for (const [id, snap] of incoming) {
+    const existing = target.get(id)
+    if (existing) {
+      target.set(id, {before: existing.before, after: snap.after})
+    } else {
+      target.set(id, {before: snap.before, after: snap.after})
+    }
+  }
+}
+
 /** Look up an own-write for a given id. Used by `tx.peek` to see this
  *  tx's pending writes before the cache. */
 export const peekSnapshot = (

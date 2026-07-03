@@ -1013,6 +1013,10 @@ export class Repo {
         txId: result.txId,
         snapshots: result.snapshots,
         description: opts.description,
+        // Group token (issue #306): entries sharing it merge at record
+        // time while the previous one is still top-of-stack, so a
+        // multi-tx composite reverts with one cmd-Z.
+        groupId: opts.groupId,
       })
     }
     return result.value
@@ -1079,6 +1083,51 @@ export class Repo {
       manager.pushRedo(scope, entry)
       throw err
     }
+  }
+
+  /** Run `fn` against a `Repo`-shaped facade whose every tx carries one
+   *  freshly-minted undo-group token (issue #306, docs/undo-grouping.md).
+   *  Consecutive txs opened through the facade — directly via
+   *  `grouped.tx`, or indirectly via `grouped.mutate.X` / `grouped.run`
+   *  — MERGE into a single undo entry at record time, so the whole
+   *  composite reverts with one cmd-Z. Helpers that take a `Repo`
+   *  parameter join the group simply by being handed the facade.
+   *
+   *  Semantics to be aware of:
+   *   - Merging is top-of-stack only: a foreign tx (one opened on the
+   *     plain repo, e.g. a background write) landing mid-group SPLITS
+   *     the group into two entries rather than folding across it.
+   *   - No atomicity: each tx still commits independently. If a later
+   *     tx throws, the committed prefix stays applied and remains
+   *     covered by the (single) group entry; the error propagates.
+   *   - Nested `undoGroup` on the facade joins the OUTER group — one
+   *     user-perceived action, one entry.
+   *   - Reads and every other Repo member delegate to the real repo via
+   *     the prototype chain; only `tx` / `run` / `mutate` / `undoGroup`
+   *     are overridden, and each closes over the real repo, so repo
+   *     internals never execute with the facade as `this`. */
+  async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
+    return fn(this.groupedFacade(this.newId()))
+  }
+
+  /** Build the group-injecting facade for {@link undoGroup}. */
+  private groupedFacade(groupId: string): Repo {
+    const facade = Object.create(this) as Repo
+    const tx = <R,>(fn: (tx: Tx) => Promise<R>, opts: RepoTxOptions): Promise<R> =>
+      this.tx(fn, {...opts, groupId})
+    const run = ((name: string, args: unknown) =>
+      this.dispatchMutator(name, groupId)(args)) as Repo['run']
+    // Same Proxy shape as the constructor's `mutate`, but dispatching
+    // with the group token.
+    const mutate = new Proxy({} as Record<string, (args: unknown) => Promise<unknown>>, {
+      get: (_target, prop) => {
+        if (typeof prop !== 'string') return undefined
+        return this.dispatchMutator(prop, groupId)
+      },
+    }) as MutateProxy
+    const undoGroup = <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
+      inner(facade)
+    return Object.assign(facade, {tx, run, mutate, undoGroup})
   }
 
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`
@@ -1985,8 +2034,10 @@ export class Repo {
    *       plugin full-name like `'tasks:setDueDate'`)
    *    2. `'core.${name}'` (so `repo.mutate.indent` resolves to
    *       `'core.indent'` even though the registry key is full-prefixed)
-   *  Throws `MutatorNotRegisteredError` if neither matches. */
-  private dispatchMutator(name: string): (args: unknown) => Promise<unknown> {
+   *  Throws `MutatorNotRegisteredError` if neither matches.
+   *  `groupId` (from an `undoGroup` facade) stamps the dispatched tx so
+   *  it merges into the group's undo entry. */
+  private dispatchMutator(name: string, groupId?: string): (args: unknown) => Promise<unknown> {
     return async (args: unknown) => {
       const m = this.mutators.get(name) ?? this.mutators.get(`core.${name}`)
       if (!m) throw new MutatorNotRegisteredError(name)
@@ -1995,6 +2046,7 @@ export class Repo {
       return this.tx(tx => tx.run(m, validated) as Promise<unknown>, {
         scope,
         description: m.describe?.(validated),
+        groupId,
       })
     }
   }

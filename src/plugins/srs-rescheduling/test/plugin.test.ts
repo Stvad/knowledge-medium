@@ -366,11 +366,13 @@ describe('srsReschedulingPlugin', () => {
     // Old behavior: workspaceId = activeWorkspaceId ('ws-2'), peekUndo on
     // ws-2's (empty) manager → `if (!top) return` → no toast at all.
     expect(showCustomMock).toHaveBeenCalledTimes(1)
-    const element = showCustomMock.mock.calls[0][0]('toast-id') as { props: { workspaceId: string; txId: string } }
+    const element = showCustomMock.mock.calls[0][0]('toast-id') as { props: { workspaceId: string; groupId: string } }
     expect(element.props.workspaceId).toBe('ws-1')
     const top = repo.undoManagerFor('ws-1').peekUndo(ChangeScope.BlockDefault)
     expect(top).not.toBeNull()
-    expect(element.props.txId).toBe(top?.txId)
+    // The toast matches the merged group entry by its group token (#306).
+    expect(top?.groupId).toBeDefined()
+    expect(element.props.groupId).toBe(top?.groupId)
     // The active (ws-2) manager has nothing — the toast did not bind to it.
     expect(repo.undoManagerFor('ws-2').peekUndo(ChangeScope.BlockDefault)).toBeNull()
   })

@@ -272,49 +272,58 @@ export const applySrsReschedulePlan = async (
 ): Promise<boolean> => {
   if (block.repo.isReadOnly) return false
 
-  const nextReviewDaily = await getOrCreateDailyNote(
-    block.repo,
-    plan.workspaceId,
-    plan.nextReviewIso,
-  )
-  const reviewedDaily = await getOrCreateDailyNote(
-    block.repo,
-    plan.workspaceId,
-    plan.reviewedIso,
-  )
-  const snapshot: SrsReviewSnapshot = {
-    ...snapshotForPlan(plan),
-    reviewedAt: reviewedDaily.id,
-  }
-  const typeSnapshot = block.repo.snapshotTypeRegistries()
-
-  let written = false
-  await block.repo.tx(async tx => {
-    let row = await tx.get(block.id)
-    if (!row) return
-    if (!getBlockTypes(row).includes(SRS_SM25_TYPE)) {
-      await block.repo.addTypeInTx(tx, block.id, SRS_SM25_TYPE, {}, typeSnapshot)
-      row = await tx.get(block.id)
-      if (!row) return
+  // One undo group for the whole perceived action (issue #306): the
+  // daily-note lookups below can each open their own txs (daily note +
+  // journal block creation on a fresh workspace day), historically
+  // leaving 2-4 entries on the undo stack — so cmd-Z (or the toast's
+  // Undo) only reverted the property write and left the new daily
+  // notes behind. Routing every tx through the grouped facade merges
+  // them into a single entry.
+  return block.repo.undoGroup(async repo => {
+    const nextReviewDaily = await getOrCreateDailyNote(
+      repo,
+      plan.workspaceId,
+      plan.nextReviewIso,
+    )
+    const reviewedDaily = await getOrCreateDailyNote(
+      repo,
+      plan.workspaceId,
+      plan.reviewedIso,
+    )
+    const snapshot: SrsReviewSnapshot = {
+      ...snapshotForPlan(plan),
+      reviewedAt: reviewedDaily.id,
     }
-    await tx.update(block.id, {
-      properties: {
-        ...row.properties,
-        [srsIntervalProp.name]: srsIntervalProp.codec.encode(plan.newInterval),
-        [srsFactorProp.name]: srsFactorProp.codec.encode(plan.newFactor),
-        [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(nextReviewDaily.id),
-        [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(plan.nextReviewCount),
-        [srsGradeProp.name]: srsGradeProp.codec.encode(plan.grade),
-        [srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([
-          ...plan.history,
-          snapshot,
-        ]),
-      },
-    })
-    written = true
-  }, {scope: ChangeScope.BlockDefault, description: 'srs reschedule'})
+    const typeSnapshot = repo.snapshotTypeRegistries()
 
-  return written
+    let written = false
+    await repo.tx(async tx => {
+      let row = await tx.get(block.id)
+      if (!row) return
+      if (!getBlockTypes(row).includes(SRS_SM25_TYPE)) {
+        await repo.addTypeInTx(tx, block.id, SRS_SM25_TYPE, {}, typeSnapshot)
+        row = await tx.get(block.id)
+        if (!row) return
+      }
+      await tx.update(block.id, {
+        properties: {
+          ...row.properties,
+          [srsIntervalProp.name]: srsIntervalProp.codec.encode(plan.newInterval),
+          [srsFactorProp.name]: srsFactorProp.codec.encode(plan.newFactor),
+          [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(nextReviewDaily.id),
+          [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(plan.nextReviewCount),
+          [srsGradeProp.name]: srsGradeProp.codec.encode(plan.grade),
+          [srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([
+            ...plan.history,
+            snapshot,
+          ]),
+        },
+      })
+      written = true
+    }, {scope: ChangeScope.BlockDefault, description: 'srs reschedule'})
+
+    return written
+  })
 }
 
 export const rescheduleBlock = async (
@@ -413,12 +422,16 @@ const runRescheduleWithFeedback = async (
   const workspaceId = block.peek()?.workspaceId
   if (!workspaceId) return
   const top = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault)
-  if (!top) return
+  // The reschedule runs under `repo.undoGroup` (issue #306), so the top
+  // entry carries its group token — the toast matches by that, staying
+  // valid across same-group merges and going stale on any foreign entry.
+  const groupId = top?.groupId
+  if (!groupId) return
   const message = formatRescheduleToastMessage(result)
   showCustom(id => createElement(RescheduleToast, {
     toastId: id,
     message,
-    txId: top.txId,
+    groupId,
     workspaceId,
     repo: block.repo,
   }))

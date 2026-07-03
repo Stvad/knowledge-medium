@@ -37,12 +37,13 @@ import {
  *  for log inspection. */
 export const CREATE_TX_CONTEXT_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS tx_context (
-    id      INTEGER PRIMARY KEY CHECK (id = 1),
-    tx_id   TEXT,
-    tx_seq  INTEGER,
-    user_id TEXT,
-    scope   TEXT,
-    source  TEXT
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    tx_id    TEXT,
+    tx_seq   INTEGER,
+    user_id  TEXT,
+    scope    TEXT,
+    source   TEXT,
+    group_id TEXT
   )
 `
 
@@ -75,7 +76,8 @@ export const CREATE_ROW_EVENTS_TABLE_SQL = `
     before_json TEXT,
     after_json  TEXT,
     source      TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
+    created_at  INTEGER NOT NULL,
+    group_id    TEXT
   )
 `
 
@@ -415,12 +417,23 @@ const triggerTxIdSql = `
 
 const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
 
+/** Undo-group token (issue #306) — projected exactly like tx_id above,
+ *  with the same source gate: sync-applied writes (source IS NULL) must
+ *  never inherit a stale group_id left by a crashed local tx. */
+const triggerGroupIdSql = `
+      CASE
+        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
+          THEN NULL
+        ELSE (SELECT group_id FROM tx_context WHERE id = 1)
+      END
+`.trim()
+
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       NEW.id,
@@ -428,7 +441,8 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
       NULL,
       ${blockJsonObjectSql('NEW')},
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `
@@ -438,7 +452,7 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   AFTER UPDATE ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       NEW.id,
@@ -449,7 +463,8 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
       ${blockJsonObjectSql('OLD')},
       ${blockJsonObjectSql('NEW')},
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `
@@ -462,7 +477,7 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
   AFTER DELETE ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       OLD.id,
@@ -470,7 +485,8 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
       ${blockJsonObjectSql('OLD')},
       NULL,
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `
@@ -1355,6 +1371,36 @@ export const ensureBlockUserUpdatedAtColumn = async (db: {
         await db.execute('UPDATE blocks SET user_updated_at = updated_at')
       },
     )
+  }
+}
+
+/**
+ * Idempotent local-schema migration for undo grouping (issue #306): add
+ * `group_id` to `tx_context` and `row_events` on upgrading devices.
+ * Both tables are created with CREATE TABLE IF NOT EXISTS, so adding the
+ * column to the CREATE statements does NOT add it to an existing device's
+ * tables — yet the commit pipeline's tx_context UPDATE and the recreated
+ * row_events triggers reference it unconditionally, so an un-migrated
+ * device would fail "no such column" on the first `repo.tx`.
+ *
+ * MUST run BEFORE `CLIENT_SCHEMA_STATEMENTS`: the trigger recreation in
+ * that set compiles trigger bodies that insert into `row_events.group_id`.
+ * A table that does not exist yet is skipped — the CREATE that follows
+ * carries the column (and appends it LAST, so fresh and ALTER-upgraded
+ * layouts match). No backfill: NULL group_id simply means "ungrouped",
+ * which is the correct reading for all pre-existing history. No trigger
+ * suspension: ALTER TABLE fires no row triggers.
+ */
+export const ensureUndoGroupIdColumns = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  for (const table of ['tx_context', 'row_events'] as const) {
+    const columns = await db.getAll<{name: string}>(`PRAGMA table_info(${table})`)
+    if (columns.length === 0) continue
+    if (!columns.some(c => c.name === 'group_id')) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN group_id TEXT`)
+    }
   }
 }
 
