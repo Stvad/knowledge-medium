@@ -12,6 +12,8 @@ export const CLAUDE_PROPS = {
   attempts: 'claude:attempts',
   error: 'claude:error',
   reply: 'claude:reply',
+  /** Written by the Ask Claude action (companion-owned, daemon-inert). */
+  askedAt: 'claude:asked-at',
 } as const
 
 export type ChipKind = 'queued' | 'running' | 'done' | 'error'

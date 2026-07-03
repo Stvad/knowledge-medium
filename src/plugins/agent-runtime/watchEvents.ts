@@ -74,6 +74,11 @@ interface WatcherRuntime {
   settleTimer: ReturnType<typeof setTimeout> | null
   computing: boolean
   recheck: boolean
+  /** Set on dispose. In-flight computeLoops / armed timers hold direct
+   *  runtime references across awaits; once disposed nothing observes
+   *  changes anymore, so acting on the stale reference would emit
+   *  "settled" for a block that may still be mid-edit. */
+  disposed: boolean
   disposeOnChange: (() => void) | null
 }
 
@@ -97,6 +102,7 @@ const watcherRuntimeFor = (spec: WatchEventsWatcher): WatcherRuntime => ({
   settleTimer: null,
   computing: false,
   recheck: false,
+  disposed: false,
   disposeOnChange: null,
 })
 
@@ -142,6 +148,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
    *  quiet the user confirmed by leaving them — a concurrently-syncing
    *  edit from another device must not ride the exemption. */
   const emitSettled = (consumer: string, runtime: WatcherRuntime, timeConfirmed: boolean) => {
+    if (runtime.disposed) return
     const settled = [...runtime.pendingSettledIds]
       .filter(id => timeConfirmed || isBlurredNow(id))
       .slice(0, MAX_SETTLED_IDS)
@@ -171,20 +178,27 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
   }
 
   const disposeRuntime = (runtime: WatcherRuntime) => {
+    runtime.disposed = true
     runtime.disposeOnChange?.()
     runtime.disposeOnChange = null
     if (runtime.settleTimer !== null) clearTimeout(runtime.settleTimer)
     runtime.settleTimer = null
   }
 
+  /** Dispose a SPECIFIC entry — it may already have been replaced in
+   *  `entries` by a newer registration, which must survive untouched. */
+  const disposeEntry = (consumer: string, entry: ConsumerEntry) => {
+    for (const runtime of entry.runtimes) disposeRuntime(runtime)
+    if (entries.get(consumer) === entry) entries.delete(consumer)
+  }
+
   const disposeConsumer = (consumer: string) => {
     const entry = entries.get(consumer)
-    if (!entry) return
-    for (const runtime of entry.runtimes) disposeRuntime(runtime)
-    entries.delete(consumer)
+    if (entry) disposeEntry(consumer, entry)
   }
 
   const armSettle = (consumer: string, runtime: WatcherRuntime) => {
+    if (runtime.disposed) return
     if (runtime.settleTimer !== null) clearTimeout(runtime.settleTimer)
     runtime.settleTimer = setTimeout(() => {
       runtime.settleTimer = null
@@ -198,6 +212,10 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       do {
         runtime.recheck = false
         const rows = await db.getAll(runtime.sql, runtime.params)
+        // Disposed while the query was in flight (registration replaced,
+        // TTL expiry): this runtime no longer observes changes, so any
+        // settle it armed would be a false "quiet" confirmation.
+        if (runtime.disposed) return
         const fingerprint = JSON.stringify(rows)
         runtime.currentById = rowsById(rows)
         if (runtime.fingerprint !== null && fingerprint !== runtime.fingerprint) {
@@ -224,8 +242,11 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
   }
 
   const requestCompute = (db: PowerSyncDb, consumer: string, runtime: WatcherRuntime) => {
+    if (runtime.disposed) return
     const entry = entries.get(consumer)
-    if (!entry) return
+    // Only the runtime's OWN entry may vouch for its freshness — after a
+    // replace-registration, `entries` holds the successor's entry.
+    if (!entry || !entry.runtimes.includes(runtime)) return
     // Expired registrations self-clean on their next signal — a dead
     // consumer must not keep the tab re-running queries forever.
     if (now() - entry.lastRefreshedMs > entry.ttlMs) {
@@ -274,8 +295,17 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       // fire (mirrors the daemon's own first-tick baseline).
       await Promise.all(entry.runtimes.map(runtime => computeLoop(db, consumer, runtime)))
     } catch (error) {
-      disposeConsumer(consumer)
+      disposeEntry(consumer, entry)
       throw error
+    }
+
+    // Commands run concurrently in the tab: a second registration for
+    // this consumer may have replaced ours while we baselined. The
+    // successor owns the consumer — subscribing our runtimes anyway
+    // would leave live watchers no dispose path can ever reach.
+    if (entries.get(consumer) !== entry) {
+      disposeEntry(consumer, entry)
+      return {consumer, registered: [], unchanged: false}
     }
 
     watchers.forEach((spec, index) => {

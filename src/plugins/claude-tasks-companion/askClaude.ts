@@ -47,21 +47,23 @@ export const askClaude = async (block: Block): Promise<void> => {
   const row = block.peek() ?? await block.load()
   if (!row) return
 
-  const nextContent = contentWithClaudeMention(row.content ?? '')
-  const hasLifecycleState = REQUEUE_CLEARED_PROPS.some(key => row.properties[key] !== undefined)
-
-  if (nextContent !== row.content || hasLifecycleState) {
-    await block.repo.tx(async tx => {
-      const fresh = await tx.get(block.id)
-      if (!fresh) return
-      const properties = {...fresh.properties}
-      for (const key of REQUEUE_CLEARED_PROPS) delete properties[key]
-      await tx.update(block.id, {
-        content: contentWithClaudeMention(fresh.content ?? ''),
-        properties,
-      })
-    }, {scope: ChangeScope.BlockDefault, description: 'ask claude'})
-  }
+  // ALWAYS make a real write — even when the mention and props already
+  // look right (tx.update short-circuits a no-change patch WITHOUT
+  // bumping the edit stamp). The claude:asked-at timestamp guarantees
+  // the patch changes the block, and the resulting stamp bump is what
+  // carries a PRE-BASELINE mention (typed before the watcher's baseline)
+  // past the daemon's baseline gate; a "no-op" ask would otherwise be
+  // silently unable to queue exactly those blocks.
+  await block.repo.tx(async tx => {
+    const fresh = await tx.get(block.id)
+    if (!fresh) return
+    const properties = {...fresh.properties, [CLAUDE_PROPS.askedAt]: Date.now()}
+    for (const key of REQUEUE_CLEARED_PROPS) delete properties[key]
+    await tx.update(block.id, {
+      content: contentWithClaudeMention(fresh.content ?? ''),
+      properties,
+    })
+  }, {scope: ChangeScope.BlockDefault, description: 'ask claude'})
 
   markAskedClaude(block.id)
   // Explicit ask = the user is done by construction: skip the settle

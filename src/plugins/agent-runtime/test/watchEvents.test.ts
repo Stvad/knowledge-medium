@@ -233,6 +233,56 @@ describe('watch-events registry', () => {
     ])
   })
 
+  it('a registration superseded while baselining never subscribes (concurrent commands)', async () => {
+    // The bridge runs commands concurrently: register #1 suspends on its
+    // baseline query while register #2 (different spec) replaces it.
+    const getAll = fake.db.getAll as ReturnType<typeof vi.fn>
+    let releaseBaseline!: (rows: unknown[]) => void
+    getAll.mockImplementationOnce(() => new Promise(resolve => { releaseBaseline = resolve }))
+
+    const first = registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+    await vi.advanceTimersByTimeAsync(0) // first register parks on baseline
+    fake.setRows([{id: 'a'}])
+    const second = registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher({settleMs: 2_000})]})
+    releaseBaseline([{id: 'a'}])
+    const [firstResult] = await Promise.all([first, second])
+
+    // The superseded registration must not leave a live phantom watcher:
+    // exactly one subscription (the successor's) survives.
+    expect(firstResult.registered).toEqual([])
+    expect(fake.subscriptions.filter(entry => !entry.disposed)).toHaveLength(1)
+
+    // Only the successor emits, with ITS settle window.
+    await change([{id: 'a'}, {id: 'b'}])
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(emitted).toEqual([])
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(emitted).toHaveLength(1)
+  })
+
+  it('a runtime disposed mid-compute cannot arm a settle timer or emit', async () => {
+    fake.setRows([{id: 'a'}])
+    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+
+    // A change kicks off a compute that parks on its query...
+    const getAll = fake.db.getAll as ReturnType<typeof vi.fn>
+    let releaseCompute!: (rows: unknown[]) => void
+    getAll.mockImplementationOnce(() => new Promise(resolve => { releaseCompute = resolve }))
+    fake.fireChange()
+    await vi.advanceTimersByTimeAsync(0)
+
+    // ...the registration is replaced while that query is in flight...
+    fake.setRows([{id: 'a'}])
+    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher({settleMs: 2_000})]})
+
+    // ...and the stale compute resolves with a changed result set. The
+    // disposed runtime observes no further changes, so a timer it armed
+    // would "confirm" quiet for a block that may still be mid-edit.
+    releaseCompute([{id: 'a'}, {id: 'b'}])
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(emitted).toEqual([])
+  })
+
   it('a failing baseline query rejects the registration and leaves nothing armed', async () => {
     const failing = createFakeDb()
     ;(failing.db.getAll as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('no such table'))
