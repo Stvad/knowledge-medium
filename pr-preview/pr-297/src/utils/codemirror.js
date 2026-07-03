@@ -1,8 +1,10 @@
 import { EditorSelection } from "../../node_modules/@codemirror/state/dist/index.js";
-import { EditorView, keymap } from "../../node_modules/@codemirror/view/dist/index.js";
+import { EditorView, ViewPlugin, keymap } from "../../node_modules/@codemirror/view/dist/index.js";
+import { acceptCompletion, completionStatus } from "../../node_modules/@codemirror/autocomplete/dist/index.js";
 import { markdown, markdownLanguage } from "../../node_modules/@codemirror/lang-markdown/dist/index.js";
 import { javascript } from "../../node_modules/@codemirror/lang-javascript/dist/index.js";
 import { insertNewline } from "../../node_modules/@codemirror/commands/dist/index.js";
+import { isIOS } from "./platform.js";
 //#region src/utils/codemirror.ts
 /** Clamp every range of a selection into `[0, docLength]`. For
 *  dispatching a REMEMBERED selection against a doc that may have
@@ -98,6 +100,29 @@ var softLineBreakOnBeforeInput = EditorView.domEventHandlers({ beforeinput(event
 	event.preventDefault();
 	return true;
 } });
+var AcceptCompletionOnEnterCapture = class {
+	onKeydown;
+	constructor(view) {
+		this.view = view;
+		this.onKeydown = (event) => {
+			if (event.key !== "Enter" || event.isComposing || event.keyCode === 229 || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
+			if (completionStatus(this.view.state) !== "active") return;
+			acceptCompletion(this.view);
+			event.preventDefault();
+			event.stopImmediatePropagation();
+		};
+		view.dom.addEventListener("keydown", this.onKeydown, true);
+	}
+	destroy() {
+		this.view.dom.removeEventListener("keydown", this.onKeydown, true);
+	}
+};
+/** The capture-phase completion-accept plugin. Exported so tests can force it on
+*  regardless of platform (the shipped extension below only attaches it on iOS). */
+var acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptCompletionOnEnterCapture);
+/** iOS-only; empty elsewhere (off iOS, CM's completion keymap accepts + stops
+*  Enter before it can reach a window shortcut). */
+var acceptCompletionBeforeIOSDefer = isIOS() ? acceptCompletionOnEnterCapture : [];
 var createMinimalMarkdownConfig = (pluginExtensions = []) => {
 	const extensions = [
 		markdown({
@@ -106,7 +131,12 @@ var createMinimalMarkdownConfig = (pluginExtensions = []) => {
 		}),
 		keymap.of(markdownFormattingKeymap),
 		softLineBreakOnBeforeInput,
+		acceptCompletionBeforeIOSDefer,
 		mdNoQuoteClose,
+		EditorView.contentAttributes.of({
+			autocapitalize: "sentences",
+			spellcheck: "true"
+		}),
 		EditorView.theme({
 			"&": {
 				fontSize: "inherit",
@@ -196,6 +226,6 @@ var getCaretRect = (editorView) => {
 var cursorIsAtEnd = (editorView) => editorView.state.selection.main.head === editorView.state.doc.length;
 var cursorIsAtStart = (editorView) => editorView.state.selection.main.head === 0;
 //#endregion
-export { clampSelectionToLength, createMinimalMarkdownConfig, createTypeScriptConfig, cursorIsAtEnd, cursorIsAtStart, getCaretRect, getVisualColumn, isOnFirstVisualLine, isOnLastVisualLine, markdownFormattingKeymap, placeCursorAtCoords, placeCursorAtX, softLineBreakOnBeforeInput, toggleMarkdownBold, toggleMarkdownInlineCode, toggleMarkdownItalic, toggleMarkdownStrikethrough, wrapRangeWithPair };
+export { acceptCompletionBeforeIOSDefer, acceptCompletionOnEnterCapture, clampSelectionToLength, createMinimalMarkdownConfig, createTypeScriptConfig, cursorIsAtEnd, cursorIsAtStart, getCaretRect, getVisualColumn, isOnFirstVisualLine, isOnLastVisualLine, markdownFormattingKeymap, placeCursorAtCoords, placeCursorAtX, softLineBreakOnBeforeInput, toggleMarkdownBold, toggleMarkdownInlineCode, toggleMarkdownItalic, toggleMarkdownStrikethrough, wrapRangeWithPair };
 
 //# sourceMappingURL=codemirror.js.map

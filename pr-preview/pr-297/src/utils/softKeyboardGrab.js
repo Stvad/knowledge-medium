@@ -1,3 +1,4 @@
+import { isIOS } from "./platform.js";
 //#region src/utils/softKeyboardGrab.ts
 /** Raise the on-screen keyboard from within a user gesture.
 *
@@ -42,21 +43,6 @@ var failsafeTimer;
 *  long before the timeout, so the failsafe is a no-op; it only fires when edit
 *  mode never materializes, briefly stranding the keyboard until then. */
 var FOCUS_HANDOFF_TIMEOUT_MS = 3e3;
-/** iOS (iPhone/iPad) WebKit — the only place the deferred-focus keyboard bug
-*  exists. Every iOS browser is WebKit, but `navigator.vendor` reports the
-*  BRAND, not the engine: Safari (and iPad's desktop-class UA) reports
-*  `"Apple Computer, Inc."`, while iOS Chrome/Edge report `"Google Inc."` and
-*  iOS Firefox reports `""`. So vendor alone misses the non-Safari iOS
-*  browsers — for those we also accept the iOS-exclusive UA tokens
-*  `CriOS`/`FxiOS`/`EdgiOS` (Chrome-on-Android is `Chrome/`, never `CriOS/`,
-*  so this can't false-positive off iOS). `maxTouchPoints > 0` is required by
-*  both arms: it excludes desktop Safari on the Mac (Apple vendor, no
-*  touchscreen), which doesn't need the grab. */
-var isIOS = () => {
-	if (typeof navigator === "undefined") return false;
-	if ((navigator.maxTouchPoints ?? 0) === 0) return false;
-	return /apple/i.test(navigator.vendor ?? "") || /\b(CriOS|FxiOS|EdgiOS)\//.test(navigator.userAgent ?? "");
-};
 /** The singleton hidden proxy, created lazily. Zero-opacity + `position: fixed`
 *  so focusing it neither scrolls the page nor shows anything; sized 1px rather
 *  than `display:none` / `visibility:hidden`, which would make it unfocusable. */
