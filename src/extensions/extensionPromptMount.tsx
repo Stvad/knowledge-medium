@@ -98,8 +98,6 @@ export const ExtensionPromptSurface = () => {
   useEffect(() => {
     extensionPromptStore.set(active)
   }, [active])
-  // Clear the published set if this surface unmounts (plugin toggled off).
-  useEffect(() => () => extensionPromptStore.set([]), [])
 
   // Reconcile toasts against the active set: (re)show each pending prompt
   // whose content changed, dismiss toasts whose prompt is gone (enabled or
@@ -118,6 +116,20 @@ export const ExtensionPromptSurface = () => {
     }
     shown.current = next
   }, [active, repo])
+
+  // On unmount (plugin toggled off), clear the published set AND dismiss any
+  // still-open toasts. They have infinite duration and live in Sonner's
+  // portal — not this component's tree — so without this they'd stay visible
+  // and actionable after the surface is gone (mirrors appUpdateMount's
+  // dismiss-on-unmount).
+  useEffect(
+    () => () => {
+      extensionPromptStore.set([])
+      for (const id of shown.current.keys()) dismissToast(id)
+      shown.current.clear()
+    },
+    [],
+  )
 
   return null
 }

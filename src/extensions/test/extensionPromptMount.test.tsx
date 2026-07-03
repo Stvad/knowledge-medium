@@ -105,6 +105,22 @@ describe('ExtensionPromptSurface', () => {
     expect(extensionPromptDismissals.isDismissed('readwise', 'hr')).toBe(false)
   })
 
+  it('dismisses open toasts when the surface unmounts (plugin toggled off)', async () => {
+    const store = new ExtensionApprovalStatusStore()
+    store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
+    store.report('readwise', {kind: 'needs-approval', name: 'Readwise', liveHash: 'hr'})
+    const {unmount} = renderSurface(store)
+
+    await waitFor(() => expect(showInfo).toHaveBeenCalledTimes(2))
+
+    act(() => unmount())
+
+    // Infinite-duration toasts live in Sonner's portal, so unmount must tear
+    // them down explicitly or they'd linger after the plugin is disabled.
+    expect(dismissToast).toHaveBeenCalledWith('ext-approval:matrix')
+    expect(dismissToast).toHaveBeenCalledWith('ext-approval:readwise')
+  })
+
   it('Enable approves the clicked extension by its own blockId', async () => {
     const store = new ExtensionApprovalStatusStore()
     store.report('matrix', {kind: 'needs-approval', name: 'Matrix', liveHash: 'hm'})
