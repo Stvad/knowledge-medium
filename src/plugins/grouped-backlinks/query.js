@@ -61,6 +61,21 @@ var resolveSourceParents = async (ctx, workspaceId, sourceIds) => {
 *  the SQLite parameter ceiling that would have been hit by a
 *  per-id `VALUES (?)` list on heavily-linked targets. */
 var SOURCE_IDS_CTE = `source_ids(id) AS (SELECT value FROM json_each(?))`;
+/** Hydrate the member (source/backlink) rows by id. Grouping consumes the
+*  members' *references* (via `block_references`) and their parent edges, but
+*  never the members' own rows — `resolveBacklinkSourceIds` returns ids only.
+*  Group-header actions (e.g. daily-notes "spread") gate visibility on each
+*  member's content through the action's `isVisible` (`block.peek()`), so this
+*  primes those rows into the cache. One JSON-array bind (same trick as
+*  `SOURCE_IDS_CTE`) avoids the SQLite parameter ceiling on heavily-linked
+*  targets. */
+var SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL = `
+  WITH ${SOURCE_IDS_CTE}
+  SELECT ${buildQualifiedBlockColumnsSql("b")}
+  FROM source_ids s
+  JOIN blocks b ON b.id = s.id
+  WHERE b.deleted = 0
+`;
 /** Group context = (refs from source + each ancestor) UNION (root
 *  ancestor's own id). Roam-style: "what context is each backlink
 *  in?" — the page it lives on plus any tags/refs anywhere up the
@@ -214,6 +229,8 @@ var groupedBacklinksForBlockQuery = defineQuery({
 		};
 		const sourceParents = await resolveSourceParents(ctx, workspaceId, sourceIds);
 		const sourceIdsJson = JSON.stringify(sourceIds);
+		const memberRows = await ctx.db.getAll(SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL, [sourceIdsJson]);
+		ctx.hydrateBlocks(asBlockRows(memberRows), { declareRowDeps: false });
 		const candidateRows = await ctx.db.getAll(SELECT_GROUPED_BACKLINK_CANDIDATES_SQL, [
 			sourceIdsJson,
 			workspaceId,
@@ -311,6 +328,6 @@ var groupedBacklinksForBlockQuery = defineQuery({
 	}
 });
 //#endregion
-export { GROUPED_BACKLINKS_FOR_BLOCK_QUERY, SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL, SELECT_GROUPED_BACKLINK_CANDIDATES_SQL, SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL, SELECT_GROUPED_BACKLINK_TYPE_CANDIDATES_SQL, groupedBacklinksForBlockQuery };
+export { GROUPED_BACKLINKS_FOR_BLOCK_QUERY, SELECT_GROUPED_BACKLINK_ATTRIBUTE_CANDIDATES_SQL, SELECT_GROUPED_BACKLINK_CANDIDATES_SQL, SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL, SELECT_GROUPED_BACKLINK_MEMBER_ROWS_SQL, SELECT_GROUPED_BACKLINK_TYPE_CANDIDATES_SQL, groupedBacklinksForBlockQuery };
 
 //# sourceMappingURL=query.js.map
