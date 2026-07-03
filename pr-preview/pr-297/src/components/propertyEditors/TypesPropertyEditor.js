@@ -252,7 +252,7 @@ function TypesPropertyEditor(t0) {
 		$[51] = selected;
 		$[52] = t15;
 	} else t15 = $[52];
-	const t16 = open && filtered.length > 0 ? listbox.activeDescendantId : void 0;
+	const t16 = open && !readOnly ? listbox.activeDescendantId : void 0;
 	let t17;
 	if ($[57] === Symbol.for("react.memo_cache_sentinel")) {
 		t17 = () => setOpen(true);
