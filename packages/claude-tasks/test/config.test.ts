@@ -38,6 +38,17 @@ describe('parseConfig', () => {
     expect(() => parseConfig({profile: 'bad name', watchers: []})).toThrow(/[Pp]rofile/)
   })
 
+  it('rejects duplicate watcher names (they would silently share cursor/baseline state)', () => {
+    expect(() => parseConfig({watchers: [
+      {kind: 'query', name: 'inbox', sql: 'SELECT id FROM a'},
+      {kind: 'query', name: 'inbox', sql: 'SELECT id FROM b'},
+    ]})).toThrow(/duplicate/i)
+    expect(() => parseConfig({watchers: [
+      {kind: 'backlinks', name: 'same', target: 'claude'},
+      {kind: 'query', name: 'same', sql: 'SELECT id FROM blocks'},
+    ]})).toThrow(/duplicate/i)
+  })
+
   it('rejects misspelled keys instead of silently dropping them', () => {
     expect(() => parseConfig({maxconcurrent: 5, watchers: []})).toThrow()
     expect(() => parseConfig({
