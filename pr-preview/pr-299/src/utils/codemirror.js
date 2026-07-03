@@ -83,10 +83,6 @@ var mdNoQuoteClose = markdownLanguage.data.of({ closeBrackets: { brackets: [
 	"<"
 ] } });
 var softLineBreakOnBeforeInput = EditorView.domEventHandlers({ beforeinput(event, view) {
-	if (event.inputType === "insertParagraph") {
-		event.preventDefault();
-		return true;
-	}
 	if (event.inputType !== "insertLineBreak") return false;
 	if (view.state.readOnly) return false;
 	insertNewline(view);

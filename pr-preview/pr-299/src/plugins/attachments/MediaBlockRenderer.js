@@ -1,184 +1,131 @@
 import { usePropertyValue, useWorkspaceId } from "../../hooks/block.js";
-import { FileText } from "../../../node_modules/lucide-react/dist/esm/icons/file-text.js";
-import { ImageOff } from "../../../node_modules/lucide-react/dist/esm/icons/image-off.js";
-import { LoaderCircle } from "../../../node_modules/lucide-react/dist/esm/icons/loader-circle.js";
+import { useAppRuntime } from "../../extensions/runtimeContext.js";
 import { DefaultBlockRenderer } from "../../components/renderer/DefaultBlockRenderer.js";
-import { MarkdownImage } from "../../markdown/MarkdownImage.js";
 import { getAssetResolver } from "./assetResolver.js";
-import { isImageMime, mediaFilenameProp, mediaHashProp, mediaMimeProp } from "./mediaBlock.js";
+import { mediaFilenameProp, mediaHashProp, mediaMimeProp, mediaSizeProp } from "./mediaBlock.js";
+import { pickMediaViewer } from "./mediaViewers.js";
+import { mediaViewersFacet } from "./mediaViewersFacet.js";
 import { useAssetObjectUrl } from "./useAssetObjectUrl.js";
+import { useState } from "react";
 import { c } from "react/compiler-runtime";
-import { jsx, jsxs } from "react/jsx-runtime";
+import { jsx } from "react/jsx-runtime";
 //#region src/plugins/attachments/MediaBlockRenderer.tsx
 /**
 * The `media`-block renderer (design §11). Mirrors the video-player plugin's
 * wiring: a {@link BlockRenderer} that renders blocks carrying the `media` type
-* (gated on a loaded snapshot, see canRender) at a priority above the default,
-* branching on the block's `media:mime`.
+* (gated on a loaded snapshot, see canRender) at a priority above the default.
 *
-* Image branch: resolve the bytes in-thread (§7.3), wrap them as an object URL
-* (useAssetObjectUrl), and feed the existing {@link MarkdownImage} lightbox. A
-* fail-closed resolve (the resolver discarded unverified bytes, §5.1) renders the
-* broken-asset placeholder — NEVER a raw/unverified source. Bytes that verify but
-* the browser can't DECODE as an image (an untrusted `media:mime` on non-image
-* bytes, or a corrupt-but-hash-matching image) fall to the SAME placeholder via the
-* <img> onError, not the browser's broken-image glyph. Non-image MIMEs get a file
-* chip for now (full file/PDF/AV rendering is vNext, §15) and do NOT resolve bytes —
-* only the image branch fetches/decrypts.
+* It reads the block's metadata and dispatches to a viewer chosen from the
+* {@link mediaViewersFacet} registry ({@link pickMediaViewer}). Byte access is
+* per-viewer (§7.3):
+*  - an EAGER viewer (image; inline PDF later) gets the bytes resolved once on mount
+*    into a verified object URL ({@link useAssetObjectUrl}: fetch → decrypt/passthrough →
+*    HASH-VERIFY → Blob of the block's `media:mime` → object URL, revoked on unmount). A
+*    fail-closed resolve (§5.1) surfaces as `error` → the broken-asset placeholder, NEVER
+*    a raw/unverified source.
+*  - a LAZY-INLINE viewer (audio) renders from metadata and resolves NOTHING on mount; it
+*    arms the SAME object-URL resolve via `requestResolve` on the first play intent, then
+*    reads the resulting `state` exactly like an eager viewer (same fail-closed guarantee).
+*  - the LAZY download fallback resolves NOTHING on mount either; it gets a `resolveBytes`
+*    thunk and fetches the verified bytes only when the user clicks download.
+* The mount-time resolve is gated on `viewer.eager || armed` (armed = a lazy-inline viewer
+* called requestResolve). The down-lane already replicates every media block (incl.
+* non-image) to local disk for offline (§8), so deferring the resolve isn't about saving
+* egress — it avoids holding a decrypted object-URL Blob in memory for media nobody opened
+* (a page of large audio files), and avoids un-throttled demand-fetching ahead of that
+* budgeted background lane.
 */
-var Placeholder = (t0) => {
-	const $ = c(10);
-	const { testid, label, icon, spin: t1 } = t0;
-	const t2 = (t1 === void 0 ? false : t1) ? "animate-spin" : void 0;
-	let t3;
-	if ($[0] !== icon || $[1] !== t2) {
-		t3 = /* @__PURE__ */ jsx("span", {
-			className: t2,
-			children: icon
-		});
-		$[0] = icon;
-		$[1] = t2;
-		$[2] = t3;
-	} else t3 = $[2];
-	let t4;
-	if ($[3] !== label) {
-		t4 = /* @__PURE__ */ jsx("span", { children: label });
-		$[3] = label;
-		$[4] = t4;
-	} else t4 = $[4];
-	let t5;
-	if ($[5] !== label || $[6] !== t3 || $[7] !== t4 || $[8] !== testid) {
-		t5 = /* @__PURE__ */ jsxs("div", {
-			"data-testid": testid,
-			role: "img",
-			"aria-label": label,
-			className: "flex items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground",
-			children: [t3, t4]
-		});
-		$[5] = label;
-		$[6] = t3;
-		$[7] = t4;
-		$[8] = testid;
-		$[9] = t5;
-	} else t5 = $[9];
-	return t5;
-};
-/** Image branch — the ONLY path that resolves/decrypts bytes (§7.3). Split into
-*  its own component so a non-image block never triggers a resolve or an object
-*  URL it wouldn't use. */
-var MediaImage = (t0) => {
-	const $ = c(14);
-	const { block, hash, mime, filename } = t0;
-	const workspaceId = useWorkspaceId(block, "");
-	let t1;
-	if ($[0] !== hash || $[1] !== mime || $[2] !== workspaceId) {
-		t1 = {
-			workspaceId,
-			contentHash: hash,
-			mime
-		};
-		$[0] = hash;
-		$[1] = mime;
-		$[2] = workspaceId;
-		$[3] = t1;
-	} else t1 = $[3];
-	let t2;
-	if ($[4] === Symbol.for("react.memo_cache_sentinel")) {
-		t2 = getAssetResolver();
-		$[4] = t2;
-	} else t2 = $[4];
-	const [state, reportDecodeFailure] = useAssetObjectUrl(t1, t2);
-	if (state.status === "ready") {
-		const t3 = filename || "Attachment image";
-		let t4;
-		if ($[5] !== reportDecodeFailure || $[6] !== state.url) {
-			t4 = () => reportDecodeFailure(state.url);
-			$[5] = reportDecodeFailure;
-			$[6] = state.url;
-			$[7] = t4;
-		} else t4 = $[7];
-		let t5;
-		if ($[8] !== state.url || $[9] !== t3 || $[10] !== t4) {
-			t5 = /* @__PURE__ */ jsx(MarkdownImage, {
-				src: state.url,
-				alt: t3,
-				className: "max-w-full rounded",
-				onError: t4
-			});
-			$[8] = state.url;
-			$[9] = t3;
-			$[10] = t4;
-			$[11] = t5;
-		} else t5 = $[11];
-		return t5;
-	}
-	if (state.status === "loading") {
-		let t3;
-		if ($[12] === Symbol.for("react.memo_cache_sentinel")) {
-			t3 = /* @__PURE__ */ jsx(Placeholder, {
-				testid: "media-loading",
-				label: "Loading image…",
-				icon: /* @__PURE__ */ jsx(LoaderCircle, { className: "h-4 w-4" }),
-				spin: true
-			});
-			$[12] = t3;
-		} else t3 = $[12];
-		return t3;
-	}
-	let t3;
-	if ($[13] === Symbol.for("react.memo_cache_sentinel")) {
-		t3 = /* @__PURE__ */ jsx(Placeholder, {
-			testid: "media-broken",
-			label: "Image unavailable",
-			icon: /* @__PURE__ */ jsx(ImageOff, { className: "h-4 w-4" })
-		});
-		$[13] = t3;
-	} else t3 = $[13];
-	return t3;
-};
 var MediaContentRenderer = (t0) => {
-	const $ = c(8);
+	const $ = c(23);
 	const { block } = t0;
 	const [hash] = usePropertyValue(block, mediaHashProp);
 	const [mime] = usePropertyValue(block, mediaMimeProp);
 	const [filename] = usePropertyValue(block, mediaFilenameProp);
-	if (!isImageMime(mime)) {
-		let t1;
-		if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
-			t1 = /* @__PURE__ */ jsx(FileText, { className: "h-4 w-4 shrink-0 text-muted-foreground" });
-			$[0] = t1;
-		} else t1 = $[0];
-		const t2 = filename || mime || "Attachment";
-		let t3;
-		if ($[1] !== t2) {
-			t3 = /* @__PURE__ */ jsxs("div", {
-				"data-testid": "media-file",
-				className: "flex items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm",
-				children: [t1, /* @__PURE__ */ jsx("span", {
-					className: "truncate",
-					children: t2
-				})]
-			});
-			$[1] = t2;
-			$[2] = t3;
-		} else t3 = $[2];
-		return t3;
-	}
+	const [size] = usePropertyValue(block, mediaSizeProp);
+	const workspaceId = useWorkspaceId(block, "");
 	let t1;
-	if ($[3] !== block || $[4] !== filename || $[5] !== hash || $[6] !== mime) {
-		t1 = /* @__PURE__ */ jsx(MediaImage, {
-			block,
-			hash,
-			mime,
-			filename
-		});
-		$[3] = block;
-		$[4] = filename;
+	if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
+		t1 = getAssetResolver();
+		$[0] = t1;
+	} else t1 = $[0];
+	const resolver = t1;
+	const t2 = useAppRuntime();
+	let t3;
+	if ($[1] !== mime || $[2] !== t2) {
+		t3 = pickMediaViewer(t2.read(mediaViewersFacet), mime);
+		$[1] = mime;
+		$[2] = t2;
+		$[3] = t3;
+	} else t3 = $[3];
+	const viewer = t3;
+	const contentKey = `${workspaceId} ${hash} ${mime}`;
+	const [armed, setArmed] = useState(false);
+	const [armedFor, setArmedFor] = useState(contentKey);
+	if (armedFor !== contentKey) {
+		setArmedFor(contentKey);
+		if (armed) setArmed(false);
+	}
+	let t4;
+	if ($[4] === Symbol.for("react.memo_cache_sentinel")) {
+		t4 = () => setArmed(true);
+		$[4] = t4;
+	} else t4 = $[4];
+	const requestResolve = t4;
+	let t5;
+	if ($[5] !== hash || $[6] !== mime || $[7] !== workspaceId) {
+		t5 = {
+			workspaceId,
+			contentHash: hash,
+			mime
+		};
 		$[5] = hash;
 		$[6] = mime;
-		$[7] = t1;
-	} else t1 = $[7];
-	return t1;
+		$[7] = workspaceId;
+		$[8] = t5;
+	} else t5 = $[8];
+	const t6 = viewer.eager || armed;
+	let t7;
+	if ($[9] !== t6) {
+		t7 = { enabled: t6 };
+		$[9] = t6;
+		$[10] = t7;
+	} else t7 = $[10];
+	const [state, reportDecodeFailure] = useAssetObjectUrl(t5, resolver, t7);
+	let t8;
+	if ($[11] !== hash || $[12] !== workspaceId) {
+		t8 = () => resolver.resolve({
+			workspaceId,
+			contentHash: hash
+		});
+		$[11] = hash;
+		$[12] = workspaceId;
+		$[13] = t8;
+	} else t8 = $[13];
+	const resolveBytes = t8;
+	const { Component } = viewer;
+	let t9;
+	if ($[14] !== Component || $[15] !== armed || $[16] !== filename || $[17] !== mime || $[18] !== reportDecodeFailure || $[19] !== resolveBytes || $[20] !== size || $[21] !== state) {
+		t9 = /* @__PURE__ */ jsx(Component, {
+			state,
+			reportDecodeFailure,
+			resolveBytes,
+			requestResolve,
+			armed,
+			mime,
+			filename,
+			size
+		});
+		$[14] = Component;
+		$[15] = armed;
+		$[16] = filename;
+		$[17] = mime;
+		$[18] = reportDecodeFailure;
+		$[19] = resolveBytes;
+		$[20] = size;
+		$[21] = state;
+		$[22] = t9;
+	} else t9 = $[22];
+	return t9;
 };
 var MediaBlockRenderer = (props) => {
 	const $ = c(2);

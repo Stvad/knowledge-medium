@@ -1,27 +1,36 @@
 import { CallbackSet } from "../../utils/callbackSet.js";
 //#region src/plugins/data-integrity/store.ts
 /** Id of the global action that runs the built-in audit on demand (registered by
-*  the system-status plugin in auditAction.ts, triggered from the command palette
-*  and the status dropdown via `runActionById`). Lives here so neither
-*  caller has to import the other's module graph. */
+*  this plugin in auditAction.ts, triggered from the command palette). Lives here
+*  as a plain constant so a caller can reference the id without importing the
+*  action's (React/dialog) module graph. */
 var RUN_DATA_INTEGRITY_AUDIT_ACTION_ID = "run_data_integrity_audit";
-var latest = null;
+/** Id of the global action that RE-OPENS the results dialog for the last audit
+*  WITHOUT re-running it — reading the snapshot below. Registered alongside the
+*  run action by this plugin; the diagnostics snapshot routes the status
+*  dropdown's generic "Inspect" button here so viewing last results is cheap (no
+*  expensive re-scan). */
+var VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID = "view_data_integrity_audit";
+var byWorkspace = /* @__PURE__ */ new Map();
 var listeners = new CallbackSet("data-integrity-audit");
 /** Publish a completed audit result and notify subscribers. */
 var publishConsistencyAudit = (result) => {
-	latest = result;
+	byWorkspace.set(result.workspaceId, result);
 	listeners.notify();
 };
-/** Current snapshot — a stable reference until the next publish (so it's safe
-*  for useSyncExternalStore). */
-var getConsistencyAuditSnapshot = () => latest;
+/** The last result FOR `workspaceId` — a stable reference until THAT workspace is
+*  re-audited, or null. This is the single place the "the store is per-workspace,
+*  scope it before use" invariant lives: a publish for another workspace does not
+*  change what this returns, so a subscriber keyed on it (a dialog, the
+*  diagnostics source) is never blanked by an unrelated audit. */
+var getConsistencyAuditSnapshotFor = (workspaceId) => (workspaceId != null ? byWorkspace.get(workspaceId) : void 0) ?? null;
 var subscribeConsistencyAudit = (listener) => listeners.add(listener);
-/** Test helper — clear the published result + listeners. */
+/** Test helper — clear the published results + listeners. */
 var resetConsistencyAuditStore = () => {
-	latest = null;
+	byWorkspace.clear();
 	listeners.clear();
 };
 //#endregion
-export { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID, getConsistencyAuditSnapshot, publishConsistencyAudit, resetConsistencyAuditStore, subscribeConsistencyAudit };
+export { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID, VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID, getConsistencyAuditSnapshotFor, publishConsistencyAudit, resetConsistencyAuditStore, subscribeConsistencyAudit };
 
 //# sourceMappingURL=store.js.map

@@ -26,7 +26,8 @@ import { deletePanelRow, panelBlockId, panelRowsInLayoutOrder } from "../utils/p
 import { navigate, navigateFromGlobalCommand } from "../utils/navigation.js";
 import { cursorIsAtEnd, cursorIsAtStart, getCaretRect, isOnFirstVisualLine, isOnLastVisualLine } from "../utils/codemirror.js";
 import { pasteFromClipboard } from "../paste/operations.js";
-import { chooseRawSqliteExportFile, downloadBlob, exportRawSqliteDb, exportRawSqliteDbToFile, importRawSqliteDb, rawSqliteDbExportFilename } from "../utils/exportSqliteDb.js";
+import { downloadBlob } from "../utils/downloadBlob.js";
+import { chooseRawSqliteExportFile, exportRawSqliteDb, exportRawSqliteDbToFile, importRawSqliteDb, rawSqliteDbExportFilename } from "../utils/exportSqliteDb.js";
 import { applyToAllBlocksInSelection, makeMultiSelect } from "./utils.js";
 import { defaultActionContextConfigs } from "./defaultContexts.js";
 import { importState } from "../utils/state.js";
@@ -504,7 +505,7 @@ function getDefaultActionGroups({ repo }) {
 				handler: async (deps) => {
 					const { block, editorView, uiStateBlock, scopeRootId } = deps;
 					if (!block || !editorView || !uiStateBlock) return;
-					if (completionStatus(editorView.state) === "active" || editorView.dom.querySelector(".cm-tooltip-autocomplete")) {
+					if (completionStatus(editorView.state) === "active") {
 						acceptCompletion(editorView);
 						return;
 					}

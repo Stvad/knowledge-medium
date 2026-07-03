@@ -1,7 +1,6 @@
 import { systemToggle } from "../../facets/togglable.js";
 import { headerItemsFacet } from "../../extensions/core.js";
 import { SystemStatusHeaderItem } from "./SystemStatusHeaderItem.js";
-import { runDataIntegrityAuditActionContribution } from "./auditAction.js";
 //#region src/plugins/system-status/index.ts
 var systemStatusHeaderItem = {
 	id: "system-status.header",
@@ -15,7 +14,7 @@ var systemStatusPlugin = systemToggle({
 }).of([headerItemsFacet.of(systemStatusHeaderItem, {
 	source: "system-status",
 	precedence: 40
-}), runDataIntegrityAuditActionContribution]);
+})]);
 //#endregion
 export { systemStatusHeaderItem, systemStatusPlugin };
 
