@@ -200,6 +200,7 @@ var startAgentRuntimeBridge = (options) => {
 	window.addEventListener("online", handleWakeEvent);
 	document.addEventListener("visibilitychange", handleVisibilityChanged);
 	const maxConcurrentCommands = 4;
+	const saturatedParkMs = 6e4;
 	const inFlightCommands = /* @__PURE__ */ new Set();
 	const runCommand = async (command, baseUrl) => {
 		let payload;
@@ -256,7 +257,10 @@ var startAgentRuntimeBridge = (options) => {
 					inFlightCommands.delete(execution);
 				});
 				inFlightCommands.add(execution);
-				if (inFlightCommands.size >= maxConcurrentCommands) await Promise.race(inFlightCommands);
+				if (inFlightCommands.size >= maxConcurrentCommands) {
+					await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)]);
+					if (inFlightCommands.size >= maxConcurrentCommands) console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`);
+				}
 			} catch {
 				if (abortController.signal.aborted) return;
 				attempts += 1;

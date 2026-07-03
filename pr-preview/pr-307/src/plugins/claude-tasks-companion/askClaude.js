@@ -28,15 +28,16 @@ var contentWithClaudeMention = (content) => {
 };
 var askClaude = async (block) => {
 	if (block.repo.isReadOnly) return;
-	const row = block.peek() ?? await block.load();
-	if (!row) return;
-	const nextContent = contentWithClaudeMention(row.content ?? "");
-	const hasLifecycleState = REQUEUE_CLEARED_PROPS.some((key) => row.properties[key] !== void 0);
-	if (nextContent !== row.content || hasLifecycleState) await block.repo.tx(async (tx) => {
+	if (!(block.peek() ?? await block.load())) return;
+	await block.repo.tx(async (tx) => {
 		const fresh = await tx.get(block.id);
 		if (!fresh) return;
-		const properties = { ...fresh.properties };
-		for (const key of REQUEUE_CLEARED_PROPS) delete properties[key];
+		const properties = {
+			...fresh.properties,
+			[CLAUDE_PROPS.askedAt]: Date.now()
+		};
+		const status = fresh.properties[CLAUDE_PROPS.status];
+		if (status !== "queued" && status !== "running") for (const key of REQUEUE_CLEARED_PROPS) delete properties[key];
 		await tx.update(block.id, {
 			content: contentWithClaudeMention(fresh.content ?? ""),
 			properties

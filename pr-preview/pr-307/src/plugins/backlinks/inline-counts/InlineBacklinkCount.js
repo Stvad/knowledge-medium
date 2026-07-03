@@ -1,5 +1,6 @@
 import { useRepo } from "../../../context/repo.js";
 import { useWorkspaceId } from "../../../hooks/block.js";
+import { cachedContentDecorator } from "../../../extensions/blockInteraction.js";
 import { BacklinksViewSection } from "../../backlinks-view/BacklinksViewSection.js";
 import { inlineBacklinksApplies } from "./applies.js";
 import { useBacklinkCount } from "./useBacklinkCount.js";
@@ -50,28 +51,7 @@ var InlineBacklinkCountBadge = (t0) => {
 	} else t3 = $[9];
 	return t3;
 };
-var decoratorCache = /* @__PURE__ */ new WeakMap();
-var decorate = (inner) => {
-	const existing = decoratorCache.get(inner);
-	if (existing) return existing;
-	const Decorated = (t0) => {
-		const $ = c(2);
-		const { block } = t0;
-		let t1;
-		if ($[0] !== block) {
-			t1 = /* @__PURE__ */ jsx(InlineBacklinkCountBadge, {
-				block,
-				Inner: inner
-			});
-			$[0] = block;
-			$[1] = t1;
-		} else t1 = $[1];
-		return t1;
-	};
-	Decorated.displayName = "WithInlineBacklinkCount";
-	decoratorCache.set(inner, Decorated);
-	return Decorated;
-};
+var decorate = cachedContentDecorator(InlineBacklinkCountBadge, "WithInlineBacklinkCount");
 var inlineBacklinkCountDecoratorContribution = (ctx) => inlineBacklinksApplies(ctx) ? decorate : null;
 var ExpandedBacklinks = (t0) => {
 	const $ = c(3);

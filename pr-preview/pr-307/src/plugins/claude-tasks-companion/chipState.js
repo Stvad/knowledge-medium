@@ -11,7 +11,9 @@ var CLAUDE_PROPS = {
 	updatedAt: "claude:updated-at",
 	attempts: "claude:attempts",
 	error: "claude:error",
-	reply: "claude:reply"
+	reply: "claude:reply",
+	/** Written by the Ask Claude action (companion-owned, daemon-inert). */
+	askedAt: "claude:asked-at"
 };
 var chipStateFor = (properties) => {
 	const status = properties?.[CLAUDE_PROPS.status];

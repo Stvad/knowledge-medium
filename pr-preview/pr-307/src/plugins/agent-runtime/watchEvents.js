@@ -34,15 +34,27 @@ var watcherRuntimeFor = (spec) => ({
 	settleTimer: null,
 	computing: false,
 	recheck: false,
+	dirty: false,
+	disposed: false,
 	disposeOnChange: null
 });
-var rowsById = (rows) => {
+/** One serialization pass serves both the change fingerprint and the
+*  per-id diff state — this runs on every (throttled) table change.
+*  The joined fingerprint is byte-identical to JSON.stringify(rows)
+*  and is only ever compared to itself. */
+var serializeRows = (rows) => {
 	const byId = /* @__PURE__ */ new Map();
+	const rowJsons = [];
 	for (const row of rows) {
+		const json = JSON.stringify(row) ?? "null";
+		rowJsons.push(json);
 		const id = row?.id;
-		if (typeof id === "string" && id) byId.set(id, JSON.stringify(row));
+		if (typeof id === "string" && id) byId.set(id, json);
 	}
-	return byId;
+	return {
+		fingerprint: `[${rowJsons.join(",")}]`,
+		byId
+	};
 };
 var watchTablesFor = (spec) => spec.kind === "backlinks" ? BACKLINKS_WATCH_TABLES : spec.tables ?? ["blocks"];
 var createWatchEventsRegistry = (now = Date.now) => {
@@ -69,6 +81,7 @@ var createWatchEventsRegistry = (now = Date.now) => {
 	*  quiet the user confirmed by leaving them — a concurrently-syncing
 	*  edit from another device must not ride the exemption. */
 	const emitSettled = (consumer, runtime, timeConfirmed) => {
+		if (runtime.disposed) return;
 		const settled = [...runtime.pendingSettledIds].filter((id) => timeConfirmed || isBlurredNow(id)).slice(0, MAX_SETTLED_IDS);
 		if (timeConfirmed) {
 			runtime.pendingSettledIds.clear();
@@ -91,18 +104,24 @@ var createWatchEventsRegistry = (now = Date.now) => {
 		});
 	};
 	const disposeRuntime = (runtime) => {
+		runtime.disposed = true;
 		runtime.disposeOnChange?.();
 		runtime.disposeOnChange = null;
 		if (runtime.settleTimer !== null) clearTimeout(runtime.settleTimer);
 		runtime.settleTimer = null;
 	};
+	/** Dispose a SPECIFIC entry — it may already have been replaced in
+	*  `entries` by a newer registration, which must survive untouched. */
+	const disposeEntry = (consumer, entry) => {
+		for (const runtime of entry.runtimes) disposeRuntime(runtime);
+		if (entries.get(consumer) === entry) entries.delete(consumer);
+	};
 	const disposeConsumer = (consumer) => {
 		const entry = entries.get(consumer);
-		if (!entry) return;
-		for (const runtime of entry.runtimes) disposeRuntime(runtime);
-		entries.delete(consumer);
+		if (entry) disposeEntry(consumer, entry);
 	};
 	const armSettle = (consumer, runtime) => {
+		if (runtime.disposed) return;
 		if (runtime.settleTimer !== null) clearTimeout(runtime.settleTimer);
 		runtime.settleTimer = setTimeout(() => {
 			runtime.settleTimer = null;
@@ -114,9 +133,11 @@ var createWatchEventsRegistry = (now = Date.now) => {
 		try {
 			do {
 				runtime.recheck = false;
+				runtime.dirty = false;
 				const rows = await db.getAll(runtime.sql, runtime.params);
-				const fingerprint = JSON.stringify(rows);
-				runtime.currentById = rowsById(rows);
+				if (runtime.disposed) return;
+				const { fingerprint, byId } = serializeRows(rows);
+				runtime.currentById = byId;
 				if (runtime.fingerprint !== null && fingerprint !== runtime.fingerprint) {
 					for (const [id, json] of runtime.currentById) if (runtime.lastEmittedById.get(id) !== json) runtime.pendingSettledIds.add(id);
 					for (const id of runtime.lastEmittedById.keys()) if (!runtime.currentById.has(id)) runtime.pendingSettledIds.add(id);
@@ -129,8 +150,10 @@ var createWatchEventsRegistry = (now = Date.now) => {
 		}
 	};
 	const requestCompute = (db, consumer, runtime) => {
+		if (runtime.disposed) return;
+		runtime.dirty = true;
 		const entry = entries.get(consumer);
-		if (!entry) return;
+		if (!entry || !entry.runtimes.includes(runtime)) return;
 		if (now() - entry.lastRefreshedMs > entry.ttlMs) {
 			disposeConsumer(consumer);
 			return;
@@ -181,8 +204,16 @@ var createWatchEventsRegistry = (now = Date.now) => {
 		try {
 			await Promise.all(entry.runtimes.map((runtime) => computeLoop(db, consumer, runtime)));
 		} catch (error) {
-			disposeConsumer(consumer);
+			disposeEntry(consumer, entry);
 			throw error;
+		}
+		if (entries.get(consumer) !== entry) {
+			disposeEntry(consumer, entry);
+			return {
+				consumer,
+				registered: [],
+				unchanged: false
+			};
 		}
 		watchers.forEach((spec, index) => {
 			const runtime = entry.runtimes[index];
@@ -205,7 +236,10 @@ var createWatchEventsRegistry = (now = Date.now) => {
 	*  now, flush any pending settle that involves this block, and look
 	*  once more shortly after — the editor's debounced content commit
 	*  usually lands just AFTER the blur signal. */
+	const recheckTimers = /* @__PURE__ */ new Set();
 	const notifyBlockSettled = (blockId) => {
+		if (entries.size === 0) return;
+		for (const [id, until] of blurredUntil) if (now() > until) blurredUntil.delete(id);
 		blurredUntil.set(blockId, now() + BLUR_EXEMPT_MS);
 		const flushPass = async () => {
 			for (const [consumer, entry] of [...entries]) {
@@ -214,7 +248,7 @@ var createWatchEventsRegistry = (now = Date.now) => {
 					continue;
 				}
 				for (const runtime of entry.runtimes) {
-					if (!runtime.computing) await computeLoop(entry.db, consumer, runtime).catch((error) => {
+					if (!runtime.computing && runtime.dirty) await computeLoop(entry.db, consumer, runtime).catch((error) => {
 						console.warn(`watch-events: ${consumer}/${runtime.name} query failed`, error);
 					});
 					if (runtime.settleTimer !== null && runtime.pendingSettledIds.has(blockId)) {
@@ -227,12 +261,17 @@ var createWatchEventsRegistry = (now = Date.now) => {
 			}
 		};
 		flushPass();
-		setTimeout(() => {
+		const timer = setTimeout(() => {
+			recheckTimers.delete(timer);
 			flushPass();
 		}, BLUR_RECHECK_MS);
+		recheckTimers.add(timer);
 	};
 	const disposeAll = () => {
 		for (const consumer of [...entries.keys()]) disposeConsumer(consumer);
+		for (const timer of recheckTimers) clearTimeout(timer);
+		recheckTimers.clear();
+		blurredUntil.clear();
 	};
 	return {
 		register,

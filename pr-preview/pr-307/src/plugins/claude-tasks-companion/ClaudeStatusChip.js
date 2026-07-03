@@ -1,4 +1,5 @@
 import { useHandle } from "../../hooks/block.js";
+import { cachedContentDecorator } from "../../extensions/blockInteraction.js";
 import { chipStateFor, chipTitle } from "./chipState.js";
 import { clearAskedClaude, isAskedClaude, subscribeAskedClaude } from "./askedStore.js";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -187,28 +188,7 @@ var ClaudeStatusChipRow = (t0) => {
 	} else t10 = $[23];
 	return t10;
 };
-var decoratorCache = /* @__PURE__ */ new WeakMap();
-var decorate = (inner) => {
-	const existing = decoratorCache.get(inner);
-	if (existing) return existing;
-	const Decorated = (t0) => {
-		const $ = c(2);
-		const { block } = t0;
-		let t1;
-		if ($[0] !== block) {
-			t1 = /* @__PURE__ */ jsx(ClaudeStatusChipRow, {
-				block,
-				Inner: inner
-			});
-			$[0] = block;
-			$[1] = t1;
-		} else t1 = $[1];
-		return t1;
-	};
-	Decorated.displayName = "WithClaudeStatusChip";
-	decoratorCache.set(inner, Decorated);
-	return Decorated;
-};
+var decorate = cachedContentDecorator(ClaudeStatusChipRow, "WithClaudeStatusChip");
 /** Chips attach everywhere except nested surfaces (embeds, backlink
 *  entries, breadcrumbs) — a status pill repeated through every embed
 *  of a mention is noise; the canonical block carries it. */
