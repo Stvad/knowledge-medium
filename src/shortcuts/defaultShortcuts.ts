@@ -676,6 +676,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => {
         const {block, editorView, uiStateBlock, scopeRootId} = deps
         if (!block || !editorView || !uiStateBlock) return
+
+        // NOTE: Enter-accepts-an-open-completion is handled INSIDE the editor
+        // (acceptCompletionBeforeIOSDefer capture handler + CM's completion
+        // keymap), which swallow the key before it reaches this window-level
+        // shortcut. So this shortcut stays completion-unaware and just splits.
         if (!scopeRootId) return
 
         const policy = await structuralEditPolicyForBlock(block, scopeRootId)

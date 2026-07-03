@@ -1,5 +1,6 @@
 import {defineConfig, type Plugin} from 'vite'
 import path from "path"
+import {fileURLToPath} from "node:url"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import externalize from "vite-plugin-externalize-dependencies";
@@ -26,6 +27,15 @@ const isDashjsCommonjsVariableWarning = (log: RollupLogLike) => {
     )
 }
 
+// Root the dev-server fs allow-list at the primary checkout. In a git worktree
+// (.claude/worktrees/<name>) that's three levels up — the worktree has no
+// node_modules of its own, so deps resolve upward to the main checkout; outside
+// a worktree it's just this directory. Used only under VITE_TUNNEL (see below).
+const configDir = path.dirname(fileURLToPath(import.meta.url))
+const tunnelFsRoot = configDir.includes(`${path.sep}.claude${path.sep}worktrees${path.sep}`)
+    ? path.resolve(configDir, '../../..')
+    : configDir
+
 // https://vite.dev/config/
 export default defineConfig(({command}) => {
     const isDev = command === 'serve';
@@ -39,7 +49,16 @@ export default defineConfig(({command}) => {
         // testing — otherwise Vite's DNS-rebinding host check returns "Blocked
         // request". Off by default; the dev server still binds localhost only
         // (tailscaled forwards to it). See .claude/skills/ios-device-debug.
-        server: process.env.VITE_TUNNEL ? {allowedHosts: ['.ts.net']} : undefined,
+        // fs.allow widens the file-serving root to the primary checkout so a
+        // worktree dev server can reach main's node_modules (see tunnelFsRoot
+        // above) — otherwise Vite 403s the /@fs requests and the app hangs at
+        // "Loading". We scope to the repo root rather than disabling strict mode
+        // (fs.strict:false), which would serve ANY readable file — SSH keys,
+        // cloud creds — over the tunnel URL. The allow-list keeps serving inside
+        // the repo, and Vite's default deny-list still blocks .env/certs within it.
+        server: process.env.VITE_TUNNEL
+            ? {allowedHosts: ['.ts.net'], fs: {allow: [tunnelFsRoot]}}
+            : undefined,
         // Baked into the bundle as a literal so the client can show which
         // build it's running (see src/appVersion.ts). The same object is
         // emitted as dist/version.json below for the deploy-time update check.

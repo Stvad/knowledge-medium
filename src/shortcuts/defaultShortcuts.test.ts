@@ -2,7 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { waitFor } from '@testing-library/react'
-import type { EditorView } from '@codemirror/view'
+import { EditorView } from '@codemirror/view'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -71,11 +71,15 @@ const makeSelection = (from: number, to = from) => ({
   main: {empty: from === to, from, to, anchor: from, head: to},
 })
 
-const codeMirrorEditorView = (content: string, cursor: number): EditorView => {
+const codeMirrorEditorView = (
+  content: string,
+  cursor: number,
+): EditorView => {
   let text = content
   let selection = makeSelection(cursor)
 
   const view = {
+    dom: document.createElement('div'),
     dispatch: vi.fn((spec: FakeEditorDispatchSpec) => {
       if (spec.changes) {
         text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
