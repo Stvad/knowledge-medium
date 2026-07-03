@@ -16,7 +16,7 @@ import { OPEN_EXTENSIONS_SETTINGS_ACTION_ID } from "../plugins/extensions-settin
 *
 * Mirrors `appUpdateStatus.ts` (the app-build-update analog); the only
 * difference is the summary count, which varies with how many extensions are
-* pending — so the snapshot is memoized by a content signature to stay
+* pending — so the derived snapshot is memoized (see below) to stay
 * referentially stable (a `useDiagnostics`/`useSyncExternalStore` need).
 */
 var buildSnapshot = (prompts) => {
@@ -29,20 +29,15 @@ var buildSnapshot = (prompts) => {
 		nudge: true
 	};
 };
-var cached = {
-	signature: "\0never",
-	snapshot: null
-};
-var signatureOf = (prompts) => prompts.map((p) => `${p.blockId}:${p.kind}:${p.liveHash}`).join("|");
+var cached = null;
 var extensionPromptDiagnosticSource = {
 	id: "extension-prompts",
 	label: "Extensions",
 	subscribe: extensionPromptStore.subscribe,
 	getSnapshot: () => {
 		const prompts = extensionPromptStore.getSnapshot();
-		const signature = signatureOf(prompts);
-		if (signature !== cached.signature) cached = {
-			signature,
+		if (!cached || cached.prompts !== prompts) cached = {
+			prompts,
 			snapshot: buildSnapshot(prompts)
 		};
 		return cached.snapshot;
