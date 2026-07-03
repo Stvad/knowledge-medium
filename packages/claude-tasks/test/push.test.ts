@@ -114,6 +114,20 @@ describe('createExemptionPool', () => {
     const drained = pool.drain()
     expect(drained.get('claude-mentions')!.size).toBe(MAX_PENDING_EXEMPT_IDS)
   })
+
+  it('evicts aged-out ids at the cap so fresh exemptions still land (stalled-tick squatters)', () => {
+    let clock = 0
+    const pool = createExemptionPool(() => clock)
+    const staleIds = Array.from({length: MAX_PENDING_EXEMPT_IDS}, (_, index) => `stale${index}`)
+    pool.add(new Map([['claude-mentions', new Set(staleIds)]]))
+
+    // A stalled tick left the pool full of now-expired ids; a fresh
+    // blur must displace them, not bounce off the cap.
+    clock += EXEMPTION_POOL_TTL_MS + 1
+    pool.add(exemptions('claude-mentions', 'fresh'))
+
+    expect(pool.drain()).toEqual(new Map([['claude-mentions', new Set(['fresh'])]]))
+  })
 })
 
 describe('startPushLoop', () => {

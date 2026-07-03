@@ -351,6 +351,85 @@ describe('watch-events registry', () => {
     expect(emitted).toEqual([])
   })
 
+  it('a retry woken by teardown must not resurrect watchers after disposeAll', async () => {
+    const getAll = fake.db.getAll as ReturnType<typeof vi.fn>
+    let releaseBaseline!: (rows: unknown[]) => void
+    getAll.mockImplementationOnce(() => new Promise(resolve => { releaseBaseline = resolve }))
+
+    // Original registration parks on its baseline query; an identical
+    // daemon retry parks on its `ready`.
+    const first = registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+    await vi.advanceTimersByTimeAsync(0)
+    const second = registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+
+    // Bridge teardown rejects `ready`, waking the retry — which must
+    // FAIL, not fall through to a fresh registration that would arm
+    // live watchers with no transport and no owner for a full TTL.
+    registry.disposeAll()
+    releaseBaseline([{id: 'a'}])
+
+    await expect(second).rejects.toThrow('registry stopped')
+    await expect(first).rejects.toThrow('registry stopped')
+    expect(fake.subscriptions.filter(entry => !entry.disposed)).toHaveLength(0)
+
+    // The next bridge start re-arms the registry.
+    registry.setTransport(async event => { emitted.push(event) })
+    fake.setRows([{id: 'a'}])
+    const revived = await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+    expect(revived.registered).toEqual(['inbox'])
+  })
+
+  it('a blur flush holding a stale snapshot must not prune a fresh successor registration', async () => {
+    const getAll = fake.db.getAll as ReturnType<typeof vi.fn>
+    fake.setRows([{id: 'a'}])
+    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+    await registry.register(fake.db, {
+      consumer: 'other',
+      watchers: [sqlWatcher({name: 'aux', tables: ['other_table']})],
+      ttlMs: 1_000,
+    })
+
+    // Let `other` expire, and leave `daemon` with an unconsumed change:
+    // a transient query failure whose coalesced second signal parks
+    // pendingChange with no compute running.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await vi.advanceTimersByTimeAsync(1_001)
+    let failCompute!: (error: Error) => void
+    getAll.mockImplementationOnce(() => new Promise((_, reject) => { failCompute = reject }))
+    fake.fireChange()
+    await vi.advanceTimersByTimeAsync(0)
+    fake.fireChange() // coalesces into pendingChange
+    failCompute(new Error('transient'))
+    await vi.advanceTimersByTimeAsync(0)
+    warn.mockRestore()
+
+    // The blur flush snapshots [...entries], then awaits daemon's
+    // recompute — while it is parked, a fresh registration replaces
+    // the expired `other`.
+    let releaseFlushCompute!: (rows: unknown[]) => void
+    getAll.mockImplementationOnce(() => new Promise(resolve => { releaseFlushCompute = resolve }))
+    registry.notifyBlockSettled('a')
+    await vi.advanceTimersByTimeAsync(0) // microtask flush parks on the recompute
+    const successor = await registry.register(fake.db, {
+      consumer: 'other',
+      watchers: [sqlWatcher({name: 'aux2', tables: ['other_table']})],
+    })
+    expect(successor.registered).toEqual(['aux2'])
+
+    // The flush resumes and reaches `other`'s STALE snapshot entry —
+    // pruning it must not kill the fresh successor.
+    releaseFlushCompute([{id: 'a'}])
+    await vi.advanceTimersByTimeAsync(0)
+    const auxSubs = fake.subscriptions.filter(entry => !entry.disposed && entry.tables.includes('other_table'))
+    expect(auxSubs).toHaveLength(1)
+
+    // Liveness fence: the successor still detects and emits.
+    fake.setRows([{id: 'a'}, {id: 'b'}])
+    fake.fireChange('other_table')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(emitted.filter(event => event['watcher'] === 'aux2')).toHaveLength(1)
+  })
+
   it('a failing baseline query rejects the registration and leaves nothing armed', async () => {
     const failing = createFakeDb()
     ;(failing.db.getAll as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('no such table'))

@@ -145,9 +145,20 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
   // URL, secret, and clientId) and injected here so this module stays
   // free of HTTP concerns. Null = no bridge running = events dropped.
   let transport: WatchEventTransport | null = null
+  // False between disposeAll (bridge teardown) and the next bridge
+  // start. Commands already executing in the tab are NOT cancelled by
+  // teardown, so a register woken mid-flight (its parked `ready`
+  // rejected by disposeAll) could otherwise re-arm live watchers that
+  // no bridge owns — burning queries with no transport for a full TTL.
+  let active = true
 
   const setTransport = (next: WatchEventTransport | null) => {
     transport = next
+    if (next) active = true
+  }
+
+  const assertActive = () => {
+    if (!active) throw new Error('watch-events registry stopped (bridge torn down)')
   }
 
   /** blockId → exempt-until. Blocks the user explicitly left (blur /
@@ -271,10 +282,14 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
   }
 
   /** Expired registrations self-clean on their next signal — a dead
-   *  consumer must not keep the tab re-running queries forever. */
+   *  consumer must not keep the tab re-running queries forever.
+   *  Disposes only the SPECIFIC entry it judged expired: callers may
+   *  hold a stale snapshot (the blur flush iterates `[...entries]`
+   *  across awaits), and a by-name dispose would kill a fresh successor
+   *  registered mid-flush. */
   const pruneIfExpired = (consumer: string, entry: ConsumerEntry): boolean => {
     if (now() - entry.lastRefreshedMs <= entry.ttlMs) return false
-    disposeConsumer(consumer)
+    disposeEntry(consumer, entry)
     return true
   }
 
@@ -299,6 +314,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
    *  after the baseline query of every NEW watcher, so a successful
    *  response means the watchers are armed. */
   const register = async (db: PowerSyncDb, registration: WatchEventsRegistration): Promise<WatchEventsResult> => {
+    assertActive()
     const {consumer, watchers} = registration
     const ttlMs = registration.ttlMs ?? DEFAULT_TTL_MS
     const specJson = JSON.stringify({watchers, ttlMs})
@@ -329,6 +345,10 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       if (current && current !== existing) {
         return {consumer, registered: [], unchanged: false}
       }
+      // The wake-up may have BEEN the teardown (disposeAll rejects
+      // `ready`) — registering fresh here would resurrect watchers
+      // after the bridge died.
+      assertActive()
     }
 
     disposeConsumer(consumer)
@@ -365,11 +385,13 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     }
 
     // Commands run concurrently in the tab: a second registration for
-    // this consumer may have replaced ours while we baselined. The
-    // successor owns the consumer — subscribing our runtimes anyway
-    // would leave live watchers no dispose path can ever reach.
-    if (entries.get(consumer) !== entry) {
+    // this consumer may have replaced ours while we baselined — or the
+    // whole registry was torn down. The successor owns the consumer —
+    // subscribing our runtimes anyway would leave live watchers no
+    // dispose path can ever reach.
+    if (!active || entries.get(consumer) !== entry) {
       disposeEntry(consumer, entry) // also rejects `ready`
+      assertActive() // teardown: fail the command so the daemon retries later
       return {consumer, registered: [], unchanged: false}
     }
 
@@ -458,6 +480,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
   }
 
   const disposeAll = () => {
+    active = false // until the next bridge start (setTransport)
     for (const consumer of [...entries.keys()]) disposeConsumer(consumer)
     for (const timer of recheckTimers) clearTimeout(timer)
     recheckTimers.clear()
