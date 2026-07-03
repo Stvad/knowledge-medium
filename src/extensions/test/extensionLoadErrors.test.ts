@@ -91,6 +91,58 @@ describe('ExtensionLoadErrorStore', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
+  it('batches reports: buffers with no notify until commit, then swaps atomically', () => {
+    const store = new ExtensionLoadErrorStore()
+    store.reportError('old', new Error('stale'))
+    const listener = vi.fn()
+    store.subscribe(listener)
+
+    store.beginBatch()
+    store.reportError('a', new Error('err-a'))
+    store.reportError('b', new Error('err-b'))
+
+    // Mid-batch: subscribers still see the PREVIOUS complete set, no notify.
+    expect(listener).not.toHaveBeenCalled()
+    expect([...store.getSnapshot().keys()]).toEqual(['old'])
+
+    store.commitBatch()
+
+    // One notification; the map is the rebuilt set (the un-reported 'old'
+    // block is dropped — same semantics as reset()-then-report).
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect([...store.getSnapshot().keys()].sort()).toEqual(['a', 'b'])
+  })
+
+  it('commitBatch publishes an empty set (nothing re-reported) as one notify', () => {
+    const store = new ExtensionLoadErrorStore()
+    store.reportError('old', new Error('stale'))
+    const listener = vi.fn()
+    store.subscribe(listener)
+
+    store.beginBatch()
+    store.commitBatch()
+
+    expect(store.getSnapshot().size).toBe(0)
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('abandonBatch drops the buffer without publishing', () => {
+    const store = new ExtensionLoadErrorStore()
+    store.reportError('old', new Error('stale'))
+    const listener = vi.fn()
+    store.subscribe(listener)
+
+    store.beginBatch()
+    store.reportError('a', new Error('err-a'))
+    store.abandonBatch()
+
+    expect([...store.getSnapshot().keys()]).toEqual(['old'])
+    expect(listener).not.toHaveBeenCalled()
+    // A later commit does nothing (no batch open).
+    store.commitBatch()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it('subscribe returns an unsubscribe that stops further notifications', () => {
     const store = new ExtensionLoadErrorStore()
     const listener = vi.fn()

@@ -16,13 +16,43 @@ export type ExtensionLoadErrorsMap = ReadonlyMap<string, Error>
  */
 export class ExtensionLoadErrorStore {
   private errors: ReadonlyMap<string, Error> = new Map()
+  // When non-null a batch is open: reportError/clearError buffer into it and
+  // DON'T notify; commitBatch swaps it in as a single old→new transition.
+  // Used by the runtime resolve so a re-resolve publishes atomically instead
+  // of reset→dribble, which briefly blanked the map and blinked the row
+  // status icons.
+  private batch: Map<string, Error> | null = null
   private readonly listeners = new CallbackSet<[]>('ExtensionLoadErrors')
 
   getSnapshot = (): ExtensionLoadErrorsMap => this.errors
 
   subscribe = (listener: () => void): (() => void) => this.listeners.add(listener)
 
+  /** Open a batch. Subsequent reportError/clearError buffer without notifying
+   *  until commitBatch. The buffer starts EMPTY (like reset()) and is rebuilt
+   *  from this resolve's reports. Discards any in-progress batch. */
+  beginBatch = (): void => {
+    this.batch = new Map()
+  }
+
+  /** Publish the buffered batch as ONE notification. No-op if none open. */
+  commitBatch = (): void => {
+    if (this.batch === null) return
+    this.errors = this.batch
+    this.batch = null
+    this.listeners.notify()
+  }
+
+  /** Drop the buffer without publishing (cancelled / errored resolve). */
+  abandonBatch = (): void => {
+    this.batch = null
+  }
+
   reportError = (blockId: string, error: Error): void => {
+    if (this.batch !== null) {
+      this.batch.set(blockId, error)
+      return
+    }
     const next = new Map(this.errors)
     next.set(blockId, error)
     this.errors = next
@@ -30,6 +60,10 @@ export class ExtensionLoadErrorStore {
   }
 
   clearError = (blockId: string): void => {
+    if (this.batch !== null) {
+      this.batch.delete(blockId)
+      return
+    }
     if (!this.errors.has(blockId)) return
     const next = new Map(this.errors)
     next.delete(blockId)
@@ -38,6 +72,7 @@ export class ExtensionLoadErrorStore {
   }
 
   reset = (): void => {
+    this.batch = null
     if (this.errors.size === 0) return
     this.errors = new Map()
     this.listeners.notify()
