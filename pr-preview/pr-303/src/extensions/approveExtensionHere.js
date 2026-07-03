@@ -19,12 +19,12 @@ import { approveExtension } from "./compileExtensionModule.js";
 * needs-approval — #67 review).
 */
 var approveExtensionHere = async (repo, blockId, name) => {
-	const block = await repo.load(blockId);
-	if (!block) {
-		showError(`Couldn't enable "${name}" — its definition block wasn't found.`);
-		return false;
-	}
 	try {
+		const block = await repo.load(blockId);
+		if (!block) {
+			showError(`Couldn't enable "${name}" — its definition block wasn't found.`);
+			return false;
+		}
 		await approveExtension(blockId, block.content ?? "");
 		return true;
 	} catch (error) {
