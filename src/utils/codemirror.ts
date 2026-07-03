@@ -159,19 +159,19 @@ class AcceptCompletionOnEnterCapture {
         event.ctrlKey
       )
         return
-      // Fire whenever a completion is on screen — `active` OR `pending`. An open
-      // popup whose async source is mid-refresh reports `pending` (which masks
-      // `active`), and its panel is disabled so `acceptCompletion` no-ops; if we
-      // let that Enter through it would split the block *under the visible popup* —
-      // the very bug this fixes. So the rule is "never split while a completion is
-      // up", not "accept an active one".
-      if (completionStatus(this.view.state) == null) return
-      // Best-effort accept (a no-op inside CM's post-open interactionDelay or while
-      // the panel is refreshing), then swallow the key regardless: preventDefault
-      // stops the native paragraph; stopImmediatePropagation stops both CM's deferral
-      // (its listener is on contentDOM, a descendant) and the window-level split
-      // shortcut (bubble phase). When the accept no-ops, the popup simply stays open
-      // for the next Enter — better than splitting beneath it.
+      // Gate on 'active' only — NOT 'pending'. With activateOnTyping + async
+      // completion sources, completionStatus reports 'pending' transiently after
+      // *every* keystroke in plain prose (sources flip to Pending on input, before
+      // the debounce and before any popup exists), so swallowing on 'pending' would
+      // eat prose Enters. Accepted edge: pressing Enter during the brief async
+      // refresh of an already-open popup (status 'pending', panel disabled) still
+      // splits under it. Closing that would need to track the open dialog directly —
+      // no public autocomplete helper reports a *disabled* refreshing panel.
+      if (completionStatus(this.view.state) !== 'active') return
+      // Accept (a no-op inside CM's brief post-open interactionDelay) and swallow
+      // the key: preventDefault stops the native paragraph; stopImmediatePropagation
+      // stops both CM's deferral (its listener is on contentDOM, a descendant) and
+      // the window-level split shortcut (bubble phase).
       acceptCompletion(this.view)
       event.preventDefault()
       event.stopImmediatePropagation()

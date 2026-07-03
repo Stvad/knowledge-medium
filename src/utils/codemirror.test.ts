@@ -215,12 +215,12 @@ describe('acceptCompletionOnEnterCapture', () => {
     view.destroy()
   })
 
-  // A visible popup whose async source is mid-refresh reports `pending` (not
-  // `active`), and its panel is disabled so acceptCompletion no-ops. The interceptor
-  // must still swallow Enter — otherwise it bubbles to the window split shortcut and
-  // splits the block UNDER the visible popup (the original bug, narrowed to the
-  // refresh window). A never-resolving source keeps the state pinned at `pending`.
-  it('swallows Enter while an async completion is still pending, so the block never splits under the popup', async () => {
+  // Regression guard: with activateOnTyping + async sources, completionStatus is
+  // 'pending' transiently after every keystroke in plain prose — before any popup
+  // exists. The interceptor gates on 'active' (not just non-null) precisely so it
+  // does NOT eat those prose Enters. A never-resolving source pins 'pending' with
+  // no popup ever rendered; Enter must fall through to the split shortcut.
+  it('leaves Enter untouched while a source is pending but no popup is open', async () => {
     const view = new EditorView({
       parent: document.body,
       state: EditorState.create({
@@ -230,7 +230,7 @@ describe('acceptCompletionOnEnterCapture', () => {
           autocompletion({
             defaultKeymap: false,
             interactionDelay: 0,
-            override: [() => new Promise(() => {})],  // stays in flight → status 'pending'
+            override: [() => new Promise(() => {})],  // stays in flight, no options → 'pending', no panel
           }),
           acceptCompletionOnEnterCapture,
         ],
@@ -245,8 +245,8 @@ describe('acceptCompletionOnEnterCapture', () => {
     const event = pressEnter(view)
     document.removeEventListener('keydown', onBubble)
 
-    expect(event.defaultPrevented).toBe(true)  // native split suppressed even mid-refresh
-    expect(bubbledToDocument).toBe(false)       // never reaches the window split shortcut
+    expect(event.defaultPrevented).toBe(false)  // interceptor stood aside during prose pending
+    expect(bubbledToDocument).toBe(true)         // Enter is free to reach the split shortcut
     view.destroy()
   })
 })
