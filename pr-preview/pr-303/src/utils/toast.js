@@ -2,7 +2,7 @@ import { toast } from "../../node_modules/sonner/dist/index.js";
 //#region src/utils/toast.ts
 var buildAction = (action) => action ? {
 	label: action.label,
-	onClick: () => action.onClick()
+	onClick: (event) => action.onClick(event)
 } : void 0;
 var showError = (message, opts = {}) => toast.error(message, {
 	duration: opts.duration ?? 6e3,

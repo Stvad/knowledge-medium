@@ -32,6 +32,12 @@ var decode = (raw) => {
 	for (const [blockId, hash] of Object.entries(raw)) if (typeof hash === "string") out[blockId] = hash;
 	return out;
 };
+var sameDismissals = (a, b) => {
+	const aKeys = Object.keys(a);
+	if (aKeys.length !== Object.keys(b).length) return false;
+	for (const key of aKeys) if (a[key] !== b[key]) return false;
+	return true;
+};
 var ExtensionPromptDismissalStore = class {
 	state;
 	listeners = new CallbackSet("ExtensionPromptDismissals");
@@ -67,9 +73,14 @@ var ExtensionPromptDismissalStore = class {
 		this.notify();
 	};
 	/** Re-read from storage. Used by the cross-tab `storage` listener (and
-	*  tests) so a dismissal in another tab reflects here. */
+	*  tests) so a dismissal in another tab reflects here. No-ops (no notify,
+	*  no fresh snapshot) when the stored value is unchanged — mirrors the
+	*  equality guards in `dismiss`/`clear` so a redundant `storage` event
+	*  doesn't churn subscribers. */
 	reloadFromStorage = () => {
-		this.state = decode(this.storage.get(STORAGE_KEY, null));
+		const next = decode(this.storage.get(STORAGE_KEY, null));
+		if (sameDismissals(next, this.state)) return;
+		this.state = next;
 		this.notify();
 	};
 	persist() {

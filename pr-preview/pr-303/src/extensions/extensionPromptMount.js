@@ -50,12 +50,10 @@ var showPromptToast = (repo, prompt) => {
 		duration: Number.POSITIVE_INFINITY,
 		action: {
 			label: primaryLabel(prompt),
-			onClick: () => {
+			onClick: (event) => {
+				event?.preventDefault();
 				approveExtensionHere(repo, prompt.blockId, prompt.name).then((ok) => {
-					if (!ok) {
-						showPromptToast(repo, prompt);
-						return;
-					}
+					if (!ok) return;
 					extensionPromptDismissals.clear(prompt.blockId);
 					refreshAppRuntime();
 				});
