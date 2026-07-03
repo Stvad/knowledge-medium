@@ -39,7 +39,13 @@ export default defineConfig(({command}) => {
         // testing — otherwise Vite's DNS-rebinding host check returns "Blocked
         // request". Off by default; the dev server still binds localhost only
         // (tailscaled forwards to it). See .claude/skills/ios-device-debug.
-        server: process.env.VITE_TUNNEL ? {allowedHosts: ['.ts.net']} : undefined,
+        // fs.strict:false is only needed when serving from a *git worktree*
+        // (.claude/worktrees/*): the worktree has no node_modules of its own —
+        // deps resolve upward to the main checkout — but Vite's fs allow-list is
+        // scoped to the worktree root, so it 403s the /@fs node_modules requests
+        // and the app hangs at "Loading". Dev-only and tailnet-scoped, so the
+        // relaxed allow-list is acceptable here.
+        server: process.env.VITE_TUNNEL ? {allowedHosts: ['.ts.net'], fs: {strict: false}} : undefined,
         // Baked into the bundle as a literal so the client can show which
         // build it's running (see src/appVersion.ts). The same object is
         // emitted as dist/version.json below for the deploy-time update check.
