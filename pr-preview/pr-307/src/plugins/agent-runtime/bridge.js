@@ -259,6 +259,7 @@ var startAgentRuntimeBridge = (options) => {
 				});
 				inFlightCommands.add(execution);
 				if (inFlightCommands.size >= maxConcurrentCommands) {
+					await register(baseUrl);
 					await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)]);
 					if (inFlightCommands.size >= maxConcurrentCommands) console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`);
 				}

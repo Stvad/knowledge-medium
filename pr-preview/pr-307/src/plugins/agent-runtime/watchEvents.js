@@ -114,10 +114,14 @@ var createWatchEventsRegistry = (now = Date.now) => {
 		runtime.settleTimer = null;
 	};
 	/** Dispose a SPECIFIC entry — it may already have been replaced in
-	*  `entries` by a newer registration, which must survive untouched. */
+	*  `entries` by a newer registration, which must survive untouched.
+	*  Dispose is the settlement authority for `ready`: an entry that
+	*  dies while baselining (TTL prune, disposeAll, replacement) must
+	*  not leave identical-spec retries parked on it forever. */
 	const disposeEntry = (consumer, entry) => {
 		for (const runtime of entry.runtimes) disposeRuntime(runtime);
 		if (entries.get(consumer) === entry) entries.delete(consumer);
+		entry.rejectReady(/* @__PURE__ */ new Error("watch-events registration disposed"));
 	};
 	const disposeConsumer = (consumer) => {
 		const entry = entries.get(consumer);
@@ -186,12 +190,18 @@ var createWatchEventsRegistry = (now = Date.now) => {
 			existing.lastRefreshedMs = now();
 			try {
 				await existing.ready;
-				return {
+				if (entries.get(consumer) === existing) return {
 					consumer,
 					registered: existing.runtimes.map((runtime) => runtime.name),
 					unchanged: true
 				};
 			} catch {}
+			const current = entries.get(consumer);
+			if (current && current !== existing) return {
+				consumer,
+				registered: [],
+				unchanged: false
+			};
 		}
 		disposeConsumer(consumer);
 		if (watchers.length === 0) return {
@@ -212,19 +222,18 @@ var createWatchEventsRegistry = (now = Date.now) => {
 			lastRefreshedMs: now(),
 			db,
 			runtimes: watchers.map(watcherRuntimeFor),
-			ready
+			ready,
+			rejectReady: readyReject
 		};
 		entries.set(consumer, entry);
 		try {
 			await Promise.all(entry.runtimes.map((runtime) => computeLoop(db, consumer, runtime)));
 		} catch (error) {
 			disposeEntry(consumer, entry);
-			readyReject(error);
 			throw error;
 		}
 		if (entries.get(consumer) !== entry) {
 			disposeEntry(consumer, entry);
-			readyReject(/* @__PURE__ */ new Error("registration superseded while baselining"));
 			return {
 				consumer,
 				registered: [],
@@ -274,7 +283,9 @@ var createWatchEventsRegistry = (now = Date.now) => {
 				}
 			}
 		};
-		flushPass();
+		queueMicrotask(() => {
+			flushPass();
+		});
 		const timer = setTimeout(() => {
 			recheckTimers.delete(timer);
 			flushPass();
