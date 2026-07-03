@@ -211,23 +211,26 @@ export function LocalDbCorruptionFallback({
                 I&apos;ve saved the backup file
               </Button>
             )}
+            {/* Download is the precondition step — full width on its own line so
+                the two long labels below don't overflow the card (the destructive
+                + Cancel pair share a row). */}
+            {!downloaded && (
+              <Button
+                variant="outline"
+                onClick={() => void handleExport()}
+                disabled={busy !== null}
+                className="w-full"
+              >
+                {busy === 'export'
+                  ? 'Downloading…'
+                  : backupFailed
+                    ? 'Try backup again'
+                    : downloadStarted
+                      ? 'Download again'
+                      : 'Download backup first'}
+              </Button>
+            )}
             <div className="flex flex-col gap-2 sm:flex-row">
-              {!downloaded && (
-                <Button
-                  variant="outline"
-                  onClick={() => void handleExport()}
-                  disabled={busy !== null}
-                  className="flex-1"
-                >
-                  {busy === 'export'
-                    ? 'Downloading…'
-                    : backupFailed
-                      ? 'Try backup again'
-                      : downloadStarted
-                        ? 'Download again'
-                        : 'Download backup first'}
-                </Button>
-              )}
               <Button
                 variant="destructive"
                 onClick={() => void handleReset()}

@@ -32,8 +32,16 @@ const CORRUPTION_SUBSTRINGS = [
   'sqlite call returned corrupt', // powersync_control surfacing SQLITE_CORRUPT at runtime
 ] as const
 
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error)
+const messageOf = (error: unknown): string => {
+  if (error instanceof Error) return error.message
+  // A worker/Comlink-serialized error arrives as a plain object; read its string
+  // `.message` so the recovery UI's detail shows the real text, not "[object Object]".
+  if (typeof error === 'object' && error !== null) {
+    const msg = (error as { message?: unknown }).message
+    if (typeof msg === 'string') return msg
+  }
+  return String(error)
+}
 
 // The SQLite corruption text doesn't always reach us on the top-level `.message`
 // — PowerSync/app layers can rethrow with a generic outer message and the real
