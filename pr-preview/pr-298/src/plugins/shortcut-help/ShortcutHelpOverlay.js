@@ -301,7 +301,7 @@ var MatchPanel = (t0) => {
 		let t14;
 		if ($[29] !== handler.source) {
 			t14 = /* @__PURE__ */ jsx("pre", {
-				className: "mt-1 max-h-48 overflow-auto rounded bg-muted p-2 text-[11px] leading-snug",
+				className: "mt-1 max-h-48 max-w-full overflow-auto rounded bg-muted p-2 text-[11px] leading-snug",
 				children: handler.source
 			});
 			$[29] = handler.source;
@@ -318,7 +318,7 @@ var MatchPanel = (t0) => {
 			$[33] = t15;
 		} else t15 = $[33];
 		t2 = /* @__PURE__ */ jsxs("div", {
-			className: "rounded-md border bg-muted/40 p-3",
+			className: "min-w-0 rounded-md border bg-muted/40 p-3",
 			children: [
 				t7,
 				t11,
@@ -389,7 +389,7 @@ function ShortcutHelpOverlay() {
 				/* @__PURE__ */ jsxs(DialogHeader, { children: [/* @__PURE__ */ jsx(DialogTitle, { children: "Keyboard shortcuts" }), /* @__PURE__ */ jsx(DialogDescription, { children: status })] }),
 				state.matches && /* @__PURE__ */ jsx(MatchPanel, { matches: state.matches }),
 				/* @__PURE__ */ jsx("div", {
-					className: "max-h-[60vh] overflow-y-auto sm:columns-2 sm:gap-6",
+					className: "min-w-0 max-h-[60vh] overflow-y-auto sm:columns-2 sm:gap-6",
 					children: visibleGroups.map((group) => /* @__PURE__ */ jsx(ContextGroupSection, {
 						group,
 						onSelect: selectBinding
