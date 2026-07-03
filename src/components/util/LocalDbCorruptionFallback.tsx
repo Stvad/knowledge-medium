@@ -134,7 +134,7 @@ export function LocalDbCorruptionFallback({
               <Button
                 onClick={() => void handleExport()}
                 disabled={busy !== null}
-                className="flex-1"
+                className="flex-1 min-w-0"
               >
                 {busy === 'export' ? 'Downloading…' : 'Download backup (.db)'}
               </Button>
@@ -142,7 +142,7 @@ export function LocalDbCorruptionFallback({
                 variant="destructive"
                 onClick={() => setConfirming(true)}
                 disabled={busy !== null}
-                className="flex-1"
+                className="flex-1 min-w-0"
               >
                 {localOnly ? 'Reset (delete local data)…' : 'Reset & re-sync…'}
               </Button>
@@ -152,7 +152,7 @@ export function LocalDbCorruptionFallback({
                 variant="outline"
                 onClick={() => window.location.reload()}
                 disabled={busy !== null}
-                className="flex-1"
+                className="flex-1 min-w-0"
               >
                 Reload
               </Button>
@@ -160,7 +160,7 @@ export function LocalDbCorruptionFallback({
                 variant="outline"
                 onClick={() => void handleSignOut()}
                 disabled={busy !== null}
-                className="flex-1"
+                className="flex-1 min-w-0"
               >
                 Sign out
               </Button>
@@ -235,7 +235,7 @@ export function LocalDbCorruptionFallback({
                 variant="destructive"
                 onClick={() => void handleReset()}
                 disabled={busy !== null || !resetUnlocked}
-                className="flex-1"
+                className="flex-1 min-w-0"
               >
                 {busy === 'reset' ? 'Resetting…' : 'Delete local data & reload'}
               </Button>
@@ -243,7 +243,7 @@ export function LocalDbCorruptionFallback({
                 variant="outline"
                 onClick={() => setConfirming(false)}
                 disabled={busy !== null}
-                className="flex-1"
+                className="flex-1 min-w-0"
               >
                 Cancel
               </Button>

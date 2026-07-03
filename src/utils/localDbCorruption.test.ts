@@ -3,6 +3,7 @@ import {
   LocalDatabaseCorruptError,
   corruptErrorUserId,
   isLocalDbCorruptionError,
+  isRuntimeDbCorruptionError,
   toLocalDbOpenError,
 } from './localDbCorruption'
 
@@ -77,6 +78,32 @@ describe('isLocalDbCorruptionError', () => {
     // a benign plain object does not match
     expect(isLocalDbCorruptionError({ message: 'network request failed' })).toBe(false)
     expect(isLocalDbCorruptionError({ code: 5 })).toBe(false)
+  })
+})
+
+describe('isRuntimeDbCorruptionError', () => {
+  it('matches a genuine runtime SQLite corruption (Error and plain-object shapes)', () => {
+    const msg = 'powersync_control: internal SQLite call returned CORRUPT'
+    expect(isRuntimeDbCorruptionError(new Error(msg))).toBe(true)
+    // The real runtime shape: a worker-serialized plain object, not an Error.
+    expect(isRuntimeDbCorruptionError({ name: 'Error', message: msg, stack: 'x' })).toBe(true)
+    expect(isRuntimeDbCorruptionError({ message: 'database disk image is malformed' })).toBe(true)
+  })
+
+  it('does NOT route a benign HTTP/sync error whose SERVER body echoes a broad corruption phrase', () => {
+    // downloadError carries any sync-loop failure, incl. `HTTP <status>: <body>`.
+    // The broad open-path matcher WOULD match these (server-controlled text);
+    // the runtime matcher must not, so a healthy session isn't yanked to reset.
+    for (const message of [
+      'HTTP Bad Request: table "users" is not a database table',
+      'HTTP 400: malformed database schema in sync rules',
+      'HTTP 500: internal database corruption on the server',
+      'SQLITE_CORRUPT reported by an upstream service',
+    ]) {
+      expect(isLocalDbCorruptionError({ message }), `broad: ${message}`).toBe(true)
+      expect(isRuntimeDbCorruptionError({ message }), `runtime: ${message}`).toBe(false)
+    }
+    expect(isRuntimeDbCorruptionError({ message: 'network request failed' })).toBe(false)
   })
 })
 

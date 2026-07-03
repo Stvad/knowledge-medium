@@ -21,7 +21,9 @@ async function findPage() {
   // PAGE_INDEX picks among multiple page matches (e.g. a live PWA + a stale tab).
   const matches = pages.filter(p => (p.url || '').includes(MATCH) && p.title !== 'ServiceWorker')
   const pick = process.env.PAGE_INDEX ? Number(process.env.PAGE_INDEX) : 0
-  return { pages, page: matches[pick] || pages.find(p => (p.url || '').includes(MATCH)) }
+  // Fall back to the first PAGE match on an out-of-range PAGE_INDEX; only reach
+  // for a raw URL match (which could be the SW) when no page matched at all.
+  return { pages, page: matches[pick] || matches[0] || pages.find(p => (p.url || '').includes(MATCH)) }
 }
 
 function session(wsUrl) {
