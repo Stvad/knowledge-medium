@@ -159,11 +159,19 @@ class AcceptCompletionOnEnterCapture {
         event.ctrlKey
       )
         return
-      if (completionStatus(this.view.state) !== 'active') return
-      // Accept (a no-op inside CM's brief post-open interactionDelay) and swallow
-      // the key: preventDefault stops the native paragraph; stopImmediatePropagation
-      // stops both CM's deferral (its listener is on contentDOM, a descendant) and
-      // the window-level split shortcut (bubble phase).
+      // Fire whenever a completion is on screen — `active` OR `pending`. An open
+      // popup whose async source is mid-refresh reports `pending` (which masks
+      // `active`), and its panel is disabled so `acceptCompletion` no-ops; if we
+      // let that Enter through it would split the block *under the visible popup* —
+      // the very bug this fixes. So the rule is "never split while a completion is
+      // up", not "accept an active one".
+      if (completionStatus(this.view.state) == null) return
+      // Best-effort accept (a no-op inside CM's post-open interactionDelay or while
+      // the panel is refreshing), then swallow the key regardless: preventDefault
+      // stops the native paragraph; stopImmediatePropagation stops both CM's deferral
+      // (its listener is on contentDOM, a descendant) and the window-level split
+      // shortcut (bubble phase). When the accept no-ops, the popup simply stays open
+      // for the next Enter — better than splitting beneath it.
       acceptCompletion(this.view)
       event.preventDefault()
       event.stopImmediatePropagation()

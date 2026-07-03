@@ -214,4 +214,39 @@ describe('acceptCompletionOnEnterCapture', () => {
     expect(bubbledToDocument).toBe(true)         // Enter is free to reach the split shortcut
     view.destroy()
   })
+
+  // A visible popup whose async source is mid-refresh reports `pending` (not
+  // `active`), and its panel is disabled so acceptCompletion no-ops. The interceptor
+  // must still swallow Enter — otherwise it bubbles to the window split shortcut and
+  // splits the block UNDER the visible popup (the original bug, narrowed to the
+  // refresh window). A never-resolving source keeps the state pinned at `pending`.
+  it('swallows Enter while an async completion is still pending, so the block never splits under the popup', async () => {
+    const view = new EditorView({
+      parent: document.body,
+      state: EditorState.create({
+        doc: '[[Fo',
+        selection: {anchor: 4},
+        extensions: [
+          autocompletion({
+            defaultKeymap: false,
+            interactionDelay: 0,
+            override: [() => new Promise(() => {})],  // stays in flight → status 'pending'
+          }),
+          acceptCompletionOnEnterCapture,
+        ],
+      }),
+    })
+    startCompletion(view)
+    await vi.waitFor(() => expect(completionStatus(view.state)).toBe('pending'))
+
+    let bubbledToDocument = false
+    const onBubble = () => { bubbledToDocument = true }
+    document.addEventListener('keydown', onBubble)
+    const event = pressEnter(view)
+    document.removeEventListener('keydown', onBubble)
+
+    expect(event.defaultPrevented).toBe(true)  // native split suppressed even mid-refresh
+    expect(bubbledToDocument).toBe(false)       // never reaches the window split shortcut
+    view.destroy()
+  })
 })
