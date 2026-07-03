@@ -4,6 +4,7 @@ import { acceptCompletion, completionStatus } from "../../node_modules/@codemirr
 import { markdown, markdownLanguage } from "../../node_modules/@codemirror/lang-markdown/dist/index.js";
 import { javascript } from "../../node_modules/@codemirror/lang-javascript/dist/index.js";
 import { insertNewline } from "../../node_modules/@codemirror/commands/dist/index.js";
+import { isIOS } from "./platform.js";
 //#region src/utils/codemirror.ts
 /** Produce the change/range spec for one selection range that either
 *  inserts an empty `open`/`close` pair at the cursor or wraps the
@@ -90,7 +91,6 @@ var softLineBreakOnBeforeInput = EditorView.domEventHandlers({ beforeinput(event
 	event.preventDefault();
 	return true;
 } });
-var isIOS = typeof navigator !== "undefined" && /Apple/.test(navigator.vendor) && (navigator.maxTouchPoints > 2 || /Mobile\//.test(navigator.userAgent));
 var AcceptCompletionOnEnterCapture = class {
 	onKeydown;
 	constructor(view) {
@@ -113,7 +113,7 @@ var AcceptCompletionOnEnterCapture = class {
 var acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptCompletionOnEnterCapture);
 /** iOS-only; empty elsewhere (off iOS, CM's completion keymap accepts + stops
 *  Enter before it can reach a window shortcut). */
-var acceptCompletionBeforeIOSDefer = isIOS ? acceptCompletionOnEnterCapture : [];
+var acceptCompletionBeforeIOSDefer = isIOS() ? acceptCompletionOnEnterCapture : [];
 var createMinimalMarkdownConfig = (pluginExtensions = []) => {
 	const extensions = [
 		markdown({
