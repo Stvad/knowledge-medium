@@ -20,7 +20,15 @@ var CORRUPTION_SUBSTRINGS = [
 	"sqlite_notadb",
 	"sqlite call returned corrupt"
 ];
-var messageOf = (error) => error instanceof Error ? error.message : String(error);
+var RUNTIME_CORRUPTION_SUBSTRINGS = ["sqlite call returned corrupt", "disk image is malformed"];
+var messageOf = (error) => {
+	if (error instanceof Error) return error.message;
+	if (typeof error === "object" && error !== null) {
+		const msg = error.message;
+		if (typeof msg === "string") return msg;
+	}
+	return String(error);
+};
 var messageChainOf = (error, depth = 5) => {
 	if (depth <= 0 || error === null || error === void 0) return "";
 	if (error instanceof Error) {
@@ -33,11 +41,20 @@ var messageChainOf = (error, depth = 5) => {
 	}
 	return String(error);
 };
-/** True when `error` reads like an unrecoverable SQLite-corruption open failure. */
-var isLocalDbCorruptionError = (error) => {
+var includesAnySubstring = (error, substrings) => {
 	const msg = messageChainOf(error).toLowerCase();
-	return CORRUPTION_SUBSTRINGS.some((s) => msg.includes(s));
+	return substrings.some((s) => msg.includes(s));
 };
+/** True when `error` reads like an unrecoverable SQLite-corruption open failure.
+*  Use at the DB-OPEN boundary, where `error` is a real in-process Error (no
+*  worker-boundary / server-body contamination). For the runtime `downloadError`
+*  path use {@link isRuntimeDbCorruptionError}, which is narrower. */
+var isLocalDbCorruptionError = (error) => includesAnySubstring(error, CORRUPTION_SUBSTRINGS);
+/** True when a RUNTIME sync-apply `downloadError` is a genuine SQLite corruption
+*  — tighter than {@link isLocalDbCorruptionError} so a server-controlled error
+*  body can't route a healthy session into the destructive recovery UI (see
+*  RUNTIME_CORRUPTION_SUBSTRINGS). */
+var isRuntimeDbCorruptionError = (error) => includesAnySubstring(error, RUNTIME_CORRUPTION_SUBSTRINGS);
 /**
 * Typed local-DB corruption error. Carries the `userId` so the recovery UI can
 * resolve the OPFS `.db` file, and the original error as `cause`.
@@ -74,6 +91,6 @@ var toLocalDbOpenError = (error, userId) => {
 	return error;
 };
 //#endregion
-export { LocalDatabaseCorruptError, corruptErrorUserId, isLocalDbCorruptionError, toLocalDbOpenError };
+export { LocalDatabaseCorruptError, corruptErrorUserId, isLocalDbCorruptionError, isRuntimeDbCorruptionError, toLocalDbOpenError };
 
 //# sourceMappingURL=localDbCorruption.js.map

@@ -6,7 +6,7 @@ import { refreshAppRuntime } from "../facets/runtimeEvents.js";
 import { useExtensionApprovalStatuses } from "./extensionApprovalStatus.js";
 import { approveExtensionHere } from "./approveExtensionHere.js";
 import { extensionPromptDismissals, useExtensionPromptDismissals } from "./extensionPromptDismissals.js";
-import { activeExtensionPrompts, extensionPromptStore } from "./extensionPromptStore.js";
+import { extensionPromptStore, pendingExtensionPrompts } from "./extensionPromptStore.js";
 import { extensionPromptDiagnosticContribution } from "./extensionPromptStatus.js";
 import { useEffect, useRef } from "react";
 import { c } from "react/compiler-runtime";
@@ -20,7 +20,7 @@ import { c } from "react/compiler-runtime";
 *
 * Mirrors the app-BUILD update surface (`appUpdateMount.tsx` +
 * `appUpdateStatus.ts`): a loud, dismissible toast paired with an always-
-* there chip fallback. The difference is that there are N extensions, so:
+* there chip indicator. The difference is that there are N extensions, so:
 *
 *   - Each toast is keyed by `ext-approval:<blockId>` and its Enable/Update
 *     and Dismiss buttons act on THAT block only — fixing the reported bug
@@ -29,9 +29,14 @@ import { c } from "react/compiler-runtime";
 *     hash) so it survives reloads; the extension still shows in settings
 *     with a working Enable/Update button.
 *
+* Dismiss model (design C): a toast renders only for NON-dismissed prompts,
+* so Dismiss silences the loud nag. But the chip diagnostic is fed the FULL
+* pending set (dismissed included) — dismissing drops the toast and the
+* chip's ambient dot, yet leaves a quiet "Review" row as a breadcrumb.
+*
 * The driver reads the per-provider approval store (via context) — so it
-* lives under `AppRuntimeProvider` — and publishes the active set into the
-* `extensionPromptStore` singleton the chip diagnostic reads.
+* lives under `AppRuntimeProvider` — and publishes the full pending set into
+* the `extensionPromptStore` singleton the chip diagnostic reads.
 */
 var toastId = (blockId) => `ext-approval:${blockId}`;
 /** A prompt's toast content signature — reshow only when this changes, so an
@@ -63,45 +68,52 @@ var showPromptToast = (repo, prompt) => {
 	});
 };
 var ExtensionPromptSurface = () => {
-	const $ = c(13);
+	const $ = c(15);
 	const repo = useRepo();
 	const statuses = useExtensionApprovalStatuses();
 	const dismissals = useExtensionPromptDismissals();
 	let t0;
 	if ($[0] !== dismissals || $[1] !== statuses) {
-		t0 = activeExtensionPrompts(statuses, dismissals);
+		t0 = pendingExtensionPrompts(statuses, dismissals);
 		$[0] = dismissals;
 		$[1] = statuses;
 		$[2] = t0;
 	} else t0 = $[2];
-	const active = t0;
+	const pending = t0;
 	let t1;
-	let t2;
-	if ($[3] !== active) {
-		t1 = () => {
-			extensionPromptStore.set(active);
-		};
-		t2 = [active];
-		$[3] = active;
+	if ($[3] !== pending) {
+		t1 = pending.filter(_temp);
+		$[3] = pending;
 		$[4] = t1;
-		$[5] = t2;
-	} else {
-		t1 = $[4];
-		t2 = $[5];
-	}
-	useEffect(t1, t2);
+	} else t1 = $[4];
+	const toasts = t1;
+	let t2;
 	let t3;
-	if ($[6] === Symbol.for("react.memo_cache_sentinel")) {
-		t3 = /* @__PURE__ */ new Map();
-		$[6] = t3;
-	} else t3 = $[6];
-	const shown = useRef(t3);
+	if ($[5] !== pending) {
+		t2 = () => {
+			extensionPromptStore.set(pending);
+		};
+		t3 = [pending];
+		$[5] = pending;
+		$[6] = t2;
+		$[7] = t3;
+	} else {
+		t2 = $[6];
+		t3 = $[7];
+	}
+	useEffect(t2, t3);
 	let t4;
+	if ($[8] === Symbol.for("react.memo_cache_sentinel")) {
+		t4 = /* @__PURE__ */ new Map();
+		$[8] = t4;
+	} else t4 = $[8];
+	const shown = useRef(t4);
 	let t5;
-	if ($[7] !== active || $[8] !== repo) {
-		t4 = () => {
+	let t6;
+	if ($[9] !== repo || $[10] !== toasts) {
+		t5 = () => {
 			const next = /* @__PURE__ */ new Map();
-			for (const prompt of active) {
+			for (const prompt of toasts) {
 				const id = toastId(prompt.blockId);
 				const signature = toastSignature(prompt);
 				next.set(id, signature);
@@ -110,32 +122,32 @@ var ExtensionPromptSurface = () => {
 			for (const id_0 of shown.current.keys()) if (!next.has(id_0)) dismissToast(id_0);
 			shown.current = next;
 		};
-		t5 = [active, repo];
-		$[7] = active;
-		$[8] = repo;
-		$[9] = t4;
-		$[10] = t5;
+		t6 = [toasts, repo];
+		$[9] = repo;
+		$[10] = toasts;
+		$[11] = t5;
+		$[12] = t6;
 	} else {
-		t4 = $[9];
-		t5 = $[10];
+		t5 = $[11];
+		t6 = $[12];
 	}
-	useEffect(t4, t5);
-	let t6;
+	useEffect(t5, t6);
 	let t7;
-	if ($[11] === Symbol.for("react.memo_cache_sentinel")) {
-		t6 = () => () => {
+	let t8;
+	if ($[13] === Symbol.for("react.memo_cache_sentinel")) {
+		t7 = () => () => {
 			extensionPromptStore.set([]);
 			for (const id_1 of shown.current.keys()) dismissToast(id_1);
 			shown.current.clear();
 		};
-		t7 = [];
-		$[11] = t6;
-		$[12] = t7;
+		t8 = [];
+		$[13] = t7;
+		$[14] = t8;
 	} else {
-		t6 = $[11];
-		t7 = $[12];
+		t7 = $[13];
+		t8 = $[14];
 	}
-	useEffect(t6, t7);
+	useEffect(t7, t8);
 	return null;
 };
 var extensionPromptsExtension = systemToggle({
@@ -146,6 +158,9 @@ var extensionPromptsExtension = systemToggle({
 	id: "core.extension-prompts",
 	component: ExtensionPromptSurface
 }, { source: "core" }), extensionPromptDiagnosticContribution]);
+function _temp(p) {
+	return !p.dismissed;
+}
 //#endregion
 export { ExtensionPromptSurface, extensionPromptsExtension };
 
