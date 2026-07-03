@@ -114,9 +114,13 @@ function AppRuntimeProvider(t0) {
 	if ($[22] !== baseExtensions || $[23] !== overrides || $[24] !== repo || $[25] !== runtimeContext || $[26] !== safeMode || $[27] !== workspaceId) {
 		t10 = () => {
 			let cancelled = false;
-			errorStore.reset();
-			approvalStore.reset();
-			if (!workspaceId) return;
+			errorStore.beginBatch();
+			approvalStore.beginBatch();
+			if (!workspaceId) {
+				errorStore.abandonBatch();
+				approvalStore.abandonBatch();
+				return;
+			}
 			(async () => {
 				try {
 					const nextRuntime = await resolveAppRuntime([baseExtensions, dynamicExtensionsExtension({
@@ -139,6 +143,8 @@ function AppRuntimeProvider(t0) {
 						context: runtimeContext
 					});
 					if (!cancelled) {
+						errorStore.commitBatch();
+						approvalStore.commitBatch();
 						setRuntime(nextRuntime);
 						repo.setFacetRuntime(nextRuntime);
 					}

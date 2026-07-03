@@ -19,16 +19,45 @@ import { jsx } from "react/jsx-runtime";
 */
 var ExtensionApprovalStatusStore = class {
 	statuses = /* @__PURE__ */ new Map();
+	batch = null;
 	listeners = new CallbackSet("ExtensionApprovalStatus");
 	getSnapshot = () => this.statuses;
 	subscribe = (listener) => this.listeners.add(listener);
+	/** Open a batch. Subsequent report/clear buffer without notifying until
+	*  commitBatch. The buffer starts EMPTY (like reset()) and is rebuilt from
+	*  this resolve's reports — so a block that's no longer pending is simply
+	*  not re-reported and drops out on commit. Discards any in-progress batch
+	*  (a superseded resolve). */
+	beginBatch = () => {
+		this.batch = /* @__PURE__ */ new Map();
+	};
+	/** Publish the buffered batch as ONE notification (even when it clears the
+	*  map). No-op if no batch is open. */
+	commitBatch = () => {
+		if (this.batch === null) return;
+		this.statuses = this.batch;
+		this.batch = null;
+		this.listeners.notify();
+	};
+	/** Drop the buffer without publishing (cancelled / errored resolve). */
+	abandonBatch = () => {
+		this.batch = null;
+	};
 	report = (blockId, status) => {
+		if (this.batch !== null) {
+			this.batch.set(blockId, status);
+			return;
+		}
 		const next = new Map(this.statuses);
 		next.set(blockId, status);
 		this.statuses = next;
 		this.listeners.notify();
 	};
 	clear = (blockId) => {
+		if (this.batch !== null) {
+			this.batch.delete(blockId);
+			return;
+		}
 		if (!this.statuses.has(blockId)) return;
 		const next = new Map(this.statuses);
 		next.delete(blockId);
@@ -36,6 +65,7 @@ var ExtensionApprovalStatusStore = class {
 		this.listeners.notify();
 	};
 	reset = () => {
+		this.batch = null;
 		if (this.statuses.size === 0) return;
 		this.statuses = /* @__PURE__ */ new Map();
 		this.listeners.notify();
