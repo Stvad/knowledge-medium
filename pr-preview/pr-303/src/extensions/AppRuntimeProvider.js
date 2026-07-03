@@ -150,6 +150,8 @@ function AppRuntimeProvider(t0) {
 					}
 				} catch (t12) {
 					console.error("Failed to resolve app runtime", t12);
+					errorStore.abandonBatch();
+					approvalStore.abandonBatch();
 				}
 			})();
 			return () => {
