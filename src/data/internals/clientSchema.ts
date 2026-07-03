@@ -401,32 +401,28 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
       )
 `.trim()
 
-/** Belt-and-suspenders: tx_id is the active local tx_id only when source
- *  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is open
- *  during the observer's materialize); without this guard a stale tx_id left
- *  in `tx_context` from the previous local tx would leak into the sync-applied
+/** Belt-and-suspenders source gate for tx_context projections: the column
+ *  is the active local tx's value only when source IS NOT NULL. Sync-applied
+ *  writes leave source = NULL (no `repo.tx` is open during the observer's
+ *  materialize); without this guard a stale tx_id / group_id left in
+ *  `tx_context` from the previous local tx would leak into the sync-applied
  *  row_events row. The TxEngine clears all fields at end-of-tx; the trigger
- *  logic is the load-bearing correctness check. */
-const triggerTxIdSql = `
+ *  logic is the load-bearing correctness check. One template for both
+ *  columns so the gate can't silently diverge between them. */
+const triggerCtxColumnSql = (column: 'tx_id' | 'group_id') => `
       CASE
         WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
           THEN NULL
-        ELSE (SELECT tx_id FROM tx_context WHERE id = 1)
+        ELSE (SELECT ${column} FROM tx_context WHERE id = 1)
       END
 `.trim()
+
+const triggerTxIdSql = triggerCtxColumnSql('tx_id')
 
 const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
 
-/** Undo-group token (issue #306) — projected exactly like tx_id above,
- *  with the same source gate: sync-applied writes (source IS NULL) must
- *  never inherit a stale group_id left by a crashed local tx. */
-const triggerGroupIdSql = `
-      CASE
-        WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
-          THEN NULL
-        ELSE (SELECT group_id FROM tx_context WHERE id = 1)
-      END
-`.trim()
+/** Undo-group token (issue #306) — same source-gated projection as tx_id. */
+const triggerGroupIdSql = triggerCtxColumnSql('group_id')
 
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert

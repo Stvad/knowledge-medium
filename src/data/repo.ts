@@ -183,6 +183,17 @@ export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => L
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
 const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
 
+/** The `repo.mutate` / `repo.query` proxy shape: string property access
+ *  returns `dispatch(name)` (a fresh dispatcher closure per access —
+ *  fine, the underlying registry lookup is a single Map.get); symbol
+ *  access resolves to undefined. One implementation shared by the
+ *  constructor's two proxies and the undoGroup facade's grouped
+ *  `mutate`, so the shape can't drift between them. */
+const nameDispatchProxy = <T,>(dispatch: (name: string) => unknown): T =>
+  new Proxy({} as Record<string, unknown>, {
+    get: (_target, prop) => (typeof prop === 'string' ? dispatch(prop) : undefined),
+  }) as T
+
 /** Bounded ring of recent tx entries surfaced via `repo.metrics().txLog`.
  *  Sized to comfortably cover a cold-start window (a few dozen txs) so
  *  diagnostic dumps right after page load don't lose entries. */
@@ -653,29 +664,11 @@ export class Repo {
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
     })
-    // Bind dispatchMutator to `this` so the Proxy's get trap doesn't
-    // need to alias `this` to a local. Each name lookup returns a
-    // fresh dispatcher closure; that's fine, the underlying registry
-    // lookup is a single Map.get.
-    const dispatch = this.dispatchMutator.bind(this)
-    this.mutate = new Proxy({} as Record<string, (args: unknown) => Promise<unknown>>, {
-      get: (_target, prop) => {
-        if (typeof prop !== 'string') return undefined
-        return dispatch(prop)
-      },
-    }) as MutateProxy
-    // Same Proxy shape as `mutate`, dispatching to `dispatchQuery`.
-    // Each name access returns a fresh dispatcher closure; the closure
-    // does the registry lookup + argsSchema validation + handleStore
-    // getOrCreate on call. Identity stability is provided by the
-    // handle-store key, not by memoizing the dispatcher itself.
-    const dispatchQ = this.dispatchQuery.bind(this)
-    this.query = new Proxy({} as Record<string, (args: unknown) => LoaderHandle<unknown>>, {
-      get: (_target, prop) => {
-        if (typeof prop !== 'string') return undefined
-        return dispatchQ(prop)
-      },
-    }) as QueryProxy
+    this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
+    // Identity stability for query handles is provided by the
+    // handle-store key inside `dispatchQuery`, not by memoizing the
+    // dispatcher itself.
+    this.query = nameDispatchProxy<QueryProxy>(name => this.dispatchQuery(name))
     // Install the kernel-only FacetRuntime so the kernel mutators,
     // queries, same-tx processors, invalidation rule, property schemas,
     // and type contributions are live before any `setFacetRuntime` swap
@@ -1140,14 +1133,7 @@ export class Repo {
       this.tx(fn, {...opts, groupId})
     const run = ((name: string, args: unknown) =>
       this.dispatchMutator(name, groupId)(args)) as Repo['run']
-    // Same Proxy shape as the constructor's `mutate`, but dispatching
-    // with the group token.
-    const mutate = new Proxy({} as Record<string, (args: unknown) => Promise<unknown>>, {
-      get: (_target, prop) => {
-        if (typeof prop !== 'string') return undefined
-        return this.dispatchMutator(prop, groupId)
-      },
-    }) as MutateProxy
+    const mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name, groupId))
     // Async so a synchronously-throwing callback rejects like the outer
     // `undoGroup` does instead of throwing through the caller.
     const undoGroup = async <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>

@@ -54,13 +54,10 @@ export const mergeSnapshotsInto = (
   target: SnapshotsMap,
   incoming: SnapshotsMap,
 ): void => {
+  // Each incoming snapshot replays as a "write" against the target map,
+  // so the fold rule lives in exactly one place: recordWrite.
   for (const [id, snap] of incoming) {
-    const existing = target.get(id)
-    if (existing) {
-      target.set(id, {before: existing.before, after: snap.after})
-    } else {
-      target.set(id, {before: snap.before, after: snap.after})
-    }
+    recordWrite(target, id, snap.before, snap.after)
   }
 }
 
