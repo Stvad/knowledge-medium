@@ -49,7 +49,7 @@ var KERNEL_TYPE_CONTRIBUTIONS = [
 	defineBlockType({
 		id: PANEL_STACK_TYPE,
 		label: "Panel stack",
-		...INFRASTRUCTURE_TYPE_DISPLAY
+		hideFromCompletion: true
 	}),
 	defineBlockType({
 		id: PROPERTY_SCHEMA_TYPE,
