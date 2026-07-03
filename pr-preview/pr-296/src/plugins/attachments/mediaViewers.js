@@ -9,10 +9,10 @@ import { Play } from "../../../node_modules/lucide-react/dist/esm/icons/play.js"
 import { VolumeX } from "../../../node_modules/lucide-react/dist/esm/icons/volume-x.js";
 import { downloadBlob } from "../../utils/downloadBlob.js";
 import { MarkdownImage } from "../../markdown/MarkdownImage.js";
-import { GENERIC_MIME, PDF_MIME, isAudioMime, isImageMime, isPdfMime } from "./mediaBlock.js";
+import { GENERIC_MIME, isAudioMime, isImageMime, isPdfMime } from "./mediaBlock.js";
 import { useState } from "react";
 import { c } from "react/compiler-runtime";
-import { jsx, jsxs } from "react/jsx-runtime";
+import { Fragment as Fragment$1, jsx, jsxs } from "react/jsx-runtime";
 //#region src/plugins/attachments/mediaViewers.tsx
 /**
 * The media-block viewer components + the picker over the {@link mediaViewersFacet}
@@ -319,231 +319,104 @@ var DownloadIconButton = (t0) => {
 *  file download fallback, the viewer itself must hold the "every attachment is at least
 *  downloadable" floor (§11), including when playback fails or before the user ever plays. */
 var AudioViewer = (t0) => {
-	const $ = c(53);
+	const $ = c(20);
 	const { state, reportDecodeFailure, resolveBytes, requestResolve, armed, filename, size } = t0;
 	const label = filename || "Audio attachment";
-	if (!armed) {
-		const t1 = `Play ${label}`;
-		let t2;
-		if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
-			t2 = /* @__PURE__ */ jsx(Play, { className: "h-4 w-4 shrink-0 text-muted-foreground" });
-			$[0] = t2;
-		} else t2 = $[0];
-		let t3;
-		if ($[1] !== label) {
-			t3 = /* @__PURE__ */ jsx("span", {
-				className: "truncate",
-				children: label
-			});
-			$[1] = label;
-			$[2] = t3;
-		} else t3 = $[2];
-		let t4;
-		if ($[3] !== size) {
-			t4 = size > 0 && /* @__PURE__ */ jsx("span", {
-				className: "shrink-0 text-muted-foreground",
-				children: formatByteSize(size)
-			});
-			$[3] = size;
-			$[4] = t4;
-		} else t4 = $[4];
-		let t5;
-		if ($[5] !== requestResolve || $[6] !== t1 || $[7] !== t3 || $[8] !== t4) {
-			t5 = /* @__PURE__ */ jsxs("button", {
-				type: "button",
-				"data-testid": "media-audio-play",
-				onClick: requestResolve,
-				"aria-label": t1,
-				className: "inline-flex min-w-0 items-center gap-2 hover:opacity-80",
-				children: [
-					t2,
-					t3,
-					t4
-				]
-			});
-			$[5] = requestResolve;
-			$[6] = t1;
-			$[7] = t3;
-			$[8] = t4;
-			$[9] = t5;
-		} else t5 = $[9];
-		let t6;
-		if ($[10] !== filename || $[11] !== label || $[12] !== resolveBytes) {
-			t6 = /* @__PURE__ */ jsx(DownloadIconButton, {
-				resolveBytes,
-				filename,
-				label,
-				testid: "media-audio-download",
-				className: "ml-auto"
-			});
-			$[10] = filename;
-			$[11] = label;
-			$[12] = resolveBytes;
-			$[13] = t6;
-		} else t6 = $[13];
-		let t7;
-		if ($[14] !== t5 || $[15] !== t6) {
-			t7 = /* @__PURE__ */ jsxs("div", {
-				className: "inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground",
-				children: [t5, t6]
-			});
-			$[14] = t5;
-			$[15] = t6;
-			$[16] = t7;
-		} else t7 = $[16];
-		return t7;
-	}
-	if (state.status === "error") {
-		let t1;
-		if ($[17] === Symbol.for("react.memo_cache_sentinel")) {
-			t1 = /* @__PURE__ */ jsx(VolumeX, { className: "h-4 w-4 shrink-0" });
-			$[17] = t1;
-		} else t1 = $[17];
-		let t2;
-		if ($[18] !== label) {
-			t2 = /* @__PURE__ */ jsxs("span", {
-				className: "truncate",
-				children: [label, " — unavailable"]
-			});
-			$[18] = label;
-			$[19] = t2;
-		} else t2 = $[19];
-		let t3;
-		if ($[20] !== size) {
-			t3 = size > 0 && /* @__PURE__ */ jsx("span", {
-				className: "shrink-0",
-				children: formatByteSize(size)
-			});
-			$[20] = size;
-			$[21] = t3;
-		} else t3 = $[21];
-		let t4;
-		if ($[22] !== filename || $[23] !== label || $[24] !== resolveBytes) {
-			t4 = /* @__PURE__ */ jsx(DownloadIconButton, {
-				resolveBytes,
-				filename,
-				label,
-				testid: "media-audio-download",
-				className: "ml-auto"
-			});
-			$[22] = filename;
-			$[23] = label;
-			$[24] = resolveBytes;
-			$[25] = t4;
-		} else t4 = $[25];
-		let t5;
-		if ($[26] !== t2 || $[27] !== t3 || $[28] !== t4) {
-			t5 = /* @__PURE__ */ jsxs("div", {
-				"data-testid": "media-audio-broken",
-				className: "inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground",
-				children: [
-					t1,
-					t2,
-					t3,
-					t4
-				]
-			});
-			$[26] = t2;
-			$[27] = t3;
-			$[28] = t4;
-			$[29] = t5;
-		} else t5 = $[29];
-		return t5;
-	}
-	if (state.status === "loading") {
-		let t1;
-		if ($[30] === Symbol.for("react.memo_cache_sentinel")) {
-			t1 = /* @__PURE__ */ jsx(Placeholder, {
-				testid: "media-audio-loading",
-				label: "Loading audio…",
-				icon: /* @__PURE__ */ jsx(LoaderCircle, { className: "h-4 w-4" }),
-				spin: true
-			});
-			$[30] = t1;
-		} else t1 = $[30];
-		return t1;
-	}
 	let t1;
-	if ($[31] !== label) {
-		t1 = /* @__PURE__ */ jsx("span", {
-			className: "truncate",
+	if ($[0] !== armed || $[1] !== label || $[2] !== requestResolve || $[3] !== size) {
+		t1 = armed ? /* @__PURE__ */ jsxs(Fragment$1, { children: [/* @__PURE__ */ jsx("span", {
+			className: "truncate text-foreground",
 			children: label
-		});
-		$[31] = label;
-		$[32] = t1;
-	} else t1 = $[32];
-	let t2;
-	if ($[33] !== size) {
-		t2 = size > 0 && /* @__PURE__ */ jsx("span", {
+		}), size > 0 && /* @__PURE__ */ jsx("span", {
 			className: "shrink-0",
 			children: formatByteSize(size)
+		})] }) : /* @__PURE__ */ jsxs("button", {
+			type: "button",
+			"data-testid": "media-audio-play",
+			onClick: requestResolve,
+			"aria-label": `Play ${label}`,
+			className: "inline-flex min-w-0 items-center gap-2 text-foreground hover:opacity-80",
+			children: [
+				/* @__PURE__ */ jsx(Play, { className: "h-4 w-4 shrink-0 text-muted-foreground" }),
+				/* @__PURE__ */ jsx("span", {
+					className: "truncate",
+					children: label
+				}),
+				size > 0 && /* @__PURE__ */ jsx("span", {
+					className: "shrink-0 text-muted-foreground",
+					children: formatByteSize(size)
+				})
+			]
 		});
-		$[33] = size;
-		$[34] = t2;
-	} else t2 = $[34];
-	let t3;
-	if ($[35] !== filename || $[36] !== label || $[37] !== resolveBytes) {
-		t3 = /* @__PURE__ */ jsx(DownloadIconButton, {
+		$[0] = armed;
+		$[1] = label;
+		$[2] = requestResolve;
+		$[3] = size;
+		$[4] = t1;
+	} else t1 = $[4];
+	let t2;
+	if ($[5] !== filename || $[6] !== label || $[7] !== resolveBytes) {
+		t2 = /* @__PURE__ */ jsx(DownloadIconButton, {
 			resolveBytes,
 			filename,
 			label,
 			testid: "media-audio-download",
 			className: "ml-auto"
 		});
-		$[35] = filename;
-		$[36] = label;
-		$[37] = resolveBytes;
-		$[38] = t3;
-	} else t3 = $[38];
-	let t4;
-	if ($[39] !== t1 || $[40] !== t2 || $[41] !== t3) {
-		t4 = /* @__PURE__ */ jsxs("div", {
-			className: "flex items-center gap-2 text-sm text-muted-foreground",
-			children: [
-				t1,
-				t2,
-				t3
-			]
+		$[5] = filename;
+		$[6] = label;
+		$[7] = resolveBytes;
+		$[8] = t2;
+	} else t2 = $[8];
+	let t3;
+	if ($[9] !== t1 || $[10] !== t2) {
+		t3 = /* @__PURE__ */ jsxs("div", {
+			className: "flex items-center gap-2 px-3 py-2 text-muted-foreground",
+			children: [t1, t2]
 		});
-		$[39] = t1;
-		$[40] = t2;
-		$[41] = t3;
-		$[42] = t4;
-	} else t4 = $[42];
-	let t5;
-	if ($[43] !== reportDecodeFailure || $[44] !== state.url) {
-		t5 = () => reportDecodeFailure(state.url);
-		$[43] = reportDecodeFailure;
-		$[44] = state.url;
-		$[45] = t5;
-	} else t5 = $[45];
-	let t6;
-	if ($[46] !== label || $[47] !== state.url || $[48] !== t5) {
-		t6 = /* @__PURE__ */ jsx("audio", {
+		$[9] = t1;
+		$[10] = t2;
+		$[11] = t3;
+	} else t3 = $[11];
+	let t4;
+	if ($[12] !== armed || $[13] !== label || $[14] !== reportDecodeFailure || $[15] !== state) {
+		t4 = armed && (state.status === "error" ? /* @__PURE__ */ jsxs("div", {
+			"data-testid": "media-audio-broken",
+			className: "flex items-center gap-2 border-t border-border px-3 py-2 text-muted-foreground",
+			children: [/* @__PURE__ */ jsx(VolumeX, { className: "h-4 w-4 shrink-0" }), /* @__PURE__ */ jsx("span", {
+				className: "truncate",
+				children: "Playback unavailable — the file is still downloadable above."
+			})]
+		}) : state.status === "loading" ? /* @__PURE__ */ jsxs("div", {
+			"data-testid": "media-audio-loading",
+			className: "flex items-center gap-2 border-t border-border px-3 py-2 text-muted-foreground",
+			children: [/* @__PURE__ */ jsx(LoaderCircle, { className: "h-4 w-4 shrink-0 animate-spin" }), /* @__PURE__ */ jsx("span", { children: "Loading audio…" })]
+		}) : /* @__PURE__ */ jsx("audio", {
 			controls: true,
 			autoPlay: true,
 			src: state.url,
-			onError: t5,
-			className: "w-full",
+			onError: () => reportDecodeFailure(state.url),
+			className: "w-[min(28rem,86vw)] max-w-full border-t border-border",
 			"aria-label": label
-		});
-		$[46] = label;
-		$[47] = state.url;
-		$[48] = t5;
-		$[49] = t6;
-	} else t6 = $[49];
-	let t7;
-	if ($[50] !== t4 || $[51] !== t6) {
-		t7 = /* @__PURE__ */ jsxs("div", {
+		}));
+		$[12] = armed;
+		$[13] = label;
+		$[14] = reportDecodeFailure;
+		$[15] = state;
+		$[16] = t4;
+	} else t4 = $[16];
+	let t5;
+	if ($[17] !== t3 || $[18] !== t4) {
+		t5 = /* @__PURE__ */ jsxs("div", {
 			"data-testid": "media-audio",
-			className: "flex max-w-full flex-col gap-1 rounded border border-border bg-muted/40 p-2",
-			children: [t4, t6]
+			className: "flex w-fit max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 text-sm",
+			children: [t3, t4]
 		});
-		$[50] = t4;
-		$[51] = t6;
-		$[52] = t7;
-	} else t7 = $[52];
-	return t7;
+		$[17] = t3;
+		$[18] = t4;
+		$[19] = t5;
+	} else t5 = $[19];
+	return t5;
 };
 /** Native-PDF-viewer open-params appended to the object URL to shape the initial chrome:
 *  `navpanes=0` hides the pages/bookmarks sidebar by default (the note embed wants a clean preview,
@@ -582,260 +455,143 @@ var PDF_VIEWER_HASH = "#navpanes=0";
 *  the preview while buying nothing the type-pin doesn't already give (see design §11). The download
 *  stays neutral octet-stream ({@link useMediaDownload}). */
 var PdfViewer = (t0) => {
-	const $ = c(52);
+	const $ = c(31);
 	const { state, resolveBytes, requestResolve, armed, filename, size } = t0;
 	const label = filename || "PDF attachment";
 	const [collapsed, setCollapsed] = useState(false);
+	const expanded = armed && !collapsed;
 	let t1;
-	if ($[0] !== filename || $[1] !== label || $[2] !== resolveBytes) {
-		t1 = /* @__PURE__ */ jsx(DownloadIconButton, {
-			resolveBytes,
-			filename,
-			label,
-			testid: "media-pdf-download",
-			className: "ml-auto"
-		});
-		$[0] = filename;
-		$[1] = label;
-		$[2] = resolveBytes;
-		$[3] = t1;
-	} else t1 = $[3];
-	const download = t1;
-	let t2;
-	if ($[4] !== requestResolve) {
-		t2 = () => {
-			requestResolve();
-			setCollapsed(false);
+	if ($[0] !== expanded || $[1] !== requestResolve) {
+		t1 = () => {
+			if (expanded) setCollapsed(true);
+			else {
+				requestResolve();
+				setCollapsed(false);
+			}
 		};
-		$[4] = requestResolve;
-		$[5] = t2;
-	} else t2 = $[5];
-	const t3 = `Preview ${label}`;
+		$[0] = expanded;
+		$[1] = requestResolve;
+		$[2] = t1;
+	} else t1 = $[2];
+	const onToggle = t1;
+	let t2;
+	if ($[3] === Symbol.for("react.memo_cache_sentinel")) {
+		t2 = /* @__PURE__ */ jsx(FileText, { className: "h-4 w-4 shrink-0" });
+		$[3] = t2;
+	} else t2 = $[3];
+	let t3;
+	if ($[4] !== label) {
+		t3 = /* @__PURE__ */ jsx("span", {
+			className: "truncate text-foreground",
+			children: label
+		});
+		$[4] = label;
+		$[5] = t3;
+	} else t3 = $[5];
 	let t4;
-	if ($[6] === Symbol.for("react.memo_cache_sentinel")) {
-		t4 = /* @__PURE__ */ jsx(FileText, { className: "h-4 w-4 shrink-0 text-muted-foreground" });
-		$[6] = t4;
-	} else t4 = $[6];
-	let t5;
-	if ($[7] !== label) {
-		t5 = /* @__PURE__ */ jsx("span", {
-			className: "truncate",
-			children: label
-		});
-		$[7] = label;
-		$[8] = t5;
-	} else t5 = $[8];
-	let t6;
-	if ($[9] !== size) {
-		t6 = size > 0 && /* @__PURE__ */ jsx("span", {
-			className: "shrink-0 text-muted-foreground",
-			children: formatByteSize(size)
-		});
-		$[9] = size;
-		$[10] = t6;
-	} else t6 = $[10];
-	let t7;
-	if ($[11] === Symbol.for("react.memo_cache_sentinel")) {
-		t7 = /* @__PURE__ */ jsxs("span", {
-			className: "inline-flex shrink-0 items-center gap-1 rounded bg-background px-1.5 py-0.5 text-xs text-foreground",
-			children: [/* @__PURE__ */ jsx(Eye, { className: "h-3.5 w-3.5" }), "Preview"]
-		});
-		$[11] = t7;
-	} else t7 = $[11];
-	let t8;
-	if ($[12] !== t2 || $[13] !== t3 || $[14] !== t5 || $[15] !== t6) {
-		t8 = /* @__PURE__ */ jsxs("button", {
-			type: "button",
-			"data-testid": "media-pdf-preview",
-			onClick: t2,
-			"aria-label": t3,
-			className: "inline-flex min-w-0 items-center gap-2 hover:opacity-80",
-			children: [
-				t4,
-				t5,
-				t6,
-				t7
-			]
-		});
-		$[12] = t2;
-		$[13] = t3;
-		$[14] = t5;
-		$[15] = t6;
-		$[16] = t8;
-	} else t8 = $[16];
-	let t9;
-	if ($[17] !== download || $[18] !== t8) {
-		t9 = /* @__PURE__ */ jsxs("div", {
-			className: "inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground",
-			children: [t8, download]
-		});
-		$[17] = download;
-		$[18] = t8;
-		$[19] = t9;
-	} else t9 = $[19];
-	const previewBar = t9;
-	if (!armed) return previewBar;
-	if (state.status === "error") {
-		let t10;
-		if ($[20] === Symbol.for("react.memo_cache_sentinel")) {
-			t10 = /* @__PURE__ */ jsx(FileExclamationPoint, { className: "h-4 w-4 shrink-0" });
-			$[20] = t10;
-		} else t10 = $[20];
-		let t11;
-		if ($[21] !== label) {
-			t11 = /* @__PURE__ */ jsxs("span", {
-				className: "truncate",
-				children: [label, " — unavailable"]
-			});
-			$[21] = label;
-			$[22] = t11;
-		} else t11 = $[22];
-		let t12;
-		if ($[23] !== size) {
-			t12 = size > 0 && /* @__PURE__ */ jsx("span", {
-				className: "shrink-0",
-				children: formatByteSize(size)
-			});
-			$[23] = size;
-			$[24] = t12;
-		} else t12 = $[24];
-		let t13;
-		if ($[25] !== download || $[26] !== t11 || $[27] !== t12) {
-			t13 = /* @__PURE__ */ jsxs("div", {
-				"data-testid": "media-pdf-broken",
-				className: "inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground",
-				children: [
-					t10,
-					t11,
-					t12,
-					download
-				]
-			});
-			$[25] = download;
-			$[26] = t11;
-			$[27] = t12;
-			$[28] = t13;
-		} else t13 = $[28];
-		return t13;
-	}
-	if (state.status === "loading") {
-		let t10;
-		if ($[29] === Symbol.for("react.memo_cache_sentinel")) {
-			t10 = /* @__PURE__ */ jsx(Placeholder, {
-				testid: "media-pdf-loading",
-				label: "Loading PDF…",
-				icon: /* @__PURE__ */ jsx(LoaderCircle, { className: "h-4 w-4" }),
-				spin: true
-			});
-			$[29] = t10;
-		} else t10 = $[29];
-		return t10;
-	}
-	if (collapsed) return previewBar;
-	let t10;
-	if ($[30] === Symbol.for("react.memo_cache_sentinel")) {
-		t10 = /* @__PURE__ */ jsx(FileText, { className: "h-4 w-4 shrink-0" });
-		$[30] = t10;
-	} else t10 = $[30];
-	let t11;
-	if ($[31] !== label) {
-		t11 = /* @__PURE__ */ jsx("span", {
-			className: "truncate",
-			children: label
-		});
-		$[31] = label;
-		$[32] = t11;
-	} else t11 = $[32];
-	let t12;
-	if ($[33] !== size) {
-		t12 = size > 0 && /* @__PURE__ */ jsx("span", {
+	if ($[6] !== size) {
+		t4 = size > 0 && /* @__PURE__ */ jsx("span", {
 			className: "shrink-0",
 			children: formatByteSize(size)
 		});
-		$[33] = size;
-		$[34] = t12;
-	} else t12 = $[34];
-	let t13;
-	if ($[35] === Symbol.for("react.memo_cache_sentinel")) {
-		t13 = () => setCollapsed(true);
-		$[35] = t13;
-	} else t13 = $[35];
-	let t14;
-	if ($[36] === Symbol.for("react.memo_cache_sentinel")) {
-		t14 = /* @__PURE__ */ jsx("button", {
+		$[6] = size;
+		$[7] = t4;
+	} else t4 = $[7];
+	const t5 = expanded ? "media-pdf-collapse" : "media-pdf-preview";
+	const t6 = expanded ? `Collapse ${label} preview` : `Preview ${label}`;
+	let t7;
+	if ($[8] !== expanded) {
+		t7 = expanded ? /* @__PURE__ */ jsx(ChevronUp, { className: "h-4 w-4" }) : /* @__PURE__ */ jsxs(Fragment$1, { children: [/* @__PURE__ */ jsx(Eye, { className: "h-3.5 w-3.5" }), "Preview"] });
+		$[8] = expanded;
+		$[9] = t7;
+	} else t7 = $[9];
+	let t8;
+	if ($[10] !== onToggle || $[11] !== t5 || $[12] !== t6 || $[13] !== t7) {
+		t8 = /* @__PURE__ */ jsx("button", {
 			type: "button",
-			"data-testid": "media-pdf-collapse",
-			onClick: t13,
-			"aria-label": "Collapse preview",
-			className: "ml-auto shrink-0 rounded p-1 hover:bg-muted",
-			children: /* @__PURE__ */ jsx(ChevronUp, { className: "h-4 w-4" })
+			"data-testid": t5,
+			onClick: onToggle,
+			"aria-label": t6,
+			className: "ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-xs text-foreground hover:bg-muted",
+			children: t7
 		});
-		$[36] = t14;
-	} else t14 = $[36];
-	let t15;
-	if ($[37] !== filename || $[38] !== label || $[39] !== resolveBytes) {
-		t15 = /* @__PURE__ */ jsx(DownloadIconButton, {
+		$[10] = onToggle;
+		$[11] = t5;
+		$[12] = t6;
+		$[13] = t7;
+		$[14] = t8;
+	} else t8 = $[14];
+	let t9;
+	if ($[15] !== filename || $[16] !== label || $[17] !== resolveBytes) {
+		t9 = /* @__PURE__ */ jsx(DownloadIconButton, {
 			resolveBytes,
 			filename,
 			label,
 			testid: "media-pdf-download"
 		});
-		$[37] = filename;
-		$[38] = label;
-		$[39] = resolveBytes;
-		$[40] = t15;
-	} else t15 = $[40];
-	let t16;
-	if ($[41] !== t11 || $[42] !== t12 || $[43] !== t15) {
-		t16 = /* @__PURE__ */ jsxs("div", {
-			className: "flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground",
+		$[15] = filename;
+		$[16] = label;
+		$[17] = resolveBytes;
+		$[18] = t9;
+	} else t9 = $[18];
+	let t10;
+	if ($[19] !== t3 || $[20] !== t4 || $[21] !== t8 || $[22] !== t9) {
+		t10 = /* @__PURE__ */ jsxs("div", {
+			className: "flex items-center gap-2 px-3 py-2 text-muted-foreground",
 			children: [
-				t10,
-				t11,
-				t12,
-				t14,
-				t15
+				t2,
+				t3,
+				t4,
+				t8,
+				t9
 			]
 		});
-		$[41] = t11;
-		$[42] = t12;
-		$[43] = t15;
-		$[44] = t16;
-	} else t16 = $[44];
-	const t17 = `${state.url}${PDF_VIEWER_HASH}`;
-	let t18;
-	if ($[45] === Symbol.for("react.memo_cache_sentinel")) {
-		t18 = /* @__PURE__ */ jsx("div", {
-			className: "px-3 py-8 text-center text-sm text-muted-foreground",
-			children: "This browser can’t preview PDFs inline — use the download button above."
-		});
-		$[45] = t18;
-	} else t18 = $[45];
-	let t19;
-	if ($[46] !== label || $[47] !== t17) {
-		t19 = /* @__PURE__ */ jsx("object", {
-			data: t17,
-			type: PDF_MIME,
+		$[19] = t3;
+		$[20] = t4;
+		$[21] = t8;
+		$[22] = t9;
+		$[23] = t10;
+	} else t10 = $[23];
+	let t11;
+	if ($[24] !== expanded || $[25] !== label || $[26] !== state) {
+		t11 = expanded && (state.status === "error" ? /* @__PURE__ */ jsxs("div", {
+			"data-testid": "media-pdf-broken",
+			className: "flex items-center gap-2 border-t border-border px-3 py-2 text-muted-foreground",
+			children: [/* @__PURE__ */ jsx(FileExclamationPoint, { className: "h-4 w-4 shrink-0" }), /* @__PURE__ */ jsx("span", {
+				className: "truncate",
+				children: "Preview unavailable — the file is still downloadable above."
+			})]
+		}) : state.status === "loading" ? /* @__PURE__ */ jsxs("div", {
+			"data-testid": "media-pdf-loading",
+			className: "flex items-center gap-2 border-t border-border px-3 py-2 text-muted-foreground",
+			children: [/* @__PURE__ */ jsx(LoaderCircle, { className: "h-4 w-4 shrink-0 animate-spin" }), /* @__PURE__ */ jsx("span", { children: "Loading PDF…" })]
+		}) : /* @__PURE__ */ jsx("object", {
+			data: `${state.url}${PDF_VIEWER_HASH}`,
+			type: "application/pdf",
 			"aria-label": label,
-			className: "block h-[60vh] max-h-[800px] w-full bg-background",
-			children: t18
-		});
-		$[46] = label;
-		$[47] = t17;
-		$[48] = t19;
-	} else t19 = $[48];
-	let t20;
-	if ($[49] !== t16 || $[50] !== t19) {
-		t20 = /* @__PURE__ */ jsxs("div", {
+			className: "block h-[60vh] max-h-[800px] w-[min(44rem,86vw)] max-w-full border-t border-border bg-background",
+			children: /* @__PURE__ */ jsx("div", {
+				className: "px-3 py-8 text-center text-muted-foreground",
+				children: "This browser can’t preview PDFs inline — use the download button above."
+			})
+		}));
+		$[24] = expanded;
+		$[25] = label;
+		$[26] = state;
+		$[27] = t11;
+	} else t11 = $[27];
+	let t12;
+	if ($[28] !== t10 || $[29] !== t11) {
+		t12 = /* @__PURE__ */ jsxs("div", {
 			"data-testid": "media-pdf",
-			className: "flex max-w-full flex-col gap-1 overflow-hidden rounded border border-border bg-muted/40",
-			children: [t16, t19]
+			className: "flex w-fit max-w-full flex-col overflow-hidden rounded border border-border bg-muted/40 text-sm",
+			children: [t10, t11]
 		});
-		$[49] = t16;
-		$[50] = t19;
-		$[51] = t20;
-	} else t20 = $[51];
-	return t20;
+		$[28] = t10;
+		$[29] = t11;
+		$[30] = t12;
+	} else t12 = $[30];
+	return t12;
 };
 /** The image mime-family viewer — the attachments plugin's contribution to
 *  {@link mediaViewersFacet}. */
