@@ -3,6 +3,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.js'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.js'
 import { appUpdatePromptExtension } from '@/extensions/appUpdateMount.js'
+import { extensionPromptsExtension } from '@/extensions/extensionPromptMount.js'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions.js'
 import {
   defaultActionContextsExtension,
@@ -74,6 +75,10 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   defaultRenderersExtension,
   toastAppMountExtension,
   appUpdatePromptExtension,
+  // Surfaces extension trust prompts (needs-approval / update-available)
+  // globally — a per-extension toast + a status-chip indicator — instead of
+  // only inside the Extensions settings page.
+  extensionPromptsExtension,
   // The dialog mount (DialogHost reading the openDialog queue) is no
   // longer a top-level toggle — it's pulled in by every dialog-using
   // plugin (block-tagging, daily-notes) inside its own AppExtension

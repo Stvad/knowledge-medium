@@ -32,6 +32,10 @@ export interface ToastOptions {
    *  button inside the toast — used for "Open conflicting block",
    *  "Retry", etc. */
   action?: ToastAction
+  /** Optional secondary button, rendered alongside `action` (sonner's
+   *  `cancel` slot). Use for a "Dismiss"/"Not now" affordance next to a
+   *  primary action — e.g. the extension prompt's Enable + Dismiss pair. */
+  cancel?: ToastAction
   /** Stable id — passing the same id reuses the same toast slot
    *  (replaces existing content with the new message). Used by
    *  `showProgress` for in-place updates. */
@@ -45,6 +49,7 @@ export const showError = (message: string, opts: ToastOptions = {}): string | nu
   sonnerToast.error(message, {
     duration: opts.duration ?? 6000,
     action: buildAction(opts.action),
+    cancel: buildAction(opts.cancel),
     id: opts.id,
   })
 
@@ -52,6 +57,7 @@ export const showInfo = (message: string, opts: ToastOptions = {}): string | num
   sonnerToast(message, {
     duration: opts.duration ?? 4000,
     action: buildAction(opts.action),
+    cancel: buildAction(opts.cancel),
     id: opts.id,
   })
 
@@ -59,6 +65,7 @@ export const showSuccess = (message: string, opts: ToastOptions = {}): string | 
   sonnerToast.success(message, {
     duration: opts.duration ?? 4000,
     action: buildAction(opts.action),
+    cancel: buildAction(opts.cancel),
     id: opts.id,
   })
 

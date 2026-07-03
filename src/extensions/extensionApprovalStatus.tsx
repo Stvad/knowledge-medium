@@ -100,3 +100,12 @@ export const useExtensionApprovalStatus = (
     () => store.getSnapshot().get(blockId),
   )
 }
+
+/** Subscribe to the whole trust-status map (blockId → status). Used by the
+ *  global prompt surface, which needs every pending extension at once rather
+ *  than a single row. The store returns a referentially-stable Map between
+ *  changes, so this is safe to drive a `useMemo`/`useSyncExternalStore`. */
+export const useExtensionApprovalStatuses = (): ExtensionApprovalStatusMap => {
+  const store = useStore()
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
+}
