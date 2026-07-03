@@ -27,6 +27,10 @@ var messageChainOf = (error, depth = 5) => {
 		const cause = error.cause;
 		return cause === void 0 ? error.message : `${error.message}\n${messageChainOf(cause, depth - 1)}`;
 	}
+	if (typeof error === "object") {
+		const obj = error;
+		if (typeof obj.message === "string") return obj.cause === void 0 ? obj.message : `${obj.message}\n${messageChainOf(obj.cause, depth - 1)}`;
+	}
 	return String(error);
 };
 /** True when `error` reads like an unrecoverable SQLite-corruption open failure. */

@@ -151,7 +151,7 @@ var getSyncIndicatorView = (input) => {
 		...view,
 		tone: "error",
 		icon: "alert",
-		label: "Integrity issue",
+		label: alert.label,
 		title: `${alert.label}: ${alert.summary} — see details. ${view.title}`
 	};
 	return view;

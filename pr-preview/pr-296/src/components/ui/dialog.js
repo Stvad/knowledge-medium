@@ -56,56 +56,68 @@ var DialogOverlay = (t0) => {
 };
 DialogOverlay.displayName = Overlay.displayName;
 var DialogContent = (t0) => {
-	const $ = c(12);
+	const $ = c(17);
 	let children;
 	let className;
 	let props;
+	let t1;
 	if ($[0] !== t0) {
-		({className, children, ...props} = t0);
+		({className, children, hideOverlay: t1, ...props} = t0);
 		$[0] = t0;
 		$[1] = children;
 		$[2] = className;
 		$[3] = props;
+		$[4] = t1;
 	} else {
 		children = $[1];
 		className = $[2];
 		props = $[3];
+		t1 = $[4];
 	}
-	let t1;
-	if ($[4] === Symbol.for("react.memo_cache_sentinel")) {
-		t1 = /* @__PURE__ */ jsx(DialogOverlay, {});
-		$[4] = t1;
-	} else t1 = $[4];
+	const hideOverlay = t1 === void 0 ? false : t1;
 	let t2;
-	if ($[5] !== className) {
-		t2 = cn("fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg sm:rounded-lg", className);
-		$[5] = className;
+	if ($[5] !== hideOverlay) {
+		t2 = !hideOverlay && /* @__PURE__ */ jsx(DialogOverlay, {});
+		$[5] = hideOverlay;
 		$[6] = t2;
 	} else t2 = $[6];
 	let t3;
-	if ($[7] === Symbol.for("react.memo_cache_sentinel")) {
-		t3 = /* @__PURE__ */ jsxs(Close, {
+	if ($[7] !== className) {
+		t3 = cn("fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg sm:rounded-lg", className);
+		$[7] = className;
+		$[8] = t3;
+	} else t3 = $[8];
+	let t4;
+	if ($[9] === Symbol.for("react.memo_cache_sentinel")) {
+		t4 = /* @__PURE__ */ jsxs(Close, {
 			className: "absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground",
 			children: [/* @__PURE__ */ jsx(X, { className: "h-4 w-4" }), /* @__PURE__ */ jsx("span", {
 				className: "sr-only",
 				children: "Close"
 			})]
 		});
-		$[7] = t3;
-	} else t3 = $[7];
-	let t4;
-	if ($[8] !== children || $[9] !== props || $[10] !== t2) {
-		t4 = /* @__PURE__ */ jsxs(DialogPortal, { children: [t1, /* @__PURE__ */ jsxs(Content, {
-			className: t2,
+		$[9] = t4;
+	} else t4 = $[9];
+	let t5;
+	if ($[10] !== children || $[11] !== props || $[12] !== t3) {
+		t5 = /* @__PURE__ */ jsxs(Content, {
+			className: t3,
 			...props,
-			children: [children, t3]
-		})] });
-		$[8] = children;
-		$[9] = props;
-		$[10] = t2;
-		$[11] = t4;
-	} else t4 = $[11];
-	return t4;
+			children: [children, t4]
+		});
+		$[10] = children;
+		$[11] = props;
+		$[12] = t3;
+		$[13] = t5;
+	} else t5 = $[13];
+	let t6;
+	if ($[14] !== t2 || $[15] !== t5) {
+		t6 = /* @__PURE__ */ jsxs(DialogPortal, { children: [t2, t5] });
+		$[14] = t2;
+		$[15] = t5;
+		$[16] = t6;
+	} else t6 = $[16];
+	return t6;
 };
 DialogContent.displayName = Content.displayName;
 var DialogHeader = (t0) => {

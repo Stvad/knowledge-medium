@@ -1,4 +1,6 @@
+import { ChevronUp } from "../../../node_modules/lucide-react/dist/esm/icons/chevron-up.js";
 import { Download } from "../../../node_modules/lucide-react/dist/esm/icons/download.js";
+import { Eye } from "../../../node_modules/lucide-react/dist/esm/icons/eye.js";
 import { FileExclamationPoint } from "../../../node_modules/lucide-react/dist/esm/icons/file-exclamation-point.js";
 import { FileText } from "../../../node_modules/lucide-react/dist/esm/icons/file-text.js";
 import { ImageOff } from "../../../node_modules/lucide-react/dist/esm/icons/image-off.js";
@@ -543,6 +545,11 @@ var AudioViewer = (t0) => {
 	} else t7 = $[52];
 	return t7;
 };
+/** Native-PDF-viewer open-params appended to the object URL to shape the initial chrome:
+*  `navpanes=0` hides the pages/bookmarks sidebar by default (the note embed wants a clean preview,
+*  not the full reader). These are Chrome PDFium's documented parameters — best-effort: Chromium's
+*  viewer honors them, other browsers (and the non-inline-render path) ignore them harmlessly. */
+var PDF_VIEWER_HASH = "#navpanes=0";
 /** LAZY-INLINE PDF viewer for `application/pdf` (§11). Like {@link AudioViewer} it renders
 *  from METADATA as a poster and resolves NOTHING on mount. The down-lane already replicates
 *  every media block to the local plaintext byte store (§8), so an eager resolve is usually a
@@ -567,15 +574,18 @@ var AudioViewer = (t0) => {
 *  matches `application/pdf` ({@link isPdfMime}), so the Blob's type is ALWAYS `application/pdf`
 *  — never attacker-arbitrary. A `blob:` typed `application/pdf` is handed to the browser's PDF
 *  viewer (a known non-`text/*` type isn't HTML-sniffed), so even hash-verified-but-non-PDF bytes
-*  render as a broken PDF, never executable same-origin HTML; the native viewer sandboxes any
-*  PDF-level JS itself. A `sandbox`ed iframe (no allow-same-origin) is deliberately NOT used: an
-*  opaque-origin frame CAN'T load a parent-origin `blob:` URL (the preview would just fail), and
-*  the type-pin already closes the vector — see design §11. The download stays neutral
-*  octet-stream ({@link useMediaDownload}). */
+*  render as a broken PDF, never executable same-origin HTML; the native viewer runs out-of-process
+*  and sandboxes any PDF-level JS itself. A `sandbox`ed iframe is deliberately NOT used and is not an
+*  option here: Chromium BLOCKS a sandboxed frame from loading a parent-origin `blob:` URL — verified
+*  empirically, and NOT a flag-tuning fix (even WITH `allow-same-origin`, which is honored for an http
+*  document, a separate blob-navigation block still fires: `ERR_BLOCKED_BY_CLIENT`), so it would break
+*  the preview while buying nothing the type-pin doesn't already give (see design §11). The download
+*  stays neutral octet-stream ({@link useMediaDownload}). */
 var PdfViewer = (t0) => {
-	const $ = c(43);
+	const $ = c(52);
 	const { state, resolveBytes, requestResolve, armed, filename, size } = t0;
 	const label = filename || "PDF attachment";
+	const [collapsed, setCollapsed] = useState(false);
 	let t1;
 	if ($[0] !== filename || $[1] !== label || $[2] !== resolveBytes) {
 		t1 = /* @__PURE__ */ jsx(DownloadIconButton, {
@@ -591,191 +601,241 @@ var PdfViewer = (t0) => {
 		$[3] = t1;
 	} else t1 = $[3];
 	const download = t1;
-	if (!armed) {
-		const t2 = `Preview ${label}`;
-		let t3;
-		if ($[4] === Symbol.for("react.memo_cache_sentinel")) {
-			t3 = /* @__PURE__ */ jsx(FileText, { className: "h-4 w-4 shrink-0 text-muted-foreground" });
-			$[4] = t3;
-		} else t3 = $[4];
-		let t4;
-		if ($[5] !== label) {
-			t4 = /* @__PURE__ */ jsx("span", {
-				className: "truncate",
-				children: label
-			});
-			$[5] = label;
-			$[6] = t4;
-		} else t4 = $[6];
-		let t5;
-		if ($[7] !== size) {
-			t5 = size > 0 && /* @__PURE__ */ jsx("span", {
-				className: "shrink-0 text-muted-foreground",
-				children: formatByteSize(size)
-			});
-			$[7] = size;
-			$[8] = t5;
-		} else t5 = $[8];
-		let t6;
-		if ($[9] !== requestResolve || $[10] !== t2 || $[11] !== t4 || $[12] !== t5) {
-			t6 = /* @__PURE__ */ jsxs("button", {
-				type: "button",
-				"data-testid": "media-pdf-preview",
-				onClick: requestResolve,
-				"aria-label": t2,
-				className: "inline-flex min-w-0 items-center gap-2 hover:opacity-80",
-				children: [
-					t3,
-					t4,
-					t5
-				]
-			});
-			$[9] = requestResolve;
-			$[10] = t2;
-			$[11] = t4;
-			$[12] = t5;
-			$[13] = t6;
-		} else t6 = $[13];
-		let t7;
-		if ($[14] !== download || $[15] !== t6) {
-			t7 = /* @__PURE__ */ jsxs("div", {
-				className: "inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground",
-				children: [t6, download]
-			});
-			$[14] = download;
-			$[15] = t6;
-			$[16] = t7;
-		} else t7 = $[16];
-		return t7;
-	}
+	let t2;
+	if ($[4] !== requestResolve) {
+		t2 = () => {
+			requestResolve();
+			setCollapsed(false);
+		};
+		$[4] = requestResolve;
+		$[5] = t2;
+	} else t2 = $[5];
+	const t3 = `Preview ${label}`;
+	let t4;
+	if ($[6] === Symbol.for("react.memo_cache_sentinel")) {
+		t4 = /* @__PURE__ */ jsx(FileText, { className: "h-4 w-4 shrink-0 text-muted-foreground" });
+		$[6] = t4;
+	} else t4 = $[6];
+	let t5;
+	if ($[7] !== label) {
+		t5 = /* @__PURE__ */ jsx("span", {
+			className: "truncate",
+			children: label
+		});
+		$[7] = label;
+		$[8] = t5;
+	} else t5 = $[8];
+	let t6;
+	if ($[9] !== size) {
+		t6 = size > 0 && /* @__PURE__ */ jsx("span", {
+			className: "shrink-0 text-muted-foreground",
+			children: formatByteSize(size)
+		});
+		$[9] = size;
+		$[10] = t6;
+	} else t6 = $[10];
+	let t7;
+	if ($[11] === Symbol.for("react.memo_cache_sentinel")) {
+		t7 = /* @__PURE__ */ jsxs("span", {
+			className: "inline-flex shrink-0 items-center gap-1 rounded bg-background px-1.5 py-0.5 text-xs text-foreground",
+			children: [/* @__PURE__ */ jsx(Eye, { className: "h-3.5 w-3.5" }), "Preview"]
+		});
+		$[11] = t7;
+	} else t7 = $[11];
+	let t8;
+	if ($[12] !== t2 || $[13] !== t3 || $[14] !== t5 || $[15] !== t6) {
+		t8 = /* @__PURE__ */ jsxs("button", {
+			type: "button",
+			"data-testid": "media-pdf-preview",
+			onClick: t2,
+			"aria-label": t3,
+			className: "inline-flex min-w-0 items-center gap-2 hover:opacity-80",
+			children: [
+				t4,
+				t5,
+				t6,
+				t7
+			]
+		});
+		$[12] = t2;
+		$[13] = t3;
+		$[14] = t5;
+		$[15] = t6;
+		$[16] = t8;
+	} else t8 = $[16];
+	let t9;
+	if ($[17] !== download || $[18] !== t8) {
+		t9 = /* @__PURE__ */ jsxs("div", {
+			className: "inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-foreground",
+			children: [t8, download]
+		});
+		$[17] = download;
+		$[18] = t8;
+		$[19] = t9;
+	} else t9 = $[19];
+	const previewBar = t9;
+	if (!armed) return previewBar;
 	if (state.status === "error") {
-		let t2;
-		if ($[17] === Symbol.for("react.memo_cache_sentinel")) {
-			t2 = /* @__PURE__ */ jsx(FileExclamationPoint, { className: "h-4 w-4 shrink-0" });
-			$[17] = t2;
-		} else t2 = $[17];
-		let t3;
-		if ($[18] !== label) {
-			t3 = /* @__PURE__ */ jsxs("span", {
+		let t10;
+		if ($[20] === Symbol.for("react.memo_cache_sentinel")) {
+			t10 = /* @__PURE__ */ jsx(FileExclamationPoint, { className: "h-4 w-4 shrink-0" });
+			$[20] = t10;
+		} else t10 = $[20];
+		let t11;
+		if ($[21] !== label) {
+			t11 = /* @__PURE__ */ jsxs("span", {
 				className: "truncate",
 				children: [label, " — unavailable"]
 			});
-			$[18] = label;
-			$[19] = t3;
-		} else t3 = $[19];
-		let t4;
-		if ($[20] !== size) {
-			t4 = size > 0 && /* @__PURE__ */ jsx("span", {
+			$[21] = label;
+			$[22] = t11;
+		} else t11 = $[22];
+		let t12;
+		if ($[23] !== size) {
+			t12 = size > 0 && /* @__PURE__ */ jsx("span", {
 				className: "shrink-0",
 				children: formatByteSize(size)
 			});
-			$[20] = size;
-			$[21] = t4;
-		} else t4 = $[21];
-		let t5;
-		if ($[22] !== download || $[23] !== t3 || $[24] !== t4) {
-			t5 = /* @__PURE__ */ jsxs("div", {
+			$[23] = size;
+			$[24] = t12;
+		} else t12 = $[24];
+		let t13;
+		if ($[25] !== download || $[26] !== t11 || $[27] !== t12) {
+			t13 = /* @__PURE__ */ jsxs("div", {
 				"data-testid": "media-pdf-broken",
 				className: "inline-flex max-w-full items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground",
 				children: [
-					t2,
-					t3,
-					t4,
+					t10,
+					t11,
+					t12,
 					download
 				]
 			});
-			$[22] = download;
-			$[23] = t3;
-			$[24] = t4;
-			$[25] = t5;
-		} else t5 = $[25];
-		return t5;
+			$[25] = download;
+			$[26] = t11;
+			$[27] = t12;
+			$[28] = t13;
+		} else t13 = $[28];
+		return t13;
 	}
 	if (state.status === "loading") {
-		let t2;
-		if ($[26] === Symbol.for("react.memo_cache_sentinel")) {
-			t2 = /* @__PURE__ */ jsx(Placeholder, {
+		let t10;
+		if ($[29] === Symbol.for("react.memo_cache_sentinel")) {
+			t10 = /* @__PURE__ */ jsx(Placeholder, {
 				testid: "media-pdf-loading",
 				label: "Loading PDF…",
 				icon: /* @__PURE__ */ jsx(LoaderCircle, { className: "h-4 w-4" }),
 				spin: true
 			});
-			$[26] = t2;
-		} else t2 = $[26];
-		return t2;
+			$[29] = t10;
+		} else t10 = $[29];
+		return t10;
 	}
-	let t2;
-	if ($[27] === Symbol.for("react.memo_cache_sentinel")) {
-		t2 = /* @__PURE__ */ jsx(FileText, { className: "h-4 w-4 shrink-0" });
-		$[27] = t2;
-	} else t2 = $[27];
-	let t3;
-	if ($[28] !== label) {
-		t3 = /* @__PURE__ */ jsx("span", {
+	if (collapsed) return previewBar;
+	let t10;
+	if ($[30] === Symbol.for("react.memo_cache_sentinel")) {
+		t10 = /* @__PURE__ */ jsx(FileText, { className: "h-4 w-4 shrink-0" });
+		$[30] = t10;
+	} else t10 = $[30];
+	let t11;
+	if ($[31] !== label) {
+		t11 = /* @__PURE__ */ jsx("span", {
 			className: "truncate",
 			children: label
 		});
-		$[28] = label;
-		$[29] = t3;
-	} else t3 = $[29];
-	let t4;
-	if ($[30] !== size) {
-		t4 = size > 0 && /* @__PURE__ */ jsx("span", {
+		$[31] = label;
+		$[32] = t11;
+	} else t11 = $[32];
+	let t12;
+	if ($[33] !== size) {
+		t12 = size > 0 && /* @__PURE__ */ jsx("span", {
 			className: "shrink-0",
 			children: formatByteSize(size)
 		});
-		$[30] = size;
-		$[31] = t4;
-	} else t4 = $[31];
-	let t5;
-	if ($[32] !== download || $[33] !== t3 || $[34] !== t4) {
-		t5 = /* @__PURE__ */ jsxs("div", {
+		$[33] = size;
+		$[34] = t12;
+	} else t12 = $[34];
+	let t13;
+	if ($[35] === Symbol.for("react.memo_cache_sentinel")) {
+		t13 = () => setCollapsed(true);
+		$[35] = t13;
+	} else t13 = $[35];
+	let t14;
+	if ($[36] === Symbol.for("react.memo_cache_sentinel")) {
+		t14 = /* @__PURE__ */ jsx("button", {
+			type: "button",
+			"data-testid": "media-pdf-collapse",
+			onClick: t13,
+			"aria-label": "Collapse preview",
+			className: "ml-auto shrink-0 rounded p-1 hover:bg-muted",
+			children: /* @__PURE__ */ jsx(ChevronUp, { className: "h-4 w-4" })
+		});
+		$[36] = t14;
+	} else t14 = $[36];
+	let t15;
+	if ($[37] !== filename || $[38] !== label || $[39] !== resolveBytes) {
+		t15 = /* @__PURE__ */ jsx(DownloadIconButton, {
+			resolveBytes,
+			filename,
+			label,
+			testid: "media-pdf-download"
+		});
+		$[37] = filename;
+		$[38] = label;
+		$[39] = resolveBytes;
+		$[40] = t15;
+	} else t15 = $[40];
+	let t16;
+	if ($[41] !== t11 || $[42] !== t12 || $[43] !== t15) {
+		t16 = /* @__PURE__ */ jsxs("div", {
 			className: "flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground",
 			children: [
-				t2,
-				t3,
-				t4,
-				download
+				t10,
+				t11,
+				t12,
+				t14,
+				t15
 			]
 		});
-		$[32] = download;
-		$[33] = t3;
-		$[34] = t4;
-		$[35] = t5;
-	} else t5 = $[35];
-	let t6;
-	if ($[36] === Symbol.for("react.memo_cache_sentinel")) {
-		t6 = /* @__PURE__ */ jsx("div", {
+		$[41] = t11;
+		$[42] = t12;
+		$[43] = t15;
+		$[44] = t16;
+	} else t16 = $[44];
+	const t17 = `${state.url}${PDF_VIEWER_HASH}`;
+	let t18;
+	if ($[45] === Symbol.for("react.memo_cache_sentinel")) {
+		t18 = /* @__PURE__ */ jsx("div", {
 			className: "px-3 py-8 text-center text-sm text-muted-foreground",
 			children: "This browser can’t preview PDFs inline — use the download button above."
 		});
-		$[36] = t6;
-	} else t6 = $[36];
-	let t7;
-	if ($[37] !== label || $[38] !== state.url) {
-		t7 = /* @__PURE__ */ jsx("object", {
-			data: state.url,
+		$[45] = t18;
+	} else t18 = $[45];
+	let t19;
+	if ($[46] !== label || $[47] !== t17) {
+		t19 = /* @__PURE__ */ jsx("object", {
+			data: t17,
 			type: PDF_MIME,
 			"aria-label": label,
 			className: "block h-[60vh] max-h-[800px] w-full bg-background",
-			children: t6
+			children: t18
 		});
-		$[37] = label;
-		$[38] = state.url;
-		$[39] = t7;
-	} else t7 = $[39];
-	let t8;
-	if ($[40] !== t5 || $[41] !== t7) {
-		t8 = /* @__PURE__ */ jsxs("div", {
+		$[46] = label;
+		$[47] = t17;
+		$[48] = t19;
+	} else t19 = $[48];
+	let t20;
+	if ($[49] !== t16 || $[50] !== t19) {
+		t20 = /* @__PURE__ */ jsxs("div", {
 			"data-testid": "media-pdf",
 			className: "flex max-w-full flex-col gap-1 overflow-hidden rounded border border-border bg-muted/40",
-			children: [t5, t7]
+			children: [t16, t19]
 		});
-		$[40] = t5;
-		$[41] = t7;
-		$[42] = t8;
-	} else t8 = $[42];
-	return t8;
+		$[49] = t16;
+		$[50] = t19;
+		$[51] = t20;
+	} else t20 = $[51];
+	return t20;
 };
 /** The image mime-family viewer — the attachments plugin's contribution to
 *  {@link mediaViewersFacet}. */
