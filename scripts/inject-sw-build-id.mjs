@@ -8,8 +8,7 @@
  *   2. The first-paint asset list (`__PRECACHE_ASSETS__` placeholder) — the
  *      HTML graph the browser dispatches before our SW activates — so the
  *      install handler can fetch them up front; without it a first-time
- *      offline reload would fail to boot. Installed `{ cache: 'default' }`
- *      (the page just fetched these exact URLs).
+ *      offline reload would fail to boot.
  *   3. The REST asset list (`__PRECACHE_REST_ASSETS__` placeholder) — every
  *      OTHER same-origin runtime asset the SW serves cache-first (the full
  *      emitted module graph minus first-paint: lazy chunks, `@babel/standalone`,
@@ -18,10 +17,12 @@
  *      never has to fall through to the network (which would serve the newest,
  *      possibly-different generation and graft mismatched module bytes onto an
  *      old page — the `does not provide an export named …` skew). It also makes
- *      the app fully offline. Kept SEPARATE from first-paint because the SW
- *      installs it `{ cache: 'reload' }`: these unhashed URLs carry
- *      per-deploy-varying bytes, so a `default` fetch could copy a stale
- *      prior-deploy entry into this generation.
+ *      the app fully offline.
+ *
+ *   The two lists are separate for install ORDERING, not cache mode — the SW
+ *   fetches BOTH with `{ cache: 'no-cache' }` (a conditional revalidate that
+ *   can't copy a stale prior-deploy entry), first-paint first because it's the
+ *   offline-boot-critical set.
  *
  * Fails the build if any placeholder is missing — all are required for the
  * SW to behave correctly.
@@ -114,17 +115,12 @@ const walkDistFiles = () => {
 
 const buildId = resolveBuildId()
 
-// Two lists, fetched with DIFFERENT cache modes at install (see sw.js):
-//   - first-paint assets → { cache: 'default' }: the page just fetched these
-//     exact (unhashed) URLs, so the browser HTTP cache holds THIS generation's
-//     bytes — copying them into Cache Storage is near-free and correct.
-//   - rest assets (the full emitted graph minus first-paint) → { cache: 'reload' }:
-//     unhashed URLs whose bytes vary per deploy, so a { cache: 'default' } fetch
-//     could copy a STALE prior-deploy entry out of the HTTP cache into this
-//     generation — reintroducing the cross-generation skew this precache exists
-//     to prevent. 'reload' forces the network so the generation gets its own
-//     bytes. `collectRestAssets` drops any URL already in first-paint (no double
-//     fetch) and everything the SW wouldn't serve cache-first (maps, sw.js, …).
+// Two lists (see sw.js). first-paint is the HTML-derived offline-boot set; rest
+// is the full emitted graph minus first-paint (the SW installs it second so the
+// boot-critical set lands first). The SW fetches BOTH with { cache: 'no-cache' }
+// — a conditional revalidate that can't copy a stale prior-deploy entry into
+// this generation. `collectRestAssets` drops any URL already in first-paint (no
+// double fetch) and everything the SW wouldn't serve cache-first (maps, sw.js, …).
 const firstPaintAssets = collectPrecacheAssets()
 const restAssets = collectRestAssets({
   allFiles: walkDistFiles(),

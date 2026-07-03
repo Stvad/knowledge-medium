@@ -51,17 +51,15 @@ export const isPrecacheableAsset = (relPath) =>
 
 /**
  * Partition the emitted graph into the "rest" precache list — every
- * precacheable asset that is NOT already in the first-paint set. The SW
- * installs the two lists with different cache modes (see `public/sw.js`):
- * first-paint with `{cache:'default'}` (the page just fetched those exact
- * URLs, so the HTTP cache holds this generation's bytes), and `rest` with
- * `{cache:'reload'}` (these unhashed URLs can hold a PRIOR deploy's bytes in
- * the HTTP cache, so a `default` fetch could copy stale cross-generation bytes
- * into this generation and reintroduce the very skew we're closing).
+ * precacheable asset that is NOT already in the first-paint set. The SW installs
+ * first-paint and rest as two separate passes (first-paint first, since it's the
+ * offline-boot-critical set), BOTH with `{cache:'no-cache'}` — a conditional
+ * revalidate that fetches this generation's bytes without copying a stale
+ * prior-deploy HTTP-cache entry.
  *
- * Excluding first-paint keeps the SW from re-fetching (with `reload`) the URLs
- * `default` already covered for free. Output is base-prefixed to match the
- * first-paint URLs and how the SW resolves entries against its scope.
+ * Excluding first-paint keeps the SW from fetching those URLs twice. Output is
+ * base-prefixed to match the first-paint URLs and how the SW resolves entries
+ * against its scope.
  *
  * @param {object} p
  * @param {string[]} p.allFiles  dist-relative POSIX paths of every emitted file
