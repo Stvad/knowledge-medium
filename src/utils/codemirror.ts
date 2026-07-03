@@ -4,6 +4,7 @@ import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { insertNewline } from '@codemirror/commands'
 import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
+import { isIOS } from '@/utils/platform.js'
 
 /** Produce the change/range spec for one selection range that either
  *  inserts an empty `open`/`close` pair at the cursor or wraps the
@@ -144,11 +145,6 @@ export const softLineBreakOnBeforeInput = EditorView.domEventHandlers({
 // on-device (iPad, iOS 26): accepting a completion this way does NOT disturb
 // software-keyboard autocapitalization (and hardware presses, the common case that
 // reaches here, never involved autocaps anyway). So no keyboard-type gate is needed.
-const isIOS =
-  typeof navigator !== 'undefined' &&
-  /Apple/.test(navigator.vendor) &&
-  (navigator.maxTouchPoints > 2 || /Mobile\//.test(navigator.userAgent))
-
 class AcceptCompletionOnEnterCapture {
   private readonly onKeydown: (event: KeyboardEvent) => void
   constructor(private readonly view: EditorView) {
@@ -186,7 +182,7 @@ export const acceptCompletionOnEnterCapture = ViewPlugin.fromClass(AcceptComplet
 
 /** iOS-only; empty elsewhere (off iOS, CM's completion keymap accepts + stops
  *  Enter before it can reach a window shortcut). */
-export const acceptCompletionBeforeIOSDefer: Extension = isIOS ? acceptCompletionOnEnterCapture : []
+export const acceptCompletionBeforeIOSDefer: Extension = isIOS() ? acceptCompletionOnEnterCapture : []
 
 export const createMinimalMarkdownConfig = (
   pluginExtensions: readonly Extension[] = [],
