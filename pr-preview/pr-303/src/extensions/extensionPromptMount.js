@@ -47,7 +47,10 @@ var showPromptToast = (repo, prompt) => {
 			label: primaryLabel(prompt),
 			onClick: () => {
 				approveExtensionHere(repo, prompt.blockId, prompt.name).then((ok) => {
-					if (!ok) return;
+					if (!ok) {
+						showPromptToast(repo, prompt);
+						return;
+					}
 					extensionPromptDismissals.clear(prompt.blockId);
 					refreshAppRuntime();
 				});
