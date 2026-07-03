@@ -197,6 +197,17 @@ export const createMinimalMarkdownConfig = (
     softLineBreakOnBeforeInput,
     acceptCompletionBeforeIOSDefer,
     mdNoQuoteClose,
+    // CodeMirror defaults all three input-assist attributes OFF. We opt browser
+    // spellcheck and sentence auto-capitalization back ON for prose note-taking
+    // (autocorrect stays off — it fights the `[[ ]]`/`(( ))` completion and mangles
+    // technical text). autocapitalize only ever influences the SOFT keyboard (the
+    // hardware keyboard's caps is a separate iOS setting, not this attribute), and
+    // acceptCompletionBeforeIOSDefer's preventDefault leaves it intact (verified
+    // on-device).
+    EditorView.contentAttributes.of({
+      autocapitalize: 'sentences',
+      spellcheck: 'true',
+    }),
     EditorView.theme({
       '&': {
         // Default CodeMirror styles paint the editor white; setting
