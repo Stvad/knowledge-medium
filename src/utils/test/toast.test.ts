@@ -23,7 +23,7 @@ vi.mock('sonner', () => ({
   }),
 }))
 
-import { showCustom } from '../toast.ts'
+import { showCustom, showInfo } from '../toast.ts'
 
 describe('toast facade', () => {
   beforeEach(() => {
@@ -52,5 +52,22 @@ describe('toast facade', () => {
       duration: 1234,
       id: 'stable-id',
     })
+  })
+
+  it('forwards the click event to an action handler (so preventDefault reaches sonner)', () => {
+    // Load-bearing: if buildAction dropped the event, a handler calling
+    // event.preventDefault() would get nothing and sonner would dismiss the
+    // toast on click — reintroducing the failed-approval-retry bug.
+    const handler = vi.fn()
+    showInfo('hi', {action: {label: 'Go', onClick: handler}})
+
+    const [, options] = sonner.base.mock.calls[0] as unknown as [
+      unknown,
+      {action: {onClick: (event: unknown) => void}},
+    ]
+    const event = {preventDefault: vi.fn()}
+    options.action.onClick(event)
+
+    expect(handler).toHaveBeenCalledWith(event)
   })
 })

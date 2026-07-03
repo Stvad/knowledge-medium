@@ -141,6 +141,14 @@ describe('ExtensionLoadErrorStore', () => {
     // A later commit does nothing (no batch open).
     store.commitBatch()
     expect(listener).not.toHaveBeenCalled()
+
+    // Crucially, the store is back to a live (non-batch) state — a later
+    // report notifies again. This is what the resolve-error path relies on:
+    // abandonBatch() in the catch prevents a stuck-open batch from silently
+    // swallowing every subsequent report.
+    store.reportError('c', new Error('live'))
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(store.getSnapshot().get('c')?.message).toBe('live')
   })
 
   it('subscribe returns an unsubscribe that stops further notifications', () => {

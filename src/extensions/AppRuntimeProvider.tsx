@@ -186,6 +186,13 @@ export function AppRuntimeProvider({
         // workspace, so a switch can't leak a stale buffer.)
       } catch (error) {
         console.error('Failed to resolve app runtime', error)
+        // A throw is NOT guaranteed to be followed by another resolve (unlike
+        // cancel), so close the batches explicitly — otherwise they'd stay
+        // open and every later report/clear would silently buffer into a dead
+        // map with no notify. abandonBatch leaves the last-known map intact
+        // (stale-on-error, which is better than blanking every prompt).
+        errorStore.abandonBatch()
+        approvalStore.abandonBatch()
       }
     })()
 
