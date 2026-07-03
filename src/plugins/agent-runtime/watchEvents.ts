@@ -92,12 +92,16 @@ interface ConsumerEntry {
   db: PowerSyncDb
   runtimes: WatcherRuntime[]
   /** Settles when the registration finished arming (baseline + change
-   *  subscriptions); rejects if it died first (baseline failure or a
-   *  replacement registration superseding it). An identical-spec
-   *  re-register must not report success against an entry that is
-   *  still baselining — the entry may yet die, leaving the consumer
-   *  believing it's registered for a whole refresh interval. */
+   *  subscriptions); rejects if it died first (baseline failure, a
+   *  replacement registration superseding it, or any dispose). An
+   *  identical-spec re-register must not report success against an
+   *  entry that is still baselining — the entry may yet die, leaving
+   *  the consumer believing it's registered for a whole refresh
+   *  interval. */
   ready: Promise<void>
+  /** Settle `ready` as failed — dispose paths call this so retries
+   *  parked on `ready` wake instead of pending forever. Idempotent. */
+  rejectReady: (error: unknown) => void
 }
 
 const watcherRuntimeFor = (spec: WatchEventsWatcher): WatcherRuntime => ({
@@ -207,10 +211,14 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
   }
 
   /** Dispose a SPECIFIC entry — it may already have been replaced in
-   *  `entries` by a newer registration, which must survive untouched. */
+   *  `entries` by a newer registration, which must survive untouched.
+   *  Dispose is the settlement authority for `ready`: an entry that
+   *  dies while baselining (TTL prune, disposeAll, replacement) must
+   *  not leave identical-spec retries parked on it forever. */
   const disposeEntry = (consumer: string, entry: ConsumerEntry) => {
     for (const runtime of entry.runtimes) disposeRuntime(runtime)
     if (entries.get(consumer) === entry) entries.delete(consumer)
+    entry.rejectReady(new Error('watch-events registration disposed'))
   }
 
   const disposeConsumer = (consumer: string) => {
@@ -304,9 +312,22 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
         // once it actually armed. If it died, fall through and
         // register fresh instead of vouching for a dead entry.
         await existing.ready
-        return {consumer, registered: existing.runtimes.map(runtime => runtime.name), unchanged: true}
+        // Ownership can change during the await even when ready
+        // resolved: a different-spec registration may have replaced
+        // the entry. Only vouch for an entry that is still live.
+        if (entries.get(consumer) === existing) {
+          return {consumer, registered: existing.runtimes.map(runtime => runtime.name), unchanged: true}
+        }
       } catch {
-        /* the entry died mid-arming — replace it below */
+        /* the entry died mid-arming */
+      }
+      // Our identical-spec entry died or was replaced while we waited.
+      // If a DIFFERENT registration now owns the consumer, it is newer
+      // by causality (it replaced ours) — defer to it rather than
+      // clobbering a healthy successor with this (older) retry.
+      const current = entries.get(consumer)
+      if (current && current !== existing) {
+        return {consumer, registered: [], unchanged: false}
       }
     }
 
@@ -330,6 +351,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       db,
       runtimes: watchers.map(watcherRuntimeFor),
       ready,
+      rejectReady: readyReject,
     }
     entries.set(consumer, entry)
 
@@ -338,8 +360,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       // fire (mirrors the daemon's own first-tick baseline).
       await Promise.all(entry.runtimes.map(runtime => computeLoop(db, consumer, runtime)))
     } catch (error) {
-      disposeEntry(consumer, entry)
-      readyReject(error)
+      disposeEntry(consumer, entry) // also rejects `ready`
       throw error
     }
 
@@ -348,8 +369,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     // successor owns the consumer — subscribing our runtimes anyway
     // would leave live watchers no dispose path can ever reach.
     if (entries.get(consumer) !== entry) {
-      disposeEntry(consumer, entry)
-      readyReject(new Error('registration superseded while baselining'))
+      disposeEntry(consumer, entry) // also rejects `ready`
       return {consumer, registered: [], unchanged: false}
     }
 
@@ -413,7 +433,15 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       }
     }
 
-    void flushPass()
+    // Deferred off the caller's stack: React flushes ALL effect
+    // destroys before ALL creates in one synchronous pass, so a
+    // remount of the actively-edited editor (indent/reorder reparents
+    // the fiber) fires settled(X) and THEN resumed(X) on the same
+    // stack. A synchronous flush here would emit X as settled before
+    // the resumed revocation lands — the microtask lets any
+    // same-stack revocation win. A genuine blur loses nothing: the
+    // emit still happens ahead of the settle window.
+    queueMicrotask(() => { void flushPass() })
     const timer = setTimeout(() => {
       recheckTimers.delete(timer)
       void flushPass()

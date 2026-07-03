@@ -255,6 +255,29 @@ describe('watch-events registry', () => {
     ])
   })
 
+  it('a same-stack settle→resume (editor remount) never emits the block as settled', async () => {
+    fake.setRows([{id: 'a'}])
+    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+
+    // Mid-typing: a debounced commit landed, settle window armed.
+    await change([{id: 'a'}, {id: 'b'}])
+
+    // Indent/reorder remounts the actively-edited editor: React fires
+    // ALL effect destroys before ALL creates on ONE synchronous stack —
+    // settled(b) then resumed(b), user still typing throughout.
+    registry.notifyBlockSettled('b')
+    registry.notifyBlockEditing('b')
+
+    await vi.advanceTimersByTimeAsync(600) // immediate flush + recheck
+    expect(emitted.filter(event => 'settledBlocks' in event)).toEqual([])
+
+    // Genuine quiet still time-confirms via the settle window.
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(emitted.filter(event => 'settledBlocks' in event)).toEqual([
+      expect.objectContaining({settledBlocks: ['b']}),
+    ])
+  })
+
   it('an identical re-registration only confirms once the original finished baselining', async () => {
     const getAll = fake.db.getAll as ReturnType<typeof vi.fn>
     let rejectBaseline!: (error: Error) => void

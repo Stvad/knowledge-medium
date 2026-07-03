@@ -452,6 +452,12 @@ export const startAgentRuntimeBridge = (
           // a generous cap — commands have no tab-side execution timeout,
           // so a fleet of hung evals must degrade to a SOFT concurrency
           // bound rather than stalling command delivery until reload.
+          // Re-register FIRST: the long-poll that delivered this command
+          // may have been held up to 25s server-side, and lastSeen + 25s
+          // + the park would breach the server's 60s client TTL (client
+          // dropped, tokens revoked). Registering caps the quiet gap at
+          // exactly the park duration.
+          await register(baseUrl)
           await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)])
           if (inFlightCommands.size >= maxConcurrentCommands) {
             console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`)

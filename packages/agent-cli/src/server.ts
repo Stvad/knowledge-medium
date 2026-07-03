@@ -641,6 +641,14 @@ const setCommandResult = async (
     return
   }
 
+  // A result post proves the tab is alive — count it toward the client
+  // TTL like polls and registers, so a tab busy executing commands
+  // (e.g. parked on a saturated slot) isn't dropped as idle.
+  if (typeof reportingClientId === 'string') {
+    const client = clients.get(reportingClientId)
+    if (client) client.lastSeen = now()
+  }
+
   command.status = 'completed'
   command.completedAt = now()
   command.result = await readBody(request)

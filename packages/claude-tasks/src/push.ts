@@ -53,8 +53,10 @@ export const MAX_PENDING_EXEMPT_IDS = 2_048
 /** Exemptions expire in the pool too: ticks drain the pool, but a sick
  *  bridge can stall a tick for minutes (each graph call may hang up to
  *  the client timeout) — by then "quiet, source-confirmed" may be
- *  false again, so drained exemptions older than this are dropped. */
-export const EXEMPTION_POOL_TTL_MS = 10_000
+ *  false again, so drained exemptions older than this are dropped.
+ *  Same freshness budget as the arrival check (one 10s window applied
+ *  at both legs), deliberately derived so the two can't drift. */
+export const EXEMPTION_POOL_TTL_MS = MAX_EXEMPTION_AGE_MS
 
 /** Daemon-side pool between push events and the (coalesced) tick that
  *  consumes them: per-watcher, deduped, bounded, and freshness-checked
@@ -64,10 +66,26 @@ export const createExemptionPool = (now: () => number = Date.now) => {
   const pools = new Map<string, Map<string, number>>() // watcher → id → pooledAt
   let count = 0
 
+  /** Under a stalled tick, expired ids must not squat the cap and
+   *  starve fresh exemptions — evict them before refusing an add. */
+  const evictExpired = (): void => {
+    const cutoff = now() - EXEMPTION_POOL_TTL_MS
+    for (const [watcher, pool] of pools) {
+      for (const [id, pooledAt] of pool) {
+        if (pooledAt < cutoff) {
+          pool.delete(id)
+          count -= 1
+        }
+      }
+      if (pool.size === 0) pools.delete(watcher)
+    }
+  }
+
   const add = (exemptions: QuietExemptions): void => {
     for (const [watcher, ids] of exemptions) {
       const pool = pools.get(watcher) ?? new Map<string, number>()
       for (const id of ids) {
+        if (count >= MAX_PENDING_EXEMPT_IDS) evictExpired()
         if (count >= MAX_PENDING_EXEMPT_IDS) break
         if (!pool.has(id)) {
           pool.set(id, now())
