@@ -1,5 +1,5 @@
 import { defaultTypeColor } from "../../data/typeColors.js";
-//#region src/plugins/supertags/chipStyle.ts
+//#region src/components/typeChip/chipStyle.ts
 /** Contribution-declared chip color, validated so an unparseable value
 *  degrades to default styling instead of a half-styled chip. (Inline
 *  styles assign via CSSOM, so invalid values can't inject — this is

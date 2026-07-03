@@ -1,6 +1,6 @@
 import { EditorSelection } from "../../../node_modules/@codemirror/state/dist/index.js";
-import { matchCharTrigger } from "../../editor/triggerMatch.js";
 import { isInsideLiteralMarkdown } from "../../editor/syntaxContext.js";
+import { matchCharTrigger } from "../../editor/triggerMatch.js";
 //#region src/plugins/supertags/typeAutocomplete.ts
 /** CodeMirror CompletionSource for the `#` type-tag trigger (Tana-style
 *  supertags).

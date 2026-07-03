@@ -1,4 +1,5 @@
 import { EditorSelection } from "../../../node_modules/@codemirror/state/dist/index.js";
+import { isInsideLiteralMarkdown } from "../../editor/syntaxContext.js";
 import { matchCharTrigger } from "../../editor/triggerMatch.js";
 //#region src/plugins/geo/placeAutocomplete.ts
 /** CodeMirror CompletionSource for the `@` place trigger.
@@ -111,6 +112,7 @@ var placeCompletionSource = (options) => {
 		const lineText = line.text;
 		const match = matchAtTrigger(lineText, pos - line.from);
 		if (!match) return null;
+		if (isInsideLiteralMarkdown(state, pos)) return null;
 		const candidates = await options.getCandidates(match.query);
 		if (candidates.length === 0 && !explicit) return null;
 		return {

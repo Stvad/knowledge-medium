@@ -1,33 +1,13 @@
 import { typesProp } from "../../data/properties.js";
-import { cn } from "../../lib/utils.js";
 import { useProperty, useWorkspaceId } from "../../hooks/block.js";
-import { X } from "../../../node_modules/lucide-react/dist/esm/icons/x.js";
 import { buildAppHash } from "../../utils/routing.js";
 import { useBlockOpener } from "../../utils/navigation.js";
 import { useTypes } from "../../hooks/typeRegistry.js";
+import { TypeChip } from "../../components/typeChip/TypeChip.js";
 import { visibleTagTypeIds } from "./typeAutocomplete.js";
-import { chipStyle } from "./chipStyle.js";
 import { c } from "react/compiler-runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/plugins/supertags/TypeChipsDecorator.tsx
-/** Block content decorator that renders a block's types as trailing
-*  `#label` chips (Tana-style supertags), each with a remove button.
-*
-*  Unlike the character-counter/geo decorators, the contribution does
-*  NOT gate on `ctx.types` — the wrap applies to every block and the
-*  component decides whether to render chips. NOTE the honest scope of
-*  this: a types change still remounts the content subtree regardless,
-*  because `types` participates in `DefaultBlockRenderer`'s
-*  resolve-context and slot identity (the `#` pick flow stays correct
-*  across that remount because its tag write is cache-coherent — see
-*  codeMirrorExtensions.ts). What the unconditional wrap DOES buy:
-*  chip visibility driven by the registry (`hideFromBlockDisplay`
-*  edits, late type
-*  publication) re-renders in place instead of re-resolving decorator
-*  gates, and if the renderer's slot identity is ever stabilized the
-*  no-remount invariant holds here without changes. The WeakMap cache
-*  keeps identity stable across parent re-renders (same invariant as
-*  CharacterCountDecorator). */
 var TypeChips = (t0) => {
 	const $ = c(17);
 	const { block, typeIds, registry } = t0;
@@ -41,38 +21,22 @@ var TypeChips = (t0) => {
 		if ($[8] !== block || $[9] !== openBlock || $[10] !== readOnly || $[11] !== registry || $[12] !== repo.userTypes || $[13] !== workspaceId) {
 			t2 = (typeId) => {
 				const type = registry.get(typeId);
-				const label = type?.label ?? (typeId.length > 8 ? `${typeId.slice(0, 8)}…` : typeId);
-				const style = chipStyle(type);
 				const removable = !readOnly && type?.hideFromCompletion !== true;
 				const definitionId = repo.userTypes.getTypeBlockId(typeId);
-				const labelText = `#${label}`;
-				return /* @__PURE__ */ jsxs("span", {
-					className: cn("inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-xs", style ? "" : "bg-muted text-muted-foreground"),
-					style,
-					title: type ? type.description ?? typeId : `Unknown type ${typeId} (not registered)`,
-					children: [definitionId ? /* @__PURE__ */ jsx("a", {
+				return /* @__PURE__ */ jsx(TypeChip, {
+					typeId,
+					type,
+					withHash: true,
+					link: definitionId ? {
 						href: buildAppHash(workspaceId, definitionId),
-						className: "truncate text-inherit no-underline hover:underline",
-						draggable: false,
 						onClick: (event) => openBlock(event, {
 							blockId: definitionId,
 							workspaceId
-						}),
-						children: labelText
-					}) : /* @__PURE__ */ jsx("span", {
-						className: "truncate",
-						children: labelText
-					}), removable && /* @__PURE__ */ jsx("button", {
-						type: "button",
-						className: cn("rounded-sm p-1 -m-1 hover:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring", style ? "text-inherit opacity-70 hover:opacity-100" : "text-muted-foreground hover:text-foreground"),
-						"aria-label": `Remove ${label} type`,
-						onMouseDown: _temp,
-						onClick: (event_1) => {
-							event_1.stopPropagation();
-							block.removeType(typeId);
-						},
-						children: /* @__PURE__ */ jsx(X, { className: "h-3 w-3" })
-					})]
+						})
+					} : void 0,
+					onRemove: removable ? () => {
+						block.removeType(typeId);
+					} : void 0
 				}, typeId);
 			};
 			$[8] = block;
@@ -192,9 +156,6 @@ var decorate = (inner) => {
 	return Decorated;
 };
 var typeChipsDecoratorContribution = () => decorate;
-function _temp(event_0) {
-	return event_0.preventDefault();
-}
 //#endregion
 export { typeChipsDecoratorContribution };
 
