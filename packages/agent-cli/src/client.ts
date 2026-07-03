@@ -21,6 +21,7 @@ import {
 import {
   type CommandResult,
   type CommandStatusResponse,
+  type EventsNextResponse,
   type KnownCommand,
   type WhoamiInfo,
 } from './protocol.js'
@@ -246,6 +247,11 @@ export interface BridgeClient {
   readonly bridgeUrl: string
   /** Submit a wire command and wait for its unwrapped result value. */
   runCommand: (command: KnownCommand, options?: {timeoutMs?: number}) => Promise<unknown>
+  /** Long-poll the token-audience event stream (tab-pushed events, e.g.
+   *  watch-events hits). Omit `afterSeq` to bootstrap a cursor without
+   *  replaying the buffer; a `reset: true` response means the bridge
+   *  restarted — adopt `nextSeq` and assume missed events. */
+  nextEvents: (options?: {afterSeq?: number | null, timeoutMs?: number}) => Promise<EventsNextResponse>
   /** Resolve the token's audience + live-tab connection state. */
   whoami: () => Promise<WhoamiInfo>
   /** Throws unless the bridge process is reachable. */
@@ -352,6 +358,19 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     return result.value
   }
 
+  const nextEvents = async (
+    eventOptions: {afterSeq?: number | null, timeoutMs?: number} = {},
+  ): Promise<EventsNextResponse> => {
+    const url = new URL(`${bridgeUrl}/runtime/events/next`)
+    if (typeof eventOptions.afterSeq === 'number') {
+      url.searchParams.set('afterSeq', String(eventOptions.afterSeq))
+    }
+    if (typeof eventOptions.timeoutMs === 'number') {
+      url.searchParams.set('timeoutMs', String(eventOptions.timeoutMs))
+    }
+    return authedRequest<EventsNextResponse>(url.toString())
+  }
+
   const whoami = async (): Promise<WhoamiInfo> => {
     const token = await requireToken()
     return requestJson<WhoamiInfo>(`${bridgeUrl}/runtime/whoami`, {
@@ -369,6 +388,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   return {
     bridgeUrl,
     runCommand,
+    nextEvents,
     whoami,
     health,
     resolveToken: clientResolveToken,

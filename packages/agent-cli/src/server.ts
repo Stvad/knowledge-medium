@@ -10,8 +10,10 @@ import {
 } from './config.js'
 import {
   type Audience,
+  type BridgeEventRecord,
   type CommandPayload,
   commandPayloadSchema,
+  isReadOnlySql,
   knownCommandRegistry,
   type KnownCommandMeta,
   registerClientMetadataSchema,
@@ -235,8 +237,10 @@ const deleteTokenForClient = (token: Token, clientId: ClientId): void => {
   if (entry?.clientId === clientId) tokens.delete(token)
 }
 
-const isReadOnlySql = (sql: unknown): boolean =>
-  typeof sql === 'string' && /^(select|explain)\b/i.test(sql.trimStart())
+// Read-only-ness of a SQL string is enforced by the STRICT shared guard
+// (protocol.ts isReadOnlySql) — the previous local `/^(select|explain)/`
+// prefix check let a read-only token run `SELECT powersync_clear(1)`
+// (local-data wipe) or smuggle a second statement after a `;`.
 
 const isReadOnlyCommand = (command: CommandPayload): boolean => {
   // `sql` is the one verb whose read-only-ness depends on the call, not
@@ -244,7 +248,9 @@ const isReadOnlyCommand = (command: CommandPayload): boolean => {
   // `mode: 'execute'` (or a mutating statement) is not. Refine it here
   // before falling back to the schema-derived registry.
   if (command.type === 'sql') {
-    return command.mode !== 'execute' && isReadOnlySql(command.sql)
+    return command.mode !== 'execute'
+      && typeof command.sql === 'string'
+      && isReadOnlySql(command.sql)
   }
   // Every other verb's read-only-ness is a static, per-verb fact declared
   // once in `knownCommandRegistry` — TypeScript-exhaustiveness-checked, so
@@ -422,6 +428,135 @@ const enqueueCommand = (
   return command
 }
 
+// ----- events channel (tab → consumers) --------------------------------
+//
+// The reverse of the command queue: the TAB pushes small events (e.g.
+// watch-events watcher hits) and token-authenticated consumers (the
+// claude-tasks daemon) long-poll them. Events are hints, not truth —
+// consumers re-derive state from the graph on every hint — so a bounded
+// buffer with possible gaps is fine; a consumer whose cursor falls off
+// the floor just acts once on "something happened".
+
+const eventBufferCap = 512
+
+interface EventBuffer {
+  tail: number
+  events: BridgeEventRecord[]
+}
+
+interface EventWaiter {
+  response: http.ServerResponse
+  timeout: NodeJS.Timeout
+  afterSeq: number
+}
+
+// Events are routed by AUDIENCE, not clientId: the consumer's token and
+// the emitting tab share a user+workspace, and that pairing survives tab
+// reloads (a fresh clientId keeps feeding the same stream).
+const audienceKey = (audience: Audience | TokenAudience | null): string | null => {
+  if (!audience) return null
+  if (!audience.userId && !audience.workspaceId) return null
+  return `${audience.userId ?? ''} ${audience.workspaceId ?? ''}`
+}
+
+// audience key -> ring buffer / parked long-polls
+const eventBuffers = new Map<string, EventBuffer>()
+const eventWaitersByAudience = new Map<string, Set<EventWaiter>>()
+
+const eventsAfter = (buffer: EventBuffer, afterSeq: number): BridgeEventRecord[] =>
+  buffer.events.filter(event => event.seq > afterSeq)
+
+const removeEventWaiter = (key: string, waiter: EventWaiter): void => {
+  const set = eventWaitersByAudience.get(key)
+  if (!set) return
+  set.delete(waiter)
+  if (set.size === 0) eventWaitersByAudience.delete(key)
+}
+
+const appendEvent = (key: string, clientId: ClientId, event: Record<string, unknown>): BridgeEventRecord => {
+  let buffer = eventBuffers.get(key)
+  if (!buffer) {
+    buffer = {tail: 0, events: []}
+    eventBuffers.set(key, buffer)
+  }
+  buffer.tail += 1
+  const record: BridgeEventRecord = {seq: buffer.tail, receivedAt: now(), clientId, event}
+  buffer.events.push(record)
+  if (buffer.events.length > eventBufferCap) buffer.events.splice(0, buffer.events.length - eventBufferCap)
+
+  const waiters = eventWaitersByAudience.get(key)
+  if (waiters) {
+    for (const waiter of Array.from(waiters)) {
+      const pending = eventsAfter(buffer, waiter.afterSeq)
+      if (pending.length === 0) continue
+      removeEventWaiter(key, waiter)
+      clearTimeout(waiter.timeout)
+      sendJson(waiter.response, 200, {events: pending, nextSeq: buffer.tail})
+    }
+  }
+  return record
+}
+
+const waitForNextEvents = (
+  request: http.IncomingMessage,
+  requestUrl: URL,
+  response: http.ServerResponse,
+  key: string,
+): void => {
+  const timeoutMs = Math.min(Number(requestUrl.searchParams.get('timeoutMs') ?? 25_000), 60_000)
+  const buffer = eventBuffers.get(key) ?? {tail: 0, events: []}
+  const afterSeqRaw = requestUrl.searchParams.get('afterSeq')
+
+  // No cursor yet: bootstrap — hand back the current tail so the
+  // consumer subscribes "from now" without replaying the buffer.
+  if (afterSeqRaw === null) {
+    sendJson(response, 200, {events: [], nextSeq: buffer.tail})
+    return
+  }
+
+  const afterSeq = Number(afterSeqRaw)
+  if (!Number.isFinite(afterSeq) || afterSeq < 0) {
+    sendJson(response, 400, {error: 'afterSeq must be a non-negative number'})
+    return
+  }
+
+  // A cursor past the tail means the bridge restarted (seq reset): tell
+  // the consumer to adopt the fresh cursor and assume it missed events —
+  // parking would hang until `afterSeq` events accumulate again.
+  if (afterSeq > buffer.tail) {
+    sendJson(response, 200, {events: [], nextSeq: buffer.tail, reset: true})
+    return
+  }
+
+  const pending = eventsAfter(buffer, afterSeq)
+  if (pending.length > 0) {
+    sendJson(response, 200, {events: pending, nextSeq: buffer.tail})
+    return
+  }
+
+  const waiter: EventWaiter = {
+    response,
+    afterSeq,
+    timeout: setTimeout(() => {
+      removeEventWaiter(key, waiter)
+      const current = eventBuffers.get(key)
+      sendJson(response, 200, {events: [], nextSeq: current?.tail ?? buffer.tail})
+    }, timeoutMs),
+  }
+
+  request.on('close', () => {
+    removeEventWaiter(key, waiter)
+    clearTimeout(waiter.timeout)
+  })
+
+  let set = eventWaitersByAudience.get(key)
+  if (!set) {
+    set = new Set()
+    eventWaitersByAudience.set(key, set)
+  }
+  set.add(waiter)
+}
+
 const waitForNextCommand = (
   request: http.IncomingMessage,
   requestUrl: URL,
@@ -533,11 +668,23 @@ const resetState = (): void => {
       }
     }
   }
+  for (const set of eventWaitersByAudience.values()) {
+    for (const waiter of set) {
+      clearTimeout(waiter.timeout)
+      try {
+        waiter.response.end()
+      } catch {
+        /* response already closed */
+      }
+    }
+  }
   clients.clear()
   commands.clear()
   pendingByClient.clear()
   waitersByClient.clear()
   tokens.clear()
+  eventBuffers.clear()
+  eventWaitersByAudience.clear()
 }
 
 const handleRequest = async (
@@ -602,6 +749,60 @@ const handleRequest = async (
     if (request.method === 'GET' && requestUrl.pathname === '/runtime/commands/next') {
       if (!requireBridgeSecret(request, response)) return
       waitForNextCommand(request, requestUrl, response)
+      return
+    }
+
+    // Tab-side event push — authenticated like result posts (bridge
+    // secret + registered clientId); routed by the client's audience.
+    if (request.method === 'POST' && requestUrl.pathname === '/runtime/events') {
+      if (!requireBridgeSecret(request, response)) return
+      const clientId = request.headers['x-agent-runtime-client-id']
+      if (typeof clientId !== 'string' || !clientId) {
+        sendJson(response, 400, {error: 'Missing x-agent-runtime-client-id header'})
+        return
+      }
+      const client = clients.get(clientId)
+      if (!client) {
+        sendJson(response, 409, {error: 'Client is not registered with the bridge — register before posting events'})
+        return
+      }
+      const key = audienceKey(client.audience)
+      if (!key) {
+        sendJson(response, 409, {error: 'Client has no audience (userId/workspaceId) — events cannot be routed'})
+        return
+      }
+      // Same minimal envelope as commands: a string `type`, everything
+      // else passes through to the consumer verbatim.
+      const parsed = commandPayloadSchema.safeParse(await readBody(request))
+      if (!parsed.success) {
+        sendJson(response, 400, {error: 'Event body must include a string type', issues: parsed.error.issues})
+        return
+      }
+      client.lastSeen = now()
+      const record = appendEvent(key, clientId, parsed.data)
+      sendJson(response, 202, {ok: true, seq: record.seq})
+      return
+    }
+
+    // Consumer-side long-poll — token-authenticated, scoped to the
+    // token's audience so one user's daemon can't read another's events.
+    if (request.method === 'GET' && requestUrl.pathname === '/runtime/events/next') {
+      const token = extractBearer(request)
+      if (!token) {
+        sendJson(response, 401, {error: 'Missing bearer token'})
+        return
+      }
+      const entry = tokens.get(token)
+      if (!entry) {
+        sendJson(response, 401, {error: unknownTokenMessage})
+        return
+      }
+      const key = audienceKey(entry.audience)
+      if (!key) {
+        sendJson(response, 409, {error: 'Token has no audience (userId/workspaceId) — no event stream to read'})
+        return
+      }
+      waitForNextEvents(request, requestUrl, response, key)
       return
     }
 

@@ -392,4 +392,114 @@ describe('agent runtime bridge', () => {
     expect(statuses.map(status => status.status)).toEqual(['completed', 'completed'])
     expect(statuses.map(status => status.result.value).sort()).toEqual(['result-0', 'result-1'])
   })
+
+  it('blocks side-effecting SELECTs and multi-statement SQL for read-only tokens', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1', scope: 'read-only'}],
+    })
+
+    // A SELECT prologue is not enough: powersync_clear wipes local data.
+    for (const sql of [
+      'SELECT powersync_clear(1)',
+      'select 1; drop table blocks',
+    ]) {
+      const response = await fetch(`${baseUrl}/runtime/commands`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+        body: JSON.stringify({type: 'sql', mode: 'all', sql}),
+      })
+      expect(response.status, sql).toBe(403)
+    }
+  })
+})
+
+describe('events channel', () => {
+  const postEvent = (clientId: string, event: object) =>
+    fetch(`${baseUrl}/runtime/events`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': clientId},
+      body: JSON.stringify(event),
+    })
+
+  const nextEvents = (token: string, query = '') =>
+    fetch(`${baseUrl}/runtime/events/next${query}`, {
+      headers: {authorization: `Bearer ${token}`},
+    })
+
+  const registerAlice = () => registerClient('alice-tab', {
+    audience: {userId: 'alice', workspaceId: 'ws-1'},
+    tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+  })
+
+  it('requires a registered client (and the bridge secret) to post events', async () => {
+    const noSecret = await fetch(`${baseUrl}/runtime/events`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', 'x-agent-runtime-client-id': 'alice-tab'},
+      body: JSON.stringify({type: 'watcher-settled'}),
+    })
+    expect(noSecret.status).toBe(401)
+
+    const unregistered = await postEvent('ghost-tab', {type: 'watcher-settled'})
+    expect(unregistered.status).toBe(409)
+  })
+
+  it('delivers events to a parked long-poll for the same audience', async () => {
+    await registerAlice()
+
+    const bootstrap = await nextEvents('TOKEN-A').then(response => response.json())
+    expect(bootstrap).toEqual({events: [], nextSeq: 0})
+
+    // Park a long-poll, then push — the waiter must wake with the event.
+    const parked = nextEvents('TOKEN-A', `?afterSeq=${bootstrap.nextSeq}&timeoutMs=5000`)
+    const posted = await postEvent('alice-tab', {type: 'watcher-settled', watcher: 'claude-mentions'})
+    expect(posted.status).toBe(202)
+
+    const body = await (await parked).json()
+    expect(body.nextSeq).toBe(1)
+    expect(body.events).toHaveLength(1)
+    expect(body.events[0].event).toMatchObject({type: 'watcher-settled', watcher: 'claude-mentions'})
+    expect(body.events[0].clientId).toBe('alice-tab')
+
+    // Cursor advanced: nothing new to read.
+    const drained = await nextEvents('TOKEN-A', '?afterSeq=1&timeoutMs=100').then(response => response.json())
+    expect(drained.events).toEqual([])
+  })
+
+  it('buffers events posted before the consumer polls', async () => {
+    await registerAlice()
+    await postEvent('alice-tab', {type: 'watcher-settled', watcher: 'w1'})
+    await postEvent('alice-tab', {type: 'watcher-settled', watcher: 'w2'})
+
+    const body = await nextEvents('TOKEN-A', '?afterSeq=0&timeoutMs=100').then(response => response.json())
+    expect(body.events.map((entry: {event: {watcher: string}}) => entry.event.watcher)).toEqual(['w1', 'w2'])
+    expect(body.nextSeq).toBe(2)
+  })
+
+  it('isolates event streams by audience', async () => {
+    await registerAlice()
+    await registerClient('bob-tab', {
+      audience: {userId: 'bob', workspaceId: 'ws-2'},
+      tokens: [{token: 'TOKEN-B', label: 'cli', userId: 'bob', workspaceId: 'ws-2'}],
+    })
+
+    await postEvent('alice-tab', {type: 'watcher-settled', watcher: 'alice-only'})
+
+    const bob = await nextEvents('TOKEN-B', '?afterSeq=0&timeoutMs=100').then(response => response.json())
+    expect(bob.events).toEqual([])
+    const alice = await nextEvents('TOKEN-A', '?afterSeq=0&timeoutMs=100').then(response => response.json())
+    expect(alice.events).toHaveLength(1)
+  })
+
+  it('flags a stale cursor after a bridge restart instead of parking forever', async () => {
+    await registerAlice()
+    // Fresh server state (per-test reset): a cursor from a previous
+    // bridge lifetime points past the tail.
+    const body = await nextEvents('TOKEN-A', '?afterSeq=41&timeoutMs=100').then(response => response.json())
+    expect(body).toEqual({events: [], nextSeq: 0, reset: true})
+  })
+
+  it('rejects event reads without a token', async () => {
+    const response = await fetch(`${baseUrl}/runtime/events/next`)
+    expect(response.status).toBe(401)
+  })
 })
