@@ -44,7 +44,7 @@ var KERNEL_TYPE_CONTRIBUTIONS = [
 	defineBlockType({
 		id: PANEL_TYPE,
 		label: "Panel",
-		...INFRASTRUCTURE_TYPE_DISPLAY
+		hideFromCompletion: true
 	}),
 	defineBlockType({
 		id: PANEL_STACK_TYPE,
@@ -94,7 +94,7 @@ var KERNEL_TYPE_CONTRIBUTIONS = [
 	defineBlockType({
 		id: USER_TYPE,
 		label: "User",
-		...INFRASTRUCTURE_TYPE_DISPLAY,
+		hideFromCompletion: true,
 		properties: [aliasesProp, userIdProp]
 	})
 ];
