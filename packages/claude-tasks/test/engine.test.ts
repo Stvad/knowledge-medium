@@ -401,6 +401,33 @@ describe('mention lifecycle', () => {
     expect(replies).toHaveLength(1)
   })
 
+  it('refunds the budget slot when a same-session duplicate bails without spawning', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-f1'}, {id: 'b-f2'}],
+      blocks: {
+        'b-root': {content: 'root', properties: {[PROPS.session]: 'sess-shared'}},
+        'b-f1': {content: '[[claude]] follow 1', parentId: 'b-root'},
+        'b-f2': {content: '[[claude]] follow 2', parentId: 'b-root'},
+      },
+    })
+    const state = memoryState()
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask, state, config: mentionConfig({runsPerHour: 2, maxConcurrent: 10})})
+
+    // Both follow-ups pass the pre-filter, but only one can hold the
+    // session guard — the duplicate spawns nothing, so its budget slot
+    // must come back or a tight runsPerHour defers real work for an hour.
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(1)
+    expect(state.launches).toHaveLength(1)
+
+    // The refunded slot lets the second follow-up run within the budget.
+    await engine.tick()
+    await engine.drain()
+    expect(runTask).toHaveBeenCalledTimes(2)
+  })
+
   it('never runs two concurrent --resume of the same session', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-f1'}, {id: 'b-f2'}],

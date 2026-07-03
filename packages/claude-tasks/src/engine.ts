@@ -78,14 +78,31 @@ export const createEngine = (deps: EngineDeps) => {
     return launchTimes.length < config.runsPerHour
   }
 
-  const recordLaunch = () => {
-    launchTimes.push(now())
-    pruneLaunchTimes()
+  const persistLaunchTimes = () => {
     // Fire-and-forget: the in-memory log already gates this tick; the
     // write only needs to survive a later restart. Pass a COPY — the
     // live array keeps mutating (prune/push) while the async write runs.
     void state.setLaunchTimes([...launchTimes]).catch(error =>
       log(`failed to persist spend log: ${errorMessage(error)}`))
+  }
+
+  const recordLaunch = (): number => {
+    const stamp = now()
+    launchTimes.push(stamp)
+    pruneLaunchTimes()
+    persistLaunchTimes()
+    return stamp
+  }
+
+  /** Give back a slot recorded at the launch decision when the task
+   *  provably spawned nothing (duplicate session, lost claim, block
+   *  gone) — otherwise a tight runsPerHour defers REAL work for an
+   *  hour on phantom launches. */
+  const refundLaunch = (stamp: number) => {
+    const index = launchTimes.indexOf(stamp)
+    if (index === -1) return // already pruned out of the window
+    launchTimes.splice(index, 1)
+    persistLaunchTimes()
   }
 
   const launch = (key: string, work: () => Promise<void>) => {
@@ -125,18 +142,22 @@ export const createEngine = (deps: EngineDeps) => {
     log(`[${watcher.name}] parked ${sourceId}: ${reason}`)
   }
 
-  const processMention = async (watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number) => {
+  const processMention = async (
+    watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
+  ) => {
+    // Pre-claim bails spawned nothing — refund the budget slot recorded
+    // at the launch decision so phantom launches can't defer real work.
     const block = await graph.getBlock(sourceId)
-    if (!block) return
+    if (!block) return refundLaunch(launchStamp)
     const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs})
-    if (!decision.pending) return
+    if (!decision.pending) return refundLaunch(launchStamp)
     const ancestorBlocks = await graph.ancestors(sourceId)
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
     const session = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
     const sessionKey = session ? `session:${session}` : null
-    if (sessionKey && running.has(sessionKey)) return
+    if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
     if (sessionKey) running.set(sessionKey, Promise.resolve())
 
     try {
@@ -157,6 +178,7 @@ export const createEngine = (deps: EngineDeps) => {
       const props = verified?.properties ?? {}
       if (props['claude:watcher'] !== watcher.name || props['claude:updated-at'] !== claimStamp) {
         log(`[${watcher.name}] lost claim race on ${sourceId} — backing off`)
+        refundLaunch(launchStamp)
         return
       }
 
@@ -262,10 +284,10 @@ export const createEngine = (deps: EngineDeps) => {
       }
       // Budget is consumed at the launch DECISION (synchronously) — the
       // async task body would record too late to gate this same loop.
-      // Conservative direction: a launch that then loses its claim race
-      // still counts against the hour.
-      recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs))
+      // Bails that provably spawned nothing (duplicate session, lost
+      // claim, block gone) refund their slot inside processMention.
+      const launchStamp = recordLaunch()
+      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp))
     }
   }
 
