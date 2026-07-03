@@ -13,10 +13,15 @@
  *     For that to hold for LAZY modules too, each generation's cache must be
  *     COMPLETE: `install` precaches the whole emitted asset graph (first-paint
  *     + every other cacheable asset, see PRECACHE_REST_ASSETS), so
- *     `assetCacheFirst` finds this generation's copy and never falls through to
- *     the network — which would serve the NEWEST generation and graft
+ *     `assetCacheFirst` finds this generation's copy instead of falling through
+ *     to the network — which serves the NEWEST generation and grafts
  *     foreign-build bytes onto an old page (the `does not provide an export
  *     named …` skew). The same completeness is what makes the app work OFFLINE.
+ *     Caveat: this is only as good as the precache — a swallowed precache
+ *     failure (flaky net, or the storage-yield skip below) leaves a hole, and a
+ *     miss there still network-grafts. Fully closing the miss path (so the
+ *     fallback refuses cross-generation bytes) needs a per-generation guard and
+ *     is a follow-up, not done here.
  *   - We deliberately do NOT call clients.claim(). A freshly installed
  *     worker self-skipWaiting()s so it becomes the ACTIVE worker (and thus
  *     controls the NEXT load — so one reload, the user's own or our update
@@ -57,6 +62,15 @@ const META_CACHE = `${CACHE_PREFIX}meta`
 // Beyond the window the stale tab degrades to live bytes (possible skew),
 // and it's been nudged to reload by the update prompt the whole time.
 const KEEP_GENERATIONS = 3
+
+// Storage-yield floor: skip the heavy full-graph precache when the origin has
+// less than this much room left, so asset caches never consume the last
+// headroom the user's OPFS SQLite DB / IndexedDB needs to write (see the
+// install handler). Deliberately generous — the caches are bounded and small
+// (one graph × KEEP_GENERATIONS), the DB is the dominant, growing consumer, so
+// we bias hard toward leaving the DB room. Inert where quota is large (desktop:
+// GBs free); it only bites on genuinely storage-constrained devices.
+const MIN_FREE_BYTES_FOR_FULL_PRECACHE = 200 * 1024 * 1024
 
 // VENDOR_CACHE / META_CACHE are never generation-GC'd: the scoped activate GC
 // below only ever names this deploy's own shell-/assets-<id> caches, so these
@@ -142,34 +156,52 @@ const recordGeneration = async (id) => {
   await writeLedger(ids)
 }
 
+// Whether there's enough free storage to precache the full asset graph without
+// crowding the user's local database. Fails OPEN (returns true) whenever we
+// can't get a real estimate — a missing/legacy `StorageManager`, or a browser
+// that reports `quota`/`usage` as 0/undefined — so we degrade to the prior
+// best-effort behavior rather than silently disabling offline everywhere.
+const hasHeadroomForFullPrecache = async () => {
+  try {
+    const est = await self.navigator?.storage?.estimate?.()
+    if (!est || typeof est.quota !== 'number' || typeof est.usage !== 'number') return true
+    return est.quota - est.usage > MIN_FREE_BYTES_FOR_FULL_PRECACHE
+  } catch {
+    return true
+  }
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
-      await recordGeneration(BUILD_ID)
       const [shell, assets] = await Promise.all([
         caches.open(SHELL_CACHE),
         caches.open(ASSET_CACHE),
       ])
-      // Three cache modes, by what the browser's HTTP cache holds for each:
-      //   - SHELL_URLS → 'reload': always pull fresh HTML/icons from network.
-      //   - PRECACHE_ASSETS (first-paint) → 'default': the page just fetched
-      //     these exact unhashed URLs, so the HTTP cache holds THIS
-      //     generation's bytes — copying them into Cache Storage is near-free.
-      //   - PRECACHE_REST_ASSETS (all other cacheable assets) → 'reload': these
-      //     were NOT first-painted and their unhashed URLs carry per-deploy-
-      //     varying bytes, so a 'default' fetch could copy a STALE prior-deploy
-      //     entry out of the HTTP cache into this generation's cache — the exact
-      //     cross-generation skew this full precache exists to prevent. 'reload'
-      //     forces the network for the current bytes. (Cost: a deploy re-fetches
-      //     even byte-unchanged assets, since unhashed URLs give the SW no way to
-      //     prove a prior generation's entry is identical — a content-manifest
-      //     that lets us copy unchanged bytes from a retained generation is a
-      //     possible follow-up to reclaim that bandwidth.)
-      // Per-URL failures are swallowed so one 404 can't strand install. A fetch
-      // failure here (offline/flaky during an SW update) just leaves that entry
-      // absent from this generation; `assetCacheFirst` fetches + caches it on
-      // demand once online (self-heal), and the persistent IndexedDB compile
-      // cache (survives deploys) covers warm extension compiles regardless.
+      // Cache modes, chosen so a generation cache only ever holds THIS build's
+      // bytes for a URL — never a stale prior deploy's:
+      //   - SHELL_URLS → 'reload': always pull the fresh HTML/icons from network.
+      //   - PRECACHE_ASSETS (first-paint) + PRECACHE_REST_ASSETS → 'no-cache':
+      //     a CONDITIONAL revalidate. The unhashed URLs are served by GitHub
+      //     Pages with `Cache-Control: max-age=600` + a content ETag, so the
+      //     browser HTTP cache can hold a PRIOR generation's bytes inside that
+      //     window. 'default' would copy those stale bytes into this generation
+      //     (persistently poisoning it — the exact cross-generation export-skew
+      //     this precache exists to kill), and 'reload' would re-download every
+      //     asset on every deploy. 'no-cache' revalidates against the origin:
+      //     the ETag mismatches a stale entry → 200 with current bytes, and an
+      //     unchanged asset → 304 → the warm HTTP-cache bytes are reused (cheap,
+      //     and it's what keeps a redeploy from re-downloading unchanged files).
+      // Per-URL failures are swallowed so one 404 (or a `cache.put` quota
+      // rejection) can't strand install. NOTE: this makes each generation's
+      // cache self-contained only if the precache SUCCEEDS — a swallowed failure
+      // (flaky net, storage pressure) leaves an asset absent, and
+      // `assetCacheFirst`'s network fallback then serves the NEWEST deploy's
+      // bytes on that miss, which grafts a foreign generation. That fallback is
+      // "self-healing" ONLY while this generation is still the newest deploy;
+      // eliminating the graft on a genuine miss needs a per-generation guard and
+      // is a follow-up. The persistent IndexedDB compile cache (survives
+      // deploys) still covers warm extension compiles regardless.
       const fetchInto = (cache, url, mode) =>
         fetch(new Request(url, {cache: mode}))
           .then((res) => (res && res.ok ? cache.put(url, res) : null))
@@ -186,11 +218,29 @@ self.addEventListener('install', (event) => {
           Array.from({length: Math.min(limit, items.length)}, worker),
         )
       }
+      // Shell + first-paint are small and needed for offline boot → always cache.
       await Promise.all([
         ...SHELL_URLS.map((u) => fetchInto(shell, u, 'reload')),
-        ...PRECACHE_ASSETS.map((u) => fetchInto(assets, u, 'default')),
-        runPooled(PRECACHE_REST_ASSETS, 16, (u) => fetchInto(assets, u, 'reload')),
+        ...PRECACHE_ASSETS.map((u) => fetchInto(assets, u, 'no-cache')),
       ])
+      // Storage yield: the user's OPFS SQLite DB / IndexedDB are sacred; asset
+      // caches are disposable (re-fetchable from the origin). `persist()` is
+      // granted at boot, so the browser won't auto-evict — nothing reclaims cache
+      // space for a growing DB unless the SW yields voluntarily. So skip the
+      // heavy full-graph precache when the origin is near quota, rather than let
+      // it consume the last headroom a DB write needs. The generation then
+      // degrades to online-only / on-demand for that low-storage device (skew
+      // risk returns there — acceptable; data integrity outranks offline
+      // completeness), while shell + first-paint above keep it bootable.
+      if (await hasHeadroomForFullPrecache()) {
+        await runPooled(PRECACHE_REST_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache'))
+      }
+      // Record the generation ONLY after its cache is populated. Recording at
+      // the start would leave a phantom ledger id if the (now heavy) install is
+      // interrupted mid-precache — a later deploy's activate GC would then count
+      // that never-usable id toward KEEP_GENERATIONS and evict a real, still-
+      // needed older generation one deploy early.
+      await recordGeneration(BUILD_ID)
     })(),
   )
   // Become active immediately so the NEXT load is served by this build.
@@ -207,7 +257,6 @@ self.addEventListener('activate', (event) => {
     (async () => {
       const ledger = await readLedger()
       const keepIds = new Set(ledger.slice(-KEEP_GENERATIONS))
-      if (ledger.length > keepIds.size) await writeLedger([...keepIds])
 
       // Delete only THIS deploy's own now-expired generations. Cache Storage is
       // per-ORIGIN, so caches.keys() also lists the production deploy's caches
@@ -221,12 +270,26 @@ self.addEventListener('activate', (event) => {
       // unreadable/empty ledger yields no deletions (safe); vendor/meta and this
       // build's caches are simply never named here.
       const expiredIds = ledger.slice(0, Math.max(0, ledger.length - KEEP_GENERATIONS))
+      // Free space FIRST, then trim the ledger. The ledger write is a
+      // `cache.put`, which throws `QuotaExceededError` exactly when the origin
+      // is full — i.e. the moment GC matters most. Doing it before the deletes
+      // (the old order) let that throw abort activate and skip the deletes, so
+      // no space was ever reclaimed. Deletes don't depend on the trimmed ledger
+      // (expiredIds comes from the original), and a failed ledger trim is benign
+      // (a few stale ids that the next activate re-trims), so guard it.
       await Promise.all(
         expiredIds.flatMap((id) => [
           caches.delete(`${CACHE_PREFIX}shell-${id}`),
           caches.delete(`${CACHE_PREFIX}assets-${id}`),
         ]),
       )
+      if (ledger.length > keepIds.size) {
+        try {
+          await writeLedger([...keepIds])
+        } catch {
+          // benign — the ledger keeps a few extra ids; next activate re-trims.
+        }
+      }
       // NB: intentionally no clients.claim() — see the file header. Taking
       // over already-open pages is exactly what would let a new chunk land
       // in an old page mid-session.
@@ -269,11 +332,14 @@ const shellNetworkFirst = async (request, shellURL) => {
 }
 
 // Cache-first within THIS generation's caches, no revalidation. The
-// generation's assets are immutable, so a hit is always correct and a miss
-// (a lazy chunk not seen yet this session) is fetched once and stored so the
-// page keeps reading the one build it booted with. We check the shell cache
-// too (icons/manifest land there at install) — both belong to this
-// generation, so there's no cross-version skew.
+// generation's assets are immutable, so a HIT is always correct and skew-free.
+// We check the shell cache too (icons/manifest land there at install) — both
+// belong to this generation. Since `install` now precaches the WHOLE graph, a
+// miss should only happen when precache didn't complete (flaky net / storage
+// yield). The network fallback below then serves the NEWEST deploy's bytes,
+// which grafts a foreign generation onto an old page — correct only while this
+// IS the newest deploy. Closing that (a fallback that refuses cross-generation
+// bytes) needs a per-generation guard and is a follow-up.
 const assetCacheFirst = async (request) => {
   const assets = await caches.open(ASSET_CACHE)
   const cached =

@@ -126,7 +126,7 @@ const buildId = resolveBuildId()
 //     bytes. `collectRestAssets` drops any URL already in first-paint (no double
 //     fetch) and everything the SW wouldn't serve cache-first (maps, sw.js, …).
 const firstPaintAssets = collectPrecacheAssets()
-const {restAssets} = collectRestAssets({
+const restAssets = collectRestAssets({
   allFiles: walkDistFiles(),
   firstPaint: firstPaintAssets,
   toBaseUrl,

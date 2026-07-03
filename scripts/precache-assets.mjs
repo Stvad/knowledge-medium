@@ -31,20 +31,23 @@
  * Pure + dependency-injected (`allFiles` / `toBaseUrl`) so it unit-tests
  * without touching a real dist tree.
  */
-import {posix} from 'node:path'
-
 // Keep in sync with ASSET_EXTENSION in public/sw.js — the set of same-origin
-// files the SW serves cache-first from the generation cache.
+// files the SW serves cache-first from the generation cache. A drift-guard test
+// in precache-assets.test.ts asserts the two literals stay identical.
 export const ASSET_EXTENSION =
   /\.(?:js|mjs|css|wasm|woff2?|ttf|otf|png|svg|jpe?g|webp|gif|ico)$/
 
 // The service worker file is same-origin JS but must never be cached as an app
 // asset: it's fetched + version-checked by the SW machinery, never `import`ed.
-const EXCLUDE_BASENAMES = new Set(['sw.js'])
+// Matched by ROOT-relative path (not basename) so ONLY the emitted `dist/sw.js`
+// is dropped — a bundled dep that happens to ship a nested `sw.js` stays
+// precached (excluding it by basename would leave it to network-graft on a
+// post-deploy miss).
+const EXCLUDE_PATHS = new Set(['sw.js'])
 
 /** True for a dist-relative path the SW would serve from the generation cache. */
 export const isPrecacheableAsset = (relPath) =>
-  ASSET_EXTENSION.test(relPath) && !EXCLUDE_BASENAMES.has(posix.basename(relPath))
+  ASSET_EXTENSION.test(relPath) && !EXCLUDE_PATHS.has(relPath)
 
 /**
  * Partition the emitted graph into the "rest" precache list — every
@@ -64,7 +67,7 @@ export const isPrecacheableAsset = (relPath) =>
  * @param {string[]} p.allFiles  dist-relative POSIX paths of every emitted file
  * @param {string[]} p.firstPaint base-prefixed first-paint URLs (from the HTML)
  * @param {(rel: string) => string} p.toBaseUrl dist-rel → base-prefixed URL
- * @returns {{restAssets: string[]}} base-prefixed, deduped, sorted
+ * @returns {string[]} base-prefixed, deduped, sorted
  */
 export const collectRestAssets = ({allFiles, firstPaint, toBaseUrl}) => {
   const firstPaintSet = new Set(firstPaint)
@@ -75,5 +78,5 @@ export const collectRestAssets = ({allFiles, firstPaint, toBaseUrl}) => {
     if (firstPaintSet.has(url)) continue
     rest.add(url)
   }
-  return {restAssets: [...rest].sort()}
+  return [...rest].sort()
 }
