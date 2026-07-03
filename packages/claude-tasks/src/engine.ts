@@ -116,10 +116,11 @@ export const createEngine = (deps: EngineDeps) => {
     claudeBin: config.claudeBin,
     prompt,
     cwd: watcher.cwd ?? os.homedir(),
-    allowedTools: [
+    allowedTools: [...new Set([
       ...(mcpConfigPath ? KM_MCP_ALLOWED_TOOLS : []),
+      ...config.defaultAllowedTools,
       ...watcher.allowedTools,
-    ],
+    ])],
     mcpConfigPath: mcpConfigPath ?? undefined,
     model: watcher.model,
     resumeSessionId,

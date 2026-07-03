@@ -126,6 +126,15 @@ export const configSchema = z.strictObject({
    *  to pure polling when the tab/bridge doesn't support it. */
   push: z.boolean().default(true),
   claudeBin: z.string().default('claude'),
+  /** Tools EVERY spawned run may use, beyond the km MCP graph tools;
+   *  per-watcher `allowedTools` adds on top. Defaults to web research
+   *  (WebSearch + WebFetch) — the common "look this up for me" mention
+   *  needs it, and neither tool touches the local machine. TRADE-OFF:
+   *  WebFetch ingests arbitrary page text, so a prompt-injected page
+   *  can steer a run that also holds graph WRITE tools — including
+   *  exfiltrating note content through crafted fetch URLs. Accepted
+   *  default here; set `defaultAllowedTools: []` to run graph-only. */
+  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch']),
   maxConcurrent: z.number().int().positive().default(2),
   /** Global spend circuit-breaker: at most this many run launches
    *  (spawns or channel deliveries) per rolling hour, across all

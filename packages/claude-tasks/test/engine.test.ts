@@ -543,7 +543,7 @@ describe('mention lifecycle', () => {
     expect(second.runTask).not.toHaveBeenCalled()
   })
 
-  it('passes the km MCP allowlist plus watcher extras to the run', async () => {
+  it('passes the km MCP allowlist plus default web tools plus watcher extras to the run', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] with tools'}},
@@ -562,7 +562,33 @@ describe('mention lifecycle', () => {
 
     const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
     expect(tools).toContain('mcp__km__get_block')
+    expect(tools).toContain('WebSearch')
+    expect(tools).toContain('WebFetch')
     expect(tools).toContain('Bash(git:*)')
+  })
+
+  it('defaultAllowedTools: [] keeps runs graph-only (web-tools opt-out)', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] sensitive graph'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({
+        defaultAllowedTools: [],
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
+    expect(tools).toContain('mcp__km__get_block')
+    expect(tools).not.toContain('WebSearch')
+    expect(tools).not.toContain('WebFetch')
   })
 })
 

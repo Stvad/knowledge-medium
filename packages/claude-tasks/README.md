@@ -84,7 +84,7 @@ Runs execute via `claude -p` on a machine authenticated with `claude login`. The
 1. Watcher sees a new backlink to `target` whose source block has no `claude:status` property (one batched SQL per tick — processed mentions stay cheap forever). Blocks edited in the last `quietMs` (default 15 s) wait — the daemon shouldn't claim (and bill) a half-typed request.
 2. Claim: `claude:status=running` + `claude:watcher` + `claude:attempts` + `claude:updated-at` written to the block, then **claim-verified** (re-read; if a competing daemon overwrote it, this one backs off).
 3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped).
-4. `claude -p` runs with the **km MCP graph tools only** (fail-closed `--allowedTools` + `--strict-mcp-config`; add e.g. `"Bash(git:*)"` per watcher to opt into more). `cwd` defaults to `$HOME`.
+4. `claude -p` runs with the **km MCP graph tools + web research** (fail-closed `--allowedTools` + `--strict-mcp-config`; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and e.g. `"Bash(git:*)"` per watcher opts into more). `cwd` defaults to `$HOME`.
 5. Reply text lands as a child block (marked `claude:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `claude:session`.
 6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `claude:session` and `--resume`s it (never two concurrent resumes of one session).
 
@@ -131,7 +131,8 @@ Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql
 ## Security posture
 
 - The daemon's bridge token is scoped to its own profile — revoke it in the app's token dialog to kill all graph access at once.
-- Spawned runs get **no Bash and no filesystem tools by default**; graph MCP tools only. Watchers that operate on code repos must opt in via `allowedTools` + `cwd`, which is a deliberate, per-watcher decision.
+- Spawned runs get **no Bash and no filesystem tools by default**; graph MCP tools plus `WebSearch`/`WebFetch` (the top-level `defaultAllowedTools`). Watchers that operate on code repos must opt in via `allowedTools` + `cwd`, which is a deliberate, per-watcher decision.
+- **Web-tools trade-off:** `WebFetch` ingests arbitrary page text, so a prompt-injected page can steer a run that also holds graph *write* tools — including exfiltrating note content through crafted fetch URLs. Neither web tool touches the local machine, and `runsPerHour` bounds the blast radius, but if your notes are sensitive set `"defaultAllowedTools": []` to keep runs graph-only.
 - No `--dangerously-skip-permissions` anywhere; print mode denies anything outside the allowlist.
 
 ## Ambient mode via channels (EXPERIMENTAL)
