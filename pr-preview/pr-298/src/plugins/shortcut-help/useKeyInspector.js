@@ -53,18 +53,18 @@ var hasTextSelection = () => {
 *  layout- and modifier-independent; `key` is the fallback where `code`
 *  is unavailable (some test environments). */
 var physicalKeyId = (event) => event.code || event.key;
-var useKeyInspector = (open, bindings, onClose) => {
-	const $ = c(15);
+var useKeyInspector = (open, bindings, onClose, capture) => {
+	const $ = c(18);
 	const [state, setState] = useState(EMPTY);
-	const stateRef = useRef(state);
+	const captureRef = useRef(capture ?? null);
 	let t0;
 	let t1;
-	if ($[0] !== state) {
+	if ($[0] !== capture) {
 		t0 = () => {
-			stateRef.current = state;
+			captureRef.current = capture ?? null;
 		};
-		t1 = [state];
-		$[0] = state;
+		t1 = [capture];
+		$[0] = capture;
 		$[1] = t0;
 		$[2] = t1;
 	} else {
@@ -72,12 +72,28 @@ var useKeyInspector = (open, bindings, onClose) => {
 		t1 = $[2];
 	}
 	useLayoutEffect(t0, t1);
+	const stateRef = useRef(state);
 	let t2;
-	if ($[3] === Symbol.for("react.memo_cache_sentinel")) {
-		t2 = /* @__PURE__ */ new Set();
-		$[3] = t2;
-	} else t2 = $[3];
-	const downWhileOpenRef = useRef(t2);
+	let t3;
+	if ($[3] !== state) {
+		t2 = () => {
+			stateRef.current = state;
+		};
+		t3 = [state];
+		$[3] = state;
+		$[4] = t2;
+		$[5] = t3;
+	} else {
+		t2 = $[4];
+		t3 = $[5];
+	}
+	useLayoutEffect(t2, t3);
+	let t4;
+	if ($[6] === Symbol.for("react.memo_cache_sentinel")) {
+		t4 = /* @__PURE__ */ new Set();
+		$[6] = t4;
+	} else t4 = $[6];
+	const downWhileOpenRef = useRef(t4);
 	const [prevOpen, setPrevOpen] = useState(open);
 	const [prevBindings, setPrevBindings] = useState(bindings);
 	if (prevOpen !== open || prevBindings !== bindings) {
@@ -85,27 +101,27 @@ var useKeyInspector = (open, bindings, onClose) => {
 		setPrevBindings(bindings);
 		setState(EMPTY);
 	}
-	let t3;
-	let t4;
-	if ($[4] !== open) {
-		t3 = () => {
+	let t5;
+	let t6;
+	if ($[7] !== open) {
+		t5 = () => {
 			if (!open) return;
 			downWhileOpenRef.current = /* @__PURE__ */ new Set();
 			cancelArmedHolds();
 		};
-		t4 = [open];
-		$[4] = open;
-		$[5] = t3;
-		$[6] = t4;
+		t6 = [open];
+		$[7] = open;
+		$[8] = t5;
+		$[9] = t6;
 	} else {
-		t3 = $[5];
-		t4 = $[6];
+		t5 = $[8];
+		t6 = $[9];
 	}
-	useEffect(t3, t4);
-	let t5;
-	let t6;
-	if ($[7] !== bindings || $[8] !== onClose || $[9] !== open) {
-		t5 = () => {
+	useEffect(t5, t6);
+	let t7;
+	let t8;
+	if ($[10] !== bindings || $[11] !== onClose || $[12] !== open) {
+		t7 = () => {
 			if (!open) return;
 			const clearPartial = () => {
 				setState(_temp);
@@ -113,21 +129,41 @@ var useKeyInspector = (open, bindings, onClose) => {
 			const onKeydown = (rawEvent) => {
 				rawEvent.stopPropagation();
 				if (!rawEvent.repeat) downWhileOpenRef.current.add(physicalKeyId(rawEvent));
+				const capturing = captureRef.current;
+				if (capturing) {
+					rawEvent.preventDefault();
+					if (rawEvent.repeat) return;
+					if (rawEvent.key === "Escape") {
+						capturing.onCancel();
+						return;
+					}
+					if (isModifierOnly(rawEvent)) {
+						const partial = modifierPreview(rawEvent);
+						setState((s_0) => ({
+							...s_0,
+							partial
+						}));
+						return;
+					}
+					const chord = chordFromEvent(rawEvent);
+					if (chord) capturing.onChord(chord);
+					return;
+				}
 				if (isCopyChord(rawEvent) && hasTextSelection()) return;
 				rawEvent.preventDefault();
 				if (rawEvent.repeat) return;
 				const event = withRecoveredLetterKey(rawEvent);
 				if (isModifierOnly(event)) {
-					const partial = modifierPreview(event);
-					setState((s_0) => ({
-						...s_0,
-						partial
+					const partial_0 = modifierPreview(event);
+					setState((s_1) => ({
+						...s_1,
+						partial: partial_0
 					}));
 					return;
 				}
 				if (event.key === "Escape") {
-					const s_1 = stateRef.current;
-					if (s_1.pressed.length > 0 || s_1.matches || s_1.pendingMatches || s_1.unmatched || s_1.partial) setState(EMPTY);
+					const s_2 = stateRef.current;
+					if (s_2.pressed.length > 0 || s_2.matches || s_2.pendingMatches || s_2.unmatched || s_2.partial) setState(EMPTY);
 					else onClose();
 					return;
 				}
@@ -173,42 +209,42 @@ var useKeyInspector = (open, bindings, onClose) => {
 				window.removeEventListener("blur", onBlur);
 			};
 		};
-		t6 = [
+		t8 = [
 			open,
 			bindings,
 			onClose
 		];
-		$[7] = bindings;
-		$[8] = onClose;
-		$[9] = open;
-		$[10] = t5;
-		$[11] = t6;
+		$[10] = bindings;
+		$[11] = onClose;
+		$[12] = open;
+		$[13] = t7;
+		$[14] = t8;
 	} else {
-		t5 = $[10];
-		t6 = $[11];
+		t7 = $[13];
+		t8 = $[14];
 	}
-	useEffect(t5, t6);
-	let t7;
-	if ($[12] === Symbol.for("react.memo_cache_sentinel")) {
-		t7 = (binding) => {
+	useEffect(t7, t8);
+	let t9;
+	if ($[15] === Symbol.for("react.memo_cache_sentinel")) {
+		t9 = (binding) => {
 			setState({
 				...EMPTY,
 				matches: [binding]
 			});
 		};
-		$[12] = t7;
-	} else t7 = $[12];
-	const selectBinding = t7;
-	let t8;
-	if ($[13] !== state) {
-		t8 = {
+		$[15] = t9;
+	} else t9 = $[15];
+	const selectBinding = t9;
+	let t10;
+	if ($[16] !== state) {
+		t10 = {
 			state,
 			selectBinding
 		};
-		$[13] = state;
-		$[14] = t8;
-	} else t8 = $[14];
-	return t8;
+		$[16] = state;
+		$[17] = t10;
+	} else t10 = $[17];
+	return t10;
 };
 function _temp(s) {
 	return s.partial ? {

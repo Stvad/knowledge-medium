@@ -1,6 +1,7 @@
 import { getPluginPrefsBlock } from "../../data/stateBlocks.js";
 import { KEYBINDING_OVERRIDE_USER_SOURCE, keybindingOverridesFacet } from "../../shortcuts/keybindingOverrides.js";
 import { keybindingOverridesProp, keybindingsPrefsType } from "./config.js";
+import { toFacetOverride } from "./overrideStore.js";
 //#region src/plugins/keybindings-settings/effect.ts
 var readOverridesFromBlock = (block) => {
 	try {
@@ -10,18 +11,12 @@ var readOverridesFromBlock = (block) => {
 		return [];
 	}
 };
-var toFacetEntry = (entry) => ({
-	actionId: entry.actionId,
-	context: entry.context,
-	binding: entry.binding,
-	source: KEYBINDING_OVERRIDE_USER_SOURCE
-});
 /** Push the stored overrides into the facet's runtime bucket. The
 *  facet runtime invalidates its cache and fires per-facet listeners,
 *  which `HotkeyReconciler` listens to and uses to re-run
 *  `getEffectiveActions`. */
 var pushOverridesToRuntime = (runtime, stored) => {
-	runtime.setRuntimeContributions(keybindingOverridesFacet, KEYBINDING_OVERRIDE_USER_SOURCE, stored.map(toFacetEntry));
+	runtime.setRuntimeContributions(keybindingOverridesFacet, KEYBINDING_OVERRIDE_USER_SOURCE, stored.map(toFacetOverride));
 };
 var keybindingsSyncEffect = {
 	id: "keybindings.sync-runtime",

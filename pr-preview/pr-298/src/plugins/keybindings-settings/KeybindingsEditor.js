@@ -7,7 +7,6 @@ import { Plus } from "../../../node_modules/lucide-react/dist/esm/icons/plus.js"
 import { RotateCcw } from "../../../node_modules/lucide-react/dist/esm/icons/rotate-ccw.js";
 import { TriangleAlert } from "../../../node_modules/lucide-react/dist/esm/icons/triangle-alert.js";
 import { X } from "../../../node_modules/lucide-react/dist/esm/icons/x.js";
-import { KEYBINDING_OVERRIDE_USER_SOURCE } from "../../shortcuts/keybindingOverrides.js";
 import { normalizeChord } from "../../shortcuts/canonicalizeChord.js";
 import { applyKeybindingOverrides } from "../../shortcuts/applyKeybindingOverrides.js";
 import { getActionsBeforeKeybindingOverrides } from "../../shortcuts/effectiveActions.js";
@@ -15,6 +14,7 @@ import { Kbd } from "../../components/ui/kbd.js";
 import { formatChord } from "./keyCapture.js";
 import { overrideEntryKey } from "./config.js";
 import { findKeybindingConflicts } from "../../shortcuts/keybindingConflicts.js";
+import { toFacetOverrides, withRemovedOverride, withReplacedOverride } from "./overrideStore.js";
 import { KeyCaptureInput } from "./KeyCaptureInput.js";
 import { useState } from "react";
 import { c } from "react/compiler-runtime";
@@ -36,20 +36,6 @@ import { Fragment as Fragment$1, jsx, jsxs } from "react/jsx-runtime";
 * and dispatches `refreshAppRuntime`, after which `HotkeyReconciler`
 * picks up the new bindings via the next `getEffectiveActions` pass.
 */
-var toFacetEntries = (stored) => stored.map((entry) => ({
-	actionId: entry.actionId,
-	context: entry.context,
-	binding: entry.binding,
-	source: KEYBINDING_OVERRIDE_USER_SOURCE
-}));
-var withReplaced = (stored, next) => {
-	const key = overrideEntryKey(next.context, next.actionId);
-	return [...stored.filter((e) => overrideEntryKey(e.context, e.actionId) !== key), next];
-};
-var withRemoved = (stored, actionId, context) => {
-	const key = overrideEntryKey(context, actionId);
-	return stored.filter((e) => overrideEntryKey(e.context, e.actionId) !== key);
-};
 var chordOf = (action) => {
 	const binding = action.defaultBinding;
 	if (!binding) return null;
@@ -102,7 +88,7 @@ var KeybindingsEditor = (t0) => {
 	const contextDisplay = map;
 	let t3;
 	if ($[11] !== value) {
-		t3 = toFacetEntries(value);
+		t3 = toFacetOverrides(value);
 		$[11] = value;
 		$[12] = t3;
 	} else t3 = $[12];
@@ -197,7 +183,7 @@ var KeybindingsEditor = (t0) => {
 		t10 = (chord) => {
 			if (!capturing) return;
 			const normalized = normalizeChord(chord);
-			onChange(withReplaced(value, {
+			onChange(withReplacedOverride(value, {
 				actionId: capturing.actionId,
 				context: capturing.context,
 				binding: { keys: normalized }
@@ -224,7 +210,7 @@ var KeybindingsEditor = (t0) => {
 	let t12;
 	if ($[32] !== onChange || $[33] !== value) {
 		t12 = (actionId, context) => {
-			onChange(withRemoved(value, actionId, context));
+			onChange(withRemovedOverride(value, actionId, context));
 		};
 		$[32] = onChange;
 		$[33] = value;
@@ -234,7 +220,7 @@ var KeybindingsEditor = (t0) => {
 	let t13;
 	if ($[35] !== onChange || $[36] !== value) {
 		t13 = (actionId_0, context_0) => {
-			onChange(withReplaced(value, {
+			onChange(withReplacedOverride(value, {
 				actionId: actionId_0,
 				context: context_0,
 				binding: { unbound: true }
