@@ -79,6 +79,9 @@ export const startupRecordProp = defineProperty<StartupRecordData | undefined>('
 export const startupMetricsUIStateType = defineBlockType({
   id: 'startup-metrics',
   label: 'Startup metrics',
+  // Plumbing for the # dropdown, but the chip is informative on the
+  // record block itself.
+  hideFromCompletion: true,
   properties: [],
 })
 

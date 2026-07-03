@@ -12,7 +12,7 @@
  * cosmetic. (Capture — Phase 5 — populates them; this phase only defines + renders.)
  */
 
-import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
+import { ChangeScope, codecs, defineBlockType, defineProperty, INFRASTRUCTURE_TYPE_DISPLAY } from '@/data/api'
 import type { PropertySchema, TypeContribution } from '@/data/api'
 
 export const MEDIA_TYPE = 'media'
@@ -58,6 +58,7 @@ export const MEDIA_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
 export const MEDIA_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
   id: MEDIA_TYPE,
   label: 'Media',
+  ...INFRASTRUCTURE_TYPE_DISPLAY,
   description: 'An image or file attachment, stored content-addressed and embedded via !((id)).',
   // Lift the media:* fields so addType('media') materialises their defaults and
   // the property panel surfaces them.
@@ -127,5 +128,6 @@ export const ASSETS_ALIAS = 'Assets'
 export const ASSETS_TYPE_CONTRIBUTION: TypeContribution = defineBlockType({
   id: ASSETS_TYPE,
   label: 'Assets',
+  ...INFRASTRUCTURE_TYPE_DISPLAY,
   description: 'The workspace-level container that holds content-addressed media attachment blocks.',
 })

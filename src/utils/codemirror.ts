@@ -6,6 +6,31 @@ import { insertNewline } from '@codemirror/commands'
 import { acceptCompletion, completionStatus } from '@codemirror/autocomplete'
 import { isIOS } from '@/utils/platform.js'
 
+/** Clamp every range of a selection into `[0, docLength]`. For
+ *  dispatching a REMEMBERED selection against a doc that may have
+ *  shrunk since it was captured — a debounce-persisted selection
+ *  restored on focus, or a selection carried across an external
+ *  content adoption. CodeMirror throws "Selection points outside of
+ *  document" on a raw out-of-range anchor, and (for adoption) omitting
+ *  the selection instead would let default mapping collapse the cursor
+ *  to 0. */
+export const clampSelectionToLength = (
+  selection: EditorSelection,
+  docLength: number,
+): EditorSelection =>
+  EditorSelection.create(
+    selection.ranges.map(range =>
+      EditorSelection.range(
+        // Both bounds: persisted selections are synced data a bridge /
+        // import can corrupt. An overlong offset throws at dispatch; a
+        // negative one is silently ACCEPTED into state (checkSelection
+        // only rejects past-end), leaving a corrupt selection live.
+        Math.max(0, Math.min(range.anchor, docLength)),
+        Math.max(0, Math.min(range.head, docLength)),
+      )),
+    selection.mainIndex,
+  )
+
 /** Produce the change/range spec for one selection range that either
  *  inserts an empty `open`/`close` pair at the cursor or wraps the
  *  selection with them, keeping the selection inside the wrappers.

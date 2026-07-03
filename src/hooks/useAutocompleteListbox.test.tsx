@@ -110,4 +110,12 @@ describe('useAutocompleteListbox', () => {
     expect(hook.result.current.getOptionProps(0).id).toBeUndefined()
     expect(hook.result.current.activeDescendantId).toBeUndefined()
   })
+
+  it('drops the active-descendant id when the list shrinks below the active index', () => {
+    const { hook, onCommit, setOpen } = setup({ itemCount: 4, listboxId: 'lb' })
+    act(() => hook.result.current.setActiveIndex(3))
+    expect(hook.result.current.activeDescendantId).toBe('lb-option-3')
+    hook.rerender({ itemCount: 2, onCommit, setOpen, listboxId: 'lb' })
+    expect(hook.result.current.activeDescendantId).toBeUndefined()
+  })
 })

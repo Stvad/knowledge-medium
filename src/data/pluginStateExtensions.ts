@@ -51,7 +51,11 @@ export const pluginPrefsExtension = (
   type: TypeContribution,
   source: string,
 ): readonly AppExtension[] => [
-  typesFacet.of(type, {source}),
+  // Prefs containers are plumbing for the # dropdown (never offer to
+  // tag a block "Backlinks prefs"), but their chip is informative when
+  // the container block itself is on screen — so only completion is
+  // hidden.
+  typesFacet.of({...type, hideFromCompletion: true}, {source}),
   appEffectsFacet.of(pluginPrefsBootstrapEffect(type), {source}),
 ]
 
@@ -62,6 +66,7 @@ export const pluginUIStateExtension = (
   type: TypeContribution,
   source: string,
 ): readonly AppExtension[] => [
-  typesFacet.of(type, {source}),
+  // UI-state containers are plumbing, not tags — see pluginPrefsExtension.
+  typesFacet.of({...type, hideFromCompletion: true}, {source}),
   appEffectsFacet.of(pluginUIStateBootstrapEffect(type), {source}),
 ]

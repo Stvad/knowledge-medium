@@ -1,7 +1,9 @@
-import { defineBlockType, type TypeContribution } from '@/data/api'
+import { defineBlockType, INFRASTRUCTURE_TYPE_DISPLAY, type TypeContribution } from '@/data/api'
 import {
   aliasesProp,
+  blockTypeColorProp,
   blockTypeDescriptionProp,
+  blockTypeHideFromBlockDisplayProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
   extensionDescriptionProp,
@@ -43,14 +45,18 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
     id: EXTENSION_TYPE,
     label: 'Extension',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [extensionNameProp, extensionDescriptionProp],
   }),
-  defineBlockType({id: PAGE_TYPE, label: 'Page', properties: [aliasesProp]}),
-  defineBlockType({id: PANEL_TYPE, label: 'Panel'}),
-  defineBlockType({id: PANEL_STACK_TYPE, label: 'Panel stack'}),
+  defineBlockType({id: PAGE_TYPE, label: 'Page', ...INFRASTRUCTURE_TYPE_DISPLAY, properties: [aliasesProp]}),
+  // Panels/user pages ARE plumbing for the # dropdown, but their chips
+  // are informative when the block itself is on screen — keep those.
+  defineBlockType({id: PANEL_TYPE, label: 'Panel', hideFromCompletion: true}),
+  defineBlockType({id: PANEL_STACK_TYPE, label: 'Panel stack', hideFromCompletion: true}),
   defineBlockType({
     id: PROPERTY_SCHEMA_TYPE,
     label: 'Property schema',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
     // Lift these so addType('property-schema') auto-materialises them
     // and the panel surfaces them through the type-section path.
     properties: [propertyNameProp, presetIdProp, presetConfigProp],
@@ -58,28 +64,42 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
     id: PROPERTIES_PAGE_TYPE,
     label: 'Properties page',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
   defineBlockType({
     id: BLOCK_TYPE_TYPE,
     label: 'Type',
-    // Lift label / description / properties so the panel surfaces them
-    // through the type-section path when editing a block-type block.
-    properties: [blockTypeLabelProp, blockTypeDescriptionProp, blockTypePropertiesProp],
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
+    // Lift label / description / properties / tag-display fields so the
+    // panel surfaces them through the type-section path when editing a
+    // block-type block.
+    properties: [
+      blockTypeLabelProp,
+      blockTypeDescriptionProp,
+      blockTypePropertiesProp,
+      blockTypeHideFromBlockDisplayProp,
+      blockTypeColorProp,
+    ],
   }),
   defineBlockType({
     id: TYPES_PAGE_TYPE,
     label: 'Types page',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
   defineBlockType({
     id: RECENTS_PAGE_TYPE,
     label: 'Recents page',
+    ...INFRASTRUCTURE_TYPE_DISPLAY,
     properties: [aliasesProp],
   }),
   defineBlockType({
     id: USER_TYPE,
     label: 'User',
+    // Never offered by the # dropdown, but the chip is informative on
+    // the user page itself (see the Panel comment above).
+    hideFromCompletion: true,
     // Lift aliases + id so the property panel surfaces them and the id
     // auto-materialises when `addType('user')` runs.
     properties: [aliasesProp, userIdProp],

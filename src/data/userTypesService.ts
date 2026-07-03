@@ -18,6 +18,7 @@
 
 import {
   type AnyPropertySchema,
+  type PropertySchema,
   type TypeContribution,
 } from '@/data/api'
 import type { Block } from '@/data/block'
@@ -27,7 +28,9 @@ import type {
   ProjectorHandle,
 } from '@/data/projectorRuntime'
 import {
+  blockTypeColorProp,
   blockTypeDescriptionProp,
+  blockTypeHideFromBlockDisplayProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
 } from '@/data/properties'
@@ -39,6 +42,15 @@ import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 export const USER_TYPES_PROJECTOR_ID = 'user-types'
 
 const USER_DATA_SOURCE_ID = 'user-data'
+
+const safeDisplayProp = <T,>(block: Block, prop: PropertySchema<T>, fallback: T): T => {
+  try {
+    return block.peekProperty(prop) ?? fallback
+  } catch (err) {
+    console.warn(`[UserTypesService] block ${block.id}: malformed ${prop.name}; using default`, err)
+    return fallback
+  }
+}
 
 /** Build a TypeContribution from a user-authored block-type block.
  *  Returns null with a logged diagnostic when the label is empty;
@@ -55,6 +67,13 @@ const tryBuildType = (
     return null
   }
   const description = block.peekProperty(blockTypeDescriptionProp) ?? ''
+  // Display-only props must not gate registration: a malformed value
+  // (a raw bridge/import write of e.g. "true" into the boolean) decodes
+  // with a CodecError, and letting that skip the row would drop the
+  // type from every picker and re-offer "Create type" duplicates.
+  // Degrade to the default instead.
+  const hideFromBlockDisplay = safeDisplayProp(block, blockTypeHideFromBlockDisplayProp, false)
+  const color = safeDisplayProp(block, blockTypeColorProp, '').trim()
   const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
   const properties: AnyPropertySchema[] = []
   for (const refId of refIds) {
@@ -65,6 +84,8 @@ const tryBuildType = (
     id: block.id,
     label,
     ...(description ? {description} : {}),
+    ...(hideFromBlockDisplay ? {hideFromBlockDisplay} : {}),
+    ...(color ? {color} : {}),
     properties,
   }
 }
@@ -83,6 +104,7 @@ const contributionsEqual = (
     const ac = a[i]
     const bc = b[i]
     if (ac.id !== bc.id || ac.label !== bc.label || ac.description !== bc.description) return false
+    if (ac.hideFromBlockDisplay !== bc.hideFromBlockDisplay || ac.color !== bc.color) return false
     const ap = ac.properties ?? []
     const bp = bc.properties ?? []
     if (ap.length !== bp.length) return false
