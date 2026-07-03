@@ -1,0 +1,139 @@
+/**
+ * Push loop — the daemon's consumer side of the in-tab watch-events
+ * facility. Registers the config's watchers with the tab (detection
+ * runs where the data layer is reactive), long-polls the bridge events
+ * channel, and turns every settle event into an immediate engine tick.
+ *
+ * Events are ACCELERATORS, not truth: the tick re-derives everything
+ * from graph state (status props, baselines, cursors), so duplicate,
+ * missed, or spurious events cost at most one cheap tick — the polling
+ * sweep in daemon.ts remains the correctness backstop. That's what
+ * keeps this loop allowed to fail: any error just degrades to sweep
+ * latency, never to missed work.
+ */
+import { errorMessage, type BridgeClient } from '@knowledge-medium/agent-cli/client'
+import type { WatchEventsWatcher } from '@knowledge-medium/agent-cli/protocol'
+import type { DaemonConfig } from './config.js'
+import type { Graph } from './graph.js'
+
+export const PUSH_CONSUMER = 'claude-tasks'
+
+/** Tab-side registrations expire without a refresh (a dead daemon must
+ *  not leave watchers running forever); refresh at half the TTL so one
+ *  missed cycle doesn't lapse the registration. */
+export const REGISTRATION_TTL_MS = 10 * 60_000
+export const REGISTRATION_REFRESH_MS = REGISTRATION_TTL_MS / 2
+
+/** Settle window for query watchers: no user-typing semantics to wait
+ *  out (rows appear atomically), just burst-coalescing. */
+const QUERY_SETTLE_MS = 1_000
+
+const EVENTS_TIMEOUT_MS = 25_000
+const ERROR_BACKOFF_MS = 15_000
+/** An old tab bundle rejects the watch-events command outright; retry
+ *  slowly — a reload may bring the new bundle. */
+const UNSUPPORTED_BACKOFF_MS = 5 * 60_000
+
+export interface PushDeps {
+  client: Pick<BridgeClient, 'runCommand' | 'nextEvents'>
+  config: DaemonConfig
+  graph: Pick<Graph, 'resolvePageId'>
+  /** Ask the main loop for an immediate tick (coalesced there). */
+  requestTick: () => void
+  log: (message: string) => void
+  isStopping: () => boolean
+  /** Interruptible sleep (resolves early on shutdown). */
+  nap: (ms: number) => Promise<void>
+  /** Aborts in-flight long-polls on shutdown. */
+  stopSignal?: AbortSignal
+  now?: () => number
+}
+
+const isUnsupportedCommand = (error: unknown): boolean => {
+  const message = errorMessage(error)
+  return message.includes('Unknown agent runtime command')
+    || message.includes('Invalid command body')
+}
+
+export const buildRegistrationWatchers = async (
+  config: DaemonConfig,
+  graph: Pick<Graph, 'resolvePageId'>,
+): Promise<WatchEventsWatcher[]> =>
+  Promise.all(config.watchers.map(async (watcher): Promise<WatchEventsWatcher> =>
+    watcher.kind === 'backlinks'
+      ? {
+          kind: 'backlinks',
+          name: watcher.name,
+          targetId: await graph.resolvePageId(watcher.target),
+          // The tab measures the quiet period at the source, so by the
+          // time the event lands the engine's own quiet gate passes.
+          settleMs: watcher.quietMs,
+        }
+      : {
+          kind: 'sql',
+          name: watcher.name,
+          sql: watcher.sql,
+          params: watcher.params,
+          tables: watcher.tables,
+          settleMs: QUERY_SETTLE_MS,
+        },
+  ))
+
+export const startPushLoop = async (deps: PushDeps): Promise<void> => {
+  const {client, config, graph, requestTick, log, isStopping, nap, stopSignal} = deps
+  const now = deps.now ?? Date.now
+
+  let cursor: number | null = null
+  // null = not registered (never, or invalidated by an error/reset) —
+  // NOT epoch 0, which would make first registration depend on the size
+  // of the clock value.
+  let registeredAt: number | null = null
+  let announced = false
+
+  while (!isStopping()) {
+    try {
+      if (registeredAt === null || now() - registeredAt >= REGISTRATION_REFRESH_MS) {
+        const watchers = await buildRegistrationWatchers(config, graph)
+        await client.runCommand({
+          type: 'watch-events',
+          consumer: PUSH_CONSUMER,
+          watchers,
+          ttlMs: REGISTRATION_TTL_MS,
+        })
+        registeredAt = now()
+        if (!announced) {
+          announced = true
+          log(`push: watch-events registered (${watchers.map(watcher => watcher.name).join(', ')}) — events beat the ${config.pollIntervalMs}ms sweep`)
+        }
+      }
+
+      const response = await client.nextEvents({
+        afterSeq: cursor,
+        timeoutMs: EVENTS_TIMEOUT_MS,
+        signal: stopSignal,
+      })
+      cursor = response.nextSeq
+      if (response.reset) {
+        // Bridge restarted: registration state is gone too, and unknown
+        // events may have been dropped — re-register and sweep once.
+        registeredAt = null
+        log('push: bridge restarted — re-registering and sweeping')
+        requestTick()
+        continue
+      }
+      const relevant = response.events.some(entry =>
+        entry.event['type'] === 'watcher-settled' && entry.event['consumer'] === PUSH_CONSUMER)
+      if (relevant) requestTick()
+    } catch (error) {
+      if (isStopping()) return
+      registeredAt = null // whatever broke, re-register once it heals
+      if (isUnsupportedCommand(error)) {
+        log(`push: tab does not support watch-events (${errorMessage(error)}) — polling only; retrying in ${UNSUPPORTED_BACKOFF_MS / 60_000}min`)
+        await nap(UNSUPPORTED_BACKOFF_MS)
+      } else {
+        log(`push: ${errorMessage(error)} — retrying in ${ERROR_BACKOFF_MS / 1000}s`)
+        await nap(ERROR_BACKOFF_MS)
+      }
+    }
+  }
+}

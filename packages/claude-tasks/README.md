@@ -98,6 +98,14 @@ Failures reply visibly (`⚠️ …`) and set `claude:status=error` + `claude:er
 - The default prompt forbids writing `[[claude]]`, and the MCP write tools **refuse** any reference to a watcher-target page — every alias of the page (`[[any-alias]]`) and its id in every block-ref form (`((id))`, `!((id))`, `[label](((id)))`). The daemon passes the target names (`KM_MCP_BLOCKED_WIKILINKS`); the MCP server resolves each page's full alias set + id itself and refreshes it every 10 min.
 - `runsPerHour` bounds whatever slips past both.
 
+## Push detection (watch-events)
+
+By default (`"push": true`) the daemon registers its watchers **inside the tab** via the bridge `watch-events` command: the tab re-runs each watcher's read-only query when its tables change, waits for the result set to be stable (`settleMs` = the watcher's `quietMs` for mentions), and pushes a `watcher-settled` event over the bridge events channel (`/runtime/events`). The daemon long-polls those events and ticks immediately — detection latency becomes "quiet period ends", instead of "next poll + quiet period".
+
+Events are accelerators, not truth: every tick still re-derives everything from graph state, so missed/duplicate/spurious events cost at most one cheap tick. The poll loop stays on as the correctness backstop — with push active, raise `pollIntervalMs` to a slow sweep (30 000 is plenty); without push (old tab bundle, `"push": false`), keep it low because it IS the detection latency.
+
+Registrations are ephemeral tab state: they die with the tab and expire after 10 min without a refresh (the daemon re-registers every 5 min and after any error). All of it is bounded — a dead daemon can't leave watchers running, and a dead tab just means the daemon falls back to sweep cadence until it's back.
+
 ## Query watchers
 
 Rows must select a stable `id` column. First tick establishes a baseline without firing (no backlog replay); afterwards, new ids fire one batched run. Cursors live in `~/.config/knowledge-medium/claude-tasks-state.json` (alongside the backlink-watcher baselines); the cursor advances **before** the run so a failing prompt can't re-bill every tick (failures are logged, not retried).

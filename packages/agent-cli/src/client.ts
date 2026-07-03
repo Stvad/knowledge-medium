@@ -165,6 +165,8 @@ export interface RequestOptions {
   method?: string
   body?: string
   headers?: Record<string, string>
+  /** Cancels the underlying fetch — long-polls must not outlive their caller. */
+  signal?: AbortSignal
 }
 
 export const requestJson = async <T = unknown>(
@@ -251,7 +253,7 @@ export interface BridgeClient {
    *  watch-events hits). Omit `afterSeq` to bootstrap a cursor without
    *  replaying the buffer; a `reset: true` response means the bridge
    *  restarted — adopt `nextSeq` and assume missed events. */
-  nextEvents: (options?: {afterSeq?: number | null, timeoutMs?: number}) => Promise<EventsNextResponse>
+  nextEvents: (options?: {afterSeq?: number | null, timeoutMs?: number, signal?: AbortSignal}) => Promise<EventsNextResponse>
   /** Resolve the token's audience + live-tab connection state. */
   whoami: () => Promise<WhoamiInfo>
   /** Throws unless the bridge process is reachable. */
@@ -359,7 +361,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
   }
 
   const nextEvents = async (
-    eventOptions: {afterSeq?: number | null, timeoutMs?: number} = {},
+    eventOptions: {afterSeq?: number | null, timeoutMs?: number, signal?: AbortSignal} = {},
   ): Promise<EventsNextResponse> => {
     const url = new URL(`${bridgeUrl}/runtime/events/next`)
     if (typeof eventOptions.afterSeq === 'number') {
@@ -368,7 +370,7 @@ export const createBridgeClient = (options: BridgeClientOptions = {}): BridgeCli
     if (typeof eventOptions.timeoutMs === 'number') {
       url.searchParams.set('timeoutMs', String(eventOptions.timeoutMs))
     }
-    return authedRequest<EventsNextResponse>(url.toString())
+    return authedRequest<EventsNextResponse>(url.toString(), {signal: eventOptions.signal})
   }
 
   const whoami = async (): Promise<WhoamiInfo> => {

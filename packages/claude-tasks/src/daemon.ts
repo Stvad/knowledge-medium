@@ -24,6 +24,7 @@ import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
+import { startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
 import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, encodeBlockedWikilinks, MCP_SERVER_NAME } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
@@ -154,9 +155,11 @@ const main = async () => {
     ? await loadOrCreateChannelSecret()
     : null
 
+  const graph = createGraph(client)
+
   const engine = createEngine({
     config,
-    graph: createGraph(client),
+    graph,
     state: createStateStore(config.statePath ?? defaultStatePath()),
     runTask: options => runClaude(options),
     deliverToChannel: async event => {
@@ -179,10 +182,48 @@ const main = async () => {
 
   log(`watching: ${config.watchers.map(watcher => `${watcher.name}(${watcher.kind})`).join(', ')} every ${config.pollIntervalMs}ms (max ${config.runsPerHour} runs/hour)`)
 
+  // Push events request an immediate tick; requests are COALESCED into
+  // the single main loop (never concurrent with the sweep tick) and a
+  // request landing mid-tick re-ticks right after — the tick may have
+  // snapshotted state from before that event's write.
+  let tickRequested = false
+  const tickWaiters = new Set<() => void>()
+  const requestTick = () => {
+    tickRequested = true
+    for (const waiter of [...tickWaiters]) waiter()
+    tickWaiters.clear()
+  }
+  const napOrTick = (ms: number) => new Promise<void>(resolve => {
+    if (stopping || tickRequested) return resolve()
+    const timer = setTimeout(finish, ms)
+    function finish() {
+      clearTimeout(timer)
+      wake.signal.removeEventListener('abort', finish)
+      tickWaiters.delete(finish)
+      resolve()
+    }
+    wake.signal.addEventListener('abort', finish, {once: true})
+    tickWaiters.add(finish)
+  })
+
+  if (config.push && !args.once) {
+    void startPushLoop({
+      client,
+      config,
+      graph,
+      requestTick,
+      log,
+      isStopping: () => stopping,
+      nap,
+      stopSignal: wake.signal,
+    })
+  }
+
   while (!stopping) {
+    tickRequested = false
     await engine.tick()
     if (args.once) break
-    await nap(config.pollIntervalMs)
+    await napOrTick(config.pollIntervalMs)
   }
 
   await engine.drain()

@@ -82,6 +82,10 @@ const queryWatcherSchema = z.strictObject({
   params: z.array(z.unknown()).default([]),
   /** Cap on rows folded into one prompt; overflow is summarized. */
   maxRowsPerFire: z.number().int().positive().default(100),
+  /** Tables whose changes re-run the query for PUSH detection (the
+   *  in-tab watch-events registration; default: blocks). The polling
+   *  sweep ignores this. */
+  tables: z.array(z.string().min(1)).max(8).optional(),
 })
 
 export const watcherSchema = z.discriminatedUnion('kind', [
@@ -107,7 +111,14 @@ export const configSchema = z.strictObject({
       return false
     }
   }, {message: 'profile names may only contain letters, numbers, underscores, dots, and dashes'}),
+  /** Sweep cadence. With push active (see `push`) this is only the
+   *  correctness backstop — 30s is plenty; without push it is the
+   *  detection latency, so keep it low. */
   pollIntervalMs: z.number().int().positive().default(5_000),
+  /** Register in-tab watch-events watchers and react to their settle
+   *  events immediately, demoting the poll to a slow sweep. Falls back
+   *  to pure polling when the tab/bridge doesn't support it. */
+  push: z.boolean().default(true),
   claudeBin: z.string().default('claude'),
   maxConcurrent: z.number().int().positive().default(2),
   /** Global spend circuit-breaker: at most this many run launches
