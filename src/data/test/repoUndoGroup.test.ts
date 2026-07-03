@@ -24,8 +24,9 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, defineBlockType } from '@/data/api'
-import { typesFacet } from '@/data/facets'
+import { z } from 'zod'
+import { ChangeScope, defineBlockType, defineQuery } from '@/data/api'
+import { queriesFacet, typesFacet } from '@/data/facets'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -351,6 +352,48 @@ describe('facade hygiene — no group-token leak into shared state (review findi
     // The write must land on the real repo, not on a facade shadow.
     expect(repo.activeWorkspaceId).toBe('ws-2')
     repo.setActiveWorkspaceId(WS)
+  })
+
+  it('grouped.runQuery resolves with the REAL repo in QueryCtx (no facade escape into the handle store)', async () => {
+    const {repo} = env
+    const seenRepos: unknown[] = []
+    const probe = defineQuery<{id: string}, number>({
+      name: 'plugin:groupCtxProbe',
+      argsSchema: z.object({id: z.string()}),
+      resultSchema: z.number(),
+      resolve: async (_args, ctx) => {
+        seenRepos.push(ctx.repo)
+        return seenRepos.length
+      },
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      queriesFacet.of(probe, {source: 'plugin'}),
+    ]))
+
+    await repo.undoGroup(async (grouped) => {
+      await grouped.runQuery('plugin:groupCtxProbe', {id: 'whatever'})
+      // The handle (and its re-resolving loader) lives in the SHARED
+      // handle store long after this callback dies — it must be bound
+      // to the real repo, never the facade.
+      expect(seenRepos[0]).toBe(repo)
+      expect(seenRepos[0]).not.toBe(grouped)
+    })
+  })
+
+  it('Block-facade writes do NOT join the group — they split it (documented limitation)', async () => {
+    const {repo} = env
+    await seedRoot(repo, 'x', 'v0')
+    await repo.undoGroup(async (grouped) => {
+      await grouped.tx(async (tx) => { await tx.update('x', {content: 'g1'}) }, SCOPE)
+      // Block sugar routes through block.repo = the REAL repo (a
+      // group-bound Block would be the identity-map leak the `block`
+      // override closes), so this lands as a foreign tx.
+      await grouped.block('x').setContent('foreign')
+      await grouped.tx(async (tx) => { await tx.update('x', {content: 'g2'}) }, SCOPE)
+    })
+    // [group-first-half, foreign block write, group-second-half]
+    expect(depths(repo)).toEqual({undo: 3, redo: 0})
   })
 })
 

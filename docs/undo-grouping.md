@@ -68,6 +68,33 @@ have) explicit overrides:
   (and `undo` / `redo`, whose metrics bookkeeping assigns fields) would
   shadow the write onto the facade. Delegated explicitly.
 
+- **shared-closure minting** (same class as `block`) — `runQuery` would
+  store a LoaderHandle whose resolver context captures the facade into
+  the shared handle store (every future re-resolve would see the dead
+  facade), and the `schedule*` job enqueuers would capture it into job
+  queues that fire minutes later, opening GROUPED txs long after the
+  group died. All delegate to the real repo — query resolution and
+  deferred jobs are never group-bound.
+
+What deliberately does NOT join a group (both land as foreign txs and
+split it — use `grouped.tx` / `grouped.mutate` instead):
+
+- **Block-facade sugar** — `grouped.block(id).setContent(...)` routes
+  through `block.repo` = the real repo. A group-bound Block would be
+  exactly the identity-map leak the `block` override closes (and Blocks
+  escape callbacks routinely — helpers return them), so splitting is
+  the safe behavior.
+- **Stateful service writes** — `userSchemas` / `userTypes` /
+  `projectors` are constructed against the real repo and own shared
+  contribution buckets; a facade-hosted twin would clobber them.
+
+Known edges (deliberate): a cmd-Z landed in the gap between two grouped
+txs pops the partial entry to redo, and the next grouped tx's record
+clears redo (invariant 5) — the first half becomes unrecoverable; the
+window is microseconds for real composites. A group whose txs pin
+different workspaces produces one entry per workspace manager (undo is
+per-workspace); don't hand the facade to cross-workspace helpers.
+
 The facade must not escape the callback — the token never expires, so a
 leaked reference would stamp far-future txs into a long-dead group.
 Adding a Repo member in one of the hazard classes means adding a facade

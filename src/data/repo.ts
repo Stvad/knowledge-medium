@@ -1108,20 +1108,33 @@ export class Repo {
    *     expires, so a leaked reference would stamp far-future txs into
    *     a long-dead group (see the `block` override below for the one
    *     leak path that existed).
+   *   - Grouping covers `tx` / `mutate` / `run` and the TypeTagger
+   *     convenience writes. Two write styles deliberately do NOT join:
+   *     Block-facade sugar (`grouped.block(id).setContent(...)` routes
+   *     through `block.repo` = the real repo — a group-bound Block
+   *     would be exactly the leak the `block` override closes) and
+   *     stateful service writes (`userSchemas` / `userTypes` /
+   *     `projectors` — constructed against the real repo; a
+   *     facade-hosted twin would clobber their shared contribution
+   *     buckets). Both land as foreign txs and split the group; use
+   *     `grouped.tx` / `grouped.mutate` inside a group instead.
    *   - Everything not overridden delegates to the real repo via the
    *     prototype chain and therefore runs with the facade as `this`.
    *     That is safe for reads and for mutation of shared objects
    *     (caches, maps — reached through the chain), and the overrides
    *     cover the three hazard classes it would NOT be safe for:
-   *     members that mint `this`-capturing objects into shared state
-   *     (`block`), members that assign instance fields — the write
+   *     members that mint `this`-capturing objects or closures into
+   *     shared/long-lived state (`block`, `runQuery`, the `schedule*`
+   *     job enqueuers), members that assign instance fields — the write
    *     would shadow on the facade instead of updating the repo
-   *     (`setActiveWorkspaceId` / `setReadOnly`, plus `undo` / `redo`
-   *     whose metrics bookkeeping assigns fields mid-flight) — and
-   *     members whose collaborator captured the real repo at
-   *     construction and would open UNGROUPED txs mid-group (the
-   *     TypeTagger family). Adding a Repo member in one of these
-   *     classes means adding a facade override here. */
+   *     (`setActiveWorkspaceId` / `setReadOnly` / the sync-observer
+   *     pair / `resetMetrics`, plus `undo` / `redo` whose metrics
+   *     bookkeeping assigns fields mid-flight) — and members whose
+   *     collaborator captured the real repo at construction and would
+   *     open UNGROUPED txs mid-group (the TypeTagger family; the
+   *     stateful services above are the documented exception). Adding
+   *     a Repo member in one of these classes means adding a facade
+   *     override here. */
   async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
     return fn(this.groupedFacade(this.newId()))
   }
@@ -1164,20 +1177,43 @@ export class Repo {
       groupedTagger.toggleType(blockId, typeId)
     const setBlockTypes: Repo['setBlockTypes'] = (blockId, typeIds) =>
       groupedTagger.setBlockTypes(blockId, typeIds)
+    // Shared-state minting, part 2: `runQuery` (the dynamic dispatch
+    // entry point — exactly helper-shaped) would store a LoaderHandle
+    // whose loader and QueryCtx capture the facade into the SHARED
+    // handle store, where every future invalidation-driven re-resolve
+    // would see `ctx.repo` = the long-dead facade. Query resolution is
+    // never group-bound; delegate.
+    const runQuery: Repo['runQuery'] = (name, args) => this.runQuery(name, args)
+    // Deferred-job scheduling captures `this` into shared job queues
+    // that fire long after the group's lifetime — a facade-bound job
+    // would open GROUPED txs minutes later and merge system writes into
+    // the dead entry. Never group-bound; delegate.
+    const scheduleWorkspaceBackfills: Repo['scheduleWorkspaceBackfills'] = (ws) =>
+      this.scheduleWorkspaceBackfills(ws)
+    const scheduleReconcileRescan: Repo['scheduleReconcileRescan'] = (ws) =>
+      this.scheduleReconcileRescan(ws)
     // Field-assigning members: run with the facade as `this`, the
     // assignment would create a shadow property on the facade and the
     // real repo would never see it (silent state divergence). Delegate
     // explicitly. `undo`/`redo` belong here because `_runAndDispatch`
-    // assigns `slowestTx` mid-flight.
+    // assigns `slowestTx` mid-flight; the sync-observer pair assigns
+    // `syncObserver` (a shadowed stop would strand the real repo with a
+    // disposed observer it believes is live).
     const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
       this.setActiveWorkspaceId(id)
     const setReadOnly: Repo['setReadOnly'] = (value) => this.setReadOnly(value)
     const undo: Repo['undo'] = (scope) => this.undo(scope)
     const redo: Repo['redo'] = (scope) => this.redo(scope)
+    const startSyncObserver: Repo['startSyncObserver'] = (options) =>
+      this.startSyncObserver(options)
+    const stopSyncObserver: Repo['stopSyncObserver'] = () => this.stopSyncObserver()
+    const resetMetrics: Repo['resetMetrics'] = () => this.resetMetrics()
     return Object.assign(facade, {
-      tx, run, mutate, undoGroup, block,
+      tx, run, mutate, undoGroup, block, runQuery,
       addType, removeType, toggleType, setBlockTypes,
+      scheduleWorkspaceBackfills, scheduleReconcileRescan,
       setActiveWorkspaceId, setReadOnly, undo, redo,
+      startSyncObserver, stopSyncObserver, resetMetrics,
     })
   }
 
