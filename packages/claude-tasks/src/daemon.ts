@@ -18,10 +18,11 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createBridgeClient, errorMessage, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
-import { agentRuntimeConfigDir, bridgeUrl as resolveBridgeUrl, isErrnoException, isLocalBridgeUrl } from '@knowledge-medium/agent-cli/config'
+import { agentRuntimeConfigDir, bridgeUrl as resolveBridgeUrl, isLocalBridgeUrl } from '@knowledge-medium/agent-cli/config'
 import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
 import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
+import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
 import { runClaude } from './runner.js'
 import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, encodeBlockedWikilinks, MCP_SERVER_NAME } from './mcpShared.js'
@@ -40,57 +41,8 @@ const parseArgs = (argv: string[]) => {
   return args
 }
 
-// ----- single-instance lock -------------------------------------------
-// The claim protocol has no cross-process atomicity (plain update-block
-// writes), so two daemons on one machine (launchd + a manual run) would
-// double-claim and double-bill. A pidfile makes that impossible here;
-// one-daemon-per-FLEET is a documented constraint (see README).
-
+// Single-instance lock — see pidfile.ts for the takeover semantics.
 const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'claude-tasks.pid')
-
-const isProcessAlive = (pid: number): boolean => {
-  if (!(pid > 0)) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    // EPERM = alive but not ours to signal; ESRCH = gone.
-    return isErrnoException(error) && error.code === 'EPERM'
-  }
-}
-
-const acquirePidfile = async (): Promise<void> => {
-  const file = pidfilePath()
-  await fs.mkdir(path.dirname(file), {recursive: true})
-
-  // `wx` is the atomic create — no read-check-write TOCTOU where two
-  // daemons starting at once both pass. On EEXIST, decide against the
-  // existing pid and, if it's stale, replace it and retry once.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await fs.writeFile(file, `${process.pid}\n`, {flag: 'wx'})
-      return
-    } catch (error) {
-      if (!isErrnoException(error) || error.code !== 'EEXIST') throw error
-    }
-
-    const existing = Number((await fs.readFile(file, 'utf8').catch(() => '')).trim())
-    if (isProcessAlive(existing) && existing !== process.pid) {
-      throw new Error(`Another km-claude-daemon is already running (pid ${existing}). Stop it first — two daemons double-claim tasks.`)
-    }
-    await fs.rm(file, {force: true}) // stale pidfile — take over
-  }
-  throw new Error('Could not acquire the daemon pidfile (lost a startup race).')
-}
-
-const releasePidfile = async (): Promise<void> => {
-  try {
-    const existing = Number((await fs.readFile(pidfilePath(), 'utf8')).trim())
-    if (existing === process.pid) await fs.unlink(pidfilePath())
-  } catch {
-    // best-effort
-  }
-}
 
 /** Generated --mcp-config for spawned runs: the km server, bound to the
  *  daemon's own profile, with watcher targets blocked from write-back
@@ -137,7 +89,7 @@ const main = async () => {
     process.exit(0)
   }
 
-  await acquirePidfile()
+  await acquirePidfile({file: pidfilePath()})
 
   let stopping = false
   const wake = new AbortController()
@@ -175,7 +127,7 @@ const main = async () => {
     } catch (error) {
       if (args.once) {
         process.stderr.write(`bridge/pairing not ready: ${errorMessage(error)}\n`)
-        await releasePidfile()
+        await releasePidfile({file: pidfilePath()})
         process.exit(1)
       }
       if (!bridgeStartAttempted && !process.env.AGENT_RUNTIME_URL && isLocalBridgeUrl(resolveBridgeUrl())) {
@@ -234,12 +186,12 @@ const main = async () => {
   }
 
   await engine.drain()
-  await releasePidfile()
+  await releasePidfile({file: pidfilePath()})
   log('stopped')
 }
 
 main().catch(async error => {
   process.stderr.write(`${errorMessage(error)}\n`)
-  await releasePidfile()
+  await releasePidfile({file: pidfilePath()})
   process.exit(1)
 })
