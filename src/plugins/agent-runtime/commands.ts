@@ -21,6 +21,7 @@ import { formatRoamDate } from '@/utils/dailyPage.js'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
+import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
 import {
   actionsFacet,
@@ -1238,6 +1239,16 @@ export const executeCommand = async (
 
     case 'search':
       return runSearchCommand(context.repo, command)
+
+    case 'watch-events':
+      // Detection relocation (see watchEvents.ts): the tab hosts the
+      // reactive watchers; the registering consumer long-polls the
+      // bridge events channel for their settle events.
+      return watchEventsRegistry.register(context.db, {
+        consumer: command.consumer,
+        watchers: command.watchers,
+        ttlMs: command.ttlMs,
+      })
 
     default: {
       // Exhaustive — the union covers everything; TS narrows `command`

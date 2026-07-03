@@ -9,6 +9,7 @@ import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
 import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDialog.tsx'
 import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePairingDialog.tsx'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
+import { watchEventsRegistry } from './watchEvents.ts'
 import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
 import { knownAgentCommandSchema, type KnownAgentCommand } from '@knowledge-medium/agent-cli/protocol'
@@ -332,6 +333,13 @@ export const startAgentRuntimeBridge = (
     wakeBridgeLoop(true)
   }
 
+  // watch-events emissions ride this bridge connection (same secret +
+  // clientId as result posts). The live-read of bridgeUrl() matters for
+  // the same reason as in the poll loop: pairings can change mid-flight.
+  watchEventsRegistry.setTransport(async event => {
+    await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId)
+  })
+
   window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
   window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
   window.addEventListener('focus', handleWakeEvent)
@@ -456,6 +464,10 @@ export const startAgentRuntimeBridge = (
 
   return () => {
     abortController.abort()
+    // Registrations are useless without a transport — drop them so dead
+    // watchers don't keep re-running queries against a stopped bridge.
+    watchEventsRegistry.setTransport(null)
+    watchEventsRegistry.disposeAll()
     window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
     window.removeEventListener('focus', handleWakeEvent)
