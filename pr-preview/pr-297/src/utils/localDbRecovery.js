@@ -1,6 +1,7 @@
 import { LocalDatabaseCorruptError, corruptErrorUserId, isLocalDbCorruptionError } from "./localDbCorruption.js";
 import { closePowerSyncDbIfOpen } from "../data/repoProvider.js";
-import { deleteLocalSqliteDb, downloadBlob, getRawSqliteDbBackup, removeRecoveryBackupTemps } from "./exportSqliteDb.js";
+import { downloadBlob } from "./downloadBlob.js";
+import { deleteLocalSqliteDb, getRawSqliteDbBackup, removeRecoveryBackupTemps } from "./exportSqliteDb.js";
 //#region src/utils/localDbRecovery.ts
 /**
 * User-initiated recovery from a corrupt local database. Two actions, both

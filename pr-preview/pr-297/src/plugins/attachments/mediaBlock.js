@@ -61,6 +61,9 @@ var MEDIA_TYPE_CONTRIBUTION = defineBlockType({
 /** Does a MIME type render as an inline image (§11 image branch)? Case-insensitive
 *  — MIME types are case-insensitive (RFC 2045) even though `File.type` is lowercase. */
 var isImageMime = (mime) => typeof mime === "string" && mime.toLowerCase().startsWith("image/");
+/** Does a MIME type render through the inline `<audio>` player (§11 audio branch)?
+*  Case-insensitive, like {@link isImageMime}. */
+var isAudioMime = (mime) => typeof mime === "string" && mime.toLowerCase().startsWith("audio/");
 /** The fallback MIME for a file with no declared type. */
 var GENERIC_MIME = "application/octet-stream";
 /** Sniff a common raster image MIME from the leading magic bytes. Returns `null`
@@ -100,6 +103,6 @@ var ASSETS_TYPE_CONTRIBUTION = defineBlockType({
 	description: "The workspace-level container that holds content-addressed media attachment blocks."
 });
 //#endregion
-export { ASSETS_ALIAS, ASSETS_NS, ASSETS_TYPE, ASSETS_TYPE_CONTRIBUTION, GENERIC_MIME, MEDIA_PROPERTY_SCHEMAS, MEDIA_TYPE, MEDIA_TYPE_CONTRIBUTION, isImageMime, mediaFilenameProp, mediaHashProp, mediaMimeProp, mediaSizeProp, resolveCaptureMime, sniffImageMime };
+export { ASSETS_ALIAS, ASSETS_NS, ASSETS_TYPE, ASSETS_TYPE_CONTRIBUTION, GENERIC_MIME, MEDIA_PROPERTY_SCHEMAS, MEDIA_TYPE, MEDIA_TYPE_CONTRIBUTION, isAudioMime, isImageMime, mediaFilenameProp, mediaHashProp, mediaMimeProp, mediaSizeProp, resolveCaptureMime, sniffImageMime };
 
 //# sourceMappingURL=mediaBlock.js.map

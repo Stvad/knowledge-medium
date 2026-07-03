@@ -1,9 +1,12 @@
 import { typesProp } from "../../data/properties.js";
 import { cn } from "../../lib/utils.js";
-import { useProperty } from "../../hooks/block.js";
+import { useProperty, useWorkspaceId } from "../../hooks/block.js";
 import { X } from "../../../node_modules/lucide-react/dist/esm/icons/x.js";
+import { buildAppHash } from "../../utils/routing.js";
+import { useBlockOpener } from "../../utils/navigation.js";
 import { visibleTagTypeIds } from "./typeAutocomplete.js";
 import { useTypes } from "../../hooks/typeRegistry.js";
+import { chipStyle } from "./chipStyle.js";
 import { c } from "react/compiler-runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/plugins/supertags/TypeChipsDecorator.tsx
@@ -24,77 +27,92 @@ import { jsx, jsxs } from "react/jsx-runtime";
 *  no-remount invariant holds here without changes. The WeakMap cache
 *  keeps identity stable across parent re-renders (same invariant as
 *  CharacterCountDecorator). */
-/** Contribution-declared chip color, validated so an unparseable value
-*  degrades to default styling instead of a half-styled chip. (Inline
-*  styles assign via CSSOM, so invalid values can't inject — this is
-*  purely a rendering-quality guard.) */
-var chipColor = (type) => {
-	const color = type?.color?.trim();
-	if (!color) return void 0;
-	if (typeof CSS !== "undefined" && CSS.supports && !CSS.supports("color", color)) return void 0;
-	return color;
-};
 var TypeChips = (t0) => {
-	const $ = c(11);
+	const $ = c(17);
 	const { block, typeIds, registry } = t0;
-	const readOnly = block.repo.isReadOnly;
+	const repo = block.repo;
+	const readOnly = repo.isReadOnly;
+	const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? "");
+	const openBlock = useBlockOpener();
 	let t1;
-	if ($[0] !== block || $[1] !== readOnly || $[2] !== registry || $[3] !== typeIds) {
+	if ($[0] !== block || $[1] !== openBlock || $[2] !== readOnly || $[3] !== registry || $[4] !== repo.userTypes || $[5] !== typeIds || $[6] !== workspaceId) {
 		let t2;
-		if ($[5] !== block || $[6] !== readOnly || $[7] !== registry) {
+		if ($[8] !== block || $[9] !== openBlock || $[10] !== readOnly || $[11] !== registry || $[12] !== repo.userTypes || $[13] !== workspaceId) {
 			t2 = (typeId) => {
 				const type = registry.get(typeId);
 				const label = type?.label ?? (typeId.length > 8 ? `${typeId.slice(0, 8)}…` : typeId);
-				const color = chipColor(type);
+				const style = chipStyle(type, typeId);
+				const definitionId = repo.userTypes.getTypeBlockId(typeId);
+				const labelText = `#${label}`;
 				return /* @__PURE__ */ jsxs("span", {
-					className: cn("inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-xs", color ? "" : "bg-muted text-muted-foreground"),
-					style: color ? {
-						color,
-						backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)`
-					} : void 0,
+					className: cn("inline-flex max-w-full items-center gap-1 rounded px-1.5 py-0.5 text-xs", style ? "" : "bg-muted text-muted-foreground"),
+					style,
 					title: type ? type.description ?? typeId : `Unknown type ${typeId} (not registered)`,
-					children: [/* @__PURE__ */ jsxs("span", {
+					children: [definitionId ? /* @__PURE__ */ jsx("a", {
+						href: buildAppHash(workspaceId, definitionId),
+						className: "truncate text-inherit no-underline hover:underline",
+						draggable: false,
+						onClick: (event) => openBlock(event, {
+							blockId: definitionId,
+							workspaceId
+						}),
+						children: labelText
+					}) : /* @__PURE__ */ jsx("span", {
 						className: "truncate",
-						children: ["#", label]
+						children: labelText
 					}), !readOnly && /* @__PURE__ */ jsx("button", {
 						type: "button",
-						className: cn("rounded-sm p-1 -m-1 hover:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring", color ? "text-inherit opacity-70 hover:opacity-100" : "text-muted-foreground hover:text-foreground"),
+						className: cn("rounded-sm p-1 -m-1 hover:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring", style ? "text-inherit opacity-70 hover:opacity-100" : "text-muted-foreground hover:text-foreground"),
 						"aria-label": `Remove ${label} type`,
 						onMouseDown: _temp,
-						onClick: (event_0) => {
-							event_0.stopPropagation();
+						onClick: (event_1) => {
+							event_1.stopPropagation();
 							block.removeType(typeId);
 						},
 						children: /* @__PURE__ */ jsx(X, { className: "h-3 w-3" })
 					})]
 				}, typeId);
 			};
-			$[5] = block;
-			$[6] = readOnly;
-			$[7] = registry;
-			$[8] = t2;
-		} else t2 = $[8];
+			$[8] = block;
+			$[9] = openBlock;
+			$[10] = readOnly;
+			$[11] = registry;
+			$[12] = repo.userTypes;
+			$[13] = workspaceId;
+			$[14] = t2;
+		} else t2 = $[14];
 		t1 = typeIds.map(t2);
 		$[0] = block;
-		$[1] = readOnly;
-		$[2] = registry;
-		$[3] = typeIds;
-		$[4] = t1;
-	} else t1 = $[4];
+		$[1] = openBlock;
+		$[2] = readOnly;
+		$[3] = registry;
+		$[4] = repo.userTypes;
+		$[5] = typeIds;
+		$[6] = workspaceId;
+		$[7] = t1;
+	} else t1 = $[7];
 	let t2;
-	if ($[9] !== t1) {
+	if ($[15] !== t1) {
 		t2 = /* @__PURE__ */ jsx("span", {
-			className: "flex shrink-0 flex-wrap items-center gap-1",
+			className: "flex min-w-0 flex-wrap items-center gap-1",
 			"aria-label": "Block types",
 			children: t1
 		});
-		$[9] = t1;
-		$[10] = t2;
-	} else t2 = $[10];
+		$[15] = t1;
+		$[16] = t2;
+	} else t2 = $[16];
 	return t2;
 };
+/** Layout: chips hug the end of the content instead of claiming a
+*  column. In a flex-WRAP container, line-breaking is decided on the
+*  items' base sizes before any shrinking, so the chip row can never
+*  squeeze the content narrower: short single-line content gets the
+*  chips right after the text (Tana-ish); content long enough to wrap
+*  puts them on their own row below. True Tana inline-in-the-last-line
+*  isn't reachable while the content is a block-level editor — it
+*  would need a CodeMirror end-of-doc widget. */
 var TypeChipsDecorator = (t0) => {
-	const $ = c(13);
+	const $ = c(16);
 	const { block, Inner } = t0;
 	const [types] = useProperty(block, typesProp);
 	const registry = useTypes();
@@ -106,39 +124,47 @@ var TypeChipsDecorator = (t0) => {
 		$[2] = t1;
 	} else t1 = $[2];
 	const visible = t1;
-	let t2;
+	const t2 = visible.length > 0 ? "min-w-8 max-w-full" : "w-full";
+	let t3;
 	if ($[3] !== Inner || $[4] !== block) {
-		t2 = /* @__PURE__ */ jsx("div", {
-			className: "min-w-0 max-w-full flex-1 basis-48",
-			children: /* @__PURE__ */ jsx(Inner, { block })
-		});
+		t3 = /* @__PURE__ */ jsx(Inner, { block });
 		$[3] = Inner;
 		$[4] = block;
-		$[5] = t2;
-	} else t2 = $[5];
-	let t3;
-	if ($[6] !== block || $[7] !== registry || $[8] !== visible) {
-		t3 = visible.length > 0 && /* @__PURE__ */ jsx(TypeChips, {
+		$[5] = t3;
+	} else t3 = $[5];
+	let t4;
+	if ($[6] !== t2 || $[7] !== t3) {
+		t4 = /* @__PURE__ */ jsx("div", {
+			className: t2,
+			children: t3
+		});
+		$[6] = t2;
+		$[7] = t3;
+		$[8] = t4;
+	} else t4 = $[8];
+	let t5;
+	if ($[9] !== block || $[10] !== registry || $[11] !== visible) {
+		t5 = visible.length > 0 && /* @__PURE__ */ jsx(TypeChips, {
 			block,
 			typeIds: visible,
 			registry
 		});
-		$[6] = block;
-		$[7] = registry;
-		$[8] = visible;
-		$[9] = t3;
-	} else t3 = $[9];
-	let t4;
-	if ($[10] !== t2 || $[11] !== t3) {
-		t4 = /* @__PURE__ */ jsxs("div", {
-			className: "flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5",
-			children: [t2, t3]
+		$[9] = block;
+		$[10] = registry;
+		$[11] = visible;
+		$[12] = t5;
+	} else t5 = $[12];
+	let t6;
+	if ($[13] !== t4 || $[14] !== t5) {
+		t6 = /* @__PURE__ */ jsxs("div", {
+			className: "flex w-full flex-wrap items-baseline gap-x-1.5 gap-y-0.5",
+			children: [t4, t5]
 		});
-		$[10] = t2;
-		$[11] = t3;
-		$[12] = t4;
-	} else t4 = $[12];
-	return t4;
+		$[13] = t4;
+		$[14] = t5;
+		$[15] = t6;
+	} else t6 = $[15];
+	return t6;
 };
 var cache = /* @__PURE__ */ new WeakMap();
 var decorate = (inner) => {
@@ -163,8 +189,8 @@ var decorate = (inner) => {
 	return Decorated;
 };
 var typeChipsDecoratorContribution = () => decorate;
-function _temp(event) {
-	return event.preventDefault();
+function _temp(event_0) {
+	return event_0.preventDefault();
 }
 //#endregion
 export { typeChipsDecoratorContribution };

@@ -1,4 +1,4 @@
-import { RUN_DATA_INTEGRITY_AUDIT_ACTION_ID, getConsistencyAuditSnapshot, subscribeConsistencyAudit } from "./store.js";
+import { VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID, getConsistencyAuditSnapshotFor, subscribeConsistencyAudit } from "./store.js";
 //#region src/plugins/data-integrity/diagnosticsSource.ts
 var anomalousChecks = (result) => Object.entries(result.checks).filter(([, c]) => c.status === "anomaly").map(([name]) => name);
 var erroredChecks = (result) => Object.entries(result.checks).filter(([, c]) => c.status === "error").map(([name]) => name);
@@ -29,13 +29,13 @@ var mapAuditToSnapshot = (result) => {
 		severity,
 		summary,
 		detail: detailParts.join(" · ") || void 0,
-		actionId: RUN_DATA_INTEGRITY_AUDIT_ACTION_ID
+		actionId: VIEW_DATA_INTEGRITY_AUDIT_ACTION_ID
 	};
 };
-/** Build the diagnostic source. The audit store is a module global holding the
-*  LAST audited workspace's result, so gate on the active workspace: a result
-*  for another workspace reports nothing (rather than the wrong counts) until
-*  this workspace's audit publishes. Memoized so getSnapshot is ref-stable. */
+/** Build the diagnostic source. The audit store keeps results per workspace, so
+*  read the ACTIVE workspace's result via `getConsistencyAuditSnapshotFor`: a
+*  result for another workspace reports nothing (rather than the wrong counts)
+*  until this workspace's audit publishes. Memoized so getSnapshot is ref-stable. */
 var createDataIntegrityDiagnosticSource = (repo) => {
 	let cachedKey = "";
 	let cachedSnapshot = null;
@@ -44,9 +44,9 @@ var createDataIntegrityDiagnosticSource = (repo) => {
 		label: "Data integrity",
 		subscribe: subscribeConsistencyAudit,
 		getSnapshot: () => {
-			const result = getConsistencyAuditSnapshot();
 			const active = repo.activeWorkspaceId;
-			if (!result || result.workspaceId !== active) {
+			const result = getConsistencyAuditSnapshotFor(active);
+			if (!result) {
 				const key = `none:${active ?? ""}`;
 				if (key !== cachedKey) {
 					cachedKey = key;
