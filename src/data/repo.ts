@@ -1062,6 +1062,15 @@ export class Repo {
     } catch (err) {
       // Replay failed — push the entry back so the user can retry
       // (e.g. after toggling read-only off, fixing a missing parent).
+      // Known narrow hazard (pre-existing, issue #226 window): if a new
+      // tx recorded during the failed replay's await, this pushback
+      // lands the entry ABOVE it — chronologically inverted. With
+      // grouping the inversion additionally makes a same-group tx merge
+      // into the pushed-back entry rather than the newer one. We keep
+      // the groupId on pushback anyway: stripping it would break the
+      // legitimate retry path (RescheduleToast re-matches the restored
+      // entry by groupId once read-only clears), which is a far more
+      // common sequence than a mid-replay same-group commit.
       manager.pushUndo(scope, entry)
       throw err
     }
@@ -1102,10 +1111,24 @@ export class Repo {
    *     covered by the (single) group entry; the error propagates.
    *   - Nested `undoGroup` on the facade joins the OUTER group — one
    *     user-perceived action, one entry.
-   *   - Reads and every other Repo member delegate to the real repo via
-   *     the prototype chain; only `tx` / `run` / `mutate` / `undoGroup`
-   *     are overridden, and each closes over the real repo, so repo
-   *     internals never execute with the facade as `this`. */
+   *   - The facade must not escape the callback: its token never
+   *     expires, so a leaked reference would stamp far-future txs into
+   *     a long-dead group (see the `block` override below for the one
+   *     leak path that existed).
+   *   - Everything not overridden delegates to the real repo via the
+   *     prototype chain and therefore runs with the facade as `this`.
+   *     That is safe for reads and for mutation of shared objects
+   *     (caches, maps — reached through the chain), and the overrides
+   *     cover the three hazard classes it would NOT be safe for:
+   *     members that mint `this`-capturing objects into shared state
+   *     (`block`), members that assign instance fields — the write
+   *     would shadow on the facade instead of updating the repo
+   *     (`setActiveWorkspaceId` / `setReadOnly`, plus `undo` / `redo`
+   *     whose metrics bookkeeping assigns fields mid-flight) — and
+   *     members whose collaborator captured the real repo at
+   *     construction and would open UNGROUPED txs mid-group (the
+   *     TypeTagger family). Adding a Repo member in one of these
+   *     classes means adding a facade override here. */
   async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
     return fn(this.groupedFacade(this.newId()))
   }
@@ -1125,9 +1148,51 @@ export class Repo {
         return this.dispatchMutator(prop, groupId)
       },
     }) as MutateProxy
-    const undoGroup = <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
+    // Async so a synchronously-throwing callback rejects like the outer
+    // `undoGroup` does instead of throwing through the caller.
+    const undoGroup = async <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
       inner(facade)
-    return Object.assign(facade, {tx, run, mutate, undoGroup})
+    // `block()` on a cache miss mints `new Block(this, id)` into the
+    // repo-wide `blockFacades` identity map. With the facade as `this`
+    // that would cache a facade-bound Block FOREVER — every later
+    // ordinary edit through it (`setContent`, `set`, `delete` route
+    // through `block.repo`) would carry this group's token and merge
+    // into the long-dead group's entry (one cmd-Z would then revert an
+    // unrelated edit plus the whole composite). Mint through the real
+    // repo so shared state only ever holds real-repo Blocks.
+    const block = (id: string): Block => this.block(id)
+    // The TypeTagger convenience writes (`addType` & co.) open their own
+    // txs through the tagger's construction-captured host — the REAL
+    // repo — so on the facade they would silently escape the group and
+    // split it. A facade-hosted tagger (TypeTagger is a stateless
+    // wrapper; the facade satisfies TypeTaggerHost structurally, with
+    // grouped `tx`) keeps the documented "helpers join by being handed
+    // the facade" contract true for them. The `*InTx` variants write
+    // into a caller-provided tx and need no override.
+    const groupedTagger = new TypeTagger(facade)
+    const addType: Repo['addType'] = (blockId, typeId, initialValues = {}) =>
+      groupedTagger.addType(blockId, typeId, initialValues)
+    const removeType: Repo['removeType'] = (blockId, typeId) =>
+      groupedTagger.removeType(blockId, typeId)
+    const toggleType: Repo['toggleType'] = (blockId, typeId) =>
+      groupedTagger.toggleType(blockId, typeId)
+    const setBlockTypes: Repo['setBlockTypes'] = (blockId, typeIds) =>
+      groupedTagger.setBlockTypes(blockId, typeIds)
+    // Field-assigning members: run with the facade as `this`, the
+    // assignment would create a shadow property on the facade and the
+    // real repo would never see it (silent state divergence). Delegate
+    // explicitly. `undo`/`redo` belong here because `_runAndDispatch`
+    // assigns `slowestTx` mid-flight.
+    const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
+      this.setActiveWorkspaceId(id)
+    const setReadOnly: Repo['setReadOnly'] = (value) => this.setReadOnly(value)
+    const undo: Repo['undo'] = (scope) => this.undo(scope)
+    const redo: Repo['redo'] = (scope) => this.redo(scope)
+    return Object.assign(facade, {
+      tx, run, mutate, undoGroup, block,
+      addType, removeType, toggleType, setBlockTypes,
+      setActiveWorkspaceId, setReadOnly, undo, redo,
+    })
   }
 
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`

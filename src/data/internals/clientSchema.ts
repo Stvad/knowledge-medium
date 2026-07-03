@@ -1383,8 +1383,14 @@ export const ensureBlockUserUpdatedAtColumn = async (db: {
  * row_events triggers reference it unconditionally, so an un-migrated
  * device would fail "no such column" on the first `repo.tx`.
  *
- * MUST run BEFORE `CLIENT_SCHEMA_STATEMENTS`: the trigger recreation in
- * that set compiles trigger bodies that insert into `row_events.group_id`.
+ * MUST run before ANY re-creation of the row_events trigger bodies from
+ * the current constants — that is the `CLIENT_SCHEMA_STATEMENTS` loop AND
+ * `withTriggerSuspended` inside {@link ensureBlockUserUpdatedAtColumn}
+ * (its backfill bracket re-installs `blocks_row_event_update` from the
+ * NEW body, which inserts into `row_events.group_id`). SQLite accepts a
+ * CREATE TRIGGER referencing a missing column and fails only at fire
+ * time, so a wrong ordering isn't caught at bootstrap — it surfaces as
+ * "no such column: group_id" on a concurrent old-tab write.
  * A table that does not exist yet is skipped — the CREATE that follows
  * carries the column (and appends it LAST, so fresh and ALTER-upgraded
  * layouts match). No backfill: NULL group_id simply means "ungrouped",

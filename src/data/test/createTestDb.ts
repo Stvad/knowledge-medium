@@ -294,7 +294,7 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
     // as non-local (no upload-routing into ps_crud) regardless of what the
     // previous test left behind.
     await tx.execute(
-      'UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL',
+      'UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL, group_id = NULL',
     )
     for (const table of existing(RESET_CONTENT_TABLES)) await tx.execute(`DELETE FROM ${table}`)
     for (const table of existing(RESET_AUDIT_TABLES)) await tx.execute(`DELETE FROM ${table}`)

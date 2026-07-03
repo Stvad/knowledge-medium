@@ -388,6 +388,15 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  // Idempotent local migration: add `group_id` to an existing
+  // tx_context / row_events (undo grouping, issue #306). MUST run
+  // before ANY re-creation of the row_events trigger bodies — that
+  // includes `withTriggerSuspended` inside `ensureBlockUserUpdatedAtColumn`
+  // below (its backfill bracket re-installs blocks_row_event_update
+  // from the NEW constant, whose body references group_id), not just
+  // the CLIENT_SCHEMA_STATEMENTS loop. Fresh DBs skip it (tables don't
+  // exist yet; the CREATEs carry the column).
+  await ensureUndoGroupIdColumns(powerSyncDb)
   // Idempotent local migration: add `user_updated_at` to an existing
   // `blocks` / `blocks_synced` on upgrading devices (CREATE TABLE IF NOT
   // EXISTS above is a no-op when the table already exists) + one-shot
@@ -408,13 +417,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // Statements include
   // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
   // TRIGGER IF NOT EXISTS so re-running is a no-op against an
-  // already-bootstrapped dev database.
-  //
-  // Idempotent local migration FIRST: add `group_id` to an existing
-  // tx_context / row_events (undo grouping, issue #306) — the trigger
-  // recreation below compiles bodies that reference the column. Fresh
-  // DBs skip it (tables don't exist yet; the CREATEs carry the column).
-  await ensureUndoGroupIdColumns(powerSyncDb)
+  // already-bootstrapped dev database. (`ensureUndoGroupIdColumns`
+  // already ran above, so the recreated trigger bodies can reference
+  // row_events.group_id.)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await powerSyncDb.execute(stmt)
   }

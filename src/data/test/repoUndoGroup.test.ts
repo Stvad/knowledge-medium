@@ -24,9 +24,12 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, defineBlockType } from '@/data/api'
+import { typesFacet } from '@/data/facets'
+import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
@@ -288,6 +291,66 @@ describe('nested undoGroup joins the outer group (invariant 9)', () => {
     expect(await repo.undo()).toBe(true)
     expect(await readContent(repo, 'n1')).toBeNull()
     expect(await readContent(repo, 'n2')).toBeNull()
+  })
+})
+
+describe('facade hygiene — no group-token leak into shared state (review findings)', () => {
+  it('block() minted through the facade is real-repo-bound; later edits record their own entry', async () => {
+    const {repo} = env
+    await seedRoot(repo, 'x', 'v0')
+
+    // What daily-note helpers do when handed the facade: mint a Block on
+    // a cache miss. Unfixed, the facade-bound Block would be cached in
+    // the repo-wide identity map forever and every later ordinary edit
+    // through it would carry the dead group's token.
+    const minted = await repo.undoGroup(async (grouped) => {
+      await grouped.tx(async (tx) => {
+        await tx.update('x', {content: 'v1'})
+      }, SCOPE)
+      return grouped.block('x')
+    })
+    expect(minted.repo).toBe(repo)
+    expect(repo.block('x')).toBe(minted) // same identity-map slot...
+
+    // ...and an ordinary edit through it must NOT merge into the
+    // finished group's entry.
+    await repo.block('x').setContent('v2')
+    expect(depths(repo)).toEqual({undo: 2, redo: 0})
+  })
+
+  it('grouped.addType joins the group instead of splitting it (TypeTagger family)', async () => {
+    const {repo} = env
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    ]))
+    await seedRoot(repo, 't1', 'v0')
+
+    await repo.undoGroup(async (grouped) => {
+      await grouped.tx(async (tx) => {
+        await tx.update('t1', {content: 'v1'})
+      }, SCOPE)
+      // Opens its own tx through TypeTagger — must carry the group token.
+      await grouped.addType('t1', 'todo')
+    })
+
+    expect(depths(repo)).toEqual({undo: 1, redo: 0})
+    expect(await repo.undo()).toBe(true)
+    expect(await readContent(repo, 't1')).toBe('v0')
+    const row = await repo.db.getOptional<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', ['t1'],
+    )
+    expect(row?.properties_json ?? '{}').not.toContain('todo')
+  })
+
+  it('field-assigning setters delegate to the real repo instead of shadowing', async () => {
+    const {repo} = env
+    await repo.undoGroup(async (grouped) => {
+      grouped.setActiveWorkspaceId('ws-2')
+    })
+    // The write must land on the real repo, not on a facade shadow.
+    expect(repo.activeWorkspaceId).toBe('ws-2')
+    repo.setActiveWorkspaceId(WS)
   })
 })
 

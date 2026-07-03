@@ -47,12 +47,31 @@ history and can never revert the foreign write as part of the group.
 ### `repo.undoGroup(fn)`
 
 Mints a `groupId` and passes `fn` a `Repo`-shaped facade
-(`Object.create(repo)` + four overrides — `tx`, `run`, `mutate`,
-`undoGroup`). Each override closes over the real repo and injects the
-token into `RepoTxOptions.groupId`, so repo internals never execute with
-the facade as `this`. Everything else (reads, `block()`, `load`,
-`addTypeInTx`, …) delegates via the prototype chain. Nested
-`undoGroup` on the facade joins the outer group.
+(`Object.create(repo)` with overrides that close over the real repo).
+`tx` / `run` / `mutate` inject the token into `RepoTxOptions.groupId`;
+nested `undoGroup` joins the outer group. Everything else delegates via
+the prototype chain and so runs with the facade as `this` — safe for
+reads and shared-object mutation, but three hazard classes need (and
+have) explicit overrides:
+
+- **shared-state minting** — `block()` caches `new Block(this, id)` in
+  the repo-wide identity map; unfixed, a facade-bound Block would live
+  there forever and every later ordinary edit through it would carry
+  the dead group's token and merge into the stale entry. The override
+  mints through the real repo.
+- **construction-captured collaborators** — `addType` / `removeType` /
+  `toggleType` / `setBlockTypes` go through `TypeTagger`, whose host was
+  captured at Repo construction; they would open UNGROUPED txs mid-group
+  and split it. The facade hosts its own `TypeTagger` (stateless
+  wrapper; the facade satisfies `TypeTaggerHost` structurally).
+- **field-assigning members** — `setActiveWorkspaceId` / `setReadOnly`
+  (and `undo` / `redo`, whose metrics bookkeeping assigns fields) would
+  shadow the write onto the facade. Delegated explicitly.
+
+The facade must not escape the callback — the token never expires, so a
+leaked reference would stamp far-future txs into a long-dead group.
+Adding a Repo member in one of the hazard classes means adding a facade
+override (see the `undoGroup` jsdoc).
 
 Grouping is **not** atomicity: each tx still commits independently. If a
 later tx throws, the committed prefix stays applied, remains covered by
