@@ -97,7 +97,7 @@ var AcceptCompletionOnEnterCapture = class {
 		this.view = view;
 		this.onKeydown = (event) => {
 			if (event.key !== "Enter" || event.isComposing || event.keyCode === 229 || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
-			if (completionStatus(this.view.state) !== "active") return;
+			if (completionStatus(this.view.state) == null) return;
 			acceptCompletion(this.view);
 			event.preventDefault();
 			event.stopImmediatePropagation();
