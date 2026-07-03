@@ -74,8 +74,10 @@ var NOT_FOUND_STORAGE_CODES = new Set([
 *  status (via {@link httpStatusOf}, so a numeric `statusCode: '404'` flattened onto
 *  `.status: 400` is still caught) AND the symbolic word-code shape — the same
 *  dual-shape robustness {@link isAlreadyExists} needs. Anything NOT matched here stays
-*  a throw the probe treats as transient (offline / 5xx / RLS-denied) — recovery must
-*  not read an ambiguous error as "path free". Module-private — only `probe` consumes it
+*  a throw the probe treats as transient (offline / 5xx / unknown) — recovery must not
+*  read an ambiguous error as "path free". (A genuinely RLS-DENIED read is NOT such an
+*  error: Storage hides existence, so it returns a 404-shape that DOES match here → null;
+*  see {@link BlobStore.probe}.) Module-private — only `probe` consumes it
 *  (unlike `isAlreadyExists`, which the off-path RLS verifier also uses). */
 var isObjectNotFound = (err) => {
 	const sc = err.statusCode != null ? String(err.statusCode) : void 0;

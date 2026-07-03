@@ -14,21 +14,23 @@ import { decodeBytes } from "../../sync/byteTransform.js";
 * stop.
 *
 * USER-TRIGGERED, NOT AN AUTOMATIC SWEEP. Recovery only ever touches the QUARANTINED set:
-* a TRANSIENT failure (offline / 5xx / token) never reaches `failed` — the drain keeps it
-* `pending` and the reconnect/refocus sweep re-drives it automatically. So `failed` holds
-* only the permanent-ish rejects (poisoned path, shape-rejected body, 413, not-a-writer),
-* and for those the right — and codebase-consistent — UX is to SURFACE them (the §9
-* diagnostics warning) and let the user hit Retry, exactly as block-sync rejections surface
-* via `ps_crud_rejected`. The user is the rate limiter, so there is no automatic re-drive
-* bound: this pass runs when they ask, and the probe below makes even a "Retry all" cheap
-* and safe against poisoned paths.
+* a TRANSIENT failure (offline / 5xx / token) stays `pending` — the drain keeps it there and
+* the reconnect/refocus sweep re-drives it automatically — and only crosses into `failed` if it
+* keeps failing past the drain's ~7-day AGE backstop ({@link import('./uploadDrain.js')}
+* `deferTransientOrFail`). So `failed` holds mostly the permanent-ish rejects (poisoned path,
+* shape-rejected body, 413, not-a-writer) plus that rare aged-out transient, and for those the
+* right — and codebase-consistent — UX is to SURFACE them (the §9 diagnostics warning) and let
+* the user hit Retry, exactly as block-sync rejections surface via `ps_crud_rejected`. The user
+* is the rate limiter, so there is no automatic re-drive bound: this pass runs when they ask, and
+* the probe below makes even a "Retry all" safe against poisoned paths (a probe + hash-verify,
+* never a blind re-PUT).
 *
 * WHY A PROBE PASS, NOT A BLIND RE-`pending`: a blind `failed → pending` would make the
 * drain re-UPLOAD the full sealed bytes even when the content path is occupied/poisoned
-* (`put` → 409 → verify → back to `failed`) — the exact egress §9's "cheap bodiless GET"
-* exists to avoid, and against a poisoner it's a wasted full PUT per Retry. Instead we do
-* ONE cheap direct RLS GET of the content path ({@link BlobStore.probe}) and branch
-* (§9/§17):
+* (`put` → 409 → verify → back to `failed`) — the exact wasted full PUT per Retry §9's probe
+* exists to avoid. Instead we do ONE direct RLS GET of the content path
+* ({@link BlobStore.probe}) — a 404 when the path is free (no body); the object's bytes when
+* it's occupied (which we have to read anyway to hash-verify) — and branch (§9/§17):
 *   - ABSENT (404, path free)     → `requeue` failed→pending; the existing drain uploads
 *                                   the local bytes. The ONLY branch that costs a PUT,
 *                                   and it reuses the already-bounded drain rather than a
@@ -40,7 +42,7 @@ import { decodeBytes } from "../../sync/byteTransform.js";
 *   - PRESENT + hash-MISMATCHES /
 *     undecodable                 → still poisoned (§17) → stay `failed`; never a PUT.
 *   - transient GET (offline/5xx/
-*     denied), not-materializable
+*     unknown), not-materializable
 *     (locked/unpinned/signed-out),
 *     or wrong active account      → DEFER (no state change); a later Retry re-probes.
 *                                    No attempt burn, no PUT.
@@ -68,6 +70,7 @@ var recoverOne = async (userId, rec, ctx) => {
 	} catch {
 		return "deferred";
 	}
+	if (!ctx.isActiveUser()) return "deferred";
 	if (stored === null) {
 		await ctx.store.requeue(userId, rec.assetBlockId, rec.stagedAt);
 		return "requeued";
