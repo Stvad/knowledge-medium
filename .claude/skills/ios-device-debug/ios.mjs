@@ -16,7 +16,12 @@ async function findPage() {
   const dev = (await (await fetch(LIST + '/json')).json())[0]
   if (!dev) throw new Error('no device (is the proxy up / iPad connected?)')
   const pages = await (await fetch('http://' + dev.url + '/json')).json()
-  return { pages, page: pages.find(p => (p.url || '').includes(MATCH)) }
+  // A page and its ServiceWorker share a URL; the SW is never the JS app context
+  // we want to eval in (and connecting to it hangs with "no target announced").
+  // PAGE_INDEX picks among multiple page matches (e.g. a live PWA + a stale tab).
+  const matches = pages.filter(p => (p.url || '').includes(MATCH) && p.title !== 'ServiceWorker')
+  const pick = process.env.PAGE_INDEX ? Number(process.env.PAGE_INDEX) : 0
+  return { pages, page: matches[pick] || pages.find(p => (p.url || '').includes(MATCH)) }
 }
 
 function session(wsUrl) {
