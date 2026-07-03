@@ -28,11 +28,17 @@ var pluginUIStateBootstrapEffect = (type) => ({
 *        // …other facet contributions…
 *      ]
 */
-var pluginPrefsExtension = (type, source) => [typesFacet.of(type, { source }), appEffectsFacet.of(pluginPrefsBootstrapEffect(type), { source })];
+var pluginPrefsExtension = (type, source) => [typesFacet.of({
+	...type,
+	hideFromCompletion: true
+}, { source }), appEffectsFacet.of(pluginPrefsBootstrapEffect(type), { source })];
 /** Same as `pluginPrefsExtension`, for sub-blocks under the root
 *  ui-state subtree (scoped via ChangeScope.UiState — non-undoable but
 *  still synced). */
-var pluginUIStateExtension = (type, source) => [typesFacet.of(type, { source }), appEffectsFacet.of(pluginUIStateBootstrapEffect(type), { source })];
+var pluginUIStateExtension = (type, source) => [typesFacet.of({
+	...type,
+	hideFromCompletion: true
+}, { source }), appEffectsFacet.of(pluginUIStateBootstrapEffect(type), { source })];
 //#endregion
 export { pluginPrefsExtension, pluginUIStateExtension };
 

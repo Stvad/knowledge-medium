@@ -1,4 +1,4 @@
-import { defineBlockType } from "../../data/api/blockType.js";
+import { INFRASTRUCTURE_TYPE_DISPLAY, defineBlockType } from "../../data/api/blockType.js";
 import { ChangeScope } from "../../data/api/changeScope.js";
 import { codecs } from "../../data/api/codecs.js";
 import { defineProperty } from "../../data/api/propertySchema.js";
@@ -42,6 +42,7 @@ var reviewProgressProp = defineProperty("srs-review:progress", {
 var srsReviewProgressType = defineBlockType({
 	id: SRS_REVIEW_PROGRESS_TYPE,
 	label: "SRS review progress",
+	...INFRASTRUCTURE_TYPE_DISPLAY,
 	properties: [reviewProgressProp]
 });
 //#endregion

@@ -5,13 +5,13 @@ import { EditorView } from "../../node_modules/@codemirror/view/dist/index.js";
 import { useContentRevision, usePropertyValue } from "../hooks/block.js";
 import { useBlockContext } from "../context/block.js";
 import { useInEditMode, useIsEditing, useUIStateBlock } from "../data/globalState.js";
-import { placeCursorAtCoords, placeCursorAtX } from "../utils/codemirror.js";
+import { clampSelectionToLength, placeCursorAtCoords, placeCursorAtX } from "../utils/codemirror.js";
 import ReactCodeMirror from "../../node_modules/@uiw/react-codemirror/esm/index.js";
 import { shouldExitEditModeAfterBlur } from "../utils/dom.js";
 import { keyboardAwareScroll } from "../utils/keyboardAwareScroll.js";
 import { useShortcutSurfaceActivations } from "../extensions/useShortcutSurfaceActivations.js";
 import { resolveEditModeKeepalive } from "./editModeKeepalive.js";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { jsx } from "react/jsx-runtime";
 //#region src/components/BlockEditor.tsx
 var BlockEditor = ({ block, ref, ...codeMirrorProps }) => {
@@ -38,7 +38,7 @@ var BlockEditor = ({ block, ref, ...codeMirrorProps }) => {
 		pushChange.flush();
 		pushSelection.flush();
 	}, [pushChange, pushSelection]);
-	useEffect(() => flushDebouncers, [flushDebouncers]);
+	useLayoutEffect(() => flushDebouncers, [flushDebouncers]);
 	useEffect(() => {
 		if (!blockEditData || !editorView) return;
 		const incomingUpdatedAt = blockEditData.updatedAt;
@@ -51,16 +51,13 @@ var BlockEditor = ({ block, ref, ...codeMirrorProps }) => {
 		}
 		if (incomingUpdatedAt <= lastAdoptedUpdatedAt.current) return;
 		if (live !== lastCommittedContent.current) return;
-		const newLength = incoming.length;
-		const oldSelection = editorView.state.selection;
-		const clampedSelection = EditorSelection.create(oldSelection.ranges.map((r) => EditorSelection.range(Math.min(r.anchor, newLength), Math.min(r.head, newLength))), oldSelection.mainIndex);
 		editorView.dispatch({
 			changes: {
 				from: 0,
 				to: live.length,
 				insert: incoming
 			},
-			selection: clampedSelection
+			selection: clampSelectionToLength(editorView.state.selection, incoming.length)
 		});
 		pushChange.cancel();
 		lastCommittedContent.current = incoming;
@@ -83,13 +80,7 @@ var BlockEditor = ({ block, ref, ...codeMirrorProps }) => {
 					y: selection.y
 				});
 				else if (selection.x !== void 0) placeCursorAtX(editorView, selection.x, selection.line === "last");
-				else if (selection.start !== void 0) {
-					const end = selection.end ?? selection.start;
-					editorView.dispatch({ selection: {
-						anchor: selection.start,
-						head: end
-					} });
-				}
+				else if (selection.start !== void 0) editorView.dispatch({ selection: clampSelectionToLength(EditorSelection.single(selection.start, selection.end ?? selection.start), editorView.state.doc.length) });
 			}
 			if (cancelled) return;
 			editorView.dispatch({ effects: EditorView.scrollIntoView(editorView.state.selection.main.head) });

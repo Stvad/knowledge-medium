@@ -82,7 +82,13 @@ var ProjectorLifecycle = class {
 		const nextByKey = /* @__PURE__ */ new Map();
 		const nextByBlockId = /* @__PURE__ */ new Map();
 		for (const row of rows) {
-			const built = this.descriptor.project(row, this.ctx);
+			let built;
+			try {
+				built = this.descriptor.project(row, this.ctx);
+			} catch (err) {
+				console.warn(`[projector ${this.descriptor.id}] project() failed for block ${row.id}; skipping row`, err);
+				continue;
+			}
 			if (built) {
 				next.push(built);
 				nextByKey.set(this.descriptor.keyOf(built), row.id);

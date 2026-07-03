@@ -36,6 +36,7 @@ var startupRecordProp = defineProperty("startupRecord", {
 var startupMetricsUIStateType = defineBlockType({
 	id: "startup-metrics",
 	label: "Startup metrics",
+	hideFromCompletion: true,
 	properties: []
 });
 var startupDeviceLabel = () => {

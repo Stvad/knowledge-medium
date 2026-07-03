@@ -2,6 +2,7 @@ import { openDialog } from "../../utils/dialogs.js";
 import { agentTokenStore, agentTokensChangedEvent } from "./tokens.js";
 import { AgentTokensDialog } from "./AgentTokensDialog.js";
 import { BridgePairingDialog } from "./BridgePairingDialog.js";
+import { watchEventsRegistry } from "./watchEvents.js";
 import { knownAgentCommandSchema } from "../../../packages/agent-cli/src/protocol.js";
 import { createAgentRuntimeContext, executeCommand } from "./commands.js";
 import { serializeError, serializeValue } from "./serialization.js";
@@ -187,6 +188,9 @@ var startAgentRuntimeBridge = (options) => {
 		processBridgePairingFromHash();
 		wakeBridgeLoop(true);
 	};
+	watchEventsRegistry.setTransport(async (event) => {
+		await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId);
+	});
 	window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart);
 	window.addEventListener(agentTokensChangedEvent, handleTokensChanged);
 	window.addEventListener("focus", handleWakeEvent);
@@ -272,6 +276,8 @@ var startAgentRuntimeBridge = (options) => {
 	poll();
 	return () => {
 		abortController.abort();
+		watchEventsRegistry.setTransport(null);
+		watchEventsRegistry.disposeAll();
 		window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart);
 		window.removeEventListener(agentTokensChangedEvent, handleTokensChanged);
 		window.removeEventListener("focus", handleWakeEvent);

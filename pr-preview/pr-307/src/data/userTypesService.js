@@ -1,4 +1,4 @@
-import { blockTypeDescriptionProp, blockTypeLabelProp, blockTypePropertiesProp } from "./properties.js";
+import { blockTypeColorProp, blockTypeDescriptionProp, blockTypeHideFromBlockDisplayProp, blockTypeLabelProp, blockTypePropertiesProp } from "./properties.js";
 import { typesFacet } from "./facets.js";
 import { BLOCK_TYPE_TYPE } from "./blockTypes.js";
 import { USER_SCHEMAS_PROJECTOR_ID } from "./userSchemasService.js";
@@ -6,6 +6,14 @@ import { USER_SCHEMAS_PROJECTOR_ID } from "./userSchemasService.js";
 /** Projector id for the user-defined block-type bridge. */
 var USER_TYPES_PROJECTOR_ID = "user-types";
 var USER_DATA_SOURCE_ID = "user-data";
+var safeDisplayProp = (block, prop, fallback) => {
+	try {
+		return block.peekProperty(prop) ?? fallback;
+	} catch (err) {
+		console.warn(`[UserTypesService] block ${block.id}: malformed ${prop.name}; using default`, err);
+		return fallback;
+	}
+};
 /** Build a TypeContribution from a user-authored block-type block.
 *  Returns null with a logged diagnostic when the label is empty;
 *  silently drops refList entries that don't resolve through the schema
@@ -18,6 +26,8 @@ var tryBuildType = (block, schemas) => {
 		return null;
 	}
 	const description = block.peekProperty(blockTypeDescriptionProp) ?? "";
+	const hideFromBlockDisplay = safeDisplayProp(block, blockTypeHideFromBlockDisplayProp, false);
+	const color = safeDisplayProp(block, blockTypeColorProp, "").trim();
 	const refIds = block.peekProperty(blockTypePropertiesProp) ?? [];
 	const properties = [];
 	for (const refId of refIds) {
@@ -28,6 +38,8 @@ var tryBuildType = (block, schemas) => {
 		id: block.id,
 		label,
 		...description ? { description } : {},
+		...hideFromBlockDisplay ? { hideFromBlockDisplay } : {},
+		...color ? { color } : {},
 		properties
 	};
 };
@@ -42,6 +54,7 @@ var contributionsEqual = (a, b) => {
 		const ac = a[i];
 		const bc = b[i];
 		if (ac.id !== bc.id || ac.label !== bc.label || ac.description !== bc.description) return false;
+		if (ac.hideFromBlockDisplay !== bc.hideFromBlockDisplay || ac.color !== bc.color) return false;
 		const ap = ac.properties ?? [];
 		const bp = bc.properties ?? [];
 		if (ap.length !== bp.length) return false;

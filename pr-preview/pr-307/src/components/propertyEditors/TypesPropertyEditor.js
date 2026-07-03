@@ -1,14 +1,32 @@
-import { typesFacet } from "../../data/facets.js";
 import { Block } from "../../data/block.js";
 import { cn } from "../../lib/utils.js";
-import { useAppRuntime } from "../../extensions/runtimeContext.js";
 import { Plus } from "../../../node_modules/lucide-react/dist/esm/icons/plus.js";
-import { X } from "../../../node_modules/lucide-react/dist/esm/icons/x.js";
 import { FloatingListbox } from "../ui/floating-listbox.js";
+import { useAutocompleteListbox } from "../../hooks/useAutocompleteListbox.js";
+import { useTypes } from "../../hooks/typeRegistry.js";
+import { TypeChip } from "../typeChip/TypeChip.js";
 import { useId, useState } from "react";
 import { c } from "react/compiler-runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/components/propertyEditors/TypesPropertyEditor.tsx
+/** Which option Enter/Tab commits. Pure — exported for direct testing.
+*
+*  A user-defined type can share a label with an infrastructure
+*  kernel/plugin type ("page", "Media"). Typing that label into a TYPE
+*  picker almost always means the completion-offered one — preferring
+*  it matches the `#` autocomplete's resolution (the ref-target picker
+*  currently resolves such collisions by registration order — a known
+*  gap, not a policy to be consistent with). A sole infrastructure
+*  exact match still commits (the panel's dropdown deliberately lists
+*  everything, and it's the visibly highlighted row). An explicit
+*  highlight (arrows / hover → `navigated`) beats the exact-match
+*  shortcut — committing something other than the highlighted row
+*  contradicts what the user is looking at. */
+var resolveCommitTarget = (args) => {
+	const exactMatches = args.options.filter((option) => option.id.toLowerCase() === args.queryText || option.label.toLowerCase() === args.queryText);
+	const exact = exactMatches.find((option) => !option.hideFromCompletion) ?? exactMatches[0];
+	return !args.navigated && exact && !args.selectedIds.has(exact.id) ? exact : args.filtered[args.activeIndex] ?? args.filtered[0];
+};
 var normalizedTypes = (value) => Array.from(new Set(value.map((type) => type.trim()).filter(Boolean)));
 /** A user-defined type's id is the type-definition block's uuid —
 *  meaningless to a human picking the type. Hide it from the dropdown
@@ -18,9 +36,8 @@ var normalizedTypes = (value) => Array.from(new Set(value.map((type) => type.tri
 var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 var isOpaqueId = (id) => UUID_PATTERN.test(id);
 function TypesPropertyEditor(t0) {
-	const $ = c(74);
+	const $ = c(80);
 	const { value, block } = t0;
-	const runtime = useAppRuntime();
 	const listboxId = useId();
 	const [shellElement, setShellElement] = useState(null);
 	const typedBlock = block instanceof Block ? block : null;
@@ -41,115 +58,129 @@ function TypesPropertyEditor(t0) {
 	const selectedSet = t2;
 	const [query, setQuery] = useState("");
 	const [open, setOpen] = useState(false);
-	const [activeIndex, setActiveIndex] = useState(0);
+	const [navigated, setNavigated] = useState(false);
+	const typesRegistry = useTypes();
 	let t3;
-	if ($[4] !== runtime) {
-		t3 = runtime.read(typesFacet);
-		$[4] = runtime;
+	if ($[4] !== typesRegistry) {
+		t3 = Array.from(typesRegistry.values()).map(_temp);
+		$[4] = typesRegistry;
 		$[5] = t3;
 	} else t3 = $[5];
-	const typesRegistry = t3;
+	const options = t3;
 	let t4;
-	if ($[6] !== typesRegistry) {
-		t4 = Array.from(typesRegistry.values()).map(_temp);
-		$[6] = typesRegistry;
+	if ($[6] !== query) {
+		t4 = query.trim().toLowerCase();
+		$[6] = query;
 		$[7] = t4;
 	} else t4 = $[7];
-	const options = t4;
+	const queryText = t4;
 	let t5;
-	if ($[8] !== options) {
-		t5 = new Map(options.map(_temp2));
-		$[8] = options;
-		$[9] = t5;
-	} else t5 = $[9];
-	const optionsById = t5;
-	let t6;
-	if ($[10] !== query) {
-		t6 = query.trim().toLowerCase();
-		$[10] = query;
-		$[11] = t6;
-	} else t6 = $[11];
-	const queryText = t6;
-	let t7;
-	if ($[12] !== options || $[13] !== queryText || $[14] !== selectedSet) {
-		t7 = options.filter((option_0) => {
-			if (selectedSet.has(option_0.id)) return false;
+	if ($[8] !== options || $[9] !== queryText || $[10] !== selectedSet) {
+		t5 = options.filter((option) => {
+			if (selectedSet.has(option.id)) return false;
 			if (!queryText) return true;
-			return option_0.id.toLowerCase().includes(queryText) || option_0.label.toLowerCase().includes(queryText);
+			return option.id.toLowerCase().includes(queryText) || option.label.toLowerCase().includes(queryText);
 		});
-		$[12] = options;
-		$[13] = queryText;
-		$[14] = selectedSet;
-		$[15] = t7;
-	} else t7 = $[15];
-	const filtered = t7;
-	let t8;
-	if ($[16] !== readOnly || $[17] !== typedBlock) {
-		t8 = (nextTypes) => {
+		$[8] = options;
+		$[9] = queryText;
+		$[10] = selectedSet;
+		$[11] = t5;
+	} else t5 = $[11];
+	const filtered = t5;
+	let t6;
+	if ($[12] !== readOnly || $[13] !== typedBlock) {
+		t6 = (nextTypes) => {
 			if (!typedBlock || readOnly) return;
 			typedBlock.repo.setBlockTypes(typedBlock.id, normalizedTypes(nextTypes));
 		};
-		$[16] = readOnly;
-		$[17] = typedBlock;
-		$[18] = t8;
-	} else t8 = $[18];
-	const setTypes = t8;
-	let t9;
-	if ($[19] !== selected || $[20] !== selectedSet || $[21] !== setTypes || $[22] !== typesRegistry) {
-		t9 = (typeId) => {
+		$[12] = readOnly;
+		$[13] = typedBlock;
+		$[14] = t6;
+	} else t6 = $[14];
+	const setTypes = t6;
+	let t7;
+	if ($[15] !== selected || $[16] !== selectedSet || $[17] !== setTypes || $[18] !== typesRegistry) {
+		t7 = (typeId) => {
 			if (!typesRegistry.has(typeId) || selectedSet.has(typeId)) return;
 			setTypes([...selected, typeId]);
 			setQuery("");
 			setOpen(false);
 		};
-		$[19] = selected;
-		$[20] = selectedSet;
-		$[21] = setTypes;
-		$[22] = typesRegistry;
-		$[23] = t9;
-	} else t9 = $[23];
-	const addType = t9;
-	let t10;
-	if ($[24] !== selected || $[25] !== setTypes) {
-		t10 = (typeId_0) => {
+		$[15] = selected;
+		$[16] = selectedSet;
+		$[17] = setTypes;
+		$[18] = typesRegistry;
+		$[19] = t7;
+	} else t7 = $[19];
+	const addType = t7;
+	let t8;
+	if ($[20] !== selected || $[21] !== setTypes) {
+		t8 = (typeId_0) => {
 			setTypes(selected.filter((selectedType) => selectedType !== typeId_0));
 		};
-		$[24] = selected;
-		$[25] = setTypes;
-		$[26] = t10;
-	} else t10 = $[26];
-	const removeType = t10;
-	let t11;
-	if ($[27] !== activeIndex || $[28] !== addType || $[29] !== filtered || $[30] !== options || $[31] !== queryText || $[32] !== selectedSet) {
-		t11 = () => {
-			const exact = options.find((option_1) => option_1.id.toLowerCase() === queryText || option_1.label.toLowerCase() === queryText);
-			const option_2 = exact && !selectedSet.has(exact.id) ? exact : filtered[activeIndex] ?? filtered[0];
-			if (!option_2) return false;
-			addType(option_2.id);
+		$[20] = selected;
+		$[21] = setTypes;
+		$[22] = t8;
+	} else t8 = $[22];
+	const removeType = t8;
+	let t9;
+	if ($[23] !== addType || $[24] !== filtered) {
+		t9 = (index) => {
+			const option_0 = filtered[index];
+			if (!option_0) return false;
+			addType(option_0.id);
 			return true;
 		};
-		$[27] = activeIndex;
-		$[28] = addType;
-		$[29] = filtered;
-		$[30] = options;
-		$[31] = queryText;
-		$[32] = selectedSet;
-		$[33] = t11;
-	} else t11 = $[33];
+		$[23] = addType;
+		$[24] = filtered;
+		$[25] = t9;
+	} else t9 = $[25];
+	let t10;
+	if ($[26] !== filtered.length || $[27] !== listboxId || $[28] !== t9) {
+		t10 = {
+			itemCount: filtered.length,
+			setOpen,
+			listboxId,
+			onCommit: t9
+		};
+		$[26] = filtered.length;
+		$[27] = listboxId;
+		$[28] = t9;
+		$[29] = t10;
+	} else t10 = $[29];
+	const listbox = useAutocompleteListbox(t10);
+	let t11;
+	if ($[30] !== addType || $[31] !== filtered || $[32] !== listbox.activeIndex || $[33] !== navigated || $[34] !== options || $[35] !== queryText || $[36] !== selectedSet) {
+		t11 = () => {
+			const option_1 = resolveCommitTarget({
+				options,
+				filtered,
+				queryText,
+				navigated,
+				activeIndex: listbox.activeIndex,
+				selectedIds: selectedSet
+			});
+			if (!option_1) return false;
+			addType(option_1.id);
+			return true;
+		};
+		$[30] = addType;
+		$[31] = filtered;
+		$[32] = listbox.activeIndex;
+		$[33] = navigated;
+		$[34] = options;
+		$[35] = queryText;
+		$[36] = selectedSet;
+		$[37] = t11;
+	} else t11 = $[37];
 	const commitCurrentQuery = t11;
 	let t12;
-	if ($[34] !== commitCurrentQuery || $[35] !== filtered.length || $[36] !== query || $[37] !== readOnly || $[38] !== removeType || $[39] !== selected) {
+	if ($[38] !== commitCurrentQuery || $[39] !== listbox || $[40] !== query || $[41] !== readOnly || $[42] !== removeType || $[43] !== selected) {
 		t12 = (event) => {
 			if (readOnly) return;
-			if (event.key === "ArrowDown") {
-				event.preventDefault();
-				setOpen(true);
-				setActiveIndex((index) => Math.min(index + 1, Math.max(filtered.length - 1, 0)));
-				return;
-			}
-			if (event.key === "ArrowUp") {
-				event.preventDefault();
-				setActiveIndex(_temp3);
+			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+				setNavigated(true);
+				listbox.onKeyDown(event);
 				return;
 			}
 			if ((event.key === "Enter" || event.key === "Tab") && query.trim()) {
@@ -163,75 +194,63 @@ function TypesPropertyEditor(t0) {
 			}
 			if (event.key === "Escape") setOpen(false);
 		};
-		$[34] = commitCurrentQuery;
-		$[35] = filtered.length;
-		$[36] = query;
-		$[37] = readOnly;
-		$[38] = removeType;
-		$[39] = selected;
-		$[40] = t12;
-	} else t12 = $[40];
+		$[38] = commitCurrentQuery;
+		$[39] = listbox;
+		$[40] = query;
+		$[41] = readOnly;
+		$[42] = removeType;
+		$[43] = selected;
+		$[44] = t12;
+	} else t12 = $[44];
 	const handleInputKeyDown = t12;
 	let t13;
-	if ($[41] === Symbol.for("react.memo_cache_sentinel")) {
+	if ($[45] === Symbol.for("react.memo_cache_sentinel")) {
 		t13 = () => {
 			window.setTimeout(() => setOpen(false), 120);
 		};
-		$[41] = t13;
-	} else t13 = $[41];
+		$[45] = t13;
+	} else t13 = $[45];
 	let t14;
-	if ($[42] !== optionsById || $[43] !== readOnly || $[44] !== removeType || $[45] !== selected) {
+	if ($[46] !== readOnly || $[47] !== removeType || $[48] !== selected || $[49] !== typesRegistry) {
 		let t15;
-		if ($[47] !== optionsById || $[48] !== readOnly || $[49] !== removeType) {
-			t15 = (typeId_1) => {
-				const option_3 = optionsById.get(typeId_1);
-				const label = option_3?.label ?? typeId_1;
-				return /* @__PURE__ */ jsxs("span", {
-					className: "inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs text-foreground",
-					title: option_3?.description ?? typeId_1,
-					children: [/* @__PURE__ */ jsx("span", {
-						className: "truncate",
-						children: label
-					}), !readOnly && /* @__PURE__ */ jsx("button", {
-						type: "button",
-						className: "rounded-sm text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-						"aria-label": `Remove ${label} type`,
-						onMouseDown: _temp4,
-						onClick: () => removeType(typeId_1),
-						children: /* @__PURE__ */ jsx(X, { className: "h-3 w-3" })
-					})]
-				}, typeId_1);
-			};
-			$[47] = optionsById;
-			$[48] = readOnly;
-			$[49] = removeType;
-			$[50] = t15;
-		} else t15 = $[50];
+		if ($[51] !== readOnly || $[52] !== removeType || $[53] !== typesRegistry) {
+			t15 = (typeId_1) => /* @__PURE__ */ jsx(TypeChip, {
+				typeId: typeId_1,
+				type: typesRegistry.get(typeId_1),
+				onRemove: readOnly ? void 0 : () => removeType(typeId_1)
+			}, typeId_1);
+			$[51] = readOnly;
+			$[52] = removeType;
+			$[53] = typesRegistry;
+			$[54] = t15;
+		} else t15 = $[54];
 		t14 = selected.map(t15);
-		$[42] = optionsById;
-		$[43] = readOnly;
-		$[44] = removeType;
-		$[45] = selected;
-		$[46] = t14;
-	} else t14 = $[46];
-	let t15;
+		$[46] = readOnly;
+		$[47] = removeType;
+		$[48] = selected;
+		$[49] = typesRegistry;
+		$[50] = t14;
+	} else t14 = $[50];
+	const t15 = open && !readOnly ? listbox.activeDescendantId : void 0;
 	let t16;
-	if ($[51] === Symbol.for("react.memo_cache_sentinel")) {
-		t15 = () => setOpen(true);
-		t16 = (event_1) => {
-			setQuery(event_1.target.value);
-			setActiveIndex(0);
+	if ($[55] === Symbol.for("react.memo_cache_sentinel")) {
+		t16 = () => setOpen(true);
+		$[55] = t16;
+	} else t16 = $[55];
+	let t17;
+	if ($[56] !== listbox) {
+		t17 = (event_0) => {
+			setQuery(event_0.target.value);
+			listbox.setActiveIndex(0);
+			setNavigated(false);
 			setOpen(true);
 		};
-		$[51] = t15;
-		$[52] = t16;
-	} else {
-		t15 = $[51];
-		t16 = $[52];
-	}
-	let t17;
-	if ($[53] !== handleInputKeyDown || $[54] !== listboxId || $[55] !== open || $[56] !== query || $[57] !== readOnly) {
-		t17 = /* @__PURE__ */ jsx("input", {
+		$[56] = listbox;
+		$[57] = t17;
+	} else t17 = $[57];
+	let t18;
+	if ($[58] !== handleInputKeyDown || $[59] !== listboxId || $[60] !== open || $[61] !== query || $[62] !== readOnly || $[63] !== t15 || $[64] !== t17) {
+		t18 = /* @__PURE__ */ jsx("input", {
 			className: "h-6 min-w-[8rem] flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/55 disabled:cursor-not-allowed disabled:opacity-60",
 			value: query,
 			placeholder: "Add type",
@@ -241,108 +260,102 @@ function TypesPropertyEditor(t0) {
 			"aria-expanded": open,
 			"aria-controls": listboxId,
 			"aria-autocomplete": "list",
-			onFocus: t15,
-			onChange: t16,
+			"aria-activedescendant": t15,
+			onFocus: t16,
+			onChange: t17,
 			onKeyDown: handleInputKeyDown
 		});
-		$[53] = handleInputKeyDown;
-		$[54] = listboxId;
-		$[55] = open;
-		$[56] = query;
-		$[57] = readOnly;
-		$[58] = t17;
-	} else t17 = $[58];
-	let t18;
-	if ($[59] !== t14 || $[60] !== t17) {
-		t18 = /* @__PURE__ */ jsxs("div", {
+		$[58] = handleInputKeyDown;
+		$[59] = listboxId;
+		$[60] = open;
+		$[61] = query;
+		$[62] = readOnly;
+		$[63] = t15;
+		$[64] = t17;
+		$[65] = t18;
+	} else t18 = $[65];
+	let t19;
+	if ($[66] !== t14 || $[67] !== t18) {
+		t19 = /* @__PURE__ */ jsxs("div", {
 			ref: setShellElement,
 			className: "flex min-h-7 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-transparent bg-transparent px-0 py-0.5 focus-within:border-input focus-within:px-1.5",
-			children: [t14, t17]
+			children: [t14, t18]
 		});
-		$[59] = t14;
-		$[60] = t17;
-		$[61] = t18;
-	} else t18 = $[61];
-	const t19 = open && !readOnly;
-	let t20;
-	if ($[62] !== activeIndex || $[63] !== addType || $[64] !== filtered) {
-		t20 = filtered.length > 0 ? filtered.map((option_4, index_1) => /* @__PURE__ */ jsxs("button", {
-			type: "button",
-			role: "option",
-			"aria-selected": index_1 === activeIndex,
-			className: cn("flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left", index_1 === activeIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent hover:text-accent-foreground"),
-			onMouseDown: _temp5,
-			onMouseEnter: () => setActiveIndex(index_1),
-			onClick: () => addType(option_4.id),
-			children: [
-				/* @__PURE__ */ jsx(Plus, { className: "h-3.5 w-3.5 shrink-0 text-muted-foreground" }),
-				/* @__PURE__ */ jsx("span", {
-					className: "min-w-0 flex-1 truncate",
-					children: option_4.label
-				}),
-				option_4.label !== option_4.id && !isOpaqueId(option_4.id) && /* @__PURE__ */ jsx("span", {
-					className: "min-w-0 max-w-[12rem] truncate text-xs text-muted-foreground",
-					children: option_4.id
-				})
-			]
-		}, option_4.id)) : /* @__PURE__ */ jsx("div", {
+		$[66] = t14;
+		$[67] = t18;
+		$[68] = t19;
+	} else t19 = $[68];
+	const t20 = open && !readOnly;
+	let t21;
+	if ($[69] !== filtered || $[70] !== listbox) {
+		t21 = filtered.length > 0 ? filtered.map((option_2, index_0) => {
+			const optionProps = listbox.getOptionProps(index_0);
+			return /* @__PURE__ */ jsxs("button", {
+				type: "button",
+				...optionProps,
+				className: cn("flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left", index_0 === listbox.activeIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent hover:text-accent-foreground"),
+				onMouseEnter: () => {
+					setNavigated(true);
+					optionProps.onMouseEnter();
+				},
+				children: [
+					/* @__PURE__ */ jsx(Plus, { className: "h-3.5 w-3.5 shrink-0 text-muted-foreground" }),
+					/* @__PURE__ */ jsx("span", {
+						className: "min-w-0 flex-1 truncate",
+						children: option_2.label
+					}),
+					option_2.label !== option_2.id && !isOpaqueId(option_2.id) && /* @__PURE__ */ jsx("span", {
+						className: "min-w-0 max-w-[12rem] truncate text-xs text-muted-foreground",
+						children: option_2.id
+					})
+				]
+			}, option_2.id);
+		}) : /* @__PURE__ */ jsx("div", {
 			className: "px-2 py-1.5 text-muted-foreground",
 			children: "No matching types"
 		});
-		$[62] = activeIndex;
-		$[63] = addType;
-		$[64] = filtered;
-		$[65] = t20;
-	} else t20 = $[65];
-	let t21;
-	if ($[66] !== listboxId || $[67] !== shellElement || $[68] !== t19 || $[69] !== t20) {
-		t21 = /* @__PURE__ */ jsx(FloatingListbox, {
+		$[69] = filtered;
+		$[70] = listbox;
+		$[71] = t21;
+	} else t21 = $[71];
+	let t22;
+	if ($[72] !== listboxId || $[73] !== shellElement || $[74] !== t20 || $[75] !== t21) {
+		t22 = /* @__PURE__ */ jsx(FloatingListbox, {
 			id: listboxId,
-			open: t19,
+			open: t20,
 			anchorElement: shellElement,
 			maxWidth: 352,
 			maxHeight: 224,
-			children: t20
+			children: t21
 		});
-		$[66] = listboxId;
-		$[67] = shellElement;
-		$[68] = t19;
-		$[69] = t20;
-		$[70] = t21;
-	} else t21 = $[70];
-	let t22;
-	if ($[71] !== t18 || $[72] !== t21) {
-		t22 = /* @__PURE__ */ jsxs("div", {
+		$[72] = listboxId;
+		$[73] = shellElement;
+		$[74] = t20;
+		$[75] = t21;
+		$[76] = t22;
+	} else t22 = $[76];
+	let t23;
+	if ($[77] !== t19 || $[78] !== t22) {
+		t23 = /* @__PURE__ */ jsxs("div", {
 			className: "min-w-0",
 			onBlur: t13,
-			children: [t18, t21]
+			children: [t19, t22]
 		});
-		$[71] = t18;
-		$[72] = t21;
-		$[73] = t22;
-	} else t22 = $[73];
-	return t22;
-}
-function _temp5(event_2) {
-	return event_2.preventDefault();
-}
-function _temp4(event_0) {
-	return event_0.preventDefault();
-}
-function _temp3(index_0) {
-	return Math.max(index_0 - 1, 0);
-}
-function _temp2(option) {
-	return [option.id, option];
+		$[77] = t19;
+		$[78] = t22;
+		$[79] = t23;
+	} else t23 = $[79];
+	return t23;
 }
 function _temp(type) {
 	return {
 		id: type.id,
 		label: type.label ?? type.id,
-		description: type.description
+		description: type.description,
+		hideFromCompletion: type.hideFromCompletion === true
 	};
 }
 //#endregion
-export { TypesPropertyEditor };
+export { TypesPropertyEditor, resolveCommitTarget };
 
 //# sourceMappingURL=TypesPropertyEditor.js.map

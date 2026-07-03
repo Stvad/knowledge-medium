@@ -202,6 +202,64 @@ var searchCommandSchema = looseObject({
 	limit: number().optional(),
 	...commandIdField
 });
+/** Side-effecting SQL functions PowerSync registers on the SAME wa-sqlite
+*  connection the bridge uses — `SELECT powersync_clear(1)` wipes local
+*  (incl. un-uploaded) data, `powersync_replace_schema` / `_control`
+*  corrupt schema/sync state. A `SELECT` prologue does NOT make a
+*  statement read-only here, so these must be denied regardless of
+*  prologue. Match the bare `powersync_` TOKEN, not `powersync_` + `(`:
+*  a SQLite comment counts as whitespace, so a comment wedged between the
+*  name and its paren makes a valid call that a `\s*\(` guard would miss
+*  — but the function name itself must appear as one contiguous
+*  identifier to be callable (a comment can't split it), so the bare
+*  token match is comment-proof. The app registers no other writable
+*  UDFs (verified), so this family is the whole vector. */
+var SIDE_EFFECTING_FN = /\bpowersync_/i;
+/** Textual read-only enforcement, shared by every surface that accepts
+*  SQL it will run repeatedly or on someone else's authority (the km MCP
+*  graph tools, claude-tasks watcher configs, watch-events registrations,
+*  the bridge's read-only token scope): single statement, no
+*  side-effecting function call, and either a SELECT/PRAGMA-info/EXPLAIN
+*  prologue or a WITH containing no mutating keyword — CTEs can head
+*  `WITH … UPDATE/INSERT/DELETE`, so `with` alone proves nothing. The
+*  keyword/function scan can false-positive on string literals; rewrite
+*  the query (or use the write tools) in that case. */
+var isReadOnlySql = (sql) => {
+	const body = sql.trim().replace(/;\s*$/, "");
+	if (body.includes(";")) return false;
+	if (SIDE_EFFECTING_FN.test(body)) return false;
+	if (/^(select|pragma table_info|explain)\b/i.test(body)) return true;
+	if (/^with\b/i.test(body)) return !/\b(insert|update|delete|replace|drop|alter|create|vacuum|attach|detach|reindex)\b/i.test(body);
+	return false;
+};
+var watcherSettleMsField = { 
+/** Quiet window: the result set must be stable this long before an
+*  event is emitted (restarted on every further change). */
+settleMs: number().int().min(0).max(6e5).optional() };
+var watchEventsWatcherSchema = discriminatedUnion("kind", [looseObject({
+	kind: literal("sql"),
+	name: string().min(1),
+	sql: string().refine(isReadOnlySql, { message: "watcher sql must be a single read-only statement (SELECT / PRAGMA table_info / EXPLAIN, or a non-mutating WITH)" }),
+	params: array(unknown()).optional(),
+	/** Tables whose changes re-run the query (default: blocks). */
+	tables: array(string().min(1)).max(8).optional(),
+	...watcherSettleMsField
+}), looseObject({
+	kind: literal("backlinks"),
+	name: string().min(1),
+	targetId: string().min(1),
+	...watcherSettleMsField
+})]);
+/** Replace `consumer`'s whole watcher registration (empty = unregister).
+*  Registrations live in the tab: they die with it and expire after
+*  `ttlMs` without a refresh, so consumers re-send this periodically. */
+var watchEventsCommandSchema = looseObject({
+	type: literal("watch-events"),
+	consumer: string().min(1),
+	watchers: array(watchEventsWatcherSchema).max(64),
+	ttlMs: number().int().min(1e3).max(24 * 36e5).optional(),
+	...commandIdField
+});
 discriminatedUnion("type", [
 	pingCommandSchema,
 	runtimeSummaryCommandSchema,
@@ -223,7 +281,8 @@ discriminatedUnion("type", [
 	dataModelCommandSchema,
 	pageCommandSchema,
 	dailyNoteCommandSchema,
-	searchCommandSchema
+	searchCommandSchema,
+	watchEventsCommandSchema
 ]);
 /** Full set of commands the kernel handles — canonical + legacy
 *  aliases (`set-extension-enabled`, `action`). Used by the bridge
@@ -252,7 +311,8 @@ var knownAgentCommandSchema = discriminatedUnion("type", [
 	dataModelCommandSchema,
 	pageCommandSchema,
 	dailyNoteCommandSchema,
-	searchCommandSchema
+	searchCommandSchema,
+	watchEventsCommandSchema
 ]);
 /** Schema-derived registry of every known wire command. Typed as
 *  `Record<KnownCommandType, …>` so adding a variant to
@@ -368,6 +428,11 @@ var knownCommandRegistry = {
 		usage: "kmagent search <query> [--limit <n>] [--workspace <id>]",
 		description: "Full-text search over block content; hydrated results.",
 		readOnly: true
+	},
+	"watch-events": {
+		usage: "kmagent raw '{\"type\":\"watch-events\",\"consumer\":\"...\",\"watchers\":[...]}'",
+		description: "Replace a consumer's change-watcher registration in the tab; matching changes are pushed to the bridge events channel (GET /runtime/events/next).",
+		readOnly: false
 	}
 };
 /** Lookup helper for surfaces that want a single command's metadata.

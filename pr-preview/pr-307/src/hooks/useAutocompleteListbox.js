@@ -74,7 +74,7 @@ function useAutocompleteListbox(t0) {
 		$[12] = t5;
 	} else t5 = $[12];
 	const getOptionProps = t5;
-	const t6 = listboxId ? `${listboxId}-option-${activeIndex}` : void 0;
+	const t6 = listboxId && activeIndex < itemCount ? `${listboxId}-option-${activeIndex}` : void 0;
 	let t7;
 	if ($[13] !== activeIndex || $[14] !== getOptionProps || $[15] !== onKeyDown || $[16] !== t6) {
 		t7 = {
