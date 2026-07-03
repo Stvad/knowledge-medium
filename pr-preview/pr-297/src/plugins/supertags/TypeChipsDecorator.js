@@ -42,7 +42,8 @@ var TypeChips = (t0) => {
 			t2 = (typeId) => {
 				const type = registry.get(typeId);
 				const label = type?.label ?? (typeId.length > 8 ? `${typeId.slice(0, 8)}…` : typeId);
-				const style = chipStyle(type, typeId);
+				const style = chipStyle(type);
+				const removable = !readOnly && type?.hideFromCompletion !== true;
 				const definitionId = repo.userTypes.getTypeBlockId(typeId);
 				const labelText = `#${label}`;
 				return /* @__PURE__ */ jsxs("span", {
@@ -61,7 +62,7 @@ var TypeChips = (t0) => {
 					}) : /* @__PURE__ */ jsx("span", {
 						className: "truncate",
 						children: labelText
-					}), !readOnly && /* @__PURE__ */ jsx("button", {
+					}), removable && /* @__PURE__ */ jsx("button", {
 						type: "button",
 						className: cn("rounded-sm p-1 -m-1 hover:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring", style ? "text-inherit opacity-70 hover:opacity-100" : "text-muted-foreground hover:text-foreground"),
 						"aria-label": `Remove ${label} type`,
@@ -125,7 +126,7 @@ var TypeChipsDecorator = (t0) => {
 		$[2] = t1;
 	} else t1 = $[2];
 	const visible = t1;
-	const t2 = visible.length > 0 ? "min-w-8 max-w-full has-[iframe]:w-full has-[video]:w-full" : "w-full";
+	const t2 = visible.length > 0 ? "min-w-8 max-w-full has-[iframe]:w-full has-[video]:w-full has-[audio]:w-full" : "w-full";
 	let t3;
 	if ($[3] !== Inner || $[4] !== block) {
 		t3 = /* @__PURE__ */ jsx(Inner, { block });

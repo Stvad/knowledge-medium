@@ -17,14 +17,14 @@ var configuredChipColor = (type) => {
 *  dark-variant branch. Unregistered ids return undefined and keep the
 *  muted-gray fallback: the missing color is a SIGNAL (definition not
 *  synced / plugin disabled), not a styling gap. */
-var chipStyle = (type, typeId) => {
+var chipStyle = (type) => {
 	if (!type) return void 0;
 	const configured = configuredChipColor(type);
 	if (configured) return {
 		color: configured,
 		backgroundColor: `color-mix(in srgb, ${configured} 14%, transparent)`
 	};
-	const base = defaultTypeColor(typeId);
+	const base = defaultTypeColor(type.id);
 	return {
 		color: `color-mix(in oklch, ${base} 72%, hsl(var(--foreground)))`,
 		backgroundColor: `color-mix(in srgb, ${base} 14%, transparent)`

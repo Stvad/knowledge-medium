@@ -73,7 +73,7 @@ async function createTypeBlock(repo, args) {
 		if (!repo.userSchemas.getSchemaForBlockId(schemaId)) throw new Error(`createTypeBlock: property-schema block ${schemaId} ("${name}") isn't published by UserSchemasService — e.g. its preset isn't loaded, its config didn't validate, or the block hasn't synced yet. Fix the schema block before retrying.`);
 	}
 	args.signal?.throwIfAborted();
-	const color = args.color ?? pickLeastUsedTypeColor(repo.types.values());
+	const color = args.color !== void 0 ? args.color.trim() : args.workspaceId === repo.activeWorkspaceId ? pickLeastUsedTypeColor(repo.types.values()) : "";
 	const typeSnapshot = repo.snapshotTypeRegistries();
 	let newId = "";
 	await repo.tx(async (tx) => {

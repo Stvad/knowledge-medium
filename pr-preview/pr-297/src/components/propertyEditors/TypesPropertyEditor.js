@@ -9,6 +9,24 @@ import { useId, useState } from "react";
 import { c } from "react/compiler-runtime";
 import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/components/propertyEditors/TypesPropertyEditor.tsx
+/** Which option Enter/Tab commits. Pure — exported for direct testing.
+*
+*  A user-defined type can share a label with an infrastructure
+*  kernel/plugin type ("page", "Media"). Typing that label into a TYPE
+*  picker almost always means the completion-offered one — preferring
+*  it matches the `#` autocomplete's resolution (the ref-target picker
+*  currently resolves such collisions by registration order — a known
+*  gap, not a policy to be consistent with). A sole infrastructure
+*  exact match still commits (the panel's dropdown deliberately lists
+*  everything, and it's the visibly highlighted row). An explicit
+*  highlight (arrows / hover → `navigated`) beats the exact-match
+*  shortcut — committing something other than the highlighted row
+*  contradicts what the user is looking at. */
+var resolveCommitTarget = (args) => {
+	const exactMatches = args.options.filter((option) => option.id.toLowerCase() === args.queryText || option.label.toLowerCase() === args.queryText);
+	const exact = exactMatches.find((option) => !option.hideFromCompletion) ?? exactMatches[0];
+	return !args.navigated && exact && !args.selectedIds.has(exact.id) ? exact : args.filtered[args.activeIndex] ?? args.filtered[0];
+};
 var normalizedTypes = (value) => Array.from(new Set(value.map((type) => type.trim()).filter(Boolean)));
 /** A user-defined type's id is the type-definition block's uuid —
 *  meaningless to a human picking the type. Hide it from the dropdown
@@ -123,11 +141,16 @@ function TypesPropertyEditor(t0) {
 	let t11;
 	if ($[27] !== activeIndex || $[28] !== addType || $[29] !== filtered || $[30] !== navigated || $[31] !== options || $[32] !== queryText || $[33] !== selectedSet) {
 		t11 = () => {
-			const exactMatches = options.filter((option_1) => option_1.id.toLowerCase() === queryText || option_1.label.toLowerCase() === queryText);
-			const exact = exactMatches.find(_temp3) ?? exactMatches[0];
-			const option_3 = !navigated && exact && !selectedSet.has(exact.id) ? exact : filtered[activeIndex] ?? filtered[0];
-			if (!option_3) return false;
-			addType(option_3.id);
+			const option_1 = resolveCommitTarget({
+				options,
+				filtered,
+				queryText,
+				navigated,
+				activeIndex,
+				selectedIds: selectedSet
+			});
+			if (!option_1) return false;
+			addType(option_1.id);
 			return true;
 		};
 		$[27] = activeIndex;
@@ -154,7 +177,7 @@ function TypesPropertyEditor(t0) {
 			if (event.key === "ArrowUp") {
 				event.preventDefault();
 				setNavigated(true);
-				setActiveIndex(_temp4);
+				setActiveIndex(_temp3);
 				return;
 			}
 			if ((event.key === "Enter" || event.key === "Tab") && query.trim()) {
@@ -189,11 +212,11 @@ function TypesPropertyEditor(t0) {
 		let t15;
 		if ($[48] !== optionsById || $[49] !== readOnly || $[50] !== removeType) {
 			t15 = (typeId_1) => {
-				const option_4 = optionsById.get(typeId_1);
-				const label = option_4?.label ?? typeId_1;
+				const option_2 = optionsById.get(typeId_1);
+				const label = option_2?.label ?? typeId_1;
 				return /* @__PURE__ */ jsxs("span", {
 					className: "inline-flex max-w-full items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs text-foreground",
-					title: option_4?.description ?? typeId_1,
+					title: option_2?.description ?? typeId_1,
 					children: [/* @__PURE__ */ jsx("span", {
 						className: "truncate",
 						children: label
@@ -201,7 +224,7 @@ function TypesPropertyEditor(t0) {
 						type: "button",
 						className: "rounded-sm text-muted-foreground hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
 						"aria-label": `Remove ${label} type`,
-						onMouseDown: _temp5,
+						onMouseDown: _temp4,
 						onClick: () => removeType(typeId_1),
 						children: /* @__PURE__ */ jsx(X, { className: "h-3 w-3" })
 					})]
@@ -272,29 +295,29 @@ function TypesPropertyEditor(t0) {
 	const t19 = open && !readOnly;
 	let t20;
 	if ($[63] !== activeIndex || $[64] !== addType || $[65] !== filtered) {
-		t20 = filtered.length > 0 ? filtered.map((option_5, index_1) => /* @__PURE__ */ jsxs("button", {
+		t20 = filtered.length > 0 ? filtered.map((option_3, index_1) => /* @__PURE__ */ jsxs("button", {
 			type: "button",
 			role: "option",
 			"aria-selected": index_1 === activeIndex,
 			className: cn("flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left", index_1 === activeIndex ? "bg-accent text-accent-foreground" : "hover:bg-accent hover:text-accent-foreground"),
-			onMouseDown: _temp6,
+			onMouseDown: _temp5,
 			onMouseEnter: () => {
 				setNavigated(true);
 				setActiveIndex(index_1);
 			},
-			onClick: () => addType(option_5.id),
+			onClick: () => addType(option_3.id),
 			children: [
 				/* @__PURE__ */ jsx(Plus, { className: "h-3.5 w-3.5 shrink-0 text-muted-foreground" }),
 				/* @__PURE__ */ jsx("span", {
 					className: "min-w-0 flex-1 truncate",
-					children: option_5.label
+					children: option_3.label
 				}),
-				option_5.label !== option_5.id && !isOpaqueId(option_5.id) && /* @__PURE__ */ jsx("span", {
+				option_3.label !== option_3.id && !isOpaqueId(option_3.id) && /* @__PURE__ */ jsx("span", {
 					className: "min-w-0 max-w-[12rem] truncate text-xs text-muted-foreground",
-					children: option_5.id
+					children: option_3.id
 				})
 			]
-		}, option_5.id)) : /* @__PURE__ */ jsx("div", {
+		}, option_3.id)) : /* @__PURE__ */ jsx("div", {
 			className: "px-2 py-1.5 text-muted-foreground",
 			children: "No matching types"
 		});
@@ -332,17 +355,14 @@ function TypesPropertyEditor(t0) {
 	} else t22 = $[74];
 	return t22;
 }
-function _temp6(event_2) {
+function _temp5(event_2) {
 	return event_2.preventDefault();
 }
-function _temp5(event_0) {
+function _temp4(event_0) {
 	return event_0.preventDefault();
 }
-function _temp4(index_0) {
+function _temp3(index_0) {
 	return Math.max(index_0 - 1, 0);
-}
-function _temp3(option_2) {
-	return !option_2.hideFromCompletion;
 }
 function _temp2(option) {
 	return [option.id, option];
@@ -356,6 +376,6 @@ function _temp(type) {
 	};
 }
 //#endregion
-export { TypesPropertyEditor };
+export { TypesPropertyEditor, resolveCommitTarget };
 
 //# sourceMappingURL=TypesPropertyEditor.js.map

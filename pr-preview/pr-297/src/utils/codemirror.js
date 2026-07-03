@@ -12,7 +12,7 @@ import { insertNewline } from "../../node_modules/@codemirror/commands/dist/inde
 *  document" on a raw out-of-range anchor, and (for adoption) omitting
 *  the selection instead would let default mapping collapse the cursor
 *  to 0. */
-var clampSelectionToLength = (selection, docLength) => EditorSelection.create(selection.ranges.map((range) => EditorSelection.range(Math.min(range.anchor, docLength), Math.min(range.head, docLength))), selection.mainIndex);
+var clampSelectionToLength = (selection, docLength) => EditorSelection.create(selection.ranges.map((range) => EditorSelection.range(Math.max(0, Math.min(range.anchor, docLength)), Math.max(0, Math.min(range.head, docLength)))), selection.mainIndex);
 /** Produce the change/range spec for one selection range that either
 *  inserts an empty `open`/`close` pair at the cursor or wraps the
 *  selection with them, keeping the selection inside the wrappers.
