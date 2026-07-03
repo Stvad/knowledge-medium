@@ -4,8 +4,8 @@ import { syntaxTree } from "../../node_modules/@codemirror/language/dist/index.j
 *  code — FencedCode (```), CodeBlock (indented), InlineCode
 *  (backticks), CodeText (the content node of the block forms);
 *  URL — autolinks and link targets (`http://…/#anchor`, `[t](#anchor)`
-*  are anchors, not tags); raw HTML and comments (`<div>#foo`,
-*  `<!-- #todo`). */
+*  are anchors, not tags); raw HTML, comments, and entities
+*  (`<div>#foo`, `<!-- #todo`, `&#123;`). */
 var LITERAL_NODE_NAMES = new Set([
 	"FencedCode",
 	"CodeBlock",
@@ -15,7 +15,8 @@ var LITERAL_NODE_NAMES = new Set([
 	"HTMLBlock",
 	"HTMLTag",
 	"Comment",
-	"CommentBlock"
+	"CommentBlock",
+	"Entity"
 ]);
 /** True when `pos` sits inside a literal markdown span (code, URL, raw
 *  HTML, comment). Fail-open: if the tree hasn't been parsed up to
