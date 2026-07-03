@@ -24,7 +24,7 @@ import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
-import { startPushLoop } from './push.js'
+import { createExemptionPool, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
 import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, encodeBlockedWikilinks, MCP_SERVER_NAME } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
@@ -196,24 +196,11 @@ const main = async () => {
   log(`watching: ${config.watchers.map(watcher => `${watcher.name}(${watcher.kind})`).join(', ')} every ${config.pollIntervalMs}ms (max ${config.runsPerHour} runs/hour)`)
 
   // Exemptions are keyed by the EMITTING watcher — only that watcher's
-  // tick may skip its still-typing gate for these blocks. Bounded: a
-  // flood of settled ids degrades to un-exempted ticks (sweep-latency
-  // cost), never to unbounded daemon memory.
-  const MAX_PENDING_EXEMPT_IDS = 2_048
-  let pendingExemptCount = 0
-  const pendingExempt = new Map<string, Set<string>>()
+  // tick may skip its still-typing gate for these blocks. The pool is
+  // bounded and freshness-checked at drain (see createExemptionPool).
+  const exemptionPool = createExemptionPool()
   const requestTick: Parameters<typeof startPushLoop>[0]['requestTick'] = exemptions => {
-    for (const [watcher, ids] of exemptions ?? []) {
-      const pool = pendingExempt.get(watcher) ?? new Set<string>()
-      for (const id of ids) {
-        if (pendingExemptCount >= MAX_PENDING_EXEMPT_IDS) break
-        if (!pool.has(id)) {
-          pool.add(id)
-          pendingExemptCount += 1
-        }
-      }
-      if (pool.size > 0) pendingExempt.set(watcher, pool)
-    }
+    if (exemptions) exemptionPool.add(exemptions)
     tickRequested = true
     for (const waiter of [...tickWaiters]) waiter()
     tickWaiters.clear()
@@ -235,10 +222,7 @@ const main = async () => {
     tickRequested = false
     // Drain the exemptions INTO this tick — ids arriving mid-tick stay
     // pending and re-tick immediately via tickRequested.
-    const quietExemptByWatcher = new Map(pendingExempt)
-    pendingExempt.clear()
-    pendingExemptCount = 0
-    await engine.tick({quietExemptByWatcher})
+    await engine.tick({quietExemptByWatcher: exemptionPool.drain()})
     if (args.once) break
     await napOrTick(config.pollIntervalMs)
   }

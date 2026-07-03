@@ -47,6 +47,55 @@ export const MAX_EXEMPTION_AGE_MS = 10_000
  *  backlinks watcher's much longer quietMs on the same block. */
 export type QuietExemptions = ReadonlyMap<string, ReadonlySet<string>>
 
+/** Cap on pooled exemption ids — a settledBlocks flood degrades to
+ *  un-exempted ticks (sweep-latency cost), never to unbounded memory. */
+export const MAX_PENDING_EXEMPT_IDS = 2_048
+/** Exemptions expire in the pool too: ticks drain the pool, but a sick
+ *  bridge can stall a tick for minutes (each graph call may hang up to
+ *  the client timeout) — by then "quiet, source-confirmed" may be
+ *  false again, so drained exemptions older than this are dropped. */
+export const EXEMPTION_POOL_TTL_MS = 10_000
+
+/** Daemon-side pool between push events and the (coalesced) tick that
+ *  consumes them: per-watcher, deduped, bounded, and freshness-checked
+ *  AT DRAIN TIME — arrival-time freshness alone (see the event loop
+ *  below) doesn't cover a delayed drain. */
+export const createExemptionPool = (now: () => number = Date.now) => {
+  const pools = new Map<string, Map<string, number>>() // watcher → id → pooledAt
+  let count = 0
+
+  const add = (exemptions: QuietExemptions): void => {
+    for (const [watcher, ids] of exemptions) {
+      const pool = pools.get(watcher) ?? new Map<string, number>()
+      for (const id of ids) {
+        if (count >= MAX_PENDING_EXEMPT_IDS) break
+        if (!pool.has(id)) {
+          pool.set(id, now())
+          count += 1
+        }
+      }
+      if (pool.size > 0) pools.set(watcher, pool)
+    }
+  }
+
+  const drain = (): Map<string, ReadonlySet<string>> => {
+    const cutoff = now() - EXEMPTION_POOL_TTL_MS
+    const result = new Map<string, ReadonlySet<string>>()
+    for (const [watcher, pool] of pools) {
+      const fresh = new Set<string>()
+      for (const [id, pooledAt] of pool) {
+        if (pooledAt >= cutoff) fresh.add(id)
+      }
+      if (fresh.size > 0) result.set(watcher, fresh)
+    }
+    pools.clear()
+    count = 0
+    return result
+  }
+
+  return {add, drain}
+}
+
 export interface PushDeps {
   client: Pick<BridgeClient, 'runCommand' | 'nextEvents'>
   config: DaemonConfig

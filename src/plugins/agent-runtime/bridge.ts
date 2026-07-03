@@ -10,7 +10,7 @@ import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDia
 import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePairingDialog.tsx'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
-import { blockEditSettled } from '@/editor/editSettleSignal.js'
+import { blockEditResumed, blockEditSettled } from '@/editor/editSettleSignal.js'
 import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
 import { knownAgentCommandSchema, type KnownAgentCommand } from '@knowledge-medium/agent-cli/protocol'
@@ -341,9 +341,13 @@ export const startAgentRuntimeBridge = (
     await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId)
   })
   // Editor blur short-circuits the settle window for that block —
-  // typed mentions fire the moment the user leaves them.
+  // typed mentions fire the moment the user leaves them. Re-entering
+  // the editor revokes the blur exemption (quiet is no longer
+  // user-confirmed once they're back typing).
   const offEditSettled = blockEditSettled.add(blockId =>
     watchEventsRegistry.notifyBlockSettled(blockId))
+  const offEditResumed = blockEditResumed.add(blockId =>
+    watchEventsRegistry.notifyBlockEditing(blockId))
 
   window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
   window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
@@ -358,7 +362,11 @@ export const startAgentRuntimeBridge = (
   // command flood can't pile up unboundedly; the loop parks on a free
   // slot instead of on completion of the command it just delivered.
   const maxConcurrentCommands = 4
-  const saturatedParkMs = 60_000
+  // Must sit comfortably BELOW the bridge server's 60s client TTL: a
+  // fully-parked tab neither registers nor polls, and parking right up
+  // to the TTL gets the client dropped (tokens gone, commands failed
+  // ClientGone) at exactly the park boundary.
+  const saturatedParkMs = 45_000
   const inFlightCommands = new Set<Promise<void>>()
 
   const runCommand = async (command: KnownAgentCommand, baseUrl: string) => {
@@ -482,6 +490,7 @@ export const startAgentRuntimeBridge = (
     watchEventsRegistry.setTransport(null)
     watchEventsRegistry.disposeAll()
     offEditSettled()
+    offEditResumed()
     window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
     window.removeEventListener('focus', handleWakeEvent)

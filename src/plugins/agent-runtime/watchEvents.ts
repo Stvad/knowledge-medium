@@ -91,6 +91,13 @@ interface ConsumerEntry {
   lastRefreshedMs: number
   db: PowerSyncDb
   runtimes: WatcherRuntime[]
+  /** Settles when the registration finished arming (baseline + change
+   *  subscriptions); rejects if it died first (baseline failure or a
+   *  replacement registration superseding it). An identical-spec
+   *  re-register must not report success against an entry that is
+   *  still baselining — the entry may yet die, leaving the consumer
+   *  believing it's registered for a whole refresh interval. */
+  ready: Promise<void>
 }
 
 const watcherRuntimeFor = (spec: WatchEventsWatcher): WatcherRuntime => ({
@@ -154,9 +161,13 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
 
   /** Emit the watcher's event and advance its emitted-state reference.
    *  `timeConfirmed` (settle timer ran its full course) may report every
-   *  pending id as settled; a blur FLUSH may only report ids whose
-   *  quiet the user confirmed by leaving them — a concurrently-syncing
-   *  edit from another device must not ride the exemption. */
+   *  pending id as settled; a blur FLUSH may only report ids the LOCAL
+   *  user blurred recently. Note the limit of that filter: it knows
+   *  which ids were blurred, not who caused a pending change — a remote
+   *  device's mid-typing edit to a block this user just blurred can
+   *  still ride the exemption (accepted residual risk; the fingerprint
+   *  carries no change origin). What it does reliably exclude is
+   *  pending ids this user never left. */
   const emitSettled = (consumer: string, runtime: WatcherRuntime, timeConfirmed: boolean) => {
     if (runtime.disposed) return
     const settled = [...runtime.pendingSettledIds]
@@ -287,11 +298,30 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     const existing = entries.get(consumer)
     if (existing && existing.specJson === specJson) {
       existing.lastRefreshedMs = now()
-      return {consumer, registered: existing.runtimes.map(runtime => runtime.name), unchanged: true}
+      try {
+        // A concurrent identical registration (daemon retry after a
+        // client-side timeout) may still be baselining — only confirm
+        // once it actually armed. If it died, fall through and
+        // register fresh instead of vouching for a dead entry.
+        await existing.ready
+        return {consumer, registered: existing.runtimes.map(runtime => runtime.name), unchanged: true}
+      } catch {
+        /* the entry died mid-arming — replace it below */
+      }
     }
 
     disposeConsumer(consumer)
     if (watchers.length === 0) return {consumer, registered: [], unchanged: false}
+
+    let readyResolve!: () => void
+    let readyReject!: (error: unknown) => void
+    const ready = new Promise<void>((resolve, reject) => {
+      readyResolve = resolve
+      readyReject = reject
+    })
+    // Only identical-spec re-registers await `ready`; without one, the
+    // rejection must not surface as an unhandled-promise crash.
+    ready.catch(() => {})
 
     const entry: ConsumerEntry = {
       specJson,
@@ -299,6 +329,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       lastRefreshedMs: now(),
       db,
       runtimes: watchers.map(watcherRuntimeFor),
+      ready,
     }
     entries.set(consumer, entry)
 
@@ -308,6 +339,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       await Promise.all(entry.runtimes.map(runtime => computeLoop(db, consumer, runtime)))
     } catch (error) {
       disposeEntry(consumer, entry)
+      readyReject(error)
       throw error
     }
 
@@ -317,6 +349,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     // would leave live watchers no dispose path can ever reach.
     if (entries.get(consumer) !== entry) {
       disposeEntry(consumer, entry)
+      readyReject(new Error('registration superseded while baselining'))
       return {consumer, registered: [], unchanged: false}
     }
 
@@ -331,6 +364,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
       )
     })
 
+    readyResolve()
     return {consumer, registered: entry.runtimes.map(runtime => runtime.name), unchanged: false}
   }
 
@@ -387,6 +421,14 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     recheckTimers.add(timer)
   }
 
+  /** The user re-entered the block's editor: a blur exemption asserts
+   *  "quiet, confirmed by leaving" — no longer true, so revoke it before
+   *  any later flush (incl. the blur's own 600ms recheck, or another
+   *  block's flush pass) can emit this block as settled mid-retype. */
+  const notifyBlockEditing = (blockId: string) => {
+    blurredUntil.delete(blockId)
+  }
+
   const disposeAll = () => {
     for (const consumer of [...entries.keys()]) disposeConsumer(consumer)
     for (const timer of recheckTimers) clearTimeout(timer)
@@ -394,7 +436,7 @@ export const createWatchEventsRegistry = (now: () => number = Date.now) => {
     blurredUntil.clear()
   }
 
-  return {register, setTransport, notifyBlockSettled, disposeAll}
+  return {register, setTransport, notifyBlockSettled, notifyBlockEditing, disposeAll}
 }
 
 export type WatchEventsRegistry = ReturnType<typeof createWatchEventsRegistry>

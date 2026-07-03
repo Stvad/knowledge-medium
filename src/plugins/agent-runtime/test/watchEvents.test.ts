@@ -233,6 +233,51 @@ describe('watch-events registry', () => {
     ])
   })
 
+  it('re-entering the editor revokes the blur exemption (bounce-back typo pattern)', async () => {
+    fake.setRows([{id: 'a'}])
+    await registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+
+    // User leaves block b; the debounced commit lands just after.
+    registry.notifyBlockSettled('b')
+    await change([{id: 'a'}, {id: 'b'}])
+
+    // ...but they bounce right back to fix a typo and keep typing. The
+    // blur's 600ms recheck (and any other flush) must no longer treat
+    // b's quiet as user-confirmed.
+    registry.notifyBlockEditing('b')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(emitted.filter(event => 'settledBlocks' in event)).toEqual([])
+
+    // The block still time-confirms once genuinely quiet for settleMs.
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(emitted.filter(event => 'settledBlocks' in event)).toEqual([
+      expect.objectContaining({settledBlocks: ['b']}),
+    ])
+  })
+
+  it('an identical re-registration only confirms once the original finished baselining', async () => {
+    const getAll = fake.db.getAll as ReturnType<typeof vi.fn>
+    let rejectBaseline!: (error: Error) => void
+    getAll.mockImplementationOnce(() => new Promise((_, reject) => { rejectBaseline = reject }))
+
+    // Daemon retry after a client-side timeout: same spec, while the
+    // original registration is still parked on its baseline query.
+    const first = registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+    await vi.advanceTimersByTimeAsync(0)
+    fake.setRows([{id: 'a'}])
+    const second = registry.register(fake.db, {consumer: 'daemon', watchers: [sqlWatcher()]})
+
+    rejectBaseline(new Error('no such table'))
+    await expect(first).rejects.toThrow('no such table')
+
+    // The retry must not have vouched for the dead entry: it registers
+    // fresh and leaves a live, armed watcher behind.
+    const result = await second
+    expect(result.unchanged).toBe(false)
+    expect(result.registered).toEqual(['inbox'])
+    expect(fake.subscriptions.filter(entry => !entry.disposed)).toHaveLength(1)
+  })
+
   it('a registration superseded while baselining never subscribes (concurrent commands)', async () => {
     // The bridge runs commands concurrently: register #1 suspends on its
     // baseline query while register #2 (different spec) replaces it.

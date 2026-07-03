@@ -3,7 +3,10 @@ import type {EventsNextResponse} from '@knowledge-medium/agent-cli/protocol'
 import {parseConfig} from '../src/config'
 import {
   buildRegistrationWatchers,
+  createExemptionPool,
+  EXEMPTION_POOL_TTL_MS,
   MAX_EXEMPTION_AGE_MS,
+  MAX_PENDING_EXEMPT_IDS,
   PUSH_CONSUMER,
   REGISTRATION_REFRESH_MS,
   REGISTRATION_TTL_MS,
@@ -71,6 +74,45 @@ describe('buildRegistrationWatchers', () => {
       {kind: 'backlinks', name: 'claude-mentions', targetId: 'page:claude', settleMs: 5_000},
       {kind: 'sql', name: 'inbox', sql: 'SELECT id FROM blocks', params: [], tables: ['blocks', 'block_references'], settleMs: 1_000},
     ])
+  })
+})
+
+describe('createExemptionPool', () => {
+  const exemptions = (watcher: string, ...ids: string[]) =>
+    new Map([[watcher, new Set(ids)]])
+
+  it('pools per watcher, dedupes, and drains everything fresh', () => {
+    const pool = createExemptionPool(() => 0)
+    pool.add(exemptions('claude-mentions', 'b1', 'b2'))
+    pool.add(exemptions('claude-mentions', 'b2'))
+    pool.add(exemptions('inbox', 'b3'))
+
+    expect(pool.drain()).toEqual(new Map([
+      ['claude-mentions', new Set(['b1', 'b2'])],
+      ['inbox', new Set(['b3'])],
+    ]))
+    // Drain empties the pool.
+    expect(pool.drain()).toEqual(new Map())
+  })
+
+  it('drops exemptions that aged out in the pool (delayed drain)', () => {
+    let clock = 0
+    const pool = createExemptionPool(() => clock)
+    pool.add(exemptions('claude-mentions', 'stale'))
+    clock += EXEMPTION_POOL_TTL_MS + 1
+    pool.add(exemptions('claude-mentions', 'fresh'))
+
+    // A sick bridge stalled the tick; by drain time 'stale' may be
+    // mid-retype again — only 'fresh' survives.
+    expect(pool.drain()).toEqual(new Map([['claude-mentions', new Set(['fresh'])]]))
+  })
+
+  it('caps the pooled id count', () => {
+    const pool = createExemptionPool(() => 0)
+    const ids = Array.from({length: MAX_PENDING_EXEMPT_IDS + 10}, (_, index) => `b${index}`)
+    pool.add(new Map([['claude-mentions', new Set(ids)]]))
+    const drained = pool.drain()
+    expect(drained.get('claude-mentions')!.size).toBe(MAX_PENDING_EXEMPT_IDS)
   })
 })
 

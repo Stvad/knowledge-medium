@@ -13,3 +13,13 @@ export const blockEditSettled = new CallbackSet<[blockId: string]>('block-edit-s
 
 export const notifyBlockEditSettled = (blockId: string): void =>
   blockEditSettled.notify(blockId)
+
+/** The user is editing this block AGAIN — fired when its editor mounts.
+ *  Consumers must revoke anything they inferred from the last settled
+ *  signal (e.g. watch-events drops the block's blur exemption: quiet
+ *  "confirmed by leaving" stops being true the moment the user is
+ *  back). */
+export const blockEditResumed = new CallbackSet<[blockId: string]>('block-edit-resumed')
+
+export const notifyBlockEditResumed = (blockId: string): void =>
+  blockEditResumed.notify(blockId)
