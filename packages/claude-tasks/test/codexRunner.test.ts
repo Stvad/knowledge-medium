@@ -120,7 +120,6 @@ describe('createCodexJsonlParser', () => {
     expect(result).toMatchObject({
       resultText: 'ok',
       sessionId: '019f2a7e-1ba0-70b3-8292-61528d38f840',
-      isError: false,
       sawTurnCompleted: true,
       failed: false,
     })
@@ -140,7 +139,6 @@ describe('createCodexJsonlParser', () => {
     ])
 
     const result = parser.finish()
-    expect(result.isError).toBe(true)
     expect(result.failed).toBe(true)
     expect(result.sawTurnCompleted).toBe(false)
     expect(result.errorMessage).toBe('{"type":"error","status":400,"foo":"bar"}')
@@ -175,7 +173,7 @@ describe('createCodexJsonlParser', () => {
       {kind: 'activity', label: 'km: search'},
       {kind: 'text', text: 'done'},
     ])
-    expect(parser.finish()).toMatchObject({resultText: 'done', isError: false})
+    expect(parser.finish()).toMatchObject({resultText: 'done', sawTurnCompleted: true, failed: false})
   })
 
   it('resume re-emits thread.started with the SAME thread id (session continuity)', () => {
@@ -197,13 +195,13 @@ describe('createCodexJsonlParser', () => {
     expect(() => parser.feed(line({type: 'item.completed', item: {type: 'agent_message', text: 'x'}}))).not.toThrow()
     expect(() => parser.feed('not json at all\n')).not.toThrow()
     expect(() => parser.feed(line({type: 'turn.completed', usage: {}}))).not.toThrow()
-    expect(parser.finish()).toMatchObject({resultText: 'x', isError: false})
+    expect(parser.finish()).toMatchObject({resultText: 'x', sawTurnCompleted: true, failed: false})
   })
 
   it('finish() flushes a trailing unterminated line', () => {
     const parser = createCodexJsonlParser()
     parser.feed(JSON.stringify({type: 'turn.completed', usage: {}}))
-    expect(parser.finish()).toMatchObject({sawTurnCompleted: true, isError: false})
+    expect(parser.finish()).toMatchObject({sawTurnCompleted: true, failed: false})
   })
 
   it('accumulates multiple agent_message items in one turn (keeps the earlier one)', () => {

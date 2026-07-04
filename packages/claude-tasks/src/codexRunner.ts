@@ -114,13 +114,11 @@ export const buildCodexArgs = (options: CodexRunOptions): string[] => {
 export interface ParsedCodexResult {
   resultText: string
   sessionId: string | null
-  /** True if the run never reached turn.completed OR reached
-   *  turn.failed. Named to mirror the claude parser's `isError`. */
-  isError: boolean
-  /** Independent flags behind isError's collapse — runCodex needs these
-   *  distinct from a plain "not yet terminal" state (e.g. a timeout with
-   *  no turn.failed line at all must not read as "failed with a
-   *  message"). */
+  /** Terminal state comes from two INDEPENDENT flags, not one collapsed
+   *  error boolean: runCodex derives ok = sawTurnCompleted && !failed, and
+   *  needs them distinct so a plain "not yet terminal" state (e.g. a
+   *  timeout with no turn.failed line at all) doesn't read as "failed with
+   *  a message". */
   sawTurnCompleted: boolean
   failed: boolean
   errorMessage: string | null
@@ -280,7 +278,6 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
     return {
       resultText,
       sessionId,
-      isError: failed || !sawTurnCompleted,
       sawTurnCompleted,
       failed,
       errorMessage,
