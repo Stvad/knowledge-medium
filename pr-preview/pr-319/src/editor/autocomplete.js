@@ -1,0 +1,2 @@
+import{codeMirrorExtensionsFacet as e}from"./codeMirrorExtensions.js";import{keymap as t}from"../../node_modules/@codemirror/view/dist/index.js";import{autocompletion as n}from"../../node_modules/@codemirror/autocomplete/dist/index.js";import{completionKeymapWithEscapeFallthrough as r}from"../utils/codemirrorCompletion.js";var i=e.of(()=>[n({defaultKeymap:!1,icons:!1,tooltipClass:()=>`tm-reference-autocomplete`}),t.of(r)],{source:`editor-autocomplete`});export{i as editorAutocompleteExtension};
+//# sourceMappingURL=autocomplete.js.map

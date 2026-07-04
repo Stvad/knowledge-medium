@@ -1,0 +1,2 @@
+import{propertySchemasFacet as e,typesFacet as t}from"../../data/facets.js";import{charLimitProp as n}from"./properties.js";import{CHAR_COUNTER_TYPE_CONTRIBUTIONS as r}from"./blockType.js";var i=[r.map(e=>t.of(e,{source:`character-counter`})),e.of(n,{source:`character-counter`})];export{i as characterCounterDataExtension};
+//# sourceMappingURL=dataExtension.js.map
