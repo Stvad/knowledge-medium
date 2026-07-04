@@ -124,10 +124,11 @@ server.registerTool('get_block' satisfies KmMcpToolName, {
 }, async ({id}) => json(await graph.getBlock(id)))
 
 server.registerTool('subtree' satisfies KmMcpToolName, {
-  description: 'Fetch the subtree under a block as a depth-indented outline (one line per block: `- [<id>] <content>`).',
-  inputSchema: {rootId: z.string()},
-}, async ({rootId}) =>
-  text(renderSubtreeOutline(await graph.getSubtree(rootId) as SubtreeOutlineRow[])))
+  description: 'Fetch the subtree under a block as a depth-indented outline (one line per block: `- [<id>] <content> <propsJSON>`). '
+    + "Each block's properties (e.g. status, type) are appended as compact JSON by default; pass includeProperties:false for the lean id+content form.",
+  inputSchema: {rootId: z.string(), includeProperties: z.boolean().optional().default(true)},
+}, async ({rootId, includeProperties}) =>
+  text(renderSubtreeOutline(await graph.getSubtree(rootId) as SubtreeOutlineRow[], {includeProperties})))
 
 server.registerTool('backlinks' satisfies KmMcpToolName, {
   description: 'List blocks that reference the given block/page (hydrated: id, content, deepLink).',

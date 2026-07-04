@@ -329,7 +329,10 @@ export const createEngine = (deps: EngineDeps) => {
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
       const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
         content: block.content ?? '',
-        subtree: renderSubtreeOutline(subtreeRows as SubtreeOutlineRow[]),
+        // includeProperties: the prompt needs block properties (e.g.
+        // status='done') to reason about the subtree — a done sub-item
+        // should be skipped, which the lean id+content outline can't convey.
+        subtree: renderSubtreeOutline(subtreeRows as SubtreeOutlineRow[], {includeProperties: true}),
         // graph.ancestors is nearest-first; the prompt reads root→leaf.
         ancestors: ancestorBlocks.map(ancestor => ancestor.content ?? '').reverse(),
         blockId: sourceId,
