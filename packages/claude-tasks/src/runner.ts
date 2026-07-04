@@ -186,17 +186,30 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
     if (type === 'assistant') {
       const message = line.message as {content?: unknown} | undefined
       const content = Array.isArray(message?.content) ? message?.content : []
+      // Concatenate ALL text blocks in this finalized message (a single
+      // message can carry more than one — e.g. a web-search turn is
+      // [text, server_tool_use, web_search_result, text]), matching how
+      // the content_block_delta path accumulates them with no separator.
+      let messageText = ''
       for (const item of content ?? []) {
         if (!item || typeof item !== 'object') continue
         const block = item as Record<string, unknown>
         if (block.type === 'tool_use') {
           activityForToolUse(block)
-        } else if (block.type === 'text' && typeof block.text === 'string' && block.text.length > 0) {
-          // Complete-message text supersedes any partial accumulation so
-          // far — reset and re-emit as the current cumulative text.
-          textAccumulator = block.text
-          emit({kind: 'text', text: textAccumulator})
+        } else if (block.type === 'text' && typeof block.text === 'string') {
+          messageText += block.text
         }
+      }
+      // The finalized summary must only ADVANCE the cumulative text, never
+      // rewrite it backwards: the partial-message deltas (always on) have
+      // already built the full running text, so re-emitting per-block here
+      // used to SHRINK it (the last block superseding the whole). Adopt the
+      // summary only when it's longer than what the deltas produced — that
+      // covers the (rare) case where deltas didn't fire, without ever
+      // losing streamed text on a multi-text-block message.
+      if (messageText.length > textAccumulator.length) {
+        textAccumulator = messageText
+        emit({kind: 'text', text: textAccumulator})
       }
       return
     }

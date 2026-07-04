@@ -900,6 +900,57 @@ describe('live progress streaming', () => {
     // The run still lands in a terminal error state (props stick).
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
   })
+
+  it('transient blip on the terminal props-write (non-stream) does NOT duplicate the delivered answer', async () => {
+    const {graph, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ok task'}},
+    })
+    // The reply lands fine; the blip hits the `status:done` props write
+    // that FOLLOWS it — the case the shared deliverReply refactor missed.
+    const realSetTaskProps = graph.setTaskProps
+    graph.setTaskProps = async (id, args) => {
+      if (args.status === 'done') throw new Error('bridge command timed out')
+      return realSetTaskProps(id, args)
+    }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Exactly one reply — the answer. The infra-catch must not post a
+    // second (infra-error) reply just because the props write blipped.
+    expect(replies).toEqual([{parentId: 'b-1', content: 'the answer'}])
+  })
+
+  it('transient blip on the terminal props-write (streamReply) does NOT clobber the delivered answer', async () => {
+    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ok task'}},
+    })
+    const realSetTaskProps = graph.setTaskProps
+    graph.setTaskProps = async (id, args) => {
+      if (args.status === 'done') throw new Error('bridge command timed out')
+      return realSetTaskProps(id, args)
+    }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // The streamed placeholder holds the final answer — the infra-catch
+    // must NOT overwrite it with the infrastructure-error note.
+    expect(replies).toHaveLength(1)
+    const replyId = contentUpdates.at(-1)!.id
+    expect(blocks.get(replyId)?.content).toBe('the answer')
+  })
 })
 
 describe('backlink watcher baseline', () => {

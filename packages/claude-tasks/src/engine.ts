@@ -37,12 +37,15 @@ export interface EngineDeps {
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
-/** A deleted block surfaces as an `update-block: block <id> not found`
- *  error from the bridge (repo.load filters `deleted = 0`). Used to tell
- *  "placeholder was deleted, create a fresh reply" apart from a transient
- *  bridge failure that must NOT spawn a duplicate reply. */
+/** A deleted block surfaces as an `updateBlock: block <id> not found`
+ *  error from the bridge (commands.ts updateBlock; repo.load filters
+ *  `deleted = 0`). Used to tell "placeholder was deleted, create a fresh
+ *  reply" apart from a transient bridge failure that must NOT spawn a
+ *  duplicate reply. Matched tightly (`block … not found`) so an unrelated
+ *  "not found" transient (a future "workspace not found" etc.) can't be
+ *  misread as a deleted placeholder and trigger a duplicate reply. */
 const isBlockNotFound = (error: unknown): boolean =>
-  /not found/i.test(errorMessage(error))
+  /\bblock\b.*\bnot found\b/i.test(errorMessage(error))
 
 /** claude:session values are executor-scoped: codex thread ids are
  *  stored as `codex:<id>`, claude session ids bare (back-compat — every
@@ -218,6 +221,12 @@ export const createEngine = (deps: EngineDeps) => {
     // that had already streamed most of its (billed) answer appends the
     // error note to that partial instead of discarding it.
     let lastStreamedText = ''
+    // Set once a TERMINAL reply (the ok answer, or the failure/partial
+    // note) has been written. The infra-catch checks it so a transient
+    // blip on the *terminal props write* — which lands AFTER a good reply
+    // — can't re-enter deliverReply and clobber the answer (streamReply)
+    // or post a duplicate (fresh reply). See the catch below.
+    let terminalReplyDelivered = false
 
     // Land `text` on the streamed placeholder if one exists, else create a
     // fresh reply. Only a NOT-FOUND update (the user deleted the
@@ -324,8 +333,9 @@ export const createEngine = (deps: EngineDeps) => {
       await writes // ordering guarantee: no progress write races the final one below
 
       if (result.ok) {
-        const finalText = result.resultText.trim() || '(claude returned an empty reply)'
+        const finalText = result.resultText.trim() || `(${watcher.executor} returned an empty reply)`
         await deliverReply(finalText)
+        terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
@@ -338,6 +348,7 @@ export const createEngine = (deps: EngineDeps) => {
         // the note appended, rather than replacing it with the one-liner.
         const partial = lastStreamedText.trim()
         await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
+        terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
         log(`[${watcher.name}] FAILED ${sourceId}: ${reason}`)
       }
@@ -349,7 +360,12 @@ export const createEngine = (deps: EngineDeps) => {
       // Drain any queued progress writes first — a streamed-text write
       // landing after the note would silently replace it.
       await writes.catch(() => {})
-      await deliverReply(infraNote).catch(() => {})
+      // Only post the infra note if no terminal reply landed yet. If the
+      // answer (or failure/partial note) was already delivered and the
+      // error came from the *props* write that follows it, re-delivering
+      // would overwrite the good answer (streamReply) or duplicate it
+      // (fresh reply) — so we leave the reply intact and only flip props.
+      if (!terminalReplyDelivered) await deliverReply(infraNote).catch(() => {})
       await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {

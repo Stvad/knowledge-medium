@@ -152,6 +152,45 @@ describe('createStreamJsonParser', () => {
     ])
   })
 
+  it('a multi-text-block assistant summary never shrinks the delta-built cumulative text', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+
+    // A web-search turn is one message with TWO text blocks around the
+    // server tool call. The deltas build the full running text; the
+    // finalized summary re-lists the blocks and must NOT rewind it.
+    parser.feed(line({type: 'stream_event', event: {type: 'message_start'}}))
+    parser.feed(line({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'text_delta', text: 'Let me search'}}}))
+    parser.feed(line({type: 'stream_event', event: {type: 'content_block_delta', delta: {type: 'text_delta', text: 'the answer'}}}))
+    parser.feed(line({type: 'assistant', message: {content: [
+      {type: 'text', text: 'Let me search'},
+      {type: 'tool_use', name: 'WebSearch'},
+      {type: 'text', text: 'the answer'},
+    ]}}))
+
+    const textEvents = events.filter(e => e.kind === 'text').map(e => (e as {text: string}).text)
+    // Monotonic and complete — the last streamed text is the FULL answer,
+    // never the trailing block alone ('the answer').
+    expect(textEvents).toEqual(['Let me search', 'Let me searchthe answer'])
+    // The summary still drives the activity chip from its tool_use block.
+    expect(events).toContainEqual({kind: 'activity', label: 'Searching the web'})
+  })
+
+  it('a multi-text-block summary still delivers full text when no deltas fired', () => {
+    const events: RunEvent[] = []
+    const parser = createStreamJsonParser(event => events.push(event))
+
+    // No partial-message deltas — the summary is the only text source.
+    parser.feed(line({type: 'assistant', message: {content: [
+      {type: 'text', text: 'Alpha'},
+      {type: 'tool_use', name: 'WebSearch'},
+      {type: 'text', text: 'Omega'},
+    ]}}))
+
+    const textEvents = events.filter(e => e.kind === 'text').map(e => (e as {text: string}).text)
+    expect(textEvents).toEqual(['AlphaOmega'])
+  })
+
   it('humanizes tool names, including the mcp__km__ mapping', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event))
