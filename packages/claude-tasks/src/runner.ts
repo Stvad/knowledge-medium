@@ -131,6 +131,11 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
   let result: ParsedClaudeResult | null = null
   let textAccumulator = ''
   let warnedOnEventError = false
+  // Captured from the `system/init` line, which arrives BEFORE any
+  // `result` line. On a timeout/crash there is no result line, so this is
+  // the only way to recover the (billed, possibly long) session id for a
+  // retry to `--resume` — mirrors the codex parser retaining thread.started.
+  let initSessionId: string | null = null
 
   const emit = (event: RunEvent) => {
     if (!onEvent) return
@@ -155,7 +160,10 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
 
     if (type === 'system' && line.subtype === 'init') {
       const sessionId = line.session_id
-      if (typeof sessionId === 'string') emit({kind: 'session', sessionId})
+      if (typeof sessionId === 'string') {
+        initSessionId = sessionId
+        emit({kind: 'session', sessionId})
+      }
       return
     }
 
@@ -249,7 +257,10 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
     return result
   }
 
-  return {feed, finish}
+  /** The session id even when no `result` line arrived (timeout/crash). */
+  const sessionId = (): string | null => result?.sessionId ?? initSessionId
+
+  return {feed, finish, sessionId}
 }
 
 export type { SpawnImpl }
@@ -278,7 +289,7 @@ export const runClaude = async (
   return {
     ok,
     resultText: parsed?.resultText ?? '',
-    sessionId: parsed?.sessionId ?? null,
+    sessionId: parser.sessionId(),
     exitCode,
     timedOut,
     stderr,

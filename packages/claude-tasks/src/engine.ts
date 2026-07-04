@@ -37,6 +37,13 @@ export interface EngineDeps {
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
+/** A deleted block surfaces as an `update-block: block <id> not found`
+ *  error from the bridge (repo.load filters `deleted = 0`). Used to tell
+ *  "placeholder was deleted, create a fresh reply" apart from a transient
+ *  bridge failure that must NOT spawn a duplicate reply. */
+const isBlockNotFound = (error: unknown): boolean =>
+  /not found/i.test(errorMessage(error))
+
 /** claude:session values are executor-scoped: codex thread ids are
  *  stored as `codex:<id>`, claude session ids bare (back-compat — every
  *  session stored before executors existed is a claude one). A
@@ -206,6 +213,25 @@ export const createEngine = (deps: EngineDeps) => {
     // streamed-text write never lands AFTER (and clobbers) the note.
     let replyId: string | null = null
     let writes: Promise<unknown> = Promise.resolve()
+    // Last cumulative text streamed into the reply — kept so a FAILED run
+    // that had already streamed most of its (billed) answer appends the
+    // error note to that partial instead of discarding it.
+    let lastStreamedText = ''
+
+    // Land `text` on the streamed placeholder if one exists, else create a
+    // fresh reply. Only a NOT-FOUND update (the user deleted the
+    // placeholder mid-run) falls back to createReply — a transient bridge
+    // error rethrows instead, so a blip on the final write can't post a
+    // duplicate reply and orphan the placeholder forever.
+    const deliverReply = async (text: string): Promise<void> => {
+      if (!replyId) { await graph.createReply(sourceId, text); return }
+      try {
+        await graph.updateBlockContent(replyId, text)
+      } catch (error) {
+        if (!isBlockNotFound(error)) throw error
+        await graph.createReply(sourceId, text)
+      }
+    }
 
     try {
       const attempt = taskAttempts(block) + 1
@@ -284,6 +310,7 @@ export const createEngine = (deps: EngineDeps) => {
         } else if (event.kind === 'text') {
           const streamedReplyId = replyId
           if (!streamedReplyId) return
+          lastStreamedText = event.text
           const nowMs = now()
           if (nowMs - lastTextWriteMs < 1_500) return
           lastTextWriteMs = nowMs
@@ -297,11 +324,7 @@ export const createEngine = (deps: EngineDeps) => {
 
       if (result.ok) {
         const finalText = result.resultText.trim() || '(claude returned an empty reply)'
-        // Fallback: the streamed block may be gone (user deleted the
-        // placeholder mid-run) — the billed run's output must still
-        // land somewhere rather than vanish into an error status.
-        if (replyId) await graph.updateBlockContent(replyId, finalText).catch(() => graph.createReply(sourceId, finalText))
-        else await graph.createReply(sourceId, finalText)
+        await deliverReply(finalText)
         await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
@@ -309,12 +332,11 @@ export const createEngine = (deps: EngineDeps) => {
           ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
           : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
         const failureNote = `⚠️ claude-tasks run failed — ${reason}`
-        // Same deleted-placeholder fallback as the ok branch — without
-        // it a missing streamed block would throw here and the outer
-        // catch would record the wrong reason (the missing-reply error,
-        // not the run failure).
-        if (replyId) await graph.updateBlockContent(replyId, failureNote).catch(() => graph.createReply(sourceId, failureNote))
-        else await graph.createReply(sourceId, failureNote)
+        // Preserve a streamed partial: a run that timed out (or died)
+        // after streaming most of its billed answer keeps that text with
+        // the note appended, rather than replacing it with the one-liner.
+        const partial = lastStreamedText.trim()
+        await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
         await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
         log(`[${watcher.name}] FAILED ${sourceId}: ${reason}`)
       }
@@ -326,13 +348,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Drain any queued progress writes first — a streamed-text write
       // landing after the note would silently replace it.
       await writes.catch(() => {})
-      if (replyId) {
-        await graph.updateBlockContent(replyId, infraNote)
-          .catch(() => graph.createReply(sourceId, infraNote))
-          .catch(() => {})
-      } else {
-        await graph.createReply(sourceId, infraNote).catch(() => {})
-      }
+      await deliverReply(infraNote).catch(() => {})
       await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {

@@ -205,6 +205,22 @@ describe('createCodexJsonlParser', () => {
     parser.feed(JSON.stringify({type: 'turn.completed', usage: {}}))
     expect(parser.finish()).toMatchObject({sawTurnCompleted: true, isError: false})
   })
+
+  it('accumulates multiple agent_message items in one turn (keeps the earlier one)', () => {
+    const events: RunEvent[] = []
+    const parser = createCodexJsonlParser(event => events.push(event))
+    parser.feed(line({type: 'thread.started', thread_id: 't1'}))
+    parser.feed(line({type: 'item.completed', item: {type: 'agent_message', text: 'first part'}}))
+    parser.feed(line({type: 'item.completed', item: {type: 'agent_message', text: 'second part'}}))
+    parser.feed(line({type: 'turn.completed', usage: {}}))
+
+    expect(parser.finish().resultText).toBe('first part\n\nsecond part')
+    // Cumulative contract: each text event carries the running total.
+    expect(events.filter(e => e.kind === 'text')).toEqual([
+      {kind: 'text', text: 'first part'},
+      {kind: 'text', text: 'first part\n\nsecond part'},
+    ])
+  })
 })
 
 /** Run the real runner against a scripted `node -e` child (mirrors
@@ -247,6 +263,20 @@ describe('runCodex', () => {
     const result = await runCodex(baseOptions, fakeCodex(script))
     expect(result.ok).toBe(false)
     expect(result.stderr).toBe('bad request')
+  })
+
+  it('surfaces the structured error even when stderr carries unrelated noise', async () => {
+    // codex logs warnings/update notices to stderr; the real failure
+    // reason lives in the structured error line. The engine's ⚠️ reason
+    // must show the latter, not be masked by the former.
+    const script = [
+      `process.stderr.write('warning: a new version of codex is available\\n')`,
+      jsonlResult({type: 'turn.failed', error: {message: 'rate limit exceeded'}}),
+    ].join('; ')
+
+    const result = await runCodex(baseOptions, fakeCodex(script))
+    expect(result.ok).toBe(false)
+    expect(result.stderr).toContain('rate limit exceeded')
   })
 
   it('kills runs that exceed the timeout', async () => {

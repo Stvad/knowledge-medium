@@ -199,12 +199,14 @@ export const createCodexJsonlParser = (onEvent?: (event: RunEvent) => void) => {
       const itemRecord = item as Record<string, unknown>
       if (type === 'item.completed' && itemRecord.type === 'agent_message') {
         const text = itemRecord.text
-        // Full text, cumulative contract — a codex agent_message is
-        // whole, not a delta, but re-emitting keeps the contract
-        // identical to the claude parser's (each event carries the
-        // full in-progress reply so far).
-        if (typeof text === 'string') {
-          resultText = text
+        // A codex agent_message is a whole message, not a delta. A turn
+        // usually emits one, but can emit several (interleaved with
+        // reasoning) — accumulate them so an earlier message isn't lost,
+        // then re-emit the running text (the cumulative contract the
+        // engine's streamReply consumer expects, same as the claude
+        // parser's).
+        if (typeof text === 'string' && text.length > 0) {
+          resultText = resultText ? `${resultText}\n\n${text}` : text
           emit({kind: 'text', text: resultText})
         }
         return
@@ -306,10 +308,15 @@ export const runCodex = async (
   const parsed = parser.finish()
   const ok = !timedOut && exitCode === 0 && parsed.sawTurnCompleted && !parsed.failed
 
-  // Surface a captured `error` event's message so the engine's ⚠️ reason
-  // (built from stderr/resultText) has something to show even though
-  // codex writes structured errors to stdout, not stderr.
-  const effectiveStderr = stderr.length === 0 && parsed.errorMessage ? parsed.errorMessage : stderr
+  // Surface a captured `error`/`turn.failed` message so the engine's ⚠️
+  // reason (built from stderr/resultText) shows the real cause — codex
+  // writes structured errors to stdout, not stderr, and its stderr often
+  // carries unrelated warnings/update notices that would otherwise mask
+  // the actual failure. Prefer the structured message whenever we have
+  // one, keeping any stderr as secondary context.
+  const effectiveStderr = parsed.errorMessage
+    ? (stderr.trim() ? `${parsed.errorMessage}\n${stderr}` : parsed.errorMessage)
+    : stderr
 
   return {
     ok,

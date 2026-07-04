@@ -852,6 +852,54 @@ describe('live progress streaming', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
     expect(blocks.get('b-1')?.properties?.[PROPS.error]).toContain('boom')
   })
+
+  it('failure after streaming: preserves the billed partial and appends the note', async () => {
+    const {graph, blocks, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] long task'}},
+    })
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, text?: string}) => void}) => {
+      options.onEvent?.({kind: 'text', text: 'Here is most of the answer'}) // billed, streamed
+      return okRun({ok: false, timedOut: true, resultText: ''})
+    })
+    const engine = engineWith({
+      graph, runTask,
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    const finalContent = blocks.get(contentUpdates.at(-1)!.id)?.content ?? ''
+    expect(finalContent).toContain('Here is most of the answer') // partial NOT discarded
+    expect(finalContent).toContain('timed out')                   // note appended
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+  })
+
+  it('transient final-write error does NOT duplicate the reply (only not-found falls back)', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ok task'}},
+    })
+    // A transient bridge blip on the final write — the placeholder still
+    // exists. Must NOT create a second reply block.
+    graph.updateBlockContent = async () => { throw new Error('bridge command timed out') }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Only the early placeholder — the failed update rethrew into the
+    // infra catch, which also can't write, so no duplicate reply block.
+    expect(replies).toHaveLength(1)
+    expect(replies[0]!.content).toBe('💭 Claude is working…')
+    // The run still lands in a terminal error state (props stick).
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+  })
 })
 
 describe('backlink watcher baseline', () => {

@@ -122,6 +122,14 @@ describe('createStreamJsonParser', () => {
     expect(parser.finish()).toBeNull()
   })
 
+  it('sessionId() survives a missing result line (timeout/crash) via the init line', () => {
+    const parser = createStreamJsonParser()
+    parser.feed(line({type: 'system', subtype: 'init', session_id: 'sess-init'}))
+    // No result line — as on a timeout.
+    expect(parser.finish()).toBeNull()
+    expect(parser.sessionId()).toBe('sess-init')
+  })
+
   it('finish() flushes a trailing unterminated line', () => {
     const events: RunEvent[] = []
     const parser = createStreamJsonParser(event => events.push(event))
@@ -213,6 +221,18 @@ describe('runClaude', () => {
     )
     expect(result.timedOut).toBe(true)
     expect(result.ok).toBe(false)
+  })
+
+  it('retains the session id from a run that timed out before the result line', async () => {
+    // The init line arrives, then the child hangs past the timeout — no
+    // result line. The (billed) session id must still come back so a
+    // retry can --resume it.
+    const result = await runClaude(
+      {...baseOptions, timeoutMs: 300},
+      fakeClaude(`${streamResult({type: 'system', subtype: 'init', session_id: 'sess-timeout'})}; setTimeout(() => {}, 60_000)`),
+    )
+    expect(result.timedOut).toBe(true)
+    expect(result.sessionId).toBe('sess-timeout')
   })
 
   it('scrubs billing vars from the child environment', async () => {
