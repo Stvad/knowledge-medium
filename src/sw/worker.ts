@@ -320,20 +320,30 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
 
   const isVendor = (url: URL): boolean => VENDOR_HOSTS.has(url.hostname)
 
-  // Network-first for the SPA shell. We always read and write under a single
-  // canonical key so the many distinct navigation URLs (deep links,
-  // query-strings, hash routes) all share one cached HTML entry.
-  const shellNetworkFirst = async (request: Request, shellURL: string): Promise<Response> => {
+  // Cache-first for the SPA shell, PINNED to this generation. `install` precaches
+  // ./index.html into this generation's shell cache (fetched fresh via 'reload'),
+  // so a controlled navigation boots the shell from the SAME generation as the
+  // assets it then loads cache-first — no new-HTML-over-old-assets skew on the
+  // load right after a deploy, and no failed network round-trip when offline. We
+  // read (and, only on a COLD miss, write) a single canonical key so the many
+  // navigation URLs (deep links, query-strings, hash routes) share one entry.
+  //
+  // We deliberately do NOT overwrite a shell that's already present: a
+  // generation's cache stays immutable after install (like its assets), so an
+  // old-gen tab can never get a new build's HTML grafted over its old assets.
+  // A new deploy is applied on the NEXT reload (once the freshly-installed worker
+  // controls) — never mid-generation; the app.checkForUpdates action and the
+  // 30-min update poll surface that a new build exists so the user can reload.
+  const shellCacheFirst = async (request: Request, shellURL: string): Promise<Response> => {
     const cache = await caches.open(SHELL_CACHE)
-    try {
-      const fresh = await fetch(request)
-      if (fresh && fresh.ok) cache.put(shellURL, fresh.clone()).catch(() => {})
-      return fresh
-    } catch (err) {
-      const cached = await cache.match(shellURL)
-      if (cached) return cached
-      throw err
-    }
+    const cached = await cache.match(shellURL)
+    if (cached) return cached
+    // Cold miss (install's shell precache didn't land): fetch and seed this
+    // generation's shell for next time. Offline with nothing cached rejects —
+    // there's no shell to show, the same terminal outcome as before.
+    const fresh = await fetch(request)
+    if (fresh && fresh.ok) cache.put(shellURL, fresh.clone()).catch(() => {})
+    return fresh
   }
 
   // Cache-first within THIS generation's caches, no revalidation. The
@@ -393,7 +403,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     if (isForeignPreviewRequest(OWN_SCOPE_IS_PREVIEW, url.pathname)) return undefined
 
     if (isNavigationRequest(request) && isSameOrigin(url)) {
-      return shellNetworkFirst(request, toScopeUrl('./index.html'))
+      return shellCacheFirst(request, toScopeUrl('./index.html'))
     }
     if (isCacheableAsset(request.destination, url.pathname, isSameOrigin(url))) {
       return assetCacheFirst(request)

@@ -41,7 +41,11 @@
  *   - esm.sh imports: cache-first in a single shared, un-namespaced cache —
  *     those URLs carry version + integrity, so they're immutable across
  *     generations and need not be re-fetched on every deploy.
- *   - HTML navigations: network-first, falling back to the cached shell.
+ *   - HTML navigations: CACHE-FIRST from this generation's own shell cache
+ *     (network only on a cold miss). The shell is pinned like the assets, so a
+ *     controlled load never mixes a new build's HTML with an old build's assets;
+ *     a new deploy is applied on the next reload, and the app.checkForUpdates
+ *     action / the update poll surface that a new build is available.
  *   - Everything else (Supabase, PowerSync, agent relay): straight to the
  *     network, never cached.
  *

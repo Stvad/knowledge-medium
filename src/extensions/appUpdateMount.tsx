@@ -19,6 +19,7 @@ import { appUpdate, useAppUpdateAvailable } from '@/appUpdate.js'
 import { dismissToast, showInfo } from '@/utils/toast.js'
 import { appMountsFacet } from './core.ts'
 import {
+  appCheckForUpdatesActionContribution,
   appReloadActionContribution,
   appUpdateDiagnosticContribution,
 } from './appUpdateStatus.ts'
@@ -54,4 +55,5 @@ export const appUpdatePromptExtension: AppExtension = systemToggle({
   // seam, not chip-hardcoded knowledge of appUpdate.
   appUpdateDiagnosticContribution,
   appReloadActionContribution,
+  appCheckForUpdatesActionContribution,
 ])

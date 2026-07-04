@@ -304,26 +304,28 @@ describe('handleFetch routing', () => {
   })
 })
 
-describe('shellNetworkFirst (HTML navigation)', () => {
+describe('shellCacheFirst (HTML navigation)', () => {
   const navRequest = () =>
     new Request(abs('./deep/link'), {headers: {accept: 'text/html'}})
 
-  it('network-first: returns fresh HTML and caches it under the canonical shell key', async () => {
+  it("cache-first: serves this generation's cached shell without touching the network", async () => {
+    // Network is UP and would return DIFFERENT bytes — cache-first must still win
+    // so the shell stays pinned to the generation the page booted with (no
+    // new-HTML-over-old-assets skew on the load right after a deploy).
+    const {sw, caches, fetchMock} = build({}, async () => ok('<html>fresh</html>'))
+    ;(await caches.open('km-shell-gen1')).store.set(abs('./index.html'), ok('<html>cached</html>'))
+    const res = await sw.handleFetch(navRequest())!
+    expect(await res.text()).toBe('<html>cached</html>')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('cold miss: falls back to the network and seeds the shell under the canonical key', async () => {
     const {sw, caches, fetchMock} = build({}, async () => ok('<html>fresh</html>'))
     const res = await sw.handleFetch(navRequest())!
     expect(await res.text()).toBe('<html>fresh</html>')
     expect(fetchMock).toHaveBeenCalledOnce()
-    // cached under ./index.html (the single canonical key), not the deep-link URL
+    // seeded under ./index.html (the single canonical key), not the deep-link URL
     expect(await (await caches.open('km-shell-gen1')).match(abs('./index.html'))).toBeDefined()
-  })
-
-  it('falls back to the cached shell when the network is down', async () => {
-    const {sw, caches} = build({}, async () => {
-      throw new TypeError('offline')
-    })
-    ;(await caches.open('km-shell-gen1')).store.set(abs('./index.html'), ok('<html>cached</html>'))
-    const res = await sw.handleFetch(navRequest())!
-    expect(await res.text()).toBe('<html>cached</html>')
   })
 
   it('rejects when the network is down and there is no cached shell', async () => {
