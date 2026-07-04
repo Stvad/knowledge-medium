@@ -71,9 +71,21 @@ export const buildCodexArgs = (options: CodexRunOptions): string[] => {
   if (options.model) args.push('-m', options.model)
   if (options.mcpServer) {
     const {name, command, args: serverArgs, env} = options.mcpServer
-    args.push('-c', `mcp_servers.${name}.command="${command}"`)
+    // -c values parse as TOML, not JSON (live-verified): a JSON array of
+    // strings is coincidentally valid TOML, but a JSON object is NOT a
+    // TOML map ("expected a map"), so env goes as dotted per-key
+    // overrides. JSON.stringify doubles as TOML basic-string escaping
+    // for the quote/backslash cases these values can contain.
+    args.push('-c', `mcp_servers.${name}.command=${JSON.stringify(command)}`)
     args.push('-c', `mcp_servers.${name}.args=${JSON.stringify(serverArgs)}`)
-    args.push('-c', `mcp_servers.${name}.env=${JSON.stringify(env)}`)
+    // Headless exec has no user to approve MCP tool calls — without
+    // this, every km call dies as "user cancelled MCP tool call"
+    // (live-verified). Auto-approving km mirrors the claude executor's
+    // --allowedTools grant of the same tools.
+    args.push('-c', `mcp_servers.${name}.default_tools_approval_mode="approve"`)
+    for (const [key, value] of Object.entries(env)) {
+      args.push('-c', `mcp_servers.${name}.env.${key}=${JSON.stringify(value)}`)
+    }
   }
   args.push('-')
   return args

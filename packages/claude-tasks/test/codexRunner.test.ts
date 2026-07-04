@@ -40,32 +40,36 @@ describe('buildCodexArgs', () => {
     ])
   })
 
-  it('injects the km MCP server via -c overrides with valid JSON values, "-" still last', () => {
+  it('injects the km MCP server via -c overrides as TOML-compatible values, "-" still last', () => {
     const args = buildCodexArgs({
       ...baseOptions,
       mcpServer: {
         name: 'km',
         command: '/usr/bin/node',
         args: ['/path/to/mcp.js'],
-        env: {AGENT_RUNTIME_PROFILE: 'claude-tasks'},
+        // Blocked-wikilinks value carries embedded quotes — the escaping
+        // must survive TOML basic-string parsing.
+        env: {AGENT_RUNTIME_PROFILE: 'claude-tasks', KM_MCP_BLOCKED_WIKILINKS: '["claude"]'},
       },
     })
     expect(args.at(-1)).toBe('-')
 
     const cIndices = args.flatMap((arg, i) => (arg === '-c' ? [i] : []))
-    expect(cIndices).toHaveLength(3)
+    expect(cIndices).toHaveLength(5)
     const overrides = cIndices.map(i => args[i + 1])
 
-    const commandOverride = overrides.find(o => o.startsWith('mcp_servers.km.command='))
-    const argsOverride = overrides.find(o => o.startsWith('mcp_servers.km.args='))
-    const envOverride = overrides.find(o => o.startsWith('mcp_servers.km.env='))
-    expect(commandOverride).toBeDefined()
-    expect(argsOverride).toBeDefined()
-    expect(envOverride).toBeDefined()
-
-    expect(commandOverride).toBe('mcp_servers.km.command="/usr/bin/node"')
-    expect(JSON.parse(argsOverride!.slice('mcp_servers.km.args='.length))).toEqual(['/path/to/mcp.js'])
-    expect(JSON.parse(envOverride!.slice('mcp_servers.km.env='.length))).toEqual({AGENT_RUNTIME_PROFILE: 'claude-tasks'})
+    // -c values parse as TOML: strings and string arrays are fine, but a
+    // JSON object is NOT a TOML map — env must go as dotted per-key
+    // overrides (live-verified failure: "expected a map"). The approval
+    // mode is required for headless runs — without it every MCP call is
+    // auto-cancelled ("user cancelled MCP tool call").
+    expect(overrides).toEqual([
+      'mcp_servers.km.command="/usr/bin/node"',
+      'mcp_servers.km.args=["/path/to/mcp.js"]',
+      'mcp_servers.km.default_tools_approval_mode="approve"',
+      'mcp_servers.km.env.AGENT_RUNTIME_PROFILE="claude-tasks"',
+      'mcp_servers.km.env.KM_MCP_BLOCKED_WIKILINKS="[\\"claude\\"]"',
+    ])
   })
 })
 
