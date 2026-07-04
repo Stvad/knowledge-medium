@@ -474,7 +474,12 @@ export const createEngine = (deps: EngineDeps) => {
       // would overwrite the good answer (streamReply) or duplicate it
       // (fresh reply) — so we leave the reply intact and only flip props.
       if (!terminalReplyDelivered) await deliverReply(infraNote).catch(() => {})
-      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, nowMs: now()}).catch(() => {})
+      // Clear claude:cancel like the done/error terminal writes: a Stop
+      // may have set it (this catch can run right after the child was
+      // aborted, e.g. the reply write then failed). Left behind, the flag
+      // survives askClaude's retry-reset and would abort the fresh run on
+      // its very next tick.
+      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, cancel: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {
       if (sessionKey) running.delete(sessionKey)
@@ -518,16 +523,6 @@ export const createEngine = (deps: EngineDeps) => {
     const views = await graph.blockViews(sources.map(source => source.id))
     for (const source of sources) {
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
-      // Cancel: a running task we own, flagged for cancellation via
-      // claude:cancel (written by the UI Stop action). Abort its child —
-      // the run then parks `error: cancelled` and clears the flag. Delete
-      // the controller so a lingering flag can't re-abort a later run.
-      if (view.properties?.[PROPS.cancel] && abortControllers.has(source.id)) {
-        log(`[${watcher.name}] cancelling ${source.id} (Stop requested)`)
-        abortControllers.get(source.id)?.abort()
-        abortControllers.delete(source.id)
-        continue
-      }
       if (running.has(source.id)) continue
       const quietExempt = quietExemptBlockIds.has(source.id)
       const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
@@ -627,6 +622,29 @@ export const createEngine = (deps: EngineDeps) => {
     })
   }
 
+  /** Honor Stop requests (claude:cancel) for every in-flight run, keyed
+   *  off the live abortControllers rather than the backlink scan. A run is
+   *  claimed the instant its block links [[claude]], but the user can edit
+   *  that link away while it runs: the block keeps claude:status:running
+   *  (so the chip's Stop still writes claude:cancel) yet it no longer shows
+   *  up in backlinkSources, so a per-watcher scan would never reach it and
+   *  the child would run to completion/timeout. Polling the abort handles
+   *  directly covers every live run regardless of its current link state.
+   *  Runs once per tick (poll and push both route through tick()). The `?.`
+   *  guards the race where a run settles and clears its controller during
+   *  the blockViews await. */
+  const sweepCancellations = async () => {
+    if (abortControllers.size === 0) return
+    const ids = [...abortControllers.keys()]
+    const views = await graph.blockViews(ids)
+    for (const id of ids) {
+      if (!views.get(id)?.properties?.[PROPS.cancel]) continue
+      log(`[cancel] aborting ${id} (Stop requested)`)
+      abortControllers.get(id)?.abort()
+      abortControllers.delete(id)
+    }
+  }
+
   const NO_EXEMPTIONS: ReadonlySet<string> = new Set()
 
   /** `quietExemptByWatcher`: blocks whose quiet period was confirmed at
@@ -642,6 +660,9 @@ export const createEngine = (deps: EngineDeps) => {
       pruneLaunchTimes()
       launchTimesLoaded = true
     }
+    // Before scanning for new work, honor any pending Stop — independent
+    // of whether the target block still links [[claude]] (see above).
+    await sweepCancellations().catch(error => log(`[cancel] sweep failed: ${errorMessage(error)}`))
     for (const watcher of config.watchers) {
       try {
         if (watcher.kind === 'backlinks') {

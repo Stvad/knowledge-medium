@@ -314,6 +314,45 @@ describe('mention lifecycle', () => {
     expect(runTask).toHaveBeenCalledTimes(1) // not re-run
   })
 
+  it('cancels an in-flight run even after its [[claude]] link was edited away', async () => {
+    // Regression: the cancel scan must key off the live run, not the
+    // current backlink set. Once claimed, the user removes the mention —
+    // the block drops out of backlinkSources but is still running, so Stop
+    // must still reach it (else the child runs to completion/timeout).
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] long task'}},
+    })
+    let releaseRun = () => {}
+    const runGate = new Promise<void>(resolve => { releaseRun = resolve })
+    let sawAbort = false
+    const runTask = vi.fn(async (opts: {signal?: AbortSignal}) => {
+      opts.signal?.addEventListener('abort', () => { sawAbort = true; releaseRun() })
+      await runGate
+      return okRun({ok: false, exitCode: null, timedOut: false, resultText: '', sessionId: 'sess-1'})
+    })
+    const engine = engineWith({graph, runTask})
+
+    const tick1 = engine.tick()
+    await vi.waitFor(() => expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running'))
+
+    // The mention is edited out: b-1 no longer resolves as a backlink,
+    // but the run (and its claude:status:running) persists.
+    ;(graph.backlinkSources as ReturnType<typeof vi.fn>).mockResolvedValue([])
+    const b1 = blocks.get('b-1')!
+    b1.properties = {...b1.properties, [PROPS.cancel]: NOW}
+
+    await engine.tick()
+    await vi.waitFor(() => expect(sawAbort).toBe(true))
+    await tick1
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toBe('cancelled')
+    expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('')
+    expect(runTask).toHaveBeenCalledTimes(1)
+  })
+
   it('is idempotent: a processed mention does not re-run on later ticks', async () => {
     const {graph, replies} = fakeGraph({
       backlinks: [{id: 'b-1'}],
@@ -380,6 +419,25 @@ describe('mention lifecycle', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
     expect(replies[0].content).toContain('infrastructure error')
     expect(replies[0].content).toContain('bridge blipped')
+  })
+
+  it('clears claude:cancel on the infra-error path so a retry is not aborted', async () => {
+    // If Stop set claude:cancel and the run then takes the infra-catch
+    // (e.g. the child was aborted, then a bridge write failed), the flag
+    // must be cleared like the normal terminal writes — else the next
+    // retry inherits it and is aborted on its first tick.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] infra', properties: {[PROPS.cancel]: NOW}}},
+    })
+    graph.getSubtree = vi.fn(async () => { throw new Error('bridge blipped') })
+    const engine = engineWith({graph})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+    expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('')
   })
 
   it('parks a task after MAX_ATTEMPTS with a terminal error write', async () => {
