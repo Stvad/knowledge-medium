@@ -46,16 +46,24 @@ const isDepth = (value: unknown): value is number =>
  *  `String.prototype.repeat` (OOM, or RangeError past 2**53). */
 const MAX_OUTLINE_DEPTH = 100
 
-/** Collapse every character a terminal (or an LLM reading the outline)
- *  renders as a vertical break — LF, CR, VT, FF, plus NEL/LS/PS — to a
- *  single `⏎` marker, so a value can't spill onto a second visual line
- *  and forge an id-less `- [id]`-shaped bullet. Applied to BOTH content
- *  and the rendered properties: `JSON.stringify` escapes the C0 controls
- *  (LF/CR/VT/FF) but NOT U+0085/U+2028/U+2029 (all ≥ U+0080), so a
- *  property key/value carrying one of those would otherwise survive
- *  literally and break the one-line-per-block invariant. */
+/** Collapse every character a terminal, a `splitlines`-style parser, or an
+ *  LLM reading the outline may treat as a vertical break — LF, CR, VT, FF,
+ *  the C0 information separators FS/GS/RS/US (U+001C–U+001F), plus
+ *  NEL/LS/PS — to a single `⏎` marker, so a value can't spill onto a second
+ *  visual line and forge an id-less `- [id]`-shaped bullet. Applied to BOTH
+ *  content and the rendered properties. The two paths need the FULL set for
+ *  different reasons: properties go through `JSON.stringify`, which escapes
+ *  every char < U+0020 (FS/GS/RS/US already inert there) but NOT
+ *  U+0085/U+2028/U+2029 (all ≥ U+0080); content is NOT stringified, so the
+ *  C0 separators reach the outline literally and must be collapsed here.
+ *  Covering everything on both keeps the one-line-per-block invariant on
+ *  either path. */
 const collapseVerticalMotion = (text: string): string =>
-  text.replace(/[\r\n\v\f\u0085\u2028\u2029]+/g, ' ⏎ ')
+  // Matching the C0 separators (U+001C-U+001F) is the whole point:
+  // neutralize control chars that could forge a line break, rather than
+  // treat them as innocent text.
+  // eslint-disable-next-line no-control-regex -- intentional control-char match
+  text.replace(/[\r\n\v\f\u001c-\u001f\u0085\u2028\u2029]+/g, ' ⏎ ')
 
 /**
  * Render the flat `get-subtree` array as a depth-indented outline.
