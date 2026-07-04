@@ -27,7 +27,10 @@ var contentWithClaudeMention = (content) => {
 	const trimmed = content.trimEnd();
 	return trimmed ? `${trimmed} ${CLAUDE_MENTION}` : CLAUDE_MENTION;
 };
-var askClaude = async (block) => {
+/** `liveContent`, when given, replaces the persisted content as the
+*  base for the mention write — the edit-mode action passes the editor
+*  doc, which leads the DB by up to the BlockEditor's commit debounce. */
+var askClaude = async (block, liveContent) => {
 	if (block.repo.isReadOnly) return;
 	if (!(block.peek() ?? await block.load())) return;
 	await block.repo.tx(async (tx) => {
@@ -40,7 +43,7 @@ var askClaude = async (block) => {
 		const status = fresh.properties[CLAUDE_PROPS.status];
 		if (status !== "queued" && status !== "running") for (const key of REQUEUE_CLEARED_PROPS) delete properties[key];
 		await tx.update(block.id, {
-			content: contentWithClaudeMention(fresh.content ?? ""),
+			content: contentWithClaudeMention(liveContent ?? fresh.content ?? ""),
 			properties
 		});
 	}, {
@@ -50,15 +53,31 @@ var askClaude = async (block) => {
 	markAskedClaude(block.id);
 	notifyBlockEditSettled(block.id);
 };
-var createAskClaudeAction = (context, id, description) => ({
-	id,
-	description,
-	context,
-	handler: (async ({ block }) => {
+var askClaudeActions = [{
+	id: ASK_CLAUDE_ACTION_ID,
+	description: "Ask Claude about this block",
+	context: ActionContextTypes.NORMAL_MODE,
+	handler: async ({ block }) => {
 		await askClaude(block);
-	})
-});
-var askClaudeActions = [createAskClaudeAction(ActionContextTypes.NORMAL_MODE, ASK_CLAUDE_ACTION_ID, "Ask Claude about this block"), createAskClaudeAction(ActionContextTypes.EDIT_MODE_CM, EDIT_MODE_ASK_CLAUDE_ACTION_ID, "Ask Claude about this block (Edit Mode)")];
+	}
+}, {
+	id: EDIT_MODE_ASK_CLAUDE_ACTION_ID,
+	description: "Ask Claude about this block (Edit Mode)",
+	context: ActionContextTypes.EDIT_MODE_CM,
+	handler: async ({ block, editorView }) => {
+		const live = editorView.state.doc.toString();
+		const next = contentWithClaudeMention(live);
+		if (next !== live) {
+			const keptLength = live.trimEnd().length;
+			editorView.dispatch({ changes: {
+				from: keptLength,
+				to: live.length,
+				insert: next.slice(keptLength)
+			} });
+		}
+		await askClaude(block, live);
+	}
+}];
 //#endregion
 export { ASK_CLAUDE_ACTION_ID, EDIT_MODE_ASK_CLAUDE_ACTION_ID, askClaude, askClaudeActions, contentWithClaudeMention };
 
