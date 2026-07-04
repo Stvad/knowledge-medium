@@ -8,6 +8,7 @@ import os from 'node:os'
 import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
+import { PROPS } from './config.js'
 import type { Graph } from './graph.js'
 import type { ClaudeRunOptions, ClaudeRunResult, RunEvent } from './runner.js'
 import type { StateStore } from './state.js'
@@ -123,6 +124,10 @@ export const createEngine = (deps: EngineDeps) => {
    *  One structure serves the double-claim guard, the capacity gate,
    *  and drain(). */
   const running = new Map<string, Promise<void>>()
+  /** Abort handle per in-flight mention run, keyed by source block id, so
+   *  a cancel request (claude:cancel) can kill THAT run — and only it.
+   *  Set when the run launches, deleted in its finally. */
+  const abortControllers = new Map<string, AbortController>()
   /** target alias → {id, resolvedAt}. TTL'd: a page deleted-then-
    *  recreated gets a NEW id, and a stale id doesn't error (backlinks of
    *  a missing target just return []), so an unbounded cache would
@@ -199,6 +204,7 @@ export const createEngine = (deps: EngineDeps) => {
 
   const runOptionsFor = (
     watcher: Watcher, prompt: string, resumeSessionId?: string, onEvent?: (event: RunEvent) => void,
+    signal?: AbortSignal,
   ): ClaudeRunOptions => ({
     claudeBin: config.claudeBin,
     prompt,
@@ -215,6 +221,7 @@ export const createEngine = (deps: EngineDeps) => {
     onEvent,
     executor: watcher.executor,
     billing: config.billing,
+    signal,
   })
 
   /** Park a task that exhausted its retries. Re-read + re-decide first
@@ -280,6 +287,11 @@ export const createEngine = (deps: EngineDeps) => {
     // — can't re-enter deliverReply and clobber the answer (streamReply)
     // or post a duplicate (fresh reply). See the catch below.
     let terminalReplyDelivered = false
+    // Abort handle for THIS run — a cancel request (claude:cancel, detected
+    // in the tick) aborts it, killing the child. `signal.aborted` after the
+    // run tells a user cancel apart from a timeout/crash. Registered just
+    // before the run launches (below), deleted in finally.
+    const abortController = new AbortController()
 
     // Land `text` on the streamed placeholder if one exists, else create a
     // fresh reply. The streamed update is idempotent (same block, same
@@ -414,28 +426,39 @@ export const createEngine = (deps: EngineDeps) => {
         }
       }
 
-      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent))
+      // Register the abort handle immediately before the run so a cancel
+      // request (claude:cancel) detected by the tick can kill this child.
+      abortControllers.set(sourceId, abortController)
+      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal))
       await writes // ordering guarantee: no progress write races the final one below
 
       if (result.ok) {
         const finalText = result.resultText.trim() || `(${watcher.executor} returned an empty reply)`
         await deliverReply(finalText)
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
+        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
-        const reason = result.timedOut
-          ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
-          : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
-        const failureNote = `⚠️ claude-tasks run failed — ${reason}`
+        // A user Stop aborts the run — signal.aborted distinguishes it from
+        // a timeout/crash so the task parks `error: cancelled` (deliberate,
+        // terminal, non-refiring) rather than looking like a failure.
+        const cancelled = abortController.signal.aborted
+        const reason = cancelled
+          ? 'cancelled'
+          : result.timedOut
+            ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
+            : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
+        const failureNote = cancelled
+          ? '⏹️ claude-tasks run cancelled'
+          : `⚠️ claude-tasks run failed — ${reason}`
         // Preserve a streamed partial: a run that timed out (or died)
         // after streaming most of its billed answer keeps that text with
         // the note appended, rather than replacing it with the one-liner.
         const partial = lastStreamedText.trim()
         await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
-        log(`[${watcher.name}] FAILED ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
+        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
+        log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {
       // Infra failure between claim and reply (bridge blip, spawn error,
@@ -456,6 +479,7 @@ export const createEngine = (deps: EngineDeps) => {
     } finally {
       if (sessionKey) running.delete(sessionKey)
       if (liveSessionKey) running.delete(liveSessionKey)
+      abortControllers.delete(sourceId)
     }
   }
 
@@ -493,8 +517,18 @@ export const createEngine = (deps: EngineDeps) => {
     // any claim is written.
     const views = await graph.blockViews(sources.map(source => source.id))
     for (const source of sources) {
-      if (running.has(source.id)) continue
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
+      // Cancel: a running task we own, flagged for cancellation via
+      // claude:cancel (written by the UI Stop action). Abort its child —
+      // the run then parks `error: cancelled` and clears the flag. Delete
+      // the controller so a lingering flag can't re-abort a later run.
+      if (view.properties?.[PROPS.cancel] && abortControllers.has(source.id)) {
+        log(`[${watcher.name}] cancelling ${source.id} (Stop requested)`)
+        abortControllers.get(source.id)?.abort()
+        abortControllers.delete(source.id)
+        continue
+      }
+      if (running.has(source.id)) continue
       const quietExempt = quietExemptBlockIds.has(source.id)
       const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
 

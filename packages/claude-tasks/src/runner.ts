@@ -49,6 +49,10 @@ export interface ClaudeRunOptions {
    *  — the safe default, so a missing value never accidentally bills the
    *  API. */
   billing?: 'subscription' | 'api'
+  /** Abort the in-flight run (UI Stop). The engine holds the controller
+   *  and reads `signal.aborted` after the run to tell a cancel apart from
+   *  a timeout/crash. */
+  signal?: AbortSignal
 }
 
 export interface ClaudeRunResult {
@@ -309,6 +313,7 @@ export const runClaude = async (
     env: envForBilling(options.env ?? process.env, options.billing),
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
+    signal: options.signal,
     spawnImpl,
   })
 

@@ -60,6 +60,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
         ...(args.attempts !== undefined ? {[PROPS.attempts]: args.attempts} : {}),
         ...(args.error !== undefined ? {[PROPS.error]: args.error ?? ''} : {}),
         ...(args.activity !== undefined ? {[PROPS.activity]: args.activity ?? ''} : {}),
+        ...(args.cancel !== undefined ? {[PROPS.cancel]: args.cancel ?? ''} : {}),
       }
       blocks.set(id, target)
       propWrites.push({id, status: args.status, activity: args.activity})
@@ -273,6 +274,44 @@ describe('mention lifecycle', () => {
     releaseParent()
     await parentTick
     await engine.drain()
+  })
+
+  it('cancels a running task: aborts the run, parks it error:cancelled, and clears the flag', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] long task'}},
+    })
+    let releaseRun = () => {}
+    const runGate = new Promise<void>(resolve => { releaseRun = resolve })
+    let sawAbort = false
+    // The run hangs until aborted — exactly what killing the child does:
+    // the abort ends it and it returns a non-ok result.
+    const runTask = vi.fn(async (opts: {signal?: AbortSignal}) => {
+      opts.signal?.addEventListener('abort', () => { sawAbort = true; releaseRun() })
+      await runGate
+      return okRun({ok: false, exitCode: null, timedOut: false, resultText: '', sessionId: 'sess-1'})
+    })
+    const engine = engineWith({graph, runTask})
+
+    const tick1 = engine.tick()
+    await vi.waitFor(() => expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running'))
+    expect(runTask).toHaveBeenCalledTimes(1)
+
+    // User hits Stop → the UI writes claude:cancel on the running block.
+    const b1 = blocks.get('b-1')!
+    b1.properties = {...b1.properties, [PROPS.cancel]: NOW}
+
+    // Next tick detects the flag and aborts the in-flight run.
+    await engine.tick()
+    await vi.waitFor(() => expect(sawAbort).toBe(true))
+    await tick1
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toBe('cancelled')
+    expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('') // flag cleared, won't re-cancel a rerun
+    expect(replies).toEqual([{parentId: 'b-1', content: '⏹️ claude-tasks run cancelled'}])
+    expect(runTask).toHaveBeenCalledTimes(1) // not re-run
   })
 
   it('is idempotent: a processed mention does not re-run on later ticks', async () => {

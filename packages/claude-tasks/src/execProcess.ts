@@ -23,6 +23,10 @@ export interface RunJsonlProcessOptions {
    *  so a multibyte char split across chunks never decodes as U+FFFD
    *  garbage). Feed this straight into the caller's line parser. */
   onStdoutText: (text: string) => void
+  /** Abort the run on demand (the UI Stop action, via the engine): kills
+   *  the child the same way the timeout does. Independent of `timedOut` —
+   *  the caller reads `signal.aborted` to tell a cancel from a timeout. */
+  signal?: AbortSignal
   spawnImpl?: SpawnImpl
 }
 
@@ -51,19 +55,37 @@ export const runJsonlProcess = async (options: RunJsonlProcessOptions): Promise<
   child.stdout?.on('data', (chunk: Buffer) => options.onStdoutText(stdoutDecoder.write(chunk)))
   child.stderr?.on('data', (chunk: Buffer) => { stderr += stderrDecoder.write(chunk) })
 
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
+  // SIGTERM, then SIGKILL after a grace period if it's still alive —
+  // shared by the timeout and the abort (Stop) paths.
+  const killChild = () => {
     child.kill('SIGTERM')
     setTimeout(() => {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
     }, 5_000).unref()
+  }
+
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    killChild()
   }, options.timeoutMs)
+
+  // Abort (UI Stop): kill immediately. `once` + removal on close so a
+  // reused signal can't fire against a dead child. If already aborted
+  // before spawn, kill straight away.
+  const onAbort = () => killChild()
+  if (options.signal) {
+    if (options.signal.aborted) killChild()
+    else options.signal.addEventListener('abort', onAbort, {once: true})
+  }
 
   const exitCode = await new Promise<number | null>((resolve, reject) => {
     child.on('error', reject)
     child.on('close', code => resolve(code))
-  }).finally(() => clearTimeout(timer))
+  }).finally(() => {
+    clearTimeout(timer)
+    options.signal?.removeEventListener('abort', onAbort)
+  })
 
   options.onStdoutText(stdoutDecoder.end())
   stderr += stderrDecoder.end()
