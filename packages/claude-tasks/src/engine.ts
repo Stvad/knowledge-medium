@@ -549,11 +549,22 @@ export const createEngine = (deps: EngineDeps) => {
     recordLaunch()
     log(`[${watcher.name}] firing for ${batch.length} new row(s)${overflow > 0 ? ` (+${overflow} truncated)` : ''}`)
     launch(key, async () => {
-      const result = await runTask(runOptionsFor(watcher, prompt))
+      // Log the session id the instant it streams (same as the mention
+      // path) so a query-triggered run is findable/inspectable while it's
+      // live, not just from the terminal line. Query runs aren't threaded,
+      // so there's no block to persist it to — the log is the only record.
+      let loggedSession: string | null = null
+      const result = await runTask(runOptionsFor(watcher, prompt, undefined, event => {
+        if (event.kind === 'session' && !loggedSession) {
+          loggedSession = event.sessionId
+          log(`[${watcher.name}] session ${event.sessionId}`)
+        }
+      }))
+      const session = result.sessionId ?? loggedSession
       if (result.ok) {
-        log(`[${watcher.name}] done: ${truncate(result.resultText.trim(), 200)}`)
+        log(`[${watcher.name}] done${session ? ` (session ${session})` : ''}: ${truncate(result.resultText.trim(), 200)}`)
       } else {
-        log(`[${watcher.name}] FAILED: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
+        log(`[${watcher.name}] FAILED${session ? ` (session ${session})` : ''}: exit ${result.exitCode} ${truncate(result.stderr.trim())}`)
       }
     })
   }
