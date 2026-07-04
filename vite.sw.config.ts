@@ -23,11 +23,16 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: false,
     target: 'esnext',
-    // Not in the app module graph and never imported, so minifying it buys
-    // little — and could perturb the '__BUILD_ID__' / JSON.parse('__…__')
-    // placeholders that inject-sw-build-id.ts string-replaces post-build.
-    // Keep it readable and the placeholders verbatim.
-    minify: false,
+    // Minified like the app bundle — the SW ships to every user, so the bytes
+    // matter. The post-build stamp (scripts/inject-sw-build-id.ts) is written to
+    // survive minification: it substitutes the bare `__BUILD_ID__` token
+    // (quote-agnostic) and replaces each `JSON.parse("__…__")` call by matching
+    // the placeholder STRING LITERAL — whose contents a minifier preserves
+    // verbatim — not the `JSON.parse` identifier (which a minifier may alias).
+    // Its guards (no placeholder may survive + `new Function` must parse the
+    // result) turn any minifier interaction that DID perturb a placeholder into
+    // a loud build failure, never a silently-shipped dead worker.
+    minify: true,
     sourcemap: false,
     rollupOptions: {
       input: path.resolve(configDir, 'src/sw/sw.ts'),

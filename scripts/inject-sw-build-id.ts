@@ -33,6 +33,7 @@ import {execSync} from 'node:child_process'
 import {dirname, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {collectRestAssets} from './precache-assets'
+import {stampSwSource} from './stamp-sw-source'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const distDir = resolve(scriptDir, '..', 'dist')
@@ -130,49 +131,23 @@ const restAssets = collectRestAssets({
   toBaseUrl,
 })
 
-let source = readFileSync(swPath, 'utf8')
-
 const fail = (msg: string): never => {
   console.error(`[inject-sw-build-id] ${msg}`)
   process.exit(1)
 }
 
-// BUILD_ID is a bare token inside a string literal (`"__BUILD_ID__"`); the git
-// sha / dev fallback contains no quotes/backslashes/newlines, so substituting it
-// inside whatever quote style the bundler chose is safe.
-if (!source.includes('__BUILD_ID__')) fail('placeholder __BUILD_ID__ not found in sw.js')
-source = source.split('__BUILD_ID__').join(buildId)
-
-// The precache lists are injected as JS ARRAY LITERALS, not as a string fed to
-// JSON.parse. JSON output (`["a","b"]`) is itself a valid JS array expression,
-// so replacing the WHOLE `JSON.parse("__…__")` call with the literal sidesteps
-// quote-nesting entirely: the bundler emits the placeholder wrapped in either
-// single OR double quotes, and the JSON payload's own double quotes would break
-// a double-quoted wrapper (a silent, ships-broken failure). Matching the full
-// call — quote char included — and substituting a literal avoids all escaping.
-const injectArrayLiteral = (placeholder: string, arr: string[]) => {
-  const call = new RegExp(`JSON\\.parse\\((["'])${placeholder}\\1\\)`)
-  if (!call.test(source)) fail(`could not find JSON.parse("${placeholder}") in sw.js`)
-  // Function replacer so `$` in a URL isn't treated as a replacement pattern.
-  const literal = JSON.stringify(arr)
-  source = source.replace(call, () => literal)
-}
-injectArrayLiteral('__PRECACHE_ASSETS__', firstPaintAssets)
-injectArrayLiteral('__PRECACHE_REST_ASSETS__', restAssets)
-
-// Guard against a silently-broken stamp: no placeholder may survive, and the
-// result must parse as JS. `new Function` compiles (parses) the body without
-// running it — free identifiers like `self` are fine — so a syntax error here
-// (e.g. the quote-nesting bug that array-literal injection fixes) fails the
-// BUILD instead of shipping a dead worker.
-for (const p of ['__BUILD_ID__', '__PRECACHE_ASSETS__', '__PRECACHE_REST_ASSETS__']) {
-  if (source.includes(p)) fail(`placeholder ${p} survived injection`)
-}
-try {
-  new Function(source)
-} catch (err) {
-  fail(`stamped sw.js is not valid JS: ${err instanceof Error ? err.message : String(err)}`)
-}
+// The build-id + precache substitution — and the guards that make a botched
+// stamp fail the BUILD rather than ship a dead worker — live in the pure,
+// unit-tested stampSwSource (see stamp-sw-source.test.ts, which pins the
+// minification robustness across quote styles). Here we just feed it the
+// worker source + collected lists and turn a thrown failure into a clean exit.
+const source = (() => {
+  try {
+    return stampSwSource(readFileSync(swPath, 'utf8'), {buildId, firstPaintAssets, restAssets})
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err))
+  }
+})()
 
 writeFileSync(swPath, source)
 console.log(
