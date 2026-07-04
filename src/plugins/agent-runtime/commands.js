@@ -21,6 +21,7 @@ import { resolveBacklinksFilter } from "../backlinks/resolveFilter.js";
 import { resolveGroupedBacklinksConfig } from "../grouped-backlinks/resolveConfig.js";
 import { DATA_MODEL_GUIDE } from "./dataModelGuide.js";
 import { runHealthCommand } from "./healthCommand.js";
+import { watchEventsRegistry } from "./watchEvents.js";
 import { readRuntimeActions } from "../../extensions/runtimeActions.js";
 import { findExtensionBlock } from "../../extensions/extensionLookup.js";
 import { lintExtensionSource } from "./extensionLint.js";
@@ -701,6 +702,11 @@ var executeCommand = async (command, context) => {
 		case "page": return runPageCommand(context.repo, command);
 		case "daily-note": return runDailyNoteCommand(context.repo, command);
 		case "search": return runSearchCommand(context.repo, command);
+		case "watch-events": return watchEventsRegistry.register(context.db, {
+			consumer: command.consumer,
+			watchers: command.watchers,
+			ttlMs: command.ttlMs
+		});
 		default: throw new Error(`Unknown agent runtime command: ${command.type}`);
 	}
 };

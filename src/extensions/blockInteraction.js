@@ -2,7 +2,26 @@ import { editorSelection, focusBlock, requestEditorFocus } from "../data/propert
 import { combineLastContributionResult, defineFacet, isFunction } from "../facets/facet.js";
 import { resetBlockSelection } from "../data/stateBlocks.js";
 import { defineVariantFacet } from "../facets/variantFacet.js";
+import { createElement } from "react";
 //#region src/extensions/blockInteraction.ts
+/** Build a content decorator that renders `Wrapper` around each inner
+*  renderer. The per-inner cache is correctness, not a perf nicety:
+*  decorators resolve during render, and a fresh component identity on
+*  every pass would remount the block's whole content subtree. */
+var cachedContentDecorator = (Wrapper, displayName) => {
+	const cache = /* @__PURE__ */ new WeakMap();
+	return (inner) => {
+		const existing = cache.get(inner);
+		if (existing) return existing;
+		const Decorated = ({ block }) => createElement(Wrapper, {
+			block,
+			Inner: inner
+		});
+		Decorated.displayName = displayName;
+		cache.set(inner, Decorated);
+		return Decorated;
+	};
+};
 var blockHeaderFacet = defineFacet({
 	id: "core.block-header",
 	combine: (contributions) => (context) => {
@@ -185,6 +204,6 @@ var blockPointerDepsFrom = (context, event) => {
 	};
 };
 //#endregion
-export { blockChildrenFooterFacet, blockClickHandlersFacet, blockContentDecoratorsFacet, blockContentRendererFacet, blockContentSurfacePropsFacet, blockHeaderFacet, blockLayoutFacet, blockPointerDepsFrom, blockShellDecoratorsFacet, enterBlockEditMode, enterEditModeForBlock, focusBlockWithoutEditing, getBlockContentRendererSlot, isInteractiveContentEvent, isSelectionClick, mergeBlockContentSurfaceProps, resolveShortcutActivations, shortcutSurfaceActivationsFacet };
+export { blockChildrenFooterFacet, blockClickHandlersFacet, blockContentDecoratorsFacet, blockContentRendererFacet, blockContentSurfacePropsFacet, blockHeaderFacet, blockLayoutFacet, blockPointerDepsFrom, blockShellDecoratorsFacet, cachedContentDecorator, enterBlockEditMode, enterEditModeForBlock, focusBlockWithoutEditing, getBlockContentRendererSlot, isInteractiveContentEvent, isSelectionClick, mergeBlockContentSurfaceProps, resolveShortcutActivations, shortcutSurfaceActivationsFacet };
 
 //# sourceMappingURL=blockInteraction.js.map

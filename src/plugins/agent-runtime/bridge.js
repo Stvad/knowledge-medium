@@ -1,7 +1,9 @@
+import { blockEditResumed, blockEditSettled } from "../../editor/editSettleSignal.js";
 import { openDialog } from "../../utils/dialogs.js";
 import { agentTokenStore, agentTokensChangedEvent } from "./tokens.js";
 import { AgentTokensDialog } from "./AgentTokensDialog.js";
 import { BridgePairingDialog } from "./BridgePairingDialog.js";
+import { watchEventsRegistry } from "./watchEvents.js";
 import { knownAgentCommandSchema } from "../../../packages/agent-cli/src/protocol.js";
 import { createAgentRuntimeContext, executeCommand } from "./commands.js";
 import { serializeError, serializeValue } from "./serialization.js";
@@ -187,12 +189,39 @@ var startAgentRuntimeBridge = (options) => {
 		processBridgePairingFromHash();
 		wakeBridgeLoop(true);
 	};
+	watchEventsRegistry.setTransport(async (event) => {
+		await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId);
+	});
+	const offEditSettled = blockEditSettled.add((blockId) => watchEventsRegistry.notifyBlockSettled(blockId));
+	const offEditResumed = blockEditResumed.add((blockId) => watchEventsRegistry.notifyBlockEditing(blockId));
 	window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart);
 	window.addEventListener(agentTokensChangedEvent, handleTokensChanged);
 	window.addEventListener("focus", handleWakeEvent);
 	window.addEventListener("hashchange", handleHashChanged);
 	window.addEventListener("online", handleWakeEvent);
 	document.addEventListener("visibilitychange", handleVisibilityChanged);
+	const maxConcurrentCommands = 4;
+	const saturatedParkMs = 45e3;
+	const inFlightCommands = /* @__PURE__ */ new Set();
+	const runCommand = async (command, baseUrl) => {
+		let payload;
+		try {
+			payload = {
+				ok: true,
+				value: serializeValue(await executeCommand(command, createAgentRuntimeContext(options)))
+			};
+		} catch (error) {
+			payload = {
+				ok: false,
+				error: serializeError(error)
+			};
+		}
+		try {
+			await reportResult(command.commandId, payload, baseUrl);
+		} catch (reportError) {
+			if (!abortController.signal.aborted) console.warn("Agent runtime: failed to report a command result.", reportError);
+		}
+	};
 	const poll = async () => {
 		while (!abortController.signal.aborted) {
 			const baseUrl = bridgeUrl();
@@ -225,17 +254,14 @@ var startAgentRuntimeBridge = (options) => {
 					continue;
 				}
 				const command = parsed.data;
-				try {
-					const value = await executeCommand(command, createAgentRuntimeContext(options));
-					await reportResult(command.commandId, {
-						ok: true,
-						value: serializeValue(value)
-					}, baseUrl);
-				} catch (error) {
-					await reportResult(command.commandId, {
-						ok: false,
-						error: serializeError(error)
-					}, baseUrl);
+				const execution = runCommand(command, baseUrl).finally(() => {
+					inFlightCommands.delete(execution);
+				});
+				inFlightCommands.add(execution);
+				if (inFlightCommands.size >= maxConcurrentCommands) {
+					await register(baseUrl);
+					await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)]);
+					if (inFlightCommands.size >= maxConcurrentCommands) console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`);
 				}
 			} catch {
 				if (abortController.signal.aborted) return;
@@ -258,6 +284,10 @@ var startAgentRuntimeBridge = (options) => {
 	poll();
 	return () => {
 		abortController.abort();
+		watchEventsRegistry.setTransport(null);
+		watchEventsRegistry.disposeAll();
+		offEditSettled();
+		offEditResumed();
 		window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart);
 		window.removeEventListener(agentTokensChangedEvent, handleTokensChanged);
 		window.removeEventListener("focus", handleWakeEvent);

@@ -35,6 +35,7 @@ import { groupedBacklinksPlugin } from "../plugins/grouped-backlinks/index.js";
 import { backlinksViewPlugin } from "../plugins/backlinks-view/index.js";
 import { updateIndicatorPlugin } from "../plugins/update-indicator/index.js";
 import { agentRuntimePlugin } from "../plugins/agent-runtime/index.js";
+import { claudeTasksCompanionPlugin } from "../plugins/claude-tasks-companion/index.js";
 import { appIntentsPlugin } from "../plugins/app-intents/index.js";
 import { roamImportPlugin } from "../plugins/roam-import/plugin.js";
 import "../plugins/roam-import/index.js";
@@ -108,6 +109,7 @@ var staticAppExtensions = ({ repo }) => [
 	startupMetricsPlugin,
 	updateIndicatorPlugin,
 	agentRuntimePlugin,
+	claudeTasksCompanionPlugin,
 	roamImportPlugin({ repo }),
 	birthdayPlugin,
 	appIntentsPlugin
