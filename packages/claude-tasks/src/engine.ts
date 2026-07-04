@@ -147,6 +147,13 @@ export const createEngine = (deps: EngineDeps) => {
     persistLaunchTimes()
   }
 
+  // INVARIANT: callers must guarantee `key` is unique among LIVE launches.
+  // The .finally below deletes the key unconditionally, so if two live
+  // promises ever shared one key, the first to settle would evict the
+  // other from `running` — breaking drain()/capacity accounting for it.
+  // Today no path collides (serial ticks + the running.has prefilter +
+  // mutually-exclusive claim/park branches keep each source.id/query:/
+  // session: key to one live promise); this comment pins that requirement.
   const launch = (key: string, work: () => Promise<void>) => {
     const promise = work()
       .catch(error => log(`[${key}] run crashed: ${errorMessage(error)}`))
