@@ -274,8 +274,13 @@ export const createEngine = (deps: EngineDeps) => {
         const reason = result.timedOut
           ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
           : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
-        if (replyId) await graph.updateBlockContent(replyId, `⚠️ claude-tasks run failed — ${reason}`)
-        else await graph.createReply(sourceId, `⚠️ claude-tasks run failed — ${reason}`)
+        const failureNote = `⚠️ claude-tasks run failed — ${reason}`
+        // Same deleted-placeholder fallback as the ok branch — without
+        // it a missing streamed block would throw here and the outer
+        // catch would record the wrong reason (the missing-reply error,
+        // not the run failure).
+        if (replyId) await graph.updateBlockContent(replyId, failureNote).catch(() => graph.createReply(sourceId, failureNote))
+        else await graph.createReply(sourceId, failureNote)
         await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: result.sessionId, activity: null, nowMs: now()})
         log(`[${watcher.name}] FAILED ${sourceId}: ${reason}`)
       }
@@ -287,8 +292,13 @@ export const createEngine = (deps: EngineDeps) => {
       // Drain any queued progress writes first — a streamed-text write
       // landing after the note would silently replace it.
       await writes.catch(() => {})
-      if (replyId) await graph.updateBlockContent(replyId, infraNote).catch(() => {})
-      else await graph.createReply(sourceId, infraNote).catch(() => {})
+      if (replyId) {
+        await graph.updateBlockContent(replyId, infraNote)
+          .catch(() => graph.createReply(sourceId, infraNote))
+          .catch(() => {})
+      } else {
+        await graph.createReply(sourceId, infraNote).catch(() => {})
+      }
       await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {

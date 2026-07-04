@@ -739,6 +739,37 @@ describe('live progress streaming', () => {
     expect(blocks.get(replyId)?.content).toContain('boom')
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
   })
+
+  it('failure with a DELETED streamed placeholder: failure note falls back to a new reply, run reason preserved', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] break'}},
+    })
+    // The user deleted the placeholder mid-run: content updates to any
+    // reply block fail; createReply still works.
+    graph.updateBlockContent = async id => {
+      throw new Error(`block not found: ${id}`)
+    }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'boom', resultText: ''})),
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Placeholder + the fallback failure note.
+    expect(replies).toHaveLength(2)
+    expect(replies[1]!.content).toContain('run failed')
+    expect(replies[1]!.content).toContain('boom')
+    // Props record the RUN failure — not an infra error about the
+    // missing reply block.
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toContain('boom')
+  })
 })
 
 describe('backlink watcher baseline', () => {
