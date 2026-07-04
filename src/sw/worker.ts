@@ -130,7 +130,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // km-assets-<id> the scoped GC can't reach (which recording-at-the-end
     // would strand permanently on the shared origin). The keep-window cost of a
     // phantom is bounded and self-clearing; a cleaner fix (provisional ledger
-    // entries that don't consume a keep slot) rides with the preview sweep.
+    // entries that don't consume a keep slot) is a possible follow-up.
     await recordGeneration(buildId)
     const [shell, assets] = await Promise.all([
       caches.open(SHELL_CACHE),
