@@ -40,6 +40,30 @@ export interface EngineDeps {
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
+/** True for a character safe to write into a plain-text log line — i.e.
+ *  not an ASCII/C1 control byte: C0 (0x00–0x1F), DEL (0x7F) and C1
+ *  (0x80–0x9F) are excluded, since their ANSI/OSC escape sequences could
+ *  clear or spoof a terminal tailing the daemon log. */
+const isLoggable = (ch: string): boolean => {
+  const code = ch.codePointAt(0) ?? 0
+  return code > 0x1f && code !== 0x7f && !(code >= 0x80 && code <= 0x9f)
+}
+
+/** One-line, bounded, log-safe quote of a block's text for the daemon
+ *  log, so a claimed block is identifiable at a glance (a bare id isn't).
+ *  Whitespace is collapsed to one line and non-printable control bytes
+ *  are stripped: graph content can be synced/imported from an external
+ *  source, and raw ANSI/OSC escapes would otherwise let it spoof or clear
+ *  a `tail -f` of the log. JSON-encoded so any embedded quote/backslash
+ *  stays unambiguous; empty content renders as `(empty)`. */
+const logPreview = (content: string | null | undefined): string => {
+  const cleaned = [...(content ?? '').replace(/\s+/g, ' ')]
+    .filter(isLoggable)
+    .join('')
+    .trim()
+  return cleaned ? JSON.stringify(truncate(cleaned, 100)) : '(empty)'
+}
+
 /** A deleted block surfaces as an `updateBlock: block <id> not found`
  *  error from the bridge (commands.ts updateBlock; repo.load filters
  *  `deleted = 0`). Used to tell "placeholder was deleted, create a fresh
@@ -282,7 +306,7 @@ export const createEngine = (deps: EngineDeps) => {
     try {
       const attempt = taskAttempts(block) + 1
       const claimStamp = now()
-      log(`[${watcher.name}] claiming ${sourceId} (${decision.reason}, attempt ${attempt})`)
+      log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
         status: 'running', watcher: watcher.name, attempts: attempt, nowMs: claimStamp,
       })

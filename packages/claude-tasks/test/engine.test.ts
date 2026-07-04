@@ -167,6 +167,45 @@ describe('mention lifecycle', () => {
     expect(prompt).toContain('[[claude]] summarize inbox')
   })
 
+  it('quotes the claimed block text in the log so a picked-up block is identifiable', async () => {
+    // A block seen only through a page's backlink surface shows no status
+    // chip, so the daemon log is the sole handle on what it just claimed —
+    // a bare id is not enough to tell which block fired.
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[browser emacs]]\ninvestigate the flaky test'}},
+    })
+    const logs: string[] = []
+    const engine = engineWith({graph, log: line => logs.push(line)})
+
+    await engine.tick()
+    await engine.drain()
+
+    const claimLog = logs.find(line => line.includes('claiming b-1'))
+    // Whitespace-collapsed onto one line, and the text is present.
+    expect(claimLog).toContain('"[[browser emacs]] investigate the flaky test"')
+  })
+
+  it('strips control bytes from the claim-log preview so synced block text cannot spoof the terminal', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      // ANSI ESC + NUL + BEL — control bytes a synced/imported block could
+      // carry that would clear/spoof a `tail -f` of the daemon log.
+      blocks: {'b-1': {content: 'a\u001b[2Jb\u0000 c\u0007'}},
+    })
+    const logs: string[] = []
+    const engine = engineWith({graph, log: line => logs.push(line)})
+
+    await engine.tick()
+    await engine.drain()
+
+    const claimLog = logs.find(line => line.includes('claiming b-1'))!
+    // No control byte survives into the log line.
+    expect([...claimLog].every(ch => (ch.codePointAt(0) ?? 0) >= 0x20)).toBe(true)
+    // The ESC/NUL/BEL are stripped; the (harmless) printable remainder survives.
+    expect(claimLog).toContain('"a[2Jb c"')
+  })
+
   it('persists the session id mid-run, even when the terminal result loses it', async () => {
     const {graph, blocks, sessionWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],

@@ -111,8 +111,13 @@ const ClaudeStatusChipRow = ({
 
 const decorate = cachedContentDecorator(ClaudeStatusChipRow, 'WithClaudeStatusChip')
 
-/** Chips attach everywhere except nested surfaces (embeds, backlink
- *  entries, breadcrumbs) — a status pill repeated through every embed
- *  of a mention is noise; the canonical block carries it. */
+/** The chip is a block-level pill in the right gutter, so it attaches on
+ *  every surface that renders the block as a full row — the outline,
+ *  backlink entries, and embeds — where run status is genuinely useful
+ *  (a page's backlink list is exactly where you review what the daemon
+ *  just picked up, and a bare mention there otherwise shows no status).
+ *  It's suppressed only where the block renders as inline text or a
+ *  compact path preview — an inline `((reference))` or a breadcrumb
+ *  segment — because a full-width gutter row can't lay out there. */
 export const claudeStatusChipContribution: BlockContentDecoratorContribution = (ctx) =>
-  ctx.blockContext?.isNestedSurface ? null : decorate
+  ctx.blockContext?.isReference || ctx.blockContext?.isBreadcrumb ? null : decorate
