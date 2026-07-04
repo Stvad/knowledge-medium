@@ -86,9 +86,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
 
   // --- generation ledger ----------------------------------------------------
   // An install-ordered list of BUILD_IDs (newest last), stored as a JSON
-  // Response under a synthetic key in META_CACHE. Retention math is the pure
-  // computeKeepIds / computeExpiredIds in ./ledger.
-  const LEDGER_KEY = toScopeUrl('./__km_generations__')
+  // Response under a synthetic per-scope key in the shared META_CACHE. Retention
+  // math is the pure computeKeepIds / computeExpiredIds in ./ledger.
+  const LEDGER_BASENAME = '__km_generations__'
+  const LEDGER_KEY = toScopeUrl(`./${LEDGER_BASENAME}`)
 
   const readLedgerEntry = async (): Promise<LedgerEntry> => {
     try {
@@ -189,13 +190,17 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // per-ORIGIN, so caches.keys() also lists the production deploy's caches
     // and every sibling PR preview's — all sharing the km- prefix, all live
     // (production + previews are served from the same origin). Blanket-deleting
-    // km-* not in a keep-set would wipe THEIR caches. Our ledger holds only the
-    // generation ids this scope installed, and ids don't collide across deploys
-    // (distinct build shas), so mapping our expired ledger ids to cache names
-    // targets exactly our own — never a sibling's. The current build's id is
-    // the last ledger entry (recorded on install) so it's never expired; an
-    // unreadable/empty ledger yields no deletions (safe); vendor/meta and this
-    // build's caches are simply never named here.
+    // km-* not in a keep-set would wipe THEIR caches. We instead map only OUR
+    // expired ledger ids to cache names. That targets exactly our own — never a
+    // sibling's — because a build id is the built commit's sha, and a preview's
+    // HEAD carries the PR's own commits, so no two live scopes ever build the
+    // same commit (the one case they'd match, a fast-forward merge, tears the
+    // preview down). If build-id derivation ever changed to allow collisions,
+    // this path would need the same cross-scope shared-id guard the preview
+    // sweep already applies (computeReapableCaches's keptIds). The current
+    // build's id is the last ledger entry (recorded on install) so it's never
+    // expired; an unreadable/empty ledger yields no deletions (safe);
+    // vendor/meta and this build's caches are simply never named here.
     const expiredIds = computeExpiredIds(ledger, keepGenerations)
     // Free space FIRST, then trim the ledger. The ledger write is a
     // `cache.put`, which throws `QuotaExceededError` exactly when the origin
@@ -239,10 +244,23 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // computeReapableCaches enforces the safety rails (preview-only — production
   // is structurally unreapable; timestamped-and-stale only; never a cache a
   // surviving scope still references). See src/sw/ledger.ts.
+  //
+  // Best-effort + snapshot-based: it reads a snapshot of all ledgers, then
+  // deletes. In the (near-impossible) window where a 14-day-dormant preview
+  // redeploys — re-stamping its ledger — DURING another client's sweep, that
+  // sweep's delete can drop the just-written entry. Harmless and self-healing:
+  // only ledger TRACKING is lost (the fresh generation's caches are keyed by a
+  // new id the snapshot never saw, so they're untouched), and the next deploy
+  // re-records it.
   const sweepStalePreviewGenerations = async (): Promise<void> => {
     const meta = await caches.open(META_CACHE)
     const ledgers: ScopeLedger[] = []
     for (const req of await meta.keys()) {
+      // Only <scope>/__km_generations__ keys are scope ledgers. META_CACHE holds
+      // nothing else today, but guard structurally so a future non-ledger entry
+      // — especially one under a /pr-preview/ path — can never be misread as a
+      // reapable scope and deleted.
+      if (!req.url.endsWith(`/${LEDGER_BASENAME}`)) continue
       const res = await meta.match(req)
       if (!res) continue
       const raw: unknown = await res.json().catch(() => null)

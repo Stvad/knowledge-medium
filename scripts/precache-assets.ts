@@ -19,9 +19,11 @@
  * Storage.
  *
  * The precache set is defined by `ASSET_EXTENSION`, imported from the SW itself
- * (src/sw/assets.ts) — the ONE definition of what the SW serves cache-first —
- * so the precached set can't drift from what's served. That deliberately
- * excludes:
+ * (src/sw/assets.ts) — the ONE definition of the extension axis the SW serves
+ * cache-first on — so the precached set can't drift from the served set on that
+ * axis. (The SW also serves by `request.destination`; that's a superset only for
+ * an asset with no recognized extension, which our emitted output never has —
+ * see the note in src/sw/assets.ts.) That deliberately excludes:
  *   - `*.map`   — dev/DevTools only (~30 MB), never fetched by the running app;
  *   - `sw.js`   — the worker itself, managed by the SW lifecycle, not imported;
  *   - `version.json`, `*.html`, `*.webmanifest` — not asset-typed; the shell is

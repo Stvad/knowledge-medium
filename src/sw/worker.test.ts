@@ -413,6 +413,24 @@ describe('activate — stale preview cache sweep', () => {
     expect(await metaMatch(caches, previewScope(312))).toBeUndefined() // ledger entry dropped
   })
 
+  it('ignores non-ledger km-meta entries (only <scope>/__km_generations__ keys are scopes)', async () => {
+    const {sw, caches} = build()
+    await seedScope(caches, prodScope, {ids: ['prodA'], updatedAt: NOW}, ['prodA'])
+    // A hypothetical future non-ledger entry under a preview-looking path, with a
+    // coincidentally ledger-shaped, stale body. It must NOT be treated as a scope.
+    const strayKey = `${ORIGIN}/knowledge-medium/pr-preview/pr-999/some-other-meta`
+    ;(await caches.open('km-meta')).store.set(
+      strayKey,
+      new Response(JSON.stringify({ids: ['strayId'], updatedAt: NOW - 99 * DAY})),
+    )
+    await caches.open('km-shell-strayId')
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-strayId')).toBe(true) // not reaped
+    expect(await metaMatch(caches, strayKey)).toBeDefined() // entry left intact
+  })
+
   it('a preview-scoped SW never reaps its OWN scope, even if its ledger looks stale', async () => {
     // current scope IS a preview. install created its caches + a fresh ledger;
     // force that ledger to look ancient so ONLY the self-scope guard protects it.
