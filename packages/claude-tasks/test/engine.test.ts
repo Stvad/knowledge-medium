@@ -26,6 +26,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const activityWrites: Array<{id: string, label: string}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
   const contentUpdates: Array<{id: string, content: string}> = []
+  const cancelClears: string[] = []
 
   const graph: Graph = {
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
@@ -83,6 +84,13 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       sessionWrites.push({id, session})
     },
+    clearCancel: async id => {
+      // Merged single-key write: ONLY claude:cancel changes (like the bridge).
+      const target = blocks.get(id) ?? {id, properties: {}}
+      target.properties = {...target.properties, [PROPS.cancel]: ''}
+      blocks.set(id, target)
+      cancelClears.push(id)
+    },
     updateBlockContent: async (id, content) => {
       const target = blocks.get(id) ?? {id, properties: {}}
       target.content = content
@@ -98,7 +106,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, propWrites, activityWrites, sessionWrites, contentUpdates}
+  return {graph, blocks, replies, propWrites, activityWrites, sessionWrites, contentUpdates, cancelClears}
 }
 
 const memoryState = (
@@ -391,12 +399,15 @@ describe('mention lifecycle', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('')
   })
 
-  it('clears an un-actionable claude:cancel (running block, no live run here)', async () => {
+  it('clears an un-actionable claude:cancel with a cancel-only write (never touches status)', async () => {
     // A channel-delivered task the daemon doesn't own — or a run stranded by
     // a hard kill — is status:running with a Stop flag but no controller. The
-    // scan clears the inert flag (chip un-sticks) without relaunching, and
-    // preserves the block's status + timestamp.
-    const {graph, blocks} = fakeGraph({
+    // scan clears the inert flag so the chip un-sticks. Crucially it writes
+    // ONLY cancel: a status write would race the ambient session's concurrent
+    // status:done and revert it → the stale-running sweep would then redeliver
+    // (duplicate work). So no setTaskProps here, and status/updatedAt are left
+    // exactly as-is.
+    const {graph, blocks, propWrites, cancelClears} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] x', editedAtMs: NOW - 10_000, properties: {
         [PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 1_000, [PROPS.cancel]: NOW,
@@ -408,9 +419,11 @@ describe('mention lifecycle', () => {
     await engine.tick()
     await engine.drain()
 
+    expect(cancelClears).toEqual(['b-1'])                       // cancel-only clear fired
+    expect(propWrites.filter(w => w.id === 'b-1')).toEqual([])  // no status write → nothing to revert
     expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('')
-    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
-    expect(blocks.get('b-1')?.properties?.[PROPS.updatedAt]).toBe(NOW - 1_000)
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')      // untouched
+    expect(blocks.get('b-1')?.properties?.[PROPS.updatedAt]).toBe(NOW - 1_000) // untouched
     expect(runTask).not.toHaveBeenCalled()
   })
 

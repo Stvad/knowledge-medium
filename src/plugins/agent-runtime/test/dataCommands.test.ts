@@ -278,3 +278,35 @@ describe('search command', () => {
     expect(out.results.find(r => r.id === 's1')?.deepLink).toBe(`#${WS}/s1`)
   })
 })
+
+describe('update-block command', () => {
+  it('merges properties — a partial update preserves the other keys', async () => {
+    await create({id: 'u1', content: 'x', properties: {a: '1', b: '2'}})
+    await executeCommand(
+      {commandId: 'up-1', type: 'update-block', id: 'u1', properties: {b: '3'}},
+      context,
+    )
+    expect((await repo.load('u1'))?.properties).toEqual({a: '1', b: '3'})
+  })
+
+  it('throws a not-found error for a missing block', async () => {
+    await expect(executeCommand(
+      {commandId: 'up-nf', type: 'update-block', id: 'nope', properties: {a: '1'}},
+      context,
+    )).rejects.toThrow(/block nope not found/)
+  })
+
+  it('applies concurrent property updates atomically — neither clobbers the other', async () => {
+    // Two writers touch DIFFERENT keys of the same block at once. The
+    // read-merge-write runs inside one serialized writeTransaction, so
+    // neither stale full-map write drops the other's key. A repo.load
+    // OUTSIDE the tx (the prior code) let whichever committed second write
+    // back its stale snapshot and lose the first's change.
+    await create({id: 'u2', content: 'x', properties: {status: 'running', cancel: 'yes'}})
+    await Promise.all([
+      executeCommand({commandId: 'c-a', type: 'update-block', id: 'u2', properties: {status: 'done'}}, context),
+      executeCommand({commandId: 'c-b', type: 'update-block', id: 'u2', properties: {cancel: ''}}, context),
+    ])
+    expect((await repo.load('u2'))?.properties).toEqual({status: 'done', cancel: ''})
+  })
+})
