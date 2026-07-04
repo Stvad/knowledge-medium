@@ -1775,7 +1775,7 @@ fcdbe603f722c835f2451911a25e455fdc0c67175beb46746962727f75811088  ./packages/age
 1fb947a799f6ec708cfb146c8ca45a6e2bdb94e4619d22848f6c090ee537f9f2  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-23c264c8d890b4082e0ac1e5ac232e948a074e85070612182e70f5da104be09d  ./src/appVersion.js
+5647ac59fb773139a734af180e6aa90564a44db9b25ab8e94cbd30d35d44c78b  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 d82fb876b5e2b470c1ee8cf15e17b3f6b8730b52b4802e6e5ab0d9eebc2f7148  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2434,8 +2434,8 @@ fbc67da32bf7d469e5969d841ffb7cd31a61d65d858eeba3310f7085b99d72c1  ./src/plugins/
 1abf0b10ae8b0ebbd63a7e71d96089415476898910d8c5100b22baad4ad47fc4  ./src/plugins/character-counter/index.js.map
 dbc8ce53e4324e879acc040650d9c20c9c63fc4cb58188d165ff4aafd80aed77  ./src/plugins/character-counter/properties.js
 6b1b36bf2044c4adc7b7947b9ba04425a57a69cac5bc417753246a6dab907df8  ./src/plugins/character-counter/properties.js.map
-701dcaf23545d479154cc009c0d35d95d237b1f8aff397a114e2fcb497b09624  ./src/plugins/claude-tasks-companion/ClaudeStatusChip.js
-35032ea72c01982428004830b3be22b5c6922b4b241c0943bd2fba6b8470dd7e  ./src/plugins/claude-tasks-companion/ClaudeStatusChip.js.map
+7e66dfd16b935c4f9280f7bdf5e29dac1d7a6ad01c3099407b75713d68fcf72e  ./src/plugins/claude-tasks-companion/ClaudeStatusChip.js
+6b8c71f6990af750c092e4723438e0996d96881bb6728ff648442a69b10affd7  ./src/plugins/claude-tasks-companion/ClaudeStatusChip.js.map
 dc39b549e6892616323be772eab7be60372dceb171f6ca372ecc49e002239f8f  ./src/plugins/claude-tasks-companion/askClaude.js
 8079b11844ef11c6a4a8e78dcf08c48002264902213b9cd1c5555077c5b2f8b0  ./src/plugins/claude-tasks-companion/askClaude.js.map
 c9bf5c5dad9bebeeb7c4ec588ff270169827fc6fd453b3f29444b8a8473e9243  ./src/plugins/claude-tasks-companion/askedStore.js
@@ -3155,8 +3155,8 @@ dd7fcf8357bb4f5fbb7478a7d59216cace479438a5e4d040031b2216cf428170  ./src/utils/to
 e15298832ec4effff04e2f6fafb5db3a8e5c3f4b5767822fccbaf55206b77091  ./src/utils/types.js.map
 ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/viewTransition.js
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
-888eab3726b733d6c6045b82af903a3e0c35fb7d8be04ad587e3fee17e7d9298  ./sw.js
-19e326ebdedad1a8d60e68a59e4356e8d8a0870d69f7a5c65082b085c9b1e20b  ./version.json
+94266e2fed0d6db7d282766e242b955209f9456d2e76a17c53208f5db444ec0b  ./sw.js
+cbaf4c2ac70e246a7312a6b90ab31e03ebe022c52e1f1704ba52528e09d3f831  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
