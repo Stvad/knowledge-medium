@@ -1138,7 +1138,9 @@ export class Repo {
    *     open UNGROUPED txs mid-group (the TypeTagger family; the
    *     stateful services above are the documented exception). Adding
    *     a Repo member in one of these classes means adding a facade
-   *     override here. */
+   *     override here — enforced structurally by
+   *     `repoFacadeGate.test.ts`, which fails on any Repo member that
+   *     is neither overridden nor consciously allowlisted. */
   async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
     return fn(this.groupedFacade(this.newId()))
   }

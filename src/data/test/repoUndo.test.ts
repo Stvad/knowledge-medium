@@ -23,7 +23,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, ReadOnlyError } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
@@ -71,14 +71,6 @@ const readContent = async (repo: Repo, id: string): Promise<string | null> => {
   return row.deleted === 1 ? null : row.content
 }
 
-const isDeleted = async (repo: Repo, id: string): Promise<boolean> => {
-  const row = await repo.db.getOptional<{deleted: number}>(
-    'SELECT deleted FROM blocks WHERE id = ?',
-    [id],
-  )
-  return row?.deleted === 1
-}
-
 const rowCount = async (repo: Repo, table: string): Promise<number> => {
   const row = await repo.db.get<{n: number}>(`SELECT COUNT(*) AS n FROM ${table}`)
   return row.n
@@ -122,13 +114,13 @@ describe('repo.undo / redo on tx.create', () => {
         content: 'created',
       })
     }, {scope: ChangeScope.BlockDefault})
-    expect(await isDeleted(env.repo, 'fresh')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'fresh')).toBe(false)
 
     expect(await env.repo.undo()).toBe(true)
-    expect(await isDeleted(env.repo, 'fresh')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'fresh')).toBe(true)
 
     expect(await env.repo.redo()).toBe(true)
-    expect(await isDeleted(env.repo, 'fresh')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'fresh')).toBe(false)
     expect(await readContent(env.repo, 'fresh')).toBe('created')
   })
 })
@@ -140,14 +132,14 @@ describe('repo.undo / redo on tx.delete', () => {
     await env.repo.tx(async (tx) => {
       await tx.delete('doomed')
     }, {scope: ChangeScope.BlockDefault})
-    expect(await isDeleted(env.repo, 'doomed')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'doomed')).toBe(true)
 
     expect(await env.repo.undo()).toBe(true)
-    expect(await isDeleted(env.repo, 'doomed')).toBe(false)
+    expect(await isBlockDeleted(env.repo, 'doomed')).toBe(false)
     expect(await readContent(env.repo, 'doomed')).toBe('live')
 
     expect(await env.repo.redo()).toBe(true)
-    expect(await isDeleted(env.repo, 'doomed')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'doomed')).toBe(true)
   })
 })
 
