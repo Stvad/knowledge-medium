@@ -32,6 +32,9 @@ export interface EngineDeps {
   mcpConfigPath: string | null
   log: (message: string) => void
   now?: () => number
+  /** Sleep between deliverReply retries — injected so tests run instantly
+   *  (default is a real timer). */
+  delay?: (ms: number) => Promise<void>
 }
 
 const truncate = (value: string, max = 500): string =>
@@ -46,6 +49,14 @@ const truncate = (value: string, max = 500): string =>
  *  misread as a deleted placeholder and trigger a duplicate reply. */
 const isBlockNotFound = (error: unknown): boolean =>
   /\bblock\b.*\bnot found\b/i.test(errorMessage(error))
+
+/** Backoff schedule for retrying the IDEMPOTENT streamed terminal write
+ *  (updateBlockContent) past a transient bridge blip — recovering the
+ *  billed answer instead of losing it to `status:error`. Bounded and
+ *  short (≈1.7s worst case) so a genuinely-down bridge fails fast. Only
+ *  the same-block/same-text update is retried; createReply is NOT (not
+ *  idempotent — a half-succeeded create would duplicate the reply). */
+const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
 
 /** claude:session values are executor-scoped: codex thread ids are
  *  stored as `codex:<id>`, claude session ids bare (back-compat — every
@@ -82,6 +93,7 @@ const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null
 export const createEngine = (deps: EngineDeps) => {
   const {config, graph, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
   const now = deps.now ?? Date.now
+  const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
   /** Live work, keyed by block id / query-watcher key / thread session.
    *  One structure serves the double-claim guard, the capacity gate,
@@ -236,17 +248,24 @@ export const createEngine = (deps: EngineDeps) => {
     let terminalReplyDelivered = false
 
     // Land `text` on the streamed placeholder if one exists, else create a
-    // fresh reply. Only a NOT-FOUND update (the user deleted the
-    // placeholder mid-run) falls back to createReply — a transient bridge
-    // error rethrows instead, so a blip on the final write can't post a
-    // duplicate reply and orphan the placeholder forever.
+    // fresh reply. The streamed update is idempotent (same block, same
+    // text), so a transient bridge blip on the terminal write is RETRIED
+    // (bounded backoff) to recover the billed answer rather than lose it.
+    // A NOT-FOUND (the user deleted the placeholder mid-run) breaks out to
+    // a single createReply. createReply itself is NOT retried — it isn't
+    // idempotent, so a half-succeeded create would duplicate the reply.
     const deliverReply = async (text: string): Promise<void> => {
       if (!replyId) { await graph.createReply(sourceId, text); return }
-      try {
-        await graph.updateBlockContent(replyId, text)
-      } catch (error) {
-        if (!isBlockNotFound(error)) throw error
-        await graph.createReply(sourceId, text)
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await graph.updateBlockContent(replyId, text)
+          return
+        } catch (error) {
+          if (isBlockNotFound(error)) { await graph.createReply(sourceId, text); return }
+          if (attempt >= DELIVER_RETRY_DELAYS_MS.length) throw error
+          log(`[${watcher.name}] retrying reply write for ${sourceId} after a transient error: ${errorMessage(error)}`)
+          await delay(DELIVER_RETRY_DELAYS_MS[attempt])
+        }
       }
     }
 

@@ -135,6 +135,7 @@ const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
     mcpConfigPath: '/tmp/mcp.json',
     log: () => {},
     now: () => NOW,
+    delay: async () => {}, // no-op so deliverReply retries don't slow tests
     ...deps,
   })
 
@@ -950,6 +951,37 @@ describe('live progress streaming', () => {
     expect(replies).toHaveLength(1)
     const replyId = contentUpdates.at(-1)!.id
     expect(blocks.get(replyId)?.content).toBe('the answer')
+  })
+
+  it('transient blip on the terminal streamReply write is retried and recovers the billed answer', async () => {
+    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ok task'}},
+    })
+    // The idempotent streamed update is safe to retry: one transient blip,
+    // then it lands. The answer must be recovered, not lost to status:error.
+    const realUpdate = graph.updateBlockContent
+    let updateCalls = 0
+    graph.updateBlockContent = async (id, content) => {
+      updateCalls += 1
+      if (updateCalls === 1) throw new Error('bridge command timed out')
+      return realUpdate(id, content)
+    }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Retry landed the answer on the existing placeholder — no fallback
+    // createReply (still one reply block), terminal state is done.
+    expect(replies).toHaveLength(1)
+    const replyId = contentUpdates.at(-1)!.id
+    expect(blocks.get(replyId)?.content).toBe('the answer')
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
   })
 })
 
