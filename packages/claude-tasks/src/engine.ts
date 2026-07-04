@@ -230,6 +230,16 @@ export const createEngine = (deps: EngineDeps) => {
     if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
     if (sessionKey) running.set(sessionKey, Promise.resolve())
 
+    // A fresh run's session id is unknown until mid-run (the runner emits
+    // it on its first line). The instant we write it to the block,
+    // findThreadSession resolves it for a follow-up nested under this
+    // source — so a live session must ALSO hold a dedup key, or that
+    // follow-up, claimed before this run finishes, would pass the guard
+    // above and `--resume` the SAME session concurrently. Registered when
+    // the session event arrives (below), released in finally. null until
+    // (and unless) a resumable session shows up.
+    let liveSessionKey: string | null = null
+
     // Hoisted so the infra-catch below can prefer updating an
     // already-created streamed reply block over posting a new one —
     // and can drain the progress-write chain first, so a queued
@@ -362,6 +372,19 @@ export const createEngine = (deps: EngineDeps) => {
           sessionRecorded = true
           const stored = storedSessionFor(watcher.executor, event.sessionId)
           if (!stored) return
+          // Claim a dedup key for the now-live session BEFORE exposing it
+          // on the block (the register is synchronous; the block write is
+          // only queued), so a follow-up can never observe the session
+          // without also seeing the guard. The key mirrors exactly what a
+          // child computes (resumableSessionFor over the stored value).
+          // Skip when we already hold this key (a run that was itself a
+          // resume) or someone else does — finally only deletes what we set.
+          const resumable = resumableSessionFor(watcher.executor, stored)
+          const liveKey = resumable ? `session:${resumable}` : null
+          if (liveKey && liveKey !== sessionKey && !running.has(liveKey)) {
+            liveSessionKey = liveKey
+            running.set(liveKey, Promise.resolve())
+          }
           log(`[${watcher.name}] session ${stored} for ${sourceId}`)
           queueWrite(() => graph.setSession(sourceId, stored))
         }
@@ -408,6 +431,7 @@ export const createEngine = (deps: EngineDeps) => {
       throw error
     } finally {
       if (sessionKey) running.delete(sessionKey)
+      if (liveSessionKey) running.delete(liveSessionKey)
     }
   }
 
