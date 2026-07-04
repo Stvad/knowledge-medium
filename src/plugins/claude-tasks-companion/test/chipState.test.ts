@@ -71,11 +71,21 @@ describe('claudeStatusChipContribution gate', () => {
   const ctx = (over: Partial<BlockResolveContext>): BlockResolveContext =>
     ({isTopLevel: false, ...over}) as BlockResolveContext
 
-  it('attaches to ordinary and focal blocks, but not nested surfaces', () => {
+  const withContext = (over: Record<string, unknown>) =>
+    ctx({blockContext: over as BlockResolveContext['blockContext']})
+
+  it('attaches where the block renders as a full row — outline, backlinks, embeds', () => {
     expect(claudeStatusChipContribution(ctx({}))).toBeTruthy()
     expect(claudeStatusChipContribution(ctx({isTopLevel: true}))).toBeTruthy()
-    expect(claudeStatusChipContribution(
-      ctx({blockContext: {isNestedSurface: true} as BlockResolveContext['blockContext']}),
-    )).toBeNull()
+    // A backlink-entry body / embed sets isNestedSurface but still renders
+    // the block as a full row, so the chip belongs there — the review
+    // surface for what the daemon picked up must not hide status.
+    expect(claudeStatusChipContribution(withContext({isNestedSurface: true, isBacklink: true}))).toBeTruthy()
+    expect(claudeStatusChipContribution(withContext({isNestedSurface: true, isEmbedded: true}))).toBeTruthy()
+  })
+
+  it('suppresses only inline references and breadcrumb segments (a gutter pill cannot lay out inline)', () => {
+    expect(claudeStatusChipContribution(withContext({isNestedSurface: true, isReference: true}))).toBeNull()
+    expect(claudeStatusChipContribution(withContext({isNestedSurface: true, isBreadcrumb: true}))).toBeNull()
   })
 })
