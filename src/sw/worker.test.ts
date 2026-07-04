@@ -30,6 +30,9 @@ class MockCache {
   async delete(req: RequestInfo | URL) {
     return this.store.delete(keyOf(req))
   }
+  async keys() {
+    return [...this.store.keys()].map((url) => new Request(url))
+  }
 }
 
 class MockCaches {
@@ -56,11 +59,14 @@ class MockCaches {
 
 const ORIGIN = 'https://app.example'
 const SCOPE = `${ORIGIN}/knowledge-medium/`
+const DAY = 24 * 60 * 60 * 1000
+const NOW = 1_700_000_000_000
 
 const makeConfig = (o: Partial<SwConfig> = {}): SwConfig => ({
   buildId: 'gen1',
   scopeURL: new URL(SCOPE),
   keepGenerations: 3,
+  staleScopeMs: 14 * DAY,
   precacheAssets: ['/knowledge-medium/src/main.js'],
   precacheRestAssets: ['/knowledge-medium/src/lazy.js'],
   ...o,
@@ -70,9 +76,12 @@ const ok = (body = 'body') => new Response(body, {status: 200})
 
 // Build a fresh worker + mock env per test (in-memory Maps, cheap — no shared
 // DB to reset). Returns the worker plus the mocks so tests can seed/inspect.
+// `now` is a fixed injected clock so ledger timestamps and the stale sweep are
+// deterministic.
 const build = (
   configOverrides: Partial<SwConfig> = {},
   fetchImpl: (req: Request) => Promise<Response> = async () => ok(),
+  now: () => number = () => NOW,
 ) => {
   const caches = new MockCaches()
   const fetchMock = vi.fn(fetchImpl)
@@ -81,6 +90,7 @@ const build = (
     caches: caches as unknown as CacheStorage,
     fetch: fetchMock as unknown as typeof fetch,
     origin: ORIGIN,
+    now,
   })
   return {sw, caches, fetchMock, config}
 }
@@ -320,5 +330,103 @@ describe('shellNetworkFirst (HTML navigation)', () => {
       throw new TypeError('offline')
     })
     await expect(sw.handleFetch(navRequest())!).rejects.toThrow('offline')
+  })
+})
+
+describe('activate — stale preview cache sweep', () => {
+  const previewScope = (n: number) =>
+    `${ORIGIN}/knowledge-medium/pr-preview/pr-${n}/__km_generations__`
+  const prodScope = `${SCOPE}__km_generations__` // this (production) scope's own ledger key
+  const metaMatch = async (caches: MockCaches, url: string) =>
+    (await caches.open('km-meta')).match(url)
+
+  // Seed one scope's ledger entry into the shared meta cache + its generation
+  // caches — mimicking a PR preview a client visited earlier.
+  const seedScope = async (
+    caches: MockCaches,
+    scopeUrl: string,
+    entry: unknown,
+    ids: string[],
+  ) => {
+    ;(await caches.open('km-meta')).store.set(scopeUrl, new Response(JSON.stringify(entry)))
+    for (const id of ids) {
+      await caches.open(`km-shell-${id}`)
+      await caches.open(`km-assets-${id}`)
+    }
+  }
+
+  it('reaps a merged preview’s caches + ledger entry, keeps prod and fresh previews', async () => {
+    const {sw, caches} = build() // current scope = production
+    await seedScope(caches, prodScope, {ids: ['prodA'], updatedAt: NOW - DAY}, ['prodA'])
+    await seedScope(caches, previewScope(309), {ids: ['pvStale'], updatedAt: NOW - 15 * DAY}, ['pvStale'])
+    await seedScope(caches, previewScope(310), {ids: ['pvFresh'], updatedAt: NOW - DAY}, ['pvFresh'])
+
+    await sw.activate()
+
+    // stale preview 309 fully reclaimed (both caches + its ledger entry)
+    expect(await caches.has('km-shell-pvStale')).toBe(false)
+    expect(await caches.has('km-assets-pvStale')).toBe(false)
+    expect(await metaMatch(caches, previewScope(309))).toBeUndefined()
+    // fresh preview 310 kept
+    expect(await caches.has('km-shell-pvFresh')).toBe(true)
+    expect(await metaMatch(caches, previewScope(310))).toBeDefined()
+    // production untouched
+    expect(await caches.has('km-shell-prodA')).toBe(true)
+    expect(await metaMatch(caches, prodScope)).toBeDefined()
+  })
+
+  it('never reaps production, however old its ledger (not a preview scope)', async () => {
+    const {sw, caches} = build()
+    await seedScope(caches, prodScope, {ids: ['prodA'], updatedAt: NOW - 999 * DAY}, ['prodA'])
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-prodA')).toBe(true)
+    expect(await metaMatch(caches, prodScope)).toBeDefined()
+  })
+
+  it('does not reap a legacy (untimestamped bare-array) preview ledger', async () => {
+    const {sw, caches} = build()
+    await seedScope(caches, prodScope, {ids: ['prodA'], updatedAt: NOW}, ['prodA'])
+    await seedScope(caches, previewScope(311), ['pvLegacy'], ['pvLegacy']) // bare array, no updatedAt
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvLegacy')).toBe(true)
+    expect(await metaMatch(caches, previewScope(311))).toBeDefined()
+  })
+
+  it('spares a cache a surviving scope still shares, but still drops the stale ledger entry', async () => {
+    const {sw, caches} = build()
+    await seedScope(caches, prodScope, {ids: ['shared', 'prodA'], updatedAt: NOW - DAY}, ['shared', 'prodA'])
+    await seedScope(
+      caches,
+      previewScope(312),
+      {ids: ['shared', 'pvOnly'], updatedAt: NOW - 30 * DAY},
+      ['shared', 'pvOnly'],
+    )
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-shared')).toBe(true) // shared with prod — spared
+    expect(await caches.has('km-shell-pvOnly')).toBe(false) // preview-only — reaped
+    expect(await metaMatch(caches, previewScope(312))).toBeUndefined() // ledger entry dropped
+  })
+
+  it('a preview-scoped SW never reaps its OWN scope, even if its ledger looks stale', async () => {
+    // current scope IS a preview. install created its caches + a fresh ledger;
+    // force that ledger to look ancient so ONLY the self-scope guard protects it.
+    const selfScope = new URL(`${ORIGIN}/knowledge-medium/pr-preview/pr-500/`)
+    const {sw, caches} = build({scopeURL: selfScope, buildId: 'selfGen'})
+    await sw.install() // creates km-shell-selfGen / km-assets-selfGen + fresh ledger
+    ;(await caches.open('km-meta')).store.set(
+      `${ORIGIN}/knowledge-medium/pr-preview/pr-500/__km_generations__`,
+      new Response(JSON.stringify({ids: ['selfGen'], updatedAt: NOW - 99 * DAY})),
+    )
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-selfGen')).toBe(true)
+    expect(await caches.has('km-assets-selfGen')).toBe(true)
   })
 })

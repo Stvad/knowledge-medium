@@ -38,7 +38,14 @@ deploy):
   longer intercepts or caches `/pr-preview/…` requests (so an offline production
   load can't boot a preview build), and each SW's `activate` GC deletes only its
   own deploy's generations, so a preview SW no longer evicts production's caches
-  (and vice-versa). Verified in a real browser (both directions).
+  (and vice-versa). Verified in a real browser (both directions). A merged
+  preview's SW then stops running, so its `km-shell-*`/`km-assets-*` caches would
+  otherwise leak on the shared origin forever; on `activate` every SW also runs a
+  cross-scope sweep (`computeReapableCaches`, `src/sw/ledger.ts`) that reclaims
+  the generation caches + ledger entry of any **preview** scope untouched for 14
+  days. It is preview-only by construction — production is never a preview scope,
+  so the sweep is structurally incapable of reaping prod caches — and spares any
+  generation a surviving scope still references.
 - **Local SQLite DB** (`kmp-v6-<user>.db`, `src/data/repoProvider.ts`) — preview
   builds suffix the filename with `-pr-<n>`, so a preview gets its **own** local
   DB and a preview PR's client migration can't touch production's real store.

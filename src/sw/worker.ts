@@ -11,7 +11,14 @@
  * The versioning model this implements is documented in the sw.ts header.
  */
 import {isCacheableAsset} from './assets'
-import {computeExpiredIds, computeKeepIds} from './ledger'
+import {
+  computeExpiredIds,
+  computeKeepIds,
+  computeReapableCaches,
+  type LedgerEntry,
+  normalizeLedger,
+  type ScopeLedger,
+} from './ledger'
 import {isForeignPreviewRequest, PREVIEW_SUBTREE} from './preview'
 
 const CACHE_PREFIX = 'km-'
@@ -38,6 +45,11 @@ export interface SwConfig {
   scopeURL: URL
   /** How many generations to retain on activate (current + previous). */
   keepGenerations: number
+  /**
+   * How long a PR-preview scope may sit untouched before its leaked generation
+   * caches are reaped from the shared origin (never applies to production).
+   */
+  staleScopeMs: number
   /** First-paint asset URLs (build-injected), base-prefixed or scope-relative. */
   precacheAssets: string[]
   /** The rest of the emitted graph (build-injected) — everything minus first-paint. */
@@ -49,11 +61,13 @@ export interface SwEnv {
   fetch: typeof fetch
   /** self.location.origin — for the same-origin check. */
   origin: string
+  /** Injected clock (Date.now) — stamps ledger writes / drives the stale sweep. */
+  now: () => number
 }
 
 export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   const {buildId, scopeURL, keepGenerations} = config
-  const {caches, fetch} = env
+  const {caches, fetch, now} = env
 
   const SHELL_CACHE = `${CACHE_PREFIX}shell-${buildId}`
   const ASSET_CACHE = `${CACHE_PREFIX}assets-${buildId}`
@@ -76,23 +90,29 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // computeKeepIds / computeExpiredIds in ./ledger.
   const LEDGER_KEY = toScopeUrl('./__km_generations__')
 
-  const readLedger = async (): Promise<string[]> => {
+  const readLedgerEntry = async (): Promise<LedgerEntry> => {
     try {
       const cache = await caches.open(META_CACHE)
       const res = await cache.match(LEDGER_KEY)
-      if (!res) return []
-      const ids = await res.json()
-      return Array.isArray(ids) ? ids : []
+      if (!res) return {ids: [], updatedAt: undefined}
+      return normalizeLedger(await res.json())
     } catch {
-      return []
+      return {ids: [], updatedAt: undefined}
     }
   }
 
+  const readLedger = async (): Promise<string[]> => (await readLedgerEntry()).ids
+
+  // Stamp every write with the current time. updatedAt is what the cross-scope
+  // sweep reads to tell an ABANDONED preview (SW stopped running after merge) from
+  // a live one — and it's refreshed on this scope's install/activate, so the
+  // current scope's own ledger always looks fresh and is never self-reaped.
   const writeLedger = async (ids: string[]): Promise<void> => {
     const cache = await caches.open(META_CACHE)
+    const entry: LedgerEntry = {ids, updatedAt: now()}
     await cache.put(
       LEDGER_KEY,
-      new Response(JSON.stringify(ids), {headers: {'content-type': 'application/json'}}),
+      new Response(JSON.stringify(entry), {headers: {'content-type': 'application/json'}}),
     )
   }
 
@@ -197,9 +217,49 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
         // benign — the ledger keeps a few extra ids; next activate re-trims.
       }
     }
+    // Then reclaim OTHER scopes' leaked preview caches (best-effort — a sweep
+    // failure must never break activation).
+    try {
+      await sweepStalePreviewGenerations()
+    } catch {
+      // benign — leaked previews just persist to the next activate.
+    }
     // NB: intentionally no clients.claim() — see the sw.ts header. Taking over
     // already-open pages is exactly what would let a new chunk land in an old
     // page mid-session.
+  }
+
+  // Cache Storage is shared per-ORIGIN, so a client accumulates the caches of
+  // every PR preview it ever opened. Production's activate GC only ever names
+  // its OWN generations (by ledger id), and a merged preview's SW never runs
+  // again to clean up after itself — so those preview caches (shell + assets +
+  // ledger entry) leak on the origin forever. This sweep, run from any active
+  // SW, reclaims them: it reads every scope's ledger out of the shared meta
+  // cache and deletes the caches of preview scopes untouched for staleScopeMs.
+  // computeReapableCaches enforces the safety rails (preview-only — production
+  // is structurally unreapable; timestamped-and-stale only; never a cache a
+  // surviving scope still references). See src/sw/ledger.ts.
+  const sweepStalePreviewGenerations = async (): Promise<void> => {
+    const meta = await caches.open(META_CACHE)
+    const ledgers: ScopeLedger[] = []
+    for (const req of await meta.keys()) {
+      const res = await meta.match(req)
+      if (!res) continue
+      const raw: unknown = await res.json().catch(() => null)
+      const {ids, updatedAt} = normalizeLedger(raw)
+      ledgers.push({scopeUrl: req.url, ids, updatedAt})
+    }
+    const {cacheNames, ledgerScopeUrls} = computeReapableCaches({
+      ledgers,
+      now: now(),
+      staleMs: config.staleScopeMs,
+      cachePrefix: CACHE_PREFIX,
+      selfScopeUrl: LEDGER_KEY,
+    })
+    await Promise.all([
+      ...cacheNames.map((name) => caches.delete(name)),
+      ...ledgerScopeUrls.map((url) => meta.delete(url)),
+    ])
   }
 
   const isNavigationRequest = (request: Request): boolean =>

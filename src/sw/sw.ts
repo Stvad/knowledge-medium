@@ -71,6 +71,10 @@ const sw = createServiceWorker(
     // retained generation is roughly one full asset cache (~15-17MB) — a
     // storage-for-resilience trade bounded by deploy-span, not fleet size.
     keepGenerations: 3,
+    // Reap a PR-preview scope's leaked caches once it's sat untouched for 14
+    // days (a merged preview's SW never runs again to clean up after itself).
+    // Production is never a preview scope, so this can't touch prod caches.
+    staleScopeMs: 14 * 24 * 60 * 60 * 1000,
     // Build-injected: first-paint assets (entry script + modulepreload +
     // stylesheets — the offline-boot-critical set) and the rest of the emitted
     // graph (lazy chunks, @babel/standalone, wasm, fonts). Precaching all of it
@@ -79,7 +83,7 @@ const sw = createServiceWorker(
     precacheAssets: JSON.parse('__PRECACHE_ASSETS__') as string[],
     precacheRestAssets: JSON.parse('__PRECACHE_REST_ASSETS__') as string[],
   },
-  {caches, fetch, origin: self.location.origin},
+  {caches, fetch, origin: self.location.origin, now: () => Date.now()},
 )
 
 self.addEventListener('install', (event) => {
