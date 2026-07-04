@@ -109,6 +109,8 @@ self.addEventListener('message', (event) => {
 })
 
 self.addEventListener('fetch', (event) => {
-  const response = sw.handleFetch(event.request)
+  // Pass waitUntil so the preview ledger heartbeat (maybeTouchOwnLedger) is tied
+  // to this event's lifetime and can't be dropped by early worker termination.
+  const response = sw.handleFetch(event.request, (p) => event.waitUntil(p))
   if (response) event.respondWith(response)
 })

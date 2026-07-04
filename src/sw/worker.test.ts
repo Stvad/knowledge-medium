@@ -496,4 +496,22 @@ describe('touch-on-use keeps a live preview from being reaped', () => {
     sw.handleFetch(new Request(abs('/knowledge-medium/src/main.js'))) // gate returns synchronously
     expect(await readUpdatedAt(caches, prodLedgerKey)).toBe(NOW) // unchanged
   })
+
+  it('hands the touch write to event.waitUntil so early worker termination cannot drop it', async () => {
+    let clock = NOW
+    const {sw, caches} = buildPreview(() => clock)
+    await sw.install()
+    const extended: Promise<unknown>[] = []
+    const waitUntil = (p: Promise<unknown>) => extended.push(p)
+
+    clock = NOW + 2 * DAY // past the interval → touches
+    sw.handleFetch(new Request(`${previewScopeURL}src/main.js`), waitUntil)
+    expect(extended).toHaveLength(1) // handed to waitUntil, not fired detached
+    await Promise.all(extended) // the browser awaits this before it may terminate
+    expect(await readUpdatedAt(caches, previewLedgerKey)).toBe(NOW + 2 * DAY)
+
+    clock = NOW + 2 * DAY + 60 * 60 * 1000 // +1h, within the interval → no touch
+    sw.handleFetch(new Request(`${previewScopeURL}b.js`), waitUntil)
+    expect(extended).toHaveLength(1) // unchanged — a throttled fetch schedules nothing
+  })
 })

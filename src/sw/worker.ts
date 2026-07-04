@@ -137,15 +137,17 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // scope re-stamps its OWN ledger on use (any fetch its SW handles is proof a
   // controlled tab is alive), throttled to touchIntervalMs via an in-memory
   // guard so it's ~one write per interval of activity, not one per request.
-  // Production never touches (it's never reaped). Fire-and-forget: the write
-  // must not delay the response, and a failure just retries next interval.
+  // Production never touches (it's never reaped). The write must not delay the
+  // response, but it IS tied to the fetch event via waitUntil (see below) so the
+  // browser can't terminate the worker mid-write; a failure just retries next
+  // interval.
   let lastTouchAt = 0
-  const maybeTouchOwnLedger = (): void => {
+  const maybeTouchOwnLedger = (waitUntil?: (p: Promise<unknown>) => void): void => {
     if (!OWN_SCOPE_IS_PREVIEW) return
     const t = now()
     if (t - lastTouchAt <= config.touchIntervalMs) return
     lastTouchAt = t // set optimistically so concurrent fetches don't pile on writes
-    void (async () => {
+    const touch = (async () => {
       try {
         await writeLedger((await readLedgerEntry()).ids)
       } catch {
@@ -153,6 +155,15 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
         // interval tries again; worst case the sweep reaps a genuinely idle scope.
       }
     })()
+    // Hand the write to event.waitUntil so it's tied to the fetch event's
+    // lifetime: a quick cache-hit response can settle in microseconds, and a
+    // DETACHED write (`void touch`) lets the browser kill the worker before the
+    // `cache.put` lands — silently dropping the heartbeat that keeps a live
+    // preview from being reaped. `waitUntil` keeps the worker alive until the
+    // write finishes. Detached fallback keeps the factory usable off a
+    // FetchEvent (tests / non-event callers).
+    if (waitUntil) waitUntil(touch)
+    else void touch
   }
 
   const install = async (): Promise<void> => {
@@ -388,14 +399,19 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
    * non-GET, non-http(s), foreign preview subtree, and same-origin non-assets
    * like version.json that must stay fresh).
    */
-  const handleFetch = (request: Request): Promise<Response> | undefined => {
+  const handleFetch = (
+    request: Request,
+    waitUntil?: (p: Promise<unknown>) => void,
+  ): Promise<Response> | undefined => {
     if (request.method !== 'GET') return undefined
     const url = new URL(request.url)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
 
     // Any GET this SW handles means a tab it controls is alive — keep this
     // (preview) scope's ledger fresh so the sweep doesn't reap a live preview.
-    maybeTouchOwnLedger()
+    // Thread the event's waitUntil so the async ledger write is tied to the
+    // fetch event lifetime (see maybeTouchOwnLedger).
+    maybeTouchOwnLedger(waitUntil)
 
     // Never let production's broad-scope SW touch a nested preview deploy's
     // requests — let them fall through to the network (the preview's own SW owns
