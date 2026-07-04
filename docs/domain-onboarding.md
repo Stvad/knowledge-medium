@@ -77,7 +77,7 @@ The map currently uses `DEMO_MAP_ID` (hardcoded in [src/plugins/geo/MapView.tsx]
 These were audited and confirmed domain-agnostic — no action needed:
 
 - **PWA manifest** ([public/manifest.webmanifest](../public/manifest.webmanifest)) — uses relative URLs (`.` for `start_url` and `scope`).
-- **Service worker** ([public/sw.js](../public/sw.js), [src/registerServiceWorker.ts](../src/registerServiceWorker.ts)) — uses `self.registration.scope` and `import.meta.env.BASE_URL`.
+- **Service worker** ([src/sw/sw.ts](../src/sw/sw.ts), [src/registerServiceWorker.ts](../src/registerServiceWorker.ts)) — uses `self.registration.scope` and `import.meta.env.BASE_URL`.
 - **Supabase / PowerSync client construction** — both read from env vars, no hardcoded URLs.
 - **Google Places API base URL** (`https://places.googleapis.com/v1`) — Google's endpoint, fixed.
 - **CDN imports in [index.html](../index.html)** — `https://esm.sh` with SRI hashes; intentional.

@@ -25,7 +25,7 @@ GitHub Pages serves a single site per repo:
 
 The build is already base-path aware: Vite's `base` comes from `APP_BASE_PATH`
 (`vite.config.ts`), the service worker registers at `${BASE_URL}sw.js` scoped to
-that path (`src/registerServiceWorker.ts`), and `inject-sw-build-id.mjs`
+that path (`src/registerServiceWorker.ts`), and `scripts/inject-sw-build-id.ts`
 base-prefixes precache URLs. So each preview's assets and its *own* service
 worker are scoped to its subpath.
 
@@ -34,7 +34,7 @@ state (Cache Storage, OPFS, IndexedDB, localStorage) is a shared namespace with
 production. The two riskiest overlaps are handled explicitly (namespaced per
 deploy):
 
-- **Service-worker caches / offline shell** (`public/sw.js`) — production's SW no
+- **Service-worker caches / offline shell** (`src/sw/sw.ts`) — production's SW no
   longer intercepts or caches `/pr-preview/…` requests (so an offline production
   load can't boot a preview build), and each SW's `activate` GC deletes only its
   own deploy's generations, so a preview SW no longer evicts production's caches
@@ -152,7 +152,7 @@ permissions → **Read and write permissions**.
 Because previews share production's origin, per-origin client state is
 namespaced by deploy so a preview can't corrupt production:
 
-- **`public/sw.js`** — (a) production's SW ignores `/pr-preview/…` requests
+- **`src/sw/sw.ts`** — (a) production's SW ignores `/pr-preview/…` requests
   (`isForeignPreviewRequest`), so it can't cache preview content under
   production's keys; (b) each SW's `activate` GC deletes only its own deploy's
   expired ledger generations rather than blanket-deleting every `km-*` cache on
