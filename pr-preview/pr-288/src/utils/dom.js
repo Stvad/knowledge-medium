@@ -1,0 +1,2 @@
+var e=e=>{let t=e.getBoundingClientRect(),n=window.innerHeight||document.documentElement.clientHeight,r=t.height,i=window.getComputedStyle(e),a=parseFloat(i.lineHeight)||parseFloat(i.fontSize)*1.2,o=Math.max(0,t.top),s=Math.min(n,t.bottom),c=Math.max(0,s-o);if(r<=n)return c>=a;let l=c/n,u=c/r;return l>=.6||u>=.2||c>=a},t=e=>e?e instanceof HTMLTextAreaElement||!!e.closest(`.cm-editor`):!1,n=e=>!t(e);export{t as isEditorElement,e as isElementProperlyVisible,n as shouldExitEditModeAfterBlur};
+//# sourceMappingURL=dom.js.map

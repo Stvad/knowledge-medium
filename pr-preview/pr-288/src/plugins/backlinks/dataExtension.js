@@ -1,0 +1,2 @@
+import{propertySchemasFacet as e,queriesFacet as t}from"../../data/facets.js";import{pluginPrefsExtension as n}from"../../data/pluginStateExtensions.js";import{backlinksForBlockQuery as r}from"./query.js";import{backlinksFilterProp as i}from"./filterProperty.js";import{backlinksPrefsType as a,dailyNoteBacklinksDefaultsProp as o}from"./dailyNoteDefaults.js";var s=[t.of(r,{source:`backlinks`}),e.of(i,{source:`backlinks`}),e.of(o,{source:`backlinks`}),...n(a,`backlinks`)];export{s as backlinksDataExtension};
+//# sourceMappingURL=dataExtension.js.map
