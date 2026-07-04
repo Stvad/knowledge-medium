@@ -45,14 +45,28 @@ const truncate = (value: string, max = 500): string =>
  *  (`codex exec resume` only accepts codex thread ids, and vice versa). */
 const CODEX_SESSION_PREFIX = 'codex:'
 
+/** A resume id is forwarded verbatim as a bare argv token (`--resume <id>`
+ *  / `codex exec resume <id>`), and `claude:session` is a plain block
+ *  property that any MCP `update_block` caller — including a
+ *  prompt-injected run — can write. A planted value like
+ *  `codex:-c=tools.web_search="live"` would de-prefix to a `-c` flag and
+ *  inject live codex config on the next follow-up. Real session/thread
+ *  ids are UUID/token-shaped, so anything with a leading dash or a
+ *  non-`[A-Za-z0-9_-]` char is rejected (→ fresh thread) before it can
+ *  reach argv. */
+const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/
+
 const storedSessionFor = (executor: 'claude' | 'codex', sessionId: string | null): string | null =>
   sessionId && executor === 'codex' ? `${CODEX_SESSION_PREFIX}${sessionId}` : sessionId
 
 const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null): string | null => {
   if (!stored) return null
   const isCodexSession = stored.startsWith(CODEX_SESSION_PREFIX)
-  if (executor === 'codex') return isCodexSession ? stored.slice(CODEX_SESSION_PREFIX.length) : null
-  return isCodexSession ? null : stored
+  const bare = executor === 'codex'
+    ? (isCodexSession ? stored.slice(CODEX_SESSION_PREFIX.length) : null)
+    : (isCodexSession ? null : stored)
+  if (bare === null || !SESSION_ID_SHAPE.test(bare)) return null
+  return bare
 }
 
 export const createEngine = (deps: EngineDeps) => {

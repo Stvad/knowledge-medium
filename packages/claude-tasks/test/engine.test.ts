@@ -454,6 +454,32 @@ describe('mention lifecycle', () => {
     }
   })
 
+  it('refuses to resume an argv-injection-shaped session id (starts fresh)', async () => {
+    // claude:session is a plain block property any MCP update_block caller
+    // can write; a planted flag-shaped value would otherwise ride into the
+    // resume argv (`codex exec resume <id>` / `--resume <id>`) as a live
+    // option. Anything that isn't UUID/token-shaped must start fresh.
+    for (const planted of ['codex:-c=tools.web_search="live"', '--dangerously-bypass', 'has space', 'a;b']) {
+      const executor = planted.startsWith('codex:') ? 'codex' : 'claude'
+      const {graph} = fakeGraph({
+        backlinks: [{id: 'b-child'}],
+        blocks: {
+          'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: planted}},
+          'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun())
+      const engine = engineWith({
+        graph,
+        runTask,
+        config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor}]}),
+      })
+      await engine.tick()
+      await engine.drain()
+      expect((runTask.mock.calls[0]?.[0] as {resumeSessionId?: string} | undefined)?.resumeSessionId).toBeUndefined()
+    }
+  })
+
   it('fires for a follow-up nested under a daemon reply (thread continuation)', async () => {
     const {graph, replies} = fakeGraph({
       backlinks: [{id: 'b-follow'}],

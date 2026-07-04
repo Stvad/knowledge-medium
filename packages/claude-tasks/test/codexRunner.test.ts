@@ -74,15 +74,25 @@ describe('buildCodexArgs', () => {
 })
 
 describe('scrubCodexEnv', () => {
-  it('removes billing-redirecting vars and keeps the rest', () => {
+  it('removes every billing-redirecting credential var and keeps the rest', () => {
     const env = scrubCodexEnv({
       PATH: '/usr/bin',
       OPENAI_API_KEY: 'sk-api',
       OPENAI_BASE_URL: 'https://proxy.example',
+      CODEX_API_KEY: 'sk-codex',
+      CODEX_ACCESS_TOKEN: 'tok-codex',
       HOME: '/Users/x',
     })
     expect(env).toEqual({PATH: '/usr/bin', HOME: '/Users/x'})
     for (const key of CODEX_BILLING_ENV_DENYLIST) expect(env).not.toHaveProperty(key)
+  })
+
+  it('scrubs the codex-native credential vars (not just the OPENAI_* ones)', () => {
+    // Regression: codex-cli reads CODEX_API_KEY / CODEX_ACCESS_TOKEN as
+    // live credential sources ahead of the ChatGPT-plan OAuth session, so
+    // an exported one would silently bill the API despite the scrub.
+    expect(CODEX_BILLING_ENV_DENYLIST).toContain('CODEX_API_KEY')
+    expect(CODEX_BILLING_ENV_DENYLIST).toContain('CODEX_ACCESS_TOKEN')
   })
 })
 

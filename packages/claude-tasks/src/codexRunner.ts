@@ -7,14 +7,25 @@
  *
  * Billing invariant: runs must hit the user's ChatGPT plan login, not
  * the OpenAI API. `codex` prefers an API key over the ChatGPT-plan OAuth
- * session when OPENAI_API_KEY / OPENAI_BASE_URL are present, so both are
- * scrubbed from the child env — the machine's `codex login` state then
- * wins.
+ * session when one is present in the env, so every API-key/token var it
+ * reads (CODEX_BILLING_ENV_DENYLIST) is scrubbed from the child env —
+ * the machine's `codex login` state (auth.json) then wins. NB: a key
+ * stored via `codex login --with-api-key` lives in auth.json and env
+ * scrubbing can't touch it; that's a login-state caveat, documented in
+ * the README, not something this can fix.
  *
- * Permissions: `-s read-only` — no filesystem/exec beyond what the km
- * MCP server exposes. `--ignore-user-config` keeps the user's global
- * config.toml (their own MCP servers, hooks) out of daemon runs — the
- * codex analogue of claude's --strict-mcp-config.
+ * Permissions: `-s read-only` is NOT "no shell" — codex still EXECUTES
+ * model-generated shell commands, but the sandbox restricts them to
+ * reading the filesystem (full-disk read) with network egress blocked.
+ * So an injected prompt can read local files into the model's context
+ * (and thus into the reply block); it cannot write files or reach the
+ * network from a command. km MCP is the only *write* path. This is a
+ * materially weaker posture than the claude executor's fail-closed
+ * allowlist — see the README "Executors" section.
+ * `--ignore-user-config` skips `$CODEX_HOME/config.toml` (the user's own
+ * MCP servers / settings there); it does NOT guarantee plugins, skills,
+ * or a global AGENTS.md outside config.toml stay out, so it's a weaker
+ * analogue of claude's --strict-mcp-config than "equivalent".
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import { humanizeToolName } from './runner.js'
@@ -22,12 +33,17 @@ import type { ClaudeRunResult, RunEvent } from './runner.js'
 
 export type { SpawnImpl }
 
-/** Env vars that would redirect billing away from the ChatGPT plan login
- *  (an API key beats OAuth in codex's credential order; a proxy base
- *  URL reroutes entirely). Mirrors runner.ts's BILLING_ENV_DENYLIST. */
+/** Env vars that would redirect billing away from the ChatGPT plan login.
+ *  codex's credential order reads any of these before falling back to the
+ *  OAuth session in auth.json (verified against the codex-cli 0.142.5
+ *  binary's auth manager: OPENAI_API_KEY / CODEX_API_KEY / CODEX_ACCESS_TOKEN
+ *  are all live env credential sources; OPENAI_BASE_URL reroutes the API
+ *  target). Mirrors runner.ts's BILLING_ENV_DENYLIST intent. */
 export const CODEX_BILLING_ENV_DENYLIST = [
   'OPENAI_API_KEY',
   'OPENAI_BASE_URL',
+  'CODEX_API_KEY',
+  'CODEX_ACCESS_TOKEN',
 ] as const
 
 export const scrubCodexEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
