@@ -206,16 +206,17 @@
 			await writeLedger(ids);
 		};
 		let lastTouchAt = 0;
-		const maybeTouchOwnLedger = () => {
+		const maybeTouchOwnLedger = (waitUntil) => {
 			if (!OWN_SCOPE_IS_PREVIEW) return;
 			const t = now();
 			if (t - lastTouchAt <= config.touchIntervalMs) return;
 			lastTouchAt = t;
-			(async () => {
+			const touch = (async () => {
 				try {
 					await writeLedger((await readLedgerEntry()).ids);
 				} catch {}
 			})();
+			if (waitUntil) waitUntil(touch);
 		};
 		const install = async () => {
 			await recordGeneration(buildId);
@@ -308,11 +309,11 @@
 		* non-GET, non-http(s), foreign preview subtree, and same-origin non-assets
 		* like version.json that must stay fresh).
 		*/
-		const handleFetch = (request) => {
+		const handleFetch = (request, waitUntil) => {
 			if (request.method !== "GET") return void 0;
 			const url = new URL(request.url);
 			if (url.protocol !== "http:" && url.protocol !== "https:") return void 0;
-			maybeTouchOwnLedger();
+			maybeTouchOwnLedger(waitUntil);
 			if (isForeignPreviewRequest(OWN_SCOPE_IS_PREVIEW, url.pathname)) return void 0;
 			if (isNavigationRequest(request) && isSameOrigin(url)) return shellCacheFirst(request, toScopeUrl("./index.html"));
 			if (isCacheableAsset(request.destination, url.pathname, isSameOrigin(url))) return assetCacheFirst(request);
@@ -330,7 +331,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "1866febab865",
+		buildId: "f7c31fc853c9",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
@@ -354,7 +355,7 @@
 		if (event.data === "SKIP_WAITING") self.skipWaiting();
 	});
 	self.addEventListener("fetch", (event) => {
-		const response = sw.handleFetch(event.request);
+		const response = sw.handleFetch(event.request, (p) => event.waitUntil(p));
 		if (response) event.respondWith(response);
 	});
 	//#endregion
