@@ -1,24 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { actionsFacet, appEffectsFacet } from "../../extensions/core.js";
-import { ActionContextTypes } from "../../shortcuts/types.js";
-import { FALLBACK_THEME, THEME_STORAGE_KEY, applyTheme, getCurrentTheme, getThemes, setThemeRegistry, themesFacet, toggleTheme } from "./theme.js";
-import { themeStyleSyncEffect } from "./effect.js";
-import { ThemeToggle } from "./ThemeToggle.js";
-//#region src/plugins/theme-toggle/index.ts
-var toggleThemeAction = {
-	id: "theme-toggle.toggle",
-	description: "Cycle through themes",
-	context: ActionContextTypes.GLOBAL,
-	handler: () => {
-		toggleTheme();
-	}
-};
-var themeTogglePlugin = systemToggle({
-	id: "system:theme-toggle",
-	name: "Theme toggle",
-	description: "Cycle through the registered colour themes."
-}).of([actionsFacet.of(toggleThemeAction, { source: "theme-toggle" }), appEffectsFacet.of(themeStyleSyncEffect, { source: "theme-toggle" })]);
-//#endregion
-export { FALLBACK_THEME, THEME_STORAGE_KEY, ThemeToggle, applyTheme, getCurrentTheme, getThemes, setThemeRegistry, themeStyleSyncEffect, themeTogglePlugin, themesFacet, toggleTheme, toggleThemeAction };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{actionsFacet as t,appEffectsFacet as n}from"../../extensions/core.js";import{ActionContextTypes as r}from"../../shortcuts/types.js";import{FALLBACK_THEME as i,THEME_STORAGE_KEY as a,applyTheme as o,getCurrentTheme as s,getThemes as c,setThemeRegistry as l,themesFacet as u,toggleTheme as d}from"./theme.js";import{themeStyleSyncEffect as f}from"./effect.js";import{ThemeToggle as p}from"./ThemeToggle.js";var m={id:`theme-toggle.toggle`,description:`Cycle through themes`,context:r.GLOBAL,handler:()=>{d()}},h=e({id:`system:theme-toggle`,name:`Theme toggle`,description:`Cycle through the registered colour themes.`}).of([t.of(m,{source:`theme-toggle`}),n.of(f,{source:`theme-toggle`})]);export{i as FALLBACK_THEME,a as THEME_STORAGE_KEY,p as ThemeToggle,o as applyTheme,s as getCurrentTheme,c as getThemes,l as setThemeRegistry,f as themeStyleSyncEffect,h as themeTogglePlugin,u as themesFacet,d as toggleTheme,m as toggleThemeAction};
 //# sourceMappingURL=index.js.map

@@ -1,21 +1,2 @@
-import { propertyEditorOverridesFacet } from "../../data/facets.js";
-import { systemToggle } from "../../facets/togglable.js";
-import { groupedBacklinksDataExtension } from "./dataExtension.js";
-import { defineVariant } from "../../facets/variantFacet.js";
-import { backlinksViewFacet } from "../backlinks-view/facet.js";
-import { GroupedLinkedReferences } from "./GroupedLinkedReferences.js";
-import { groupedBacklinksDefaultsUi } from "./propertyEditorOverride.js";
-//#region src/plugins/grouped-backlinks/index.ts
-var groupedBacklinksPlugin = systemToggle({
-	id: "system:grouped-backlinks",
-	name: "Grouped backlinks",
-	description: "Backlinks grouped by a configurable property (defaults to the type of the source block)."
-}).of([
-	groupedBacklinksDataExtension,
-	propertyEditorOverridesFacet.of(groupedBacklinksDefaultsUi, { source: "grouped-backlinks" }),
-	backlinksViewFacet.of(() => defineVariant("grouped", "Grouped", GroupedLinkedReferences), { source: "grouped-backlinks" })
-]);
-//#endregion
-export { groupedBacklinksPlugin };
-
+import{propertyEditorOverridesFacet as e}from"../../data/facets.js";import{systemToggle as t}from"../../facets/togglable.js";import{groupedBacklinksDataExtension as n}from"./dataExtension.js";import{defineVariant as r}from"../../facets/variantFacet.js";import{backlinksViewFacet as i}from"../backlinks-view/facet.js";import{GroupedLinkedReferences as a}from"./GroupedLinkedReferences.js";import{groupedBacklinksDefaultsUi as o}from"./propertyEditorOverride.js";var s=t({id:`system:grouped-backlinks`,name:`Grouped backlinks`,description:`Backlinks grouped by a configurable property (defaults to the type of the source block).`}).of([n,e.of(o,{source:`grouped-backlinks`}),i.of(()=>r(`grouped`,`Grouped`,a),{source:`grouped-backlinks`})]);export{s as groupedBacklinksPlugin};
 //# sourceMappingURL=index.js.map

@@ -1,27 +1,2 @@
-import { getBlockTypes } from "../../data/properties.js";
-import { srsArchivedProp } from "./schema.js";
-import { ActionContextTypes } from "../../shortcuts/types.js";
-import { SWIPE_RIGHT_BLOCK_ACTION_ID } from "../swipe-quick-actions/actions.js";
-import { EDIT_MODE_TODO_CYCLE_ACTION_ID, TODO_CYCLE_ACTION_ID } from "../todo/actions.js";
-//#region src/plugins/srs-rescheduling/swipeRightDecorator.ts
-var archiveSrsBlock = async (block) => {
-	const data = block.peek() ?? await block.load();
-	if (!data || !getBlockTypes(data).includes("srs-sm2.5")) return false;
-	if (!block.repo.isReadOnly) await block.set(srsArchivedProp, true);
-	return true;
-};
-var decorateActionToArchiveSrsBlock = (actionId, context) => ({
-	actionId,
-	...context ? { context } : {},
-	wrap: async (deps, trigger, next) => {
-		const block = deps.block;
-		if (block && await archiveSrsBlock(block)) return;
-		await next(deps, trigger);
-	}
-});
-var srsSwipeRightDecorator = decorateActionToArchiveSrsBlock(SWIPE_RIGHT_BLOCK_ACTION_ID);
-var srsTodoCycleDecorators = [decorateActionToArchiveSrsBlock(TODO_CYCLE_ACTION_ID, ActionContextTypes.NORMAL_MODE), decorateActionToArchiveSrsBlock(EDIT_MODE_TODO_CYCLE_ACTION_ID, ActionContextTypes.EDIT_MODE_CM)];
-//#endregion
-export { archiveSrsBlock, srsSwipeRightDecorator, srsTodoCycleDecorators };
-
+import{getBlockTypes as e}from"../../data/properties.js";import{srsArchivedProp as t}from"./schema.js";import{ActionContextTypes as n}from"../../shortcuts/types.js";import{SWIPE_RIGHT_BLOCK_ACTION_ID as r}from"../swipe-quick-actions/actions.js";import{EDIT_MODE_TODO_CYCLE_ACTION_ID as i,TODO_CYCLE_ACTION_ID as a}from"../todo/actions.js";var o=async n=>{let r=n.peek()??await n.load();return!r||!e(r).includes(`srs-sm2.5`)?!1:(n.repo.isReadOnly||await n.set(t,!0),!0)},s=(e,t)=>({actionId:e,...t?{context:t}:{},wrap:async(e,t,n)=>{let r=e.block;r&&await o(r)||await n(e,t)}}),c=s(r),l=[s(a,n.NORMAL_MODE),s(i,n.EDIT_MODE_CM)];export{o as archiveSrsBlock,c as srsSwipeRightDecorator,l as srsTodoCycleDecorators};
 //# sourceMappingURL=swipeRightDecorator.js.map

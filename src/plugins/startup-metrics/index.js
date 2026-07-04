@@ -1,21 +1,2 @@
-import { propertySchemasFacet, typesFacet } from "../../data/facets.js";
-import { systemToggle } from "../../facets/togglable.js";
-import { appEffectsFacet } from "../../extensions/core.js";
-import { collectStartupMetricsEffect, startupMetricsUIStateType, startupRecordProp } from "./record.js";
-//#region src/plugins/startup-metrics/index.ts
-/** Records a durable per-session cold-start timeline (TTI + settled + the phase
-*  breakdown) as a block-per-session under a hidden ui-state subtree, so
-*  loading-time trends are observable over builds instead of ephemeral. */
-var startupMetricsPlugin = systemToggle({
-	id: "system:startup-metrics",
-	name: "Startup metrics",
-	description: "Records time-to-interactivity and settle timings each load so regressions are visible over time."
-}).of([
-	appEffectsFacet.of(collectStartupMetricsEffect, { source: "startup-metrics" }),
-	propertySchemasFacet.of(startupRecordProp, { source: "startup-metrics" }),
-	typesFacet.of(startupMetricsUIStateType, { source: "startup-metrics" })
-]);
-//#endregion
-export { startupMetricsPlugin };
-
+import{propertySchemasFacet as e,typesFacet as t}from"../../data/facets.js";import{systemToggle as n}from"../../facets/togglable.js";import{appEffectsFacet as r}from"../../extensions/core.js";import{collectStartupMetricsEffect as i,startupMetricsUIStateType as a,startupRecordProp as o}from"./record.js";var s=n({id:`system:startup-metrics`,name:`Startup metrics`,description:`Records time-to-interactivity and settle timings each load so regressions are visible over time.`}).of([r.of(i,{source:`startup-metrics`}),e.of(o,{source:`startup-metrics`}),t.of(a,{source:`startup-metrics`})]);export{s as startupMetricsPlugin};
 //# sourceMappingURL=index.js.map

@@ -1,17 +1,2 @@
-import { invalidationRulesFacet, localSchemaFacet, postCommitProcessorsFacet, sameTxProcessorsFacet } from "../../data/facets.js";
-import { referencesPostCommitProcessors } from "./referencesProcessor.js";
-import { renamePostCommitProcessors } from "./renameProcessor.js";
-import { referencesSameTxProcessors } from "./mergeRetargetProcessor.js";
-import { referencesLocalSchema } from "./localSchema.js";
-import { referencesInvalidationRule } from "./invalidation.js";
-//#region src/plugins/references/dataExtension.ts
-var referencesDataExtension = [
-	localSchemaFacet.of(referencesLocalSchema, { source: "references" }),
-	invalidationRulesFacet.of(referencesInvalidationRule, { source: "references" }),
-	referencesSameTxProcessors.map((processor) => sameTxProcessorsFacet.of(processor, { source: "references" })),
-	[...referencesPostCommitProcessors, ...renamePostCommitProcessors].map((processor) => postCommitProcessorsFacet.of(processor, { source: "references" }))
-];
-//#endregion
-export { referencesDataExtension };
-
+import{invalidationRulesFacet as e,localSchemaFacet as t,postCommitProcessorsFacet as n,sameTxProcessorsFacet as r}from"../../data/facets.js";import{referencesPostCommitProcessors as i}from"./referencesProcessor.js";import{renamePostCommitProcessors as a}from"./renameProcessor.js";import{referencesSameTxProcessors as o}from"./mergeRetargetProcessor.js";import{referencesLocalSchema as s}from"./localSchema.js";import{referencesInvalidationRule as c}from"./invalidation.js";var l=[t.of(s,{source:`references`}),e.of(c,{source:`references`}),o.map(e=>r.of(e,{source:`references`})),[...i,...a].map(e=>n.of(e,{source:`references`}))];export{l as referencesDataExtension};
 //# sourceMappingURL=dataExtension.js.map

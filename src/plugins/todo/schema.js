@@ -1,27 +1,2 @@
-import { defineBlockType } from "../../data/api/blockType.js";
-import { ChangeScope } from "../../data/api/changeScope.js";
-import { codecs } from "../../data/api/codecs.js";
-import { defineProperty } from "../../data/api/propertySchema.js";
-import "../../data/api/index.js";
-//#region src/plugins/todo/schema.ts
-var TODO_TYPE = "todo";
-var statusProp = defineProperty("status", {
-	codec: codecs.enum(["open", "done"]),
-	defaultValue: "open",
-	changeScope: ChangeScope.BlockDefault
-});
-var roamTodoStateProp = defineProperty("roam:todo-state", {
-	codec: codecs.enum(["TODO", "DONE"]),
-	defaultValue: "TODO",
-	changeScope: ChangeScope.BlockDefault
-});
-var todoType = defineBlockType({
-	id: TODO_TYPE,
-	label: "Todo",
-	hideFromBlockDisplay: true,
-	properties: [statusProp]
-});
-//#endregion
-export { TODO_TYPE, roamTodoStateProp, statusProp, todoType };
-
+import{defineBlockType as e}from"../../data/api/blockType.js";import{ChangeScope as t}from"../../data/api/changeScope.js";import{codecs as n}from"../../data/api/codecs.js";import{defineProperty as r}from"../../data/api/propertySchema.js";import"../../data/api/index.js";var i=`todo`,a=r(`status`,{codec:n.enum([`open`,`done`]),defaultValue:`open`,changeScope:t.BlockDefault}),o=r(`roam:todo-state`,{codec:n.enum([`TODO`,`DONE`]),defaultValue:`TODO`,changeScope:t.BlockDefault}),s=e({id:i,label:`Todo`,hideFromBlockDisplay:!0,properties:[a]});export{i as TODO_TYPE,o as roamTodoStateProp,a as statusProp,s as todoType};
 //# sourceMappingURL=schema.js.map

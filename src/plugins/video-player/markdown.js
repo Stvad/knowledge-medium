@@ -1,25 +1,2 @@
-import VideoTimeStamp from "./VideoTimeStamp.js";
-import { remarkTimestamps } from "./remark-timestamps.js";
-import { jsx } from "react/jsx-runtime";
-//#region src/plugins/video-player/markdown.tsx
-var videoPlayerMarkdownExtension = ({ blockContext }) => {
-	const videoBlockId = blockContext.videoPlayerBlockId;
-	if (typeof videoBlockId !== "string") return null;
-	const renderScopeId = typeof blockContext.renderScopeId === "string" ? blockContext.renderScopeId : void 0;
-	return {
-		remarkPlugins: [remarkTimestamps],
-		components: { "time-stamp": ({ node }) => {
-			const hms = node?.properties?.hms;
-			if (typeof hms !== "string") return null;
-			return /* @__PURE__ */ jsx(VideoTimeStamp, {
-				hms,
-				videoBlockId,
-				renderScopeId
-			});
-		} }
-	};
-};
-//#endregion
-export { videoPlayerMarkdownExtension };
-
+import e from"./VideoTimeStamp.js";import{remarkTimestamps as t}from"./remark-timestamps.js";import{jsx as n}from"react/jsx-runtime";var r=({blockContext:r})=>{let i=r.videoPlayerBlockId;if(typeof i!=`string`)return null;let a=typeof r.renderScopeId==`string`?r.renderScopeId:void 0;return{remarkPlugins:[t],components:{"time-stamp":({node:t})=>{let r=t?.properties?.hms;return typeof r==`string`?n(e,{hms:r,videoBlockId:i,renderScopeId:a}):null}}}};export{r as videoPlayerMarkdownExtension};
 //# sourceMappingURL=markdown.js.map

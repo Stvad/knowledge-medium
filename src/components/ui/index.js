@@ -1,25 +1,2 @@
-import { __exportAll } from "../../../_virtual/_rolldown/runtime.js";
-import { Input } from "./input.js";
-import { Button } from "./button.js";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./collapsible.js";
-import { Label } from "./label.js";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "./card.js";
-//#region src/components/ui/index.ts
-var ui_exports = /* @__PURE__ */ __exportAll({
-	Button: () => Button,
-	Card: () => Card,
-	CardContent: () => CardContent,
-	CardDescription: () => CardDescription,
-	CardFooter: () => CardFooter,
-	CardHeader: () => CardHeader,
-	CardTitle: () => CardTitle,
-	Collapsible: () => Collapsible,
-	CollapsibleContent: () => CollapsibleContent,
-	CollapsibleTrigger: () => CollapsibleTrigger,
-	Input: () => Input,
-	Label: () => Label
-});
-//#endregion
-export { Button, Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle, Collapsible, CollapsibleContent, CollapsibleTrigger, Input, Label, ui_exports };
-
+import{__exportAll as e}from"../../../_virtual/_rolldown/runtime.js";import{Input as t}from"./input.js";import{Button as n}from"./button.js";import{Collapsible as r,CollapsibleContent as i,CollapsibleTrigger as a}from"./collapsible.js";import{Label as o}from"./label.js";import{Card as s,CardContent as c,CardDescription as l,CardFooter as u,CardHeader as d,CardTitle as f}from"./card.js";var p=e({Button:()=>n,Card:()=>s,CardContent:()=>c,CardDescription:()=>l,CardFooter:()=>u,CardHeader:()=>d,CardTitle:()=>f,Collapsible:()=>r,CollapsibleContent:()=>i,CollapsibleTrigger:()=>a,Input:()=>t,Label:()=>o});export{n as Button,s as Card,c as CardContent,l as CardDescription,u as CardFooter,d as CardHeader,f as CardTitle,r as Collapsible,i as CollapsibleContent,a as CollapsibleTrigger,t as Input,o as Label,p as ui_exports};
 //# sourceMappingURL=index.js.map
