@@ -46,6 +46,17 @@ const isDepth = (value: unknown): value is number =>
  *  `String.prototype.repeat` (OOM, or RangeError past 2**53). */
 const MAX_OUTLINE_DEPTH = 100
 
+/** Collapse every character a terminal (or an LLM reading the outline)
+ *  renders as a vertical break — LF, CR, VT, FF, plus NEL/LS/PS — to a
+ *  single `⏎` marker, so a value can't spill onto a second visual line
+ *  and forge an id-less `- [id]`-shaped bullet. Applied to BOTH content
+ *  and the rendered properties: `JSON.stringify` escapes the C0 controls
+ *  (LF/CR/VT/FF) but NOT U+0085/U+2028/U+2029 (all ≥ U+0080), so a
+ *  property key/value carrying one of those would otherwise survive
+ *  literally and break the one-line-per-block invariant. */
+const collapseVerticalMotion = (text: string): string =>
+  text.replace(/[\r\n\v\f\u0085\u2028\u2029]+/g, ' ⏎ ')
+
 /**
  * Render the flat `get-subtree` array as a depth-indented outline.
  *
@@ -60,12 +71,10 @@ const MAX_OUTLINE_DEPTH = 100
  *   `<indent>- [<id>] <content> <propsJSON>` (with `includeProperties`)
  * — the id comes first (right after the bullet) so arbitrary content can
  * never push it off the line or forge a second id-shaped token where the
- * real id is expected; content (for reading) follows. Internal line breaks
- * in content are collapsed to a `⏎` marker so a block can't spill into
+ * real id is expected; content (for reading) follows. Every vertical-break
+ * character in content AND in the rendered properties is collapsed to a
+ * `⏎` marker (see collapseVerticalMotion) so a block can't spill into
  * id-less lines that masquerade as child bullets: line count == block count.
- * Properties (opt-in) are appended as `JSON.stringify` output — inherently
- * single-line and control-char-escaped, so a hostile property key/value
- * can't inject a newline and forge a bullet either; the invariant holds.
  */
 export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptions = {}): string => {
   if (!Array.isArray(value)) {
@@ -88,13 +97,10 @@ export const renderSubtreeOutline = (value: unknown, options: RenderSubtreeOptio
     depthById.set(row.id, depth)
     const indent = '  '.repeat(Math.min(depth, MAX_OUTLINE_DEPTH))
     const content = typeof row.content === 'string' ? row.content : ''
-    // Collapse line breaks AND the vertical-motion controls a terminal
-    // renders as breaks (LF, CR, LS, PS, plus VT, FF, NEL) so content can't
-    // spill into an id-less line that masquerades as a child bullet.
-    const oneLine = content.replace(/[\r\n\v\f\u0085\u2028\u2029]+/g, ' ⏎ ')
+    const oneLine = collapseVerticalMotion(content)
     const props = options.includeProperties
       && row.properties && typeof row.properties === 'object' && Object.keys(row.properties).length > 0
-      ? ` ${JSON.stringify(row.properties)}`
+      ? ` ${collapseVerticalMotion(JSON.stringify(row.properties))}`
       : ''
     return `${indent}- [${row.id}] ${oneLine}${props}`
   })
