@@ -11,7 +11,6 @@ import { ChangeScope } from '@/data/api'
 import {
   ActionContextTypes,
   type ActionConfig,
-  type BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 import { CLAUDE_PROPS } from './chipState.ts'
@@ -43,7 +42,10 @@ export const contentWithClaudeMention = (content: string): string => {
   return trimmed ? `${trimmed} ${CLAUDE_MENTION}` : CLAUDE_MENTION
 }
 
-export const askClaude = async (block: Block): Promise<void> => {
+/** `liveContent`, when given, replaces the persisted content as the
+ *  base for the mention write — the edit-mode action passes the editor
+ *  doc, which leads the DB by up to the BlockEditor's commit debounce. */
+export const askClaude = async (block: Block, liveContent?: string): Promise<void> => {
   if (block.repo.isReadOnly) return
   const row = block.peek() ?? await block.load()
   if (!row) return
@@ -69,7 +71,7 @@ export const askClaude = async (block: Block): Promise<void> => {
       for (const key of REQUEUE_CLEARED_PROPS) delete properties[key]
     }
     await tx.update(block.id, {
-      content: contentWithClaudeMention(fresh.content ?? ''),
+      content: contentWithClaudeMention(liveContent ?? fresh.content ?? ''),
       properties,
     })
   }, {scope: ChangeScope.BlockDefault, description: 'ask claude'})
@@ -80,20 +82,37 @@ export const askClaude = async (block: Block): Promise<void> => {
   notifyBlockEditSettled(block.id)
 }
 
-const createAskClaudeAction = <T extends typeof ActionContextTypes.NORMAL_MODE | typeof ActionContextTypes.EDIT_MODE_CM>(
-  context: T,
-  id: string,
-  description: string,
-): ActionConfig<T> => ({
-  id,
-  description,
-  context,
-  handler: (async ({block}: BlockShortcutDependencies) => {
+const normalModeAsk: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
+  id: ASK_CLAUDE_ACTION_ID,
+  description: 'Ask Claude about this block',
+  context: ActionContextTypes.NORMAL_MODE,
+  handler: async ({block}) => {
     await askClaude(block)
-  }) as ActionConfig<T>['handler'],
-})
+  },
+}
 
-export const askClaudeActions: readonly ActionConfig[] = [
-  createAskClaudeAction(ActionContextTypes.NORMAL_MODE, ASK_CLAUDE_ACTION_ID, 'Ask Claude about this block'),
-  createAskClaudeAction(ActionContextTypes.EDIT_MODE_CM, EDIT_MODE_ASK_CLAUDE_ACTION_ID, 'Ask Claude about this block (Edit Mode)'),
-]
+const editModeAsk: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
+  id: EDIT_MODE_ASK_CLAUDE_ACTION_ID,
+  description: 'Ask Claude about this block (Edit Mode)',
+  context: ActionContextTypes.EDIT_MODE_CM,
+  handler: async ({block, editorView}) => {
+    // The editor doc, not the persisted block, is the source of truth
+    // here — the DB trails it by the BlockEditor's commit debounce, so
+    // basing the write on `fresh.content` could drop just-typed text.
+    // The mention must ALSO go into the doc itself: the pending
+    // debounced commit will push the doc text over whatever the tx
+    // writes, and a doc without the mention would strip the backlink
+    // right back out before the daemon ever saw it.
+    const live = editorView.state.doc.toString()
+    const next = contentWithClaudeMention(live)
+    if (next !== live) {
+      const keptLength = live.trimEnd().length
+      editorView.dispatch({
+        changes: {from: keptLength, to: live.length, insert: next.slice(keptLength)},
+      })
+    }
+    await askClaude(block, live)
+  },
+}
+
+export const askClaudeActions: readonly ActionConfig[] = [normalModeAsk, editModeAsk]

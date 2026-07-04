@@ -67,6 +67,15 @@ describe('askClaude', () => {
     expect(row!.properties['claude:session']).toBe('session-1')
   })
 
+  it('bases the write on caller-supplied live content over the persisted row', async () => {
+    const block = await createBlock('debounce-window', 'persisted old text')
+
+    await askClaude(block, 'live editor text')
+
+    const row = await block.load()
+    expect(row!.content).toBe('live editor text [[claude]]')
+  })
+
   it('clears a stale claude:activity label on requeue (it must not outlive the run it described)', async () => {
     const block = await createBlock('re-ask-activity', 'summarize this', {
       [CLAUDE_PROPS.status]: 'error',
