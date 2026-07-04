@@ -21,7 +21,7 @@ import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.js'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
   DAILY_NOTE_NS,
   DAILY_NOTE_TYPE,
@@ -277,11 +277,9 @@ describe('undo grouping (issue #306)', () => {
     // merged into a single entry, so one cmd-Z removes both.
     expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
 
-    const isDeleted = async (id: string) =>
-      (await repo.db.getOptional<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id]))?.deleted === 1
     expect(await repo.undo()).toBe(true)
-    expect(await isDeleted(note.id)).toBe(true)
-    expect(await isDeleted(journalBlockId(WS))).toBe(true)
+    expect(await isBlockDeleted(repo, note.id)).toBe(true)
+    expect(await isBlockDeleted(repo, journalBlockId(WS))).toBe(true)
   })
 
   it('warm-path getOrCreateDailyNote (note exists, no repair) records nothing', async () => {

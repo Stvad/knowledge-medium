@@ -150,9 +150,9 @@ export const appendTodayDailyBlockInStack = async (
 
   const content = options.content
   // One undo entry for note creation + the appended block.
-  const blockId = await repo.undoGroup(async grouped => {
-    const note = await getOrCreateDailyNote(grouped, workspaceId, todayIso())
-    return grouped.mutate.createChild({
+  const blockId = await repo.undoGroup(async repo => {
+    const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+    return repo.mutate.createChild({
       parentId: note.id,
       content,
       position: {kind: 'last'},

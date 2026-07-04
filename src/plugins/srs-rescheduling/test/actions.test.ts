@@ -7,7 +7,7 @@ import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
   formatRescheduleToastMessage,
   rescheduleBlock,
@@ -267,10 +267,8 @@ describe('repo.undo after rescheduleBlock', () => {
 
     const nextReviewId = dailyNoteBlockId(WORKSPACE, '2026-05-10')
     const reviewedAtId = dailyNoteBlockId(WORKSPACE, '2026-05-05')
-    const isDeleted = async (id: string) =>
-      (await repo.db.getOptional<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id]))?.deleted === 1
-    expect(await isDeleted(nextReviewId)).toBe(false)
-    expect(await isDeleted(reviewedAtId)).toBe(false)
+    expect(await isBlockDeleted(repo, nextReviewId)).toBe(false)
+    expect(await isBlockDeleted(repo, reviewedAtId)).toBe(false)
 
     // One cmd-Z reverts the whole perceived action: SRS metadata gone AND
     // the freshly created daily notes are removed, not left behind.
@@ -278,8 +276,8 @@ describe('repo.undo after rescheduleBlock', () => {
     const block = repo.block('plain-block')
     await block.load()
     expect(block.types).not.toContain(SRS_SM25_TYPE)
-    expect(await isDeleted(nextReviewId)).toBe(true)
-    expect(await isDeleted(reviewedAtId)).toBe(true)
+    expect(await isBlockDeleted(repo, nextReviewId)).toBe(true)
+    expect(await isBlockDeleted(repo, reviewedAtId)).toBe(true)
   })
 
   it('drops the SRS type when the block was untyped before reschedule', async () => {

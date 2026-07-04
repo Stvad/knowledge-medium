@@ -1095,6 +1095,10 @@ export class Repo {
    *  composite reverts with one cmd-Z. Helpers that take a `Repo`
    *  parameter join the group simply by being handed the facade.
    *
+   *  Wrap-site convention: name the callback parameter `repo`,
+   *  shadowing the raw repo — that way an out-of-habit `repo.tx(...)`
+   *  inside the group cannot silently open a foreign tx and split it.
+   *
    *  Semantics to be aware of:
    *   - Merging is top-of-stack only: a foreign tx (one opened on the
    *     plain repo, e.g. a background write) landing mid-group SPLITS

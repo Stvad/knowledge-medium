@@ -177,13 +177,13 @@ export const getOrCreateDailyNote = async (
   repo: Repo,
   workspaceId: string,
   iso: string,
-): Promise<Block> => repo.undoGroup(async grouped => {
+): Promise<Block> => repo.undoGroup(async repo => {
   const id = dailyNoteBlockId(workspaceId, iso)
   const orderKey = dailyNoteOrderKey(iso)
   const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
   const dailyAliases = [longLabel, isoLabel]
   const dateValue = dailyNoteDateValue(iso)
-  const live = await grouped.load(id)
+  const live = await repo.load(id)
   if (live) {
     const aliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
@@ -193,19 +193,19 @@ export const getOrCreateDailyNote = async (
       !hasBlockType(live, DAILY_NOTE_TYPE) ||
       !includesAll(aliases, dailyAliases)
     if (!needsRepair) {
-      return grouped.block(id)
+      return repo.block(id)
     }
-    const journal = await getOrCreateJournalBlock(grouped, workspaceId)
-    const typeSnapshot = grouped.snapshotTypeRegistries()
-    await grouped.tx(async tx => {
+    const journal = await getOrCreateJournalBlock(repo, workspaceId)
+    const typeSnapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
       const current = await tx.get(id)
       if (!current || current.deleted) return
       const currentAliases = stringListProperty(current.properties[aliasesProp.name])
       if (!includesAll(currentAliases, dailyAliases)) {
         await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
       }
-      await grouped.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await grouped.addTypeInTx(
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
         {[dailyNoteDateProp.name]: dateValue},
         typeSnapshot,
@@ -214,20 +214,20 @@ export const getOrCreateDailyNote = async (
         await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
       }
     }, {scope: ChangeScope.BlockDefault})
-    return grouped.block(id)
+    return repo.block(id)
   }
 
-  const journal = await getOrCreateJournalBlock(grouped, workspaceId)
+  const journal = await getOrCreateJournalBlock(repo, workspaceId)
 
-  const typeSnapshot = grouped.snapshotTypeRegistries()
-  await grouped.tx(async tx => {
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  await repo.tx(async tx => {
     const existing = await tx.get(id)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
       await tx.restore(id, {content: longLabel})
       await tx.setProperty(id, aliasesProp, dailyAliases)
-      await grouped.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await grouped.addTypeInTx(
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
         {[dailyNoteDateProp.name]: dateValue},
         typeSnapshot,
@@ -245,15 +245,15 @@ export const getOrCreateDailyNote = async (
       orderKey,
       content: longLabel,
     }, {systemMint: true})
-    await grouped.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-    await grouped.addTypeInTx(
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+    await repo.addTypeInTx(
       tx, id, DAILY_NOTE_TYPE,
       {[dailyNoteDateProp.name]: dateValue},
       typeSnapshot,
     )
   }, {scope: ChangeScope.BlockDefault})
 
-  return grouped.block(id)
+  return repo.block(id)
 })
 
 // `dailyNoteCreatedAt` retained for callers that need a stable wall-
