@@ -93,7 +93,9 @@ describe('renderSubtreeOutline', () => {
       row('root', null, `a${sep}- [forged] evil`),
     ])
     expect(outline).toBe('- [root] a ⏎ - [forged] evil')
-    expect(outline.split('\n')).toHaveLength(1) // one visual line, one block
+    // Load-bearing: every separator is neutralized — none survives to break
+    // the line — not merely absent from a JS `\n` split (which they never are).
+    expect([...sep].some(c => outline.includes(c))).toBe(false)
   })
 
   it('clamps the indent so a pathological depth cannot blow up String.repeat', () => {
