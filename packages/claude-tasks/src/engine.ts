@@ -40,6 +40,17 @@ export interface EngineDeps {
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
+/** One-line, bounded quote of a block's text for the daemon log, so a
+ *  claimed block is identifiable at a glance — a bare id isn't, and a
+ *  picked-up block may carry no *visible* status chip (the chip is
+ *  suppressed on nested surfaces, so a mention only ever seen through a
+ *  page's backlink list shows none). Whitespace-collapsed to stay on one
+ *  log line; empty content renders as `(empty)`. */
+const logPreview = (content: string | null | undefined): string => {
+  const collapsed = (content ?? '').replace(/\s+/g, ' ').trim()
+  return collapsed ? `"${truncate(collapsed, 100)}"` : '(empty)'
+}
+
 /** A deleted block surfaces as an `updateBlock: block <id> not found`
  *  error from the bridge (commands.ts updateBlock; repo.load filters
  *  `deleted = 0`). Used to tell "placeholder was deleted, create a fresh
@@ -282,7 +293,7 @@ export const createEngine = (deps: EngineDeps) => {
     try {
       const attempt = taskAttempts(block) + 1
       const claimStamp = now()
-      log(`[${watcher.name}] claiming ${sourceId} (${decision.reason}, attempt ${attempt})`)
+      log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
         status: 'running', watcher: watcher.name, attempts: attempt, nowMs: claimStamp,
       })
