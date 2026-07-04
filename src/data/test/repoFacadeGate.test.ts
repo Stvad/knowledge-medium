@@ -137,7 +137,13 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  caches, stores) mutates shared state correctly. The hazard —
  *  ASSIGNING one of these through the facade — only arises inside
  *  members, which the prototype classification above covers. Function-
- *  valued fields are flagged where their binding matters. */
+ *  valued fields are flagged where their binding matters.
+ *
+ *  This inventory is option-independent because every Repo field is a
+ *  DECLARED class field (useDefineForClassFields defines them all at
+ *  construction, assigned or not). A `declare`-modifier field or an
+ *  `(x as any).field =` dynamic write would escape the inventory —
+ *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   _activeWorkspaceId: 'data field',
   _propertyEditorOverrides: 'data field',
@@ -273,5 +279,10 @@ describe('undoGroup facade — structural override/allowlist gate', () => {
       .filter((name) => !overrides.has(name))
     expect(materialized,
       'reading a getter through the facade materialized own properties on it — a lazily-assigning getter is shadowing state').toEqual([])
+    // Symbol-keyed backing fields would evade the name check above (and
+    // assertion 0a ran before the getter reads); groupedFacade installs
+    // only string-keyed overrides, so ANY symbol here is a shadow.
+    expect(Object.getOwnPropertySymbols(facade),
+      'reading a getter through the facade materialized a symbol-keyed own property on it').toEqual([])
   })
 })
