@@ -289,7 +289,11 @@
   merge-semantics core (children-authoritative arrival — the review had missed that the
   spike's cell-authoritative catch-up re-creates the per-key clobber between current
   clients), §6's scope decision inverted to materialize-everything, and §11 gained the
-  measurement-gated cell sync-off staging.
+  measurement-gated cell sync-off staging. A coherence pass (2026-07-04) then
+  reconciled the revision's edges: the kernel flip reclassified as correctness (not
+  optimization), the deletion diff gained its writer-generation discriminator, wire-cost
+  claims corrected for the parent metadata PATCH, and §10 re-grounded in the spike's
+  actual curated hidden list (spot-verified against the branch that day).
   <strong>Last verified against code:</strong> 2026-07-01.
 </aside>
 
@@ -313,9 +317,11 @@
     <li>The arrival pass becomes a <em>reconcile</em>: project-from-children for
       current-client rows, materialize only for old-client convergence, dedup at
       parents (<a href="#s5">§5</a>, slice C).</li>
-    <li>Stopping cell sync is a staged, <em>measurement-gated</em> optimization, not
-      part of the correctness fix — see the tiered real-DB measurement plan and
-      decision rule (<a href="#cell-endstate">§11, cell end-state</a>).</li>
+    <li>Stopping cell sync (end-state steps 4–6) is a staged, <em>measurement-gated</em>
+      optimization — see the tiered real-DB measurement plan and decision rule. The
+      kernel-prop flip (step 3) is <em>not</em> part of that optimization: it completes
+      the §6 correctness fix (it is what closes the <code>collapsed</code> clobber) and
+      is a required milestone (<a href="#cell-endstate">§11, cell end-state</a>).</li>
     <li>E2EE workspaces stay cell-only until the derive-locally path lands
       (<a href="#s8">§8</a>).</li>
     <li>Machinery inserts field rows first among children (orderKey stays user-owned);
@@ -742,10 +748,16 @@ arrived row:
     parent while there.</li>
   <li>Arrived <em>parent cells</em> → re-project child-backed keys from local children
     (ignoring the arrived cell's copies); apply the cell only for keys that are
-    <em>not</em> child-backed. The old-client convergence cases — a cell key that has no
-    children at all (set by an old client), or live children whose key an old client's
-    cell no longer carries (cleared by an old client) — are the only places materialize
-    direction still runs, and the second one is the deletion-diff requirement below.</li>
+    <em>not</em> child-backed. Materialize direction survives only for old-client
+    convergence, and only on cells carrying a <em>positive</em> old-client signal (the
+    discriminator in the callout below): the <em>set</em> branch — a cell key with no
+    child rows behind it, <strong>live or soft-deleted</strong> (a soft-deleted child
+    means a current client cleared the key; the cell must not resurrect it) — and the
+    <em>clear</em> branch, the deletion-diff requirement below.</li>
+  <li>Arrived rows whose cell carries a key <em>no registered schema matches</em>, on a
+    block whose children carry a known <code>fieldId</code> → re-project the cell from
+    those children (the offline-rename race; §7, slice C). Still project-direction:
+    the registry is consulted by <code>fieldId</code> instead of by the stale name.</li>
 </ul>
 
 <div class="callout warn">
@@ -757,10 +769,19 @@ arrived row:
       <code>[[status]]</code> field row is untouched — the spike's set-only catch-up
       sees no present key to process. B's tree still shows the value, and the next
       touch of that subtree re-projects it into the cell and re-uploads. The delete is
-      undone fleet-wide. The reconcile pass closes this with the deletion diff: live
-      children whose key is absent from an old client's arrived cell get soft-deleted.
-      (Deletes between <em>current</em> clients need none of this — they travel as
-      child soft-delete rows.)</li>
+      undone fleet-wide. The reconcile pass closes this with the deletion diff — but
+      the diff must never fire on cell shape alone. "Arrived cell omits key K while
+      local children for K exist" is also the signature of an innocent current-client
+      bag (a writer that never had K, winning column-LWW); soft-deleting on that
+      re-opens the clobber for deletes. The diff needs a <strong>positive
+      discriminator</strong>: current clients stamp the cells they project with a
+      writer-generation marker (a reserved key in the bag or a small synced column —
+      slice C picks the mechanism), and <em>both</em> materialize branches (set and
+      clear) run only on unstamped cells. Among current clients the cell is never
+      consulted — deletes travel exclusively as child soft-delete rows. If the
+      discriminator slips out of slice C, ship <em>without</em> the deletion diff and
+      close the old-client-clear gap by coordinated fleet upgrade instead (§12): a
+      wrong-direction soft-delete is worse than a temporarily unconverged clear.</li>
     <li><strong>Duplicate field rows from concurrent backfills persist.</strong> Two
       devices backfilling offline each create their own <code>[[status]]</code> row;
       after sync, the arrived rows are field/value rows whose <em>own</em> cells are
@@ -800,10 +821,12 @@ arrived row:
   materialization plus one cell-column PATCH per property write; the backfill of a
   large workspace is a real upload burst (§11, slice C). The end state goes further:
   once children are the fleet-wide source, the cell can stop syncing entirely and
-  become a locally-derived column — at which point a property update is one small
-  value-child row PATCH instead of re-shipping the whole bag, i.e. <em>cheaper on the
-  wire than today</em> — but that step is deliberately staged and gated on the
-  hydration measurements (§11).
+  become a locally-derived column — at which point a property update is a small
+  value-child PATCH plus the parent's metadata PATCH (<code>setProperty</code> bumps
+  <code>updated_at</code>/<code>updated_by</code> on the parent, and those columns
+  sync), still well under re-shipping the whole bag, i.e. <em>cheaper on the wire than
+  today</em> — but that step is deliberately staged and gated on the hydration
+  measurements (§11).
 </div>
 
 <h2 id="s6">6. The scope decision: which schemas get children</h2>
@@ -829,17 +852,21 @@ re-uploads the whole cell — carrying stale copies of every cell-backed key wit
 concurrent <code>system:collapsed</code> toggle would be clobbered by an unrelated
 property write on the same block, and no child exists to repair it from. The one
 contended kernel prop (<code>collapsed</code>) is precisely the one that most needs
-row-granular merge. Child-backing it also inverts the old write-amplification argument:
-after the first toggle (2 rows, once), each subsequent toggle is a single small
-value-child PATCH — less wire than re-shipping the bag — and it clears the path to the
-end state where the cell stops syncing entirely (§11), which only works if every
-contended key is child-backed.
+row-granular merge. Child-backing it also clears the path on wire cost — though only
+at the end state: while the cell still syncs, each toggle ships the value-child PATCH
+<em>plus</em> the re-projected whole bag (more wire than today, not less); once the
+cell stops uploading (§11, step 4), a toggle is the value-child PATCH plus the parent's
+metadata bump — cheaper than re-shipping the bag. The wire argument is a consequence of
+the sync-off (which only works if every contended key is child-backed), not an
+immediate saving; the merge argument above is what decides the flip.
 </p>
 
 <p>
 The costs the spike surfaced are real but turned out to be presentation-layer, and the
-spike itself has since built the answers: field rows hidden by default in the outline
-(per-schema <code>hidden</code> + toggle), <code>tx.childrenOf</code> default-excluding
+spike itself has since built the answers: hidden-field filtering in the outline
+(per-schema <code>hidden</code> + toggle — though the spike's hidden set is a curated
+list that must grow to cover every system schema at the kernel flip; §10),
+<code>tx.childrenOf</code> default-excluding
 field rows so structural callers see only visible siblings (<code>f4d0b447</code>), and
 panel-layout/orphan-alias special cases. Two genuine residuals to carry, eyes open:
 </p>
@@ -1012,9 +1039,12 @@ and would happily accept a plaintext <code>reference_target_id</code>:
 </ul>
 
 <p>
-A side benefit of the §11 cell end-state: once <code>properties_json</code> stops
-uploading (step 4), one of the three e2ee envelope columns leaves the wire entirely —
-property data then travels only as ordinary encrypted child-row content.
+A side benefit of the §11 cell end-state — for e2ee workspaces, sequenced behind
+option 2: under the option-1 gate the cell is an e2ee workspace's <em>only</em>
+property store, so step 4 cannot apply to it. Once derive-locally child-backing
+(option 2) replaces the gate, stopping the cell upload removes one of the three
+envelope columns from the wire entirely — property data then travels only as ordinary
+encrypted child-row content.
 </p>
 
 <p>
@@ -1129,8 +1159,9 @@ skill while at it.
     now <em>excludes</em> field rows by default (structural callers must see only
     visible siblings — the machinery opts in with
     <code>includePropertyChildren</code>). Under the §6 scoping these special cases
-    shrink (kernel props stop generating field rows) but the rules stay — user-field
-    rows must not be reparented as content.</dd>
+    apply <em>everywhere</em> — kernel props materialize too, so hidden field rows
+    exist on most blocks and the exclusion rules get more load-bearing, not less.
+    Field rows, user and kernel alike, must not be reparented as content.</dd>
 
   <dt><strong>Type-add field slots vs ghosts (decided: render-only ghosts).</strong></dt>
   <dd>The spike materializes <em>empty field rows</em>
@@ -1155,10 +1186,14 @@ linking to the schema block; value editing via the preset's editor; empty-value 
 for slot rows) and <code>PropertyValueBlockRenderer</code>, registered in the default
 renderer chain, plus hidden-field filtering in <code>useChildIds</code> and a
 "Show Hidden Fields" context-menu toggle. Under §6's materialize-everything decision
-the hidden mechanism is load-bearing, not cosmetic: every kernel schema ships a
-<code>hidden: true</code> editor override by default, so <code>[[types]]</code> /
-<code>[[system:collapsed]]</code> rows exist in storage but not in the default outline,
-with the toggle as the escape hatch. The property panel remains fully functional
+the hidden mechanism is load-bearing, not cosmetic — and it is not yet complete: the
+spike's hidden set is a curated list (<code>hiddenKernelPropertyUis</code> in
+<code>typesPropertyUi.ts</code>), not a default on every kernel schema.
+<code>system:collapsed</code> and <code>createdAt</code> are in it; <code>types</code>
+is <em>not</em> — a materialized <code>[[types]]</code> row would be visible in
+today's outline. Extending <code>hidden: true</code> to every child-backed system
+schema that should stay out of the outline is a kernel-flip deliverable (§11,
+end-state step 3), with the toggle as the escape hatch. The property panel remains fully functional
 alongside — both surfaces read the same cell and write through the same
 <code>setProperty</code>, so they coexist safely during the transition. Panel sunset is
 deliberately last (§11) and follows usage, not a schedule. Rev 1's inventory of what
@@ -1320,9 +1355,12 @@ implementation</strong> and keep it open until its content is fully accounted fo
         <code>onRowsAccepted</code> catch-up, scoped to child-backed schemas —
         <strong>rebuilt as the §5 reconcile pass — this slice IS the clobber fix</strong>:
         arrival re-projects child-backed keys from local children (the arriving cell is
-        never a merge input), materialize direction runs only for old-client rows
-        (cell keys with no children; deletion-diff for keys an old client cleared), and
-        dedup happens at the <em>parent</em> of arrived field rows. It must also
+        never a merge input); materialize direction runs only for genuinely old-client
+        cells, gated on the §5 writer-generation discriminator — which this slice
+        introduces (current clients stamp the cells they project) — never on cell shape
+        (set branch: keys with no child rows, live or soft-deleted; clear branch: the
+        deletion diff, which must not ship without the discriminator); and dedup
+        happens at the <em>parent</em> of arrived field rows. It must also
         reconcile the <em>rename race</em> B2's one-shot reproject can't reach: a block
         edited offline across a schema rename syncs up with a cell key no registry
         knows; the reconcile recognizes that case from the <em>children's</em> side —
@@ -1341,8 +1379,10 @@ implementation</strong> and keep it open until its content is fully accounted fo
         (and a key histogram) against production via <code>yarn agent sql</code> /
         Supabase.
       </p>
-      <p class="deliv">100% of user-defined property data is child-backed; cell fully
-        derived. Fall-back per block unchanged from rev 1: on backfill failure the cell
+      <p class="deliv">100% of user-defined property data is child-backed; the cell is
+        fully derived for user-defined keys (kernel keys stay cell-primary until the
+        end-state step-3 flip — itself part of the §6 correctness fix, not optional).
+        Fall-back per block unchanged from rev 1: on backfill failure the cell
         stays authoritative for that block. The two-client concurrent-backfill test
         (§12) gates this slice.</p>
     </div>
@@ -1405,8 +1445,11 @@ implementation</strong> and keep it open until its content is fully accounted fo
 <h3 id="cell-endstate">Cell end-state: measure first, then stage the sync-off</h3>
 
 <p>
-With §5's merge semantics in place, the synced cell is already harmless — the clobber
-fix does <strong>not</strong> wait on any of the below. The remaining question is
+With §5's merge semantics in place, the synced cell is harmless <em>for child-backed
+keys</em> — the clobber fix for those keys does not wait on the sync-off. One item
+below is still correctness, not optimization: <strong>step 3, the kernel flip</strong>
+— until it lands, kernel keys (<code>collapsed</code> above all) are cell-only and
+still ride whole-bag column-LWW (§6). Steps 4–6 are the pure-optimization tail:
 whether to stop syncing <code>properties_json</code> at all (wire savings, e2ee
 simplification, and the cell becomes an ordinary local derived column). The staged
 sequence, each step gated on the one before:
@@ -1420,8 +1463,11 @@ sequence, each step gated on the one before:
   <li><strong>Kernel-prop flip + test porting</strong>: flip <code>childBacked</code>
     defaults for kernel/plugin schemas (§6 end state), run the schema-scoped backfill
     for the newly flipped schemas (markers make this incremental), port the residual
-    tree-shape tests as deliberate behavior changes, ship the references-projection
-    guard for synthetic fieldIds.</li>
+    tree-shape tests as deliberate behavior changes, extend the curated hidden-override
+    set to every system schema that should stay out of the outline (§10), ship the
+    references-projection guard for synthetic fieldIds. <em>This step completes the §6
+    correctness fix — it is sequenced here for rollout pacing (tier-4 measurement
+    informs it), but it is required regardless of the step-5 decision.</em></li>
   <li><strong>Stop uploading the cell.</strong> The server copy freezes; receivers
     never merged from it, so nothing changes for current clients. Must come after
     (1)–(3): any remaining cell-only writer's edits would otherwise still need the
@@ -1524,8 +1570,10 @@ transactions, throughput logging), pointed the other direction.
   <li>
     <strong>Old-client interop during rollout.</strong> A device on pre-slice-B code
     writes cell-only; current devices converge its <em>sets and updates</em> via the
-    reconcile pass's old-client branch (cell keys with no children behind them).
-    <em>Clears do not converge</em> until the deletion diff lands with slice C (§5) —
+    reconcile pass's old-client branch (unstamped cells — the §5 writer-generation
+    discriminator — with no child rows behind the key).
+    <em>Clears do not converge</em> until the deletion diff and the discriminator it
+    requires land with slice C (§5) —
     an old client's property delete leaves stale children on peers, and a later touch
     of that subtree resurrects the value. Coordinated upgrade (small fleet) shrinks the
     window; the §5 fix closes it.
