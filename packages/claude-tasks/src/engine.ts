@@ -168,6 +168,7 @@ export const createEngine = (deps: EngineDeps) => {
     timeoutMs: watcher.timeoutMs,
     onEvent,
     executor: watcher.executor,
+    billing: config.billing,
   })
 
   /** Park a task that exhausted its retries. Re-read + re-decide first

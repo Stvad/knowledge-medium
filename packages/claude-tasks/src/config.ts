@@ -144,6 +144,17 @@ export const configSchema = z.strictObject({
   claudeBin: z.string().default('claude'),
   /** Path/name of the codex CLI, for watchers with `executor: 'codex'`. */
   codexBin: z.string().default('codex'),
+  /** Which account a run's tokens bill to. 'subscription' (default,
+   *  safe): scrub every API-key/token/provider-reroute env var from the
+   *  child so an ambient key can't SILENTLY redirect an unattended
+   *  daemon onto usage-based billing — the CLI's plan login (OAuth) then
+   *  wins. 'api': deliberately opt IN to usage-based billing/credits —
+   *  the scrub is skipped and the CLI uses whatever credential the env
+   *  or login provides. Making it a config field (not an env accident)
+   *  is the point: possible on purpose, hard by accident. NB: a key
+   *  stored via `claude`/`codex` login (auth.json / apiKeyHelper) lives
+   *  outside the env and CANNOT be scrubbed — see the startup log. */
+  billing: z.enum(['subscription', 'api']).default('subscription'),
   /** Tools EVERY spawned run may use, beyond the km MCP graph tools;
    *  per-watcher `allowedTools` adds on top. Defaults to web research
    *  (WebSearch + WebFetch) — the common "look this up for me" mention

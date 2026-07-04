@@ -1,10 +1,12 @@
 /**
  * Spawn one `claude -p` run for a task and parse its JSON result.
  *
- * Billing invariant: runs must hit the user's Claude subscription, not
+ * Billing: by default runs must hit the user's Claude subscription, not
  * the API. `claude` prefers ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
  * over subscription OAuth when they're present, so both are scrubbed
  * from the child env — the machine's `claude login` state then wins.
+ * Opt into usage-based billing per config (`billing: 'api'`), which
+ * skips the scrub (see config.ts + ClaudeRunOptions.billing).
  *
  * Permissions: no permission-mode bypass. Print mode fails closed —
  * anything outside --allowedTools is denied. Graph access comes from
@@ -42,6 +44,11 @@ export interface ClaudeRunOptions {
    *  runTask wiring); the engine itself stays executor-agnostic — this
    *  field just rides along with the rest of the run options. */
   executor?: 'claude' | 'codex'
+  /** Billing mode (config.ts). 'api' skips the env scrub so the run can
+   *  use usage-based credentials; anything else (incl. undefined) scrubs
+   *  — the safe default, so a missing value never accidentally bills the
+   *  API. */
+  billing?: 'subscription' | 'api'
 }
 
 export interface ClaudeRunResult {
@@ -75,6 +82,15 @@ export const scrubEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => {
   for (const key of BILLING_ENV_DENYLIST) delete scrubbed[key]
   return scrubbed
 }
+
+/** Resolve the child env for a given billing mode. 'api' passes the env
+ *  through (usage-based billing opted in); anything else scrubs. Fails
+ *  SAFE — only an explicit 'api' skips the scrub. */
+export const envForBilling = (
+  env: NodeJS.ProcessEnv,
+  billing: 'subscription' | 'api' | undefined,
+  scrub: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv = scrubEnv,
+): NodeJS.ProcessEnv => (billing === 'api' ? {...env} : scrub(env))
 
 /** The prompt is deliberately NOT an argv element — it goes via stdin
  *  (claude -p reads stdin when no prompt argument is given). Argv is
@@ -277,7 +293,7 @@ export const runClaude = async (
     args,
     prompt: options.prompt,
     cwd: options.cwd,
-    env: scrubEnv(options.env ?? process.env),
+    env: envForBilling(options.env ?? process.env, options.billing),
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
     spawnImpl,

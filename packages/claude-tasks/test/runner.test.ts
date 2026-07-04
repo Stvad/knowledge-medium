@@ -245,6 +245,16 @@ describe('runClaude', () => {
     expect(result.resultText).toBe('clean')
   })
 
+  it('billing=api opts in: the credential env is passed through, not scrubbed', async () => {
+    const result = await runClaude(
+      {...baseOptions, billing: 'api', env: {...process.env, ANTHROPIC_API_KEY: 'sk-live'}},
+      fakeClaude(
+        `process.stdout.write(JSON.stringify({type: 'result', result: process.env.ANTHROPIC_API_KEY ?? 'clean', session_id: 's', is_error: false}) + '\\n')`,
+      ),
+    )
+    expect(result.resultText).toBe('sk-live')
+  })
+
   it('delivers the prompt over stdin, not argv', async () => {
     const result = await runClaude(
       {...baseOptions, prompt: 'secret note content'},

@@ -28,7 +28,7 @@
  * analogue of claude's --strict-mcp-config than "equivalent".
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
-import { humanizeToolName } from './runner.js'
+import { envForBilling, humanizeToolName } from './runner.js'
 import type { ClaudeRunResult, RunEvent } from './runner.js'
 
 export type { SpawnImpl }
@@ -68,6 +68,10 @@ export interface CodexRunOptions {
   resumeSessionId?: string
   timeoutMs: number
   env?: NodeJS.ProcessEnv
+  /** Billing mode (config.ts). 'api' skips the env scrub (usage-based
+   *  billing opted in); anything else (incl. undefined) scrubs — the
+   *  safe default. */
+  billing?: 'subscription' | 'api'
   /** Called for each parsed progress event as the run streams. Errors
    *  thrown by the handler are caught and logged — a broken consumer
    *  must never kill the run. */
@@ -299,7 +303,7 @@ export const runCodex = async (
     args,
     prompt: options.prompt,
     cwd: options.cwd,
-    env: scrubCodexEnv(options.env ?? process.env),
+    env: envForBilling(options.env ?? process.env, options.billing, scrubCodexEnv),
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
     spawnImpl,

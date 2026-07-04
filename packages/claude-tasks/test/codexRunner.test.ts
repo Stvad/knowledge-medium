@@ -299,6 +299,17 @@ describe('runCodex', () => {
     expect(result.resultText).toBe('clean')
   })
 
+  it('billing=api opts in: OPENAI_API_KEY is passed through, not scrubbed', async () => {
+    const result = await runCodex(
+      {...baseOptions, billing: 'api', env: {...process.env, OPENAI_API_KEY: 'sk-live'}},
+      fakeCodex(
+        `process.stdout.write(JSON.stringify({type: 'item.completed', item: {type: 'agent_message', text: process.env.OPENAI_API_KEY ?? 'clean'}}) + '\\n');
+         process.stdout.write(JSON.stringify({type: 'turn.completed', usage: {}}) + '\\n')`,
+      ),
+    )
+    expect(result.resultText).toBe('sk-live')
+  })
+
   it('delivers the prompt over stdin, not argv', async () => {
     const result = await runCodex(
       {...baseOptions, prompt: 'secret note content'},

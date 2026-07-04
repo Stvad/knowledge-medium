@@ -27,6 +27,7 @@ import { createEngine } from './engine.js'
 import { createExemptionPool, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
 import { runCodex } from './codexRunner.js'
+import { reportBillingPosture } from './billing.js'
 import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, encodeBlockedWikilinks, MCP_SERVER_NAME } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
@@ -107,6 +108,10 @@ const main = async () => {
 
   await acquirePidfile({file: pidfilePath()})
 
+  // Say — up front and every start — what these runs bill to, so an
+  // accidental usage-based-billing setup is visible, not silent.
+  for (const line of reportBillingPosture(config, process.env).lines) log(line)
+
   let stopping = false
   const wake = new AbortController()
   const stop = (signal: string) => {
@@ -122,6 +127,10 @@ const main = async () => {
   // request landing mid-tick re-ticks right after — the tick may have
   // snapshotted state from before that event's write.
   let tickRequested = false
+  // Not a listener registry: one-shot sleep-wakers that each remove
+  // themselves the instant they fire (see `finish` below). CallbackSet's
+  // snapshot-on-notify / exception-isolation semantics don't apply.
+  // eslint-disable-next-line callback-set/prefer-callback-set -- one-shot self-removing wakers, not an add/notify/unsubscribe registry
   const tickWaiters = new Set<() => void>()
 
   // Interruptible sleep: resolves on timeout OR immediately when stop()
@@ -198,6 +207,7 @@ const main = async () => {
         model: options.model,
         resumeSessionId: options.resumeSessionId,
         timeoutMs: options.timeoutMs,
+        billing: options.billing,
         onEvent: options.onEvent,
         mcpServer: mcpServerDef,
       })
