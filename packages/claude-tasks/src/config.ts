@@ -37,6 +37,12 @@ export const PROPS = {
    *  (written as '') on every terminal status write so a stale label
    *  never outlives the run. */
   activity: 'claude:activity',
+  /** Cancellation REQUEST written by the UI (companion Stop action) on a
+   *  running block. The daemon owns the child process, so it can't be
+   *  killed from the app — this is the graph signal: the daemon sees it,
+   *  aborts the run, parks the task `error: cancelled`, and clears this
+   *  (written as '') on the terminal write so it never re-cancels a rerun. */
+  cancel: 'claude:cancel',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'

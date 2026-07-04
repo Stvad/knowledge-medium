@@ -87,4 +87,16 @@ describe('askClaude', () => {
     const row = await block.load()
     expect(row!.properties[CLAUDE_PROPS.activity]).toBeUndefined()
   })
+
+  it('clears a stale claude:cancel on requeue so the fresh run is not immediately aborted', async () => {
+    const block = await createBlock('re-ask-cancel', 'summarize this', {
+      [CLAUDE_PROPS.status]: 'error',
+      [CLAUDE_PROPS.cancel]: 123,
+    })
+
+    await askClaude(block)
+
+    const row = await block.load()
+    expect(row!.properties[CLAUDE_PROPS.cancel]).toBeUndefined()
+  })
 })

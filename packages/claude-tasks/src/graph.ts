@@ -150,7 +150,7 @@ export const createGraph = (client: BridgeClient) => {
     id: string,
     args: {
       status: TaskStatus, watcher?: string, session?: string | null, error?: string | null,
-      attempts?: number, activity?: string | null, nowMs: number,
+      attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
     },
   ): Promise<void> => {
     const properties: Record<string, unknown> = {
@@ -162,6 +162,9 @@ export const createGraph = (client: BridgeClient) => {
     if (args.error !== undefined) properties[PROPS.error] = args.error ?? ''
     if (args.attempts !== undefined) properties[PROPS.attempts] = args.attempts
     if (args.activity !== undefined) properties[PROPS.activity] = args.activity ?? ''
+    // Clear the cancel REQUEST on terminal writes (merged, like activity)
+    // so a satisfied/stale claude:cancel never re-cancels a later rerun.
+    if (args.cancel !== undefined) properties[PROPS.cancel] = args.cancel ?? ''
     await client.runCommand({type: 'update-block', id, properties})
   }
 

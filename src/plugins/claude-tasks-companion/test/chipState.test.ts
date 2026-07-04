@@ -19,7 +19,7 @@ describe('chipStateFor', () => {
       'claude:status': 'running',
       'claude:updated-at': 1_000,
       'claude:attempts': 2,
-    })).toEqual({kind: 'running', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: ''})
+    })).toEqual({kind: 'running', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: '', cancelling: false})
 
     expect(chipStateFor({'claude:status': 'done'})).toMatchObject({kind: 'done', attempts: 1})
     expect(chipStateFor({
@@ -38,7 +38,15 @@ describe('chipStateFor', () => {
       'claude:updated-at': 'yesterday',
       'claude:attempts': -3,
       'claude:activity': 42,
-    })).toEqual({kind: 'running', updatedAtMs: null, attempts: 1, errorMessage: '', activity: ''})
+    })).toEqual({kind: 'running', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false})
+  })
+
+  it('flags cancelling only for a running chip with a truthy claude:cancel', () => {
+    expect(chipStateFor({'claude:status': 'running', 'claude:cancel': Date.now()})).toMatchObject({cancelling: true})
+    expect(chipStateFor({'claude:status': 'running'})).toMatchObject({cancelling: false})
+    // A leftover claude:cancel on a non-running block must not be surfaced —
+    // the daemon only honors it while status is 'running'.
+    expect(chipStateFor({'claude:status': 'done', 'claude:cancel': Date.now()})).toMatchObject({cancelling: false})
   })
 })
 

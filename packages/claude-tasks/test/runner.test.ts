@@ -262,6 +262,22 @@ describe('runClaude', () => {
     expect(result.ok).toBe(false)
   })
 
+  it('kills an in-flight run when its abort signal fires (Stop)', async () => {
+    // A child that would hang for a minute — the abort must kill it well
+    // before the (60s) timeout, so timedOut stays false. Without the abort
+    // handling this run never returns and the test times out.
+    const controller = new AbortController()
+    const running = runClaude(
+      {...baseOptions, timeoutMs: 60_000, signal: controller.signal},
+      fakeClaude(`process.stdout.write('x'); setTimeout(() => {}, 60_000)`),
+    )
+    setTimeout(() => controller.abort(), 150)
+    const result = await running
+    expect(controller.signal.aborted).toBe(true)
+    expect(result.ok).toBe(false)
+    expect(result.timedOut).toBe(false) // killed by abort, not the timeout
+  })
+
   it('retains the session id from a run that timed out before the result line', async () => {
     // The init line arrives, then the child hangs past the timeout — no
     // result line. The (billed) session id must still come back so a

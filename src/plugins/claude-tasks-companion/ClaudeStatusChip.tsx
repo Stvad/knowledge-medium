@@ -6,7 +6,7 @@
  *
  *  Same gutter pattern as the inline backlink count badge: with no
  *  chip, content renders untouched (no wrapper). */
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore, type MouseEvent } from 'react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
 import {
@@ -16,6 +16,7 @@ import {
 import type { BlockRenderer } from '@/types.js'
 import { chipStateFor, chipTitle, type ChipState } from './chipState.ts'
 import { clearAskedClaude, isAskedClaude, subscribeAskedClaude } from './askedStore.ts'
+import { cancelClaude } from './cancelClaude.ts'
 
 /** Ticks once a second while mounted — only running chips mount it. */
 const useElapsedLabel = (sinceMs: number | null): string | null => {
@@ -30,18 +31,39 @@ const useElapsedLabel = (sinceMs: number | null): string | null => {
   return `${Math.round(seconds / 60)}m`
 }
 
-const RunningChip = ({ chip }: { chip: ChipState }) => {
+const RunningChip = ({ chip, block }: { chip: ChipState; block: Block }) => {
   const elapsed = useElapsedLabel(chip.updatedAtMs)
+  const onStop = (event: MouseEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (chip.cancelling) return
+    void cancelClaude(block)
+  }
   return (
     <>
       <span className="animate-pulse text-amber-600">●</span>
-      <span>Claude{elapsed ? ` · ${elapsed}` : ''}</span>
-      {chip.activity && <span className="truncate max-w-40"> · {chip.activity}</span>}
+      {chip.cancelling ? (
+        <span>Claude · cancelling…</span>
+      ) : (
+        <>
+          <span>Claude{elapsed ? ` · ${elapsed}` : ''}</span>
+          {chip.activity && <span className="truncate max-w-40"> · {chip.activity}</span>}
+          <button
+            type="button"
+            title="Stop the running Claude task"
+            aria-label="Stop the running Claude task"
+            onClick={onStop}
+            className="hidden shrink-0 rounded-full leading-none text-muted-foreground hover:text-foreground group-hover:inline"
+          >
+            ⏹
+          </button>
+        </>
+      )}
     </>
   )
 }
 
-const chipBody = (chip: ChipState) => {
+const chipBody = (chip: ChipState, block: Block) => {
   switch (chip.kind) {
     case 'queued':
       return (
@@ -51,7 +73,7 @@ const chipBody = (chip: ChipState) => {
         </>
       )
     case 'running':
-      return <RunningChip chip={chip} />
+      return <RunningChip chip={chip} block={block} />
     case 'done':
       return (
         <>
@@ -71,7 +93,7 @@ const chipBody = (chip: ChipState) => {
 
 /** Optimistic "queued" shown between the Ask Claude action and the
  *  daemon's claim writing real props. */
-const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', updatedAtMs: null, attempts: 1, errorMessage: '', activity: ''}
+const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false}
 
 const ClaudeStatusChipRow = ({
   block,
@@ -101,9 +123,9 @@ const ClaudeStatusChipRow = ({
       <span
         title={chipTitle(chip)}
         data-claude-chip={chip.kind}
-        className="mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground"
+        className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground"
       >
-        {chipBody(chip)}
+        {chipBody(chip, block)}
       </span>
     </div>
   )

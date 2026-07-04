@@ -8,6 +8,7 @@ import os from 'node:os'
 import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
+import { PROPS } from './config.js'
 import type { Graph } from './graph.js'
 import type { ClaudeRunOptions, ClaudeRunResult, RunEvent } from './runner.js'
 import type { StateStore } from './state.js'
@@ -123,6 +124,10 @@ export const createEngine = (deps: EngineDeps) => {
    *  One structure serves the double-claim guard, the capacity gate,
    *  and drain(). */
   const running = new Map<string, Promise<void>>()
+  /** Abort handle per in-flight mention run, keyed by source block id, so
+   *  a cancel request (claude:cancel) can kill THAT run — and only it.
+   *  Set when the run launches, deleted in its finally. */
+  const abortControllers = new Map<string, AbortController>()
   /** target alias → {id, resolvedAt}. TTL'd: a page deleted-then-
    *  recreated gets a NEW id, and a stale id doesn't error (backlinks of
    *  a missing target just return []), so an unbounded cache would
@@ -199,6 +204,7 @@ export const createEngine = (deps: EngineDeps) => {
 
   const runOptionsFor = (
     watcher: Watcher, prompt: string, resumeSessionId?: string, onEvent?: (event: RunEvent) => void,
+    signal?: AbortSignal,
   ): ClaudeRunOptions => ({
     claudeBin: config.claudeBin,
     prompt,
@@ -215,6 +221,7 @@ export const createEngine = (deps: EngineDeps) => {
     onEvent,
     executor: watcher.executor,
     billing: config.billing,
+    signal,
   })
 
   /** Park a task that exhausted its retries. Re-read + re-decide first
@@ -280,6 +287,11 @@ export const createEngine = (deps: EngineDeps) => {
     // — can't re-enter deliverReply and clobber the answer (streamReply)
     // or post a duplicate (fresh reply). See the catch below.
     let terminalReplyDelivered = false
+    // Abort handle for THIS run — a cancel request (claude:cancel, detected
+    // in the tick) aborts it, killing the child. `signal.aborted` after the
+    // run tells a user cancel apart from a timeout/crash. Registered just
+    // before the run launches (below), deleted in finally.
+    const abortController = new AbortController()
 
     // Land `text` on the streamed placeholder if one exists, else create a
     // fresh reply. The streamed update is idempotent (same block, same
@@ -324,6 +336,16 @@ export const createEngine = (deps: EngineDeps) => {
         refundLaunch(launchStamp)
         return
       }
+
+      // Register the abort handle NOW, not just before the run: a Stop can
+      // land during getSubtree / prompt render / the streamReply write, and
+      // the sweep can only abort a run whose controller it can see. Aborting
+      // before the child spawns sets signal.aborted, so runTask below starts
+      // already-cancelled (execProcess skips the spawn) and parks
+      // `error: cancelled`. Registered inside the try so the finally always
+      // clears it (the claim-lost return above happens before this, so its
+      // finally-delete is a harmless no-op).
+      abortControllers.set(sourceId, abortController)
 
       const subtreeRows = await graph.getSubtree(sourceId)
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
@@ -417,28 +439,41 @@ export const createEngine = (deps: EngineDeps) => {
         }
       }
 
-      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent))
+      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal))
       await writes // ordering guarantee: no progress write races the final one below
 
       if (result.ok) {
+        // Deliberately NOT gated on signal.aborted: if the child completed
+        // cleanly in the same instant a Stop landed (exit 0 raced SIGTERM),
+        // the billed answer is real — keep it as `done` rather than discard
+        // it as `cancelled`. Only a run that ended WITHOUT a result (the
+        // error branch below) inspects signal.aborted to label the reason.
         const finalText = result.resultText.trim() || `(${watcher.executor} returned an empty reply)`
         await deliverReply(finalText)
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
+        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
-        const reason = result.timedOut
-          ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
-          : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
-        const failureNote = `⚠️ claude-tasks run failed — ${reason}`
+        // A user Stop aborts the run — signal.aborted distinguishes it from
+        // a timeout/crash so the task parks `error: cancelled` (deliberate,
+        // terminal, non-refiring) rather than looking like a failure.
+        const cancelled = abortController.signal.aborted
+        const reason = cancelled
+          ? 'cancelled'
+          : result.timedOut
+            ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
+            : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
+        const failureNote = cancelled
+          ? '⏹️ claude-tasks run cancelled'
+          : `⚠️ claude-tasks run failed — ${reason}`
         // Preserve a streamed partial: a run that timed out (or died)
         // after streaming most of its billed answer keeps that text with
         // the note appended, rather than replacing it with the one-liner.
         const partial = lastStreamedText.trim()
         await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
-        log(`[${watcher.name}] FAILED ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
+        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
+        log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {
       // Infra failure between claim and reply (bridge blip, spawn error,
@@ -454,11 +489,17 @@ export const createEngine = (deps: EngineDeps) => {
       // would overwrite the good answer (streamReply) or duplicate it
       // (fresh reply) — so we leave the reply intact and only flip props.
       if (!terminalReplyDelivered) await deliverReply(infraNote).catch(() => {})
-      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, nowMs: now()}).catch(() => {})
+      // Clear claude:cancel like the done/error terminal writes: a Stop
+      // may have set it (this catch can run right after the child was
+      // aborted, e.g. the reply write then failed). Left behind, the flag
+      // survives askClaude's retry-reset and would abort the fresh run on
+      // its very next tick.
+      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, cancel: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {
       if (sessionKey) running.delete(sessionKey)
       if (liveSessionKey) running.delete(liveSessionKey)
+      abortControllers.delete(sourceId)
     }
   }
 
@@ -496,8 +537,32 @@ export const createEngine = (deps: EngineDeps) => {
     // any claim is written.
     const views = await graph.blockViews(sources.map(source => source.id))
     for (const source of sources) {
-      if (running.has(source.id)) continue
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
+      // Clear a claude:cancel the daemon can't act on. sweepCancellations
+      // aborts runs we OWN (a live abortController); but a Stop on a
+      // channel-delivered task (whose child the ambient session owns, not
+      // us) — or on a run stranded by a hard daemon kill — leaves
+      // status:running with no controller here, so the sweep never fires and
+      // the terminal write that clears the flag never comes: the chip would
+      // read "cancelling…" forever. When a running block is flagged but we
+      // hold no live run for it (not in `running`, no controller), the flag
+      // is inert — clear it, preserving the block's status + timestamp so
+      // the stale-running sweep is undisturbed. A spawn run mid-claim IS in
+      // `running`, so its genuinely-pending Stop is never dropped here.
+      if (
+        view.properties?.[PROPS.cancel]
+        && view.properties?.[PROPS.status] === 'running'
+        && !running.has(source.id)
+        && !abortControllers.has(source.id)
+      ) {
+        const stamp = view.properties?.[PROPS.updatedAt]
+        await graph.setTaskProps(source.id, {
+          status: 'running', cancel: null, nowMs: typeof stamp === 'number' ? stamp : now(),
+        })
+        log(`[${watcher.name}] cleared an un-actionable claude:cancel on ${source.id}`)
+        continue
+      }
+      if (running.has(source.id)) continue
       const quietExempt = quietExemptBlockIds.has(source.id)
       const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
 
@@ -596,6 +661,29 @@ export const createEngine = (deps: EngineDeps) => {
     })
   }
 
+  /** Honor Stop requests (claude:cancel) for every in-flight run, keyed
+   *  off the live abortControllers rather than the backlink scan. A run is
+   *  claimed the instant its block links [[claude]], but the user can edit
+   *  that link away while it runs: the block keeps claude:status:running
+   *  (so the chip's Stop still writes claude:cancel) yet it no longer shows
+   *  up in backlinkSources, so a per-watcher scan would never reach it and
+   *  the child would run to completion/timeout. Polling the abort handles
+   *  directly covers every live run regardless of its current link state.
+   *  Runs once per tick (poll and push both route through tick()). The `?.`
+   *  guards the race where a run settles and clears its controller during
+   *  the blockViews await. */
+  const sweepCancellations = async () => {
+    if (abortControllers.size === 0) return
+    const ids = [...abortControllers.keys()]
+    const views = await graph.blockViews(ids)
+    for (const id of ids) {
+      if (!views.get(id)?.properties?.[PROPS.cancel]) continue
+      log(`[cancel] aborting ${id} (Stop requested)`)
+      abortControllers.get(id)?.abort()
+      abortControllers.delete(id)
+    }
+  }
+
   const NO_EXEMPTIONS: ReadonlySet<string> = new Set()
 
   /** `quietExemptByWatcher`: blocks whose quiet period was confirmed at
@@ -611,6 +699,9 @@ export const createEngine = (deps: EngineDeps) => {
       pruneLaunchTimes()
       launchTimesLoaded = true
     }
+    // Before scanning for new work, honor any pending Stop — independent
+    // of whether the target block still links [[claude]] (see above).
+    await sweepCancellations().catch(error => log(`[cancel] sweep failed: ${errorMessage(error)}`))
     for (const watcher of config.watchers) {
       try {
         if (watcher.kind === 'backlinks') {

@@ -33,6 +33,10 @@ const REQUEUE_CLEARED_PROPS = [
   CLAUDE_PROPS.attempts,
   CLAUDE_PROPS.error,
   CLAUDE_PROPS.activity,
+  // A retry starts clean: never inherit a stale Stop request (the daemon
+  // clears claude:cancel on every terminal write, but drop it here too so
+  // a re-queue can't hand a leftover flag to the fresh run).
+  CLAUDE_PROPS.cancel,
   'claude:watcher',
 ] as const
 

@@ -79,6 +79,8 @@ export interface CodexRunOptions {
   /** Injected via `-c mcp_servers.<name>.*` overrides (config.toml has
    *  no --mcp-config-file equivalent this build exposes over CLI). */
   mcpServer?: CodexMcpServer
+  /** Abort the in-flight run (UI Stop) — kills the child like the timeout. */
+  signal?: AbortSignal
 }
 
 /** The prompt is deliberately NOT an argv element — same rationale as
@@ -303,6 +305,7 @@ export const runCodex = async (
     env: envForBilling(options.env ?? process.env, options.billing, scrubCodexEnv),
     timeoutMs: options.timeoutMs,
     onStdoutText: text => parser.feed(text),
+    signal: options.signal,
     spawnImpl,
   })
 

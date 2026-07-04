@@ -209,6 +209,7 @@ const main = async () => {
         timeoutMs: options.timeoutMs,
         billing: options.billing,
         onEvent: options.onEvent,
+        signal: options.signal,
         mcpServer: mcpServerDef,
       })
       : runClaude(options),
