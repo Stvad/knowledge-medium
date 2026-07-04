@@ -23,16 +23,17 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: false,
     target: 'esnext',
-    // Minified like the app bundle — the SW ships to every user, so the bytes
-    // matter. The post-build stamp (scripts/inject-sw-build-id.ts) is written to
-    // survive minification: it substitutes the bare `__BUILD_ID__` token
-    // (quote-agnostic) and replaces each `JSON.parse("__…__")` call by matching
-    // the placeholder STRING LITERAL — whose contents a minifier preserves
-    // verbatim — not the `JSON.parse` identifier (which a minifier may alias).
-    // Its guards (no placeholder may survive + `new Function` must parse the
-    // result) turn any minifier interaction that DID perturb a placeholder into
-    // a loud build failure, never a silently-shipped dead worker.
-    minify: true,
+    // NOT minified. Unlike the app bundle, the stamped sw.js is dominated by the
+    // injected precache URL LIST (data, which minification doesn't touch) — so
+    // minifying just the ~5 kB of code buys almost nothing (a few kB after gzip,
+    // fetched once per deploy and cached), while an unminified worker stays
+    // readable in DevTools. That readability is worth keeping for a
+    // correctness/security-critical worker (generation cache pinning + GC, the
+    // "stuck load" failure class). The stamp (scripts/inject-sw-build-id.ts →
+    // stampSwSource) is nonetheless written to survive minification — it keys off
+    // each placeholder STRING LITERAL, not the JSON.parse call — so flipping this
+    // to true later is safe and needs no stamp changes.
+    minify: false,
     sourcemap: false,
     rollupOptions: {
       input: path.resolve(configDir, 'src/sw/sw.ts'),
