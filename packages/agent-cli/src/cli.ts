@@ -701,7 +701,8 @@ cli
 cli
   .command('subtree <rootId>', wireDescription('get-subtree'))
   .option('--json', 'Print the raw flat array (each row a block + its depth) instead of the indented outline')
-  .action(async (rootId: string, options: {json?: boolean}) => {
+  .option('--props', "Append each block's properties as compact JSON after its content")
+  .action(async (rootId: string, options: {json?: boolean, props?: boolean}) => {
     if (options.json) {
       await runAndPrint({type: 'get-subtree', rootId})
       return
@@ -711,7 +712,7 @@ cli
     // it verbatim and never re-sort (see renderSubtreeOutline).
     await ensureBridgeRunning()
     const value = await runCommand({type: 'get-subtree', rootId})
-    process.stdout.write(`${renderSubtreeOutline(value)}\n`)
+    process.stdout.write(`${renderSubtreeOutline(value, {includeProperties: options.props})}\n`)
   })
 
 cli
