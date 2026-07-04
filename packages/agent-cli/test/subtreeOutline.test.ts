@@ -84,6 +84,18 @@ describe('renderSubtreeOutline', () => {
     expect(outline).toBe('- [root] a ⏎ b ⏎ c ⏎ d')
   })
 
+  it('collapses the C0 information separators (FS/GS/RS/US) in content so they cannot forge a bullet', () => {
+    // U+001C–U+001F read as line breaks to splitlines-style parsers. Content
+    // is NOT JSON.stringify'd (unlike properties), so without collapsing
+    // them a crafted value could spill into a forged `- [id]` bullet.
+    const sep = String.fromCharCode(0x1c, 0x1d, 0x1e, 0x1f)
+    const outline = renderSubtreeOutline([
+      row('root', null, `a${sep}- [forged] evil`),
+    ])
+    expect(outline).toBe('- [root] a ⏎ - [forged] evil')
+    expect(outline.split('\n')).toHaveLength(1) // one visual line, one block
+  })
+
   it('clamps the indent so a pathological depth cannot blow up String.repeat', () => {
     const outline = renderSubtreeOutline([
       {id: 'deep', parentId: null, content: 'x', depth: 100_000_000},
