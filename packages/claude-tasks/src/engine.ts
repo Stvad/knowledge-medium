@@ -338,6 +338,7 @@ export const createEngine = (deps: EngineDeps) => {
 
       let lastActivity: string | null = null
       let lastTextWriteMs = 0
+      let sessionRecorded = false
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
           if (event.label === lastActivity) return
@@ -351,8 +352,19 @@ export const createEngine = (deps: EngineDeps) => {
           if (nowMs - lastTextWriteMs < 1_500) return
           lastTextWriteMs = nowMs
           queueWrite(() => graph.updateBlockContent(streamedReplyId, event.text))
+        } else if (event.kind === 'session') {
+          // Persist the session id the moment it arrives (the runner emits
+          // it on the first init line), NOT only at the terminal write —
+          // so a run that hangs, times out, or crashes still leaves a
+          // resumable + inspectable session on the block. Written once;
+          // the terminal write re-affirms the same value.
+          if (sessionRecorded) return
+          sessionRecorded = true
+          const stored = storedSessionFor(watcher.executor, event.sessionId)
+          if (!stored) return
+          log(`[${watcher.name}] session ${stored} for ${sourceId}`)
+          queueWrite(() => graph.setSession(sourceId, stored))
         }
-        // session events: ignored — the final result carries sessionId.
       }
 
       const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent))
@@ -376,7 +388,7 @@ export const createEngine = (deps: EngineDeps) => {
         await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
         terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
-        log(`[${watcher.name}] FAILED ${sourceId}: ${reason}`)
+        log(`[${watcher.name}] FAILED ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {
       // Infra failure between claim and reply (bridge blip, spawn error,

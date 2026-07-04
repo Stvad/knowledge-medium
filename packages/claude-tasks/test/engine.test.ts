@@ -24,6 +24,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const replies: Array<{parentId: string, content: string}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
   const activityWrites: Array<{id: string, label: string}> = []
+  const sessionWrites: Array<{id: string, session: string}> = []
   const contentUpdates: Array<{id: string, content: string}> = []
 
   const graph: Graph = {
@@ -75,6 +76,12 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       activityWrites.push({id, label})
     },
+    setSession: async (id, session) => {
+      const target = blocks.get(id) ?? {id, properties: {}}
+      target.properties = {...target.properties, [PROPS.session]: session}
+      blocks.set(id, target)
+      sessionWrites.push({id, session})
+    },
     updateBlockContent: async (id, content) => {
       const target = blocks.get(id) ?? {id, properties: {}}
       target.content = content
@@ -90,7 +97,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, propWrites, activityWrites, contentUpdates}
+  return {graph, blocks, replies, propWrites, activityWrites, sessionWrites, contentUpdates}
 }
 
 const memoryState = (
@@ -158,6 +165,29 @@ describe('mention lifecycle', () => {
 
     const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
     expect(prompt).toContain('[[claude]] summarize inbox')
+  })
+
+  it('persists the session id mid-run, even when the terminal result loses it', async () => {
+    const {graph, blocks, sessionWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] do a slow thing'}},
+    })
+    // The run emits its session on the first init line (via onEvent), then
+    // is killed and returns a terminal result with NO sessionId — as a
+    // timed-out/crashed run does. Only the EARLY write can have persisted
+    // it, so this fails if onEvent stops recording the session.
+    const runTask = vi.fn(async (opts: {onEvent?: (e: {kind: 'session', sessionId: string}) => void}) => {
+      opts.onEvent?.({kind: 'session', sessionId: 'sess-live'})
+      return okRun({ok: false, timedOut: true, sessionId: null, resultText: ''})
+    })
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(sessionWrites).toEqual([{id: 'b-1', session: 'sess-live'}])
+    expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-live')
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
   })
 
   it('is idempotent: a processed mention does not re-run on later ticks', async () => {
