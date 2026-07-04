@@ -11,6 +11,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { agentRuntimeConfigDir, isErrnoException } from '@knowledge-medium/agent-cli/config'
 import { normalizeProfileName } from '@knowledge-medium/agent-cli/client'
+import { WATCH_EVENTS_MAX_SETTLE_MS, WATCH_EVENTS_MAX_TABLES } from '@knowledge-medium/agent-cli/protocol'
 import { isReadOnlySql } from './mcpShared.js'
 
 /** Block-property namespace the daemon owns. Kept short and stable —
@@ -31,6 +32,11 @@ export const PROPS = {
   error: 'claude:error',
   /** Marks daemon-authored reply blocks so watchers never re-trigger on them. */
   reply: 'claude:reply',
+  /** Transient "what the run is doing right now" label (e.g. a tool
+   *  name humanized by the runner's stream-json parser). Cleared
+   *  (written as '') on every terminal status write so a stale label
+   *  never outlives the run. */
+  activity: 'claude:activity',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
@@ -55,6 +61,12 @@ const watcherBase = {
    *  session via the km MCP channel port; that session completes the
    *  lifecycle itself using the graph tools. */
   delivery: z.enum(['spawn', 'channel']).default('spawn'),
+  /** Which CLI runs the task. 'claude' (default) bills the Claude
+   *  subscription; 'codex' bills the ChatGPT plan (OpenAI's `codex`
+   *  CLI) and gets the km MCP server injected plus its own built-ins.
+   *  allowedTools / defaultAllowedTools are claude-only and ignored for
+   *  a codex watcher. */
+  executor: z.enum(['claude', 'codex']).default('claude'),
 }
 
 const backlinksWatcherSchema = z.strictObject({
@@ -65,8 +77,18 @@ const backlinksWatcherSchema = z.strictObject({
   /** Resume the nearest ancestor thread session when present. */
   resume: z.boolean().default(true),
   /** Don't claim a mention until the block has been quiet this long —
-   *  otherwise the daemon snapshots (and bills) a half-typed request. */
-  quietMs: z.number().int().nonnegative().default(15_000),
+   *  otherwise the daemon snapshots (and bills) a half-typed request.
+   *  Capped at the tab-side settleMs bound: the push watcher registers
+   *  with settleMs = quietMs, and an over-cap value would fail the
+   *  tab's schema — misdiagnosed as an unsupported bundle. */
+  quietMs: z.number().int().nonnegative()
+    .max(WATCH_EVENTS_MAX_SETTLE_MS, `quietMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
+    .default(15_000),
+  /** Stream the in-progress reply text into the reply block as the run
+   *  goes, instead of posting it only once at the end. Writes are
+   *  throttled to ~1.5s apart — each one is a synced graph mutation, so
+   *  leave this off for watchers where that churn matters. */
+  streamReply: z.boolean().default(false),
 })
 
 const queryWatcherSchema = z.strictObject({
@@ -82,6 +104,10 @@ const queryWatcherSchema = z.strictObject({
   params: z.array(z.unknown()).default([]),
   /** Cap on rows folded into one prompt; overflow is summarized. */
   maxRowsPerFire: z.number().int().positive().default(100),
+  /** Tables whose changes re-run the query for PUSH detection (the
+   *  in-tab watch-events registration; default: blocks). The polling
+   *  sweep ignores this. */
+  tables: z.array(z.string().min(1)).max(WATCH_EVENTS_MAX_TABLES).optional(),
 })
 
 export const watcherSchema = z.discriminatedUnion('kind', [
@@ -107,8 +133,37 @@ export const configSchema = z.strictObject({
       return false
     }
   }, {message: 'profile names may only contain letters, numbers, underscores, dots, and dashes'}),
+  /** Sweep cadence. With push active (see `push`) this is only the
+   *  correctness backstop — 30s is plenty; without push it is the
+   *  detection latency, so keep it low. */
   pollIntervalMs: z.number().int().positive().default(5_000),
+  /** Register in-tab watch-events watchers and react to their settle
+   *  events immediately, demoting the poll to a slow sweep. Falls back
+   *  to pure polling when the tab/bridge doesn't support it. */
+  push: z.boolean().default(true),
   claudeBin: z.string().default('claude'),
+  /** Path/name of the codex CLI, for watchers with `executor: 'codex'`. */
+  codexBin: z.string().default('codex'),
+  /** Which account a run's tokens bill to. 'subscription' (default,
+   *  safe): scrub every API-key/token/provider-reroute env var from the
+   *  child so an ambient key can't SILENTLY redirect an unattended
+   *  daemon onto usage-based billing — the CLI's plan login (OAuth) then
+   *  wins. 'api': deliberately opt IN to usage-based billing/credits —
+   *  the scrub is skipped and the CLI uses whatever credential the env
+   *  or login provides. Making it a config field (not an env accident)
+   *  is the point: possible on purpose, hard by accident. NB: a key
+   *  stored via `claude`/`codex` login (auth.json / apiKeyHelper) lives
+   *  outside the env and CANNOT be scrubbed — see the startup log. */
+  billing: z.enum(['subscription', 'api']).default('subscription'),
+  /** Tools EVERY spawned run may use, beyond the km MCP graph tools;
+   *  per-watcher `allowedTools` adds on top. Defaults to web research
+   *  (WebSearch + WebFetch) — the common "look this up for me" mention
+   *  needs it, and neither tool touches the local machine. TRADE-OFF:
+   *  WebFetch ingests arbitrary page text, so a prompt-injected page
+   *  can steer a run that also holds graph WRITE tools — including
+   *  exfiltrating note content through crafted fetch URLs. Accepted
+   *  default here; set `defaultAllowedTools: []` to run graph-only. */
+  defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch']),
   maxConcurrent: z.number().int().positive().default(2),
   /** Global spend circuit-breaker: at most this many run launches
    *  (spawns or channel deliveries) per rolling hour, across all

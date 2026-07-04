@@ -19,6 +19,7 @@ import { keyboardAwareScroll } from '@/utils/keyboardAwareScroll.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { notifyBlockEditResumed, notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -110,6 +111,18 @@ export const BlockEditor = ({
   // is detached but the deletion never persisted, and a
   // restore-vs-flush race can drop the user's text.
   useLayoutEffect(() => flushDebouncers, [flushDebouncers])
+
+  // Leaving this block's editor (unmount / block switch) is the "done
+  // editing" signal — consumers like watch-events short-circuit their
+  // settle window on it. The debounced content commit above may still
+  // be in flight when this fires; subscribers re-check after a beat.
+  useEffect(() => {
+    // Mounting means the user is editing (again): revoke whatever the
+    // last settled signal implied — e.g. a lingering blur exemption
+    // must not vouch for a block being retyped right now.
+    notifyBlockEditResumed(block.id)
+    return () => notifyBlockEditSettled(block.id)
+  }, [block.id])
 
   useEffect(() => {
     if (!blockEditData || !editorView) return

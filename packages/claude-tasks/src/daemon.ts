@@ -24,7 +24,10 @@ import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
+import { createExemptionPool, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
+import { runCodex } from './codexRunner.js'
+import { reportBillingPosture } from './billing.js'
 import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, encodeBlockedWikilinks, MCP_SERVER_NAME } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
@@ -44,26 +47,40 @@ const parseArgs = (argv: string[]) => {
 // Single-instance lock — see pidfile.ts for the takeover semantics.
 const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'claude-tasks.pid')
 
-/** Generated --mcp-config for spawned runs: the km server, bound to the
- *  daemon's own profile, with watcher targets blocked from write-back
- *  (the MCP server resolves each name to its page's full alias set +
- *  id itself). */
-const writeMcpConfig = async (config: DaemonConfig): Promise<string> => {
+/** The km MCP server definition, shared between claude's --mcp-config
+ *  JSON file (writeMcpConfig) and codex's `-c mcp_servers.*` overrides
+ *  (runOptionsFor → runCodex, wired below) — one source of truth for
+ *  command/args/env so the two executors can never drift apart. */
+const buildMcpServerDef = (config: DaemonConfig) => {
   const here = path.dirname(fileURLToPath(import.meta.url))
   const mcpServerScript = path.join(here, 'mcp.js')
   const blockedTargets = config.watchers
     .filter(watcher => watcher.kind === 'backlinks')
     .map(watcher => watcher.target)
 
+  return {
+    name: MCP_SERVER_NAME,
+    command: process.execPath,
+    args: [mcpServerScript],
+    env: {
+      AGENT_RUNTIME_PROFILE: config.profile,
+      ...(blockedTargets.length > 0 ? {[BLOCKED_WIKILINKS_ENV]: encodeBlockedWikilinks(blockedTargets)} : {}),
+    },
+  }
+}
+
+/** Generated --mcp-config for spawned claude runs: the km server, bound
+ *  to the daemon's own profile, with watcher targets blocked from
+ *  write-back (the MCP server resolves each name to its page's full
+ *  alias set + id itself). */
+const writeMcpConfig = async (config: DaemonConfig): Promise<string> => {
+  const serverDef = buildMcpServerDef(config)
   const mcpConfig = {
     mcpServers: {
-      [MCP_SERVER_NAME]: {
-        command: process.execPath,
-        args: [mcpServerScript],
-        env: {
-          AGENT_RUNTIME_PROFILE: config.profile,
-          ...(blockedTargets.length > 0 ? {[BLOCKED_WIKILINKS_ENV]: encodeBlockedWikilinks(blockedTargets)} : {}),
-        },
+      [serverDef.name]: {
+        command: serverDef.command,
+        args: serverDef.args,
+        env: serverDef.env,
       },
     },
   }
@@ -91,6 +108,10 @@ const main = async () => {
 
   await acquirePidfile({file: pidfilePath()})
 
+  // Say — up front and every start — what these runs bill to, so an
+  // accidental usage-based-billing setup is visible, not silent.
+  for (const line of reportBillingPosture(config, process.env).lines) log(line)
+
   let stopping = false
   const wake = new AbortController()
   const stop = (signal: string) => {
@@ -101,17 +122,34 @@ const main = async () => {
   process.on('SIGINT', () => stop('SIGINT'))
   process.on('SIGTERM', () => stop('SIGTERM'))
 
+  // Push events request an immediate tick; requests are COALESCED into
+  // the single main loop (never concurrent with the sweep tick) and a
+  // request landing mid-tick re-ticks right after — the tick may have
+  // snapshotted state from before that event's write.
+  let tickRequested = false
+  // Not a listener registry: one-shot sleep-wakers that each remove
+  // themselves the instant they fire (see `finish` below). CallbackSet's
+  // snapshot-on-notify / exception-isolation semantics don't apply.
+  // eslint-disable-next-line callback-set/prefer-callback-set -- one-shot self-removing wakers, not an add/notify/unsubscribe registry
+  const tickWaiters = new Set<() => void>()
+
   // Interruptible sleep: resolves on timeout OR immediately when stop()
-  // fires, so shutdown isn't stuck behind a full poll/retry interval.
-  const nap = (ms: number) => new Promise<void>(resolve => {
-    if (stopping) return resolve()
-    const timer = setTimeout(() => {
-      wake.signal.removeEventListener('abort', onAbort)
+  // fires (and, with wakeOnTick, when a push event requests a tick), so
+  // shutdown isn't stuck behind a full poll/retry interval.
+  const sleep = (ms: number, opts: {wakeOnTick?: boolean} = {}) => new Promise<void>(resolve => {
+    if (stopping || (opts.wakeOnTick && tickRequested)) return resolve()
+    const timer = setTimeout(finish, ms)
+    function finish() {
+      clearTimeout(timer)
+      wake.signal.removeEventListener('abort', finish)
+      tickWaiters.delete(finish)
       resolve()
-    }, ms)
-    const onAbort = () => { clearTimeout(timer); resolve() }
-    wake.signal.addEventListener('abort', onAbort, {once: true})
+    }
+    wake.signal.addEventListener('abort', finish, {once: true})
+    if (opts.wakeOnTick) tickWaiters.add(finish)
   })
+  const nap = (ms: number) => sleep(ms)
+  const napOrTick = (ms: number) => sleep(ms, {wakeOnTick: true})
 
   const client = createBridgeClient({profile: config.profile, timeoutMs: 60_000})
 
@@ -149,16 +187,31 @@ const main = async () => {
 
   const mcpConfigPath = await writeMcpConfig(config)
   log(`mcp config: ${mcpConfigPath}`)
+  const mcpServerDef = buildMcpServerDef(config)
 
   const channelSecret = config.watchers.some(watcher => watcher.delivery === 'channel')
     ? await loadOrCreateChannelSecret()
     : null
 
+  const graph = createGraph(client)
+
   const engine = createEngine({
     config,
-    graph: createGraph(client),
+    graph,
     state: createStateStore(config.statePath ?? defaultStatePath()),
-    runTask: options => runClaude(options),
+    runTask: options => options.executor === 'codex'
+      ? runCodex({
+        codexBin: config.codexBin,
+        prompt: options.prompt,
+        cwd: options.cwd,
+        model: options.model,
+        resumeSessionId: options.resumeSessionId,
+        timeoutMs: options.timeoutMs,
+        billing: options.billing,
+        onEvent: options.onEvent,
+        mcpServer: mcpServerDef,
+      })
+      : runClaude(options),
     deliverToChannel: async event => {
       const response = await fetch(`http://127.0.0.1:${config.channelPort}/`, {
         method: 'POST',
@@ -179,10 +232,36 @@ const main = async () => {
 
   log(`watching: ${config.watchers.map(watcher => `${watcher.name}(${watcher.kind})`).join(', ')} every ${config.pollIntervalMs}ms (max ${config.runsPerHour} runs/hour)`)
 
+  // Exemptions are keyed by the EMITTING watcher — only that watcher's
+  // tick may skip its still-typing gate for these blocks. The pool is
+  // bounded and freshness-checked at drain (see createExemptionPool).
+  const exemptionPool = createExemptionPool()
+  const requestTick: Parameters<typeof startPushLoop>[0]['requestTick'] = exemptions => {
+    if (exemptions) exemptionPool.add(exemptions)
+    tickRequested = true
+    for (const waiter of [...tickWaiters]) waiter()
+    tickWaiters.clear()
+  }
+  if (config.push && !args.once) {
+    void startPushLoop({
+      client,
+      config,
+      graph,
+      requestTick,
+      log,
+      isStopping: () => stopping,
+      nap,
+      stopSignal: wake.signal,
+    })
+  }
+
   while (!stopping) {
-    await engine.tick()
+    tickRequested = false
+    // Drain the exemptions INTO this tick — ids arriving mid-tick stay
+    // pending and re-tick immediately via tickRequested.
+    await engine.tick({quietExemptByWatcher: exemptionPool.drain()})
     if (args.once) break
-    await nap(config.pollIntervalMs)
+    await napOrTick(config.pollIntervalMs)
   }
 
   await engine.drain()

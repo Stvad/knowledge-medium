@@ -280,6 +280,119 @@ export const searchCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+// ----- read-only SQL guard --------------------------------------------
+
+/** Side-effecting SQL functions PowerSync registers on the SAME wa-sqlite
+ *  connection the bridge uses — `SELECT powersync_clear(1)` wipes local
+ *  (incl. un-uploaded) data, `powersync_replace_schema` / `_control`
+ *  corrupt schema/sync state. A `SELECT` prologue does NOT make a
+ *  statement read-only here, so these must be denied regardless of
+ *  prologue. Match the bare `powersync_` TOKEN, not `powersync_` + `(`:
+ *  a SQLite comment counts as whitespace, so a comment wedged between the
+ *  name and its paren makes a valid call that a `\s*\(` guard would miss
+ *  — but the function name itself must appear as one contiguous
+ *  identifier to be callable (a comment can't split it), so the bare
+ *  token match is comment-proof. The app registers no other writable
+ *  UDFs (verified), so this family is the whole vector. */
+const SIDE_EFFECTING_FN = /\bpowersync_/i
+
+/** Textual read-only enforcement, shared by every surface that accepts
+ *  SQL it will run repeatedly or on someone else's authority (the km MCP
+ *  graph tools, claude-tasks watcher configs, watch-events registrations,
+ *  the bridge's read-only token scope): single statement, no
+ *  side-effecting function call, and either a SELECT/PRAGMA-info/EXPLAIN
+ *  prologue or a WITH containing no mutating keyword — CTEs can head
+ *  `WITH … UPDATE/INSERT/DELETE`, so `with` alone proves nothing. The
+ *  keyword/function scan can false-positive on string literals; rewrite
+ *  the query (or use the write tools) in that case. */
+export const isReadOnlySql = (sql: string): boolean => {
+  const body = sql.trim().replace(/;\s*$/, '')
+  if (body.includes(';')) return false
+  if (SIDE_EFFECTING_FN.test(body)) return false
+  if (/^(select|pragma table_info|explain)\b/i.test(body)) return true
+  if (/^with\b/i.test(body)) {
+    return !/\b(insert|update|delete|replace|drop|alter|create|vacuum|attach|detach|reindex)\b/i.test(body)
+  }
+  return false
+}
+
+// ----- watch-events (push detection) ----------------------------------
+
+/** Schema bounds, exported so consumers building registrations (e.g.
+ *  the claude-tasks daemon's config) can validate against the SAME
+ *  limits — an over-cap value fails the tab's schema at registration
+ *  time, where it's indistinguishable from an old bundle. */
+export const WATCH_EVENTS_MAX_SETTLE_MS = 600_000
+export const WATCH_EVENTS_MAX_TABLES = 8
+
+const watcherSettleMsField = {
+  /** Quiet window: the result set must be stable this long before an
+   *  event is emitted (restarted on every further change). */
+  settleMs: z.number().int().min(0).max(WATCH_EVENTS_MAX_SETTLE_MS).optional(),
+}
+
+/** Watch an arbitrary read-only query: the tab re-runs it on changes to
+ *  `tables` and emits when the result set settles on a new value. */
+export const watchEventsSqlWatcherSchema = z.looseObject({
+  kind: z.literal('sql'),
+  name: z.string().min(1),
+  sql: z.string().refine(isReadOnlySql, {
+    message: 'watcher sql must be a single read-only statement (SELECT / PRAGMA table_info / EXPLAIN, or a non-mutating WITH)',
+  }),
+  params: z.array(z.unknown()).optional(),
+  /** Tables whose changes re-run the query (default: blocks). */
+  tables: z.array(z.string().min(1)).max(WATCH_EVENTS_MAX_TABLES).optional(),
+  ...watcherSettleMsField,
+})
+
+/** Watch the backlinks of one block/page — the tab owns the query shape
+ *  so consumers don't hand-roll reference-table SQL. */
+export const watchEventsBacklinksWatcherSchema = z.looseObject({
+  kind: z.literal('backlinks'),
+  name: z.string().min(1),
+  targetId: z.string().min(1),
+  ...watcherSettleMsField,
+})
+
+export const watchEventsWatcherSchema = z.discriminatedUnion('kind', [
+  watchEventsSqlWatcherSchema,
+  watchEventsBacklinksWatcherSchema,
+])
+export type WatchEventsWatcher = z.infer<typeof watchEventsWatcherSchema>
+
+/** Replace `consumer`'s whole watcher registration (empty = unregister).
+ *  Registrations live in the tab: they die with it and expire after
+ *  `ttlMs` without a refresh, so consumers re-send this periodically. */
+export const watchEventsCommandSchema = z.looseObject({
+  type: z.literal('watch-events'),
+  consumer: z.string().min(1),
+  watchers: z.array(watchEventsWatcherSchema).max(64)
+    // Names key the consumer's exemption pools — duplicates would merge
+    // two watchers' settle semantics under one name.
+    .refine(
+      watchers => new Set(watchers.map(watcher => watcher.name)).size === watchers.length,
+      {message: 'watcher names must be unique within a registration'},
+    ),
+  ttlMs: z.number().int().min(1_000).max(24 * 3_600_000).optional(),
+  ...commandIdField,
+})
+
+/** One event as stored/delivered by the bridge's events channel. */
+export interface BridgeEventRecord {
+  seq: number
+  receivedAt: number
+  clientId: string
+  event: Record<string, unknown>
+}
+
+/** GET /runtime/events/next response. `reset` marks a stale consumer
+ *  cursor (bridge restarted): adopt `nextSeq` and assume missed events. */
+export interface EventsNextResponse {
+  events: BridgeEventRecord[]
+  nextSeq: number
+  reset?: boolean
+}
+
 /** Canonical commands the CLI emits. The 1:1 mapping to kmagent
  *  verbs makes this the right type for CLI construction sites. */
 export const knownCommandSchema = z.discriminatedUnion('type', [
@@ -304,6 +417,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   pageCommandSchema,
   dailyNoteCommandSchema,
   searchCommandSchema,
+  watchEventsCommandSchema,
 ])
 
 /** Strict shape for any known wire command. CLI authors construct
@@ -341,6 +455,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   pageCommandSchema,
   dailyNoteCommandSchema,
   searchCommandSchema,
+  watchEventsCommandSchema,
 ])
 export type KnownAgentCommand = z.infer<typeof knownAgentCommandSchema>
 
@@ -502,6 +617,13 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     usage: 'kmagent search <query> [--limit <n>] [--workspace <id>]',
     description: 'Full-text search over block content; hydrated results.',
     readOnly: true,
+  },
+  'watch-events': {
+    usage: 'kmagent raw \'{"type":"watch-events","consumer":"...","watchers":[...]}\'',
+    description: "Replace a consumer's change-watcher registration in the tab; matching changes are pushed to the bridge events channel (GET /runtime/events/next).",
+    // Registers observers and emits events — mutates tab state, so a
+    // read-only token may not install them.
+    readOnly: false,
   },
 }
 

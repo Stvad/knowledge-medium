@@ -12,6 +12,7 @@ describe('parseConfig', () => {
     expect(config.profile).toBe('claude-tasks')
     expect(config.pollIntervalMs).toBe(5_000)
     expect(config.maxConcurrent).toBe(2)
+    expect(config.billing).toBe('subscription') // safe default
     const watcher = config.watchers[0]
     expect(watcher).toMatchObject({
       kind: 'backlinks',
@@ -69,6 +70,11 @@ describe('parseConfig', () => {
     })
     expect(config.statePath).toBe(path.join(os.homedir(), 'state.json'))
     expect(config.watchers[0].cwd).toBe(path.join(os.homedir(), 'code/repo'))
+  })
+
+  it('accepts an explicit opt-in to usage-based billing', () => {
+    expect(parseConfig({billing: 'api', watchers: []}).billing).toBe('api')
+    expect(() => parseConfig({billing: 'wallet', watchers: []})).toThrow()
   })
 
   it('parses query watchers with params', () => {

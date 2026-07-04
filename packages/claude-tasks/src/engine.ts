@@ -9,7 +9,7 @@ import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import type { Graph } from './graph.js'
-import type { ClaudeRunOptions, ClaudeRunResult } from './runner.js'
+import type { ClaudeRunOptions, ClaudeRunResult, RunEvent } from './runner.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
@@ -32,14 +32,68 @@ export interface EngineDeps {
   mcpConfigPath: string | null
   log: (message: string) => void
   now?: () => number
+  /** Sleep between deliverReply retries — injected so tests run instantly
+   *  (default is a real timer). */
+  delay?: (ms: number) => Promise<void>
 }
 
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
+/** A deleted block surfaces as an `updateBlock: block <id> not found`
+ *  error from the bridge (commands.ts updateBlock; repo.load filters
+ *  `deleted = 0`). Used to tell "placeholder was deleted, create a fresh
+ *  reply" apart from a transient bridge failure that must NOT spawn a
+ *  duplicate reply. Matched tightly (`block … not found`) so an unrelated
+ *  "not found" transient (a future "workspace not found" etc.) can't be
+ *  misread as a deleted placeholder and trigger a duplicate reply. */
+const isBlockNotFound = (error: unknown): boolean =>
+  /\bblock\b.*\bnot found\b/i.test(errorMessage(error))
+
+/** Backoff schedule for retrying the IDEMPOTENT streamed terminal write
+ *  (updateBlockContent) past a transient bridge blip — recovering the
+ *  billed answer instead of losing it to `status:error`. Bounded and
+ *  short (≈1.7s worst case) so a genuinely-down bridge fails fast. Only
+ *  the same-block/same-text update is retried; createReply is NOT (not
+ *  idempotent — a half-succeeded create would duplicate the reply). */
+const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
+
+/** claude:session values are executor-scoped: codex thread ids are
+ *  stored as `codex:<id>`, claude session ids bare (back-compat — every
+ *  session stored before executors existed is a claude one). A
+ *  follow-up under the OTHER executor starts a fresh thread instead of
+ *  forwarding the foreign id to resume, which fails the run outright
+ *  (`codex exec resume` only accepts codex thread ids, and vice versa). */
+const CODEX_SESSION_PREFIX = 'codex:'
+
+/** A resume id is forwarded verbatim as a bare argv token (`--resume <id>`
+ *  / `codex exec resume <id>`), and `claude:session` is a plain block
+ *  property that any MCP `update_block` caller — including a
+ *  prompt-injected run — can write. A planted value like
+ *  `codex:-c=tools.web_search="live"` would de-prefix to a `-c` flag and
+ *  inject live codex config on the next follow-up. Real session/thread
+ *  ids are UUID/token-shaped, so anything with a leading dash or a
+ *  non-`[A-Za-z0-9_-]` char is rejected (→ fresh thread) before it can
+ *  reach argv. */
+const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/
+
+const storedSessionFor = (executor: 'claude' | 'codex', sessionId: string | null): string | null =>
+  sessionId && executor === 'codex' ? `${CODEX_SESSION_PREFIX}${sessionId}` : sessionId
+
+const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null): string | null => {
+  if (!stored) return null
+  const isCodexSession = stored.startsWith(CODEX_SESSION_PREFIX)
+  const bare = executor === 'codex'
+    ? (isCodexSession ? stored.slice(CODEX_SESSION_PREFIX.length) : null)
+    : (isCodexSession ? null : stored)
+  if (bare === null || !SESSION_ID_SHAPE.test(bare)) return null
+  return bare
+}
+
 export const createEngine = (deps: EngineDeps) => {
   const {config, graph, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
   const now = deps.now ?? Date.now
+  const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
 
   /** Live work, keyed by block id / query-watcher key / thread session.
    *  One structure serves the double-claim guard, the capacity gate,
@@ -105,6 +159,13 @@ export const createEngine = (deps: EngineDeps) => {
     persistLaunchTimes()
   }
 
+  // INVARIANT: callers must guarantee `key` is unique among LIVE launches.
+  // The .finally below deletes the key unconditionally, so if two live
+  // promises ever shared one key, the first to settle would evict the
+  // other from `running` — breaking drain()/capacity accounting for it.
+  // Today no path collides (serial ticks + the running.has prefilter +
+  // mutually-exclusive claim/park branches keep each source.id/query:/
+  // session: key to one live promise); this comment pins that requirement.
   const launch = (key: string, work: () => Promise<void>) => {
     const promise = work()
       .catch(error => log(`[${key}] run crashed: ${errorMessage(error)}`))
@@ -112,18 +173,24 @@ export const createEngine = (deps: EngineDeps) => {
     running.set(key, promise)
   }
 
-  const runOptionsFor = (watcher: Watcher, prompt: string, resumeSessionId?: string): ClaudeRunOptions => ({
+  const runOptionsFor = (
+    watcher: Watcher, prompt: string, resumeSessionId?: string, onEvent?: (event: RunEvent) => void,
+  ): ClaudeRunOptions => ({
     claudeBin: config.claudeBin,
     prompt,
     cwd: watcher.cwd ?? os.homedir(),
-    allowedTools: [
+    allowedTools: [...new Set([
       ...(mcpConfigPath ? KM_MCP_ALLOWED_TOOLS : []),
+      ...config.defaultAllowedTools,
       ...watcher.allowedTools,
-    ],
+    ])],
     mcpConfigPath: mcpConfigPath ?? undefined,
     model: watcher.model,
     resumeSessionId,
     timeoutMs: watcher.timeoutMs,
+    onEvent,
+    executor: watcher.executor,
+    billing: config.billing,
   })
 
   /** Park a task that exhausted its retries. Re-read + re-decide first
@@ -144,21 +211,63 @@ export const createEngine = (deps: EngineDeps) => {
 
   const processMention = async (
     watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
+    quietExempt: boolean,
   ) => {
     // Pre-claim bails spawned nothing — refund the budget slot recorded
     // at the launch decision so phantom launches can't defer real work.
     const block = await graph.getBlock(sourceId)
     if (!block) return refundLaunch(launchStamp)
-    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs})
+    const decision = decidePending({source: block, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
     if (!decision.pending) return refundLaunch(launchStamp)
     const ancestorBlocks = await graph.ancestors(sourceId)
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
-    const session = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
+    const session = watcher.resume
+      ? resumableSessionFor(watcher.executor, findThreadSession(block, ancestorBlocks))
+      : null
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
     if (sessionKey) running.set(sessionKey, Promise.resolve())
+
+    // Hoisted so the infra-catch below can prefer updating an
+    // already-created streamed reply block over posting a new one —
+    // and can drain the progress-write chain first, so a queued
+    // streamed-text write never lands AFTER (and clobbers) the note.
+    let replyId: string | null = null
+    let writes: Promise<unknown> = Promise.resolve()
+    // Last cumulative text streamed into the reply — kept so a FAILED run
+    // that had already streamed most of its (billed) answer appends the
+    // error note to that partial instead of discarding it.
+    let lastStreamedText = ''
+    // Set once a TERMINAL reply (the ok answer, or the failure/partial
+    // note) has been written. The infra-catch checks it so a transient
+    // blip on the *terminal props write* — which lands AFTER a good reply
+    // — can't re-enter deliverReply and clobber the answer (streamReply)
+    // or post a duplicate (fresh reply). See the catch below.
+    let terminalReplyDelivered = false
+
+    // Land `text` on the streamed placeholder if one exists, else create a
+    // fresh reply. The streamed update is idempotent (same block, same
+    // text), so a transient bridge blip on the terminal write is RETRIED
+    // (bounded backoff) to recover the billed answer rather than lose it.
+    // A NOT-FOUND (the user deleted the placeholder mid-run) breaks out to
+    // a single createReply. createReply itself is NOT retried — it isn't
+    // idempotent, so a half-succeeded create would duplicate the reply.
+    const deliverReply = async (text: string): Promise<void> => {
+      if (!replyId) { await graph.createReply(sourceId, text); return }
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await graph.updateBlockContent(replyId, text)
+          return
+        } catch (error) {
+          if (isBlockNotFound(error)) { await graph.createReply(sourceId, text); return }
+          if (attempt >= DELIVER_RETRY_DELAYS_MS.length) throw error
+          log(`[${watcher.name}] retrying reply write for ${sourceId} after a transient error: ${errorMessage(error)}`)
+          await delay(DELIVER_RETRY_DELAYS_MS[attempt])
+        }
+      }
+    }
 
     try {
       const attempt = taskAttempts(block) + 1
@@ -207,33 +316,90 @@ export const createEngine = (deps: EngineDeps) => {
         return
       }
 
-      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined))
+      // streamReply: post the reply block EARLY so its content can be
+      // updated as the run streams, instead of created once at the end.
+      if (watcher.streamReply) {
+        const streamedReply = await graph.createReply(sourceId, '💭 Claude is working…')
+        replyId = streamedReply.id
+      }
+
+      // All progress-driven graph writes funnel through one promise
+      // chain (hoisted above) so they can never reorder relative to
+      // each other (or to the final writes below, which drain it first).
+      let writeErrorLogged = false
+      const queueWrite = (work: () => Promise<unknown>) => {
+        writes = writes.then(work).catch(error => {
+          if (!writeErrorLogged) {
+            writeErrorLogged = true
+            log(`[${watcher.name}] progress write failed for ${sourceId}: ${errorMessage(error)}`)
+          }
+        })
+      }
+
+      let lastActivity: string | null = null
+      let lastTextWriteMs = 0
+      const onEvent = (event: RunEvent) => {
+        if (event.kind === 'activity') {
+          if (event.label === lastActivity) return
+          lastActivity = event.label
+          queueWrite(() => graph.setActivity(sourceId, event.label))
+        } else if (event.kind === 'text') {
+          const streamedReplyId = replyId
+          if (!streamedReplyId) return
+          lastStreamedText = event.text
+          const nowMs = now()
+          if (nowMs - lastTextWriteMs < 1_500) return
+          lastTextWriteMs = nowMs
+          queueWrite(() => graph.updateBlockContent(streamedReplyId, event.text))
+        }
+        // session events: ignored — the final result carries sessionId.
+      }
+
+      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent))
+      await writes // ordering guarantee: no progress write races the final one below
 
       if (result.ok) {
-        await graph.createReply(sourceId, result.resultText.trim() || '(claude returned an empty reply)')
-        await graph.setTaskProps(sourceId, {status: 'done', session: result.sessionId, nowMs: now()})
+        const finalText = result.resultText.trim() || `(${watcher.executor} returned an empty reply)`
+        await deliverReply(finalText)
+        terminalReplyDelivered = true
+        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
         const reason = result.timedOut
           ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
           : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
-        await graph.createReply(sourceId, `⚠️ claude-tasks run failed — ${reason}`)
-        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: result.sessionId, nowMs: now()})
+        const failureNote = `⚠️ claude-tasks run failed — ${reason}`
+        // Preserve a streamed partial: a run that timed out (or died)
+        // after streaming most of its billed answer keeps that text with
+        // the note appended, rather than replacing it with the one-liner.
+        const partial = lastStreamedText.trim()
+        await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
+        terminalReplyDelivered = true
+        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
         log(`[${watcher.name}] FAILED ${sourceId}: ${reason}`)
       }
     } catch (error) {
       // Infra failure between claim and reply (bridge blip, spawn error,
       // channel down): leave a visible trace AND status=error props.
       const reason = truncate(errorMessage(error))
-      await graph.createReply(sourceId, `⚠️ claude-tasks infrastructure error — ${reason}`).catch(() => {})
-      await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()}).catch(() => {})
+      const infraNote = `⚠️ claude-tasks infrastructure error — ${reason}`
+      // Drain any queued progress writes first — a streamed-text write
+      // landing after the note would silently replace it.
+      await writes.catch(() => {})
+      // Only post the infra note if no terminal reply landed yet. If the
+      // answer (or failure/partial note) was already delivered and the
+      // error came from the *props* write that follows it, re-delivering
+      // would overwrite the good answer (streamReply) or duplicate it
+      // (fresh reply) — so we leave the reply intact and only flip props.
+      if (!terminalReplyDelivered) await deliverReply(infraNote).catch(() => {})
+      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {
       if (sessionKey) running.delete(sessionKey)
     }
   }
 
-  const tickBacklinksWatcher = async (watcher: BacklinksWatcher) => {
+  const tickBacklinksWatcher = async (watcher: BacklinksWatcher, quietExemptBlockIds: ReadonlySet<string>) => {
     // Baseline stamp is taken BEFORE any awaited scan: a mention typed
     // while the first resolve/scan is in flight must not end up with
     // editedAtMs < baseline (it would be classed pre-baseline forever).
@@ -269,7 +435,8 @@ export const createEngine = (deps: EngineDeps) => {
     for (const source of sources) {
       if (running.has(source.id)) continue
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
-      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs})
+      const quietExempt = quietExemptBlockIds.has(source.id)
+      const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})
 
       if (preview.reason === 'attempts-exhausted') {
         // Terminal write (once) so the pre-filter skips it forever.
@@ -287,7 +454,7 @@ export const createEngine = (deps: EngineDeps) => {
       // Bails that provably spawned nothing (duplicate session, lost
       // claim, block gone) refund their slot inside processMention.
       const launchStamp = recordLaunch()
-      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp))
+      launch(source.id, () => processMention(watcher, source.id, source.deepLink, baselineMs, launchStamp, quietExempt))
     }
   }
 
@@ -355,7 +522,16 @@ export const createEngine = (deps: EngineDeps) => {
     })
   }
 
-  const tick = async () => {
+  const NO_EXEMPTIONS: ReadonlySet<string> = new Set()
+
+  /** `quietExemptByWatcher`: blocks whose quiet period was confirmed at
+   *  the source (blur / settle), keyed by the EMITTING watcher — only
+   *  that watcher may skip its still-typing gate for them, so a query
+   *  watcher's short settle can't vouch against a backlinks watcher's
+   *  longer quietMs. The push loop collects these from event payloads;
+   *  sweep ticks pass nothing. */
+  const tick = async (options: {quietExemptByWatcher?: ReadonlyMap<string, ReadonlySet<string>>} = {}) => {
+    const quietExemptByWatcher = options.quietExemptByWatcher
     if (!launchTimesLoaded) {
       launchTimes = await state.getLaunchTimes()
       pruneLaunchTimes()
@@ -363,8 +539,11 @@ export const createEngine = (deps: EngineDeps) => {
     }
     for (const watcher of config.watchers) {
       try {
-        if (watcher.kind === 'backlinks') await tickBacklinksWatcher(watcher)
-        else await tickQueryWatcher(watcher)
+        if (watcher.kind === 'backlinks') {
+          await tickBacklinksWatcher(watcher, quietExemptByWatcher?.get(watcher.name) ?? NO_EXEMPTIONS)
+        } else {
+          await tickQueryWatcher(watcher)
+        }
       } catch (error) {
         // Drop cached page ids on failure — the page may have been
         // deleted/recreated; the next tick re-resolves.

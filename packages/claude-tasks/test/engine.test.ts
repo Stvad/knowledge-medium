@@ -22,7 +22,9 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, editedAtMs: NOW, ...data}]),
   )
   const replies: Array<{parentId: string, content: string}> = []
-  const propWrites: Array<{id: string, status: string}> = []
+  const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
+  const activityWrites: Array<{id: string, label: string}> = []
+  const contentUpdates: Array<{id: string, content: string}> = []
 
   const graph: Graph = {
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
@@ -56,15 +58,28 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
         ...(args.session ? {[PROPS.session]: args.session} : {}),
         ...(args.attempts !== undefined ? {[PROPS.attempts]: args.attempts} : {}),
         ...(args.error !== undefined ? {[PROPS.error]: args.error ?? ''} : {}),
+        ...(args.activity !== undefined ? {[PROPS.activity]: args.activity ?? ''} : {}),
       }
       blocks.set(id, target)
-      propWrites.push({id, status: args.status})
+      propWrites.push({id, status: args.status, activity: args.activity})
     },
     createReply: async (parentId, content) => {
       replies.push({parentId, content})
       const reply: BlockData = {id: `reply-${replies.length}`, parentId, content, properties: {[PROPS.reply]: true}}
       blocks.set(reply.id, reply)
       return reply
+    },
+    setActivity: async (id, label) => {
+      const target = blocks.get(id) ?? {id, properties: {}}
+      target.properties = {...target.properties, [PROPS.activity]: label}
+      blocks.set(id, target)
+      activityWrites.push({id, label})
+    },
+    updateBlockContent: async (id, content) => {
+      const target = blocks.get(id) ?? {id, properties: {}}
+      target.content = content
+      blocks.set(id, target)
+      contentUpdates.push({id, content})
     },
     sqlAll: vi.fn(async () => []),
     blockViews: async ids => new Map(
@@ -75,7 +90,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, propWrites}
+  return {graph, blocks, replies, propWrites, activityWrites, contentUpdates}
 }
 
 const memoryState = (
@@ -120,6 +135,7 @@ const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
     mcpConfigPath: '/tmp/mcp.json',
     log: () => {},
     now: () => NOW,
+    delay: async () => {}, // no-op so deliverReply retries don't slow tests
     ...deps,
   })
 
@@ -383,6 +399,88 @@ describe('mention lifecycle', () => {
     expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBe('sess-root')
   })
 
+  it('never resumes a session across executors; stores codex threads executor-tagged', async () => {
+    // A thread started by the claude executor (bare session id) followed
+    // up under a codex watcher: `codex exec resume <claude-id>` would
+    // fail the run outright, so it must start FRESH instead.
+    const codexConfig = () => parseConfig({
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor: 'codex'}],
+    })
+    {
+      const {graph, blocks} = fakeGraph({
+        backlinks: [{id: 'b-child'}],
+        blocks: {
+          'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: 'claude-sess'}},
+          'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun({sessionId: 'thread-1'}))
+      const engine = engineWith({graph, runTask, config: codexConfig()})
+      await engine.tick()
+      await engine.drain()
+      expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBeUndefined()
+      // The new codex thread is stored tagged, so a claude follow-up
+      // won't try to `--resume` it either.
+      expect(blocks.get('b-child')?.properties?.[PROPS.session]).toBe('codex:thread-1')
+    }
+    // A codex-tagged session under a codex watcher resumes with the BARE id.
+    {
+      const {graph} = fakeGraph({
+        backlinks: [{id: 'b-child'}],
+        blocks: {
+          'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: 'codex:thread-9'}},
+          'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun())
+      const engine = engineWith({graph, runTask, config: codexConfig()})
+      await engine.tick()
+      await engine.drain()
+      expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBe('thread-9')
+    }
+    // A codex-tagged session under the CLAUDE executor starts fresh.
+    {
+      const {graph} = fakeGraph({
+        backlinks: [{id: 'b-child'}],
+        blocks: {
+          'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: 'codex:thread-9'}},
+          'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun())
+      const engine = engineWith({graph, runTask})
+      await engine.tick()
+      await engine.drain()
+      expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBeUndefined()
+    }
+  })
+
+  it('refuses to resume an argv-injection-shaped session id (starts fresh)', async () => {
+    // claude:session is a plain block property any MCP update_block caller
+    // can write; a planted flag-shaped value would otherwise ride into the
+    // resume argv (`codex exec resume <id>` / `--resume <id>`) as a live
+    // option. Anything that isn't UUID/token-shaped must start fresh.
+    for (const planted of ['codex:-c=tools.web_search="live"', '--dangerously-bypass', 'has space', 'a;b']) {
+      const executor = planted.startsWith('codex:') ? 'codex' : 'claude'
+      const {graph} = fakeGraph({
+        backlinks: [{id: 'b-child'}],
+        blocks: {
+          'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: planted}},
+          'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun())
+      const engine = engineWith({
+        graph,
+        runTask,
+        config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor}]}),
+      })
+      await engine.tick()
+      await engine.drain()
+      expect((runTask.mock.calls[0]?.[0] as {resumeSessionId?: string} | undefined)?.resumeSessionId).toBeUndefined()
+    }
+  })
+
   it('fires for a follow-up nested under a daemon reply (thread continuation)', async () => {
     const {graph, replies} = fakeGraph({
       backlinks: [{id: 'b-follow'}],
@@ -543,7 +641,7 @@ describe('mention lifecycle', () => {
     expect(second.runTask).not.toHaveBeenCalled()
   })
 
-  it('passes the km MCP allowlist plus watcher extras to the run', async () => {
+  it('passes the km MCP allowlist plus default web tools plus watcher extras to the run', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] with tools'}},
@@ -562,7 +660,328 @@ describe('mention lifecycle', () => {
 
     const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
     expect(tools).toContain('mcp__km__get_block')
+    expect(tools).toContain('WebSearch')
+    expect(tools).toContain('WebFetch')
     expect(tools).toContain('Bash(git:*)')
+  })
+
+  it('defaultAllowedTools: [] keeps runs graph-only (web-tools opt-out)', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] sensitive graph'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({
+        defaultAllowedTools: [],
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    const tools = (runTask.mock.calls[0][0] as {allowedTools: string[]}).allowedTools
+    expect(tools).toContain('mcp__km__get_block')
+    expect(tools).not.toContain('WebSearch')
+    expect(tools).not.toContain('WebFetch')
+  })
+
+  it('a watcher with executor: "codex" produces run options with executor "codex"', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] via codex'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor: 'codex'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask.mock.calls[0][0]).toMatchObject({executor: 'codex'})
+  })
+})
+
+describe('live progress streaming', () => {
+  it('activity events write setActivity on label CHANGE only, and the terminal write clears it', async () => {
+    const {graph, blocks, activityWrites, propWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] research this'}},
+    })
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, label?: string}) => void}) => {
+      options.onEvent?.({kind: 'activity', label: 'km: search'})
+      options.onEvent?.({kind: 'activity', label: 'km: search'}) // duplicate — must not re-write
+      options.onEvent?.({kind: 'activity', label: 'Searching the web'})
+      return okRun()
+    })
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(activityWrites).toEqual([
+      {id: 'b-1', label: 'km: search'},
+      {id: 'b-1', label: 'Searching the web'},
+    ])
+    // Terminal write clears the transient label so it never outlives the run.
+    expect(propWrites.at(-1)).toMatchObject({status: 'done', activity: null})
+    expect(blocks.get('b-1')?.properties?.[PROPS.activity]).toBe('')
+  })
+
+  it('streamReply watcher: early reply block, throttled text updates, final text replaces it, no duplicate reply', async () => {
+    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] write something long'}},
+    })
+    let clock = NOW
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, text?: string}) => void}) => {
+      options.onEvent?.({kind: 'text', text: 'Once up'}) // t+0: first write always allowed
+      clock += 500
+      options.onEvent?.({kind: 'text', text: 'Once upon a'}) // t+500: throttled, skipped
+      clock += 1_100
+      options.onEvent?.({kind: 'text', text: 'Once upon a time'}) // t+1600: past 1.5s, writes
+      return okRun({resultText: 'Once upon a time, the end.'})
+    })
+    const engine = createEngine({
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+      }),
+      state: memoryState(),
+      graph,
+      runTask,
+      deliverToChannel: vi.fn(async () => {}),
+      mcpConfigPath: '/tmp/mcp.json',
+      log: () => {},
+      now: () => clock,
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Exactly one reply block — created early, never a second one.
+    expect(replies).toHaveLength(1)
+    expect(replies[0]).toMatchObject({parentId: 'b-1', content: '💭 Claude is working…'})
+
+    // Throttled: only the first and third text events produced a streaming
+    // write; the run's own final write (always unconditional) lands after.
+    expect(contentUpdates.map(update => update.content)).toEqual([
+      'Once up', 'Once upon a time', 'Once upon a time, the end.',
+    ])
+    // All writes landed on the SAME early-created reply block.
+    const replyIds = new Set(contentUpdates.map(update => update.id))
+    expect(replyIds.size).toBe(1)
+    const finalReplyId = contentUpdates.at(-1)!.id
+    expect(blocks.get(finalReplyId)?.content).toBe('Once upon a time, the end.')
+  })
+
+  it('default (non-stream) watcher: no early reply, a single createReply at the end', async () => {
+    const {graph, replies, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] quick one'}},
+    })
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, text?: string}) => void}) => {
+      options.onEvent?.({kind: 'text', text: 'partial'}) // ignored: streamReply is off
+      return okRun({resultText: 'final'})
+    })
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(contentUpdates).toHaveLength(0)
+    expect(replies).toEqual([{parentId: 'b-1', content: 'final'}])
+  })
+
+  it('failure with streamReply: the warning text lands in the streamed block, not a new one', async () => {
+    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] break'}},
+    })
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'boom', resultText: ''})),
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(replies).toHaveLength(1) // the early streamed reply — no second block
+    const replyId = contentUpdates.at(-1)!.id
+    expect(blocks.get(replyId)?.content).toContain('run failed')
+    expect(blocks.get(replyId)?.content).toContain('boom')
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+  })
+
+  it('failure with a DELETED streamed placeholder: failure note falls back to a new reply, run reason preserved', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] break'}},
+    })
+    // The user deleted the placeholder mid-run: content updates to any
+    // reply block fail; createReply still works.
+    graph.updateBlockContent = async id => {
+      throw new Error(`block not found: ${id}`)
+    }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'boom', resultText: ''})),
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Placeholder + the fallback failure note.
+    expect(replies).toHaveLength(2)
+    expect(replies[1]!.content).toContain('run failed')
+    expect(replies[1]!.content).toContain('boom')
+    // Props record the RUN failure — not an infra error about the
+    // missing reply block.
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toContain('boom')
+  })
+
+  it('failure after streaming: preserves the billed partial and appends the note', async () => {
+    const {graph, blocks, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] long task'}},
+    })
+    const runTask = vi.fn(async (options: {onEvent?: (event: {kind: string, text?: string}) => void}) => {
+      options.onEvent?.({kind: 'text', text: 'Here is most of the answer'}) // billed, streamed
+      return okRun({ok: false, timedOut: true, resultText: ''})
+    })
+    const engine = engineWith({
+      graph, runTask,
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    const finalContent = blocks.get(contentUpdates.at(-1)!.id)?.content ?? ''
+    expect(finalContent).toContain('Here is most of the answer') // partial NOT discarded
+    expect(finalContent).toContain('timed out')                   // note appended
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+  })
+
+  it('transient final-write error does NOT duplicate the reply (only not-found falls back)', async () => {
+    const {graph, blocks, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ok task'}},
+    })
+    // A transient bridge blip on the final write — the placeholder still
+    // exists. Must NOT create a second reply block.
+    graph.updateBlockContent = async () => { throw new Error('bridge command timed out') }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Only the early placeholder — the failed update rethrew into the
+    // infra catch, which also can't write, so no duplicate reply block.
+    expect(replies).toHaveLength(1)
+    expect(replies[0]!.content).toBe('💭 Claude is working…')
+    // The run still lands in a terminal error state (props stick).
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+  })
+
+  it('transient blip on the terminal props-write (non-stream) does NOT duplicate the delivered answer', async () => {
+    const {graph, replies} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ok task'}},
+    })
+    // The reply lands fine; the blip hits the `status:done` props write
+    // that FOLLOWS it — the case the shared deliverReply refactor missed.
+    const realSetTaskProps = graph.setTaskProps
+    graph.setTaskProps = async (id, args) => {
+      if (args.status === 'done') throw new Error('bridge command timed out')
+      return realSetTaskProps(id, args)
+    }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Exactly one reply — the answer. The infra-catch must not post a
+    // second (infra-error) reply just because the props write blipped.
+    expect(replies).toEqual([{parentId: 'b-1', content: 'the answer'}])
+  })
+
+  it('transient blip on the terminal props-write (streamReply) does NOT clobber the delivered answer', async () => {
+    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ok task'}},
+    })
+    const realSetTaskProps = graph.setTaskProps
+    graph.setTaskProps = async (id, args) => {
+      if (args.status === 'done') throw new Error('bridge command timed out')
+      return realSetTaskProps(id, args)
+    }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // The streamed placeholder holds the final answer — the infra-catch
+    // must NOT overwrite it with the infrastructure-error note.
+    expect(replies).toHaveLength(1)
+    const replyId = contentUpdates.at(-1)!.id
+    expect(blocks.get(replyId)?.content).toBe('the answer')
+  })
+
+  it('transient blip on the terminal streamReply write is retried and recovers the billed answer', async () => {
+    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] ok task'}},
+    })
+    // The idempotent streamed update is safe to retry: one transient blip,
+    // then it lands. The answer must be recovered, not lost to status:error.
+    const realUpdate = graph.updateBlockContent
+    let updateCalls = 0
+    graph.updateBlockContent = async (id, content) => {
+      updateCalls += 1
+      if (updateCalls === 1) throw new Error('bridge command timed out')
+      return realUpdate(id, content)
+    }
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // Retry landed the answer on the existing placeholder — no fallback
+    // createReply (still one reply block), terminal state is done.
+    expect(replies).toHaveLength(1)
+    const replyId = contentUpdates.at(-1)!.id
+    expect(blocks.get(replyId)?.content).toBe('the answer')
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
   })
 })
 

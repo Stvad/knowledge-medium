@@ -20,6 +20,22 @@ const block = (overrides: Partial<BlockView> = {}): BlockView => ({
 })
 
 describe('decidePending', () => {
+  it('quietExempt bypasses the still-typing gate but not baseline or status', () => {
+    const typing = block({editedAtMs: NOW - 1_000})
+    expect(decidePending({source: typing, nowMs: NOW, quietMs: 5_000}).reason).toBe('still-typing')
+    // Source-confirmed quiet (blur / explicit ask): claim immediately.
+    expect(decidePending({source: typing, nowMs: NOW, quietMs: 5_000, quietExempt: true}).pending).toBe(true)
+
+    // The exemption is ONLY about quiet — history and claimed state hold.
+    const preBaseline = block({editedAtMs: NOW - 10_000})
+    expect(decidePending({source: preBaseline, nowMs: NOW, baselineMs: NOW - 5_000, quietExempt: true}).reason)
+      .toBe('pre-baseline')
+    const claimed = block({properties: {[PROPS.status]: 'done'}, editedAtMs: NOW - 1_000})
+    expect(decidePending({source: claimed, nowMs: NOW, quietMs: 5_000, quietExempt: true}).reason)
+      .toBe('already-processed')
+  })
+
+
   it('marks an unseen mention block as pending', () => {
     expect(decidePending({source: block(), nowMs: NOW}))
       .toEqual({pending: true, reason: 'pending'})

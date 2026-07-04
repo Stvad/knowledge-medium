@@ -9,9 +9,11 @@ import { agentTokenStore, agentTokensChangedEvent } from './tokens.ts'
 import { AgentTokensDialog, type AgentTokensDialogProps } from './AgentTokensDialog.tsx'
 import { BridgePairingDialog, type BridgePairingDialogProps } from './BridgePairingDialog.tsx'
 import { createAgentRuntimeContext, executeCommand } from './commands.ts'
+import { watchEventsRegistry } from './watchEvents.ts'
+import { blockEditResumed, blockEditSettled } from '@/editor/editSettleSignal.js'
 import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions } from './protocol.ts'
-import { knownAgentCommandSchema } from '@knowledge-medium/agent-cli/protocol'
+import { knownAgentCommandSchema, type KnownAgentCommand } from '@knowledge-medium/agent-cli/protocol'
 
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
@@ -332,12 +334,60 @@ export const startAgentRuntimeBridge = (
     wakeBridgeLoop(true)
   }
 
+  // watch-events emissions ride this bridge connection (same secret +
+  // clientId as result posts). The live-read of bridgeUrl() matters for
+  // the same reason as in the poll loop: pairings can change mid-flight.
+  watchEventsRegistry.setTransport(async event => {
+    await postJson(`${bridgeUrl()}/runtime/events`, event, abortController.signal, clientId)
+  })
+  // Editor blur short-circuits the settle window for that block —
+  // typed mentions fire the moment the user leaves them. Re-entering
+  // the editor revokes the blur exemption (quiet is no longer
+  // user-confirmed once they're back typing).
+  const offEditSettled = blockEditSettled.add(blockId =>
+    watchEventsRegistry.notifyBlockSettled(blockId))
+  const offEditResumed = blockEditResumed.add(blockId =>
+    watchEventsRegistry.notifyBlockEditing(blockId))
+
   window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
   window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
   window.addEventListener('focus', handleWakeEvent)
   window.addEventListener('hashchange', handleHashChanged)
   window.addEventListener('online', handleWakeEvent)
   document.addEventListener('visibilitychange', handleVisibilityChanged)
+
+  // Commands run DETACHED from the poll loop: a slow command (a hung
+  // eval, a long SQL) must not stall delivery of everything queued
+  // behind it — the daemon's polls, other CLI calls. Bounded so a
+  // command flood can't pile up unboundedly; the loop parks on a free
+  // slot instead of on completion of the command it just delivered.
+  const maxConcurrentCommands = 4
+  // Must sit comfortably BELOW the bridge server's 60s client TTL: a
+  // fully-parked tab neither registers nor polls, and parking right up
+  // to the TTL gets the client dropped (tokens gone, commands failed
+  // ClientGone) at exactly the park boundary.
+  const saturatedParkMs = 45_000
+  const inFlightCommands = new Set<Promise<void>>()
+
+  const runCommand = async (command: KnownAgentCommand, baseUrl: string) => {
+    let payload: unknown
+    try {
+      const value = await executeCommand(command, createAgentRuntimeContext(options))
+      payload = {ok: true, value: serializeValue(value)}
+    } catch (error) {
+      payload = {ok: false, error: serializeError(error)}
+    }
+    try {
+      await reportResult(command.commandId!, payload, baseUrl)
+    } catch (reportError) {
+      // No result channel left (bridge restarted / page going away). The
+      // submitter's own request times out; the poll loop's fetches carry
+      // the reconnect/backoff, so just surface it for debugging.
+      if (!abortController.signal.aborted) {
+        console.warn('Agent runtime: failed to report a command result.', reportError)
+      }
+    }
+  }
 
   const poll = async () => {
     while (!abortController.signal.aborted) {
@@ -392,17 +442,26 @@ export const startAgentRuntimeBridge = (
         }
 
         const command = parsed.data
-        try {
-          const value = await executeCommand(command, createAgentRuntimeContext(options))
-          await reportResult(command.commandId!, {
-            ok: true,
-            value: serializeValue(value),
-          }, baseUrl)
-        } catch (error) {
-          await reportResult(command.commandId!, {
-            ok: false,
-            error: serializeError(error),
-          }, baseUrl)
+        const execution = runCommand(command, baseUrl).finally(() => {
+          inFlightCommands.delete(execution)
+        })
+        inFlightCommands.add(execution)
+        if (inFlightCommands.size >= maxConcurrentCommands) {
+          // Saturated: wait for A slot, not for THIS command. The park
+          // also resolves on teardown (cleanup fires the wake) and after
+          // a generous cap — commands have no tab-side execution timeout,
+          // so a fleet of hung evals must degrade to a SOFT concurrency
+          // bound rather than stalling command delivery until reload.
+          // Re-register FIRST: the long-poll that delivered this command
+          // may have been held up to 25s server-side, and lastSeen + 25s
+          // + the park would breach the server's 60s client TTL (client
+          // dropped, tokens revoked). Registering caps the quiet gap at
+          // exactly the park duration.
+          await register(baseUrl)
+          await Promise.race([...inFlightCommands, waitForWakeOrTimeout(saturatedParkMs)])
+          if (inFlightCommands.size >= maxConcurrentCommands) {
+            console.warn(`Agent runtime: ${inFlightCommands.size} commands in flight past the saturation park — delivering anyway.`)
+          }
         }
       } catch {
         if (abortController.signal.aborted) return
@@ -432,6 +491,12 @@ export const startAgentRuntimeBridge = (
 
   return () => {
     abortController.abort()
+    // Registrations are useless without a transport — drop them so dead
+    // watchers don't keep re-running queries against a stopped bridge.
+    watchEventsRegistry.setTransport(null)
+    watchEventsRegistry.disposeAll()
+    offEditSettled()
+    offEditResumed()
     window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
     window.removeEventListener('focus', handleWakeEvent)
