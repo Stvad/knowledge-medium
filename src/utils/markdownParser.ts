@@ -71,17 +71,18 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
     let currentLineType: string;
     let processedContent: string;
 
-    const fenceOpen = /^(`{3,})/.exec(trimmedLine);
+    const fenceOpen = /^([`~])\1{2,}/.exec(trimmedLine);
     if (fenceOpen) {
-      // Fenced code block → ONE block. Consume through the closing fence or
-      // EOF, keep both fences, and never interpret the inner lines as list
-      // markers / headers. The closing fence is a run of AT LEAST as many
-      // backticks as the opener with nothing else on the line (CommonMark),
-      // so a reply can open with ```` to wrap content that itself contains
-      // ``` without closing early. The opening fence's leading indentation
-      // is stripped from every line so nested code doesn't carry the
-      // fence's indent; it nests like a plain line at that opening indent.
-      const closesFence = new RegExp('^`{' + fenceOpen[1].length + ',}$');
+      // Fenced code block → ONE block. Handles both ``` and ~~~ fences
+      // (CommonMark). Consume through the closing fence or EOF, keep both
+      // fences, and never interpret the inner lines as list markers /
+      // headers. The closer is a run of the SAME char, AT LEAST as long as
+      // the opener, with nothing else on the line — so a reply can open with
+      // ```` (or ~~~) to wrap content that itself contains ``` without
+      // closing early. The opening fence's leading indentation is stripped
+      // from every line so nested code doesn't carry the fence's indent; it
+      // nests like a plain line at that opening indent.
+      const closesFence = new RegExp('^' + fenceOpen[1] + '{' + fenceOpen[0].length + ',}$');
       currentLineRawIndent = getIndentationLevel(originalLineContent);
       currentLineType = 'text';
       const openingWs = originalLineContent.match(/^[ \t]*/)?.[0].length ?? 0;

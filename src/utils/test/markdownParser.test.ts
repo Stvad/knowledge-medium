@@ -247,5 +247,19 @@ Root
       const blocks = parseMarkdownToBlocks(input)
       expect(blocks.map(b => b.content)).toEqual(['````\n```\ninner\n```\n````', 'after'])
     })
+
+    it('handles ~~~ tilde fences, keeping inner - and # lines whole', () => {
+      const input = '~~~ts\n- not a bullet\n# not a header\n~~~'
+      const blocks = parseMarkdownToBlocks(input)
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0].content).toBe('~~~ts\n- not a bullet\n# not a header\n~~~')
+    })
+
+    it('a ~~~ fence is not closed by a ``` line (different fence char)', () => {
+      const input = '~~~\n```\ninner\n```\n~~~'
+      const blocks = parseMarkdownToBlocks(input)
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0].content).toBe('~~~\n```\ninner\n```\n~~~')
+    })
   })
 })
