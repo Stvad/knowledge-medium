@@ -4,6 +4,7 @@ import { actionsFacet } from '@/extensions/core.js'
 import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import { claudeStatusChipContribution } from './ClaudeStatusChip.tsx'
 import { askClaudeActions } from './askClaude.ts'
+import { cancelClaudeActions } from './cancelClaude.ts'
 
 const SOURCE = 'claude-tasks-companion'
 
@@ -21,4 +22,5 @@ export const claudeTasksCompanionPlugin: AppExtension = systemToggle({
 }).of([
   blockContentDecoratorsFacet.of(claudeStatusChipContribution, { source: SOURCE }),
   ...askClaudeActions.map(action => actionsFacet.of(action, { source: SOURCE })),
+  ...cancelClaudeActions.map(action => actionsFacet.of(action, { source: SOURCE })),
 ])

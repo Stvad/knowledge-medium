@@ -16,6 +16,9 @@ export const CLAUDE_PROPS = {
   activity: 'claude:activity',
   /** Written by the Ask Claude action (companion-owned, daemon-inert). */
   askedAt: 'claude:asked-at',
+  /** Written by the Cancel Claude action; the daemon clears it once the
+   *  running task is aborted and parked as `error: cancelled`. */
+  cancel: 'claude:cancel',
 } as const
 
 export type ChipKind = 'queued' | 'running' | 'done' | 'error'
@@ -29,6 +32,9 @@ export interface ChipState {
   errorMessage: string
   /** "What the run is doing now" — empty when absent/non-string. */
   activity: string
+  /** True while a running task has a pending `claude:cancel` the daemon
+   *  hasn't acted on yet. */
+  cancelling: boolean
 }
 
 type Properties = Record<string, unknown> | undefined
@@ -42,12 +48,14 @@ export const chipStateFor = (properties: Properties): ChipState | null => {
   const attempts = properties?.[CLAUDE_PROPS.attempts]
   const error = properties?.[CLAUDE_PROPS.error]
   const activity = properties?.[CLAUDE_PROPS.activity]
+  const cancel = properties?.[CLAUDE_PROPS.cancel]
   return {
     kind: status,
     updatedAtMs: typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : null,
     attempts: typeof attempts === 'number' && attempts > 0 ? Math.floor(attempts) : 1,
     errorMessage: typeof error === 'string' ? error : '',
     activity: typeof activity === 'string' ? activity : '',
+    cancelling: status === 'running' && Boolean(cancel),
   }
 }
 
