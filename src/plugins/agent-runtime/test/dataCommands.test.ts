@@ -455,6 +455,28 @@ describe('create-blocks-from-markdown command', () => {
     expect(subtree.find(row => row.content === 'Second')?.parentId).toBe(TOPIC_A)
   })
 
+  it('falls back to fresh roots when the streamed placeholder was deleted mid-run', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    const placeholder = await context.createBlock({parentId: TOPIC_A, content: '💭 working…'})
+    // The user deletes the placeholder before the run finishes.
+    await repo.tx(async tx => { await tx.delete(placeholder!.id) }, {scope: ChangeScope.BlockDefault})
+
+    const result = await executeCommand({
+      commandId: 'cbfm-5',
+      type: 'create-blocks-from-markdown',
+      parentId: TOPIC_A,
+      rootBlockId: placeholder!.id,
+      markdown: '- First\n- Second',
+      properties: {'claude:reply': true},
+    }, context) as CreateResult
+
+    // The (billed) answer is still posted — as fresh roots, not discarded.
+    expect(result.rootIds).not.toContain(placeholder!.id)
+    const subtree = await context.getSubtree(TOPIC_A)
+    expect(subtree.find(row => row.content === 'First')?.parentId).toBe(TOPIC_A)
+    expect(subtree.find(row => row.content === 'Second')?.parentId).toBe(TOPIC_A)
+  })
+
   it('keeps a fenced code block whole instead of splitting it', async () => {
     await create({id: TOPIC_A, content: 'mention'})
 

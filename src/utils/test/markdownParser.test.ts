@@ -239,5 +239,13 @@ Root
       const blocks = parseMarkdownToBlocks('intro\n```\ncode here')
       expect(blocks.map(b => b.content)).toEqual(['intro', '```\ncode here'])
     })
+
+    it('a longer ```` fence wraps inner ``` and closes only on a matching-length fence', () => {
+      // 4-backtick fence around content that itself contains a 3-backtick
+      // block — the inner ``` must NOT close it.
+      const input = '````\n```\ninner\n```\n````\nafter'
+      const blocks = parseMarkdownToBlocks(input)
+      expect(blocks.map(b => b.content)).toEqual(['````\n```\ninner\n```\n````', 'after'])
+    })
   })
 })

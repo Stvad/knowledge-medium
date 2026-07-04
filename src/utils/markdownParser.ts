@@ -71,13 +71,17 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
     let currentLineType: string;
     let processedContent: string;
 
-    if (trimmedLine.startsWith('```')) {
-      // Fenced code block → ONE block. Consume through the closing fence
-      // (a line that trims to exactly ```) or EOF, keep both fences, and
-      // never interpret the inner lines as list markers / headers. The
-      // opening fence's leading indentation is stripped from every line so
-      // nested code doesn't carry the fence's indent; the block nests like
-      // a plain line sitting at that opening-fence indent.
+    const fenceOpen = /^(`{3,})/.exec(trimmedLine);
+    if (fenceOpen) {
+      // Fenced code block → ONE block. Consume through the closing fence or
+      // EOF, keep both fences, and never interpret the inner lines as list
+      // markers / headers. The closing fence is a run of AT LEAST as many
+      // backticks as the opener with nothing else on the line (CommonMark),
+      // so a reply can open with ```` to wrap content that itself contains
+      // ``` without closing early. The opening fence's leading indentation
+      // is stripped from every line so nested code doesn't carry the
+      // fence's indent; it nests like a plain line at that opening indent.
+      const closesFence = new RegExp('^`{' + fenceOpen[1].length + ',}$');
       currentLineRawIndent = getIndentationLevel(originalLineContent);
       currentLineType = 'text';
       const openingWs = originalLineContent.match(/^[ \t]*/)?.[0].length ?? 0;
@@ -96,7 +100,7 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
         const fenceLine = lines[idx];
         fenceLines.push(stripOpeningIndent(fenceLine));
         idx++;
-        if (fenceLine.trim() === '```') break; // include the closing fence, then stop
+        if (closesFence.test(fenceLine.trim())) break; // include the closing fence, then stop
       }
       processedContent = fenceLines.join('\n').replace(/[ \t\r\n]+$/, '');
     } else {

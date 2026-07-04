@@ -349,22 +349,25 @@ const createBlocksFromMarkdown = async (
   const parsed = parseMarkdownToBlocks(input.markdown)
   const {properties, rootBlockId} = input
 
-  // Nothing parseable (blank/whitespace). If a placeholder was reserved,
-  // clear it to its (empty) final content so it isn't left saying
-  // "Claude is working…"; otherwise there's nothing to do.
+  // Nothing parseable (blank/whitespace). If a placeholder is still a live
+  // child of the mention, clear it so it isn't left saying "Claude is
+  // working…"; if the user deleted/moved it, there's nothing to do (don't
+  // resurrect or blank a moved block).
   if (parsed.length === 0) {
-    if (rootBlockId) {
-      await repo.tx(async tx => {
-        const existing = await tx.get(rootBlockId)
-        if (!existing) throw new Error(`create-blocks-from-markdown: rootBlockId ${rootBlockId} not found`)
-        await tx.update(rootBlockId, {
-          content: '',
-          ...(properties ? {properties: {...existing.properties, ...properties}} : {}),
-        })
-      }, {scope: ChangeScope.BlockDefault, description: 'agent runtime clear reply placeholder'})
-      return {ids: [rootBlockId], rootIds: [rootBlockId]}
-    }
-    return {ids: [], rootIds: []}
+    if (!rootBlockId) return {ids: [], rootIds: []}
+    let cleared = false
+    await repo.tx(async tx => {
+      const parent = await tx.get(input.parentId)
+      if (!parent) return
+      const child = (await tx.childrenOf(input.parentId, parent.workspaceId)).find(row => row.id === rootBlockId)
+      if (!child) return
+      cleared = true
+      await tx.update(rootBlockId, {
+        content: '',
+        ...(properties ? {properties: {...child.properties, ...properties}} : {}),
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'agent runtime clear reply placeholder'})
+    return cleared ? {ids: [rootBlockId], rootIds: [rootBlockId]} : {ids: [], rootIds: []}
   }
 
   const idMap = new Map<string, string>() // parsed temp id → real block id
@@ -385,25 +388,32 @@ const createBlocksFromMarkdown = async (
       [input.parentId, existingChildren.at(-1)?.orderKey ?? null],
     ])
 
+    // The placeholder is best-effort: the user may have deleted it (→ not a
+    // live child) or moved it out from under the mention (→ not in this
+    // child list) while the run was still streaming. Reuse it ONLY if it's
+    // still a live child of the mention; otherwise create every root fresh
+    // rather than throw away the (billed) answer or overwrite a moved block.
+    const reusableRoot = rootBlockId
+      ? existingChildren.find(child => child.id === rootBlockId)
+      : undefined
+
     let firstRootReused = false
     for (const block of parsed) {
       const isRoot = !block.parentId
       const realParentId = isRoot ? input.parentId : idMap.get(block.parentId!)!
 
-      // Reuse rootBlockId for the first root: overwrite content, merge
+      // Reuse the placeholder for the first root: overwrite content, merge
       // properties, keep its existing order key (it's already a child).
-      if (isRoot && rootBlockId && !firstRootReused) {
+      if (isRoot && reusableRoot && !firstRootReused) {
         firstRootReused = true
-        const existing = await tx.get(rootBlockId)
-        if (!existing) throw new Error(`create-blocks-from-markdown: rootBlockId ${rootBlockId} not found`)
-        const mergedProperties = properties ? {...existing.properties, ...properties} : undefined
-        await tx.update(rootBlockId, {
+        const mergedProperties = properties ? {...reusableRoot.properties, ...properties} : undefined
+        await tx.update(reusableRoot.id, {
           content: block.content,
           ...(mergedProperties !== undefined ? {properties: mergedProperties} : {}),
         })
-        idMap.set(block.id, rootBlockId)
-        rootIds.push(rootBlockId)
-        ids.push(rootBlockId)
+        idMap.set(block.id, reusableRoot.id)
+        rootIds.push(reusableRoot.id)
+        ids.push(reusableRoot.id)
         continue
       }
 
