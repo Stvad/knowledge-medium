@@ -11,8 +11,7 @@
  * the km MCP tools; per-watcher config can add more (e.g. Bash for a
  * repo-scoped watcher), which is a deliberate opt-in.
  */
-import { spawn as nodeSpawn } from 'node:child_process'
-import { StringDecoder } from 'node:string_decoder'
+import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 
 /** Progress observed while a run is in flight — fed to `onEvent` as the
  *  stream-json transcript arrives. `text` is CUMULATIVE: each event
@@ -39,6 +38,10 @@ export interface ClaudeRunOptions {
    *  thrown by the handler are caught and logged — a broken consumer
    *  must never kill the run. */
   onEvent?: (event: RunEvent) => void
+  /** Which CLI the engine should dispatch this run to (daemon.ts's
+   *  runTask wiring); the engine itself stays executor-agnostic — this
+   *  field just rides along with the rest of the run options. */
+  executor?: 'claude' | 'codex'
 }
 
 export interface ClaudeRunResult {
@@ -97,8 +100,9 @@ export const buildClaudeArgs = (options: ClaudeRunOptions): string[] => {
 
 /** Humanize a tool name for the `activity` event — this is what a user
  *  sees in the status chip while a run is in flight, so it should read
- *  as an action, not a raw tool identifier. */
-const humanizeToolName = (name: string): string => {
+ *  as an action, not a raw tool identifier. Exported for codexRunner.ts,
+ *  which maps its own tool-shaped fields through the same km rules. */
+export const humanizeToolName = (name: string): string => {
   if (name === 'WebSearch') return 'Searching the web'
   if (name === 'WebFetch') return 'Fetching a page'
   const kmMatch = /^mcp__km__(.+)$/.exec(name)
@@ -248,50 +252,26 @@ export const createStreamJsonParser = (onEvent?: (event: RunEvent) => void) => {
   return {feed, finish}
 }
 
-export type SpawnImpl = typeof nodeSpawn
+export type { SpawnImpl }
 
 export const runClaude = async (
   options: ClaudeRunOptions,
-  spawnImpl: SpawnImpl = nodeSpawn,
+  spawnImpl?: SpawnImpl,
 ): Promise<ClaudeRunResult> => {
   const args = buildClaudeArgs(options)
-  const child = spawnImpl(options.claudeBin, args, {
+  const parser = createStreamJsonParser(options.onEvent)
+
+  const {exitCode, timedOut, stderr} = await runJsonlProcess({
+    bin: options.claudeBin,
+    args,
+    prompt: options.prompt,
     cwd: options.cwd,
     env: scrubEnv(options.env ?? process.env),
-    stdio: ['pipe', 'pipe', 'pipe'],
+    timeoutMs: options.timeoutMs,
+    onStdoutText: text => parser.feed(text),
+    spawnImpl,
   })
 
-  // Prompt over stdin (see buildClaudeArgs). EPIPE just means the child
-  // died first — the exit path reports that better than a write error.
-  child.stdin?.on('error', () => {})
-  child.stdin?.end(options.prompt)
-
-  const parser = createStreamJsonParser(options.onEvent)
-  // StringDecoder, not per-chunk toString(): a multibyte character split
-  // across chunk boundaries must not decode as U+FFFD garbage inside the
-  // reply text (note content is routinely non-ASCII).
-  const stdoutDecoder = new StringDecoder('utf8')
-  const stderrDecoder = new StringDecoder('utf8')
-  let stderr = ''
-  child.stdout?.on('data', (chunk: Buffer) => parser.feed(stdoutDecoder.write(chunk)))
-  child.stderr?.on('data', (chunk: Buffer) => { stderr += stderrDecoder.write(chunk) })
-
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    child.kill('SIGTERM')
-    setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-    }, 5_000).unref()
-  }, options.timeoutMs)
-
-  const exitCode = await new Promise<number | null>((resolve, reject) => {
-    child.on('error', reject)
-    child.on('close', code => resolve(code))
-  }).finally(() => clearTimeout(timer))
-
-  parser.feed(stdoutDecoder.end())
-  stderr += stderrDecoder.end()
   const parsed = parser.finish()
   const ok = !timedOut && exitCode === 0 && parsed !== null && !parsed.isError
 

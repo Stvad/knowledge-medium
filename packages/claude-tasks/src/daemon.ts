@@ -26,6 +26,7 @@ import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
 import { createExemptionPool, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
+import { runCodex } from './codexRunner.js'
 import { BLOCKED_WIKILINKS_ENV, CHANNEL_PORT_ENV, encodeBlockedWikilinks, MCP_SERVER_NAME } from './mcpShared.js'
 import { CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
@@ -45,26 +46,40 @@ const parseArgs = (argv: string[]) => {
 // Single-instance lock — see pidfile.ts for the takeover semantics.
 const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'claude-tasks.pid')
 
-/** Generated --mcp-config for spawned runs: the km server, bound to the
- *  daemon's own profile, with watcher targets blocked from write-back
- *  (the MCP server resolves each name to its page's full alias set +
- *  id itself). */
-const writeMcpConfig = async (config: DaemonConfig): Promise<string> => {
+/** The km MCP server definition, shared between claude's --mcp-config
+ *  JSON file (writeMcpConfig) and codex's `-c mcp_servers.*` overrides
+ *  (runOptionsFor → runCodex, wired below) — one source of truth for
+ *  command/args/env so the two executors can never drift apart. */
+const buildMcpServerDef = (config: DaemonConfig) => {
   const here = path.dirname(fileURLToPath(import.meta.url))
   const mcpServerScript = path.join(here, 'mcp.js')
   const blockedTargets = config.watchers
     .filter(watcher => watcher.kind === 'backlinks')
     .map(watcher => watcher.target)
 
+  return {
+    name: MCP_SERVER_NAME,
+    command: process.execPath,
+    args: [mcpServerScript],
+    env: {
+      AGENT_RUNTIME_PROFILE: config.profile,
+      ...(blockedTargets.length > 0 ? {[BLOCKED_WIKILINKS_ENV]: encodeBlockedWikilinks(blockedTargets)} : {}),
+    },
+  }
+}
+
+/** Generated --mcp-config for spawned claude runs: the km server, bound
+ *  to the daemon's own profile, with watcher targets blocked from
+ *  write-back (the MCP server resolves each name to its page's full
+ *  alias set + id itself). */
+const writeMcpConfig = async (config: DaemonConfig): Promise<string> => {
+  const serverDef = buildMcpServerDef(config)
   const mcpConfig = {
     mcpServers: {
-      [MCP_SERVER_NAME]: {
-        command: process.execPath,
-        args: [mcpServerScript],
-        env: {
-          AGENT_RUNTIME_PROFILE: config.profile,
-          ...(blockedTargets.length > 0 ? {[BLOCKED_WIKILINKS_ENV]: encodeBlockedWikilinks(blockedTargets)} : {}),
-        },
+      [serverDef.name]: {
+        command: serverDef.command,
+        args: serverDef.args,
+        env: serverDef.env,
       },
     },
   }
@@ -163,6 +178,7 @@ const main = async () => {
 
   const mcpConfigPath = await writeMcpConfig(config)
   log(`mcp config: ${mcpConfigPath}`)
+  const mcpServerDef = buildMcpServerDef(config)
 
   const channelSecret = config.watchers.some(watcher => watcher.delivery === 'channel')
     ? await loadOrCreateChannelSecret()
@@ -174,7 +190,18 @@ const main = async () => {
     config,
     graph,
     state: createStateStore(config.statePath ?? defaultStatePath()),
-    runTask: options => runClaude(options),
+    runTask: options => options.executor === 'codex'
+      ? runCodex({
+        codexBin: config.codexBin,
+        prompt: options.prompt,
+        cwd: options.cwd,
+        model: options.model,
+        resumeSessionId: options.resumeSessionId,
+        timeoutMs: options.timeoutMs,
+        onEvent: options.onEvent,
+        mcpServer: mcpServerDef,
+      })
+      : runClaude(options),
     deliverToChannel: async event => {
       const response = await fetch(`http://127.0.0.1:${config.channelPort}/`, {
         method: 'POST',

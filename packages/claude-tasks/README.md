@@ -20,6 +20,24 @@ Runs execute via `claude -p` on a machine authenticated with `claude login`. The
 
 **Spend circuit-breaker:** `runsPerHour` (default 10) caps launches across all watchers in a rolling hour. Any watcher-loop bug or misconfigured query becomes a bounded bill, not an unbounded one. Additionally each task is attempted at most 3 times (crashed/dropped runs re-queue via the 30-min stale sweep) before being parked as `error` with a visible reply.
 
+## Executors
+
+By default a watcher runs `claude`. Set `"executor": "codex"` on any watcher to run [OpenAI's `codex` CLI](https://github.com/openai/codex) instead:
+
+```jsonc
+{
+  "kind": "backlinks",
+  "name": "codex-mentions",
+  "target": "codex",
+  "executor": "codex"
+}
+```
+
+- **Billing:** codex runs authenticate with `codex login` (ChatGPT plan) on this machine. The daemon scrubs `OPENAI_API_KEY` and `OPENAI_BASE_URL` from the child environment — same rationale as the claude billing invariant above (an API key beats the ChatGPT-plan OAuth session in codex's credential order).
+- **Sandboxing:** codex runs are spawned `-s read-only --skip-git-repo-check --ignore-user-config` — no filesystem/exec access beyond what the km MCP server exposes, and the user's own global `config.toml` (their MCP servers, hooks) is kept out of daemon runs, mirroring claude's `--strict-mcp-config`.
+- **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. `allowedTools` / `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
+- **Sessions don't cross executors:** `claude:session` ids are per-executor. Switching a watcher's `executor` doesn't carry its thread history over — a `--resume`/`resume` attempt with the other CLI's session id just fails into the normal error path (task retried, then parked after `MAX_ATTEMPTS`), it does not silently mix histories.
+
 ## Setup
 
 1. **Pair a dedicated bridge profile** (revocable independently of your interactive one) with a **read-write** token:

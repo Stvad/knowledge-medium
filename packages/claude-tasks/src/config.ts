@@ -61,6 +61,12 @@ const watcherBase = {
    *  session via the km MCP channel port; that session completes the
    *  lifecycle itself using the graph tools. */
   delivery: z.enum(['spawn', 'channel']).default('spawn'),
+  /** Which CLI runs the task. 'claude' (default) bills the Claude
+   *  subscription; 'codex' bills the ChatGPT plan (OpenAI's `codex`
+   *  CLI) and gets the km MCP server injected plus its own built-ins.
+   *  allowedTools / defaultAllowedTools are claude-only and ignored for
+   *  a codex watcher. */
+  executor: z.enum(['claude', 'codex']).default('claude'),
 }
 
 const backlinksWatcherSchema = z.strictObject({
@@ -136,6 +142,8 @@ export const configSchema = z.strictObject({
    *  to pure polling when the tab/bridge doesn't support it. */
   push: z.boolean().default(true),
   claudeBin: z.string().default('claude'),
+  /** Path/name of the codex CLI, for watchers with `executor: 'codex'`. */
+  codexBin: z.string().default('codex'),
   /** Tools EVERY spawned run may use, beyond the km MCP graph tools;
    *  per-watcher `allowedTools` adds on top. Defaults to web research
    *  (WebSearch + WebFetch) — the common "look this up for me" mention

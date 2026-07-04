@@ -605,6 +605,26 @@ describe('mention lifecycle', () => {
     expect(tools).not.toContain('WebSearch')
     expect(tools).not.toContain('WebFetch')
   })
+
+  it('a watcher with executor: "codex" produces run options with executor "codex"', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] via codex'}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor: 'codex'}],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(runTask.mock.calls[0][0]).toMatchObject({executor: 'codex'})
+  })
 })
 
 describe('live progress streaming', () => {

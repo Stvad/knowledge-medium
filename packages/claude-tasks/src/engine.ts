@@ -128,6 +128,7 @@ export const createEngine = (deps: EngineDeps) => {
     resumeSessionId,
     timeoutMs: watcher.timeoutMs,
     onEvent,
+    executor: watcher.executor,
   })
 
   /** Park a task that exhausted its retries. Re-read + re-decide first
