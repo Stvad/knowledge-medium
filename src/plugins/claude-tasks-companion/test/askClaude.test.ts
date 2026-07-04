@@ -66,4 +66,16 @@ describe('askClaude', () => {
     expect(row!.properties[CLAUDE_PROPS.updatedAt]).toBeUndefined()
     expect(row!.properties['claude:session']).toBe('session-1')
   })
+
+  it('clears a stale claude:activity label on requeue (it must not outlive the run it described)', async () => {
+    const block = await createBlock('re-ask-activity', 'summarize this', {
+      [CLAUDE_PROPS.status]: 'error',
+      [CLAUDE_PROPS.activity]: 'km: search',
+    })
+
+    await askClaude(block)
+
+    const row = await block.load()
+    expect(row!.properties[CLAUDE_PROPS.activity]).toBeUndefined()
+  })
 })

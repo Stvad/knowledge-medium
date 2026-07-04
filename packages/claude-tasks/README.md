@@ -98,6 +98,12 @@ Failures reply visibly (`⚠️ …`) and set `claude:status=error` + `claude:er
 - The default prompt forbids writing `[[claude]]`, and the MCP write tools **refuse** any reference to a watcher-target page — every alias of the page (`[[any-alias]]`) and its id in every block-ref form (`((id))`, `!((id))`, `[label](((id)))`). The daemon passes the target names (`KM_MCP_BLOCKED_WIKILINKS`); the MCP server resolves each page's full alias set + id itself and refreshes it every 10 min.
 - `runsPerHour` bounds whatever slips past both.
 
+## Live progress
+
+Runs use `claude -p --output-format stream-json` internally, so the daemon sees progress as the run goes, not just the final result. While a run is in flight, the source block carries `claude:activity` — a short label for whatever the run is doing right now (a tool name, humanized: `km: search`, `Searching the web`, `Fetching a page`, …). The companion UI's status chip shows it next to the elapsed time (`Claude · 12s · Searching the web`); the label is cleared the moment the run reaches a terminal state, so it never goes stale.
+
+Set `"streamReply": true` on a backlinks watcher to also stream the in-progress reply text into the reply block as it's written, instead of only posting it once at the end. Each streamed update is a real synced graph mutation (throttled to roughly one write per 1.5s), so leave it off for watchers where that write churn matters — the default (`false`) still posts the full reply in one shot when the run finishes.
+
 ## Push detection (watch-events)
 
 By default (`"push": true`) the daemon registers its watchers **inside the tab** via the bridge `watch-events` command: the tab re-runs each watcher's read-only query when its tables change, waits for the result set to be stable (`settleMs` = the watcher's `quietMs` for mentions), and pushes a `watcher-settled` event over the bridge events channel (`/runtime/events`). The daemon long-polls those events and ticks immediately — detection latency becomes "quiet period ends", instead of "next poll + quiet period".

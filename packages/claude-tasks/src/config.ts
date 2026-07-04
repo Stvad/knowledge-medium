@@ -32,6 +32,11 @@ export const PROPS = {
   error: 'claude:error',
   /** Marks daemon-authored reply blocks so watchers never re-trigger on them. */
   reply: 'claude:reply',
+  /** Transient "what the run is doing right now" label (e.g. a tool
+   *  name humanized by the runner's stream-json parser). Cleared
+   *  (written as '') on every terminal status write so a stale label
+   *  never outlives the run. */
+  activity: 'claude:activity',
 } as const
 
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
@@ -73,6 +78,11 @@ const backlinksWatcherSchema = z.strictObject({
   quietMs: z.number().int().nonnegative()
     .max(WATCH_EVENTS_MAX_SETTLE_MS, `quietMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
     .default(15_000),
+  /** Stream the in-progress reply text into the reply block as the run
+   *  goes, instead of posting it only once at the end. Writes are
+   *  throttled to ~1.5s apart — each one is a synced graph mutation, so
+   *  leave this off for watchers where that churn matters. */
+  streamReply: z.boolean().default(false),
 })
 
 const queryWatcherSchema = z.strictObject({

@@ -9,7 +9,7 @@ import { errorMessage } from '@knowledge-medium/agent-cli/client'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from '@knowledge-medium/agent-cli/subtreeOutline'
 import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './config.js'
 import type { Graph } from './graph.js'
-import type { ClaudeRunOptions, ClaudeRunResult } from './runner.js'
+import type { ClaudeRunOptions, ClaudeRunResult, RunEvent } from './runner.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
@@ -112,7 +112,9 @@ export const createEngine = (deps: EngineDeps) => {
     running.set(key, promise)
   }
 
-  const runOptionsFor = (watcher: Watcher, prompt: string, resumeSessionId?: string): ClaudeRunOptions => ({
+  const runOptionsFor = (
+    watcher: Watcher, prompt: string, resumeSessionId?: string, onEvent?: (event: RunEvent) => void,
+  ): ClaudeRunOptions => ({
     claudeBin: config.claudeBin,
     prompt,
     cwd: watcher.cwd ?? os.homedir(),
@@ -125,6 +127,7 @@ export const createEngine = (deps: EngineDeps) => {
     model: watcher.model,
     resumeSessionId,
     timeoutMs: watcher.timeoutMs,
+    onEvent,
   })
 
   /** Park a task that exhausted its retries. Re-read + re-decide first
@@ -161,6 +164,13 @@ export const createEngine = (deps: EngineDeps) => {
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
     if (sessionKey) running.set(sessionKey, Promise.resolve())
+
+    // Hoisted so the infra-catch below can prefer updating an
+    // already-created streamed reply block over posting a new one —
+    // and can drain the progress-write chain first, so a queued
+    // streamed-text write never lands AFTER (and clobbers) the note.
+    let replyId: string | null = null
+    let writes: Promise<unknown> = Promise.resolve()
 
     try {
       const attempt = taskAttempts(block) + 1
@@ -209,26 +219,76 @@ export const createEngine = (deps: EngineDeps) => {
         return
       }
 
-      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined))
+      // streamReply: post the reply block EARLY so its content can be
+      // updated as the run streams, instead of created once at the end.
+      if (watcher.streamReply) {
+        const streamedReply = await graph.createReply(sourceId, '💭 Claude is working…')
+        replyId = streamedReply.id
+      }
+
+      // All progress-driven graph writes funnel through one promise
+      // chain (hoisted above) so they can never reorder relative to
+      // each other (or to the final writes below, which drain it first).
+      let writeErrorLogged = false
+      const queueWrite = (work: () => Promise<unknown>) => {
+        writes = writes.then(work).catch(error => {
+          if (!writeErrorLogged) {
+            writeErrorLogged = true
+            log(`[${watcher.name}] progress write failed for ${sourceId}: ${errorMessage(error)}`)
+          }
+        })
+      }
+
+      let lastActivity: string | null = null
+      let lastTextWriteMs = 0
+      const onEvent = (event: RunEvent) => {
+        if (event.kind === 'activity') {
+          if (event.label === lastActivity) return
+          lastActivity = event.label
+          queueWrite(() => graph.setActivity(sourceId, event.label))
+        } else if (event.kind === 'text') {
+          const streamedReplyId = replyId
+          if (!streamedReplyId) return
+          const nowMs = now()
+          if (nowMs - lastTextWriteMs < 1_500) return
+          lastTextWriteMs = nowMs
+          queueWrite(() => graph.updateBlockContent(streamedReplyId, event.text))
+        }
+        // session events: ignored — the final result carries sessionId.
+      }
+
+      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent))
+      await writes // ordering guarantee: no progress write races the final one below
 
       if (result.ok) {
-        await graph.createReply(sourceId, result.resultText.trim() || '(claude returned an empty reply)')
-        await graph.setTaskProps(sourceId, {status: 'done', session: result.sessionId, nowMs: now()})
+        const finalText = result.resultText.trim() || '(claude returned an empty reply)'
+        // Fallback: the streamed block may be gone (user deleted the
+        // placeholder mid-run) — the billed run's output must still
+        // land somewhere rather than vanish into an error status.
+        if (replyId) await graph.updateBlockContent(replyId, finalText).catch(() => graph.createReply(sourceId, finalText))
+        else await graph.createReply(sourceId, finalText)
+        await graph.setTaskProps(sourceId, {status: 'done', session: result.sessionId, activity: null, nowMs: now()})
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
         const reason = result.timedOut
           ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
           : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
-        await graph.createReply(sourceId, `⚠️ claude-tasks run failed — ${reason}`)
-        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: result.sessionId, nowMs: now()})
+        if (replyId) await graph.updateBlockContent(replyId, `⚠️ claude-tasks run failed — ${reason}`)
+        else await graph.createReply(sourceId, `⚠️ claude-tasks run failed — ${reason}`)
+        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: result.sessionId, activity: null, nowMs: now()})
         log(`[${watcher.name}] FAILED ${sourceId}: ${reason}`)
       }
     } catch (error) {
       // Infra failure between claim and reply (bridge blip, spawn error,
       // channel down): leave a visible trace AND status=error props.
       const reason = truncate(errorMessage(error))
-      await graph.createReply(sourceId, `⚠️ claude-tasks infrastructure error — ${reason}`).catch(() => {})
-      await graph.setTaskProps(sourceId, {status: 'error', error: reason, nowMs: now()}).catch(() => {})
+      const infraNote = `⚠️ claude-tasks infrastructure error — ${reason}`
+      // Drain any queued progress writes first — a streamed-text write
+      // landing after the note would silently replace it.
+      await writes.catch(() => {})
+      if (replyId) await graph.updateBlockContent(replyId, infraNote).catch(() => {})
+      else await graph.createReply(sourceId, infraNote).catch(() => {})
+      await graph.setTaskProps(sourceId, {status: 'error', error: reason, activity: null, nowMs: now()}).catch(() => {})
       throw error
     } finally {
       if (sessionKey) running.delete(sessionKey)

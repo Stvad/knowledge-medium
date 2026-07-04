@@ -33,6 +33,7 @@ const REQUEUE_CLEARED_PROPS = [
   CLAUDE_PROPS.updatedAt,
   CLAUDE_PROPS.attempts,
   CLAUDE_PROPS.error,
+  CLAUDE_PROPS.activity,
   'claude:watcher',
 ] as const
 

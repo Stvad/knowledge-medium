@@ -36,6 +36,7 @@ const RunningChip = ({ chip }: { chip: ChipState }) => {
     <>
       <span className="animate-pulse text-amber-600">●</span>
       <span>Claude{elapsed ? ` · ${elapsed}` : ''}</span>
+      {chip.activity && <span className="truncate max-w-40"> · {chip.activity}</span>}
     </>
   )
 }
@@ -70,7 +71,7 @@ const chipBody = (chip: ChipState) => {
 
 /** Optimistic "queued" shown between the Ask Claude action and the
  *  daemon's claim writing real props. */
-const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', updatedAtMs: null, attempts: 1, errorMessage: ''}
+const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', updatedAtMs: null, attempts: 1, errorMessage: '', activity: ''}
 
 const ClaudeStatusChipRow = ({
   block,

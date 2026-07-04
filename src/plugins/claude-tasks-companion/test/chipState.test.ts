@@ -19,13 +19,17 @@ describe('chipStateFor', () => {
       'claude:status': 'running',
       'claude:updated-at': 1_000,
       'claude:attempts': 2,
-    })).toEqual({kind: 'running', updatedAtMs: 1_000, attempts: 2, errorMessage: ''})
+    })).toEqual({kind: 'running', updatedAtMs: 1_000, attempts: 2, errorMessage: '', activity: ''})
 
     expect(chipStateFor({'claude:status': 'done'})).toMatchObject({kind: 'done', attempts: 1})
     expect(chipStateFor({
       'claude:status': 'error',
       'claude:error': 'timed out after 600s',
     })).toMatchObject({kind: 'error', errorMessage: 'timed out after 600s'})
+    expect(chipStateFor({
+      'claude:status': 'running',
+      'claude:activity': 'km: search',
+    })).toMatchObject({kind: 'running', activity: 'km: search'})
   })
 
   it('sanitizes malformed metadata instead of propagating it', () => {
@@ -33,7 +37,8 @@ describe('chipStateFor', () => {
       'claude:status': 'running',
       'claude:updated-at': 'yesterday',
       'claude:attempts': -3,
-    })).toEqual({kind: 'running', updatedAtMs: null, attempts: 1, errorMessage: ''})
+      'claude:activity': 42,
+    })).toEqual({kind: 'running', updatedAtMs: null, attempts: 1, errorMessage: '', activity: ''})
   })
 })
 
@@ -43,6 +48,13 @@ describe('chipTitle', () => {
       .toContain('exit 1: boom')
     expect(chipTitle(chipStateFor({'claude:status': 'running', 'claude:attempts': 3})!))
       .toContain('attempt 3')
+  })
+
+  it('appends the activity label for a running chip when present', () => {
+    const withActivity = chipTitle(chipStateFor({'claude:status': 'running', 'claude:activity': 'Searching the web'})!)
+    expect(withActivity).toContain('Searching the web')
+    const withoutActivity = chipTitle(chipStateFor({'claude:status': 'running'})!)
+    expect(withoutActivity).not.toContain('—')
   })
 })
 

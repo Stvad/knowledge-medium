@@ -148,7 +148,10 @@ export const createGraph = (client: BridgeClient) => {
   // bridge to forward a skipMetadata flag to tx.update; not available yet.
   const setTaskProps = async (
     id: string,
-    args: {status: TaskStatus, watcher?: string, session?: string | null, error?: string | null, attempts?: number, nowMs: number},
+    args: {
+      status: TaskStatus, watcher?: string, session?: string | null, error?: string | null,
+      attempts?: number, activity?: string | null, nowMs: number,
+    },
   ): Promise<void> => {
     const properties: Record<string, unknown> = {
       [PROPS.status]: args.status,
@@ -158,6 +161,7 @@ export const createGraph = (client: BridgeClient) => {
     if (args.session !== undefined && args.session !== null) properties[PROPS.session] = args.session
     if (args.error !== undefined) properties[PROPS.error] = args.error ?? ''
     if (args.attempts !== undefined) properties[PROPS.attempts] = args.attempts
+    if (args.activity !== undefined) properties[PROPS.activity] = args.activity ?? ''
     await client.runCommand({type: 'update-block', id, properties})
   }
 
@@ -169,6 +173,19 @@ export const createGraph = (client: BridgeClient) => {
       properties: {[PROPS.reply]: true},
     })
     return asRecord(result, 'create-block') as unknown as BlockData
+  }
+
+  /** Transient "what the run is doing now" label — merged (update-block
+   *  merges the properties map) so it never clobbers other claude:*
+   *  state written concurrently. */
+  const setActivity = async (id: string, label: string): Promise<void> => {
+    await client.runCommand({type: 'update-block', id, properties: {[PROPS.activity]: label}})
+  }
+
+  /** Overwrite a block's content — used to stream the in-progress reply
+   *  text into an early-created reply block. */
+  const updateBlockContent = async (id: string, content: string): Promise<void> => {
+    await client.runCommand({type: 'update-block', id, content})
   }
 
   /** Batched pending-decision views — ONE query per tick instead of a
@@ -207,6 +224,8 @@ export const createGraph = (client: BridgeClient) => {
     getSubtree,
     setTaskProps,
     createReply,
+    setActivity,
+    updateBlockContent,
     sqlAll,
     blockViews,
   }
