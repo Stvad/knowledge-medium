@@ -24,6 +24,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
   const replies: Array<{parentId: string, content: string}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
   const activityWrites: Array<{id: string, label: string}> = []
+  const sessionWrites: Array<{id: string, session: string}> = []
   const contentUpdates: Array<{id: string, content: string}> = []
 
   const graph: Graph = {
@@ -75,6 +76,12 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       activityWrites.push({id, label})
     },
+    setSession: async (id, session) => {
+      const target = blocks.get(id) ?? {id, properties: {}}
+      target.properties = {...target.properties, [PROPS.session]: session}
+      blocks.set(id, target)
+      sessionWrites.push({id, session})
+    },
     updateBlockContent: async (id, content) => {
       const target = blocks.get(id) ?? {id, properties: {}}
       target.content = content
@@ -90,7 +97,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, propWrites, activityWrites, contentUpdates}
+  return {graph, blocks, replies, propWrites, activityWrites, sessionWrites, contentUpdates}
 }
 
 const memoryState = (
@@ -158,6 +165,75 @@ describe('mention lifecycle', () => {
 
     const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
     expect(prompt).toContain('[[claude]] summarize inbox')
+  })
+
+  it('persists the session id mid-run, even when the terminal result loses it', async () => {
+    const {graph, blocks, sessionWrites} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] do a slow thing'}},
+    })
+    // The run emits its session on the first init line (via onEvent), then
+    // is killed and returns a terminal result with NO sessionId — as a
+    // timed-out/crashed run does. Only the EARLY write can have persisted
+    // it, so this fails if onEvent stops recording the session.
+    const runTask = vi.fn(async (opts: {onEvent?: (e: {kind: 'session', sessionId: string}) => void}) => {
+      opts.onEvent?.({kind: 'session', sessionId: 'sess-live'})
+      return okRun({ok: false, timedOut: true, sessionId: null, resultText: ''})
+    })
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(sessionWrites).toEqual([{id: 'b-1', session: 'sess-live'}])
+    expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-live')
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+  })
+
+  it('a follow-up nested under a still-running parent does not resume its session concurrently', async () => {
+    // Start with only the parent; the follow-up is created MID-RUN (below),
+    // after the parent's session is already exposed on the block — the case
+    // the early setSession opened up.
+    const backlinks: Array<{id: string}> = [{id: 'parent'}]
+    const {graph, blocks} = fakeGraph({
+      backlinks,
+      blocks: {parent: {content: '[[claude]] long parent task'}},
+    })
+    let releaseParent = () => {}
+    const parentGate = new Promise<void>(resolve => { releaseParent = resolve })
+    const runTask = vi.fn(async (opts: {prompt: string, onEvent?: (e: {kind: 'session', sessionId: string}) => void}) => {
+      if (opts.prompt.includes('long parent task')) {
+        opts.onEvent?.({kind: 'session', sessionId: 'sess-parent'}) // exposes the session mid-run
+        await parentGate // stay in-flight, holding the session, until released
+        return okRun({sessionId: 'sess-parent'})
+      }
+      return okRun({resultText: 'child reply', sessionId: 'sess-parent'})
+    })
+    const engine = engineWith({graph, runTask, config: mentionConfig({maxConcurrent: 5})})
+
+    const parentTick = engine.tick()
+    // Parent's session lands on the block the instant it streams.
+    await vi.waitFor(() => expect(blocks.get('parent')?.properties?.[PROPS.session]).toBe('sess-parent'))
+
+    // User adds a follow-up nested under the (still-running) parent.
+    blocks.set('child', {id: 'child', parentId: 'parent', content: '[[claude]] quick follow-up', properties: {}, editedAtMs: NOW})
+    backlinks.push({id: 'child'})
+
+    // Tick claims pending work; let the follow-up's decision path settle
+    // (all fakes resolve on the microtask queue, so a bounded flush is
+    // deterministic). The duplicate-session guard must turn it away BEFORE
+    // it claims — so it never writes a status and never resumes the live
+    // session. Absent the guard, it claims (status:running) and starts a
+    // concurrent `--resume`.
+    await engine.tick()
+    for (let i = 0; i < 50; i += 1) await Promise.resolve()
+
+    expect(blocks.get('child')?.properties?.[PROPS.status]).toBeUndefined()
+    expect(runTask).toHaveBeenCalledTimes(1) // only the parent
+
+    releaseParent()
+    await parentTick
+    await engine.drain()
   })
 
   it('is idempotent: a processed mention does not re-run on later ticks', async () => {

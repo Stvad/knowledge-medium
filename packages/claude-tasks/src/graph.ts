@@ -182,6 +182,16 @@ export const createGraph = (client: BridgeClient) => {
     await client.runCommand({type: 'update-block', id, properties: {[PROPS.activity]: label}})
   }
 
+  /** Persist the run's session id the instant it's known (mid-run),
+   *  merged so it never clobbers concurrent claude:* state. Writing it
+   *  early — rather than only at the terminal status write — is what
+   *  keeps a hung/timed-out/crashed run resumable and inspectable: the
+   *  session lands on the block seconds after spawn, not 10 minutes
+   *  later (or never, if the terminal write loses it). */
+  const setSession = async (id: string, session: string): Promise<void> => {
+    await client.runCommand({type: 'update-block', id, properties: {[PROPS.session]: session}})
+  }
+
   /** Overwrite a block's content — used to stream the in-progress reply
    *  text into an early-created reply block. */
   const updateBlockContent = async (id: string, content: string): Promise<void> => {
@@ -225,6 +235,7 @@ export const createGraph = (client: BridgeClient) => {
     setTaskProps,
     createReply,
     setActivity,
+    setSession,
     updateBlockContent,
     sqlAll,
     blockViews,
