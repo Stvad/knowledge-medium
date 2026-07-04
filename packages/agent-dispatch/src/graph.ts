@@ -47,6 +47,22 @@ export const createGraph = (client: BridgeClient) => {
   const createReply = async (parentId: string, content: string): Promise<BlockData> =>
     bridgeGraph.createBlock(parentId, content, {[PROPS.reply]: true})
 
+  /** Post the reply as a block HIERARCHY parsed from `markdown` with the
+   *  app's own paste parser, created under `parentId` in ONE app-side
+   *  transaction (a failure never leaves a partial tree). Every block is
+   *  tagged the reply marker. `rootBlockId` — a streamed placeholder — is
+   *  reused as the first root instead of being orphaned. Deliberately NOT
+   *  retried: the write is atomic and a re-send would duplicate the whole
+   *  subtree, so a transient failure is left to the caller's infra-catch. */
+  const createReplyTree = async (
+    parentId: string, markdown: string, rootBlockId?: string,
+  ): Promise<void> => {
+    await bridgeGraph.createBlocksFromMarkdown(parentId, markdown, {
+      ...(rootBlockId ? {rootBlockId} : {}),
+      properties: {[PROPS.reply]: true},
+    })
+  }
+
   /** Transient "what the run is doing now" label — merged
    *  (update-block merges the properties map) so it never clobbers
    *  other dispatch state written concurrently. */
@@ -76,6 +92,7 @@ export const createGraph = (client: BridgeClient) => {
     ...bridgeGraph,
     setTaskProps,
     createReply,
+    createReplyTree,
     setActivity,
     setSession,
     clearCancel,
@@ -104,6 +121,7 @@ export type Graph = DispatchBridgeGraph & {
     },
   ) => Promise<void>
   createReply: (parentId: string, content: string) => Promise<BlockData>
+  createReplyTree: (parentId: string, markdown: string, rootBlockId?: string) => Promise<void>
   setActivity: (id: string, label: string) => Promise<void>
   setSession: (id: string, session: string, resumeOptions?: AgentResumeOptions | null) => Promise<void>
   clearCancel: (id: string) => Promise<void>

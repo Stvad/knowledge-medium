@@ -257,6 +257,18 @@ Spawned executors stream progress where their CLI supports it, so the daemon see
 
 Set `"streamReply": true` on a backlinks watcher to also stream the in-progress reply text into the reply block as it's written, instead of only posting it once at the end. Each streamed update is a real synced graph mutation (throttled to roughly one write per 1.5s), so leave it off for watchers where that write churn matters — the default (`false`) still posts the full reply in one shot when the run finishes.
 
+## Reply as a block hierarchy
+
+By default (`"splitReply": true`) a reply is split along its **markdown outline** into a block hierarchy under the mention — top-level lines/bullets become sibling blocks, indented bullets become child blocks, headings nest their following content, and fenced code stays whole. Free-form lines stay one-block-per-line and fenced code blocks stay intact, so this fragments *structure*, not code. The spawned run is also nudged to write a nested outline so the split threads naturally (the "prompting" half; the parsing is the "injection" half).
+
+Parsing + insertion happen **app-side**: the daemon sends the raw markdown over the `create-blocks-from-markdown` bridge command, and the app runs its **own paste parser** (`parseMarkdownToBlocks`) and inserts the whole subtree in **one transaction**. So the split matches "paste as markdown" exactly, and a failure never leaves a partial reply.
+
+Set `"splitReply": false` on a watcher where the single-block terminal write matters more than shape. The trade-offs:
+- A single-block reply is **one idempotent, retry-safe write**. A split reply is atomic (no partial tree) but **not retried** — a re-send would duplicate the subtree, so a transient bridge blip surfaces as `status=error` (and re-runs per the attempt cap) instead of being recovered in place.
+- With `streamReply` also on, the live text still streams into a single placeholder block; the split happens once at the end, and the placeholder is **reused as the reply's first block** (not orphaned).
+- Ignored for `delivery: "channel"` watchers — the ambient session writes its own reply.
+- Requires an app build new enough to handle the `create-blocks-from-markdown` command; against an older tab the run errors visibly rather than silently falling back.
+
 ## Push detection (watch-events)
 
 By default (`"push": true`) the daemon registers its watchers **inside the tab** via the bridge `watch-events` command: the tab re-runs each watcher's read-only query when its tables change, waits for the result set to be stable (`settleMs` = the watcher's `quietMs` for mentions), and pushes a `watcher-settled` event over the bridge events channel (`/runtime/events`). The daemon long-polls those events and ticks immediately — detection latency becomes "quiet period ends", instead of "next poll + quiet period".

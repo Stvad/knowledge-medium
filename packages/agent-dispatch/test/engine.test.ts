@@ -22,6 +22,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, editedAtMs: NOW, ...data}]),
   )
   const replies: Array<{parentId: string, content: string}> = []
+  const replyTrees: Array<{parentId: string, markdown: string, rootBlockId?: string}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
   const activityWrites: Array<{id: string, label: string}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
@@ -73,6 +74,9 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(reply.id, reply)
       return reply
     },
+    createReplyTree: async (parentId, markdown, rootBlockId) => {
+      replyTrees.push({parentId, markdown, rootBlockId})
+    },
     setActivity: async (id, label) => {
       const target = blocks.get(id) ?? {id, properties: {}}
       target.properties = {...target.properties, [PROPS.activity]: label}
@@ -111,7 +115,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, propWrites, activityWrites, sessionWrites, contentUpdates, cancelClears}
+  return {graph, blocks, replies, replyTrees, propWrites, activityWrites, sessionWrites, contentUpdates, cancelClears}
 }
 
 const memoryState = (
@@ -162,7 +166,7 @@ const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
 
 describe('mention lifecycle', () => {
   it('claims, runs, replies, and marks done with the session id', async () => {
-    const {graph, blocks, replies, propWrites} = fakeGraph({
+    const {graph, blocks, replies, replyTrees, propWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
     })
@@ -173,7 +177,9 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(propWrites.map(write => write.status)).toEqual(['running', 'done'])
-    expect(replies).toEqual([{parentId: 'b-1', content: 'Reply text'}])
+    // splitReply defaults on: the reply goes over the app-side split command.
+    expect(replyTrees).toEqual([{parentId: 'b-1', markdown: 'Reply text', rootBlockId: undefined}])
+    expect(replies).toEqual([])
     expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-1')
     expect(blocks.get('b-1')?.properties?.[PROPS.executor]).toBe('claude')
     expect(blocks.get('b-1')?.properties?.[PROPS.attempts]).toBe(1)
@@ -434,7 +440,7 @@ describe('mention lifecycle', () => {
   })
 
   it('is idempotent: a processed mention does not re-run on later ticks', async () => {
-    const {graph, replies} = fakeGraph({
+    const {graph, replyTrees} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] hi'}},
     })
@@ -447,7 +453,7 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(runTask).toHaveBeenCalledTimes(1)
-    expect(replies).toHaveLength(1)
+    expect(replyTrees).toHaveLength(1)
   })
 
   it('waits for the quiet period before claiming a just-edited mention', async () => {
@@ -774,7 +780,7 @@ describe('mention lifecycle', () => {
   })
 
   it('fires for a follow-up nested under a daemon reply (thread continuation)', async () => {
-    const {graph, replies} = fakeGraph({
+    const {graph, replyTrees} = fakeGraph({
       backlinks: [{id: 'b-follow'}],
       blocks: {
         'reply-block': {content: 'earlier answer', properties: {[PROPS.reply]: true}},
@@ -788,7 +794,7 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(runTask).toHaveBeenCalledTimes(1)
-    expect(replies).toHaveLength(1)
+    expect(replyTrees).toHaveLength(1)
   })
 
   it('refunds the budget slot when a same-session duplicate bails without spawning', async () => {
@@ -1111,7 +1117,7 @@ describe('live progress streaming', () => {
     })
     const engine = createEngine({
       config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}],
       }),
       state: memoryState(),
       graph,
@@ -1150,7 +1156,10 @@ describe('live progress streaming', () => {
       options.onEvent?.({kind: 'text', text: 'partial'}) // ignored: streamReply is off
       return okRun({resultText: 'final'})
     })
-    const engine = engineWith({graph, runTask})
+    const engine = engineWith({
+      graph, runTask,
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
+    })
 
     await engine.tick()
     await engine.drain()
@@ -1247,7 +1256,7 @@ describe('live progress streaming', () => {
     const engine = engineWith({
       graph,
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1276,6 +1285,7 @@ describe('live progress streaming', () => {
     const engine = engineWith({
       graph,
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1299,7 +1309,7 @@ describe('live progress streaming', () => {
     const engine = engineWith({
       graph,
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1329,7 +1339,7 @@ describe('live progress streaming', () => {
     const engine = engineWith({
       graph,
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}]}),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
     })
 
     await engine.tick()
@@ -1341,6 +1351,109 @@ describe('live progress streaming', () => {
     const replyId = contentUpdates.at(-1)!.id
     expect(blocks.get(replyId)?.content).toBe('the answer')
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
+  })
+})
+
+describe('splitReply (reply as a block hierarchy)', () => {
+  const OUTLINE = '- Top A\n  - Child A1\n- Top B'
+
+  it('hands the final reply to the app-side split command (no single reply block)', async () => {
+    const {graph, blocks, replies, replyTrees} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] reflect'}},
+    })
+    // mentionConfig defaults splitReply on.
+    const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    // The whole markdown goes over one create-blocks-from-markdown call —
+    // the app parses + inserts the tree atomically. No single reply block,
+    // no streamed placeholder (streamReply off → no rootBlockId).
+    expect(replyTrees).toEqual([{parentId: 'b-1', markdown: OUTLINE, rootBlockId: undefined}])
+    expect(replies).toEqual([])
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
+
+    // The run was nudged to author a nested outline (the "prompting" half).
+    const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
+    expect(prompt).toContain('block hierarchy')
+  })
+
+  it('splitReply: false keeps the single-block path and drops the nudge', async () => {
+    const {graph, replies, replyTrees} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] reflect'}},
+    })
+    const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
+    const engine = createEngine({
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}],
+      }),
+      state: memoryState(),
+      graph,
+      runTask,
+      deliverToChannel: vi.fn(async () => {}),
+      mcpConfigPath: '/tmp/mcp.json',
+      log: () => {},
+      now: () => NOW,
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(replyTrees).toEqual([])
+    expect(replies).toEqual([{parentId: 'b-1', content: OUTLINE}])
+    const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
+    expect(prompt).not.toContain('block hierarchy')
+  })
+
+  it('with streamReply on, passes the streamed placeholder as the split root', async () => {
+    const {graph, replies, replyTrees} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] reflect'}},
+    })
+    const runTask = vi.fn(async () => okRun({resultText: OUTLINE}))
+    const engine = createEngine({
+      config: parseConfig({
+        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
+      }),
+      state: memoryState(),
+      graph,
+      runTask,
+      deliverToChannel: vi.fn(async () => {}),
+      mcpConfigPath: '/tmp/mcp.json',
+      log: () => {},
+      now: () => NOW,
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    // The placeholder (reply-1) is created up front, then handed to the
+    // split command as rootBlockId so the app reuses it as the first root
+    // instead of orphaning it.
+    expect(replies).toEqual([{parentId: 'b-1', content: '💭 Claude is working…'}])
+    expect(replyTrees).toEqual([{parentId: 'b-1', markdown: OUTLINE, rootBlockId: 'reply-1'}])
+  })
+
+  it('a failed run does NOT split — the warning goes to a single block', async () => {
+    const {graph, replies, replyTrees} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] reflect'}},
+    })
+    const engine = engineWith({
+      graph,
+      runTask: vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'boom', resultText: ''})),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(replyTrees).toEqual([])
+    expect(replies).toHaveLength(1)
+    expect(replies[0].content).toContain('⚠️')
   })
 })
 

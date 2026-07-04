@@ -173,6 +173,23 @@ const backlinksWatcherSchema = z.strictObject({
    *  throttled to ~1.5s apart — each one is a synced graph mutation, so
    *  leave this off for watchers where that churn matters. */
   streamReply: z.boolean().default(false),
+  /** Split the final reply along its markdown outline into a block
+   *  HIERARCHY (nested bullets → child blocks, headings → nesting, code
+   *  fences kept whole) instead of one big block. ON by default — a
+   *  threaded reply reads far better in an outliner. Parsing + insertion
+   *  happen APP-SIDE via the `create-blocks-from-markdown` bridge command
+   *  (the app's own paste parser), so the split matches "paste as markdown"
+   *  and the whole subtree lands in one transaction — a failure never
+   *  leaves a partial reply. That single write is NOT retried on a
+   *  transient bridge blip (a re-send would duplicate the subtree); it
+   *  surfaces as `status=error` instead. Set `false` to keep the
+   *  single-block terminal write, which IS retried. A structureless reply
+   *  (one paragraph) still lands as a single block either way. The spawned
+   *  run is nudged (see prompt.ts) to write a nested outline so the split
+   *  threads naturally. Ignored for `delivery: 'channel'` (the ambient
+   *  session posts its own reply). Requires an app build new enough to
+   *  handle the bridge command. */
+  splitReply: z.boolean().default(true),
 })
 
 const queryWatcherSchema = z.strictObject({

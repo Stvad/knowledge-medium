@@ -137,6 +137,22 @@ export const createBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** Create a whole block SUBTREE from a markdown string, in one
+ *  transaction, under `parentId` (append after existing children). The
+ *  markdown is parsed with the app's own paste parser so the split matches
+ *  "paste as markdown" exactly. `properties` (looseObject passthrough) is
+ *  applied to every created block — the claude-tasks daemon uses it to tag
+ *  `claude:reply`. `rootBlockId`, when given, is reused as the first root
+ *  (its content is overwritten) instead of created — lets a streamed
+ *  placeholder become the reply's first block rather than being orphaned. */
+export const createBlocksFromMarkdownCommandSchema = z.looseObject({
+  type: z.literal('create-blocks-from-markdown'),
+  parentId: z.string(),
+  markdown: z.string(),
+  rootBlockId: z.string().optional(),
+  ...commandIdField,
+})
+
 export const updateBlockCommandSchema = z.looseObject({
   type: z.literal('update-block'),
   id: z.string().optional(),
@@ -434,6 +450,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
+  createBlocksFromMarkdownCommandSchema,
   updateBlockCommandSchema,
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
@@ -473,6 +490,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
+  createBlocksFromMarkdownCommandSchema,
   updateBlockCommandSchema,
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
@@ -575,6 +593,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'create-block': {
     usage: 'kmagent create-block <json>',
     description: 'Create a block (body shape per <json>).',
+    readOnly: false,
+  },
+  'create-blocks-from-markdown': {
+    usage: 'kmagent create-blocks-from-markdown <json:{parentId,markdown,rootBlockId?,properties?}>',
+    description: 'Create a block subtree from a markdown string (parsed with the app paste parser) under parentId, in one transaction. Optional rootBlockId reuses an existing block as the first root; properties are applied to every created block.',
     readOnly: false,
   },
   'update-block': {

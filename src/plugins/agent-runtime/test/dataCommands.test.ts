@@ -382,3 +382,91 @@ describe('delete-block / restore-block commands', () => {
     expect(await deletedById(['root', 'child'])).toEqual({root: 0, child: 1})
   })
 })
+
+describe('create-blocks-from-markdown command', () => {
+  type CreateResult = {ids: string[], rootIds: string[]}
+
+  it('builds a block hierarchy under the parent, tagged with the given properties', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+
+    const result = await executeCommand({
+      commandId: 'cbfm-1',
+      type: 'create-blocks-from-markdown',
+      parentId: TOPIC_A,
+      markdown: '- Top A\n  - Child A1\n- Top B',
+      properties: {'claude:reply': true},
+    }, context) as CreateResult
+
+    const subtree = await context.getSubtree(TOPIC_A)
+    const byContent = (text: string) => subtree.find(row => row.content === text)!
+    const topA = byContent('Top A')
+    const topB = byContent('Top B')
+    const childA1 = byContent('Child A1')
+
+    // Roots are children of the mention; the nested bullet is a grandchild.
+    expect(result.rootIds).toEqual([topA.id, topB.id])
+    expect(topA.parentId).toBe(TOPIC_A)
+    expect(topB.parentId).toBe(TOPIC_A)
+    expect(childA1.parentId).toBe(topA.id)
+    // Every created block carries the passed marker.
+    for (const row of [topA, topB, childA1]) {
+      expect(row.properties?.['claude:reply']).toBe(true)
+    }
+  })
+
+  it('appends after existing children rather than before them', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    const existing = await context.createBlock({parentId: TOPIC_A, content: 'user sub-item'})
+
+    await executeCommand({
+      commandId: 'cbfm-2',
+      type: 'create-blocks-from-markdown',
+      parentId: TOPIC_A,
+      markdown: '- reply one\n- reply two',
+      properties: {'claude:reply': true},
+    }, context)
+
+    const children = (await context.getSubtree(TOPIC_A))
+      .filter(row => row.parentId === TOPIC_A)
+      .sort((a, b) => (a.orderKey! < b.orderKey! ? -1 : 1))
+    expect(children.map(row => row.content)).toEqual(['user sub-item', 'reply one', 'reply two'])
+    expect(children[0].id).toBe(existing!.id)
+  })
+
+  it('reuses rootBlockId (a streamed placeholder) as the first root', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    const placeholder = await context.createBlock({parentId: TOPIC_A, content: '💭 working…'})
+
+    const result = await executeCommand({
+      commandId: 'cbfm-3',
+      type: 'create-blocks-from-markdown',
+      parentId: TOPIC_A,
+      rootBlockId: placeholder!.id,
+      markdown: '- First\n- Second',
+      properties: {'claude:reply': true},
+    }, context) as CreateResult
+
+    // The placeholder becomes the first root (content overwritten), not an
+    // orphaned extra block; Second is a fresh sibling.
+    expect(result.rootIds[0]).toBe(placeholder!.id)
+    const subtree = await context.getSubtree(TOPIC_A)
+    expect(subtree.find(row => row.id === placeholder!.id)?.content).toBe('First')
+    expect(subtree.some(row => row.content === '💭 working…')).toBe(false)
+    expect(subtree.find(row => row.content === 'Second')?.parentId).toBe(TOPIC_A)
+  })
+
+  it('keeps a fenced code block whole instead of splitting it', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+
+    await executeCommand({
+      commandId: 'cbfm-4',
+      type: 'create-blocks-from-markdown',
+      parentId: TOPIC_A,
+      markdown: 'Here:\n```js\nconst x = 1\n```',
+      properties: {'claude:reply': true},
+    }, context)
+
+    const subtree = await context.getSubtree(TOPIC_A)
+    expect(subtree.some(row => row.content === '```js\nconst x = 1\n```')).toBe(true)
+  })
+})

@@ -177,6 +177,25 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'restore-block') as unknown as BlockData
   }
 
+  /** Create a block SUBTREE from a markdown string under `parentId`, in one
+   *  app-side transaction (atomic — a failure never leaves a partial tree).
+   *  `rootBlockId` reuses an existing block as the first root; `properties`
+   *  is applied to every created block. A GENERIC bridge write — callers
+   *  layer their own semantics on top (e.g. the dispatch reply marker). */
+  const createBlocksFromMarkdown = async (
+    parentId: string,
+    markdown: string,
+    opts: {rootBlockId?: string, properties?: Record<string, unknown>} = {},
+  ): Promise<unknown> => {
+    return client.runCommand({
+      type: 'create-blocks-from-markdown',
+      parentId,
+      markdown,
+      ...(opts.rootBlockId ? {rootBlockId: opts.rootBlockId} : {}),
+      ...(opts.properties ? {properties: opts.properties} : {}),
+    })
+  }
+
   /** Overwrite a block's content — used to stream the in-progress reply
    *  text into an early-created reply block. */
   const updateBlockContent = async (id: string, content: string): Promise<void> => {
@@ -221,6 +240,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     moveBlock,
     deleteBlock,
     restoreBlock,
+    createBlocksFromMarkdown,
     updateBlockContent,
     sqlAll,
     blockViews,

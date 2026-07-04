@@ -375,6 +375,9 @@ export const createEngine = (deps: EngineDeps) => {
         blockId: sourceId,
         deepLink,
         watcherName: watcher.name,
+        // Only spawn delivery posts (and thus splits) the reply — the
+        // channel session writes its own, so don't nudge it.
+        splitReply: watcher.delivery !== 'channel' && watcher.splitReply,
       })
 
       if (watcher.delivery === 'channel') {
@@ -470,7 +473,15 @@ export const createEngine = (deps: EngineDeps) => {
         // it as `cancelled`. Only a run that ended WITHOUT a result (the
         // error branch below) inspects signal.aborted to label the reason.
         const finalText = result.resultText.trim() || `(${runner.executor} returned an empty reply)`
-        await deliverReply(finalText)
+        if (watcher.splitReply) {
+          // Split into a block hierarchy app-side (parsed with the app's
+          // paste parser, created in one atomic tx). A streamed placeholder
+          // becomes the first root; without one the subtree is created
+          // fresh. A structureless reply just lands as a single block.
+          await graph.createReplyTree(sourceId, finalText, replyId ?? undefined)
+        } else {
+          await deliverReply(finalText)
+        }
         terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {
           status: 'done',

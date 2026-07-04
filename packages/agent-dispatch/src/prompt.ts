@@ -13,6 +13,10 @@ export interface MentionPromptContext {
   blockId: string
   deepLink: string
   watcherName: string
+  /** The daemon will split this reply into a block hierarchy along its
+   *  markdown outline — append the outline-authoring nudge so the split
+   *  threads naturally (the "prompting" half of the feature). */
+  splitReply?: boolean
 }
 
 export const DEFAULT_MENTION_PROMPT = `You are responding to a mention inside the user's Knowledge Medium notes (an outliner: blocks nest under blocks).
@@ -33,6 +37,15 @@ Instructions:
 - Use the km MCP tools when you need more of the graph (search, get_block, subtree, backlinks) or to make edits (create_block, update_block, move_block, delete_block, restore_block).
 - Your final text response is posted verbatim as a reply block under the mention. Keep it concise, notes-style markdown. No preamble.
 - Never write the literal token [[claude]] (or any watcher-target wikilink) into the graph or your reply — it would re-trigger the watcher.`
+
+/** Appended to a mention prompt when the watcher has `splitReply` on: the
+ *  daemon splits the reply along its markdown outline into a block
+ *  hierarchy, so nudge the run to WRITE a nested outline. Each top-level
+ *  line/bullet becomes its own block and indented bullets become child
+ *  blocks; prose paragraphs stay whole. */
+export const SPLIT_REPLY_GUIDANCE = `
+
+Your reply will be split into a block hierarchy along its markdown outline: each top-level line or bullet becomes its own block, and nested (indented) bullets become child blocks (headings nest their following content too; fenced code stays whole). So structure the answer as a nested bullet outline — one idea per bullet, indentation for sub-points — rather than one dense paragraph. Multi-sentence prose you want kept together should stay in a single paragraph (no blank line inside it).`
 
 export const DEFAULT_QUERY_PROMPT = `A watched query over the user's Knowledge Medium notes returned new rows.
 
@@ -69,8 +82,8 @@ const renderTemplate = (template: string, values: Record<string, string>): strin
 export const renderMentionPrompt = (
   template: string | undefined,
   context: MentionPromptContext,
-): string =>
-  renderTemplate(template ?? DEFAULT_MENTION_PROMPT, {
+): string => {
+  const rendered = renderTemplate(template ?? DEFAULT_MENTION_PROMPT, {
     content: context.content,
     subtree: context.subtree,
     ancestors: context.ancestors.length > 0 ? context.ancestors.map(line => `- ${line}`).join('\n') : '(top level)',
@@ -78,6 +91,11 @@ export const renderMentionPrompt = (
     deepLink: context.deepLink,
     watcherName: context.watcherName,
   })
+  // The nudge rides on the RENDERED prompt (not the template) so it also
+  // applies to a watcher's custom `prompt` — splitReply is orthogonal to
+  // what the run is asked to do.
+  return context.splitReply ? `${rendered}${SPLIT_REPLY_GUIDANCE}` : rendered
+}
 
 export interface QueryPromptContext {
   newRows: unknown[]

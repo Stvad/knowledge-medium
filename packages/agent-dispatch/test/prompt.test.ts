@@ -30,6 +30,15 @@ describe('renderMentionPrompt', () => {
     const prompt = renderMentionPrompt(undefined, {...context, ancestors: []})
     expect(prompt).toContain('(top level)')
   })
+
+  it('appends the outline nudge only when splitReply is set', () => {
+    expect(renderMentionPrompt(undefined, context)).not.toContain('block hierarchy')
+    const withSplit = renderMentionPrompt(undefined, {...context, splitReply: true})
+    expect(withSplit).toContain('block hierarchy')
+    // The nudge rides on custom templates too (splitReply is orthogonal).
+    expect(renderMentionPrompt('Do {{blockId}}', {...context, splitReply: true}))
+      .toContain('block hierarchy')
+  })
 })
 
 describe('renderQueryPrompt', () => {

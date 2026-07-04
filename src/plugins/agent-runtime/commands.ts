@@ -23,6 +23,7 @@ import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
+import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
   appEffectsFacet,
@@ -61,6 +62,8 @@ import type {
   AgentRuntimeContext,
   BlockPosition,
   CreateBlockInput,
+  CreateBlocksFromMarkdownInput,
+  CreateBlocksFromMarkdownResult,
   DeleteBlockInput,
   DeleteBlockResult,
   ExtensionVerificationResult,
@@ -326,6 +329,102 @@ const createRuntimeBlock = async (
     })
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
   return repo.load(id)
+}
+
+/** Create a whole block subtree from markdown, in ONE transaction, under
+ *  `parentId` — appended after any existing children. The markdown is
+ *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
+ *  split matches "paste as markdown" exactly; `properties` are applied to
+ *  every created block (the claude-tasks daemon passes `claude:reply`).
+ *
+ *  Atomic by design: the daemon must never leave a PARTIAL reply tree, so
+ *  every block lands in the same `repo.tx` or none do. `rootBlockId`, when
+ *  present, is REUSED as the first root (its content is overwritten, its
+ *  order key left in place) rather than created — so a streamed placeholder
+ *  becomes the reply's first block instead of being orphaned. */
+const createBlocksFromMarkdown = async (
+  repo: Repo,
+  input: CreateBlocksFromMarkdownInput,
+): Promise<CreateBlocksFromMarkdownResult> => {
+  const parsed = parseMarkdownToBlocks(input.markdown)
+  const {properties, rootBlockId} = input
+
+  // Nothing parseable (blank/whitespace). If a placeholder was reserved,
+  // clear it to its (empty) final content so it isn't left saying
+  // "Claude is working…"; otherwise there's nothing to do.
+  if (parsed.length === 0) {
+    if (rootBlockId) {
+      await repo.tx(async tx => {
+        const existing = await tx.get(rootBlockId)
+        if (!existing) throw new Error(`create-blocks-from-markdown: rootBlockId ${rootBlockId} not found`)
+        await tx.update(rootBlockId, {
+          content: '',
+          ...(properties ? {properties: {...existing.properties, ...properties}} : {}),
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'agent runtime clear reply placeholder'})
+      return {ids: [rootBlockId], rootIds: [rootBlockId]}
+    }
+    return {ids: [], rootIds: []}
+  }
+
+  const idMap = new Map<string, string>() // parsed temp id → real block id
+  const rootIds: string[] = []
+  const ids: string[] = []
+
+  await repo.tx(async tx => {
+    const parent = await tx.get(input.parentId)
+    if (!parent) throw new Error(`create-blocks-from-markdown: parent ${input.parentId} not found`)
+    const {workspaceId} = parent
+
+    // Reply roots append AFTER existing children (the mention's own
+    // sub-items, prior replies). Track the last order key per real parent
+    // so siblings created in this pass stay ordered; seed the mention with
+    // its current last child (which already includes a reused placeholder).
+    const existingChildren = await tx.childrenOf(input.parentId, workspaceId)
+    const lastKeyByParent = new Map<string, string | null>([
+      [input.parentId, existingChildren.at(-1)?.orderKey ?? null],
+    ])
+
+    let firstRootReused = false
+    for (const block of parsed) {
+      const isRoot = !block.parentId
+      const realParentId = isRoot ? input.parentId : idMap.get(block.parentId!)!
+
+      // Reuse rootBlockId for the first root: overwrite content, merge
+      // properties, keep its existing order key (it's already a child).
+      if (isRoot && rootBlockId && !firstRootReused) {
+        firstRootReused = true
+        const existing = await tx.get(rootBlockId)
+        if (!existing) throw new Error(`create-blocks-from-markdown: rootBlockId ${rootBlockId} not found`)
+        const mergedProperties = properties ? {...existing.properties, ...properties} : undefined
+        await tx.update(rootBlockId, {
+          content: block.content,
+          ...(mergedProperties !== undefined ? {properties: mergedProperties} : {}),
+        })
+        idMap.set(block.id, rootBlockId)
+        rootIds.push(rootBlockId)
+        ids.push(rootBlockId)
+        continue
+      }
+
+      const id = crypto.randomUUID()
+      const orderKey = keyAtEnd(lastKeyByParent.get(realParentId) ?? null)
+      lastKeyByParent.set(realParentId, orderKey)
+      await tx.create({
+        id,
+        workspaceId,
+        parentId: realParentId,
+        orderKey,
+        content: block.content,
+        ...(properties !== undefined ? {properties} : {}),
+      })
+      idMap.set(block.id, id)
+      if (isRoot) rootIds.push(id)
+      ids.push(id)
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create blocks from markdown'})
+
+  return {ids, rootIds}
 }
 
 const updateRuntimeBlock = async (
@@ -1126,6 +1225,7 @@ export const createAgentRuntimeContext = ({
     getBlock: id => repo.load(id),
     getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
+    createBlocksFromMarkdown: input => createBlocksFromMarkdown(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
     moveBlock: input => moveRuntimeBlock(repo, input),
     deleteBlock: input => deleteRuntimeBlock(repo, input),
@@ -1199,6 +1299,25 @@ export const executeCommand = async (
         position: getPosition(command.position),
         data: getBlockDataInput(command),
       })
+
+    case 'create-blocks-from-markdown': {
+      const properties = command.properties === undefined
+        ? undefined
+        : isRecord(command.properties)
+          ? structuredClone(command.properties) as BlockProperties
+          : undefined
+      if (command.properties !== undefined && !properties) {
+        throw new Error('properties must be an object')
+      }
+      return context.createBlocksFromMarkdown({
+        parentId: requireString(command.parentId, 'parentId'),
+        markdown: requireString(command.markdown, 'markdown'),
+        rootBlockId: command.rootBlockId === undefined
+          ? undefined
+          : requireString(command.rootBlockId, 'rootBlockId'),
+        properties,
+      })
+    }
 
     case 'update-block': {
       const properties = command.properties === undefined

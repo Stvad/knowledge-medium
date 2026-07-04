@@ -58,6 +58,25 @@ export interface RestoreBlockInput {
   id: string
 }
 
+export interface CreateBlocksFromMarkdownInput {
+  /** Parent the subtree is appended under (after existing children). */
+  parentId: string
+  /** Markdown parsed with the app paste parser into the block tree. */
+  markdown: string
+  /** Reuse this existing block as the first root (content overwritten)
+   *  instead of creating it — e.g. a streamed placeholder. */
+  rootBlockId?: string
+  /** Applied (merged) to every created/reused block. */
+  properties?: BlockProperties
+}
+
+export interface CreateBlocksFromMarkdownResult {
+  /** Every created/reused block id, in pre-order. */
+  ids: string[]
+  /** The top-level block ids (direct children of `parentId`). */
+  rootIds: string[]
+}
+
 export interface InstallExtensionInput {
   source: string
   label?: string
@@ -163,6 +182,7 @@ export interface AgentRuntimeContext {
   getBlock: (id: string) => Promise<BlockData | null>
   getSubtree: (rootId: string) => Promise<SubtreeRow[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
+  createBlocksFromMarkdown: (input: CreateBlocksFromMarkdownInput) => Promise<CreateBlocksFromMarkdownResult>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   moveBlock: (input: MoveBlockInput) => Promise<BlockData | null>
   deleteBlock: (input: DeleteBlockInput) => Promise<DeleteBlockResult>
