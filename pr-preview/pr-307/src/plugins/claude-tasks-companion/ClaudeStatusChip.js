@@ -52,7 +52,7 @@ var useElapsedLabel = (sinceMs) => {
 	return `${t3}m`;
 };
 var RunningChip = (t0) => {
-	const $ = c(3);
+	const $ = c(8);
 	const { chip } = t0;
 	const elapsed = useElapsedLabel(chip.updatedAtMs);
 	let t1;
@@ -66,11 +66,31 @@ var RunningChip = (t0) => {
 	const t2 = elapsed ? ` · ${elapsed}` : "";
 	let t3;
 	if ($[1] !== t2) {
-		t3 = /* @__PURE__ */ jsxs(Fragment$1, { children: [t1, /* @__PURE__ */ jsxs("span", { children: ["Claude", t2] })] });
+		t3 = /* @__PURE__ */ jsxs("span", { children: ["Claude", t2] });
 		$[1] = t2;
 		$[2] = t3;
 	} else t3 = $[2];
-	return t3;
+	let t4;
+	if ($[3] !== chip.activity) {
+		t4 = chip.activity && /* @__PURE__ */ jsxs("span", {
+			className: "truncate max-w-40",
+			children: [" · ", chip.activity]
+		});
+		$[3] = chip.activity;
+		$[4] = t4;
+	} else t4 = $[4];
+	let t5;
+	if ($[5] !== t3 || $[6] !== t4) {
+		t5 = /* @__PURE__ */ jsxs(Fragment$1, { children: [
+			t1,
+			t3,
+			t4
+		] });
+		$[5] = t3;
+		$[6] = t4;
+		$[7] = t5;
+	} else t5 = $[7];
+	return t5;
 };
 var chipBody = (chip) => {
 	switch (chip.kind) {
@@ -95,7 +115,8 @@ var OPTIMISTIC_QUEUED = {
 	kind: "queued",
 	updatedAtMs: null,
 	attempts: 1,
-	errorMessage: ""
+	errorMessage: "",
+	activity: ""
 };
 var ClaudeStatusChipRow = (t0) => {
 	const $ = c(24);
