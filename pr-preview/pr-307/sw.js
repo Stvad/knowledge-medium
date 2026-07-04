@@ -36,7 +36,7 @@
  */
 
 const CACHE_PREFIX = 'km-'
-const BUILD_ID = '2e6774cd0337'
+const BUILD_ID = '6c7d7455e50f'
 const SHELL_CACHE = `${CACHE_PREFIX}shell-${BUILD_ID}`
 const ASSET_CACHE = `${CACHE_PREFIX}assets-${BUILD_ID}`
 const VENDOR_CACHE = `${CACHE_PREFIX}vendor`
