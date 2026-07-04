@@ -186,6 +186,26 @@ describe('mention lifecycle', () => {
     expect(claimLog).toContain('"[[browser emacs]] investigate the flaky test"')
   })
 
+  it('strips control bytes from the claim-log preview so synced block text cannot spoof the terminal', async () => {
+    const {graph} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      // ANSI ESC + NUL + BEL — control bytes a synced/imported block could
+      // carry that would clear/spoof a `tail -f` of the daemon log.
+      blocks: {'b-1': {content: 'a\u001b[2Jb\u0000 c\u0007'}},
+    })
+    const logs: string[] = []
+    const engine = engineWith({graph, log: line => logs.push(line)})
+
+    await engine.tick()
+    await engine.drain()
+
+    const claimLog = logs.find(line => line.includes('claiming b-1'))!
+    // No control byte survives into the log line.
+    expect([...claimLog].every(ch => (ch.codePointAt(0) ?? 0) >= 0x20)).toBe(true)
+    // The ESC/NUL/BEL are stripped; the (harmless) printable remainder survives.
+    expect(claimLog).toContain('"a[2Jb c"')
+  })
+
   it('persists the session id mid-run, even when the terminal result loses it', async () => {
     const {graph, blocks, sessionWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],
