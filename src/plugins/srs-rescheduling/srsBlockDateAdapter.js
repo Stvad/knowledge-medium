@@ -50,21 +50,23 @@ var srsBlockDateAdapter = {
 		if (block.repo.isReadOnly) return false;
 		const data = block.peek() ?? await block.load();
 		if (!data || !getBlockTypes(data).includes("srs-sm2.5")) return false;
-		const targetDaily = await getOrCreateDailyNote(block.repo, data.workspaceId, iso);
-		let written = false;
-		await block.repo.tx(async (tx) => {
-			const row = await tx.get(block.id);
-			if (!row || !getBlockTypes(row).includes("srs-sm2.5")) return;
-			await tx.update(block.id, { properties: {
-				...row.properties,
-				[srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(targetDaily.id)
-			} });
-			written = true;
-		}, {
-			scope: ChangeScope.BlockDefault,
-			description: "set srs next review date"
+		return block.repo.undoGroup(async (repo) => {
+			const targetDaily = await getOrCreateDailyNote(repo, data.workspaceId, iso);
+			let written = false;
+			await repo.tx(async (tx) => {
+				const row = await tx.get(block.id);
+				if (!row || !getBlockTypes(row).includes("srs-sm2.5")) return;
+				await tx.update(block.id, { properties: {
+					...row.properties,
+					[srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(targetDaily.id)
+				} });
+				written = true;
+			}, {
+				scope: ChangeScope.BlockDefault,
+				description: "set srs next review date"
+			});
+			return written;
 		});
-		return written;
 	}
 };
 //#endregion

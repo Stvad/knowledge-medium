@@ -1,5 +1,6 @@
 import { scopeIsUndoable } from "../api/changeScope.js";
 import "../api/index.js";
+import { mergeSnapshotsInto } from "./txSnapshots.js";
 import { CallbackSet } from "../../utils/callbackSet.js";
 //#region src/data/internals/undoManager.ts
 /**
@@ -15,11 +16,18 @@ import { CallbackSet } from "../../utils/callbackSet.js";
 * stacks (manager-managed), so the cycle is symmetric and idempotent
 * across repeated undo/redo presses.
 *
+* Group merging (issue #306, docs/undo-grouping.md): entries recorded
+* with a matching `groupId` while the previous one is top-of-stack fold
+* into ONE entry, so a composite operation spanning several `repo.tx`
+* calls (via `repo.undoGroup`) reverts with a single cmd-Z.
+*
 * What this is NOT:
 *   - Checkpoint coalescing for fine-grained typing (§16.4 — deferred).
 *     v1 granularity is one entry per `repo.tx`; CodeMirror's internal
 *     undo handles per-keystroke during edit-mode, and the document
 *     write happens once on save/blur — already coarse-grained.
+*     Group merge is not typing coalescing — it only folds txs that
+*     explicitly share a minted group token.
 *   - Events-derived undo (§16.6 — deferred). row_events.before_json
 *     enables a future drift-tolerant variant; for now snapshots are
 *     in-memory only.
@@ -42,19 +50,44 @@ var UndoManager = class {
 	constructor(opts = {}) {
 		this.maxDepth = opts.maxDepth ?? 100;
 	}
-	/** Push an entry onto the undo stack of its scope. Side-effects:
-	*  clears the redo stack for that scope (a new action invalidates
-	*  the redo branch). No-op for non-undoable scopes and zero-write txs.
+	/** Push an entry onto the undo stack of its scope — or, when the
+	*  entry carries a `groupId` matching the current top-of-stack entry,
+	*  MERGE into it (issue #306): snapshots fold per block (earliest
+	*  `before`, latest `after` — same rule as within-tx `recordWrite`),
+	*  steps append, and the description takes the incoming tx's (the
+	*  last step of a composite names the user-perceived action — e.g.
+	*  'srs reschedule' after two 'create daily note' helpers). Merging
+	*  only ever targets the TOP entry, so a foreign tx landing mid-group
+	*  splits the group rather than letting undo reorder history.
+	*
+	*  Side-effects: clears the redo stack for that scope (a new action —
+	*  merged or not — invalidates the redo branch). No-op for
+	*  non-undoable scopes and zero-write txs.
 	*
 	*  Subscriber-visible state must be consistent at notify-time, so the
-	*  redo clear happens BEFORE pushUndo's notify fires — otherwise a
+	*  redo clear happens BEFORE the push/merge notify fires — otherwise a
 	*  listener that recomputes `depths()` would see the stale pre-clear
 	*  redo count and keep redo UI enabled. */
 	record(entry) {
 		if (!this.isUndoable(entry.scope)) return;
 		if (entry.snapshots.size === 0) return;
 		this.getRedo(entry.scope).length = 0;
+		const top = this.peekUndo(entry.scope);
+		if (entry.groupId !== void 0 && top !== null && top.groupId === entry.groupId) {
+			mergeSnapshotsInto(top.snapshots, entry.snapshots);
+			top.steps = [...this.stepsOf(top), ...this.stepsOf(entry)];
+			top.description = entry.description ?? top.description;
+			this.notify(entry.scope);
+			return;
+		}
 		this.pushUndo(entry.scope, entry);
+	}
+	/** Constituent steps of an entry; a lone entry is its own single step. */
+	stepsOf(entry) {
+		return entry.steps ?? [{
+			txId: entry.txId,
+			description: entry.description
+		}];
 	}
 	peekUndo(scope) {
 		return this.getUndo(scope).at(-1) ?? null;

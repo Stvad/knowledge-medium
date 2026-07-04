@@ -115,43 +115,47 @@ var dailyNoteOrderKey = (iso) => {
 *  scratch — the row's content + descendant subtree may carry edits
 *  the user wants back. We also re-link to the journal because the
 *  resurrected row's parent_id may have drifted; `tx.move` sets it
-*  cleanly. */
-var getOrCreateDailyNote = async (repo, workspaceId, iso) => {
+*  cleanly.
+*
+*  Runs under `repo.undoGroup`: journal bootstrap + note create/repair
+*  can be two txs — one undo entry for the pair, for every caller
+*  (callers handing us their own group facade fold us into theirs). */
+var getOrCreateDailyNote = async (repo, workspaceId, iso) => repo.undoGroup(async (grouped) => {
 	const id = dailyNoteBlockId(workspaceId, iso);
 	const orderKey = dailyNoteOrderKey(iso);
 	const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso));
 	const dailyAliases = [longLabel, isoLabel];
 	const dateValue = dailyNoteDateValue(iso);
-	const live = await repo.load(id);
+	const live = await grouped.load(id);
 	if (live) {
 		const aliases = stringListProperty(live.properties[aliasesProp.name]);
-		if (!(live.parentId !== journalBlockId(workspaceId) || live.orderKey !== orderKey || !hasBlockType(live, "page") || !hasBlockType(live, "daily-note") || !includesAll(aliases, dailyAliases))) return repo.block(id);
-		const journal = await getOrCreateJournalBlock(repo, workspaceId);
-		const typeSnapshot = repo.snapshotTypeRegistries();
-		await repo.tx(async (tx) => {
+		if (!(live.parentId !== journalBlockId(workspaceId) || live.orderKey !== orderKey || !hasBlockType(live, "page") || !hasBlockType(live, "daily-note") || !includesAll(aliases, dailyAliases))) return grouped.block(id);
+		const journal = await getOrCreateJournalBlock(grouped, workspaceId);
+		const typeSnapshot = grouped.snapshotTypeRegistries();
+		await grouped.tx(async (tx) => {
 			const current = await tx.get(id);
 			if (!current || current.deleted) return;
 			const currentAliases = stringListProperty(current.properties[aliasesProp.name]);
 			if (!includesAll(currentAliases, dailyAliases)) await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]));
-			await repo.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: dailyAliases }, typeSnapshot);
-			await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, { [dailyNoteDateProp.name]: dateValue }, typeSnapshot);
+			await grouped.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: dailyAliases }, typeSnapshot);
+			await grouped.addTypeInTx(tx, id, DAILY_NOTE_TYPE, { [dailyNoteDateProp.name]: dateValue }, typeSnapshot);
 			if (current.parentId !== journal.id || current.orderKey !== orderKey) await tx.move(id, {
 				parentId: journal.id,
 				orderKey
 			}, { skipMetadata: true });
 		}, { scope: ChangeScope.BlockDefault });
-		return repo.block(id);
+		return grouped.block(id);
 	}
-	const journal = await getOrCreateJournalBlock(repo, workspaceId);
-	const typeSnapshot = repo.snapshotTypeRegistries();
-	await repo.tx(async (tx) => {
+	const journal = await getOrCreateJournalBlock(grouped, workspaceId);
+	const typeSnapshot = grouped.snapshotTypeRegistries();
+	await grouped.tx(async (tx) => {
 		const existing = await tx.get(id);
 		if (existing && !existing.deleted) return;
 		if (existing && existing.deleted) {
 			await tx.restore(id, { content: longLabel });
 			await tx.setProperty(id, aliasesProp, dailyAliases);
-			await repo.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: dailyAliases }, typeSnapshot);
-			await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, { [dailyNoteDateProp.name]: dateValue }, typeSnapshot);
+			await grouped.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: dailyAliases }, typeSnapshot);
+			await grouped.addTypeInTx(tx, id, DAILY_NOTE_TYPE, { [dailyNoteDateProp.name]: dateValue }, typeSnapshot);
 			await tx.move(id, {
 				parentId: journal.id,
 				orderKey
@@ -165,11 +169,11 @@ var getOrCreateDailyNote = async (repo, workspaceId, iso) => {
 			orderKey,
 			content: longLabel
 		}, { systemMint: true });
-		await repo.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: dailyAliases }, typeSnapshot);
-		await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, { [dailyNoteDateProp.name]: dateValue }, typeSnapshot);
+		await grouped.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: dailyAliases }, typeSnapshot);
+		await grouped.addTypeInTx(tx, id, DAILY_NOTE_TYPE, { [dailyNoteDateProp.name]: dateValue }, typeSnapshot);
 	}, { scope: ChangeScope.BlockDefault });
-	return repo.block(id);
-};
+	return grouped.block(id);
+});
 /** Date-shaped alias detector (spec §7.6). Shape-only — matches the
 *  `YYYY-MM-DD` regex without checking calendar validity. Reach for
 *  this when you want to find any date-looking alias on a row

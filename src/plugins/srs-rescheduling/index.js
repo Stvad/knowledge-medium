@@ -138,37 +138,39 @@ var planSrsReschedule = async (block, signal, options = {}) => {
 };
 var applySrsReschedulePlan = async (block, plan) => {
 	if (block.repo.isReadOnly) return false;
-	const nextReviewDaily = await getOrCreateDailyNote(block.repo, plan.workspaceId, plan.nextReviewIso);
-	const reviewedDaily = await getOrCreateDailyNote(block.repo, plan.workspaceId, plan.reviewedIso);
-	const snapshot = {
-		...snapshotForPlan(plan),
-		reviewedAt: reviewedDaily.id
-	};
-	const typeSnapshot = block.repo.snapshotTypeRegistries();
-	let written = false;
-	await block.repo.tx(async (tx) => {
-		let row = await tx.get(block.id);
-		if (!row) return;
-		if (!getBlockTypes(row).includes("srs-sm2.5")) {
-			await block.repo.addTypeInTx(tx, block.id, SRS_SM25_TYPE, {}, typeSnapshot);
-			row = await tx.get(block.id);
+	return block.repo.undoGroup(async (repo) => {
+		const nextReviewDaily = await getOrCreateDailyNote(repo, plan.workspaceId, plan.nextReviewIso);
+		const reviewedDaily = await getOrCreateDailyNote(repo, plan.workspaceId, plan.reviewedIso);
+		const snapshot = {
+			...snapshotForPlan(plan),
+			reviewedAt: reviewedDaily.id
+		};
+		const typeSnapshot = repo.snapshotTypeRegistries();
+		let written = false;
+		await repo.tx(async (tx) => {
+			let row = await tx.get(block.id);
 			if (!row) return;
-		}
-		await tx.update(block.id, { properties: {
-			...row.properties,
-			[srsIntervalProp.name]: srsIntervalProp.codec.encode(plan.newInterval),
-			[srsFactorProp.name]: srsFactorProp.codec.encode(plan.newFactor),
-			[srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(nextReviewDaily.id),
-			[srsReviewCountProp.name]: srsReviewCountProp.codec.encode(plan.nextReviewCount),
-			[srsGradeProp.name]: srsGradeProp.codec.encode(plan.grade),
-			[srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([...plan.history, snapshot])
-		} });
-		written = true;
-	}, {
-		scope: ChangeScope.BlockDefault,
-		description: "srs reschedule"
+			if (!getBlockTypes(row).includes("srs-sm2.5")) {
+				await repo.addTypeInTx(tx, block.id, SRS_SM25_TYPE, {}, typeSnapshot);
+				row = await tx.get(block.id);
+				if (!row) return;
+			}
+			await tx.update(block.id, { properties: {
+				...row.properties,
+				[srsIntervalProp.name]: srsIntervalProp.codec.encode(plan.newInterval),
+				[srsFactorProp.name]: srsFactorProp.codec.encode(plan.newFactor),
+				[srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(nextReviewDaily.id),
+				[srsReviewCountProp.name]: srsReviewCountProp.codec.encode(plan.nextReviewCount),
+				[srsGradeProp.name]: srsGradeProp.codec.encode(plan.grade),
+				[srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([...plan.history, snapshot])
+			} });
+			written = true;
+		}, {
+			scope: ChangeScope.BlockDefault,
+			description: "srs reschedule"
+		});
+		return written;
 	});
-	return written;
 };
 var rescheduleBlock = async (block, signal) => {
 	const plan = await planSrsReschedule(block, signal);
@@ -229,13 +231,13 @@ var runRescheduleWithFeedback = async (block, signal) => {
 	if (!result) return;
 	const workspaceId = block.peek()?.workspaceId;
 	if (!workspaceId) return;
-	const top = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault);
-	if (!top) return;
+	const groupId = block.repo.undoManagerFor(workspaceId).peekUndo(ChangeScope.BlockDefault)?.groupId;
+	if (!groupId) return;
 	const message = formatRescheduleToastMessage(result);
 	showCustom((id) => createElement(RescheduleToast, {
 		toastId: id,
 		message,
-		txId: top.txId,
+		groupId,
 		workspaceId,
 		repo: block.repo
 	}));

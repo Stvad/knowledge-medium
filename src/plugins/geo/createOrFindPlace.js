@@ -96,38 +96,40 @@ var createOrFindPlace = async (repo, workspaceId, candidate) => {
 		}).load();
 		if (claimant) return collisionResult(friendlyName, machineAlias, claimant);
 	}
-	const locationsPage = await getOrCreateLocationsPage(repo, workspaceId);
 	const content = contentFor(candidate, machineAlias);
 	const id = v4();
-	const typeSnapshot = repo.snapshotTypeRegistries();
 	let resolvedId = id;
 	let racedNameClaim = false;
-	await repo.tx(async (tx) => {
-		const raced = await tx.aliasLookup(machineAlias, workspaceId);
-		if (raced) {
-			resolvedId = raced.id;
-			return;
-		}
-		if (friendlyName !== void 0) {
-			if (await tx.aliasLookup(friendlyName, workspaceId)) {
-				racedNameClaim = true;
+	await repo.undoGroup(async (grouped) => {
+		const locationsPage = await getOrCreateLocationsPage(grouped, workspaceId);
+		const typeSnapshot = grouped.snapshotTypeRegistries();
+		await grouped.tx(async (tx) => {
+			const raced = await tx.aliasLookup(machineAlias, workspaceId);
+			if (raced) {
+				resolvedId = raced.id;
 				return;
 			}
-		}
-		await tx.create({
-			id,
-			workspaceId,
-			parentId: locationsPage.id,
-			orderKey: keyAtEnd(),
-			content
+			if (friendlyName !== void 0) {
+				if (await tx.aliasLookup(friendlyName, workspaceId)) {
+					racedNameClaim = true;
+					return;
+				}
+			}
+			await tx.create({
+				id,
+				workspaceId,
+				parentId: locationsPage.id,
+				orderKey: keyAtEnd(),
+				content
+			});
+			await tx.setProperty(id, aliasesProp, [...aliases]);
+			await grouped.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: [...aliases] }, typeSnapshot);
+			await grouped.addTypeInTx(tx, id, PLACE_TYPE, { [aliasesProp.name]: [...aliases] }, typeSnapshot);
+			await writePlaceProps(tx, id, candidate);
+		}, {
+			scope: ChangeScope.BlockDefault,
+			description: "create place"
 		});
-		await tx.setProperty(id, aliasesProp, [...aliases]);
-		await repo.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: [...aliases] }, typeSnapshot);
-		await repo.addTypeInTx(tx, id, PLACE_TYPE, { [aliasesProp.name]: [...aliases] }, typeSnapshot);
-		await writePlaceProps(tx, id, candidate);
-	}, {
-		scope: ChangeScope.BlockDefault,
-		description: "create place"
 	});
 	if (racedNameClaim && friendlyName !== void 0) {
 		const claimant = await repo.query.aliasLookup({
