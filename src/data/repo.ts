@@ -1123,24 +1123,15 @@ export class Repo {
    *     buckets). Both land as foreign txs and split the group; use
    *     `grouped.tx` / `grouped.mutate` inside a group instead.
    *   - Everything not overridden delegates to the real repo via the
-   *     prototype chain and therefore runs with the facade as `this`.
-   *     That is safe for reads and for mutation of shared objects
-   *     (caches, maps — reached through the chain), and the overrides
-   *     cover the three hazard classes it would NOT be safe for:
-   *     members that mint `this`-capturing objects or closures into
-   *     shared/long-lived state (`block`, `runQuery`, the `schedule*`
-   *     job enqueuers), members that assign instance fields — the write
-   *     would shadow on the facade instead of updating the repo
-   *     (`setActiveWorkspaceId` / `setReadOnly` / the sync-observer
-   *     pair / `resetMetrics`, plus `undo` / `redo` whose metrics
-   *     bookkeeping assigns fields mid-flight) — and members whose
-   *     collaborator captured the real repo at construction and would
-   *     open UNGROUPED txs mid-group (the TypeTagger family; the
-   *     stateful services above are the documented exception). Adding
-   *     a Repo member in one of these classes means adding a facade
-   *     override here — enforced structurally by
-   *     `repoFacadeGate.test.ts`, which fails on any Repo member that
-   *     is neither overridden nor consciously allowlisted. */
+   *     prototype chain and therefore runs with the facade as `this` —
+   *     safe for reads and shared-object mutation, NOT safe for three
+   *     hazard classes (shared-state minting, instance-field
+   *     assignment, construction-captured collaborators), which the
+   *     overrides in {@link groupedFacade} cover — each carries its
+   *     rationale at the override. The classification rubric and the
+   *     structural enforcement live in `repoFacadeGate.test.ts`, which
+   *     fails on any Repo member that is neither overridden nor
+   *     consciously allowlisted. */
   async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
     return fn(this.groupedFacade(this.newId()))
   }

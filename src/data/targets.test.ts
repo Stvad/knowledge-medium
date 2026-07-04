@@ -30,7 +30,7 @@ import {
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { Repo } from './repo'
 import {
   aliasSeatSeed,
@@ -334,9 +334,7 @@ describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
 
     expect(result.id).toBe(slot1Id)
     expect(result.inserted).toBe(true)
-    const slot0Row = await env.h.db.get<{deleted: 0 | 1}>(
-      'SELECT deleted FROM blocks WHERE id = ?', [slot0Id])
-    expect(slot0Row.deleted).toBe(1)
+    expect(await isBlockDeleted(env.repo, slot0Id)).toBe(true)
   })
 
   it('probes past a tombstone with extra user-added properties', async () => {

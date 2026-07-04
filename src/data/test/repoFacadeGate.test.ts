@@ -46,6 +46,11 @@
  *   - Otherwise (pure read; mutation of a shared object reached
  *     through the chain; writes into a caller-provided tx) → allowlist
  *     with a short reason.
+ *   - 'getter read' requires proving the getter ASSIGNS nothing — a
+ *     lazily-initializing getter (`this._x ??= mk(this)`) would shadow
+ *     its backing field onto the facade. The gate reads every
+ *     non-overridden getter through the facade and fails if any own
+ *     property materializes on it.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -65,7 +70,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   propertySchemas: 'getter read',
   types: 'getter read',
   typesPageId: 'getter read',
-  undoManager: 'getter read (resolves per-workspace manager)',
+  undoManager: 'getter; delegates to undoManagerFor (see its entry for the mint)',
   valuePresets: 'getter read',
   metrics: 'read-only snapshot of counters',
   exists: 'read',
@@ -117,7 +122,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   runSubquery: 'private read',
   runWorkspaceBackfills: 'private; jobs are enqueued via the DELEGATED schedule* overrides',
   scheduleReprojection: 'private; invoked by constructor-bound facetBridge',
-  swapQueries: 'private; assigns fields but reached only via setFacetRuntime (constructor-bound)',
+  swapQueries: 'private; assigns fields — reached via setFacetRuntime (constructor-bound) and __setQueriesForTesting (see its entry: never call on a facade)',
 
   // ── test-only escape hatches (assign fields — never call on a facade) ──
   __resetReprojectionMarkerCache: 'test-only',
@@ -194,6 +199,25 @@ describe('undoGroup facade — structural override/allowlist gate', () => {
     const protoMembers = Object.getOwnPropertyNames(Repo.prototype)
       .filter((name) => name !== 'constructor')
     const instanceFields = Object.getOwnPropertyNames(repo)
+    const allowlisted = [
+      ...Object.keys(SAFE_VIA_PROTOTYPE),
+      ...Object.keys(SAFE_INSTANCE_FIELDS),
+    ]
+
+    // 0a. Enumeration soundness: getOwnPropertyNames skips symbol keys,
+    //     so a symbol-keyed member (e.g. a future
+    //     `[Symbol.asyncDispose]() { this.stopSyncObserver() }`) would
+    //     ship invisible to every check below. Force a gate revision
+    //     the moment one appears.
+    expect(Object.getOwnPropertySymbols(Repo.prototype),
+      'symbol-keyed prototype member — extend this gate to enumerate symbols').toEqual([])
+    expect(Object.getOwnPropertySymbols(repo),
+      'symbol-keyed instance member — extend this gate to enumerate symbols').toEqual([])
+    // 0b. Enumeration soundness: getOwnPropertyNames does not walk the
+    //     prototype chain — if Repo ever gains `extends Base`, inherited
+    //     members would ship unclassified. Force a gate revision then.
+    expect(Object.getPrototypeOf(Repo.prototype),
+      'Repo gained a base class — extend this gate to walk the chain').toBe(Object.prototype)
 
     // 1. No unclassified members. A failure here means a Repo member was
     //    added without deciding its facade behavior — classify it per the
@@ -202,30 +226,52 @@ describe('undoGroup facade — structural override/allowlist gate', () => {
     const unclassifiedProto = protoMembers.filter(
       (name) => !overrides.has(name) && !(name in SAFE_VIA_PROTOTYPE),
     )
-    expect(unclassifiedProto, 'new Repo prototype member(s) need a facade classification').toEqual([])
+    expect(unclassifiedProto,
+      'new Repo prototype member(s) need a facade classification — override in groupedFacade or allowlist per the rubric at the top of this file').toEqual([])
     const unclassifiedFields = instanceFields.filter(
       (name) => !overrides.has(name) && !(name in SAFE_INSTANCE_FIELDS),
     )
-    expect(unclassifiedFields, 'new Repo instance field(s) need a facade classification').toEqual([])
+    expect(unclassifiedFields,
+      'new Repo instance field(s) need a facade classification — override in groupedFacade or allowlist per the rubric at the top of this file').toEqual([])
 
-    // 2. No stale allowlist entries (member renamed/removed → prune the list).
-    const known = new Set([...protoMembers, ...instanceFields])
-    const stale = [
-      ...Object.keys(SAFE_VIA_PROTOTYPE),
-      ...Object.keys(SAFE_INSTANCE_FIELDS),
-    ].filter((name) => !known.has(name))
-    expect(stale, 'allowlist entries no longer on Repo').toEqual([])
+    // 2. No stale allowlist entries (member renamed/removed → prune),
+    //    checked PER SIDE so a member migrating between prototype and
+    //    instance (method ⇄ arrow-function class field) drags its
+    //    classification along instead of leaving a mis-homed leftover.
+    const staleProto = Object.keys(SAFE_VIA_PROTOTYPE)
+      .filter((name) => !protoMembers.includes(name))
+    expect(staleProto, 'SAFE_VIA_PROTOTYPE entries not on Repo.prototype').toEqual([])
+    const staleFields = Object.keys(SAFE_INSTANCE_FIELDS)
+      .filter((name) => !instanceFields.includes(name))
+    expect(staleFields, 'SAFE_INSTANCE_FIELDS entries not on the instance').toEqual([])
 
-    // 3. Nothing both overridden AND allowlisted (pick one home).
-    const doubled = [
-      ...Object.keys(SAFE_VIA_PROTOTYPE),
-      ...Object.keys(SAFE_INSTANCE_FIELDS),
-    ].filter((name) => overrides.has(name))
+    // 3. Exactly one home per member: never both overridden and
+    //    allowlisted, and never classified on both allowlists.
+    const doubled = allowlisted.filter((name) => overrides.has(name))
     expect(doubled, 'members both overridden and allowlisted').toEqual([])
+    const crossListed = Object.keys(SAFE_VIA_PROTOTYPE)
+      .filter((name) => name in SAFE_INSTANCE_FIELDS)
+    expect(crossListed, 'members classified on BOTH allowlists').toEqual([])
 
     // 4. Every override shadows a real Repo member (catches renames that
     //    would leave a dead override silently delegating to the prototype).
+    const known = new Set([...protoMembers, ...instanceFields])
     const orphaned = [...overrides].filter((name) => !known.has(name))
     expect(orphaned, 'facade overrides with no matching Repo member').toEqual([])
+
+    // 5. 'getter read' classifications are PROVEN, not trusted: read
+    //    every non-overridden getter through the facade; a lazily-
+    //    initializing getter (`this._x ??= mk(this)`) would shadow its
+    //    backing field onto the facade — a field that never existed at
+    //    inventory time and so could never be allowlisted.
+    for (const name of protoMembers) {
+      const descriptor = Object.getOwnPropertyDescriptor(Repo.prototype, name)
+      if (typeof descriptor?.get !== 'function' || overrides.has(name)) continue
+      void (facade as unknown as Record<string, unknown>)[name]
+    }
+    const materialized = Object.getOwnPropertyNames(facade)
+      .filter((name) => !overrides.has(name))
+    expect(materialized,
+      'reading a getter through the facade materialized own properties on it — a lazily-assigning getter is shadowing state').toEqual([])
   })
 })
