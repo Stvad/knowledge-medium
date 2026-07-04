@@ -40,7 +40,10 @@
  *     are garbage-collected.
  *   - esm.sh imports: cache-first in a single shared, un-namespaced cache —
  *     those URLs carry version + integrity, so they're immutable across
- *     generations and need not be re-fetched on every deploy.
+ *     generations and need not be re-fetched on every deploy. The React vendor
+ *     set (the import map's integrity keys, __PRECACHE_VENDOR__) is precached at
+ *     install so the app boots offline; anything else esm.sh serves is filled
+ *     lazily on first use.
  *   - HTML navigations: CACHE-FIRST from this generation's own shell cache
  *     (network only on a cold miss). The shell is pinned like the assets, so a
  *     controlled load never mixes a new build's HTML with an old build's assets;
@@ -89,6 +92,9 @@ const sw = createServiceWorker(
     // and the app offline-capable.
     precacheAssets: JSON.parse('__PRECACHE_ASSETS__') as string[],
     precacheRestAssets: JSON.parse('__PRECACHE_REST_ASSETS__') as string[],
+    // Cross-origin esm.sh React URLs (import-map integrity keys) — precached into
+    // the shared vendor cache at install so React resolves on an offline first load.
+    precacheVendor: JSON.parse('__PRECACHE_VENDOR__') as string[],
   },
   {caches, fetch, origin: self.location.origin, now: () => Date.now()},
 )

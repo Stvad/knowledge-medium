@@ -70,6 +70,7 @@ const makeConfig = (o: Partial<SwConfig> = {}): SwConfig => ({
   touchIntervalMs: DAY,
   precacheAssets: ['/knowledge-medium/src/main.js'],
   precacheRestAssets: ['/knowledge-medium/src/lazy.js'],
+  precacheVendor: [],
   ...o,
 })
 
@@ -158,6 +159,21 @@ describe('install', () => {
     expect(await shell.match(abs('./index.html'))).toBeDefined()
     expect(await assets.match(abs('/knowledge-medium/src/main.js'))).toBeDefined()
     expect(await assets.match(abs('/knowledge-medium/src/lazy.js'))).toBeDefined()
+  })
+
+  it('precaches cross-origin vendor URLs into the shared km-vendor cache (cache:default)', async () => {
+    const vendorUrl = 'https://esm.sh/react@19.2.6'
+    const {sw, caches, fetchMock} = build({precacheVendor: [vendorUrl], precacheRestAssets: []})
+    await sw.install()
+
+    // Vendor URLs are absolute cross-origin — cached verbatim, NOT scope-resolved,
+    // in the un-namespaced vendor cache (not km-assets-<id>).
+    const vendor = await caches.open('km-vendor')
+    expect(await vendor.match(vendorUrl)).toBeDefined()
+    expect(await (await caches.open('km-assets-gen1')).match(vendorUrl)).toBeUndefined()
+    // Immutable (version- + SRI-pinned), so fetched with cache:'default', not 'no-cache'.
+    const vendorReq = fetchMock.mock.calls.map((c) => c[0]).find((r) => r.url === vendorUrl)
+    expect(vendorReq?.cache).toBe('default')
   })
 
   it('swallows a per-URL fetch failure — install still resolves and caches the rest', async () => {

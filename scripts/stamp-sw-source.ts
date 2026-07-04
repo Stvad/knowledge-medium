@@ -1,6 +1,6 @@
 /**
  * The pure string transform at the heart of scripts/inject-sw-build-id.ts:
- * stamp a built dist/sw.js with its build id + the two precache lists. Split out
+ * stamp a built dist/sw.js with its build id + the three precache lists. Split out
  * from the orchestrator (which reads the fs, walks dist/, and exits the process)
  * so the load-bearing, MINIFICATION-SENSITIVE substitution is unit-testable —
  * see stamp-sw-source.test.ts.
@@ -19,7 +19,12 @@
  * Throws — so the build fails loudly instead of shipping a dead worker — if a
  * placeholder is missing, survives the stamp, or the result won't parse as JS.
  */
-const PLACEHOLDERS = ['__BUILD_ID__', '__PRECACHE_ASSETS__', '__PRECACHE_REST_ASSETS__'] as const
+const PLACEHOLDERS = [
+  '__BUILD_ID__',
+  '__PRECACHE_ASSETS__',
+  '__PRECACHE_REST_ASSETS__',
+  '__PRECACHE_VENDOR__',
+] as const
 
 export interface SwStampInput {
   /** Per-deploy id (git sha / dev fallback): hex/base36, no quotes/backticks/`${`. */
@@ -28,11 +33,13 @@ export interface SwStampInput {
   firstPaintAssets: string[]
   /** The rest of the emitted graph, base-prefixed. */
   restAssets: string[]
+  /** Cross-origin vendor URLs (esm.sh React set) — absolute, precached for offline. */
+  vendorAssets: string[]
 }
 
 export const stampSwSource = (
   source: string,
-  {buildId, firstPaintAssets, restAssets}: SwStampInput,
+  {buildId, firstPaintAssets, restAssets, vendorAssets}: SwStampInput,
 ): string => {
   if (!source.includes('__BUILD_ID__')) throw new Error('placeholder __BUILD_ID__ not found in sw.js')
   let out = source.split('__BUILD_ID__').join(buildId)
@@ -49,6 +56,7 @@ export const stampSwSource = (
   }
   injectList('__PRECACHE_ASSETS__', firstPaintAssets)
   injectList('__PRECACHE_REST_ASSETS__', restAssets)
+  injectList('__PRECACHE_VENDOR__', vendorAssets)
 
   for (const p of PLACEHOLDERS) {
     if (out.includes(p)) throw new Error(`placeholder ${p} survived injection`)

@@ -61,6 +61,15 @@ export interface SwConfig {
   precacheAssets: string[]
   /** The rest of the emitted graph (build-injected) — everything minus first-paint. */
   precacheRestAssets: string[]
+  /**
+   * Cross-origin vendor module URLs (esm.sh React set) to precache at install so
+   * the app boots OFFLINE. These are ABSOLUTE https URLs (not scope-resolved) and
+   * immutable (version- + SRI-pinned), so they live in the shared, un-namespaced
+   * vendor cache. Build-injected from the import map's integrity keys — the exact
+   * set the app can import — because they're excluded from the same-origin
+   * precache (which only walks dist/), leaving an offline hole this closes.
+   */
+  precacheVendor: string[]
 }
 
 export interface SwEnv {
@@ -85,6 +94,8 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   const SHELL_URLS = SHELL_PATHS.map(toScopeUrl)
   const PRECACHE_ASSETS = config.precacheAssets.map(toScopeUrl)
   const PRECACHE_REST_ASSETS = config.precacheRestAssets.map(toScopeUrl)
+  // Vendor URLs are absolute + cross-origin — used verbatim, NOT scope-resolved.
+  const PRECACHE_VENDOR = config.precacheVendor
 
   // A production/root SW's scope (…/knowledge-medium/) is a PREFIX of every
   // PR-preview path; see src/sw/preview.ts for why a SW refuses to serve/cache
@@ -176,9 +187,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // phantom is bounded and self-clearing; a cleaner fix (provisional ledger
     // entries that don't consume a keep slot) is a possible follow-up.
     await recordGeneration(buildId)
-    const [shell, assets] = await Promise.all([
+    const [shell, assets, vendor] = await Promise.all([
       caches.open(SHELL_CACHE),
       caches.open(ASSET_CACHE),
+      caches.open(VENDOR_CACHE),
     ])
     // Cache mode: SHELL_URLS → 'reload' (always fresh HTML/icons). Both asset
     // lists → 'no-cache', a CONDITIONAL revalidate against the origin. The
@@ -219,9 +231,20 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     // offline-capable — we never skip it for storage (footprint is bounded by
     // keepGenerations and reclaimed by the activate GC, not by dropping offline
     // coverage). First-paint first: it's the offline-boot-critical set, so it
-    // lands before the lazy tail.
+    // lands before the lazy tail. Vendor (esm.sh React) is equally boot-critical
+    // — the app imports React through the import map, and those cross-origin URLs
+    // are excluded from the same-origin precache (which only walks dist/), so
+    // without this pass a controlled offline first load can't resolve React. It's
+    // fetched with 'default' (not 'no-cache'): the URLs are immutable
+    // (version- + SRI-pinned), so a warm HTTP-cache copy from the page's own
+    // import is always valid and reused with no extra round-trip. The vendor cache
+    // is shared + un-namespaced, so re-running install across deploys just re-puts
+    // identical bytes.
     await Promise.all(SHELL_URLS.map((u) => fetchInto(shell, u, 'reload')))
-    await runPooled(PRECACHE_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache'))
+    await Promise.all([
+      runPooled(PRECACHE_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache')),
+      runPooled(PRECACHE_VENDOR, 16, (u) => fetchInto(vendor, u, 'default')),
+    ])
     await runPooled(PRECACHE_REST_ASSETS, 16, (u) => fetchInto(assets, u, 'no-cache'))
   }
 
