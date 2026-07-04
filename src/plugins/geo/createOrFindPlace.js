@@ -100,10 +100,10 @@ var createOrFindPlace = async (repo, workspaceId, candidate) => {
 	const id = v4();
 	let resolvedId = id;
 	let racedNameClaim = false;
-	await repo.undoGroup(async (grouped) => {
-		const locationsPage = await getOrCreateLocationsPage(grouped, workspaceId);
-		const typeSnapshot = grouped.snapshotTypeRegistries();
-		await grouped.tx(async (tx) => {
+	await repo.undoGroup(async (repo) => {
+		const locationsPage = await getOrCreateLocationsPage(repo, workspaceId);
+		const typeSnapshot = repo.snapshotTypeRegistries();
+		await repo.tx(async (tx) => {
 			const raced = await tx.aliasLookup(machineAlias, workspaceId);
 			if (raced) {
 				resolvedId = raced.id;
@@ -123,8 +123,8 @@ var createOrFindPlace = async (repo, workspaceId, candidate) => {
 				content
 			});
 			await tx.setProperty(id, aliasesProp, [...aliases]);
-			await grouped.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: [...aliases] }, typeSnapshot);
-			await grouped.addTypeInTx(tx, id, PLACE_TYPE, { [aliasesProp.name]: [...aliases] }, typeSnapshot);
+			await repo.addTypeInTx(tx, id, PAGE_TYPE, { [aliasesProp.name]: [...aliases] }, typeSnapshot);
+			await repo.addTypeInTx(tx, id, PLACE_TYPE, { [aliasesProp.name]: [...aliases] }, typeSnapshot);
 			await writePlaceProps(tx, id, candidate);
 		}, {
 			scope: ChangeScope.BlockDefault,

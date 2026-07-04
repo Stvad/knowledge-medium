@@ -117,15 +117,15 @@ var captureMedia = async (request, deps) => {
 		contentKey
 	});
 	let inserted = false;
-	await deps.repo.undoGroup(async (grouped) => {
-		await getOrCreateKernelPage(grouped, workspaceId, {
+	await deps.repo.undoGroup(async (repo) => {
+		await getOrCreateKernelPage(repo, workspaceId, {
 			namespace: ASSETS_NS,
 			alias: ASSETS_ALIAS,
 			markerType: ASSETS_TYPE
 		});
 		const containerId = kernelPageBlockId(workspaceId, ASSETS_NS);
-		const typeSnapshot = grouped.snapshotTypeRegistries();
-		await grouped.tx(async (tx) => {
+		const typeSnapshot = repo.snapshotTypeRegistries();
+		await repo.tx(async (tx) => {
 			inserted = (await createOrRestoreTargetBlock(tx, {
 				id: assetBlockId,
 				workspaceId,
@@ -138,7 +138,7 @@ var captureMedia = async (request, deps) => {
 					await tx.setProperty(id, mediaMimeProp, mime);
 					await tx.setProperty(id, mediaSizeProp, size);
 					if (filename !== void 0) await tx.setProperty(id, mediaFilenameProp, filename);
-					await grouped.addTypeInTx(tx, id, MEDIA_TYPE, {}, typeSnapshot);
+					await repo.addTypeInTx(tx, id, MEDIA_TYPE, {}, typeSnapshot);
 				}
 			})).inserted;
 		}, {

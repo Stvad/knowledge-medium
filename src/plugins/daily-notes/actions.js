@@ -76,9 +76,9 @@ var appendTodayDailyBlockInStack = async (repo, layoutSessionBlock, options = {}
 	const workspaceId = repo.activeWorkspaceId;
 	if (!workspaceId || repo.isReadOnly) return null;
 	const content = options.content;
-	const blockId = await repo.undoGroup(async (grouped) => {
-		const note = await getOrCreateDailyNote(grouped, workspaceId, todayIso());
-		return grouped.mutate.createChild({
+	const blockId = await repo.undoGroup(async (repo) => {
+		const note = await getOrCreateDailyNote(repo, workspaceId, todayIso());
+		return repo.mutate.createChild({
 			parentId: note.id,
 			content,
 			position: { kind: "last" }
