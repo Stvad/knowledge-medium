@@ -10,7 +10,7 @@ import { appUpdate } from '@/appUpdate.js'
  * Update behaviour (see also src/appUpdate.ts):
  *  - When a new SW reaches `installed` while an old one still controls the
  *    page, we flag the update. The SW self-`skipWaiting()`s in its own
- *    install handler (public/sw.js), so it activates in the background on
+ *    install handler (src/sw/sw.ts), so it activates in the background on
  *    its own — the `SKIP_WAITING` postMessage below is only a fallback for
  *    a worker that somehow didn't. We do NOT reload the page. The point is
  *    that the *next* load — whether the user clicks the Reload prompt or

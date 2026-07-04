@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.sw.tsbuildinfo",
+    "target": "ESNext",
+    // The service worker runs in a WebWorker global, NOT the DOM. WebWorker lib
+    // gives ServiceWorkerGlobalScope / ExtendableEvent / FetchEvent / Cache API
+    // and drops `window`/`document`. types:[] keeps @types/node's globals (and
+    // their conflicting `self`) out.
+    "lib": ["ESNext", "WebWorker"],
+    "types": [],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode — matches the app/scripts configs. */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  // Only the worker ENTRY is owned here (WebWorker types); it pulls in the pure
+  // src/sw/*.ts helpers as imports. Those helpers + their tests are globals-free
+  // and stay owned by tsconfig.app.json. sw.ts is excluded there so the DOM lib
+  // doesn't mistype its `self`.
+  "include": ["src/sw/sw.ts"]
+}

@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "vite",
     "compile": "tsc -b && node packages/agent-cli/scripts/build-kernel-types.mjs && chmod +x packages/agent-cli/dist/cli.js packages/agent-cli/dist/server.js",
-    "build": "yarn run compile && vite build && node scripts/inject-sw-build-id.mjs",
+    "build": "yarn run compile && vite build && vite build --config vite.sw.config.ts && vite-node scripts/inject-sw-build-id.ts",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/ --cache-strategy content",
     "preview": "vite preview",
     "test": "vitest run",

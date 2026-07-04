@@ -15,7 +15,7 @@
  *
  * Consumed by vite.config.ts (baked into the bundle via `define` and emitted
  * as dist/version.json). Mirrors the git source-order used by
- * inject-sw-build-id.mjs so the displayed version and the SW cache id agree.
+ * inject-sw-build-id.ts so the displayed version and the SW cache id agree.
  */
 import {execFileSync} from 'node:child_process'
 

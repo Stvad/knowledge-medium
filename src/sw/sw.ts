@@ -1,3 +1,4 @@
+/// <reference lib="webworker" />
 /* Knowledge Medium service worker.
  *
  * Versioning model — each deploy is an immutable "generation":
@@ -44,10 +45,21 @@
  *   - Everything else (Supabase, PowerSync, agent relay): straight to the
  *     network, never cached.
  *
- * BUILD_ID / PRECACHE_ASSETS are replaced by scripts/inject-sw-build-id.mjs
- * after `vite build`. In dev the placeholders are harmless (the SW isn't
- * registered there).
+ * Pure logic (asset/preview predicates, ledger retention math) lives in
+ * sibling src/sw/*.ts modules so it's unit-tested directly; this entry wires
+ * it to self/caches/fetch. BUILD_ID / PRECACHE_ASSETS / PRECACHE_REST_ASSETS
+ * are replaced by scripts/inject-sw-build-id.ts after the SW build. In dev the
+ * placeholders are harmless (the SW isn't registered there).
  */
+import {isCacheableAsset} from './assets'
+import {computeExpiredIds, computeKeepIds} from './ledger'
+import {isForeignPreviewRequest, PREVIEW_SUBTREE} from './preview'
+
+// The worker's global scope. `sw.ts` is a module (it imports), so this ambient
+// declaration shadows lib.webworker's generic `self` with the service-worker
+// type — giving `self.registration`, `self.skipWaiting()`, and correctly-typed
+// install/activate/fetch/message events.
+declare const self: ServiceWorkerGlobalScope
 
 const CACHE_PREFIX = 'km-'
 const BUILD_ID = '__BUILD_ID__'
@@ -87,9 +99,10 @@ const SHELL_URLS = [
 // paint (entry script + modulepreload + stylesheets). Without this,
 // first-visit module fetches go around the SW (it activates after they're
 // dispatched), and an offline reload right after first load would fail
-// to boot. Replaced by scripts/inject-sw-build-id.mjs.
-const PRECACHE_ASSETS = JSON.parse('__PRECACHE_ASSETS__')
-  .map((p) => new URL(p, scopeURL).toString())
+// to boot. Replaced by scripts/inject-sw-build-id.ts.
+const PRECACHE_ASSETS = (JSON.parse('__PRECACHE_ASSETS__') as string[]).map((p) =>
+  new URL(p, scopeURL).toString(),
+)
 
 // Build-injected list of every OTHER same-origin cacheable asset — the full
 // emitted module graph minus first-paint (lazy chunks, @babel/standalone, wasm,
@@ -97,33 +110,27 @@ const PRECACHE_ASSETS = JSON.parse('__PRECACHE_ASSETS__')
 // self-contained, so `assetCacheFirst` never network-grafts a foreign
 // generation (and the app runs offline). Kept separate from PRECACHE_ASSETS
 // because it's installed with a different cache mode (see install). Replaced by
-// scripts/inject-sw-build-id.mjs.
-const PRECACHE_REST_ASSETS = JSON.parse('__PRECACHE_REST_ASSETS__')
-  .map((p) => new URL(p, scopeURL).toString())
+// scripts/inject-sw-build-id.ts.
+const PRECACHE_REST_ASSETS = (JSON.parse('__PRECACHE_REST_ASSETS__') as string[]).map((p) =>
+  new URL(p, scopeURL).toString(),
+)
 
 const VENDOR_HOSTS = new Set(['esm.sh'])
 
 // A production/root SW's scope (…/knowledge-medium/) is a PREFIX of every
-// PR-preview path (…/pr-preview/pr-<n>/…), which are hosted on this same origin.
-// Since we never clients.claim(), the production SW controls a freshly-opened
-// preview page until it reloads — and would otherwise cache the preview's shell
-// + assets under production's OWN keys, poisoning the offline production shell
-// with an unmerged build. So a SW refuses to serve/cache a preview subtree it
-// doesn't own. A preview's own SW (its scope IS under /pr-preview/) is exempt,
-// so it still serves its own subtree normally.
-const PREVIEW_SUBTREE = /\/pr-preview\/pr-[^/]+\//
+// PR-preview path (…/pr-preview/pr-<n>/…). See src/sw/preview.ts for why a SW
+// refuses to serve/cache a preview subtree it doesn't own.
 const OWN_SCOPE_IS_PREVIEW = PREVIEW_SUBTREE.test(scopeURL.pathname)
-const isForeignPreviewRequest = (url) =>
-  !OWN_SCOPE_IS_PREVIEW && PREVIEW_SUBTREE.test(url.pathname)
 
 // --- generation ledger ------------------------------------------------------
 // An install-ordered list of BUILD_IDs (newest last), stored as a JSON
 // Response under a synthetic key in META_CACHE. Lets `activate` GC every
 // generation except the most recent KEEP_GENERATIONS without needing the
-// build ids to be sortable (they're git shas).
+// build ids to be sortable (they're git shas). Retention math is the pure
+// computeKeepIds / computeExpiredIds in src/sw/ledger.ts.
 const LEDGER_KEY = new URL('./__km_generations__', scopeURL).toString()
 
-const readLedger = async () => {
+const readLedger = async (): Promise<string[]> => {
   try {
     const cache = await caches.open(META_CACHE)
     const res = await cache.match(LEDGER_KEY)
@@ -135,7 +142,7 @@ const readLedger = async () => {
   }
 }
 
-const writeLedger = async (ids) => {
+const writeLedger = async (ids: string[]): Promise<void> => {
   const cache = await caches.open(META_CACHE)
   await cache.put(
     LEDGER_KEY,
@@ -143,7 +150,7 @@ const writeLedger = async (ids) => {
   )
 }
 
-const recordGeneration = async (id) => {
+const recordGeneration = async (id: string): Promise<void> => {
   const ids = (await readLedger()).filter((x) => x !== id)
   ids.push(id)
   await writeLedger(ids)
@@ -182,14 +189,18 @@ self.addEventListener('install', (event) => {
       // bytes on that miss (self-healing only while this IS the newest deploy; a
       // per-generation guard to refuse cross-gen bytes is a follow-up). The
       // persistent IndexedDB compile cache still covers warm extension compiles.
-      const fetchInto = (cache, url, mode) =>
+      const fetchInto = (cache: Cache, url: string, mode: RequestCache) =>
         fetch(new Request(url, {cache: mode}))
           .then((res) => (res && res.ok ? cache.put(url, res) : null))
           .catch(() => null)
       // Both lists are large (the minified build first-paints ~200 <script> tags;
       // the rest is the full module graph), so fan every fetch through a bounded
       // pool instead of opening hundreds/thousands of connections at once.
-      const runPooled = async (items, limit, task) => {
+      const runPooled = async (
+        items: string[],
+        limit: number,
+        task: (url: string) => Promise<unknown>,
+      ) => {
         let next = 0
         const worker = async () => {
           while (next < items.length) await task(items[next++])
@@ -219,7 +230,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const ledger = await readLedger()
-      const keepIds = new Set(ledger.slice(-KEEP_GENERATIONS))
+      const keepIds = new Set(computeKeepIds(ledger, KEEP_GENERATIONS))
 
       // Delete only THIS deploy's own now-expired generations. Cache Storage is
       // per-ORIGIN, so caches.keys() also lists the production deploy's caches
@@ -232,7 +243,7 @@ self.addEventListener('activate', (event) => {
       // the last ledger entry (recorded on install) so it's never expired; an
       // unreadable/empty ledger yields no deletions (safe); vendor/meta and this
       // build's caches are simply never named here.
-      const expiredIds = ledger.slice(0, Math.max(0, ledger.length - KEEP_GENERATIONS))
+      const expiredIds = computeExpiredIds(ledger, KEEP_GENERATIONS)
       // Free space FIRST, then trim the ledger. The ledger write is a
       // `cache.put`, which throws `QuotaExceededError` exactly when the origin
       // is full — i.e. the moment GC matters most. Doing it before the deletes
@@ -260,28 +271,18 @@ self.addEventListener('activate', (event) => {
   )
 })
 
-const isNavigationRequest = (request) =>
+const isNavigationRequest = (request: Request): boolean =>
   request.mode === 'navigate' ||
-  (request.method === 'GET' && request.headers.get('accept')?.includes('text/html'))
+  (request.method === 'GET' && (request.headers.get('accept')?.includes('text/html') ?? false))
 
-const isSameOrigin = (url) => url.origin === self.location.origin
+const isSameOrigin = (url: URL): boolean => url.origin === self.location.origin
 
-const isVendor = (url) => VENDOR_HOSTS.has(url.hostname)
-
-// Static build assets we serve cache-first within the generation. Match by
-// request.destination (script/style/worker/font/image cover module imports,
-// modulepreload, stylesheets, the wasm-sqlite worker and fonts) with an
-// extension fallback for anything a browser leaves as an empty destination.
-const ASSET_EXTENSION = /\.(?:js|mjs|css|wasm|woff2?|ttf|otf|png|svg|jpe?g|webp|gif|ico)$/
-const isCacheableAsset = (request, url) =>
-  isSameOrigin(url) &&
-  (['script', 'style', 'worker', 'font', 'image'].includes(request.destination) ||
-    ASSET_EXTENSION.test(url.pathname))
+const isVendor = (url: URL): boolean => VENDOR_HOSTS.has(url.hostname)
 
 // Network-first for the SPA shell. We always read and write under a single
 // canonical key so the many distinct navigation URLs (deep links,
 // query-strings, hash routes) all share one cached HTML entry.
-const shellNetworkFirst = async (request, shellURL) => {
+const shellNetworkFirst = async (request: Request, shellURL: string): Promise<Response> => {
   const cache = await caches.open(SHELL_CACHE)
   try {
     const fresh = await fetch(request)
@@ -303,7 +304,7 @@ const shellNetworkFirst = async (request, shellURL) => {
 // which grafts a foreign generation onto an old page — correct only while this
 // IS the newest deploy. Closing that (a fallback that refuses cross-generation
 // bytes) needs a per-generation guard and is a follow-up.
-const assetCacheFirst = async (request) => {
+const assetCacheFirst = async (request: Request): Promise<Response> => {
   const assets = await caches.open(ASSET_CACHE)
   const cached =
     (await assets.match(request)) || (await (await caches.open(SHELL_CACHE)).match(request))
@@ -317,7 +318,7 @@ const assetCacheFirst = async (request) => {
   }
 }
 
-const cacheFirst = async (request, cacheName) => {
+const cacheFirst = async (request: Request, cacheName: string): Promise<Response> => {
   const cache = await caches.open(cacheName)
   const cached = await cache.match(request)
   if (cached) return cached
@@ -339,7 +340,7 @@ self.addEventListener('fetch', (event) => {
   // Never let production's broad-scope SW touch a nested preview deploy's
   // requests — let them fall through to the network (the preview's own SW owns
   // them once active). See isForeignPreviewRequest.
-  if (isForeignPreviewRequest(url)) return
+  if (isForeignPreviewRequest(OWN_SCOPE_IS_PREVIEW, url.pathname)) return
 
   if (isNavigationRequest(request) && isSameOrigin(url)) {
     const shellURL = new URL('./index.html', scopeURL).toString()
@@ -347,7 +348,7 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  if (isCacheableAsset(request, url)) {
+  if (isCacheableAsset(request.destination, url.pathname, isSameOrigin(url))) {
     event.respondWith(assetCacheFirst(request))
     return
   }
