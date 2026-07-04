@@ -1,0 +1,2 @@
+var e=e=>Object.prototype.toString.call(e)===`[object Object]`,t=n=>{if(Array.isArray(n))return n.map(t);if(!e(n))return n;let r={};for(let e of Object.keys(n).sort())Object.defineProperty(r,e,{value:t(n[e]),enumerable:!0,writable:!0,configurable:!0});return r},n=(e,n)=>JSON.stringify(t(e))===JSON.stringify(t(n));export{n as jsonValuesEqual,t as stableJsonValue};
+//# sourceMappingURL=jsonCanonical.js.map
