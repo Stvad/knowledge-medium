@@ -28,12 +28,13 @@ import { ALIAS_COLLISION_RAISE_PREFIX, PARENT_DELETED_RAISE_PREFIX, RAISE_FIELD_
 *  for log inspection. */
 var CREATE_TX_CONTEXT_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS tx_context (
-    id      INTEGER PRIMARY KEY CHECK (id = 1),
-    tx_id   TEXT,
-    tx_seq  INTEGER,
-    user_id TEXT,
-    scope   TEXT,
-    source  TEXT
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    tx_id    TEXT,
+    tx_seq   INTEGER,
+    user_id  TEXT,
+    scope    TEXT,
+    source   TEXT,
+    group_id TEXT
   )
 `;
 /** Idempotent seed of the single row. Re-runs are no-ops. */
@@ -64,7 +65,8 @@ var CREATE_ROW_EVENTS_TABLE_SQL = `
     before_json TEXT,
     after_json  TEXT,
     source      TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
+    created_at  INTEGER NOT NULL,
+    group_id    TEXT
   )
 `;
 var CREATE_ROW_EVENTS_TX_INDEX_SQL = `
@@ -305,26 +307,31 @@ var blockJsonObjectSql = (rowRef) => `
         'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
       )
 `.trim();
-/** Belt-and-suspenders: tx_id is the active local tx_id only when source
-*  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is open
-*  during the observer's materialize); without this guard a stale tx_id left
-*  in `tx_context` from the previous local tx would leak into the sync-applied
+/** Belt-and-suspenders source gate for tx_context projections: the column
+*  is the active local tx's value only when source IS NOT NULL. Sync-applied
+*  writes leave source = NULL (no `repo.tx` is open during the observer's
+*  materialize); without this guard a stale tx_id / group_id left in
+*  `tx_context` from the previous local tx would leak into the sync-applied
 *  row_events row. The TxEngine clears all fields at end-of-tx; the trigger
-*  logic is the load-bearing correctness check. */
-var triggerTxIdSql = `
+*  logic is the load-bearing correctness check. One template for both
+*  columns so the gate can't silently diverge between them. */
+var triggerCtxColumnSql = (column) => `
       CASE
         WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
           THEN NULL
-        ELSE (SELECT tx_id FROM tx_context WHERE id = 1)
+        ELSE (SELECT ${column} FROM tx_context WHERE id = 1)
       END
 `.trim();
+var triggerTxIdSql = triggerCtxColumnSql("tx_id");
 var triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`;
+/** Undo-group token (issue #306) — same source-gated projection as tx_id. */
+var triggerGroupIdSql = triggerCtxColumnSql("group_id");
 var CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       NEW.id,
@@ -332,7 +339,8 @@ var CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
       NULL,
       ${blockJsonObjectSql("NEW")},
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `;
@@ -341,7 +349,7 @@ var CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   AFTER UPDATE ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       NEW.id,
@@ -352,7 +360,8 @@ var CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
       ${blockJsonObjectSql("OLD")},
       ${blockJsonObjectSql("NEW")},
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `;
@@ -364,7 +373,7 @@ var CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
   AFTER DELETE ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       OLD.id,
@@ -372,7 +381,8 @@ var CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
       ${blockJsonObjectSql("OLD")},
       NULL,
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `;
@@ -1033,6 +1043,36 @@ var ensureBlockUserUpdatedAtColumn = async (db) => {
 		await db.execute("UPDATE blocks SET user_updated_at = updated_at");
 	});
 };
+/**
+* Idempotent local-schema migration for undo grouping (issue #306): add
+* `group_id` to `tx_context` and `row_events` on upgrading devices.
+* Both tables are created with CREATE TABLE IF NOT EXISTS, so adding the
+* column to the CREATE statements does NOT add it to an existing device's
+* tables — yet the commit pipeline's tx_context UPDATE and the recreated
+* row_events triggers reference it unconditionally, so an un-migrated
+* device would fail "no such column" on the first `repo.tx`.
+*
+* MUST run before ANY re-creation of the row_events trigger bodies from
+* the current constants — that is the `CLIENT_SCHEMA_STATEMENTS` loop AND
+* `withTriggerSuspended` inside {@link ensureBlockUserUpdatedAtColumn}
+* (its backfill bracket re-installs `blocks_row_event_update` from the
+* NEW body, which inserts into `row_events.group_id`). SQLite accepts a
+* CREATE TRIGGER referencing a missing column and fails only at fire
+* time, so a wrong ordering isn't caught at bootstrap — it surfaces as
+* "no such column: group_id" on a concurrent old-tab write.
+* A table that does not exist yet is skipped — the CREATE that follows
+* carries the column (and appends it LAST, so fresh and ALTER-upgraded
+* layouts match). No backfill: NULL group_id simply means "ungrouped",
+* which is the correct reading for all pre-existing history. No trigger
+* suspension: ALTER TABLE fires no row triggers.
+*/
+var ensureUndoGroupIdColumns = async (db) => {
+	for (const table of ["tx_context", "row_events"]) {
+		const columns = await db.getAll(`PRAGMA table_info(${table})`);
+		if (columns.length === 0) continue;
+		if (!columns.some((c) => c.name === "group_id")) await db.execute(`ALTER TABLE ${table} ADD COLUMN group_id TEXT`);
+	}
+};
 /** Row count `sqlite_stat1` recorded for `blocks` at the last ANALYZE, or
 *  `null` if ANALYZE has never run for it. See {@link SELECT_BLOCKS_STAT_ESTIMATE_SQL}. */
 var getBlocksStatEstimate = async (db) => {
@@ -1088,6 +1128,6 @@ var runAnalyzeNow = async (db) => {
 	return { count };
 };
 //#endregion
-export { ALIAS_BACKFILL_MARKER_KEY, ANALYZE_GROWTH_FACTOR, ANALYZE_MIN_BLOCKS, BACKFILL_BLOCKS_FTS_ROWIDS_SQL, BACKFILL_BLOCKS_FTS_SQL, BACKFILL_BLOCK_ALIASES_SQL, BACKFILL_BLOCK_TYPES_SQL, BLOCKS_FTS_BACKFILL_MARKER_KEY, BLOCK_TYPES_BACKFILL_MARKER_KEY, CLEAR_REPROJECT_REF_MARKER_SQL, CLIENT_SCHEMA_STATEMENTS, CLIENT_SCHEMA_TRIGGER_NAMES, CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL, CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL, CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL, CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL, CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL, CREATE_BLOCKS_FTS_ROWIDS_TABLE_SQL, CREATE_BLOCKS_FTS_TABLE_SQL, CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL, CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL, CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL, CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL, CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL, CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL, CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL, CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL, CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL, CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL, CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL, CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL, CREATE_BLOCK_ALIASES_TABLE_SQL, CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL, CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL, CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL, CREATE_BLOCK_TYPES_TABLE_SQL, CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL, CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL, CREATE_COMMAND_EVENTS_CREATED_INDEX_SQL, CREATE_COMMAND_EVENTS_TABLE_SQL, CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL, CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL, CREATE_PS_CRUD_REJECTED_TABLE_SQL, CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL, CREATE_ROW_EVENTS_BLOCK_INDEX_SQL, CREATE_ROW_EVENTS_CREATED_INDEX_SQL, CREATE_ROW_EVENTS_TABLE_SQL, CREATE_ROW_EVENTS_TX_INDEX_SQL, CREATE_TX_CONTEXT_TABLE_SQL, DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL, RECONCILE_RESCAN_MARKER_PREFIX, RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL, RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL, RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL, RECORD_RECONCILE_RESCAN_MARKER_SQL, RECORD_REPROJECT_REF_MARKER_SQL, RECORD_WORKSPACE_BACKFILL_MARKER_SQL, REPROJECT_REF_MARKER_PREFIX, SEED_TX_CONTEXT_ROW_SQL, SELECT_BLOCKS_COUNT_SQL, SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL, SELECT_BLOCKS_STAT_ESTIMATE_SQL, SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL, SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL, SELECT_RECONCILE_RESCAN_MARKER_SQL, SELECT_REPROJECT_REF_MARKERS_SQL, SELECT_SQLITE_STAT1_EXISTS_SQL, SELECT_WORKSPACE_BACKFILL_MARKERS_SQL, WORKSPACE_BACKFILL_MARKER_PREFIX, analyzeIsWarranted, backfillBlockAliasesIfEmpty, backfillBlockTypesIfEmpty, backfillBlocksFtsIfEmpty, ensureBlockUserUpdatedAtColumn, getBlocksCount, getBlocksStatEstimate, runAnalyzeIfStale, runAnalyzeNow };
+export { ALIAS_BACKFILL_MARKER_KEY, ANALYZE_GROWTH_FACTOR, ANALYZE_MIN_BLOCKS, BACKFILL_BLOCKS_FTS_ROWIDS_SQL, BACKFILL_BLOCKS_FTS_SQL, BACKFILL_BLOCK_ALIASES_SQL, BACKFILL_BLOCK_TYPES_SQL, BLOCKS_FTS_BACKFILL_MARKER_KEY, BLOCK_TYPES_BACKFILL_MARKER_KEY, CLEAR_REPROJECT_REF_MARKER_SQL, CLIENT_SCHEMA_STATEMENTS, CLIENT_SCHEMA_TRIGGER_NAMES, CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL, CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL, CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL, CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL, CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL, CREATE_BLOCKS_FTS_ROWIDS_TABLE_SQL, CREATE_BLOCKS_FTS_TABLE_SQL, CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL, CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL, CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL, CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL, CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL, CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL, CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL, CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL, CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL, CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL, CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL, CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL, CREATE_BLOCK_ALIASES_TABLE_SQL, CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL, CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL, CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL, CREATE_BLOCK_TYPES_TABLE_SQL, CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL, CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL, CREATE_COMMAND_EVENTS_CREATED_INDEX_SQL, CREATE_COMMAND_EVENTS_TABLE_SQL, CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL, CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL, CREATE_PS_CRUD_REJECTED_TABLE_SQL, CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL, CREATE_ROW_EVENTS_BLOCK_INDEX_SQL, CREATE_ROW_EVENTS_CREATED_INDEX_SQL, CREATE_ROW_EVENTS_TABLE_SQL, CREATE_ROW_EVENTS_TX_INDEX_SQL, CREATE_TX_CONTEXT_TABLE_SQL, DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL, RECONCILE_RESCAN_MARKER_PREFIX, RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL, RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL, RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL, RECORD_RECONCILE_RESCAN_MARKER_SQL, RECORD_REPROJECT_REF_MARKER_SQL, RECORD_WORKSPACE_BACKFILL_MARKER_SQL, REPROJECT_REF_MARKER_PREFIX, SEED_TX_CONTEXT_ROW_SQL, SELECT_BLOCKS_COUNT_SQL, SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL, SELECT_BLOCKS_STAT_ESTIMATE_SQL, SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL, SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL, SELECT_RECONCILE_RESCAN_MARKER_SQL, SELECT_REPROJECT_REF_MARKERS_SQL, SELECT_SQLITE_STAT1_EXISTS_SQL, SELECT_WORKSPACE_BACKFILL_MARKERS_SQL, WORKSPACE_BACKFILL_MARKER_PREFIX, analyzeIsWarranted, backfillBlockAliasesIfEmpty, backfillBlockTypesIfEmpty, backfillBlocksFtsIfEmpty, ensureBlockUserUpdatedAtColumn, ensureUndoGroupIdColumns, getBlocksCount, getBlocksStatEstimate, runAnalyzeIfStale, runAnalyzeNow };
 
 //# sourceMappingURL=clientSchema.js.map

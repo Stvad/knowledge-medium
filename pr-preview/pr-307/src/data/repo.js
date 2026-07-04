@@ -52,6 +52,13 @@ import { FacetBridge } from "./facetBridge.js";
 */
 var KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map((t) => [t.id, t]));
 var KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map((s) => [s.name, s]));
+/** The `repo.mutate` / `repo.query` proxy shape: string property access
+*  returns `dispatch(name)` (a fresh dispatcher closure per access —
+*  fine, the underlying registry lookup is a single Map.get); symbol
+*  access resolves to undefined. One implementation shared by the
+*  constructor's two proxies and the undoGroup facade's grouped
+*  `mutate`, so the shape can't drift between them. */
+var nameDispatchProxy = (dispatch) => new Proxy({}, { get: (_target, prop) => typeof prop === "string" ? dispatch(prop) : void 0 });
 /** Bounded ring of recent tx entries surfaced via `repo.metrics().txLog`.
 *  Sized to comfortably cover a cold-start window (a few dozen txs) so
 *  diagnostic dumps right after page load don't lose entries. */
@@ -424,16 +431,8 @@ var Repo = class Repo {
 				this.scheduleReprojection(names, schemas);
 			}
 		});
-		const dispatch = this.dispatchMutator.bind(this);
-		this.mutate = new Proxy({}, { get: (_target, prop) => {
-			if (typeof prop !== "string") return void 0;
-			return dispatch(prop);
-		} });
-		const dispatchQ = this.dispatchQuery.bind(this);
-		this.query = new Proxy({}, { get: (_target, prop) => {
-			if (typeof prop !== "string") return void 0;
-			return dispatchQ(prop);
-		} });
+		this.mutate = nameDispatchProxy((name) => this.dispatchMutator(name));
+		this.query = nameDispatchProxy((name) => this.dispatchQuery(name));
 		if (opts.installKernelRuntime ?? true) this.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]));
 		if (opts.startSyncObserver ?? true) this.startSyncObserver(opts.syncObserverOptions);
 	}
@@ -680,7 +679,8 @@ var Repo = class Repo {
 			scope: opts.scope,
 			txId: result.txId,
 			snapshots: result.snapshots,
-			description: opts.description
+			description: opts.description,
+			groupId: opts.groupId
 		});
 		return result.value;
 	}
@@ -742,6 +742,105 @@ var Repo = class Repo {
 			manager.pushRedo(scope, entry);
 			throw err;
 		}
+	}
+	/** Run `fn` against a `Repo`-shaped facade whose every tx carries one
+	*  freshly-minted undo-group token (issue #306, docs/undo-grouping.md).
+	*  Consecutive txs opened through the facade — directly via
+	*  `grouped.tx`, or indirectly via `grouped.mutate.X` / `grouped.run`
+	*  — MERGE into a single undo entry at record time, so the whole
+	*  composite reverts with one cmd-Z. Helpers that take a `Repo`
+	*  parameter join the group simply by being handed the facade.
+	*
+	*  Semantics to be aware of:
+	*   - Merging is top-of-stack only: a foreign tx (one opened on the
+	*     plain repo, e.g. a background write) landing mid-group SPLITS
+	*     the group into two entries rather than folding across it.
+	*   - No atomicity: each tx still commits independently. If a later
+	*     tx throws, the committed prefix stays applied and remains
+	*     covered by the (single) group entry; the error propagates.
+	*   - Nested `undoGroup` on the facade joins the OUTER group — one
+	*     user-perceived action, one entry.
+	*   - The facade must not escape the callback: its token never
+	*     expires, so a leaked reference would stamp far-future txs into
+	*     a long-dead group (see the `block` override below for the one
+	*     leak path that existed).
+	*   - Grouping covers `tx` / `mutate` / `run` and the TypeTagger
+	*     convenience writes. Two write styles deliberately do NOT join:
+	*     Block-facade sugar (`grouped.block(id).setContent(...)` routes
+	*     through `block.repo` = the real repo — a group-bound Block
+	*     would be exactly the leak the `block` override closes) and
+	*     stateful service writes (`userSchemas` / `userTypes` /
+	*     `projectors` — constructed against the real repo; a
+	*     facade-hosted twin would clobber their shared contribution
+	*     buckets). Both land as foreign txs and split the group; use
+	*     `grouped.tx` / `grouped.mutate` inside a group instead.
+	*   - Everything not overridden delegates to the real repo via the
+	*     prototype chain and therefore runs with the facade as `this`.
+	*     That is safe for reads and for mutation of shared objects
+	*     (caches, maps — reached through the chain), and the overrides
+	*     cover the three hazard classes it would NOT be safe for:
+	*     members that mint `this`-capturing objects or closures into
+	*     shared/long-lived state (`block`, `runQuery`, the `schedule*`
+	*     job enqueuers), members that assign instance fields — the write
+	*     would shadow on the facade instead of updating the repo
+	*     (`setActiveWorkspaceId` / `setReadOnly` / the sync-observer
+	*     pair / `resetMetrics`, plus `undo` / `redo` whose metrics
+	*     bookkeeping assigns fields mid-flight) — and members whose
+	*     collaborator captured the real repo at construction and would
+	*     open UNGROUPED txs mid-group (the TypeTagger family; the
+	*     stateful services above are the documented exception). Adding
+	*     a Repo member in one of these classes means adding a facade
+	*     override here. */
+	async undoGroup(fn) {
+		return fn(this.groupedFacade(this.newId()));
+	}
+	/** Build the group-injecting facade for {@link undoGroup}. */
+	groupedFacade(groupId) {
+		const facade = Object.create(this);
+		const tx = (fn, opts) => this.tx(fn, {
+			...opts,
+			groupId
+		});
+		const run = ((name, args) => this.dispatchMutator(name, groupId)(args));
+		const mutate = nameDispatchProxy((name) => this.dispatchMutator(name, groupId));
+		const undoGroup = async (inner) => inner(facade);
+		const block = (id) => this.block(id);
+		const groupedTagger = new TypeTagger(facade);
+		const addType = (blockId, typeId, initialValues = {}) => groupedTagger.addType(blockId, typeId, initialValues);
+		const removeType = (blockId, typeId) => groupedTagger.removeType(blockId, typeId);
+		const toggleType = (blockId, typeId) => groupedTagger.toggleType(blockId, typeId);
+		const setBlockTypes = (blockId, typeIds) => groupedTagger.setBlockTypes(blockId, typeIds);
+		const runQuery = (name, args) => this.runQuery(name, args);
+		const scheduleWorkspaceBackfills = (ws) => this.scheduleWorkspaceBackfills(ws);
+		const scheduleReconcileRescan = (ws) => this.scheduleReconcileRescan(ws);
+		const setActiveWorkspaceId = (id) => this.setActiveWorkspaceId(id);
+		const setReadOnly = (value) => this.setReadOnly(value);
+		const undo = (scope) => this.undo(scope);
+		const redo = (scope) => this.redo(scope);
+		const startSyncObserver = (options) => this.startSyncObserver(options);
+		const stopSyncObserver = () => this.stopSyncObserver();
+		const resetMetrics = () => this.resetMetrics();
+		return Object.assign(facade, {
+			tx,
+			run,
+			mutate,
+			undoGroup,
+			block,
+			runQuery,
+			addType,
+			removeType,
+			toggleType,
+			setBlockTypes,
+			scheduleWorkspaceBackfills,
+			scheduleReconcileRescan,
+			setActiveWorkspaceId,
+			setReadOnly,
+			undo,
+			redo,
+			startSyncObserver,
+			stopSyncObserver,
+			resetMetrics
+		});
 	}
 	/** Shared `runTx` + processor-dispatch path. Used by both `tx`
 	*  (records on undo stack) and `_replay` (does not).
@@ -1375,8 +1474,10 @@ var Repo = class Repo {
 	*       plugin full-name like `'tasks:setDueDate'`)
 	*    2. `'core.${name}'` (so `repo.mutate.indent` resolves to
 	*       `'core.indent'` even though the registry key is full-prefixed)
-	*  Throws `MutatorNotRegisteredError` if neither matches. */
-	dispatchMutator(name) {
+	*  Throws `MutatorNotRegisteredError` if neither matches.
+	*  `groupId` (from an `undoGroup` facade) stamps the dispatched tx so
+	*  it merges into the group's undo entry. */
+	dispatchMutator(name, groupId) {
 		return async (args) => {
 			const m = this.mutators.get(name) ?? this.mutators.get(`core.${name}`);
 			if (!m) throw new MutatorNotRegisteredError(name);
@@ -1384,7 +1485,8 @@ var Repo = class Repo {
 			const scope = typeof m.scope === "function" ? m.scope(validated) : m.scope;
 			return this.tx((tx) => tx.run(m, validated), {
 				scope,
-				description: m.describe?.(validated)
+				description: m.describe?.(validated),
+				groupId
 			});
 		};
 	}

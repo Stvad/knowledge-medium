@@ -1,6 +1,6 @@
 import { Schema } from "../../node_modules/@powersync/common/dist/bundle.js";
 import { BLOCKS_SYNCED_RAW_TABLE, CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL, CREATE_BLOCKS_SYNCED_TABLE_SQL, CREATE_BLOCKS_TABLE_SQL, CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL } from "./blockSchema.js";
-import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty, backfillBlockTypesIfEmpty, backfillBlocksFtsIfEmpty, ensureBlockUserUpdatedAtColumn, runAnalyzeIfStale } from "./internals/clientSchema.js";
+import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty, backfillBlockTypesIfEmpty, backfillBlocksFtsIfEmpty, ensureBlockUserUpdatedAtColumn, ensureUndoGroupIdColumns, runAnalyzeIfStale } from "./internals/clientSchema.js";
 import { scheduleIdle } from "../utils/scheduleIdle.js";
 import { createPowerSyncConnector, hasRemoteSyncConfig } from "../services/powersync.js";
 import { WASQLiteVFS } from "../../node_modules/@powersync/web/lib/src/db/adapters/wa-sqlite/vfs.js";
@@ -198,6 +198,7 @@ var initializePowerSyncDb = async (powerSyncDb) => {
 	await powerSyncDb.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL);
 	await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL);
 	await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL);
+	await ensureUndoGroupIdColumns(powerSyncDb);
 	await ensureBlockUserUpdatedAtColumn(powerSyncDb);
 	await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL);
 	await ensureWorkspaceE2eeColumns(powerSyncDb);

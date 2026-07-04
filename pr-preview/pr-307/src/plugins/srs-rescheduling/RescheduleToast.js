@@ -8,11 +8,12 @@ import { jsx, jsxs } from "react/jsx-runtime";
 //#region src/plugins/srs-rescheduling/RescheduleToast.tsx
 /** Predicate: clicking Undo right now would revert exactly this
 *  reschedule. True only when the reschedule's workspace is active and
-*  the reschedule is still that workspace's top BlockDefault entry —
-*  mirroring what `repo.undo()` (per-workspace, issue #186) will do.
-*  `repo.undoManager` resolves to the active workspace's manager, so the
-*  active-workspace check gates which manager `peekUndo` reads. */
-var wouldUndoThisReschedule = (repo, workspaceId, txId) => repo.activeWorkspaceId === workspaceId && repo.undoManager.peekUndo(ChangeScope.BlockDefault)?.txId === txId;
+*  the reschedule's group entry is still that workspace's top
+*  BlockDefault entry — mirroring what `repo.undo()` (per-workspace,
+*  issue #186) will do. `repo.undoManager` resolves to the active
+*  workspace's manager, so the active-workspace check gates which
+*  manager `peekUndo` reads. */
+var wouldUndoThisReschedule = (repo, workspaceId, groupId) => repo.activeWorkspaceId === workspaceId && repo.undoManager.peekUndo(ChangeScope.BlockDefault)?.groupId === groupId;
 /** Custom toast body for SRS reschedule feedback. The Undo button
 *  reactively disables itself once another `BlockDefault` tx lands on
 *  top of the reschedule's workspace — at that point `repo.undo()` would
@@ -20,7 +21,7 @@ var wouldUndoThisReschedule = (repo, workspaceId, txId) => repo.activeWorkspaceI
 *  Invoked via `showRescheduleToast` in the SRS plugin entry. */
 var RescheduleToast = (t0) => {
 	const $ = c(21);
-	const { toastId, message, txId, workspaceId, repo } = t0;
+	const { toastId, message, groupId, workspaceId, repo } = t0;
 	let t1;
 	if ($[0] !== repo.undoManager) {
 		t1 = (cb) => repo.undoManager.subscribe(ChangeScope.BlockDefault, cb);
@@ -29,11 +30,11 @@ var RescheduleToast = (t0) => {
 	} else t1 = $[1];
 	let t2;
 	let t3;
-	if ($[2] !== repo || $[3] !== txId || $[4] !== workspaceId) {
-		t2 = () => wouldUndoThisReschedule(repo, workspaceId, txId);
-		t3 = () => wouldUndoThisReschedule(repo, workspaceId, txId);
-		$[2] = repo;
-		$[3] = txId;
+	if ($[2] !== groupId || $[3] !== repo || $[4] !== workspaceId) {
+		t2 = () => wouldUndoThisReschedule(repo, workspaceId, groupId);
+		t3 = () => wouldUndoThisReschedule(repo, workspaceId, groupId);
+		$[2] = groupId;
+		$[3] = repo;
 		$[4] = workspaceId;
 		$[5] = t2;
 		$[6] = t3;
@@ -43,18 +44,18 @@ var RescheduleToast = (t0) => {
 	}
 	const isTopOfStack = useSyncExternalStore(t1, t2, t3);
 	let t4;
-	if ($[7] !== repo || $[8] !== toastId || $[9] !== txId || $[10] !== workspaceId) {
+	if ($[7] !== groupId || $[8] !== repo || $[9] !== toastId || $[10] !== workspaceId) {
 		t4 = () => {
-			if (!wouldUndoThisReschedule(repo, workspaceId, txId)) {
+			if (!wouldUndoThisReschedule(repo, workspaceId, groupId)) {
 				dismissToast(toastId);
 				return;
 			}
 			repo.undo().catch(_temp);
 			dismissToast(toastId);
 		};
-		$[7] = repo;
-		$[8] = toastId;
-		$[9] = txId;
+		$[7] = groupId;
+		$[8] = repo;
+		$[9] = toastId;
 		$[10] = workspaceId;
 		$[11] = t4;
 	} else t4 = $[11];

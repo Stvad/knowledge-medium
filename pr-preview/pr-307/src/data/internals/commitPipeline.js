@@ -56,12 +56,13 @@ var runTx = async (params) => {
 		description
 	});
 	const value = await db.writeTransaction(async (txDb) => {
-		await txDb.execute(`UPDATE tx_context SET tx_id = ?, tx_seq = ?, user_id = ?, scope = ?, source = ? WHERE id = 1`, [
+		await txDb.execute(`UPDATE tx_context SET tx_id = ?, tx_seq = ?, user_id = ?, scope = ?, source = ?, group_id = ? WHERE id = 1`, [
 			txId,
 			txSeq,
 			user.id,
 			scope,
-			source
+			source,
+			opts.groupId ?? null
 		]);
 		const tx = new TxImpl({
 			txDb,
@@ -107,7 +108,7 @@ var runTx = async (params) => {
 			source,
 			now()
 		]);
-		await txDb.execute(`UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1`);
+		await txDb.execute(`UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL, group_id = NULL WHERE id = 1`);
 		return result;
 	});
 	for (const [id, entry] of snapshots) if (entry.after === null) cache.markMissing(id);

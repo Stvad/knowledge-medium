@@ -116,33 +116,35 @@ var captureMedia = async (request, deps) => {
 		contentHash,
 		contentKey
 	});
-	await getOrCreateKernelPage(deps.repo, workspaceId, {
-		namespace: ASSETS_NS,
-		alias: ASSETS_ALIAS,
-		markerType: ASSETS_TYPE
-	});
-	const containerId = kernelPageBlockId(workspaceId, ASSETS_NS);
-	const typeSnapshot = deps.repo.snapshotTypeRegistries();
 	let inserted = false;
-	await deps.repo.tx(async (tx) => {
-		inserted = (await createOrRestoreTargetBlock(tx, {
-			id: assetBlockId,
-			workspaceId,
-			parentId: containerId,
-			orderKey: keyAtEnd(),
-			freshContent: filename ?? "",
-			systemMint: true,
-			onInsertedOrRestored: async (tx, id) => {
-				await tx.setProperty(id, mediaHashProp, contentHash);
-				await tx.setProperty(id, mediaMimeProp, mime);
-				await tx.setProperty(id, mediaSizeProp, size);
-				if (filename !== void 0) await tx.setProperty(id, mediaFilenameProp, filename);
-				await deps.repo.addTypeInTx(tx, id, MEDIA_TYPE, {}, typeSnapshot);
-			}
-		})).inserted;
-	}, {
-		scope: ChangeScope.BlockDefault,
-		description: "capture media"
+	await deps.repo.undoGroup(async (grouped) => {
+		await getOrCreateKernelPage(grouped, workspaceId, {
+			namespace: ASSETS_NS,
+			alias: ASSETS_ALIAS,
+			markerType: ASSETS_TYPE
+		});
+		const containerId = kernelPageBlockId(workspaceId, ASSETS_NS);
+		const typeSnapshot = grouped.snapshotTypeRegistries();
+		await grouped.tx(async (tx) => {
+			inserted = (await createOrRestoreTargetBlock(tx, {
+				id: assetBlockId,
+				workspaceId,
+				parentId: containerId,
+				orderKey: keyAtEnd(),
+				freshContent: filename ?? "",
+				systemMint: true,
+				onInsertedOrRestored: async (tx, id) => {
+					await tx.setProperty(id, mediaHashProp, contentHash);
+					await tx.setProperty(id, mediaMimeProp, mime);
+					await tx.setProperty(id, mediaSizeProp, size);
+					if (filename !== void 0) await tx.setProperty(id, mediaFilenameProp, filename);
+					await grouped.addTypeInTx(tx, id, MEDIA_TYPE, {}, typeSnapshot);
+				}
+			})).inserted;
+		}, {
+			scope: ChangeScope.BlockDefault,
+			description: "capture media"
+		});
 	});
 	await deps.uploadStore.promote(userId, assetBlockId);
 	deps.drain(userId);
