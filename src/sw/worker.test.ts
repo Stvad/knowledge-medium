@@ -67,6 +67,7 @@ const makeConfig = (o: Partial<SwConfig> = {}): SwConfig => ({
   scopeURL: new URL(SCOPE),
   keepGenerations: 3,
   staleScopeMs: 14 * DAY,
+  touchIntervalMs: DAY,
   precacheAssets: ['/knowledge-medium/src/main.js'],
   precacheRestAssets: ['/knowledge-medium/src/lazy.js'],
   ...o,
@@ -446,5 +447,51 @@ describe('activate — stale preview cache sweep', () => {
 
     expect(await caches.has('km-shell-selfGen')).toBe(true)
     expect(await caches.has('km-assets-selfGen')).toBe(true)
+  })
+})
+
+describe('touch-on-use keeps a live preview from being reaped', () => {
+  const previewScopeURL = `${ORIGIN}/knowledge-medium/pr-preview/pr-600/`
+  const previewLedgerKey = `${previewScopeURL}__km_generations__`
+  const prodLedgerKey = `${SCOPE}__km_generations__`
+  const readUpdatedAt = async (caches: MockCaches, key: string): Promise<number | undefined> => {
+    const res = await (await caches.open('km-meta')).match(key)
+    return res ? ((await res.json()) as {updatedAt?: number}).updatedAt : undefined
+  }
+  const buildPreview = (nowFn: () => number) =>
+    build({scopeURL: new URL(previewScopeURL), buildId: 'liveGen'}, undefined, nowFn)
+
+  it('re-stamps a live preview’s ledger on use once past the touch interval', async () => {
+    let clock = NOW
+    const {sw, caches} = buildPreview(() => clock)
+    await sw.install() // updatedAt = NOW
+    clock = NOW + 20 * DAY // 20 days of active use, no redeploy
+    sw.handleFetch(new Request(`${previewScopeURL}src/main.js`))
+    await vi.waitFor(async () =>
+      expect(await readUpdatedAt(caches, previewLedgerKey)).toBe(NOW + 20 * DAY),
+    )
+  })
+
+  it('throttles: a fetch within the touch interval does not re-stamp (schedules no write)', async () => {
+    let clock = NOW
+    const {sw, caches} = buildPreview(() => clock)
+    await sw.install()
+    clock = NOW + 2 * DAY // past the 1-day interval → touches
+    sw.handleFetch(new Request(`${previewScopeURL}a.js`))
+    await vi.waitFor(async () =>
+      expect(await readUpdatedAt(caches, previewLedgerKey)).toBe(NOW + 2 * DAY),
+    )
+    clock = NOW + 2 * DAY + 60 * 60 * 1000 // +1h, within the interval
+    sw.handleFetch(new Request(`${previewScopeURL}b.js`)) // returns synchronously, no write
+    expect(await readUpdatedAt(caches, previewLedgerKey)).toBe(NOW + 2 * DAY) // unchanged
+  })
+
+  it('production never touches its ledger on use (it is never reaped)', async () => {
+    let clock = NOW
+    const {sw, caches} = build({}, undefined, () => clock) // production scope
+    await sw.install() // updatedAt = NOW
+    clock = NOW + 30 * DAY
+    sw.handleFetch(new Request(abs('/knowledge-medium/src/main.js'))) // gate returns synchronously
+    expect(await readUpdatedAt(caches, prodLedgerKey)).toBe(NOW) // unchanged
   })
 })

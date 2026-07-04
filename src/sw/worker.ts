@@ -50,6 +50,13 @@ export interface SwConfig {
    * caches are reaped from the shared origin (never applies to production).
    */
   staleScopeMs: number
+  /**
+   * A preview scope that's actively USED (not just deployed) refreshes its own
+   * ledger timestamp at most this often, so a long-lived preview that hasn't
+   * redeployed isn't mistaken for abandoned and reaped. Must be well under
+   * staleScopeMs. Ignored for production (never reaped).
+   */
+  touchIntervalMs: number
   /** First-paint asset URLs (build-injected), base-prefixed or scope-relative. */
   precacheAssets: string[]
   /** The rest of the emitted graph (build-injected) — everything minus first-paint. */
@@ -121,6 +128,31 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     const ids = (await readLedger()).filter((x) => x !== id)
     ids.push(id)
     await writeLedger(ids)
+  }
+
+  // Touch-on-use: the cross-scope sweep reaps a preview whose ledger `updatedAt`
+  // is older than staleScopeMs, but install/activate (deploys) are the only
+  // writers — an actively-used preview that simply hasn't REDEPLOYED in 14 days
+  // would be misread as abandoned and have its live caches reaped. So a preview
+  // scope re-stamps its OWN ledger on use (any fetch its SW handles is proof a
+  // controlled tab is alive), throttled to touchIntervalMs via an in-memory
+  // guard so it's ~one write per interval of activity, not one per request.
+  // Production never touches (it's never reaped). Fire-and-forget: the write
+  // must not delay the response, and a failure just retries next interval.
+  let lastTouchAt = 0
+  const maybeTouchOwnLedger = (): void => {
+    if (!OWN_SCOPE_IS_PREVIEW) return
+    const t = now()
+    if (t - lastTouchAt <= config.touchIntervalMs) return
+    lastTouchAt = t // set optimistically so concurrent fetches don't pile on writes
+    void (async () => {
+      try {
+        await writeLedger((await readLedgerEntry()).ids)
+      } catch {
+        // best-effort — a missed touch just means the next fetch after the
+        // interval tries again; worst case the sweep reaps a genuinely idle scope.
+      }
+    })()
   }
 
   const install = async (): Promise<void> => {
@@ -350,6 +382,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     if (request.method !== 'GET') return undefined
     const url = new URL(request.url)
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined
+
+    // Any GET this SW handles means a tab it controls is alive — keep this
+    // (preview) scope's ledger fresh so the sweep doesn't reap a live preview.
+    maybeTouchOwnLedger()
 
     // Never let production's broad-scope SW touch a nested preview deploy's
     // requests — let them fall through to the network (the preview's own SW owns

@@ -75,6 +75,9 @@ const sw = createServiceWorker(
     // days (a merged preview's SW never runs again to clean up after itself).
     // Production is never a preview scope, so this can't touch prod caches.
     staleScopeMs: 14 * 24 * 60 * 60 * 1000,
+    // A still-used preview refreshes its ledger at most once a day so it isn't
+    // reaped for lack of a redeploy (well under the 14-day stale window).
+    touchIntervalMs: 24 * 60 * 60 * 1000,
     // Build-injected: first-paint assets (entry script + modulepreload +
     // stylesheets — the offline-boot-critical set) and the rest of the emitted
     // graph (lazy chunks, @babel/standalone, wasm, fonts). Precaching all of it
