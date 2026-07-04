@@ -38,6 +38,10 @@ export interface RunJsonlProcessResult {
 
 export const runJsonlProcess = async (options: RunJsonlProcessOptions): Promise<RunJsonlProcessResult> => {
   const spawnImpl = options.spawnImpl ?? nodeSpawn
+  // Already cancelled before we spawn (a Stop landed during prompt setup):
+  // don't launch a child just to SIGTERM it. Returns as a non-run with no
+  // output; the caller reads signal.aborted to label it `cancelled`.
+  if (options.signal?.aborted) return {exitCode: null, timedOut: false, stderr: ''}
   const child = spawnImpl(options.bin, options.args, {
     cwd: options.cwd,
     env: options.env,

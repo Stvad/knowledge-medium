@@ -337,6 +337,16 @@ export const createEngine = (deps: EngineDeps) => {
         return
       }
 
+      // Register the abort handle NOW, not just before the run: a Stop can
+      // land during getSubtree / prompt render / the streamReply write, and
+      // the sweep can only abort a run whose controller it can see. Aborting
+      // before the child spawns sets signal.aborted, so runTask below starts
+      // already-cancelled (execProcess skips the spawn) and parks
+      // `error: cancelled`. Registered inside the try so the finally always
+      // clears it (the claim-lost return above happens before this, so its
+      // finally-delete is a harmless no-op).
+      abortControllers.set(sourceId, abortController)
+
       const subtreeRows = await graph.getSubtree(sourceId)
       const defaultTemplate = watcher.delivery === 'channel' ? DEFAULT_MENTION_CHANNEL_PROMPT : undefined
       const prompt = renderMentionPrompt(watcher.prompt ?? defaultTemplate, {
@@ -426,13 +436,15 @@ export const createEngine = (deps: EngineDeps) => {
         }
       }
 
-      // Register the abort handle immediately before the run so a cancel
-      // request (claude:cancel) detected by the tick can kill this child.
-      abortControllers.set(sourceId, abortController)
       const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal))
       await writes // ordering guarantee: no progress write races the final one below
 
       if (result.ok) {
+        // Deliberately NOT gated on signal.aborted: if the child completed
+        // cleanly in the same instant a Stop landed (exit 0 raced SIGTERM),
+        // the billed answer is real — keep it as `done` rather than discard
+        // it as `cancelled`. Only a run that ended WITHOUT a result (the
+        // error branch below) inspects signal.aborted to label the reason.
         const finalText = result.resultText.trim() || `(${watcher.executor} returned an empty reply)`
         await deliverReply(finalText)
         terminalReplyDelivered = true
@@ -523,6 +535,30 @@ export const createEngine = (deps: EngineDeps) => {
     const views = await graph.blockViews(sources.map(source => source.id))
     for (const source of sources) {
       const view = views.get(source.id) ?? {id: source.id, properties: {}}
+      // Clear a claude:cancel the daemon can't act on. sweepCancellations
+      // aborts runs we OWN (a live abortController); but a Stop on a
+      // channel-delivered task (whose child the ambient session owns, not
+      // us) — or on a run stranded by a hard daemon kill — leaves
+      // status:running with no controller here, so the sweep never fires and
+      // the terminal write that clears the flag never comes: the chip would
+      // read "cancelling…" forever. When a running block is flagged but we
+      // hold no live run for it (not in `running`, no controller), the flag
+      // is inert — clear it, preserving the block's status + timestamp so
+      // the stale-running sweep is undisturbed. A spawn run mid-claim IS in
+      // `running`, so its genuinely-pending Stop is never dropped here.
+      if (
+        view.properties?.[PROPS.cancel]
+        && view.properties?.[PROPS.status] === 'running'
+        && !running.has(source.id)
+        && !abortControllers.has(source.id)
+      ) {
+        const stamp = view.properties?.[PROPS.updatedAt]
+        await graph.setTaskProps(source.id, {
+          status: 'running', cancel: null, nowMs: typeof stamp === 'number' ? stamp : now(),
+        })
+        log(`[${watcher.name}] cleared an un-actionable claude:cancel on ${source.id}`)
+        continue
+      }
       if (running.has(source.id)) continue
       const quietExempt = quietExemptBlockIds.has(source.id)
       const preview = decidePending({source: view, nowMs: now(), quietMs: watcher.quietMs, baselineMs, quietExempt})

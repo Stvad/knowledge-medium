@@ -353,6 +353,67 @@ describe('mention lifecycle', () => {
     expect(runTask).toHaveBeenCalledTimes(1)
   })
 
+  it('honors a Stop that lands before the run registers (during getSubtree)', async () => {
+    // The controller is registered right after the claim, BEFORE getSubtree,
+    // so a Stop in the claim→run window is still seen by the sweep. Without
+    // that, this cancel would be dropped and the task would report `done`.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] x'}},
+    })
+    let releaseSubtree = () => {}
+    const subtreeGate = new Promise<void>(resolve => { releaseSubtree = resolve })
+    graph.getSubtree = vi.fn(async () => {
+      await subtreeGate
+      return [{id: 'b-1', parentId: null, content: 'x'} as BlockData]
+    })
+    // Fake run mirrors execProcess's pre-abort short-circuit: an
+    // already-aborted signal returns a non-ok, no-output result.
+    const runTask = vi.fn(async (opts: {signal?: AbortSignal}) =>
+      okRun(opts.signal?.aborted
+        ? {ok: false, exitCode: null, timedOut: false, resultText: '', sessionId: 'sess-1'}
+        : {ok: true, exitCode: 0, timedOut: false, resultText: 'hi', sessionId: 'sess-1'}))
+    const engine = engineWith({graph, runTask})
+
+    const tick1 = engine.tick()
+    // Claimed + parked in getSubtree — the controller is already registered.
+    await vi.waitFor(() => expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running'))
+    blocks.get('b-1')!.properties = {...blocks.get('b-1')!.properties, [PROPS.cancel]: NOW}
+
+    await engine.tick() // sweep aborts the registered controller
+    releaseSubtree()
+    await tick1
+    await engine.drain()
+
+    expect(runTask.mock.calls[0]![0].signal!.aborted).toBe(true)
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
+    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toBe('cancelled')
+    expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('')
+  })
+
+  it('clears an un-actionable claude:cancel (running block, no live run here)', async () => {
+    // A channel-delivered task the daemon doesn't own — or a run stranded by
+    // a hard kill — is status:running with a Stop flag but no controller. The
+    // scan clears the inert flag (chip un-sticks) without relaunching, and
+    // preserves the block's status + timestamp.
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] x', editedAtMs: NOW - 10_000, properties: {
+        [PROPS.status]: 'running', [PROPS.updatedAt]: NOW - 1_000, [PROPS.cancel]: NOW,
+      }}},
+    })
+    const runTask = vi.fn(async () => okRun())
+    const engine = engineWith({graph, runTask})
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('')
+    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('running')
+    expect(blocks.get('b-1')?.properties?.[PROPS.updatedAt]).toBe(NOW - 1_000)
+    expect(runTask).not.toHaveBeenCalled()
+  })
+
   it('is idempotent: a processed mention does not re-run on later ticks', async () => {
     const {graph, replies} = fakeGraph({
       backlinks: [{id: 'b-1'}],
