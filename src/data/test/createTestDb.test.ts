@@ -29,9 +29,9 @@ describe('createTestDb harness', () => {
     expect(cols).toEqual(BLOCK_STORAGE_COLUMNS.map(c => c.name))
   })
 
-  it('seeds tx_context with one NULL row across all five tx fields', async () => {
+  it('seeds tx_context with one NULL row across all six tx fields', async () => {
     const row = await h.db.get<Record<string, unknown>>('SELECT * FROM tx_context')
-    expect(row).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null})
+    expect(row).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null, group_id: null})
   })
 
   it('installs the documented set of blocks triggers', async () => {

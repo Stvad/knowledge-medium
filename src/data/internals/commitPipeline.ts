@@ -246,8 +246,8 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // upload triggers stamp into ps_crud.tx_id so PowerSync's
     // getNextCrudTransaction() groups multi-row writes correctly.
     await txDb.execute(
-      `UPDATE tx_context SET tx_id = ?, tx_seq = ?, user_id = ?, scope = ?, source = ? WHERE id = 1`,
-      [txId, txSeq, user.id, scope, source],
+      `UPDATE tx_context SET tx_id = ?, tx_seq = ?, user_id = ?, scope = ?, source = ?, group_id = ? WHERE id = 1`,
+      [txId, txSeq, user.id, scope, source, opts.groupId ?? null],
     )
 
     // Step 2: construct Tx + snapshots map + run user fn.
@@ -347,7 +347,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // `source IS NULL` is the belt-and-suspenders backup for row_events;
     // this clear is the primary).
     await txDb.execute(
-      `UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1`,
+      `UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL, group_id = NULL WHERE id = 1`,
     )
 
     return result

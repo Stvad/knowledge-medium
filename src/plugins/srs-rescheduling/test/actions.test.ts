@@ -243,6 +243,45 @@ describe('repo.undo after rescheduleBlock', () => {
     expect(block.get(srsSnapshotHistoryProp)).toEqual([])
   })
 
+  it('collapses the whole reschedule — daily notes included — into ONE undo entry (issue #306)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 4, 5))
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'plain-block',
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'First touch',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed plain block'})
+    repo.undoManager.clear()
+
+    // Fresh workspace: this reschedule creates the journal block + two
+    // daily notes + the SRS property write — historically 2-4 undo
+    // entries (docs/follow-ups.md), now exactly one.
+    expect(await rescheduleBlock(repo.block('plain-block'), SrsSignal.GOOD)).not.toBeNull()
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    const nextReviewId = dailyNoteBlockId(WORKSPACE, '2026-05-10')
+    const reviewedAtId = dailyNoteBlockId(WORKSPACE, '2026-05-05')
+    const isDeleted = async (id: string) =>
+      (await repo.db.getOptional<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id]))?.deleted === 1
+    expect(await isDeleted(nextReviewId)).toBe(false)
+    expect(await isDeleted(reviewedAtId)).toBe(false)
+
+    // One cmd-Z reverts the whole perceived action: SRS metadata gone AND
+    // the freshly created daily notes are removed, not left behind.
+    expect(await repo.undo()).toBe(true)
+    const block = repo.block('plain-block')
+    await block.load()
+    expect(block.types).not.toContain(SRS_SM25_TYPE)
+    expect(await isDeleted(nextReviewId)).toBe(true)
+    expect(await isDeleted(reviewedAtId)).toBe(true)
+  })
+
   it('drops the SRS type when the block was untyped before reschedule', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 4, 5))

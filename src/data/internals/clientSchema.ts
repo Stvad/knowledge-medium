@@ -37,12 +37,13 @@ import {
  *  for log inspection. */
 export const CREATE_TX_CONTEXT_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS tx_context (
-    id      INTEGER PRIMARY KEY CHECK (id = 1),
-    tx_id   TEXT,
-    tx_seq  INTEGER,
-    user_id TEXT,
-    scope   TEXT,
-    source  TEXT
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    tx_id    TEXT,
+    tx_seq   INTEGER,
+    user_id  TEXT,
+    scope    TEXT,
+    source   TEXT,
+    group_id TEXT
   )
 `
 
@@ -75,7 +76,8 @@ export const CREATE_ROW_EVENTS_TABLE_SQL = `
     before_json TEXT,
     after_json  TEXT,
     source      TEXT NOT NULL,
-    created_at  INTEGER NOT NULL
+    created_at  INTEGER NOT NULL,
+    group_id    TEXT
   )
 `
 
@@ -399,28 +401,35 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
       )
 `.trim()
 
-/** Belt-and-suspenders: tx_id is the active local tx_id only when source
- *  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is open
- *  during the observer's materialize); without this guard a stale tx_id left
- *  in `tx_context` from the previous local tx would leak into the sync-applied
+/** Belt-and-suspenders source gate for tx_context projections: the column
+ *  is the active local tx's value only when source IS NOT NULL. Sync-applied
+ *  writes leave source = NULL (no `repo.tx` is open during the observer's
+ *  materialize); without this guard a stale tx_id / group_id left in
+ *  `tx_context` from the previous local tx would leak into the sync-applied
  *  row_events row. The TxEngine clears all fields at end-of-tx; the trigger
- *  logic is the load-bearing correctness check. */
-const triggerTxIdSql = `
+ *  logic is the load-bearing correctness check. One template for both
+ *  columns so the gate can't silently diverge between them. */
+const triggerCtxColumnSql = (column: 'tx_id' | 'group_id') => `
       CASE
         WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
           THEN NULL
-        ELSE (SELECT tx_id FROM tx_context WHERE id = 1)
+        ELSE (SELECT ${column} FROM tx_context WHERE id = 1)
       END
 `.trim()
 
+const triggerTxIdSql = triggerCtxColumnSql('tx_id')
+
 const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
+
+/** Undo-group token (issue #306) — same source-gated projection as tx_id. */
+const triggerGroupIdSql = triggerCtxColumnSql('group_id')
 
 export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       NEW.id,
@@ -428,7 +437,8 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
       NULL,
       ${blockJsonObjectSql('NEW')},
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `
@@ -438,7 +448,7 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   AFTER UPDATE ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       NEW.id,
@@ -449,7 +459,8 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
       ${blockJsonObjectSql('OLD')},
       ${blockJsonObjectSql('NEW')},
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `
@@ -462,7 +473,7 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
   AFTER DELETE ON blocks
   BEGIN
     INSERT INTO row_events (
-      tx_id, block_id, kind, before_json, after_json, source, created_at
+      tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
       ${triggerTxIdSql},
       OLD.id,
@@ -470,7 +481,8 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
       ${blockJsonObjectSql('OLD')},
       NULL,
       ${triggerSourceSql},
-      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
+      ${triggerGroupIdSql}
     );
   END
 `
@@ -1355,6 +1367,42 @@ export const ensureBlockUserUpdatedAtColumn = async (db: {
         await db.execute('UPDATE blocks SET user_updated_at = updated_at')
       },
     )
+  }
+}
+
+/**
+ * Idempotent local-schema migration for undo grouping (issue #306): add
+ * `group_id` to `tx_context` and `row_events` on upgrading devices.
+ * Both tables are created with CREATE TABLE IF NOT EXISTS, so adding the
+ * column to the CREATE statements does NOT add it to an existing device's
+ * tables — yet the commit pipeline's tx_context UPDATE and the recreated
+ * row_events triggers reference it unconditionally, so an un-migrated
+ * device would fail "no such column" on the first `repo.tx`.
+ *
+ * MUST run before ANY re-creation of the row_events trigger bodies from
+ * the current constants — that is the `CLIENT_SCHEMA_STATEMENTS` loop AND
+ * `withTriggerSuspended` inside {@link ensureBlockUserUpdatedAtColumn}
+ * (its backfill bracket re-installs `blocks_row_event_update` from the
+ * NEW body, which inserts into `row_events.group_id`). SQLite accepts a
+ * CREATE TRIGGER referencing a missing column and fails only at fire
+ * time, so a wrong ordering isn't caught at bootstrap — it surfaces as
+ * "no such column: group_id" on a concurrent old-tab write.
+ * A table that does not exist yet is skipped — the CREATE that follows
+ * carries the column (and appends it LAST, so fresh and ALTER-upgraded
+ * layouts match). No backfill: NULL group_id simply means "ungrouped",
+ * which is the correct reading for all pre-existing history. No trigger
+ * suspension: ALTER TABLE fires no row triggers.
+ */
+export const ensureUndoGroupIdColumns = async (db: {
+  execute: (sql: string) => Promise<unknown>
+  getAll: <T>(sql: string) => Promise<T[]>
+}): Promise<void> => {
+  for (const table of ['tx_context', 'row_events'] as const) {
+    const columns = await db.getAll<{name: string}>(`PRAGMA table_info(${table})`)
+    if (columns.length === 0) continue
+    if (!columns.some(c => c.name === 'group_id')) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN group_id TEXT`)
+    }
   }
 }
 

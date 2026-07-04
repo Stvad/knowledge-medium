@@ -255,4 +255,9 @@ export interface Tx {
 export interface RepoTxOptions {
   scope: ChangeScope
   description?: string
+  /** Undo-group token (issue #306). Txs sharing a `groupId` merge into
+   *  one undo entry at record time and stamp `group_id` into
+   *  `tx_context` / `row_events`. Minted by `repo.undoGroup` and
+   *  injected by its facade — callers don't set this by hand. */
+  groupId?: string
 }

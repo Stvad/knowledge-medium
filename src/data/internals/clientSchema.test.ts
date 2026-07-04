@@ -48,6 +48,7 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlocksFtsIfEmpty,
   ensureBlockUserUpdatedAtColumn,
+  ensureUndoGroupIdColumns,
   getBlocksStatEstimate,
   runAnalyzeIfStale,
   runAnalyzeNow,
@@ -55,7 +56,7 @@ import {
 
 interface TestDb {
   db: DatabaseSync
-  setTxContext: (ctx: { txId?: string | null; txSeq?: number | null; userId?: string | null; scope?: string | null; source?: string | null }) => void
+  setTxContext: (ctx: { txId?: string | null; txSeq?: number | null; userId?: string | null; scope?: string | null; source?: string | null; groupId?: string | null }) => void
   clearTxContext: () => void
   insertBlock: (overrides?: Partial<BlockInsert>) => void
   insertWorkspaceMember: (overrides?: Partial<WorkspaceMemberInsert>) => void
@@ -69,6 +70,7 @@ interface TestDb {
 interface RowEventRow {
   id: number
   tx_id: string | null
+  group_id: string | null
   block_id: string
   kind: string
   before_json: string | null
@@ -173,13 +175,13 @@ const setupDb = (): TestDb => {
 
   return {
     db,
-    setTxContext: ({txId = null, txSeq = null, userId = null, scope = null, source = null}) => {
+    setTxContext: ({txId = null, txSeq = null, userId = null, scope = null, source = null, groupId = null}) => {
       db.exec(
-        `UPDATE tx_context SET tx_id = ${sqlLit(txId)}, tx_seq = ${txSeq === null ? 'NULL' : String(txSeq)}, user_id = ${sqlLit(userId)}, scope = ${sqlLit(scope)}, source = ${sqlLit(source)} WHERE id = 1`,
+        `UPDATE tx_context SET tx_id = ${sqlLit(txId)}, tx_seq = ${txSeq === null ? 'NULL' : String(txSeq)}, user_id = ${sqlLit(userId)}, scope = ${sqlLit(scope)}, source = ${sqlLit(source)}, group_id = ${sqlLit(groupId)} WHERE id = 1`,
       )
     },
     clearTxContext: () => {
-      db.exec('UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1')
+      db.exec('UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL, group_id = NULL WHERE id = 1')
     },
     insertBlock: (overrides = {}) => {
       const row = {...defaultBlock, ...overrides}
@@ -215,9 +217,9 @@ describe('client schema bootstrap', () => {
   // restates the constant. What the triggers actually *do* is covered by the
   // row_events / upload-routing behavior tests below, and the harness already
   // verifies the production trigger set installs (createTestDb.test.ts).
-  it('seeds tx_context with one row that starts NULL across all five tx fields', () => {
+  it('seeds tx_context with one row that starts NULL across all six tx fields', () => {
     const ctx = h.db.prepare('SELECT * FROM tx_context').get() as Record<string, unknown>
-    expect(ctx).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null})
+    expect(ctx).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null, group_id: null})
   })
 
   it('CLIENT_SCHEMA_STATEMENTS is idempotent', () => {
@@ -337,6 +339,44 @@ describe('row_events trigger — INSERT', () => {
     h.db.exec("UPDATE tx_context SET tx_id = 'stale', source = NULL WHERE id = 1")
     h.insertBlock({id: 'b4'})
     expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
+  })
+})
+
+describe('row_events trigger — group_id projection (issue #306)', () => {
+  it('stamps group_id when a grouped local tx is open', () => {
+    h.setTxContext({txId: 'tx-A', userId: 'user-1', scope: 'block-default', source: 'user', groupId: 'grp-1'})
+    h.insertBlock({id: 'b1'})
+    h.clearTxContext()
+    expect(h.rowEvents()[0]).toMatchObject({tx_id: 'tx-A', group_id: 'grp-1'})
+  })
+
+  it('stamps NULL group_id for ungrouped local txs', () => {
+    h.setTxContext({txId: 'tx-B', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'b2'})
+    h.clearTxContext()
+    expect(h.rowEvents()[0]).toMatchObject({tx_id: 'tx-B', group_id: null})
+  })
+
+  it('stamps NULL group_id for sync-applied writes (source NULL)', () => {
+    h.insertBlock({id: 'b3'})
+    expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null, group_id: null})
+  })
+
+  it('belt-and-suspenders: stale group_id with NULL source still emits group_id=NULL', () => {
+    h.db.exec("UPDATE tx_context SET group_id = 'stale-grp', source = NULL WHERE id = 1")
+    h.insertBlock({id: 'b4'})
+    expect(h.rowEvents()[0]).toMatchObject({source: 'sync', group_id: null})
+  })
+
+  it('projects group_id on UPDATE and DELETE row events too', () => {
+    h.insertBlock({id: 'b5'}) // sync seed
+    h.setTxContext({txId: 'tx-C', userId: 'user-1', scope: 'block-default', source: 'user', groupId: 'grp-2'})
+    h.updateBlock('b5', {content: 'edited'})
+    h.deleteBlock('b5')
+    h.clearTxContext()
+    const [, update, del] = h.rowEvents()
+    expect(update).toMatchObject({kind: 'update', group_id: 'grp-2'})
+    expect(del).toMatchObject({kind: 'delete', group_id: 'grp-2'})
   })
 })
 
@@ -1203,6 +1243,95 @@ describe('ensureBlockUserUpdatedAtColumn — local migration', () => {
     // blocks already had the column → no backfill, trigger untouched.
     expect(db.executed.some(s => /UPDATE blocks SET user_updated_at/.test(s))).toBe(false)
     expect(db.executed.some(s => /blocks_row_event_update/.test(s))).toBe(false)
+  })
+})
+
+describe('ensureUndoGroupIdColumns — local migration (issue #306)', () => {
+  it('adds group_id to both tx_context and row_events when missing', async () => {
+    const db = fakeMigrationDb({
+      tx_context: ['id', 'tx_id', 'tx_seq', 'user_id', 'scope', 'source'],
+      row_events: ['id', 'tx_id', 'block_id', 'kind', 'before_json', 'after_json', 'source', 'created_at'],
+    })
+    await ensureUndoGroupIdColumns(db)
+    const alters = db.executed.filter(s => s.includes('ADD COLUMN group_id'))
+    expect(alters).toHaveLength(2)
+    expect(alters.some(s => s.includes('ALTER TABLE tx_context'))).toBe(true)
+    expect(alters.some(s => s.includes('ALTER TABLE row_events'))).toBe(true)
+  })
+
+  it('no-ops when the column already exists (fresh install / steady state)', async () => {
+    const db = fakeMigrationDb({
+      tx_context: ['id', 'tx_id', 'tx_seq', 'user_id', 'scope', 'source', 'group_id'],
+      row_events: ['id', 'tx_id', 'block_id', 'kind', 'before_json', 'after_json', 'source', 'created_at', 'group_id'],
+    })
+    await ensureUndoGroupIdColumns(db)
+    expect(db.executed.some(s => s.includes('ADD COLUMN'))).toBe(false)
+  })
+
+  it('skips tables that do not exist yet (fresh DB — CREATE TABLE carries the column)', async () => {
+    const db = fakeMigrationDb({})
+    await ensureUndoGroupIdColumns(db)
+    expect(db.executed.some(s => s.includes('ADD COLUMN'))).toBe(false)
+  })
+
+  it('upgrades a pre-existing DB in place without losing row_events history (invariant 11)', async () => {
+    // A device bootstrapped BEFORE the group_id column shipped: tx_context /
+    // row_events exist with the old column set and carry history. Frozen
+    // historical DDL — do not sync with the live constants.
+    const old = new DatabaseSync(':memory:')
+    old.exec(`
+      CREATE TABLE tx_context (
+        id      INTEGER PRIMARY KEY CHECK (id = 1),
+        tx_id   TEXT,
+        tx_seq  INTEGER,
+        user_id TEXT,
+        scope   TEXT,
+        source  TEXT
+      )
+    `)
+    old.exec('INSERT INTO tx_context (id) VALUES (1)')
+    old.exec(`
+      CREATE TABLE row_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        tx_id       TEXT,
+        block_id    TEXT NOT NULL,
+        kind        TEXT NOT NULL,
+        before_json TEXT,
+        after_json  TEXT,
+        source      TEXT NOT NULL,
+        created_at  INTEGER NOT NULL
+      )
+    `)
+    old.exec(`
+      INSERT INTO row_events (tx_id, block_id, kind, before_json, after_json, source, created_at)
+      VALUES ('tx-historic', 'b-old', 'update', '{"content":"a"}', '{"content":"b"}', 'user', 1700000000000)
+    `)
+    // The rest of the schema the statements/triggers need.
+    old.exec(CREATE_BLOCKS_TABLE_SQL)
+    old.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
+    old.exec('CREATE TABLE ps_crud (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL, tx_id INTEGER)')
+    old.exec(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
+
+    // App startup on the upgraded build: ensure columns FIRST (the
+    // recreated triggers reference group_id), then the schema statements.
+    const dbFacade = {
+      execute: async (sql: string) => { old.exec(sql) },
+      getAll: async <T,>(sql: string): Promise<T[]> => old.prepare(sql).all() as T[],
+    }
+    await ensureUndoGroupIdColumns(dbFacade)
+    for (const stmt of CLIENT_SCHEMA_STATEMENTS) old.exec(stmt)
+
+    // History intact; the historic row reads back with NULL group_id.
+    const historic = old.prepare('SELECT * FROM row_events WHERE block_id = ?').get('b-old') as Record<string, unknown>
+    expect(historic).toMatchObject({tx_id: 'tx-historic', kind: 'update', group_id: null})
+
+    // New grouped writes stamp group_id through the recreated triggers.
+    old.exec(`UPDATE tx_context SET tx_id = 'tx-new', tx_seq = 1, user_id = 'u1', scope = 'block-default', source = 'user', group_id = 'grp-new' WHERE id = 1`)
+    old.exec(`INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, references_json, created_at, updated_at, user_updated_at, created_by, updated_by, deleted)
+              VALUES ('b-new', 'ws1', NULL, 'a0', '', '{}', '[]', 1, 1, 1, 'u1', 'u1', 0)`)
+    const fresh = old.prepare('SELECT * FROM row_events WHERE block_id = ?').get('b-new') as Record<string, unknown>
+    expect(fresh).toMatchObject({tx_id: 'tx-new', group_id: 'grp-new'})
+    old.close()
   })
 })
 

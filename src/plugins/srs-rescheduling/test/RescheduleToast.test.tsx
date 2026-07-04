@@ -7,6 +7,11 @@
  * looking at a different workspace, and never revert a different
  * workspace's entry if the active workspace changed since render (an
  * in-place switch doesn't re-notify undo subscribers).
+ *
+ * Since issue #306 the reschedule records ONE grouped entry, so the
+ * toast matches the top of stack by `groupId` (not `txId`) — later txs
+ * that MERGE into the same group keep the toast's Undo valid, while any
+ * foreign entry on top disables it.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -27,10 +32,10 @@ vi.mock('@/utils/toast.js', () => ({
   showError: showErrorMock,
 }))
 
-const makeEntry = (txId: string) => {
+const makeEntry = (txId: string, groupId?: string) => {
   const snapshots = newSnapshotsMap()
   snapshots.set('a', {before: null, after: makeBlockData({id: 'a', workspaceId: 'ws-1'})})
-  return {txId, scope: ChangeScope.BlockDefault, snapshots}
+  return {txId, scope: ChangeScope.BlockDefault, snapshots, groupId}
 }
 
 // Minimal Repo stand-in: the toast only reads `activeWorkspaceId`,
@@ -62,13 +67,13 @@ afterEach(() => {
 describe('RescheduleToast workspace scoping (#186)', () => {
   it('enables Undo and reverts when the reschedule is the active workspace top', () => {
     const m = new UndoManager()
-    m.record(makeEntry('t1'))
+    m.record(makeEntry('t1', 'g1'))
     const undo = vi.fn().mockResolvedValue(true)
     render(
       <RescheduleToast
         toastId="toast-1"
         message="Rescheduled"
-        txId="t1"
+        groupId="g1"
         workspaceId="ws-1"
         repo={makeRepo(m, {id: 'ws-1'}, undo)}
       />,
@@ -84,12 +89,12 @@ describe('RescheduleToast workspace scoping (#186)', () => {
 
   it('disables Undo while viewing a different workspace than the reschedule', () => {
     const m = new UndoManager()
-    m.record(makeEntry('t1'))
+    m.record(makeEntry('t1', 'g1'))
     render(
       <RescheduleToast
         toastId="toast-1"
         message="Rescheduled"
-        txId="t1"
+        groupId="g1"
         workspaceId="ws-1"
         repo={makeRepo(m, {id: 'ws-2'})}
       />,
@@ -101,14 +106,14 @@ describe('RescheduleToast workspace scoping (#186)', () => {
 
   it('does NOT revert a different workspace if the active workspace changed after render', () => {
     const m = new UndoManager()
-    m.record(makeEntry('t1'))
+    m.record(makeEntry('t1', 'g1'))
     const active = {id: 'ws-1'}
     const undo = vi.fn().mockResolvedValue(true)
     render(
       <RescheduleToast
         toastId="toast-1"
         message="Rescheduled"
-        txId="t1"
+        groupId="g1"
         workspaceId="ws-1"
         repo={makeRepo(m, active, undo)}
       />,
@@ -129,14 +134,14 @@ describe('RescheduleToast workspace scoping (#186)', () => {
     expect(dismissToastMock).toHaveBeenCalledWith('toast-1')
   })
 
-  it('disables Undo once a newer entry lands on the reschedule workspace', () => {
+  it('disables Undo once a foreign entry lands on the reschedule workspace', () => {
     const m = new UndoManager()
-    m.record(makeEntry('t1'))
+    m.record(makeEntry('t1', 'g1'))
     render(
       <RescheduleToast
         toastId="toast-1"
         message="Rescheduled"
-        txId="t1"
+        groupId="g1"
         workspaceId="ws-1"
         repo={makeRepo(m, {id: 'ws-1'})}
       />,
@@ -148,5 +153,26 @@ describe('RescheduleToast workspace scoping (#186)', () => {
     // external-store mutation in act() so React flushes the notify.
     act(() => { m.record(makeEntry('t2')) })
     expect(undoButton().disabled).toBe(true)
+  })
+
+  it('stays enabled when a same-group tx merges into the reschedule entry (#306)', () => {
+    const m = new UndoManager()
+    m.record(makeEntry('t1', 'g1'))
+    render(
+      <RescheduleToast
+        toastId="toast-1"
+        message="Rescheduled"
+        groupId="g1"
+        workspaceId="ws-1"
+        repo={makeRepo(m, {id: 'ws-1'})}
+      />,
+    )
+    expect(undoButton().disabled).toBe(false)
+
+    // A trailing grouped tx (e.g. the reschedule's own property write
+    // landing after the daily-note creations) merges into the same
+    // entry — undoing it still reverts exactly this reschedule.
+    act(() => { m.record({...makeEntry('t2', 'g1'), steps: [{txId: 't2'}]}) })
+    expect(undoButton().disabled).toBe(false)
   })
 })

@@ -141,3 +141,33 @@ describe('srsBlockDateAdapter', () => {
     expect(block.get(srsNextReviewDateProp)).toBe(dailyNoteBlockId(WS, '2026-06-15'))
   })
 })
+
+describe('setIso undo grouping (issue #306)', () => {
+  it('records ONE undo entry even when the target daily note must be created', async () => {
+    repo.setActiveWorkspaceId(WS)
+    const original = await getOrCreateDailyNote(repo, WS, '2026-05-01')
+    await repo.tx(tx => tx.create({id: 'srs', workspaceId: WS, parentId: null, orderKey: 'a',
+      content: '',
+      properties: {
+        [typesProp.name]: typesProp.codec.encode([SRS_SM25_TYPE]),
+        [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(original.id),
+      },
+    }), {scope: ChangeScope.BlockDefault})
+    const block = repo.block('srs')
+    await block.load()
+    repo.undoManager.clear()
+
+    // '2026-06-15' has no daily note yet — setIso creates it (its own
+    // tx) then writes the property (another tx): merged into one entry.
+    expect(await srsBlockDateAdapter.setIso(block, '2026-06-15')).toBe(true)
+    expect(repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
+
+    expect(await repo.undo()).toBe(true)
+    await block.load()
+    expect(block.get(srsNextReviewDateProp)).toBe(original.id)
+    const created = await repo.db.getOptional<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [dailyNoteBlockId(WS, '2026-06-15')],
+    )
+    expect(created?.deleted).toBe(1)
+  })
+})

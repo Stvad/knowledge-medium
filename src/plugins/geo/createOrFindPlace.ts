@@ -170,45 +170,48 @@ export const createOrFindPlace = async (
     if (claimant) return collisionResult(friendlyName, machineAlias, claimant)
   }
 
-  // Lazy-bootstrap the Locations page (separate tx — safe to interleave).
-  const locationsPage = await getOrCreateLocationsPage(repo, workspaceId)
   const content = contentFor(candidate, machineAlias)
   const id = uuidv4()
-  const typeSnapshot = repo.snapshotTypeRegistries()
 
   let resolvedId = id
   let racedNameClaim = false
 
-  await repo.tx(async tx => {
-    // Double-check inside tx: a concurrent createOrFindPlace might have
-    // landed between our query and our write. Cheaper than catching the
-    // `block_aliases_workspace_alias_unique` trigger throw.
-    const raced = await tx.aliasLookup(machineAlias, workspaceId)
-    if (raced) {
-      resolvedId = raced.id
-      return
-    }
-    if (friendlyName !== undefined) {
-      const racedName = await tx.aliasLookup(friendlyName, workspaceId)
-      if (racedName) {
-        racedNameClaim = true
+  // One undo entry for Locations-page bootstrap + place creation.
+  await repo.undoGroup(async grouped => {
+    const locationsPage = await getOrCreateLocationsPage(grouped, workspaceId)
+    const typeSnapshot = grouped.snapshotTypeRegistries()
+
+    await grouped.tx(async tx => {
+      // Double-check inside tx: a concurrent createOrFindPlace might have
+      // landed between our query and our write. Cheaper than catching the
+      // `block_aliases_workspace_alias_unique` trigger throw.
+      const raced = await tx.aliasLookup(machineAlias, workspaceId)
+      if (raced) {
+        resolvedId = raced.id
         return
       }
-    }
+      if (friendlyName !== undefined) {
+        const racedName = await tx.aliasLookup(friendlyName, workspaceId)
+        if (racedName) {
+          racedNameClaim = true
+          return
+        }
+      }
 
-    await tx.create({
-      id,
-      workspaceId,
-      parentId: locationsPage.id,
-      orderKey: keyAtEnd(),
-      content,
-    })
-    await tx.setProperty(id, aliasesProp, [...aliases])
-    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [...aliases]}, typeSnapshot)
-    await repo.addTypeInTx(tx, id, PLACE_TYPE, {[aliasesProp.name]: [...aliases]}, typeSnapshot)
+      await tx.create({
+        id,
+        workspaceId,
+        parentId: locationsPage.id,
+        orderKey: keyAtEnd(),
+        content,
+      })
+      await tx.setProperty(id, aliasesProp, [...aliases])
+      await grouped.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [...aliases]}, typeSnapshot)
+      await grouped.addTypeInTx(tx, id, PLACE_TYPE, {[aliasesProp.name]: [...aliases]}, typeSnapshot)
 
-    await writePlaceProps(tx, id, candidate)
-  }, {scope: ChangeScope.BlockDefault, description: 'create place'})
+      await writePlaceProps(tx, id, candidate)
+    }, {scope: ChangeScope.BlockDefault, description: 'create place'})
+  })
 
   if (racedNameClaim && friendlyName !== undefined) {
     // Re-read outside the tx for the claimant's display info; if it

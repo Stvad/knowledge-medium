@@ -183,6 +183,17 @@ export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => L
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
 const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
 
+/** The `repo.mutate` / `repo.query` proxy shape: string property access
+ *  returns `dispatch(name)` (a fresh dispatcher closure per access —
+ *  fine, the underlying registry lookup is a single Map.get); symbol
+ *  access resolves to undefined. One implementation shared by the
+ *  constructor's two proxies and the undoGroup facade's grouped
+ *  `mutate`, so the shape can't drift between them. */
+const nameDispatchProxy = <T,>(dispatch: (name: string) => unknown): T =>
+  new Proxy({} as Record<string, unknown>, {
+    get: (_target, prop) => (typeof prop === 'string' ? dispatch(prop) : undefined),
+  }) as T
+
 /** Bounded ring of recent tx entries surfaced via `repo.metrics().txLog`.
  *  Sized to comfortably cover a cold-start window (a few dozen txs) so
  *  diagnostic dumps right after page load don't lose entries. */
@@ -653,29 +664,11 @@ export class Repo {
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
     })
-    // Bind dispatchMutator to `this` so the Proxy's get trap doesn't
-    // need to alias `this` to a local. Each name lookup returns a
-    // fresh dispatcher closure; that's fine, the underlying registry
-    // lookup is a single Map.get.
-    const dispatch = this.dispatchMutator.bind(this)
-    this.mutate = new Proxy({} as Record<string, (args: unknown) => Promise<unknown>>, {
-      get: (_target, prop) => {
-        if (typeof prop !== 'string') return undefined
-        return dispatch(prop)
-      },
-    }) as MutateProxy
-    // Same Proxy shape as `mutate`, dispatching to `dispatchQuery`.
-    // Each name access returns a fresh dispatcher closure; the closure
-    // does the registry lookup + argsSchema validation + handleStore
-    // getOrCreate on call. Identity stability is provided by the
-    // handle-store key, not by memoizing the dispatcher itself.
-    const dispatchQ = this.dispatchQuery.bind(this)
-    this.query = new Proxy({} as Record<string, (args: unknown) => LoaderHandle<unknown>>, {
-      get: (_target, prop) => {
-        if (typeof prop !== 'string') return undefined
-        return dispatchQ(prop)
-      },
-    }) as QueryProxy
+    this.mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name))
+    // Identity stability for query handles is provided by the
+    // handle-store key inside `dispatchQuery`, not by memoizing the
+    // dispatcher itself.
+    this.query = nameDispatchProxy<QueryProxy>(name => this.dispatchQuery(name))
     // Install the kernel-only FacetRuntime so the kernel mutators,
     // queries, same-tx processors, invalidation rule, property schemas,
     // and type contributions are live before any `setFacetRuntime` swap
@@ -1013,6 +1006,10 @@ export class Repo {
         txId: result.txId,
         snapshots: result.snapshots,
         description: opts.description,
+        // Group token (issue #306): entries sharing it merge at record
+        // time while the previous one is still top-of-stack, so a
+        // multi-tx composite reverts with one cmd-Z.
+        groupId: opts.groupId,
       })
     }
     return result.value
@@ -1058,6 +1055,15 @@ export class Repo {
     } catch (err) {
       // Replay failed — push the entry back so the user can retry
       // (e.g. after toggling read-only off, fixing a missing parent).
+      // Known narrow hazard (pre-existing, issue #226 window): if a new
+      // tx recorded during the failed replay's await, this pushback
+      // lands the entry ABOVE it — chronologically inverted. With
+      // grouping the inversion additionally makes a same-group tx merge
+      // into the pushed-back entry rather than the newer one. We keep
+      // the groupId on pushback anyway: stripping it would break the
+      // legitimate retry path (RescheduleToast re-matches the restored
+      // entry by groupId once read-only clears), which is a far more
+      // common sequence than a mid-replay same-group commit.
       manager.pushUndo(scope, entry)
       throw err
     }
@@ -1079,6 +1085,136 @@ export class Repo {
       manager.pushRedo(scope, entry)
       throw err
     }
+  }
+
+  /** Run `fn` against a `Repo`-shaped facade whose every tx carries one
+   *  freshly-minted undo-group token (issue #306, docs/undo-grouping.md).
+   *  Consecutive txs opened through the facade — directly via
+   *  `grouped.tx`, or indirectly via `grouped.mutate.X` / `grouped.run`
+   *  — MERGE into a single undo entry at record time, so the whole
+   *  composite reverts with one cmd-Z. Helpers that take a `Repo`
+   *  parameter join the group simply by being handed the facade.
+   *
+   *  Semantics to be aware of:
+   *   - Merging is top-of-stack only: a foreign tx (one opened on the
+   *     plain repo, e.g. a background write) landing mid-group SPLITS
+   *     the group into two entries rather than folding across it.
+   *   - No atomicity: each tx still commits independently. If a later
+   *     tx throws, the committed prefix stays applied and remains
+   *     covered by the (single) group entry; the error propagates.
+   *   - Nested `undoGroup` on the facade joins the OUTER group — one
+   *     user-perceived action, one entry.
+   *   - The facade must not escape the callback: its token never
+   *     expires, so a leaked reference would stamp far-future txs into
+   *     a long-dead group (see the `block` override below for the one
+   *     leak path that existed).
+   *   - Grouping covers `tx` / `mutate` / `run` and the TypeTagger
+   *     convenience writes. Two write styles deliberately do NOT join:
+   *     Block-facade sugar (`grouped.block(id).setContent(...)` routes
+   *     through `block.repo` = the real repo — a group-bound Block
+   *     would be exactly the leak the `block` override closes) and
+   *     stateful service writes (`userSchemas` / `userTypes` /
+   *     `projectors` — constructed against the real repo; a
+   *     facade-hosted twin would clobber their shared contribution
+   *     buckets). Both land as foreign txs and split the group; use
+   *     `grouped.tx` / `grouped.mutate` inside a group instead.
+   *   - Everything not overridden delegates to the real repo via the
+   *     prototype chain and therefore runs with the facade as `this`.
+   *     That is safe for reads and for mutation of shared objects
+   *     (caches, maps — reached through the chain), and the overrides
+   *     cover the three hazard classes it would NOT be safe for:
+   *     members that mint `this`-capturing objects or closures into
+   *     shared/long-lived state (`block`, `runQuery`, the `schedule*`
+   *     job enqueuers), members that assign instance fields — the write
+   *     would shadow on the facade instead of updating the repo
+   *     (`setActiveWorkspaceId` / `setReadOnly` / the sync-observer
+   *     pair / `resetMetrics`, plus `undo` / `redo` whose metrics
+   *     bookkeeping assigns fields mid-flight) — and members whose
+   *     collaborator captured the real repo at construction and would
+   *     open UNGROUPED txs mid-group (the TypeTagger family; the
+   *     stateful services above are the documented exception). Adding
+   *     a Repo member in one of these classes means adding a facade
+   *     override here. */
+  async undoGroup<R>(fn: (grouped: Repo) => Promise<R>): Promise<R> {
+    return fn(this.groupedFacade(this.newId()))
+  }
+
+  /** Build the group-injecting facade for {@link undoGroup}. */
+  private groupedFacade(groupId: string): Repo {
+    const facade = Object.create(this) as Repo
+    const tx = <R,>(fn: (tx: Tx) => Promise<R>, opts: RepoTxOptions): Promise<R> =>
+      this.tx(fn, {...opts, groupId})
+    const run = ((name: string, args: unknown) =>
+      this.dispatchMutator(name, groupId)(args)) as Repo['run']
+    const mutate = nameDispatchProxy<MutateProxy>(name => this.dispatchMutator(name, groupId))
+    // Async so a synchronously-throwing callback rejects like the outer
+    // `undoGroup` does instead of throwing through the caller.
+    const undoGroup = async <R,>(inner: (grouped: Repo) => Promise<R>): Promise<R> =>
+      inner(facade)
+    // `block()` on a cache miss mints `new Block(this, id)` into the
+    // repo-wide `blockFacades` identity map. With the facade as `this`
+    // that would cache a facade-bound Block FOREVER — every later
+    // ordinary edit through it (`setContent`, `set`, `delete` route
+    // through `block.repo`) would carry this group's token and merge
+    // into the long-dead group's entry (one cmd-Z would then revert an
+    // unrelated edit plus the whole composite). Mint through the real
+    // repo so shared state only ever holds real-repo Blocks.
+    const block = (id: string): Block => this.block(id)
+    // The TypeTagger convenience writes (`addType` & co.) open their own
+    // txs through the tagger's construction-captured host — the REAL
+    // repo — so on the facade they would silently escape the group and
+    // split it. A facade-hosted tagger (TypeTagger is a stateless
+    // wrapper; the facade satisfies TypeTaggerHost structurally, with
+    // grouped `tx`) keeps the documented "helpers join by being handed
+    // the facade" contract true for them. The `*InTx` variants write
+    // into a caller-provided tx and need no override.
+    const groupedTagger = new TypeTagger(facade)
+    const addType: Repo['addType'] = (blockId, typeId, initialValues = {}) =>
+      groupedTagger.addType(blockId, typeId, initialValues)
+    const removeType: Repo['removeType'] = (blockId, typeId) =>
+      groupedTagger.removeType(blockId, typeId)
+    const toggleType: Repo['toggleType'] = (blockId, typeId) =>
+      groupedTagger.toggleType(blockId, typeId)
+    const setBlockTypes: Repo['setBlockTypes'] = (blockId, typeIds) =>
+      groupedTagger.setBlockTypes(blockId, typeIds)
+    // Shared-state minting, part 2: `runQuery` (the dynamic dispatch
+    // entry point — exactly helper-shaped) would store a LoaderHandle
+    // whose loader and QueryCtx capture the facade into the SHARED
+    // handle store, where every future invalidation-driven re-resolve
+    // would see `ctx.repo` = the long-dead facade. Query resolution is
+    // never group-bound; delegate.
+    const runQuery: Repo['runQuery'] = (name, args) => this.runQuery(name, args)
+    // Deferred-job scheduling captures `this` into shared job queues
+    // that fire long after the group's lifetime — a facade-bound job
+    // would open GROUPED txs minutes later and merge system writes into
+    // the dead entry. Never group-bound; delegate.
+    const scheduleWorkspaceBackfills: Repo['scheduleWorkspaceBackfills'] = (ws) =>
+      this.scheduleWorkspaceBackfills(ws)
+    const scheduleReconcileRescan: Repo['scheduleReconcileRescan'] = (ws) =>
+      this.scheduleReconcileRescan(ws)
+    // Field-assigning members: run with the facade as `this`, the
+    // assignment would create a shadow property on the facade and the
+    // real repo would never see it (silent state divergence). Delegate
+    // explicitly. `undo`/`redo` belong here because `_runAndDispatch`
+    // assigns `slowestTx` mid-flight; the sync-observer pair assigns
+    // `syncObserver` (a shadowed stop would strand the real repo with a
+    // disposed observer it believes is live).
+    const setActiveWorkspaceId: Repo['setActiveWorkspaceId'] = (id) =>
+      this.setActiveWorkspaceId(id)
+    const setReadOnly: Repo['setReadOnly'] = (value) => this.setReadOnly(value)
+    const undo: Repo['undo'] = (scope) => this.undo(scope)
+    const redo: Repo['redo'] = (scope) => this.redo(scope)
+    const startSyncObserver: Repo['startSyncObserver'] = (options) =>
+      this.startSyncObserver(options)
+    const stopSyncObserver: Repo['stopSyncObserver'] = () => this.stopSyncObserver()
+    const resetMetrics: Repo['resetMetrics'] = () => this.resetMetrics()
+    return Object.assign(facade, {
+      tx, run, mutate, undoGroup, block, runQuery,
+      addType, removeType, toggleType, setBlockTypes,
+      scheduleWorkspaceBackfills, scheduleReconcileRescan,
+      setActiveWorkspaceId, setReadOnly, undo, redo,
+      startSyncObserver, stopSyncObserver, resetMetrics,
+    })
   }
 
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`
@@ -1985,8 +2121,10 @@ export class Repo {
    *       plugin full-name like `'tasks:setDueDate'`)
    *    2. `'core.${name}'` (so `repo.mutate.indent` resolves to
    *       `'core.indent'` even though the registry key is full-prefixed)
-   *  Throws `MutatorNotRegisteredError` if neither matches. */
-  private dispatchMutator(name: string): (args: unknown) => Promise<unknown> {
+   *  Throws `MutatorNotRegisteredError` if neither matches.
+   *  `groupId` (from an `undoGroup` facade) stamps the dispatched tx so
+   *  it merges into the group's undo entry. */
+  private dispatchMutator(name: string, groupId?: string): (args: unknown) => Promise<unknown> {
     return async (args: unknown) => {
       const m = this.mutators.get(name) ?? this.mutators.get(`core.${name}`)
       if (!m) throw new MutatorNotRegisteredError(name)
@@ -1995,6 +2133,7 @@ export class Repo {
       return this.tx(tx => tx.run(m, validated) as Promise<unknown>, {
         scope,
         description: m.describe?.(validated),
+        groupId,
       })
     }
   }
