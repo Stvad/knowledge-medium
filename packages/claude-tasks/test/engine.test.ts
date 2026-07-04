@@ -398,6 +398,62 @@ describe('mention lifecycle', () => {
     expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBe('sess-root')
   })
 
+  it('never resumes a session across executors; stores codex threads executor-tagged', async () => {
+    // A thread started by the claude executor (bare session id) followed
+    // up under a codex watcher: `codex exec resume <claude-id>` would
+    // fail the run outright, so it must start FRESH instead.
+    const codexConfig = () => parseConfig({
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor: 'codex'}],
+    })
+    {
+      const {graph, blocks} = fakeGraph({
+        backlinks: [{id: 'b-child'}],
+        blocks: {
+          'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: 'claude-sess'}},
+          'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun({sessionId: 'thread-1'}))
+      const engine = engineWith({graph, runTask, config: codexConfig()})
+      await engine.tick()
+      await engine.drain()
+      expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBeUndefined()
+      // The new codex thread is stored tagged, so a claude follow-up
+      // won't try to `--resume` it either.
+      expect(blocks.get('b-child')?.properties?.[PROPS.session]).toBe('codex:thread-1')
+    }
+    // A codex-tagged session under a codex watcher resumes with the BARE id.
+    {
+      const {graph} = fakeGraph({
+        backlinks: [{id: 'b-child'}],
+        blocks: {
+          'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: 'codex:thread-9'}},
+          'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun())
+      const engine = engineWith({graph, runTask, config: codexConfig()})
+      await engine.tick()
+      await engine.drain()
+      expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBe('thread-9')
+    }
+    // A codex-tagged session under the CLAUDE executor starts fresh.
+    {
+      const {graph} = fakeGraph({
+        backlinks: [{id: 'b-child'}],
+        blocks: {
+          'b-root': {content: '[[claude]] original', properties: {[PROPS.status]: 'done', [PROPS.session]: 'codex:thread-9'}},
+          'b-child': {content: '[[claude]] follow up', parentId: 'b-root'},
+        },
+      })
+      const runTask = vi.fn(async () => okRun())
+      const engine = engineWith({graph, runTask})
+      await engine.tick()
+      await engine.drain()
+      expect((runTask.mock.calls[0][0] as {resumeSessionId?: string}).resumeSessionId).toBeUndefined()
+    }
+  })
+
   it('fires for a follow-up nested under a daemon reply (thread continuation)', async () => {
     const {graph, replies} = fakeGraph({
       backlinks: [{id: 'b-follow'}],

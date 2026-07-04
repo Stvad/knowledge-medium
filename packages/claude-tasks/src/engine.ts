@@ -37,6 +37,24 @@ export interface EngineDeps {
 const truncate = (value: string, max = 500): string =>
   value.length > max ? `${value.slice(0, max)}…` : value
 
+/** claude:session values are executor-scoped: codex thread ids are
+ *  stored as `codex:<id>`, claude session ids bare (back-compat — every
+ *  session stored before executors existed is a claude one). A
+ *  follow-up under the OTHER executor starts a fresh thread instead of
+ *  forwarding the foreign id to resume, which fails the run outright
+ *  (`codex exec resume` only accepts codex thread ids, and vice versa). */
+const CODEX_SESSION_PREFIX = 'codex:'
+
+const storedSessionFor = (executor: 'claude' | 'codex', sessionId: string | null): string | null =>
+  sessionId && executor === 'codex' ? `${CODEX_SESSION_PREFIX}${sessionId}` : sessionId
+
+const resumableSessionFor = (executor: 'claude' | 'codex', stored: string | null): string | null => {
+  if (!stored) return null
+  const isCodexSession = stored.startsWith(CODEX_SESSION_PREFIX)
+  if (executor === 'codex') return isCodexSession ? stored.slice(CODEX_SESSION_PREFIX.length) : null
+  return isCodexSession ? null : stored
+}
+
 export const createEngine = (deps: EngineDeps) => {
   const {config, graph, state, runTask, deliverToChannel, mcpConfigPath, log} = deps
   const now = deps.now ?? Date.now
@@ -161,7 +179,9 @@ export const createEngine = (deps: EngineDeps) => {
 
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
-    const session = watcher.resume ? findThreadSession(block, ancestorBlocks) : null
+    const session = watcher.resume
+      ? resumableSessionFor(watcher.executor, findThreadSession(block, ancestorBlocks))
+      : null
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
     if (sessionKey) running.set(sessionKey, Promise.resolve())
@@ -268,7 +288,7 @@ export const createEngine = (deps: EngineDeps) => {
         // land somewhere rather than vanish into an error status.
         if (replyId) await graph.updateBlockContent(replyId, finalText).catch(() => graph.createReply(sourceId, finalText))
         else await graph.createReply(sourceId, finalText)
-        await graph.setTaskProps(sourceId, {status: 'done', session: result.sessionId, activity: null, nowMs: now()})
+        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
         const reason = result.timedOut
@@ -281,7 +301,7 @@ export const createEngine = (deps: EngineDeps) => {
         // not the run failure).
         if (replyId) await graph.updateBlockContent(replyId, failureNote).catch(() => graph.createReply(sourceId, failureNote))
         else await graph.createReply(sourceId, failureNote)
-        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: result.sessionId, activity: null, nowMs: now()})
+        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, nowMs: now()})
         log(`[${watcher.name}] FAILED ${sourceId}: ${reason}`)
       }
     } catch (error) {
