@@ -1,16 +1,2 @@
-import { propertySchemasFacet, queriesFacet } from "../../data/facets.js";
-import { pluginPrefsExtension } from "../../data/pluginStateExtensions.js";
-import { groupWithProp, groupedBacklinksDefaultsProp, groupedBacklinksOverridesProp, groupedBacklinksPrefsType } from "./config.js";
-import { groupedBacklinksForBlockQuery } from "./query.js";
-//#region src/plugins/grouped-backlinks/dataExtension.ts
-var groupedBacklinksDataExtension = [
-	propertySchemasFacet.of(groupedBacklinksDefaultsProp, { source: "grouped-backlinks" }),
-	propertySchemasFacet.of(groupedBacklinksOverridesProp, { source: "grouped-backlinks" }),
-	propertySchemasFacet.of(groupWithProp, { source: "grouped-backlinks" }),
-	queriesFacet.of(groupedBacklinksForBlockQuery, { source: "grouped-backlinks" }),
-	...pluginPrefsExtension(groupedBacklinksPrefsType, "grouped-backlinks")
-];
-//#endregion
-export { groupedBacklinksDataExtension };
-
+import{propertySchemasFacet as e,queriesFacet as t}from"../../data/facets.js";import{pluginPrefsExtension as n}from"../../data/pluginStateExtensions.js";import{groupWithProp as r,groupedBacklinksDefaultsProp as i,groupedBacklinksOverridesProp as a,groupedBacklinksPrefsType as o}from"./config.js";import{groupedBacklinksForBlockQuery as s}from"./query.js";var c=[e.of(i,{source:`grouped-backlinks`}),e.of(a,{source:`grouped-backlinks`}),e.of(r,{source:`grouped-backlinks`}),t.of(s,{source:`grouped-backlinks`}),...n(o,`grouped-backlinks`)];export{c as groupedBacklinksDataExtension};
 //# sourceMappingURL=dataExtension.js.map

@@ -1,24 +1,2 @@
-//#region src/utils/dom.ts
-var isElementProperlyVisible = (element) => {
-	const rect = element.getBoundingClientRect();
-	const windowHeight = window.innerHeight || document.documentElement.clientHeight;
-	const elementHeight = rect.height;
-	const computedStyle = window.getComputedStyle(element);
-	const minVisibleHeight = parseFloat(computedStyle.lineHeight) || parseFloat(computedStyle.fontSize) * 1.2;
-	const visibleTop = Math.max(0, rect.top);
-	const visibleBottom = Math.min(windowHeight, rect.bottom);
-	const visibleHeight = Math.max(0, visibleBottom - visibleTop);
-	if (elementHeight <= windowHeight) return visibleHeight >= minVisibleHeight;
-	const heightRatio = visibleHeight / windowHeight;
-	const elementVisibilityRatio = visibleHeight / elementHeight;
-	return heightRatio >= .6 || elementVisibilityRatio >= .2 || visibleHeight >= minVisibleHeight;
-};
-var isEditorElement = (element) => {
-	if (!element) return false;
-	return element instanceof HTMLTextAreaElement || Boolean(element.closest(".cm-editor"));
-};
-var shouldExitEditModeAfterBlur = (activeElement) => !isEditorElement(activeElement);
-//#endregion
-export { isEditorElement, isElementProperlyVisible, shouldExitEditModeAfterBlur };
-
+var e=e=>{let t=e.getBoundingClientRect(),n=window.innerHeight||document.documentElement.clientHeight,r=t.height,i=window.getComputedStyle(e),a=parseFloat(i.lineHeight)||parseFloat(i.fontSize)*1.2,o=Math.max(0,t.top),s=Math.min(n,t.bottom),c=Math.max(0,s-o);if(r<=n)return c>=a;let l=c/n,u=c/r;return l>=.6||u>=.2||c>=a},t=e=>e?e instanceof HTMLTextAreaElement||!!e.closest(`.cm-editor`):!1,n=e=>!t(e);export{t as isEditorElement,e as isElementProperlyVisible,n as shouldExitEditModeAfterBlur};
 //# sourceMappingURL=dom.js.map

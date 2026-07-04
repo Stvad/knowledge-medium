@@ -1,18 +1,2 @@
-import { getOrCreateDailyNote, todayIso } from "../daily-notes/dailyNotes.js";
-import { seedTutorial } from "./seed.js";
-//#region src/plugins/onboarding/landing.ts
-var onboardingLanding = async ({ repo, workspaceId, freshlyCreated }) => {
-	if (!freshlyCreated) return null;
-	await seedTutorial(repo, workspaceId);
-	const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso());
-	await repo.mutate.createChild({
-		parentId: dailyNote.id,
-		content: "[[Tutorial]]",
-		position: { kind: "first" }
-	});
-	return null;
-};
-//#endregion
-export { onboardingLanding };
-
+import{getOrCreateDailyNote as e,todayIso as t}from"../daily-notes/dailyNotes.js";import{seedTutorial as n}from"./seed.js";var r=async({repo:r,workspaceId:i,freshlyCreated:a})=>{if(!a)return null;await n(r,i);let o=await e(r,i,t());return await r.mutate.createChild({parentId:o.id,content:`[[Tutorial]]`,position:{kind:`first`}}),null};export{r as onboardingLanding};
 //# sourceMappingURL=landing.js.map

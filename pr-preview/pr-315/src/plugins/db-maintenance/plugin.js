@@ -1,13 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { actionsFacet } from "../../extensions/core.js";
-import { rebuildQueryStatsAction } from "./action.js";
-//#region src/plugins/db-maintenance/plugin.ts
-var dbMaintenancePlugin = ({ repo }) => systemToggle({
-	id: "system:db-maintenance",
-	name: "Database maintenance",
-	description: "Adds a command to rebuild SQLite query statistics (ANALYZE) on demand."
-}).of([actionsFacet.of(rebuildQueryStatsAction({ repo }), { source: "db-maintenance" })]);
-//#endregion
-export { dbMaintenancePlugin };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{actionsFacet as t}from"../../extensions/core.js";import{rebuildQueryStatsAction as n}from"./action.js";var r=({repo:r})=>e({id:`system:db-maintenance`,name:`Database maintenance`,description:`Adds a command to rebuild SQLite query statistics (ANALYZE) on demand.`}).of([t.of(n({repo:r}),{source:`db-maintenance`})]);export{r as dbMaintenancePlugin};
 //# sourceMappingURL=plugin.js.map

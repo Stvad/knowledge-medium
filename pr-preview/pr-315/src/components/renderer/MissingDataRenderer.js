@@ -1,23 +1,2 @@
-import { c } from "react/compiler-runtime";
-import { jsx } from "react/jsx-runtime";
-//#region src/components/renderer/MissingDataRenderer.tsx
-var MissingDataRenderer = (t0) => {
-	const $ = c(2);
-	const { block } = t0;
-	let t1;
-	if ($[0] !== block) {
-		t1 = block?.peek() === void 0 ? /* @__PURE__ */ jsx("div", {
-			className: "text-gray-500 text-sm",
-			children: "Loading block..."
-		}) : null;
-		$[0] = block;
-		$[1] = t1;
-	} else t1 = $[1];
-	return t1;
-};
-MissingDataRenderer.canRender = ({ block }) => !block?.peek();
-MissingDataRenderer.priority = () => 1;
-//#endregion
-export { MissingDataRenderer };
-
+import{c as e}from"react/compiler-runtime";import{jsx as t}from"react/jsx-runtime";var n=n=>{let r=e(2),{block:i}=n,a;return r[0]===i?a=r[1]:(a=i?.peek()===void 0?t(`div`,{className:`text-gray-500 text-sm`,children:`Loading block...`}):null,r[0]=i,r[1]=a),a};n.canRender=({block:e})=>!e?.peek(),n.priority=()=>1;export{n as MissingDataRenderer};
 //# sourceMappingURL=MissingDataRenderer.js.map

@@ -1,9 +1,2 @@
-//#region src/data/api/mutator.ts
-/** Helper for plugin authors. Returns the mutator unchanged but
-*  type-narrows `Args` / `Result` from `argsSchema` / `resultSchema`
-*  inferred types. */
-var defineMutator = (mutator) => mutator;
-//#endregion
-export { defineMutator };
-
+var e=e=>e;export{e as defineMutator};
 //# sourceMappingURL=mutator.js.map

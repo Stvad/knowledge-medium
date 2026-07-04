@@ -1,12 +1,2 @@
-import { resolveFacetRuntimeSync } from "../facets/facet.js";
-import { localSchemaFacet } from "./facets.js";
-//#region src/data/localSchema.ts
-var resolveLocalSchemaContributions = (extensions) => resolveFacetRuntimeSync(extensions).read(localSchemaFacet);
-var applyLocalSchemaContributions = async (db, contributions) => {
-	for (const contribution of contributions) for (const statement of contribution.statements ?? []) await db.execute(statement);
-	for (const contribution of contributions) for (const backfill of contribution.backfills ?? []) await backfill.run(db);
-};
-//#endregion
-export { applyLocalSchemaContributions, resolveLocalSchemaContributions };
-
+import{resolveFacetRuntimeSync as e}from"../facets/facet.js";import{localSchemaFacet as t}from"./facets.js";var n=n=>e(n).read(t),r=async(e,t)=>{for(let n of t)for(let t of n.statements??[])await e.execute(t);for(let n of t)for(let t of n.backfills??[])await t.run(e)};export{r as applyLocalSchemaContributions,n as resolveLocalSchemaContributions};
 //# sourceMappingURL=localSchema.js.map

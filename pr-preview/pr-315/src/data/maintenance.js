@@ -1,2 +1,1 @@
-import { runAnalyzeIfStale, runAnalyzeNow } from "./internals/clientSchema.js";
-export { runAnalyzeIfStale, runAnalyzeNow };
+import{runAnalyzeIfStale as e,runAnalyzeNow as t}from"./internals/clientSchema.js";export{e as runAnalyzeIfStale,t as runAnalyzeNow};

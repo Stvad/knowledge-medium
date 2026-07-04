@@ -1,11 +1,2 @@
-//#region src/appVersion.ts
-var appVersion = {
-	"display": "2026.07.04-2025",
-	"sha": "c2c0dde2",
-	"timestamp": 1783189538e3,
-	"commitUrl": "https://github.com/Stvad/knowledge-medium/commit/c2c0dde2"
-};
-//#endregion
-export { appVersion };
-
+var e={display:`2026.07.04-1207`,sha:`2b1766ef`,timestamp:178319203e4,commitUrl:`https://github.com/Stvad/knowledge-medium/commit/2b1766ef`};export{e as appVersion};
 //# sourceMappingURL=appVersion.js.map
