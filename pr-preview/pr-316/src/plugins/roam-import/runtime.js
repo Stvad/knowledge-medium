@@ -1,0 +1,2 @@
+import{planImport as e}from"./plan.js";import{importRoam as t}from"./import.js";var n=!1,r=r=>{n||(n=!0,window.__omniliner=window.__omniliner??{},window.__omniliner.roamImport={run:(e,n={})=>{let i=n.workspaceId??r.activeWorkspaceId;if(!i)throw Error(`No active workspace; pass {workspaceId} or set repo.activeWorkspaceId`);return t(e,r,{workspaceId:i,currentUserId:n.currentUserId??r.user.id,dryRun:n.dryRun,onProgress:n.onProgress??(e=>console.log(`[roam-import] ${e}`))})},plan:e})};export{r as ensureRoamImportWindowHook};
+//# sourceMappingURL=runtime.js.map
