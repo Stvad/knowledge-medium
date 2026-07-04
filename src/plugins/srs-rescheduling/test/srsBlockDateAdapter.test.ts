@@ -5,7 +5,7 @@ import { ChangeScope } from '@/data/api'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { typesProp } from '@/data/properties.js'
 import {
@@ -165,9 +165,6 @@ describe('setIso undo grouping (issue #306)', () => {
     expect(await repo.undo()).toBe(true)
     await block.load()
     expect(block.get(srsNextReviewDateProp)).toBe(original.id)
-    const created = await repo.db.getOptional<{deleted: number}>(
-      'SELECT deleted FROM blocks WHERE id = ?', [dailyNoteBlockId(WS, '2026-06-15')],
-    )
-    expect(created?.deleted).toBe(1)
+    expect(await isBlockDeleted(repo, dailyNoteBlockId(WS, '2026-06-15'))).toBe(true)
   })
 })

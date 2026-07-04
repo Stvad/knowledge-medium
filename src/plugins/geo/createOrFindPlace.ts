@@ -177,11 +177,11 @@ export const createOrFindPlace = async (
   let racedNameClaim = false
 
   // One undo entry for Locations-page bootstrap + place creation.
-  await repo.undoGroup(async grouped => {
-    const locationsPage = await getOrCreateLocationsPage(grouped, workspaceId)
-    const typeSnapshot = grouped.snapshotTypeRegistries()
+  await repo.undoGroup(async repo => {
+    const locationsPage = await getOrCreateLocationsPage(repo, workspaceId)
+    const typeSnapshot = repo.snapshotTypeRegistries()
 
-    await grouped.tx(async tx => {
+    await repo.tx(async tx => {
       // Double-check inside tx: a concurrent createOrFindPlace might have
       // landed between our query and our write. Cheaper than catching the
       // `block_aliases_workspace_alias_unique` trigger throw.
@@ -206,8 +206,8 @@ export const createOrFindPlace = async (
         content,
       })
       await tx.setProperty(id, aliasesProp, [...aliases])
-      await grouped.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [...aliases]}, typeSnapshot)
-      await grouped.addTypeInTx(tx, id, PLACE_TYPE, {[aliasesProp.name]: [...aliases]}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [...aliases]}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, PLACE_TYPE, {[aliasesProp.name]: [...aliases]}, typeSnapshot)
 
       await writePlaceProps(tx, id, candidate)
     }, {scope: ChangeScope.BlockDefault, description: 'create place'})

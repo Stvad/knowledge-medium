@@ -98,7 +98,11 @@ per-workspace); don't hand the facade to cross-workspace helpers.
 The facade must not escape the callback — the token never expires, so a
 leaked reference would stamp far-future txs into a long-dead group.
 Adding a Repo member in one of the hazard classes means adding a facade
-override (see the `undoGroup` jsdoc).
+override (see the `undoGroup` jsdoc) — enforced structurally by
+`src/data/test/repoFacadeGate.test.ts`: every Repo prototype member and
+constructor-assigned instance property must be either facade-overridden
+or classified on a reviewed allowlist, so an unclassified new member
+fails the build until someone consciously decides its facade behavior.
 
 Grouping is **not** atomicity: each tx still commits independently. If a
 later tx throws, the committed prefix stays applied, remains covered by
@@ -169,7 +173,11 @@ failure-isolated by design).
 | 11 | Pre-existing DBs get the column without data loss | `clientSchema.test.ts` |
 
 End-to-end: `srs-rescheduling/test/actions.test.ts` pins "fresh-workspace
-reschedule = exactly one undo entry, and one undo removes the daily notes".
+reschedule = exactly one undo entry, and one undo removes the daily notes";
+each rollout site pins its own single-entry + undo-reverts-all test
+(`dailyNotes.test.ts`, `srsBlockDateAdapter.test.ts`,
+`createOrFindPlace.test.ts`). The facade override contract itself is
+gated by `src/data/test/repoFacadeGate.test.ts`.
 
 ## Out of scope (deliberately)
 

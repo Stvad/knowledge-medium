@@ -6,7 +6,7 @@ import { EditorView } from '@codemirror/view'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import {
   editorSelection,
   focusBlock,
@@ -179,11 +179,6 @@ const seedPanelAndContent = async (): Promise<{uiStateBlock: ReturnType<Repo['bl
     uiStateBlock: env.repo.block('panel'),
     block: env.repo.block('content'),
   }
-}
-
-const isDeleted = async (id: string): Promise<boolean> => {
-  const row = await env.h.db.get<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id])
-  return row.deleted === 1
 }
 
 let sharedDb: TestDb
@@ -374,7 +369,7 @@ describe('default CodeMirror shortcuts', () => {
       uiStateBlock,
     } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    expect(await isDeleted('panel')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
   })
 
   it('closes the current panel from CodeMirror edit mode', async () => {
@@ -387,7 +382,7 @@ describe('default CodeMirror shortcuts', () => {
       uiStateBlock,
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
-    expect(await isDeleted('panel')).toBe(true)
+    expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
   })
 
   it('registers a command-palette action for reloading in safe mode', () => {

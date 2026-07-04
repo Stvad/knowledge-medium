@@ -7,7 +7,7 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { createTestRepo } from '@/data/test/createTestRepo'
+import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
 import { PLACE_TYPE } from '../blockTypes'
 import { geoDataExtension } from '../dataExtension'
 import {
@@ -237,10 +237,8 @@ describe('undo grouping (issue #306)', () => {
     const block = await create(DANDELION)
     expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 1, redo: 0})
 
-    const isDeleted = async (id: string) =>
-      (await env.repo.db.getOptional<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id]))?.deleted === 1
     expect(await env.repo.undo()).toBe(true)
-    expect(await isDeleted(block.id)).toBe(true)
-    expect(await isDeleted(locationsPageBlockId(WS))).toBe(true)
+    expect(await isBlockDeleted(env.repo, block.id)).toBe(true)
+    expect(await isBlockDeleted(env.repo, locationsPageBlockId(WS))).toBe(true)
   })
 })

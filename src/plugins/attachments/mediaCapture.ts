@@ -185,16 +185,16 @@ export const captureMedia = async (
   // (renderer) places it via the text-paste path, so a pasted attachment lands
   // at the caret per the text policy.
   let inserted = false
-  await deps.repo.undoGroup(async (grouped) => {
-    await getOrCreateKernelPage(grouped, workspaceId, {
+  await deps.repo.undoGroup(async (repo) => {
+    await getOrCreateKernelPage(repo, workspaceId, {
       namespace: ASSETS_NS,
       alias: ASSETS_ALIAS,
       markerType: ASSETS_TYPE,
     })
     const containerId = kernelPageBlockId(workspaceId, ASSETS_NS)
-    const typeSnapshot = grouped.snapshotTypeRegistries()
+    const typeSnapshot = repo.snapshotTypeRegistries()
 
-    await grouped.tx(async (tx) => {
+    await repo.tx(async (tx) => {
       const minted = await createOrRestoreTargetBlock(tx, {
         id: assetBlockId,
         workspaceId,
@@ -209,7 +209,7 @@ export const captureMedia = async (
           await tx.setProperty(id, mediaMimeProp, mime)
           await tx.setProperty(id, mediaSizeProp, size)
           if (filename !== undefined) await tx.setProperty(id, mediaFilenameProp, filename)
-          await grouped.addTypeInTx(tx, id, MEDIA_TYPE, {}, typeSnapshot)
+          await repo.addTypeInTx(tx, id, MEDIA_TYPE, {}, typeSnapshot)
         },
       })
       inserted = minted.inserted

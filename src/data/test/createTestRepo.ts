@@ -63,6 +63,16 @@ export interface TestRepo {
   cache: BlockCache
 }
 
+/** Raw-SQL probe: is the row soft-deleted? Shared by the undo/grouping
+ *  tests, which assert "undo removed the block" without trusting the
+ *  cache layer they're testing through. */
+export const isBlockDeleted = async (repo: Repo, id: string): Promise<boolean> => {
+  const row = await repo.db.getOptional<{deleted: number}>(
+    'SELECT deleted FROM blocks WHERE id = ?', [id],
+  )
+  return row?.deleted === 1
+}
+
 export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
   const cache = new BlockCache()
   let timeCursor = 1_700_000_000_000
