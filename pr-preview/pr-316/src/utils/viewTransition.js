@@ -1,2 +1,0 @@
-var e=async()=>{await new Promise(e=>setTimeout(e,0));for(let e=0;e<4;e++)await Promise.resolve()},t=!1,n=async n=>{if(typeof document>`u`||typeof document.startViewTransition!=`function`){await n();return}if(typeof window<`u`&&window.matchMedia?.(`(prefers-reduced-motion: reduce)`).matches){await n();return}if(t){await n();return}t=!0;try{await document.startViewTransition(async()=>{await n(),await e()}).updateCallbackDone}finally{t=!1}};export{n as withMoveTransition};
-//# sourceMappingURL=viewTransition.js.map
