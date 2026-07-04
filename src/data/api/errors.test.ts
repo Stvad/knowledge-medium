@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as errorsModule from './errors'
 import {
   BlockNotFoundError,
   BlockNotLoadedError,
@@ -47,6 +48,25 @@ describe('data-layer errors', () => {
       expect(e).toBeInstanceOf(Error)
       expect(e.name).toBe(e.constructor.name)
     }
+  })
+
+  it('every error reports a stable class name that survives minification', () => {
+    // The base sets no `new.target.name` (OXC minification strips class names, so
+    // it would yield a mangled id at runtime); each error pins `name` to a string
+    // literal in errors.ts. Assert every exported DataLayerError reports its
+    // export name, so a newly-added error that forgets its entry fails HERE
+    // rather than shipping a garbage `name` to prod logs.
+    const exports = Object.entries(errorsModule) as ReadonlyArray<[string, unknown]>
+    let checked = 0
+    for (const [exportName, value] of exports) {
+      if (typeof value !== 'function') continue
+      const proto = (value as {prototype?: unknown}).prototype
+      if (proto !== DataLayerError.prototype && !(proto instanceof DataLayerError)) continue
+      expect((proto as {name?: unknown}).name, exportName).toBe(exportName)
+      checked++
+    }
+    // Guard against the loop silently matching nothing (e.g. a bad predicate).
+    expect(checked).toBeGreaterThan(15)
   })
 
   it('CodecError also subclasses DataLayerError', () => {
