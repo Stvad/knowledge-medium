@@ -4,6 +4,7 @@
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" },
     { "path": "./tsconfig.scripts.json" },
+    { "path": "./tsconfig.sw.json" },
     { "path": "./packages/agent-cli" },
     { "path": "./packages/claude-tasks" }
   ],

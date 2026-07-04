@@ -170,7 +170,7 @@ export default defineConfig(({command}) => {
                 preserveEntrySignatures: 'strict', // Preserves the signature of the entry point
             },
             sourcemap: true,
-            minify: false,
+            minify: true,
             target: 'esnext',
         },
     })

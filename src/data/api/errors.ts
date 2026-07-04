@@ -2,12 +2,13 @@
  *  any of these; they all subclass `Error`. Names align with the data-layer
  *  spec (`tasks/data-layer-redesign.md` §5.3, §10.4, §4.7, §13.1). */
 
-export class DataLayerError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = new.target.name
-  }
-}
+// `name` is pinned for every subclass in the block at the BOTTOM of this file —
+// a source string literal that survives production minification. We deliberately
+// do NOT set it here via `new.target.name`: OXC minification strips class names,
+// so at runtime that resolves to a mangled identifier (e.g. "q") and every
+// data-layer error would report a garbage `name` in logs, error boundaries, and
+// telemetry.
+export class DataLayerError extends Error {}
 
 // ──── Block facade / cache ────
 
@@ -206,4 +207,44 @@ export class CodecError extends DataLayerError {
     })()
     super(`expected ${expected}, got ${typeof got} (${preview})`)
   }
+}
+
+// ──── Stable error names (minification-safe) ────
+//
+// Pin each error's `name` to a source string LITERAL. The base used to derive it
+// from `new.target.name`, but production OXC minification strips class names, so
+// that surfaced a mangled identifier (e.g. "q") in logs, error boundaries, and
+// telemetry. The KEYS below are string literals the minifier can't touch;
+// assigning on each prototype keeps this to one localized block instead of a
+// `this.name = '…'` in every constructor. errors.test.ts asserts this list
+// covers every exported subclass, so a new error that forgets its entry fails.
+const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
+  ['DataLayerError', DataLayerError],
+  ['BlockNotLoadedError', BlockNotLoadedError],
+  ['BlockNotFoundError', BlockNotFoundError],
+  ['BlockNotFoundForTypeError', BlockNotFoundForTypeError],
+  ['DuplicateIdError', DuplicateIdError],
+  ['DeletedConflictError', DeletedConflictError],
+  ['DeterministicIdCrossWorkspaceError', DeterministicIdCrossWorkspaceError],
+  ['NotDeletedError', NotDeletedError],
+  ['CycleError', CycleError],
+  ['MergeIntoDescendantError', MergeIntoDescendantError],
+  ['ParentNotFoundError', ParentNotFoundError],
+  ['ParentWorkspaceMismatchError', ParentWorkspaceMismatchError],
+  ['ParentDeletedError', ParentDeletedError],
+  ['WorkspaceMismatchError', WorkspaceMismatchError],
+  ['WorkspaceNotPinnedError', WorkspaceNotPinnedError],
+  ['ReadOnlyError', ReadOnlyError],
+  ['MutatorNotRegisteredError', MutatorNotRegisteredError],
+  ['QueryNotRegisteredError', QueryNotRegisteredError],
+  ['ProcessorNotRegisteredError', ProcessorNotRegisteredError],
+  ['CodecError', CodecError],
+]
+for (const [name, cls] of ERROR_NAMES) {
+  Object.defineProperty(cls.prototype, 'name', {
+    value: name,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  })
 }
