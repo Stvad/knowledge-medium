@@ -555,10 +555,16 @@ export const createEngine = (deps: EngineDeps) => {
         && !running.has(source.id)
         && !abortControllers.has(source.id)
       ) {
-        const stamp = view.properties?.[PROPS.updatedAt]
-        await graph.setTaskProps(source.id, {
-          status: 'running', cancel: null, nowMs: typeof stamp === 'number' ? stamp : now(),
-        })
+        // Clear ONLY the cancel property — a merged single-key write that
+        // never touches claude:status. The batched `views` snapshot is stale
+        // by the time we get here, and a channel task's ambient session may
+        // write status:done concurrently; a write that re-affirmed
+        // status:running would revert that, and once claude:updated-at went
+        // stale the stale-running sweep would REDELIVER the task (duplicate
+        // work). A cancel-only write can't clobber a terminal status, and
+        // clearing an already-satisfied flag is an idempotent no-op — so no
+        // re-read is needed. status/updatedAt are left exactly as they are.
+        await graph.clearCancel(source.id)
         log(`[${watcher.name}] cleared an un-actionable claude:cancel on ${source.id}`)
         continue
       }

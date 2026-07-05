@@ -314,22 +314,31 @@ const updateRuntimeBlock = async (
   repo: Repo,
   input: UpdateBlockInput,
 ): Promise<BlockData | null> => {
-  const before = await repo.load(input.id)
-  if (!before) throw new Error(`updateBlock: block ${input.id} not found`)
-
-  const nextProperties = input.properties === undefined
-    ? undefined
-    : input.replaceProperties
-      ? structuredClone(input.properties) as Record<string, unknown>
-      : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
-
+  // Read INSIDE the tx so a merge-update is an ATOMIC read-modify-write.
+  // repo.tx runs its whole body in one db.writeTransaction, which SQLite
+  // serializes against every other writer — so no concurrent update to the
+  // same block can land between this read and this write. A prior
+  // repo.load-then-merge OUTSIDE the tx had a TOCTOU: a full-map write built
+  // from a stale snapshot clobbered any property another writer set in the
+  // gap (e.g. a claude-tasks orphan-clear reverting a channel task's
+  // concurrently-written claude:status back to `running`).
+  let found = false
   await repo.tx(async tx => {
+    const before = await tx.get(input.id)
+    if (!before || before.deleted) return
+    found = true
+    const nextProperties = input.properties === undefined
+      ? undefined
+      : input.replaceProperties
+        ? structuredClone(input.properties) as Record<string, unknown>
+        : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
     await tx.update(input.id, {
       ...(input.content !== undefined ? {content: input.content} : {}),
       ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
     })
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
 
+  if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
   return repo.load(input.id)
 }
 

@@ -195,6 +195,16 @@ export const createGraph = (client: BridgeClient) => {
     await client.runCommand({type: 'update-block', id, properties: {[PROPS.session]: session}})
   }
 
+  /** Clear ONLY the claude:cancel request (merged single-key write, like
+   *  setSession) — used to retire a Stop the daemon can't act on. It must
+   *  NOT write claude:status: the block may have reached a terminal state
+   *  concurrently (a channel task's ambient session writing status:done),
+   *  and re-writing status:running would revert that and let the stale-
+   *  running sweep redeliver. A merged cancel-only write can't clobber it. */
+  const clearCancel = async (id: string): Promise<void> => {
+    await client.runCommand({type: 'update-block', id, properties: {[PROPS.cancel]: ''}})
+  }
+
   /** Overwrite a block's content — used to stream the in-progress reply
    *  text into an early-created reply block. */
   const updateBlockContent = async (id: string, content: string): Promise<void> => {
@@ -239,6 +249,7 @@ export const createGraph = (client: BridgeClient) => {
     createReply,
     setActivity,
     setSession,
+    clearCancel,
     updateBlockContent,
     sqlAll,
     blockViews,

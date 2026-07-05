@@ -2,6 +2,7 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { ChangeScope } from '@/data/api'
 import { aliasesProp, extensionDescriptionProp, extensionNameProp, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -49,6 +50,41 @@ afterAll(async () => { await sharedDb.cleanup() })
 beforeEach(async () => { env = await setup() })
 
 describe('agent runtime commands', () => {
+  it('update-block treats soft-deleted blocks as not found', async () => {
+    await env.repo.tx(
+      async tx => {
+        await tx.create({
+          id: 'deleted-target',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'original',
+          properties: {keep: 'yes'},
+        })
+      },
+      {scope: ChangeScope.BlockDefault, description: 'seed deleted update-block target'},
+    )
+    await env.repo.mutate.delete({id: 'deleted-target'})
+
+    await expect(executeCommand({
+      commandId: 'update-deleted',
+      type: 'update-block',
+      id: 'deleted-target',
+      content: 'updated',
+      properties: {keep: 'no'},
+    }, env.context)).rejects.toThrow(/updateBlock: block deleted-target not found/)
+
+    const row = await env.h.db.get<{content: string; deleted: 0 | 1; properties_json: string}>(
+      'SELECT content, deleted, properties_json FROM blocks WHERE id = ?',
+      ['deleted-target'],
+    )
+    expect(row).toMatchObject({
+      content: 'original',
+      deleted: 1,
+    })
+    expect(JSON.parse(row!.properties_json)).toEqual({keep: 'yes'})
+  })
+
   it('installs labelled extensions under a per-label container page', async () => {
     const result = await executeCommand({
       commandId: 'install-1',
