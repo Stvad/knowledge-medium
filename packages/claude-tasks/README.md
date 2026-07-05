@@ -79,6 +79,8 @@ By default a watcher runs `claude`. Set `"executor": "codex"` on any watcher to 
 
    **Always scope query watchers to a `workspace_id`** — the local `blocks` table holds *every* synced workspace, so an unscoped query fires runs (and their `update_block` writes) against workspaces you aren't working in. Get yours from `yarn agent runtime-summary`. Backlink watchers don't need this (a page alias resolves within the active workspace).
 
+   Set `"disabled": true` on any watcher to keep it parked in the config without registering it, blocking its target wikilinks, affecting billing posture, or processing tasks. Disabled watchers still have to be valid watcher objects, so broken parked config is caught at startup instead of drifting silently. They also still reserve their `name`, because cursors and baselines are keyed by watcher name. If every configured watcher is disabled, the daemon clears its existing push registration and stops.
+
 3. **Build + run once by hand:**
 
    ```bash

@@ -24,7 +24,7 @@ import { createGraph } from './graph.js'
 import { createStateStore } from './state.js'
 import { acquirePidfile, releasePidfile } from './pidfile.js'
 import { createEngine } from './engine.js'
-import { createExemptionPool, startPushLoop } from './push.js'
+import { clearPushRegistration, createExemptionPool, startPushLoop } from './push.js'
 import { runClaude } from './runner.js'
 import { runCodex } from './codexRunner.js'
 import { reportBillingPosture } from './billing.js'
@@ -98,7 +98,7 @@ const main = async () => {
   let config: DaemonConfig
   try {
     config = await loadConfig(args.config)
-    if (config.watchers.length === 0) {
+    if (config.configuredWatcherCount === 0) {
       throw new Error('No watchers configured — nothing to do. Add watchers to the config file.')
     }
   } catch (error) {
@@ -152,6 +152,18 @@ const main = async () => {
   const napOrTick = (ms: number) => sleep(ms, {wakeOnTick: true})
 
   const client = createBridgeClient({profile: config.profile, timeoutMs: 60_000})
+
+  if (config.watchers.length === 0) {
+    log('no active watchers (all configured watchers are disabled) — clearing push registration and stopping')
+    try {
+      await clearPushRegistration(client)
+      log('push: watch-events registration cleared')
+    } catch (error) {
+      log(`push: could not clear watch-events registration (${errorMessage(error)})`)
+    }
+    await releasePidfile({file: pidfilePath()})
+    return
+  }
 
   // Preflight: make the bridge exist, then wait for a paired tab. Never
   // exits — a reboot or closed tab is a wait, not a crash.
