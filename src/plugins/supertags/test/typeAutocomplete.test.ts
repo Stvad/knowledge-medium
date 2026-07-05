@@ -472,6 +472,15 @@ describe('planTriggerDeletion', () => {
       to: from + '#Area '.length,
     })
   })
+
+  it('removes indentation before a line-start trailing tag command', () => {
+    const doc = 'Intro\n  #Area  '
+    const from = doc.indexOf('#Area')
+    expect(planTriggerDeletion(doc, from, from + '#Area  '.length)).toEqual({
+      from: doc.indexOf('  #Area'),
+      to: doc.length,
+    })
+  })
 })
 
 describe('findCompletableTypeByName', () => {

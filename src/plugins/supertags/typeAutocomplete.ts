@@ -204,7 +204,7 @@ export const planTriggerDeletion = (
   const hasLeftSeparator = left < applyFrom
 
   if (hasLeftText && hasRightText) return {from: applyFrom, to: commandTo}
-  if (!hasLeftText && hasLeftSeparator) return {from: applyFrom, to: right}
+  if (!hasLeftText && hasLeftSeparator && hasRightText) return {from: applyFrom, to: right}
   if (hasLeftSeparator && !hasRightText) return {from: left, to: right}
   if (!hasLeftText) return {from: left, to: right}
 
