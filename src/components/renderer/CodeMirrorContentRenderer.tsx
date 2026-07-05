@@ -149,7 +149,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       ref={editorRef}
       block={block}
       extensions={extensions}
-      className="min-h-[1.7em]"
+      className="km-block-text-editor min-h-[1.7em]"
       basicSetup={{
         closeBrackets: true,
         lineNumbers: false,
