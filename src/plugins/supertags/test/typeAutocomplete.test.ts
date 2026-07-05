@@ -13,7 +13,7 @@ import {
   planTriggerDeletion,
   planTriggerRestore,
   planTriggerStrip,
-  restoreTriggerToView,
+  restoreDeletedTextToView,
   typeTagCompletionSource,
   visibleTagTypeIds,
   type TypeTagCandidate,
@@ -277,7 +277,7 @@ describe('typeTagCompletionSource', () => {
     }
   })
 
-  it('on apply, collapses a type command between two words to one space', async () => {
+  it('on apply, removes only the trigger span for a type command between two words', async () => {
     const contexts: unknown[] = []
     const source = typeTagCompletionSource({
       getCandidates: () => [candidate()],
@@ -292,22 +292,22 @@ describe('typeTagCompletionSource', () => {
       const option = result!.options[0]
       const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
       apply(view, option, result!.from, 8)
-      expect(view.state.doc.toString()).toBe('call mom')
+      expect(view.state.doc.toString()).toBe('call  mom')
       expect(view.state.selection.main.head).toBe(5)
       expect(contexts).toEqual([{
         triggerText: '#ta',
         at: 5,
-        deletedText: ' #ta ',
-        deletionFrom: 4,
+        deletedText: '#ta',
+        deletionFrom: 5,
         docBefore: 'call #ta mom',
-        docAfter: 'call mom',
+        docAfter: 'call  mom',
       }])
     } finally {
       view.destroy()
     }
   })
 
-  it('a failed pick restores the deleted trigger text into the view and warns', async () => {
+  it('a failed pick restores the deleted command span into the view and warns', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const source = typeTagCompletionSource({
@@ -315,21 +315,52 @@ describe('typeTagCompletionSource', () => {
         pickType: async () => { throw new Error('registry says no') },
       })
       const view = new EditorView({
-        state: EditorState.create({doc: '#ta'}),
+        state: EditorState.create({doc: 'call mom #ta'}),
         parent: document.body,
       })
       try {
-        const result = await source(new CompletionContext(view.state, 3, false))
+        const result = await source(new CompletionContext(view.state, 12, false))
         const option = result!.options[0]
         const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
-        apply(view, option, result!.from, 3)
-        expect(view.state.doc.toString()).toBe('')
+        apply(view, option, result!.from, 12)
+        expect(view.state.doc.toString()).toBe('call mom')
         await vi.waitFor(() => {
           expect(warn).toHaveBeenCalledWith(
             '[supertags] failed to apply type', 'Task', expect.any(Error))
-          expect(view.state.doc.toString()).toBe('#ta')
+          expect(view.state.doc.toString()).toBe('call mom #ta')
         })
-        expect(view.state.selection.main.head).toBe(3)
+        expect(view.state.selection.main.head).toBe(12)
+      } finally {
+        view.destroy()
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a failed in-text pick restores without duplicating surrounding spaces', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const source = typeTagCompletionSource({
+        getCandidates: () => [candidate()],
+        pickType: async () => { throw new Error('registry says no') },
+      })
+      const view = new EditorView({
+        state: EditorState.create({doc: 'call #ta mom'}),
+        parent: document.body,
+      })
+      try {
+        const result = await source(new CompletionContext(view.state, 8, false))
+        const option = result!.options[0]
+        const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
+        apply(view, option, result!.from, 8)
+        expect(view.state.doc.toString()).toBe('call  mom')
+        await vi.waitFor(() => {
+          expect(warn).toHaveBeenCalledWith(
+            '[supertags] failed to apply type', 'Task', expect.any(Error))
+          expect(view.state.doc.toString()).toBe('call #ta mom')
+        })
+        expect(view.state.selection.main.head).toBe(8)
       } finally {
         view.destroy()
       }
@@ -383,16 +414,16 @@ describe('planTriggerDeletion', () => {
     })
   })
 
-  it('collapses a tag command between text to one word boundary', () => {
+  it('preserves surrounding spaces when a tag command sits between text', () => {
     expect(planTriggerDeletion('Project #Area notes', 8, 13)).toEqual({
-      from: 7,
-      to: 14,
-      insert: ' ',
+      from: 8,
+      to: 13,
+      insert: '',
     })
     expect(planTriggerDeletion('Project  #Area  notes', 9, 14)).toEqual({
-      from: 7,
-      to: 16,
-      insert: ' ',
+      from: 9,
+      to: 14,
+      insert: '',
     })
   })
 
@@ -430,14 +461,21 @@ describe('findCompletableTypeByName', () => {
   })
 })
 
-describe('restoreTriggerToView', () => {
+describe('restoreDeletedTextToView', () => {
   it('re-inserts at the original spot, clamped to the live doc', () => {
     const view = new EditorView({
       state: EditorState.create({doc: 'ab'}),
       parent: document.body,
     })
     try {
-      expect(restoreTriggerToView(view, 9, '#ta')).toBe(true)
+      expect(restoreDeletedTextToView(view, {
+        triggerText: '#ta',
+        at: 9,
+        deletedText: '#ta',
+        deletionFrom: 9,
+        docBefore: 'ab#ta',
+        docAfter: 'ab',
+      })).toBe(true)
       expect(view.state.doc.toString()).toBe('ab#ta')
     } finally {
       view.destroy()
@@ -447,7 +485,14 @@ describe('restoreTriggerToView', () => {
   it('returns false for an unmounted view', () => {
     const view = new EditorView({state: EditorState.create({doc: 'ab'})})
     view.destroy()
-    expect(restoreTriggerToView(view, 0, '#ta')).toBe(false)
+    expect(restoreDeletedTextToView(view, {
+      triggerText: '#ta',
+      at: 0,
+      deletedText: '#ta',
+      deletionFrom: 0,
+      docBefore: '#taab',
+      docAfter: 'ab',
+    })).toBe(false)
   })
 })
 
@@ -479,22 +524,22 @@ describe('planTriggerRestore', () => {
   const ctx = {
     triggerText: '#ta',
     at: 5,
-    deletedText: ' #ta ',
-    deletionFrom: 4,
+    deletedText: '#ta',
+    deletionFrom: 5,
     docBefore: 'call #ta mom',
-    docAfter: 'call mom',
+    docAfter: 'call  mom',
   }
 
   it('restores the exact pre-pick doc when content matches the post-deletion snapshot', () => {
-    expect(planTriggerRestore('call mom', ctx)).toBe('call #ta mom')
+    expect(planTriggerRestore('call  mom', ctx)).toBe('call #ta mom')
   })
 
-  it('no-ops when the trigger text is demonstrably back at its spot', () => {
+  it('no-ops when the deleted command span is demonstrably back at its spot', () => {
     expect(planTriggerRestore('call #ta mom', ctx)).toBeNull()
   })
 
   it('falls back to a clamped positional insert on drifted content', () => {
-    expect(planTriggerRestore('call', ctx)).toBe('call #ta ')
-    expect(planTriggerRestore('call mom and dad', ctx)).toBe('call #ta mom and dad')
+    expect(planTriggerRestore('call', ctx)).toBe('call#ta')
+    expect(planTriggerRestore('call  mom and dad', ctx)).toBe('call #ta mom and dad')
   })
 })

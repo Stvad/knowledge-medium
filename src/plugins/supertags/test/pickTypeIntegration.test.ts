@@ -86,7 +86,7 @@ const pickAt = async (
 }
 
 describe('supertags pick integration', () => {
-  it('tags the block and strips the trigger text from stored content in the same committed state', async () => {
+  it('tags the block and strips the command span from stored content in the same committed state', async () => {
     env = await setup()
     const blockId = await makeBlock(env.repo, 'call mom #ta')
     await pickAt(env.repo, blockId, 'call mom #ta', 'Task')
@@ -146,7 +146,7 @@ describe('supertags pick integration', () => {
     }
   })
 
-  it('a failed create pick with an unmounted view restores the trigger text into stored content', async () => {
+  it('a failed create pick with an unmounted view restores the command span into stored content', async () => {
     env = await setup()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {

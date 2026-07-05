@@ -13,7 +13,7 @@
  *  text — and the (async) type write is fired through `pickType`,
  *  which also mirrors the deletion into the block's stored content
  *  (same tx as the tag) so the editor remount that a types change
- *  triggers seeds from a cache row without the trigger text. A failed
+ *  triggers seeds from a cache row without the command span. A failed
  *  pick restores the deleted text (view first, stored content as
  *  fallback).
  *
@@ -174,12 +174,13 @@ export interface TriggerDeletionPlan {
   insert: string
 }
 
-/** `#tag` is a command, not durable content. When it is accepted,
- *  absorb the spaces that only separated that command from prose:
- *  end/start positions trim cleanly, and a command between two words
- *  collapses to one normal word boundary. Spaces inside the trigger
- *  query itself still belong to `#multi word tag` and are covered by
- *  `applyFrom`/`applyTo`. */
+/** `#tag` is a command, not durable content. When it is accepted at
+ *  the start or end of content, absorb the outer separator spaces with
+ *  it. In the middle of text, leave surrounding whitespace untouched:
+ *  alias/title content is exact, so collapsing both sides would be an
+ *  irreversible normalization of user-authored spaces. Spaces inside
+ *  the trigger query itself still belong to `#multi word tag` and are
+ *  covered by `applyFrom`/`applyTo`. */
 export const planTriggerDeletion = (
   doc: string,
   applyFrom: number,
@@ -195,10 +196,6 @@ export const planTriggerDeletion = (
   const hasRightText = right < doc.length
   const hasLeftSeparator = left < applyFrom
   const hasRightSeparator = right > applyTo
-
-  if (hasLeftText && hasRightText && hasLeftSeparator && hasRightSeparator) {
-    return {from: left, to: right, insert: ' '}
-  }
 
   if (hasLeftSeparator && !hasRightText) return {from: left, to: right, insert: ''}
   if (!hasLeftText && hasRightSeparator) return {from: left, to: right, insert: ''}
@@ -220,7 +217,7 @@ export const planTriggerStrip = (
   return null
 }
 
-/** How a FAILED pick's fallback should put the trigger text back into
+/** How a FAILED pick's fallback should put the deleted command span back into
  *  stored content (the view path is preferred; this runs only when the
  *  view is unmounted). Exact inverse when the stored content matches
  *  the post-deletion snapshot; no-op when the text is demonstrably
@@ -250,37 +247,38 @@ export const planTriggerRestore = (
 export interface TypeTagAutocompleteOptions {
   /** Candidates for the current query, in display order. */
   getCandidates: (query: string) => TypeTagCandidate[] | Promise<TypeTagCandidate[]>
-  /** Called when the user picks a candidate, after the `#query`
-   *  trigger text has been deleted from the view. Implementations MUST
-   *  also remove it from the block's stored content in the SAME tx as
-   *  the tag write (via `planTriggerStrip`): adding a type remounts
-   *  the per-block editor (types participate in the renderer's slot
-   *  identity), and the remounted editor seeds from the cache, so a
-   *  cache row that still holds the trigger text resurrects it under
-   *  the user's cursor. */
+  /** Called when the user picks a candidate, after the command span has
+   *  been deleted from the view. Implementations MUST also remove it
+   *  from the block's stored content in the SAME tx as the tag write
+   *  (via `planTriggerStrip`): adding a type remounts the per-block
+   *  editor (types participate in the renderer's slot identity), and
+   *  the remounted editor seeds from the cache, so a cache row that
+   *  still holds the trigger command resurrects it under the user's
+   *  cursor. */
   pickType: (candidate: TypeTagCandidate, ctx: TypeTagPickContext) => Promise<void>
-  /** Persistence fallback for a FAILED pick: re-insert the trigger
-   *  text into the block's stored content (via `planTriggerRestore`)
-   *  when the editor view can no longer take the restore (unmounted /
+  /** Persistence fallback for a FAILED pick: re-insert the command span
+   *  into the block's stored content (via `planTriggerRestore`) when
+   *  the editor view can no longer take the restore (unmounted /
    *  navigated away). */
   restoreTrigger?: (ctx: TypeTagPickContext) => Promise<void>
 }
 
-/** Put a failed pick's trigger text back into the editor at (or as
- *  near as the doc allows) its original spot. False when the view is
- *  unmounted — the caller falls back to `restoreTrigger`. Exported for
- *  direct testing. */
-export const restoreTriggerToView = (
+/** Put a failed pick's deleted command span back into the editor. False
+ *  when the view is unmounted — the caller falls back to
+ *  `restoreTrigger`. Exported for direct testing. */
+export const restoreDeletedTextToView = (
   view: EditorView,
-  at: number,
-  triggerText: string,
+  ctx: TypeTagPickContext,
 ): boolean => {
   if (!view.dom.isConnected) return false
   try {
-    const pos = Math.min(at, view.state.doc.length)
+    const live = view.state.doc.toString()
+    const restored = planTriggerRestore(live, ctx)
+    if (restored === null) return true
+    const cursor = Math.min(ctx.deletionFrom + ctx.deletedText.length, restored.length)
     view.dispatch({
-      changes: {from: pos, insert: triggerText},
-      selection: EditorSelection.cursor(pos + triggerText.length),
+      changes: {from: 0, to: live.length, insert: restored},
+      selection: EditorSelection.cursor(cursor),
     })
     return true
   } catch {
@@ -323,9 +321,9 @@ const candidateToOption = (
         // The user's text was deleted optimistically — a failed pick
         // must give it back, not just log.
         console.warn('[supertags] failed to apply type', candidate.label, err)
-        if (!restoreTriggerToView(view, deletion.from, deletedText)) {
+        if (!restoreDeletedTextToView(view, ctx)) {
           await options.restoreTrigger?.(ctx).catch((restoreErr: unknown) => {
-            console.warn('[supertags] failed to restore trigger text', restoreErr)
+            console.warn('[supertags] failed to restore type-tag command text', restoreErr)
           })
         }
       }
