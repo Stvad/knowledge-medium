@@ -186,17 +186,21 @@ export const planTriggerDeletion = (
   applyFrom: number,
   applyTo: number,
 ): TriggerDeletionPlan => {
+  const lineStart = doc.lastIndexOf('\n', applyFrom - 1) + 1
+  const nextLineBreak = doc.indexOf('\n', applyTo)
+  const lineEnd = nextLineBreak === -1 ? doc.length : nextLineBreak
+
   let commandTo = applyTo
   while (commandTo > applyFrom + 1 && doc[commandTo - 1] === ' ') commandTo -= 1
 
   let left = applyFrom
-  while (left > 0 && doc[left - 1] === ' ') left -= 1
+  while (left > lineStart && doc[left - 1] === ' ') left -= 1
 
   let right = applyTo
-  while (right < doc.length && doc[right] === ' ') right += 1
+  while (right < lineEnd && doc[right] === ' ') right += 1
 
-  const hasLeftText = left > 0
-  const hasRightText = right < doc.length
+  const hasLeftText = left > lineStart
+  const hasRightText = right < lineEnd
   const hasLeftSeparator = left < applyFrom
 
   if (hasLeftText && hasRightText) return {from: applyFrom, to: commandTo}

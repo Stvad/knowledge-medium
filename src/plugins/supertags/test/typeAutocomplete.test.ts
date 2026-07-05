@@ -445,6 +445,24 @@ describe('planTriggerDeletion', () => {
       to: 6,
     })
   })
+
+  it('treats soft line breaks as tag command boundaries', () => {
+    const startOfLine = 'Intro\n#Area notes'
+    const startOfLineFrom = startOfLine.indexOf('#Area')
+    expect(planTriggerDeletion(startOfLine, startOfLineFrom, startOfLineFrom + '#Area'.length))
+      .toEqual({
+        from: startOfLineFrom,
+        to: startOfLineFrom + '#Area '.length,
+      })
+
+    const endOfLine = 'Intro #Area\nnotes'
+    const endOfLineFrom = endOfLine.indexOf('#Area')
+    expect(planTriggerDeletion(endOfLine, endOfLineFrom, endOfLineFrom + '#Area'.length))
+      .toEqual({
+        from: endOfLine.indexOf(' #Area'),
+        to: endOfLineFrom + '#Area'.length,
+      })
+  })
 })
 
 describe('findCompletableTypeByName', () => {
