@@ -88,9 +88,10 @@ export interface CodexRunOptions {
  *  content belongs in neither failure mode. `-` (stdin) is always LAST. */
 export const buildCodexArgs = (options: CodexRunOptions): string[] => {
   const args = ['exec']
-  if (options.resumeSessionId) args.push('resume', options.resumeSessionId)
+  if (options.resumeSessionId) args.push('resume')
   args.push('--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config')
   if (options.model) args.push('-m', options.model)
+  if (options.resumeSessionId) args.push(options.resumeSessionId)
   if (options.mcpServer) {
     const {name, command, args: serverArgs, env} = options.mcpServer
     // -c values parse as TOML, not JSON (live-verified): a JSON array of
