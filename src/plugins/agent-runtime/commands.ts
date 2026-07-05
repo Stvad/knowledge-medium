@@ -325,7 +325,7 @@ const updateRuntimeBlock = async (
   let found = false
   await repo.tx(async tx => {
     const before = await tx.get(input.id)
-    if (!before) return
+    if (!before || before.deleted) return
     found = true
     const nextProperties = input.properties === undefined
       ? undefined
