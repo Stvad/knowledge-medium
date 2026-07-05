@@ -13,11 +13,11 @@
  * nonce + tag minimum), never a full body; the
  * workflow has no pull_request trigger so the secret is not exposed to forks.
  */
-import { createHash } from 'node:crypto'
 import { appendFileSync } from 'node:fs'
 import { runCiphertextAudit } from '@/plugins/attachments/audit/audit'
 import { buildReport, type AuditOutcome } from '@/plugins/attachments/audit/report'
 import { createSupabaseAuditIO } from '@/plugins/attachments/audit/supabaseAuditIO'
+import { formatReadAttemptFailureNotice, redactAuditPath } from './attachments-ciphertext-audit-format.js'
 
 const url = process.env.SUPABASE_URL
 // The privileged key: a modern `sb_secret_…` secret key (preferred — independently
@@ -25,12 +25,9 @@ const url = process.env.SUPABASE_URL
 // opaquely, so this entrypoint doesn't care which.
 const secretKey = process.env.SUPABASE_SECRET_KEY
 
-const redact = (s: string) => createHash('sha256').update(s).digest('hex').slice(0, 12)
 const note = (m: string) => console.log(`::notice::${m}`)
 const warn = (m: string) => console.log(`::warning::${m}`)
 const fail = (m: string) => console.log(`::error::${m}`)
-const readFailureLabel = (event: { reason: string; status?: number }) =>
-  event.status === undefined ? event.reason : `${event.reason} ${event.status}`
 const writeSummary = (md: string) => {
   const f = process.env.GITHUB_STEP_SUMMARY
   if (!f) return
@@ -52,15 +49,13 @@ async function main() {
               url,
               secretKey,
               onReadAttemptFailure: (event) => {
-                note(
-                  `attachments ciphertext audit read attempt ${event.attempt}/${event.maxAttempts} failed for obj:${redact(event.path)} (${readFailureLabel(event)})`,
-                )
+                note(formatReadAttemptFailureNotice(event))
               },
             }),
           ),
         }
 
-  const report = buildReport(outcome, redact)
+  const report = buildReport(outcome, redactAuditPath)
   report.notices.forEach(note)
   report.warnings.forEach(warn)
   report.errors.forEach(fail)

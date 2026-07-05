@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it, vi } from 'vitest'
 import { BINARY_ENVELOPE_MAGIC, BINARY_ENVELOPE_MIN_BYTES } from '@/sync/crypto/binaryEnvelope.js'
-import { createSupabaseAuditIO } from './supabaseAuditIO.js'
+import { createSupabaseAuditIO, type SupabaseAuditIODeps } from './supabaseAuditIO.js'
 
 const URL = 'https://proj.supabase.co'
 const KEY = 'svc-key'
@@ -100,8 +100,10 @@ describe('createSupabaseAuditIO.listObjects', () => {
 })
 
 describe('createSupabaseAuditIO.readObjectVerdict', () => {
-  const ioWith = (fetchFn: typeof fetch) =>
-    createSupabaseAuditIO({ url: URL, secretKey: KEY, client: {} as SupabaseClient, fetchFn })
+  const ioWith = (
+    fetchFn: typeof fetch,
+    opts: Partial<Pick<SupabaseAuditIODeps, 'onReadAttemptFailure' | 'readMaxAttempts'>> = {},
+  ) => createSupabaseAuditIO({ url: URL, secretKey: KEY, client: {} as SupabaseClient, fetchFn, ...opts })
 
   it("returns 'ok' for a full-length encb:v1: head, with a Range request and encoded path", async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => bytesResponse(fullEnvelopeHead()))
@@ -151,19 +153,12 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
   })
 
   it("retries an unreadable read and returns 'ok' when a later attempt succeeds", async () => {
-    let call = 0
-    const fetchFn = vi.fn<typeof fetch>(async () => {
-      call += 1
-      return call === 1 ? new Response(null, { status: 500 }) : bytesResponse(fullEnvelopeHead())
-    })
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 500 }))
+      .mockResolvedValueOnce(bytesResponse(fullEnvelopeHead()))
     const onReadAttemptFailure = vi.fn()
-    const io = createSupabaseAuditIO({
-      url: URL,
-      secretKey: KEY,
-      client: {} as SupabaseClient,
-      fetchFn,
-      onReadAttemptFailure,
-    })
+    const io = ioWith(fetchFn, { onReadAttemptFailure })
 
     expect(await io.readObjectVerdict('ws1/k')).toBe('ok')
     expect(fetchFn).toHaveBeenCalledTimes(2)
@@ -184,24 +179,54 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
     expect(await io500.readObjectVerdict('ws1/k')).toBe('unreadable')
   })
 
-  it("returns 'unreadable' when the fetch (or body read) throws — never aborts", async () => {
+  it("returns 'unreadable' when the fetch throws — never aborts", async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => {
       throw new Error('connection reset')
     })
     expect(await ioWith(fetchFn).readObjectVerdict('ws1/k')).toBe('unreadable')
   })
 
+  it("retries a body-read failure and returns 'ok' when a later attempt succeeds", async () => {
+    const bodyErrorResponse = bytesResponse(fullEnvelopeHead())
+    vi.spyOn(bodyErrorResponse, 'arrayBuffer').mockRejectedValue(new Error('stream reset'))
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(bodyErrorResponse)
+      .mockResolvedValueOnce(bytesResponse(fullEnvelopeHead()))
+    const onReadAttemptFailure = vi.fn()
+    const io = ioWith(fetchFn, { onReadAttemptFailure })
+
+    expect(await io.readObjectVerdict('ws1/k')).toBe('ok')
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    expect(onReadAttemptFailure).toHaveBeenCalledOnce()
+    expect(onReadAttemptFailure).toHaveBeenCalledWith({
+      path: 'ws1/k',
+      attempt: 1,
+      maxAttempts: 3,
+      reason: 'body-error',
+      status: undefined,
+    })
+  })
+
+  it('continues retrying if the read-failure diagnostic callback throws', async () => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(bytesResponse(fullEnvelopeHead()))
+    const onReadAttemptFailure = vi.fn(() => {
+      throw new Error('logger exploded')
+    })
+    const io = ioWith(fetchFn, { onReadAttemptFailure })
+
+    expect(await io.readObjectVerdict('ws1/k')).toBe('ok')
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    expect(onReadAttemptFailure).toHaveBeenCalledOnce()
+  })
+
   it('reports every failed read attempt when unreadable persists', async () => {
     const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }))
     const onReadAttemptFailure = vi.fn()
-    const io = createSupabaseAuditIO({
-      url: URL,
-      secretKey: KEY,
-      client: {} as SupabaseClient,
-      fetchFn,
-      readMaxAttempts: 2,
-      onReadAttemptFailure,
-    })
+    const io = ioWith(fetchFn, { readMaxAttempts: 2, onReadAttemptFailure })
 
     expect(await io.readObjectVerdict('ws1/k')).toBe('unreadable')
     expect(fetchFn).toHaveBeenCalledTimes(2)

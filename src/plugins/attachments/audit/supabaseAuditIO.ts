@@ -118,13 +118,18 @@ export function createSupabaseAuditIO(deps: SupabaseAuditIODeps): AuditIO {
       for (let attempt = 1; attempt <= readMaxAttempts; attempt++) {
         const result = await readObjectOnce(path)
         if (result.verdict !== 'unreadable') return result.verdict
-        deps.onReadAttemptFailure?.({
-          path,
-          attempt,
-          maxAttempts: readMaxAttempts,
-          reason: result.reason,
-          status: result.status,
-        })
+        try {
+          deps.onReadAttemptFailure?.({
+            path,
+            attempt,
+            maxAttempts: readMaxAttempts,
+            reason: result.reason,
+            status: result.status,
+          })
+        } catch {
+          // Diagnostics are best-effort; a logging bug must not violate the
+          // readObjectVerdict no-throw contract or abort the audit scan.
+        }
       }
       return 'unreadable'
     },
