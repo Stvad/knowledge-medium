@@ -5,7 +5,7 @@
  *   - typing `#` in a block's editor opens an autocomplete over the
  *     registered types (plus a "Create type" option that materializes
  *     a user-defined type-definition block on the fly); picking one
- *     tags the block and removes the trigger text;
+ *     tags the block and removes the command text;
  *   - a block's types render as trailing `#label` chips after its
  *     content, each with a remove button.
  *

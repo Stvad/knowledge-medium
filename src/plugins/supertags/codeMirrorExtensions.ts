@@ -7,12 +7,13 @@
  *  kernel + plugin + user-defined, minus `hideFromCompletion`
  *  plumbing).
  *
- *  Pick semantics: the source deletes the `#query` trigger text from
- *  the view optimistically; `pickType` here commits the tag AND the
- *  matching content deletion in ONE tx. The single tx is load-bearing:
- *  a types change remounts the per-block editor (types participate in
+ *  Pick semantics: the source deletes the `#query` command span from
+ *  the view optimistically (including start/end separator whitespace
+ *  when safe); `pickType` here commits the tag AND the matching content
+ *  deletion in ONE tx. The single tx is load-bearing: a types change
+ *  remounts the per-block editor (types participate in
  *  `DefaultBlockRenderer`'s slot identity), and the fresh editor seeds
- *  from the cache — if the cached content still held the trigger text
+ *  from the cache — if the cached content still held the command span
  *  (the editor's own persistence is a 300ms-debounced `setContent`),
  *  the deleted text would resurrect under the user's cursor and could
  *  permanently fork from what they type next.
@@ -24,7 +25,7 @@
  *  then materializes a definition block via `createTypeBlock` (which
  *  resolves only once the new id is live in the registry).
  *
- *  Failures surface as a toast + trigger-text restore (handled by the
+ *  Failures surface as a toast + command-span restore (handled by the
  *  source; `restoreTrigger` covers the unmounted-view case). */
 
 import { EditorState } from '@codemirror/state'
@@ -62,7 +63,7 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
     })
   }
 
-  /** Tag + trigger-text removal in one tx (see module doc for why the
+  /** Tag + command-span removal in one tx (see module doc for why the
    *  atomicity matters). The content edit mirrors what the view
    *  already did, gated on strict snapshot equality
    *  (`planTriggerStrip`): when the stored content has moved on —
@@ -118,7 +119,7 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
     }
   }
 
-  // Unmounted-view fallback for a failed pick's trigger-text restore.
+  // Unmounted-view fallback for a failed pick's command-span restore.
   const restoreTrigger = async (ctx: TypeTagPickContext): Promise<void> => {
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
@@ -127,7 +128,7 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
       if (restored !== null) {
         await tx.update(block.id, {content: restored})
       }
-    }, {scope: ChangeScope.BlockDefault, description: 'restore type-tag trigger text'})
+    }, {scope: ChangeScope.BlockDefault, description: 'restore type-tag command text'})
   }
 
   return typeTagCompletionSource({getCandidates, pickType, restoreTrigger})

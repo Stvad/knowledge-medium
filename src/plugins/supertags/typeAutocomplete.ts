@@ -6,14 +6,16 @@
  *  with the stacked-hash guard on, so markdown headings (`# Title`,
  *  `##foo`) and URL anchors never fire it.
  *
- *  On select the trigger text (`#query`) is deleted from the doc
- *  immediately — the tag lives in the block's `types` property and is
- *  rendered as a trailing chip by `TypeChipsDecorator`, not as text —
- *  and the (async) type write is fired through `pickType`, which also
- *  mirrors the deletion into the block's stored content (same tx as
- *  the tag) so the editor remount that a types change triggers seeds
- *  from a cache row without the trigger text. A failed pick restores
- *  the deleted text (view first, stored content as fallback).
+ *  On select the trigger command (`#query` plus separator whitespace
+ *  that only existed to attach it to surrounding text) is deleted from
+ *  the doc immediately — the tag lives in the block's `types` property
+ *  and is rendered as a trailing chip by `TypeChipsDecorator`, not as
+ *  text — and the (async) type write is fired through `pickType`,
+ *  which also mirrors the deletion into the block's stored content
+ *  (same tx as the tag) so the editor remount that a types change
+ *  triggers seeds from a cache row without the command span. A failed
+ *  pick restores the deleted text (view first, stored content as
+ *  fallback).
  *
  *  The source is pure w.r.t. data access: it takes already-resolved
  *  candidates and a `pickType` callback. Wiring to the repo (the live
@@ -151,15 +153,62 @@ export const buildTypeTagCandidates = (args: {
  *  content permanently once the tag-triggered editor remount seeds
  *  from it. */
 export interface TypeTagPickContext {
-  /** The deleted `#query` span. */
+  /** The semantic trigger span (`#query`) that produced the pick. */
   triggerText: string
   /** Doc offset of the trigger's `#` at pick time. */
   at: number
+  /** The full deleted command span, possibly including separator spaces. */
+  deletedText: string
+  /** Doc offset where `deletedText` started. */
+  deletionFrom: number
   /** Full doc content immediately BEFORE the trigger deletion. */
   docBefore: string
   /** Full doc content immediately AFTER the trigger deletion
-   *  (`docBefore` minus the trigger span). */
+   *  (`docBefore` minus the command span, plus any boundary space). */
   docAfter: string
+}
+
+export interface TriggerDeletionPlan {
+  from: number
+  to: number
+}
+
+/** `#tag` is a command, not durable content. When it is accepted at
+ *  the start or end of content, absorb the outer separator spaces with
+ *  it. In the middle of text, leave surrounding whitespace untouched:
+ *  alias/title content is exact, so collapsing both sides would be an
+ *  irreversible normalization of user-authored spaces. A trailing
+ *  query space before right-hand text is boundary whitespace, not part
+ *  of the command; internal query spaces still belong to
+ *  `#multi word tag`. */
+export const planTriggerDeletion = (
+  doc: string,
+  applyFrom: number,
+  applyTo: number,
+): TriggerDeletionPlan => {
+  const lineStart = doc.lastIndexOf('\n', applyFrom - 1) + 1
+  const nextLineBreak = doc.indexOf('\n', applyTo)
+  const lineEnd = nextLineBreak === -1 ? doc.length : nextLineBreak
+
+  let commandTo = applyTo
+  while (commandTo > applyFrom + 1 && doc[commandTo - 1] === ' ') commandTo -= 1
+
+  let left = applyFrom
+  while (left > lineStart && doc[left - 1] === ' ') left -= 1
+
+  let right = applyTo
+  while (right < lineEnd && doc[right] === ' ') right += 1
+
+  const hasLeftText = left > lineStart
+  const hasRightText = right < lineEnd
+  const hasLeftSeparator = left < applyFrom
+
+  if (hasLeftText && hasRightText) return {from: applyFrom, to: commandTo}
+  if (!hasLeftText && hasLeftSeparator && hasRightText) return {from: applyFrom, to: right}
+  if (hasLeftSeparator && !hasRightText) return {from: left, to: right}
+  if (!hasLeftText) return {from: left, to: right}
+
+  return {from: applyFrom, to: applyTo}
 }
 
 /** How `pickType` should mirror the view's trigger deletion into the
@@ -176,7 +225,7 @@ export const planTriggerStrip = (
   return null
 }
 
-/** How a FAILED pick's fallback should put the trigger text back into
+/** How a FAILED pick's fallback should put the deleted command span back into
  *  stored content (the view path is preferred; this runs only when the
  *  view is unmounted). Exact inverse when the stored content matches
  *  the post-deletion snapshot; no-op when the text is demonstrably
@@ -188,45 +237,56 @@ export const planTriggerRestore = (
   ctx: TypeTagPickContext,
 ): string | null => {
   if (storedContent === ctx.docAfter) return ctx.docBefore
-  if (storedContent.slice(ctx.at, ctx.at + ctx.triggerText.length) === ctx.triggerText) return null
-  const pos = Math.min(ctx.at, storedContent.length)
-  return storedContent.slice(0, pos) + ctx.triggerText + storedContent.slice(pos)
+  if (
+    storedContent.slice(ctx.deletionFrom, ctx.deletionFrom + ctx.deletedText.length) ===
+      ctx.deletedText
+  ) return null
+  const pos = Math.min(ctx.deletionFrom, storedContent.length)
+  let insert = ctx.deletedText
+  if (insert.startsWith(' ') && pos > 0 && storedContent[pos - 1] === ' ') {
+    insert = insert.replace(/^ +/, '')
+  }
+  if (insert.endsWith(' ') && storedContent[pos] === ' ') {
+    insert = insert.replace(/ +$/, '')
+  }
+  return storedContent.slice(0, pos) + insert + storedContent.slice(pos)
 }
 
 export interface TypeTagAutocompleteOptions {
   /** Candidates for the current query, in display order. */
   getCandidates: (query: string) => TypeTagCandidate[] | Promise<TypeTagCandidate[]>
-  /** Called when the user picks a candidate, after the `#query`
-   *  trigger text has been deleted from the view. Implementations MUST
-   *  also remove it from the block's stored content in the SAME tx as
-   *  the tag write (via `planTriggerStrip`): adding a type remounts
-   *  the per-block editor (types participate in the renderer's slot
-   *  identity), and the remounted editor seeds from the cache, so a
-   *  cache row that still holds the trigger text resurrects it under
-   *  the user's cursor. */
+  /** Called when the user picks a candidate, after the command span has
+   *  been deleted from the view. Implementations MUST also remove it
+   *  from the block's stored content in the SAME tx as the tag write
+   *  (via `planTriggerStrip`): adding a type remounts the per-block
+   *  editor (types participate in the renderer's slot identity), and
+   *  the remounted editor seeds from the cache, so a cache row that
+   *  still holds the trigger command resurrects it under the user's
+   *  cursor. */
   pickType: (candidate: TypeTagCandidate, ctx: TypeTagPickContext) => Promise<void>
-  /** Persistence fallback for a FAILED pick: re-insert the trigger
-   *  text into the block's stored content (via `planTriggerRestore`)
-   *  when the editor view can no longer take the restore (unmounted /
+  /** Persistence fallback for a FAILED pick: re-insert the command span
+   *  into the block's stored content (via `planTriggerRestore`) when
+   *  the editor view can no longer take the restore (unmounted /
    *  navigated away). */
   restoreTrigger?: (ctx: TypeTagPickContext) => Promise<void>
 }
 
-/** Put a failed pick's trigger text back into the editor at (or as
- *  near as the doc allows) its original spot. False when the view is
- *  unmounted — the caller falls back to `restoreTrigger`. Exported for
- *  direct testing. */
-export const restoreTriggerToView = (
+/** Put a failed pick's deleted command span back into the editor. False
+ *  when the view is unmounted — the caller falls back to
+ *  `restoreTrigger`. Exported for direct testing. */
+export const restoreDeletedTextToView = (
   view: EditorView,
-  at: number,
-  triggerText: string,
+  ctx: TypeTagPickContext,
 ): boolean => {
   if (!view.dom.isConnected) return false
   try {
-    const pos = Math.min(at, view.state.doc.length)
+    const live = view.state.doc.toString()
+    const restored = planTriggerRestore(live, ctx)
+    if (restored === null) return true
+    const cursor = Math.min(ctx.deletionFrom + ctx.deletedText.length, restored.length)
     view.dispatch({
-      changes: {from: pos, insert: triggerText},
-      selection: EditorSelection.cursor(pos + triggerText.length),
+      changes: {from: 0, to: live.length, insert: restored},
+      selection: EditorSelection.cursor(cursor),
     })
     return true
   } catch {
@@ -248,13 +308,17 @@ const candidateToOption = (
     // TypeTagPickContext).
     const docBefore = view.state.doc.toString()
     const triggerText = view.state.doc.sliceString(applyFrom, applyTo)
+    const deletion = planTriggerDeletion(docBefore, applyFrom, applyTo)
+    const deletedText = view.state.doc.sliceString(deletion.from, deletion.to)
     view.dispatch({
-      changes: {from: applyFrom, to: applyTo, insert: ''},
-      selection: EditorSelection.cursor(applyFrom),
+      changes: {from: deletion.from, to: deletion.to, insert: ''},
+      selection: EditorSelection.cursor(deletion.from),
     })
     const ctx: TypeTagPickContext = {
       triggerText,
       at: applyFrom,
+      deletedText,
+      deletionFrom: deletion.from,
       docBefore,
       docAfter: view.state.doc.toString(),
     }
@@ -265,9 +329,9 @@ const candidateToOption = (
         // The user's text was deleted optimistically — a failed pick
         // must give it back, not just log.
         console.warn('[supertags] failed to apply type', candidate.label, err)
-        if (!restoreTriggerToView(view, applyFrom, triggerText)) {
+        if (!restoreDeletedTextToView(view, ctx)) {
           await options.restoreTrigger?.(ctx).catch((restoreErr: unknown) => {
-            console.warn('[supertags] failed to restore trigger text', restoreErr)
+            console.warn('[supertags] failed to restore type-tag command text', restoreErr)
           })
         }
       }
