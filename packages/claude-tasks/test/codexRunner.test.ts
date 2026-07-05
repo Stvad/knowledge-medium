@@ -33,9 +33,10 @@ describe('buildCodexArgs', () => {
       model: 'gpt-5-codex',
     })
     expect(args).toEqual([
-      'exec', 'resume',
+      'exec',
       '--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config',
       '-m', 'gpt-5-codex',
+      'resume',
       'thread-1',
       '-',
     ])
