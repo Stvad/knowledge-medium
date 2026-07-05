@@ -6,14 +6,16 @@
  *  with the stacked-hash guard on, so markdown headings (`# Title`,
  *  `##foo`) and URL anchors never fire it.
  *
- *  On select the trigger text (`#query`) is deleted from the doc
- *  immediately — the tag lives in the block's `types` property and is
- *  rendered as a trailing chip by `TypeChipsDecorator`, not as text —
- *  and the (async) type write is fired through `pickType`, which also
- *  mirrors the deletion into the block's stored content (same tx as
- *  the tag) so the editor remount that a types change triggers seeds
- *  from a cache row without the trigger text. A failed pick restores
- *  the deleted text (view first, stored content as fallback).
+ *  On select the trigger command (`#query` plus separator whitespace
+ *  that only existed to attach it to surrounding text) is deleted from
+ *  the doc immediately — the tag lives in the block's `types` property
+ *  and is rendered as a trailing chip by `TypeChipsDecorator`, not as
+ *  text — and the (async) type write is fired through `pickType`,
+ *  which also mirrors the deletion into the block's stored content
+ *  (same tx as the tag) so the editor remount that a types change
+ *  triggers seeds from a cache row without the trigger text. A failed
+ *  pick restores the deleted text (view first, stored content as
+ *  fallback).
  *
  *  The source is pure w.r.t. data access: it takes already-resolved
  *  candidates and a `pickType` callback. Wiring to the repo (the live
@@ -151,15 +153,57 @@ export const buildTypeTagCandidates = (args: {
  *  content permanently once the tag-triggered editor remount seeds
  *  from it. */
 export interface TypeTagPickContext {
-  /** The deleted `#query` span. */
+  /** The semantic trigger span (`#query`) that produced the pick. */
   triggerText: string
   /** Doc offset of the trigger's `#` at pick time. */
   at: number
+  /** The full deleted command span, possibly including separator spaces. */
+  deletedText: string
+  /** Doc offset where `deletedText` started. */
+  deletionFrom: number
   /** Full doc content immediately BEFORE the trigger deletion. */
   docBefore: string
   /** Full doc content immediately AFTER the trigger deletion
-   *  (`docBefore` minus the trigger span). */
+   *  (`docBefore` minus the command span, plus any boundary space). */
   docAfter: string
+}
+
+export interface TriggerDeletionPlan {
+  from: number
+  to: number
+  insert: string
+}
+
+/** `#tag` is a command, not durable content. When it is accepted,
+ *  absorb the spaces that only separated that command from prose:
+ *  end/start positions trim cleanly, and a command between two words
+ *  collapses to one normal word boundary. Spaces inside the trigger
+ *  query itself still belong to `#multi word tag` and are covered by
+ *  `applyFrom`/`applyTo`. */
+export const planTriggerDeletion = (
+  doc: string,
+  applyFrom: number,
+  applyTo: number,
+): TriggerDeletionPlan => {
+  let left = applyFrom
+  while (left > 0 && doc[left - 1] === ' ') left -= 1
+
+  let right = applyTo
+  while (right < doc.length && doc[right] === ' ') right += 1
+
+  const hasLeftText = left > 0
+  const hasRightText = right < doc.length
+  const hasLeftSeparator = left < applyFrom
+  const hasRightSeparator = right > applyTo
+
+  if (hasLeftText && hasRightText && hasLeftSeparator && hasRightSeparator) {
+    return {from: left, to: right, insert: ' '}
+  }
+
+  if (hasLeftSeparator && !hasRightText) return {from: left, to: right, insert: ''}
+  if (!hasLeftText && hasRightSeparator) return {from: left, to: right, insert: ''}
+
+  return {from: applyFrom, to: applyTo, insert: ''}
 }
 
 /** How `pickType` should mirror the view's trigger deletion into the
@@ -188,9 +232,19 @@ export const planTriggerRestore = (
   ctx: TypeTagPickContext,
 ): string | null => {
   if (storedContent === ctx.docAfter) return ctx.docBefore
-  if (storedContent.slice(ctx.at, ctx.at + ctx.triggerText.length) === ctx.triggerText) return null
-  const pos = Math.min(ctx.at, storedContent.length)
-  return storedContent.slice(0, pos) + ctx.triggerText + storedContent.slice(pos)
+  if (
+    storedContent.slice(ctx.deletionFrom, ctx.deletionFrom + ctx.deletedText.length) ===
+      ctx.deletedText
+  ) return null
+  const pos = Math.min(ctx.deletionFrom, storedContent.length)
+  let insert = ctx.deletedText
+  if (insert.startsWith(' ') && pos > 0 && storedContent[pos - 1] === ' ') {
+    insert = insert.replace(/^ +/, '')
+  }
+  if (insert.endsWith(' ') && storedContent[pos] === ' ') {
+    insert = insert.replace(/ +$/, '')
+  }
+  return storedContent.slice(0, pos) + insert + storedContent.slice(pos)
 }
 
 export interface TypeTagAutocompleteOptions {
@@ -248,13 +302,17 @@ const candidateToOption = (
     // TypeTagPickContext).
     const docBefore = view.state.doc.toString()
     const triggerText = view.state.doc.sliceString(applyFrom, applyTo)
+    const deletion = planTriggerDeletion(docBefore, applyFrom, applyTo)
+    const deletedText = view.state.doc.sliceString(deletion.from, deletion.to)
     view.dispatch({
-      changes: {from: applyFrom, to: applyTo, insert: ''},
-      selection: EditorSelection.cursor(applyFrom),
+      changes: {from: deletion.from, to: deletion.to, insert: deletion.insert},
+      selection: EditorSelection.cursor(deletion.from + deletion.insert.length),
     })
     const ctx: TypeTagPickContext = {
       triggerText,
       at: applyFrom,
+      deletedText,
+      deletionFrom: deletion.from,
       docBefore,
       docAfter: view.state.doc.toString(),
     }
@@ -265,7 +323,7 @@ const candidateToOption = (
         // The user's text was deleted optimistically — a failed pick
         // must give it back, not just log.
         console.warn('[supertags] failed to apply type', candidate.label, err)
-        if (!restoreTriggerToView(view, applyFrom, triggerText)) {
+        if (!restoreTriggerToView(view, deletion.from, deletedText)) {
           await options.restoreTrigger?.(ctx).catch((restoreErr: unknown) => {
             console.warn('[supertags] failed to restore trigger text', restoreErr)
           })

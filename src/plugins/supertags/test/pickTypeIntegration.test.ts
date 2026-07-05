@@ -2,9 +2,9 @@
 /** Repo-backed integration of the `#` pick flow. The unit tests cover
  *  the source in isolation; these pin the wiring contract that keeps
  *  the pick safe across the types-triggered editor remount: the tag
- *  write and the trigger-text removal land in ONE tx (the cache row is
- *  never tagged-but-still-carrying-the-trigger), and the create flow
- *  ends registered + applied. */
+ *  write and command-span removal land in ONE tx (the cache row is
+ *  never tagged-but-still-carrying-the-trigger command), and the create
+ *  flow ends registered + applied. */
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { CompletionContext } from '@codemirror/autocomplete'
 import { EditorState } from '@codemirror/state'
@@ -92,7 +92,7 @@ describe('supertags pick integration', () => {
     await pickAt(env.repo, blockId, 'call mom #ta', 'Task')
     const data = await env.repo.load(blockId)
     expect(getBlockTypes(data!)).toEqual(['task'])
-    expect(data!.content).toBe('call mom ')
+    expect(data!.content).toBe('call mom')
   })
 
   it('create pick mints a registered type, tags the block, and strips the trigger', async () => {
@@ -106,7 +106,7 @@ describe('supertags pick integration', () => {
     // Creation stamps a persisted palette color (least-used pick) so
     // fresh types don't hash-collide into look-alike chips.
     expect(env.repo.types.get(typeId)?.color).toMatch(/^oklch\(/)
-    expect(data!.content).toBe('dinner ')
+    expect(data!.content).toBe('dinner')
   })
 
   it('strips the picked occurrence, not an earlier identical one (positional, never indexOf)', async () => {
@@ -116,7 +116,7 @@ describe('supertags pick integration', () => {
     const data = await env.repo.load(blockId)
     expect(getBlockTypes(data!)).toEqual(['task'])
     // An indexOf-based strip would produce 'see  note #ta'.
-    expect(data!.content).toBe('see #ta note ')
+    expect(data!.content).toBe('see #ta note')
   })
 
   it('leaves DRIFTED stored content alone: tag applies, no content edit', async () => {
@@ -162,7 +162,7 @@ describe('supertags pick integration', () => {
       await env.repo.tx(async tx => { await tx.delete(env.repo.typesPageId!) }, {scope: ChangeScope.BlockDefault})
       // Simulate the editor having persisted the view deletion and
       // unmounted (navigate-away) before the failure lands.
-      await env.repo.mutate.setContent({id: blockId, content: 'dinner '})
+      await env.repo.mutate.setContent({id: blockId, content: 'dinner'})
       const apply = option.apply as (v: EditorView, c: unknown, from: number, to: number) => void
       apply(view, option, result!.from, 14)
       view.destroy()

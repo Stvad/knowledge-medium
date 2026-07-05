@@ -10,6 +10,7 @@ import {
   buildTypeTagCandidates,
   findCompletableTypeByName,
   matchHashTrigger,
+  planTriggerDeletion,
   planTriggerRestore,
   planTriggerStrip,
   restoreTriggerToView,
@@ -242,7 +243,7 @@ describe('typeTagCompletionSource', () => {
     expect(await source(markdownContext(prose, prose.length))).not.toBeNull()
   })
 
-  it('on apply, deletes the trigger text and hands pickType the candidate + doc snapshots', async () => {
+  it('on apply, deletes the trigger command boundary and hands pickType the candidate + doc snapshots', async () => {
     const picked: TypeTagCandidate[] = []
     const contexts: unknown[] = []
     const source = typeTagCompletionSource({
@@ -258,16 +259,48 @@ describe('typeTagCompletionSource', () => {
       const option = result!.options[0]
       const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
       apply(view, option, result!.from, 12)
-      expect(view.state.doc.toString()).toBe('call mom ')
-      expect(view.state.selection.main.head).toBe(9)
+      expect(view.state.doc.toString()).toBe('call mom')
+      expect(view.state.selection.main.head).toBe(8)
       expect(picked).toEqual([candidate()])
       // The snapshots are the strip/restore contract — position, not
       // text search (see planTriggerStrip).
       expect(contexts).toEqual([{
         triggerText: '#ta',
         at: 9,
+        deletedText: ' #ta',
+        deletionFrom: 8,
         docBefore: 'call mom #ta',
-        docAfter: 'call mom ',
+        docAfter: 'call mom',
+      }])
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('on apply, collapses a type command between two words to one space', async () => {
+    const contexts: unknown[] = []
+    const source = typeTagCompletionSource({
+      getCandidates: () => [candidate()],
+      pickType: async (_c, ctx) => { contexts.push(ctx) },
+    })
+    const view = new EditorView({
+      state: EditorState.create({doc: 'call #ta mom'}),
+      parent: document.body,
+    })
+    try {
+      const result = await source(new CompletionContext(view.state, 8, false))
+      const option = result!.options[0]
+      const apply = option.apply as (view: EditorView, c: unknown, from: number, to: number) => void
+      apply(view, option, result!.from, 8)
+      expect(view.state.doc.toString()).toBe('call mom')
+      expect(view.state.selection.main.head).toBe(5)
+      expect(contexts).toEqual([{
+        triggerText: '#ta',
+        at: 5,
+        deletedText: ' #ta ',
+        deletionFrom: 4,
+        docBefore: 'call #ta mom',
+        docAfter: 'call mom',
       }])
     } finally {
       view.destroy()
@@ -336,6 +369,42 @@ describe('typeTagCompletionSource', () => {
   })
 })
 
+describe('planTriggerDeletion', () => {
+  it('removes the left separator when accepting a trailing tag command', () => {
+    expect(planTriggerDeletion('Project #Area', 8, 13)).toEqual({
+      from: 7,
+      to: 13,
+      insert: '',
+    })
+    expect(planTriggerDeletion('Project  #Area', 9, 14)).toEqual({
+      from: 7,
+      to: 14,
+      insert: '',
+    })
+  })
+
+  it('collapses a tag command between text to one word boundary', () => {
+    expect(planTriggerDeletion('Project #Area notes', 8, 13)).toEqual({
+      from: 7,
+      to: 14,
+      insert: ' ',
+    })
+    expect(planTriggerDeletion('Project  #Area  notes', 9, 14)).toEqual({
+      from: 7,
+      to: 16,
+      insert: ' ',
+    })
+  })
+
+  it('removes the right separator when the command starts the content', () => {
+    expect(planTriggerDeletion('#Area Project', 0, 5)).toEqual({
+      from: 0,
+      to: 6,
+      insert: '',
+    })
+  })
+})
+
 describe('findCompletableTypeByName', () => {
   it('matches label and id case-insensitively, skipping hideFromCompletion types', () => {
     const registry = registryOf(TASK, PAGE)
@@ -383,27 +452,41 @@ describe('restoreTriggerToView', () => {
 })
 
 describe('planTriggerStrip', () => {
-  const ctx = {triggerText: '#re', at: 18, docBefore: 'see #recipe notes #re', docAfter: 'see #recipe notes '}
+  const ctx = {
+    triggerText: '#re',
+    at: 18,
+    deletedText: ' #re',
+    deletionFrom: 17,
+    docBefore: 'see #recipe notes #re',
+    docAfter: 'see #recipe notes',
+  }
 
   it('strips exactly the picked span when the stored content matches the pick-time doc', () => {
-    expect(planTriggerStrip('see #recipe notes #re', ctx)).toBe('see #recipe notes ')
+    expect(planTriggerStrip('see #recipe notes #re', ctx)).toBe('see #recipe notes')
   })
 
   it('never strips by text search — drifted content is left alone', () => {
     // The round-2 corruption case: the debounce already persisted the
     // view deletion; an indexOf-based strip would eat the `#re` inside
     // `#recipe`. Strict snapshot equality must refuse instead.
-    expect(planTriggerStrip('see #recipe notes ', ctx)).toBeNull()
+    expect(planTriggerStrip('see #recipe notes', ctx)).toBeNull()
     // Unflushed keystrokes elsewhere → refuse too.
     expect(planTriggerStrip('see #recipe notes #re!', ctx)).toBeNull()
   })
 })
 
 describe('planTriggerRestore', () => {
-  const ctx = {triggerText: '#ta', at: 5, docBefore: 'call #ta mom', docAfter: 'call  mom'}
+  const ctx = {
+    triggerText: '#ta',
+    at: 5,
+    deletedText: ' #ta ',
+    deletionFrom: 4,
+    docBefore: 'call #ta mom',
+    docAfter: 'call mom',
+  }
 
   it('restores the exact pre-pick doc when content matches the post-deletion snapshot', () => {
-    expect(planTriggerRestore('call  mom', ctx)).toBe('call #ta mom')
+    expect(planTriggerRestore('call mom', ctx)).toBe('call #ta mom')
   })
 
   it('no-ops when the trigger text is demonstrably back at its spot', () => {
@@ -411,7 +494,7 @@ describe('planTriggerRestore', () => {
   })
 
   it('falls back to a clamped positional insert on drifted content', () => {
-    expect(planTriggerRestore('call', ctx)).toBe('call#ta')
-    expect(planTriggerRestore('call  mom and dad', ctx)).toBe('call #ta mom and dad')
+    expect(planTriggerRestore('call', ctx)).toBe('call #ta ')
+    expect(planTriggerRestore('call mom and dad', ctx)).toBe('call #ta mom and dad')
   })
 })
