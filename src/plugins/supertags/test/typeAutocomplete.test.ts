@@ -405,12 +405,14 @@ describe('planTriggerDeletion', () => {
     expect(planTriggerDeletion('Project #Area', 8, 13)).toEqual({
       from: 7,
       to: 13,
-      insert: '',
     })
     expect(planTriggerDeletion('Project  #Area', 9, 14)).toEqual({
       from: 7,
       to: 14,
-      insert: '',
+    })
+    expect(planTriggerDeletion('Project #Area ', 8, 14)).toEqual({
+      from: 7,
+      to: 14,
     })
   })
 
@@ -418,12 +420,18 @@ describe('planTriggerDeletion', () => {
     expect(planTriggerDeletion('Project #Area notes', 8, 13)).toEqual({
       from: 8,
       to: 13,
-      insert: '',
+    })
+    expect(planTriggerDeletion('Project #Area notes', 8, 14)).toEqual({
+      from: 8,
+      to: 13,
     })
     expect(planTriggerDeletion('Project  #Area  notes', 9, 14)).toEqual({
       from: 9,
       to: 14,
-      insert: '',
+    })
+    expect(planTriggerDeletion('Project  #Area  notes', 9, 15)).toEqual({
+      from: 9,
+      to: 14,
     })
   })
 
@@ -431,7 +439,10 @@ describe('planTriggerDeletion', () => {
     expect(planTriggerDeletion('#Area Project', 0, 5)).toEqual({
       from: 0,
       to: 6,
-      insert: '',
+    })
+    expect(planTriggerDeletion('#Area Project', 0, 6)).toEqual({
+      from: 0,
+      to: 6,
     })
   })
 })

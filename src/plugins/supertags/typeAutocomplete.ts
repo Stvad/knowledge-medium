@@ -171,21 +171,24 @@ export interface TypeTagPickContext {
 export interface TriggerDeletionPlan {
   from: number
   to: number
-  insert: string
 }
 
 /** `#tag` is a command, not durable content. When it is accepted at
  *  the start or end of content, absorb the outer separator spaces with
  *  it. In the middle of text, leave surrounding whitespace untouched:
  *  alias/title content is exact, so collapsing both sides would be an
- *  irreversible normalization of user-authored spaces. Spaces inside
- *  the trigger query itself still belong to `#multi word tag` and are
- *  covered by `applyFrom`/`applyTo`. */
+ *  irreversible normalization of user-authored spaces. A trailing
+ *  query space before right-hand text is boundary whitespace, not part
+ *  of the command; internal query spaces still belong to
+ *  `#multi word tag`. */
 export const planTriggerDeletion = (
   doc: string,
   applyFrom: number,
   applyTo: number,
 ): TriggerDeletionPlan => {
+  let commandTo = applyTo
+  while (commandTo > applyFrom + 1 && doc[commandTo - 1] === ' ') commandTo -= 1
+
   let left = applyFrom
   while (left > 0 && doc[left - 1] === ' ') left -= 1
 
@@ -195,12 +198,12 @@ export const planTriggerDeletion = (
   const hasLeftText = left > 0
   const hasRightText = right < doc.length
   const hasLeftSeparator = left < applyFrom
-  const hasRightSeparator = right > applyTo
 
-  if (hasLeftSeparator && !hasRightText) return {from: left, to: right, insert: ''}
-  if (!hasLeftText && hasRightSeparator) return {from: left, to: right, insert: ''}
+  if (hasLeftText && hasRightText) return {from: applyFrom, to: commandTo}
+  if (hasLeftSeparator && !hasRightText) return {from: left, to: right}
+  if (!hasLeftText) return {from: left, to: right}
 
-  return {from: applyFrom, to: applyTo, insert: ''}
+  return {from: applyFrom, to: applyTo}
 }
 
 /** How `pickType` should mirror the view's trigger deletion into the
@@ -303,8 +306,8 @@ const candidateToOption = (
     const deletion = planTriggerDeletion(docBefore, applyFrom, applyTo)
     const deletedText = view.state.doc.sliceString(deletion.from, deletion.to)
     view.dispatch({
-      changes: {from: deletion.from, to: deletion.to, insert: deletion.insert},
-      selection: EditorSelection.cursor(deletion.from + deletion.insert.length),
+      changes: {from: deletion.from, to: deletion.to, insert: ''},
+      selection: EditorSelection.cursor(deletion.from),
     })
     const ctx: TypeTagPickContext = {
       triggerText,
