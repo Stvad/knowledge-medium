@@ -4,6 +4,7 @@
 //
 //   node serve.mjs            # port 5178
 //   PORT=1234 node serve.mjs
+//   HOST=127.0.0.1 node serve.mjs
 import { createServer } from "node:http"
 import { readFile } from "node:fs/promises"
 import { extname, join, normalize } from "node:path"
@@ -11,6 +12,7 @@ import { fileURLToPath } from "node:url"
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url))
 const PORT = Number(process.env.PORT) || 5178
+const HOST = process.env.HOST || "localhost"
 const TYPES = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -35,5 +37,4 @@ const server = createServer(async (req, res) => {
     res.writeHead(404).end("not found")
   }
 })
-// Node listens on both stacks for the "localhost" name by default when host omitted.
-server.listen(PORT, () => console.log(`serving ${ROOT} on http://localhost:${PORT}`))
+server.listen(PORT, HOST, () => console.log(`serving ${ROOT} on http://${HOST}:${PORT}`))

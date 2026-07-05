@@ -31,6 +31,7 @@
   .verdict.na  { color: #888; }
   .row { display: flex; gap: 8px; }
   .row button { flex: 1; min-height: 40px; border-radius: 8px; border: 1px solid #8886; background: #0002; }
+  .row button:disabled { opacity: .45; }
   details { margin-top: 12px; }
   pre.log { font: 11px/1.3 ui-monospace, Menlo, monospace; max-height: 260px; overflow: auto; background: #0001; padding: 8px; border-radius: 8px; }
 </style>
@@ -67,6 +68,7 @@
 
 <div class="row">
   <button id="reseed">↻ Re-seed both</button>
+  <button id="scriptmove" disabled>Script move N/A</button>
   <button id="clearlog">🧹 Clear log</button>
 </div>
 
@@ -107,24 +109,30 @@ document.getElementById("env").textContent = Object.entries(env)
 // ---- event log ------------------------------------------------------------
 const LOG = []
 window.__log = LOG
+function pushRow(row) {
+  LOG.push({ t: Math.round(performance.now()), ...row })
+  if (LOG.length > 400) LOG.shift()
+  renderLog()
+}
 function pushLog(src, e) {
-  LOG.push({
-    t: Math.round(performance.now()),
+  pushRow({
     src, type: e.type,
     key: e.key, keyCode: e.keyCode,
     inputType: e.inputType, data: e.data,
     defaultPrevented: e.defaultPrevented,
   })
-  if (LOG.length > 400) LOG.shift()
-  renderLog()
+}
+function pushTrace(src, type, message) {
+  pushRow({ src, type, message })
 }
 function renderLog() {
   document.getElementById("log").textContent =
-    LOG.slice(-120).map(r =>
-      `${String(r.t).padStart(6)} ${r.src.padEnd(4)} ${r.type.padEnd(11)} ` +
-      (r.type.startsWith("key") ? `key=${r.key} code=${r.keyCode}` : `it=${r.inputType} data=${JSON.stringify(r.data)}`) +
-      (r.defaultPrevented ? " [prevented]" : "")
-    ).join("\n")
+    LOG.slice(-120).map(r => {
+      const detail = r.message ??
+        (r.type.startsWith("key") ? `key=${r.key} code=${r.keyCode}` : `it=${r.inputType} data=${JSON.stringify(r.data)}`)
+      return `${String(r.t).padStart(6)} ${r.src.padEnd(4)} ${r.type.padEnd(16)} ${detail}` +
+        (r.defaultPrevented ? " [prevented]" : "")
+    }).join("\n")
 }
 
 // ---- editors --------------------------------------------------------------
@@ -159,12 +167,69 @@ window.TEST = TEST
 logListeners(CTRL, "ctrl")
 logListeners(TEST, "test")
 
+function rawSelection(view) {
+  return view.root.getSelection ? view.root.getSelection() : document.getSelection()
+}
+
+function ownsSelectionNode(view, node) {
+  return node === view.contentDOM || view.contentDOM.contains(node)
+}
+
+function domSelectionInfo(view) {
+  const sel = rawSelection(view)
+  if (!sel || !sel.anchorNode || !sel.focusNode) return null
+  const local = ownsSelectionNode(view, sel.anchorNode) && ownsSelectionNode(view, sel.focusNode)
+  const info = { collapsed: sel.isCollapsed, local }
+  if (local) {
+    try {
+      info.anchorPos = view.posAtDOM(sel.anchorNode, sel.anchorOffset)
+      info.focusPos = view.posAtDOM(sel.focusNode, sel.focusOffset)
+    } catch (err) {
+      info.error = err instanceof Error ? err.message : String(err)
+    }
+  }
+  return info
+}
+
+function domSelectionLabel(view) {
+  const info = domSelectionInfo(view)
+  if (!info) return "dom none"
+  if (!info.local) return "dom outside"
+  if (info.error) return `dom local (${info.error})`
+  return `dom ${info.anchorPos}${info.collapsed ? "" : "–" + info.focusPos}`
+}
+
+function collapseDOMSelection(view, pos, reason) {
+  const sel = rawSelection(view)
+  if (!sel) {
+    pushTrace("test", "script-selection", `${reason}: no DOM Selection`)
+    return
+  }
+  const { node, offset } = view.domAtPos(pos)
+  sel.collapse(node, offset)
+  pushTrace("test", "script-selection", `${reason}: Selection.collapse(...) to editor pos ${pos}; ${domSelectionLabel(view)}`)
+}
+
+function dispatchProgrammaticEdit(view, spec, reason) {
+  view.dispatch(spec)
+  if (spec.selection && typeof spec.selection.anchor === "number") {
+    collapseDOMSelection(view, spec.selection.anchor, reason)
+  }
+}
+
+function moveCaretByScript(view, pos, reason) {
+  view.focus()
+  view.dispatch({ selection: { anchor: pos } })
+  collapseDOMSelection(view, pos, reason)
+  render()
+}
+
 // ---- TEST-editor interceptor: reproduce the pre-kludge (no pendingIOSKey) path
 // Runs in CAPTURE phase on the .cm-editor wrapper (ancestor of contentDOM) so it
 // fires before — and can stopImmediatePropagation away from — CM's own handlers.
-// On Enter/Backspace/Delete: preventDefault the native action AND perform the
-// edit via a CM transaction, which writes the new DOM selection programmatically
-// (the exact "a script moves the DOM selection" condition from codemirror/dev #165).
+// On Enter/Backspace/Delete: preventDefault the native action, perform the edit
+// with JS, and explicitly collapse the browser DOM Selection to the new cursor.
+// That is the "a script moves the DOM selection" condition from #165.
 function editSpec(state, code) {
   const r = state.selection.main
   if (code === 13) return { changes: { from: r.from, to: r.to, insert: "\n" }, selection: { anchor: r.from + 1 } }
@@ -180,7 +245,7 @@ TEST.dom.addEventListener("keydown", e => {
     e.preventDefault()
     e.stopImmediatePropagation()
     lastKeyHandled = performance.now()
-    TEST.dispatch(editSpec(TEST.state, e.keyCode))
+    dispatchProgrammaticEdit(TEST, editSpec(TEST.state, e.keyCode), `keydown ${e.key || e.keyCode}`)
   }
 }, { capture: true })
 
@@ -191,13 +256,29 @@ TEST.dom.addEventListener("beforeinput", e => {
   e.stopImmediatePropagation()
   // If the keydown handler already performed this edit, just swallow the native
   // duplicate; otherwise (soft key that emits no keydown) perform it here.
-  if (performance.now() - lastKeyHandled > 120) TEST.dispatch(editSpec(TEST.state, code))
+  if (performance.now() - lastKeyHandled > 120) dispatchProgrammaticEdit(TEST, editSpec(TEST.state, code), `beforeinput ${e.inputType}`)
 }, { capture: true })
 
 // ---- scenarios ------------------------------------------------------------
 // Each scenario seeds identical content into both editors, and defines what the
 // resulting doc should look like if soft-keyboard autocapitalization still works.
 const SCENARIOS = {
+  scriptMove: {
+    label: "Script move",
+    seed: "Hi. ab", anchor: 6,
+    scriptMove: { anchor: 4, button: "Move TEST caret by script" },
+    steps: `<b>Original #165 test</b> (soft keyboard).<br>
+      CONTROL baseline: tap between <code>. </code> and <code>ab</code>, then type <b>q</b> without Shift → <code>Hi. Qab</code>.<br>
+      TEST: tap at the very end of <code>Hi.&nbsp;ab</code> first (old keyboard state should be lowercase), tap <b>Move TEST caret by script</b>, then type <b>q</b> without Shift.<br>
+      Autocaps updated after the JS DOM selection move → <code>Hi. Qab</code>. Stale old-position state (bug) → <code>Hi. qab</code>.`,
+    check: (doc) => {
+      const m = /^Hi\. ([A-Za-z])ab$/.exec(doc)
+      if (!m) return { state: "na", msg: `waiting — doc is ${JSON.stringify(doc)}` }
+      return m[1] === m[1].toUpperCase() && m[1] !== m[1].toLowerCase()
+        ? { state: "pass", msg: `capitalized → "${m[1]}" (keyboard state updated)` }
+        : { state: "fail", msg: `lowercase → "${m[1]}" (stale old-position state)` }
+    },
+  },
   enter: {
     label: "Enter",
     seed: "hello world", anchor: 11,
@@ -211,7 +292,7 @@ const SCENARIOS = {
       if (!m) return { state: "na", msg: "no newline+letter yet" }
       return m[1] === m[1].toUpperCase() && m[1] !== m[1].toLowerCase()
         ? { state: "pass", msg: `capitalized → "${m[1]}" (autocaps works)` }
-        : { state: "fail", msg: `lowercase → "${m[1]}" (autocaps FROZEN)` }
+        : { state: "fail", msg: `lowercase → "${m[1]}" (stale old-position state)` }
     },
   },
   backspace: {
@@ -227,7 +308,7 @@ const SCENARIOS = {
       if (!m) return { state: "na", msg: `waiting — doc is ${JSON.stringify(doc)}` }
       return m[1] === m[1].toUpperCase() && m[1] !== m[1].toLowerCase()
         ? { state: "pass", msg: `capitalized → "${m[1]}" (autocaps works)` }
-        : { state: "fail", msg: `lowercase → "${m[1]}" (autocaps FROZEN)` }
+        : { state: "fail", msg: `lowercase → "${m[1]}" (stale old-position state)` }
     },
   },
   delete: {
@@ -243,7 +324,7 @@ const SCENARIOS = {
     },
   },
 }
-let active = "enter"
+let active = "scriptMove"
 
 function seed(view, text, anchor) {
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, selection: { anchor } })
@@ -258,7 +339,21 @@ function setScenario(name) {
   active = name
   document.querySelectorAll("#scenarios button").forEach(b => b.classList.toggle("active", b.dataset.name === name))
   document.getElementById("steps").innerHTML = SCENARIOS[name].steps
+  updateScriptMoveButton()
   reseed()
+}
+
+function runScriptMove() {
+  const move = SCENARIOS[active].scriptMove
+  if (!move) return
+  moveCaretByScript(TEST, move.anchor, active)
+}
+
+function updateScriptMoveButton() {
+  const button = document.getElementById("scriptmove")
+  const move = SCENARIOS[active].scriptMove
+  button.disabled = !move
+  button.textContent = move ? move.button : "Script move N/A"
 }
 
 // ---- readout --------------------------------------------------------------
@@ -277,7 +372,7 @@ function render() {
     const sel = v.state.selection.main
     const res = s.check(doc)
     return `<div class="card">
-      <div class="k">${name} · sel ${sel.from}${sel.empty ? "" : "–" + sel.to}${trailingCaseHint(doc)}</div>
+      <div class="k">${name} · sel ${sel.from}${sel.empty ? "" : "–" + sel.to} · ${domSelectionLabel(v)}${trailingCaseHint(doc)}</div>
       <div class="doc">${escapeHtml(doc) || "<i>(empty)</i>"}</div>
       <div class="verdict ${res.state}">${res.state.toUpperCase()} — ${res.msg}</div>
     </div>`
@@ -288,12 +383,13 @@ function escapeHtml(s) { return s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "
 // snapshot helper for the debug bridge
 window.snap = () => ({
   scenario: active,
-  ctrl: CTRL.state.doc.toString(), ctrlSel: { ...CTRL.state.selection.main },
-  test: TEST.state.doc.toString(), testSel: { ...TEST.state.selection.main },
+  ctrl: CTRL.state.doc.toString(), ctrlSel: { ...CTRL.state.selection.main }, ctrlDOMSel: domSelectionInfo(CTRL),
+  test: TEST.state.doc.toString(), testSel: { ...TEST.state.selection.main }, testDOMSel: domSelectionInfo(TEST),
   env: window.__env,
 })
 window.setScenario = setScenario
 window.reseedRepro = reseed
+window.moveTestCaretByScript = runScriptMove
 
 // ---- wire UI --------------------------------------------------------------
 const bar = document.getElementById("scenarios")
@@ -306,8 +402,12 @@ for (const [name, s] of Object.entries(SCENARIOS)) {
 }
 document.getElementById("reseed").addEventListener("click", reseed)
 document.getElementById("clearlog").addEventListener("click", () => { LOG.length = 0; renderLog() })
+const scriptMoveButton = document.getElementById("scriptmove")
+scriptMoveButton.addEventListener("touchstart", e => { e.preventDefault(); runScriptMove() }, { passive: false })
+scriptMoveButton.addEventListener("mousedown", e => { e.preventDefault(); runScriptMove() })
+scriptMoveButton.addEventListener("click", e => e.preventDefault())
 
-setScenario("enter")
+setScenario("scriptMove")
 </script>
 </body>
 </html>
