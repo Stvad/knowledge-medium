@@ -489,7 +489,7 @@ const enqueueCommand = (
 //
 // The reverse of the command queue: the TAB pushes small events (e.g.
 // watch-events watcher hits) and token-authenticated consumers (the
-// claude-tasks daemon) long-poll them. Events are hints, not truth —
+// agent-dispatch daemon) long-poll them. Events are hints, not truth —
 // consumers re-derive state from the graph on every hint — so a bounded
 // buffer with possible gaps is fine; a consumer whose cursor falls off
 // the floor just acts once on "something happened".

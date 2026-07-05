@@ -1,7 +1,7 @@
 /**
  * Programmatic bridge client — the token store + authed command runner
  * that used to live inline in cli.ts, extracted so other Node processes
- * (the claude-tasks daemon, the km MCP server, scripts) can drive the
+ * (the agent-dispatch daemon, the km MCP server, scripts) can drive the
  * bridge without shelling out to `kmagent`.
  *
  * cli.ts remains the interactive surface (pairing, printing, bridge
@@ -208,7 +208,7 @@ const authedRetryMaxDelayMs = 1_000
 
 /** Spawn the bridge server detached, logging to the shared bridge log.
  *  Pre-creates the bridge secret so the server and later pairing agree
- *  on it. Shared by the CLI's ensureBridgeRunning and the claude-tasks
+ *  on it. Shared by the CLI's ensureBridgeRunning and the agent-dispatch
  *  daemon's unattended preflight (which must survive reboots without a
  *  human running `yarn agent`). */
 export const startBridgeInBackground = async (): Promise<void> => {
