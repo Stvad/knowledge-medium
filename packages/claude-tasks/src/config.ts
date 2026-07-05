@@ -49,6 +49,10 @@ export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
 
 const watcherBase = {
   name: z.string().min(1),
+  /** Keep a watcher parked in the config without registering it,
+   *  blocking its target wikilinks, or spending on it. Disabled entries
+   *  still parse as normal watchers so config drift is visible early. */
+  disabled: z.boolean().default(false),
   /** Prompt template; see prompt.ts for available {{placeholders}}. */
   prompt: z.string().optional(),
   /** Working directory for the spawned claude process. */
@@ -182,14 +186,10 @@ export const configSchema = z.strictObject({
   /** State file for query-watcher cursors (backlink watchers keep
    *  their state as block properties in the graph itself). */
   statePath: z.string().optional(),
-  /** Names must be unique: cursors, baselines, and in-flight run keys
-   *  are all keyed by watcher name — duplicates would silently share
-   *  state (e.g. the second watcher inherits the first one's cursor
-   *  and skips its own baseline). */
-  watchers: z.array(watcherSchema).default([]).refine(watchers => {
-    const names = watchers.map(watcher => watcher.name)
-    return new Set(names).size === names.length
-  }, {message: 'duplicate watcher names — cursors and baselines are keyed by name, so each watcher needs its own'}),
+  /** Names of enabled watchers must be unique: cursors, baselines, and
+   *  in-flight run keys are all keyed by watcher name. Enforced after
+   *  disabled watchers are filtered out in parseConfig. */
+  watchers: z.array(watcherSchema).default([]),
 })
 
 export type DaemonConfig = z.infer<typeof configSchema>
@@ -205,12 +205,21 @@ const expandHome = (value: string) =>
     ? path.join(os.homedir(), value.slice(1))
     : value
 
+const assertUniqueActiveWatcherNames = (watchers: Watcher[]): void => {
+  const names = watchers.map(watcher => watcher.name)
+  if (new Set(names).size !== names.length) {
+    throw new Error('duplicate watcher names — cursors and baselines are keyed by active watcher name, so each enabled watcher needs its own')
+  }
+}
+
 export const parseConfig = (raw: unknown): DaemonConfig => {
   const config = configSchema.parse(raw)
+  const activeWatchers = config.watchers.filter(watcher => !watcher.disabled)
+  assertUniqueActiveWatcherNames(activeWatchers)
   return {
     ...config,
     statePath: config.statePath ? expandHome(config.statePath) : config.statePath,
-    watchers: config.watchers.map(watcher => ({
+    watchers: activeWatchers.map(watcher => ({
       ...watcher,
       cwd: watcher.cwd ? expandHome(watcher.cwd) : watcher.cwd,
     })),

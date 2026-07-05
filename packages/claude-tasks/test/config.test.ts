@@ -50,6 +50,26 @@ describe('parseConfig', () => {
     ]})).toThrow(/duplicate/i)
   })
 
+  it('filters disabled watchers out of the active runtime config', () => {
+    const config = parseConfig({watchers: [
+      {kind: 'backlinks', name: 'old-mentions', target: 'old', disabled: true, executor: 'codex'},
+      {kind: 'backlinks', name: 'new-mentions', target: 'new'},
+    ]})
+
+    expect(config.watchers).toHaveLength(1)
+    expect(config.watchers[0]).toMatchObject({name: 'new-mentions', target: 'new'})
+  })
+
+  it('does not count disabled watchers when checking active watcher name uniqueness', () => {
+    const config = parseConfig({watchers: [
+      {kind: 'backlinks', name: 'mentions', target: 'parked', disabled: true},
+      {kind: 'backlinks', name: 'mentions', target: 'live'},
+    ]})
+
+    expect(config.watchers).toHaveLength(1)
+    expect(config.watchers[0]).toMatchObject({name: 'mentions', target: 'live'})
+  })
+
   it('rejects misspelled keys instead of silently dropping them', () => {
     expect(() => parseConfig({maxconcurrent: 5, watchers: []})).toThrow()
     expect(() => parseConfig({
