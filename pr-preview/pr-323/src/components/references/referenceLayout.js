@@ -1,2 +1,0 @@
-import{ReferenceLink as e}from"./ReferenceLink.js";import{c as t}from"react/compiler-runtime";import{jsx as n}from"react/jsx-runtime";var r=r=>{let i=t(5),{block:a,RawContent:o}=r,s;i[0]===o?s=i[1]:(s=n(o,{}),i[0]=o,i[1]=s);let c;return i[2]!==a||i[3]!==s?(c=n(e,{block:a,children:s}),i[2]=a,i[3]=s,i[4]=c):c=i[4],c},i=e=>e.blockContext?.isReference?{id:`references.reference`,label:`Block reference`,render:r}:null;export{i as referenceLayoutContribution};
-//# sourceMappingURL=referenceLayout.js.map

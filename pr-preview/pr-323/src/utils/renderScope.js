@@ -1,2 +1,0 @@
-var e=e=>encodeURIComponent(e),t=(t,n)=>[t,...n.map(e)].join(`:`),n=e=>t(`outline`,[e]),r=(e,n,r,i)=>t(`embed`,[n,r,i,e]),i=(e,n)=>t(`backlink`,[n,e]),a=(e,n,r)=>t(`breadcrumb`,[n,r,e]);export{i as backlinkRenderScopeId,a as breadcrumbRenderScopeId,r as embedRenderScopeId,n as outlineRenderScopeId};
-//# sourceMappingURL=renderScope.js.map
