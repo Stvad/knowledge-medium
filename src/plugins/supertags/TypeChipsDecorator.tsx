@@ -106,7 +106,10 @@ const TypeChipsDecorator = ({block, Inner}: TypeChipsDecoratorProps) => {
           the caret). With chips → intrinsic width so they hug the end
           of the text, with a 2rem floor for empty editors and a small
           end gutter so the caret at the final character is not painted
-          flush against the following chip.
+          flush against the following chip. In edit mode the gutter must
+          also live inside `.cm-content`: CodeMirror's clipped scroller
+          can otherwise crop the end-of-doc cursor before wrapper padding
+          ever has a chance to separate it from the chip.
           Embed CONTENT renderers (video player etc.) sit inside this
           wrapper even though the decorator is innermost — a 100%-width
           iframe/video/audio has no useful intrinsic width (react-player
@@ -114,7 +117,7 @@ const TypeChipsDecorator = ({block, Inner}: TypeChipsDecoratorProps) => {
           would collapse it; give those the full row and let the chips
           wrap below. */}
       <div className={visible.length > 0
-        ? 'min-w-8 max-w-full pr-1 has-[iframe]:w-full has-[video]:w-full has-[audio]:w-full'
+        ? 'min-w-8 max-w-full pr-1 [&_.cm-content]:!pr-1 has-[iframe]:w-full has-[video]:w-full has-[audio]:w-full'
         : 'w-full'}>
         <Inner block={block}/>
       </div>
