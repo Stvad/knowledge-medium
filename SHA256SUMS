@@ -1775,7 +1775,7 @@ fcdbe603f722c835f2451911a25e455fdc0c67175beb46746962727f75811088  ./packages/age
 1fb947a799f6ec708cfb146c8ca45a6e2bdb94e4619d22848f6c090ee537f9f2  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-2774cdc41bb94512771a3c0d4ee88f730af4b83a7e8bd8be8bd08cfd069083f7  ./src/appVersion.js
+db78cc8f954dff439164e14adba4752a7a6e5aa700eb84eedc7426f91e1efcae  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 d82fb876b5e2b470c1ee8cf15e17b3f6b8730b52b4802e6e5ab0d9eebc2f7148  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2289,8 +2289,8 @@ db7fdecdd7eb2e9f251770f6522c5473012f194822e7351864d4625d32281861  ./src/plugins/
 bec2c4b39f67dba112e90000bedd4cdc834c2cf97bbaae5a3b8f7121b024315c  ./src/plugins/attachments/audit/report.js.map
 98bf8e4ad13d3d65919e54d3b088ca8bcf08e6563eb1c9fa8f44739594a09003  ./src/plugins/attachments/audit/scan.js
 5599828a8c4c6165e592df7e64f37bbf867751d3403a1bab26dcc6129b33d83e  ./src/plugins/attachments/audit/scan.js.map
-93f21378b7a115bf6a974047f87b5b6a485f2e9024d70d366465bfb945d5628f  ./src/plugins/attachments/audit/supabaseAuditIO.js
-a465a4da3debbc8bf9bfc9f60774fd7ac3933161eb1053c0ac4b2e0d6ae1e2cf  ./src/plugins/attachments/audit/supabaseAuditIO.js.map
+bbe1c0a2e528d0455d57c1ff4ec64136ee43b50beb64793ee3fbd6c8e9890894  ./src/plugins/attachments/audit/supabaseAuditIO.js
+6c7243413c3b51ee2b5a6e5f8c300d32706641c23f66900307b70551ae26f543  ./src/plugins/attachments/audit/supabaseAuditIO.js.map
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ./src/plugins/attachments/audit/types.js
 4f89811d9aa0f6a5340abff0103183cb00e657ebd9b05ce52cbaeee4f52a7f64  ./src/plugins/attachments/blobStore.js
 a8d275d776127f7141725578e34df72c78e72ccb00c25c24908458b33a95531c  ./src/plugins/attachments/blobStore.js.map
@@ -3157,8 +3157,8 @@ dd7fcf8357bb4f5fbb7478a7d59216cace479438a5e4d040031b2216cf428170  ./src/utils/to
 e15298832ec4effff04e2f6fafb5db3a8e5c3f4b5767822fccbaf55206b77091  ./src/utils/types.js.map
 ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/viewTransition.js
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
-1092de63a07d9f54348faf56adba93bcd70c55785afa5ee2bdc4c815cd4ce095  ./sw.js
-28d4278de977a724498a6bdf9b51b0e6f2b2344f4b53ef3be20a08dfde2c1af5  ./version.json
+d31924b1ba168c49d4b8f4b40729cff9507a4add1f10a7452e43494626d658f7  ./sw.js
+edff85a171969636cd79de321f739c568b321619f8d1835085a51690156dbe6a  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
