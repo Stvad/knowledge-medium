@@ -115,8 +115,10 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
   })
 
   it("returns 'plaintext' for a non-magic head", async () => {
-    const io = ioWith(vi.fn<typeof fetch>(async () => bytesResponse(new Uint8Array([1, 2, 3]))))
+    const fetchFn = vi.fn<typeof fetch>(async () => bytesResponse(new Uint8Array([1, 2, 3])))
+    const io = ioWith(fetchFn)
     expect(await io.readObjectVerdict('ws1/k')).toBe('plaintext')
+    expect(fetchFn).toHaveBeenCalledOnce()
   })
 
   it("returns 'plaintext' for a magic-prefixed runt shorter than a real envelope", async () => {
@@ -142,8 +144,37 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
   })
 
   it("returns 'gone' on 404 (deleted mid-scan)", async () => {
-    const io = ioWith(vi.fn<typeof fetch>(async () => new Response(null, { status: 404 })))
+    const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }))
+    const io = ioWith(fetchFn)
     expect(await io.readObjectVerdict('ws1/k')).toBe('gone')
+    expect(fetchFn).toHaveBeenCalledOnce()
+  })
+
+  it("retries an unreadable read and returns 'ok' when a later attempt succeeds", async () => {
+    let call = 0
+    const fetchFn = vi.fn<typeof fetch>(async () => {
+      call += 1
+      return call === 1 ? new Response(null, { status: 500 }) : bytesResponse(fullEnvelopeHead())
+    })
+    const onReadAttemptFailure = vi.fn()
+    const io = createSupabaseAuditIO({
+      url: URL,
+      secretKey: KEY,
+      client: {} as SupabaseClient,
+      fetchFn,
+      onReadAttemptFailure,
+    })
+
+    expect(await io.readObjectVerdict('ws1/k')).toBe('ok')
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    expect(onReadAttemptFailure).toHaveBeenCalledOnce()
+    expect(onReadAttemptFailure).toHaveBeenCalledWith({
+      path: 'ws1/k',
+      attempt: 1,
+      maxAttempts: 3,
+      reason: 'http-status',
+      status: 500,
+    })
   })
 
   it("returns 'unreadable' on a 416/5xx and never throws", async () => {
@@ -158,5 +189,35 @@ describe('createSupabaseAuditIO.readObjectVerdict', () => {
       throw new Error('connection reset')
     })
     expect(await ioWith(fetchFn).readObjectVerdict('ws1/k')).toBe('unreadable')
+  })
+
+  it('reports every failed read attempt when unreadable persists', async () => {
+    const fetchFn = vi.fn<typeof fetch>(async () => new Response(null, { status: 503 }))
+    const onReadAttemptFailure = vi.fn()
+    const io = createSupabaseAuditIO({
+      url: URL,
+      secretKey: KEY,
+      client: {} as SupabaseClient,
+      fetchFn,
+      readMaxAttempts: 2,
+      onReadAttemptFailure,
+    })
+
+    expect(await io.readObjectVerdict('ws1/k')).toBe('unreadable')
+    expect(fetchFn).toHaveBeenCalledTimes(2)
+    expect(onReadAttemptFailure).toHaveBeenNthCalledWith(1, {
+      path: 'ws1/k',
+      attempt: 1,
+      maxAttempts: 2,
+      reason: 'http-status',
+      status: 503,
+    })
+    expect(onReadAttemptFailure).toHaveBeenNthCalledWith(2, {
+      path: 'ws1/k',
+      attempt: 2,
+      maxAttempts: 2,
+      reason: 'http-status',
+      status: 503,
+    })
   })
 })

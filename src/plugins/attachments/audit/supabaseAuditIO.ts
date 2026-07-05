@@ -6,6 +6,17 @@ import type { AuditIO, ObjectEntry, ObjectVerdict } from './types.js'
 
 const BUCKET = 'attachments'
 const PAGE = 1000
+const READ_MAX_ATTEMPTS = 3
+
+export type ReadFailureReason = 'body-error' | 'fetch-error' | 'http-status'
+
+export interface ReadAttemptFailure {
+  path: string
+  attempt: number
+  maxAttempts: number
+  reason: ReadFailureReason
+  status?: number
+}
 
 export interface SupabaseAuditIODeps {
   url: string
@@ -18,6 +29,10 @@ export interface SupabaseAuditIODeps {
   client?: SupabaseClient
   /** Injectable for tests; defaults to the global `fetch`. */
   fetchFn?: typeof fetch
+  /** Number of total attempts for a transient unreadable object read. */
+  readMaxAttempts?: number
+  /** Receives per-attempt diagnostics. The entrypoint must redact `path` before logging. */
+  onReadAttemptFailure?: (event: ReadAttemptFailure) => void
 }
 
 /**
@@ -34,6 +49,38 @@ export function createSupabaseAuditIO(deps: SupabaseAuditIODeps): AuditIO {
   const fetchFn = deps.fetchFn ?? fetch
   const base = deps.url.replace(/\/$/, '')
   const authHeaders = { apikey: deps.secretKey, authorization: `Bearer ${deps.secretKey}` }
+  const readMaxAttempts = Math.max(1, Math.floor(deps.readMaxAttempts ?? READ_MAX_ATTEMPTS))
+
+  const readObjectOnce = async (path: string): Promise<
+    | { verdict: Exclude<ObjectVerdict, 'unreadable'> }
+    | { verdict: 'unreadable'; reason: ReadFailureReason; status?: number }
+  > => {
+    try {
+      // Read the whole envelope MINIMUM (magic + nonce + tag), not just the
+      // magic: an object that is `encb:v1:` followed by too few bytes to hold a
+      // nonce + auth tag cannot be a real envelope, so the magic alone would let
+      // a truncated/forged runt pass as 'ok'. A partial-content response clamps
+      // to the object size, so `head.length` is the true min(MIN, objectSize). The
+      // URL is built via the shared helper so it can't drift from the storage-js
+      // download shape the app's own reads use (a wrong shape 404s → false-clean).
+      const res = await fetchFn(authenticatedObjectUrl(base, BUCKET, path), {
+        headers: { ...authHeaders, range: `bytes=0-${BINARY_ENVELOPE_MIN_BYTES - 1}` },
+      })
+      if (res.status === 404) return { verdict: 'gone' }
+      if (!res.ok) return { verdict: 'unreadable', reason: 'http-status', status: res.status }
+      try {
+        const head = new Uint8Array(await res.arrayBuffer())
+        return {
+          verdict:
+            hasBinaryEnvelopeMagic(head) && head.length >= BINARY_ENVELOPE_MIN_BYTES ? 'ok' : 'plaintext',
+        }
+      } catch {
+        return { verdict: 'unreadable', reason: 'body-error' }
+      }
+    } catch {
+      return { verdict: 'unreadable', reason: 'fetch-error' }
+    }
+  }
 
   return {
     async listE2eeWorkspaceIds() {
@@ -68,24 +115,18 @@ export function createSupabaseAuditIO(deps: SupabaseAuditIODeps): AuditIO {
       // The whole op is guarded: the fetch resolves on headers, so the body
       // (arrayBuffer) streams lazily and can drop mid-stream — any per-object
       // failure must degrade to 'unreadable', never abort the scan.
-      try {
-        // Read the whole envelope MINIMUM (magic + nonce + tag), not just the
-        // magic: an object that is `encb:v1:` followed by too few bytes to hold a
-        // nonce + auth tag cannot be a real envelope, so the magic alone would let
-        // a truncated/forged runt pass as 'ok'. A partial-content response clamps
-        // to the object size, so `head.length` is the true min(MIN, objectSize). The
-        // URL is built via the shared helper so it can't drift from the storage-js
-        // download shape the app's own reads use (a wrong shape 404s → false-clean).
-        const res = await fetchFn(authenticatedObjectUrl(base, BUCKET, path), {
-          headers: { ...authHeaders, range: `bytes=0-${BINARY_ENVELOPE_MIN_BYTES - 1}` },
+      for (let attempt = 1; attempt <= readMaxAttempts; attempt++) {
+        const result = await readObjectOnce(path)
+        if (result.verdict !== 'unreadable') return result.verdict
+        deps.onReadAttemptFailure?.({
+          path,
+          attempt,
+          maxAttempts: readMaxAttempts,
+          reason: result.reason,
+          status: result.status,
         })
-        if (res.status === 404) return 'gone'
-        if (!res.ok) return 'unreadable'
-        const head = new Uint8Array(await res.arrayBuffer())
-        return hasBinaryEnvelopeMagic(head) && head.length >= BINARY_ENVELOPE_MIN_BYTES ? 'ok' : 'plaintext'
-      } catch {
-        return 'unreadable'
       }
+      return 'unreadable'
     },
   }
 }

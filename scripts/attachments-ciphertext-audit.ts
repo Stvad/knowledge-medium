@@ -29,6 +29,8 @@ const redact = (s: string) => createHash('sha256').update(s).digest('hex').slice
 const note = (m: string) => console.log(`::notice::${m}`)
 const warn = (m: string) => console.log(`::warning::${m}`)
 const fail = (m: string) => console.log(`::error::${m}`)
+const readFailureLabel = (event: { reason: string; status?: number }) =>
+  event.status === undefined ? event.reason : `${event.reason} ${event.status}`
 const writeSummary = (md: string) => {
   const f = process.env.GITHUB_STEP_SUMMARY
   if (!f) return
@@ -43,7 +45,20 @@ async function main() {
   const outcome: AuditOutcome =
     !url || !secretKey
       ? { armed: false }
-      : { armed: true, result: await runCiphertextAudit(createSupabaseAuditIO({ url, secretKey })) }
+      : {
+          armed: true,
+          result: await runCiphertextAudit(
+            createSupabaseAuditIO({
+              url,
+              secretKey,
+              onReadAttemptFailure: (event) => {
+                note(
+                  `attachments ciphertext audit read attempt ${event.attempt}/${event.maxAttempts} failed for obj:${redact(event.path)} (${readFailureLabel(event)})`,
+                )
+              },
+            }),
+          ),
+        }
 
   const report = buildReport(outcome, redact)
   report.notices.forEach(note)
