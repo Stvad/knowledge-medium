@@ -120,16 +120,22 @@ const queryWatcherSchema = z.strictObject({
   tables: z.array(z.string().min(1)).max(WATCH_EVENTS_MAX_TABLES).optional(),
 })
 
-export const watcherSchema = z.discriminatedUnion('kind', [
+const rawWatcherSchema = z.discriminatedUnion('kind', [
   backlinksWatcherSchema,
   queryWatcherSchema,
 ])
 
-export type BacklinksWatcher = z.infer<typeof backlinksWatcherSchema>
-export type QueryWatcher = z.infer<typeof queryWatcherSchema>
-export type Watcher = z.infer<typeof watcherSchema>
+type RawBacklinksWatcher = z.infer<typeof backlinksWatcherSchema>
+type RawQueryWatcher = z.infer<typeof queryWatcherSchema>
+type RawWatcher = z.infer<typeof rawWatcherSchema>
 
-export const configSchema = z.strictObject({
+type ActiveWatcher<T extends {disabled: boolean}> = Omit<T, 'disabled'>
+
+export type BacklinksWatcher = ActiveWatcher<RawBacklinksWatcher>
+export type QueryWatcher = ActiveWatcher<RawQueryWatcher>
+export type Watcher = BacklinksWatcher | QueryWatcher
+
+const rawConfigSchema = z.strictObject({
   /** kmagent token profile the daemon pairs under. Keep it dedicated
    *  (not "default") so its access can be revoked independently.
    *  Validated here with the bridge client's own rules — an invalid
@@ -186,13 +192,20 @@ export const configSchema = z.strictObject({
   /** State file for query-watcher cursors (backlink watchers keep
    *  their state as block properties in the graph itself). */
   statePath: z.string().optional(),
-  /** Names of enabled watchers must be unique: cursors, baselines, and
-   *  in-flight run keys are all keyed by watcher name. Enforced after
-   *  disabled watchers are filtered out in parseConfig. */
-  watchers: z.array(watcherSchema).default([]),
+  /** Names must be unique across the whole config: cursors, baselines,
+   *  and in-flight run keys are all keyed by watcher name, so even a
+   *  disabled watcher reserves its name against accidental state reuse. */
+  watchers: z.array(rawWatcherSchema).default([]),
+}).superRefine((config, ctx) => {
+  const duplicateName = duplicateWatcherName(config.watchers)
+  if (duplicateName) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['watchers'],
+      message: `duplicate watcher name "${duplicateName}" — cursors and baselines are keyed by watcher name, so each watcher needs its own even when disabled`,
+    })
+  }
 })
-
-export type DaemonConfig = z.infer<typeof configSchema>
 
 export const defaultConfigPath = () =>
   path.join(agentRuntimeConfigDir(), 'claude-tasks.json')
@@ -205,26 +218,42 @@ const expandHome = (value: string) =>
     ? path.join(os.homedir(), value.slice(1))
     : value
 
-const assertUniqueActiveWatcherNames = (watchers: Watcher[]): void => {
-  const names = watchers.map(watcher => watcher.name)
-  if (new Set(names).size !== names.length) {
-    throw new Error('duplicate watcher names — cursors and baselines are keyed by active watcher name, so each enabled watcher needs its own')
+const duplicateWatcherName = (watchers: RawWatcher[]): string | null => {
+  const seen = new Set<string>()
+  for (const watcher of watchers) {
+    if (seen.has(watcher.name)) return watcher.name
+    seen.add(watcher.name)
+  }
+  return null
+}
+
+const toActiveWatcher = (rawWatcher: RawWatcher): Watcher => {
+  const {disabled, ...watcher} = rawWatcher
+  void disabled
+  return {
+    ...watcher,
+    cwd: watcher.cwd ? expandHome(watcher.cwd) : watcher.cwd,
   }
 }
 
-export const parseConfig = (raw: unknown): DaemonConfig => {
-  const config = configSchema.parse(raw)
+export const configSchema = rawConfigSchema.transform(config => {
   const activeWatchers = config.watchers.filter(watcher => !watcher.disabled)
-  assertUniqueActiveWatcherNames(activeWatchers)
   return {
     ...config,
+    /** Raw watcher-entry count before `disabled` filtering. The daemon
+     *  needs this to distinguish an empty config from a deliberately
+     *  parked all-disabled config, while runtime consumers still see
+     *  only active watchers in `watchers`. */
+    configuredWatcherCount: config.watchers.length,
     statePath: config.statePath ? expandHome(config.statePath) : config.statePath,
-    watchers: activeWatchers.map(watcher => ({
-      ...watcher,
-      cwd: watcher.cwd ? expandHome(watcher.cwd) : watcher.cwd,
-    })),
+    watchers: activeWatchers.map(toActiveWatcher),
   }
-}
+})
+
+export type DaemonConfig = z.infer<typeof configSchema>
+
+export const parseConfig = (raw: unknown): DaemonConfig =>
+  configSchema.parse(raw)
 
 export const loadConfig = async (configPath = defaultConfigPath()): Promise<DaemonConfig> => {
   let raw: string

@@ -13,7 +13,7 @@
  */
 import { errorMessage, type BridgeClient } from '@knowledge-medium/agent-cli/client'
 import type { WatchEventsWatcher } from '@knowledge-medium/agent-cli/protocol'
-import type { DaemonConfig } from './config.js'
+import type { DaemonConfig, Watcher } from './config.js'
 import type { Graph } from './graph.js'
 
 export const PUSH_CONSUMER = 'claude-tasks'
@@ -23,6 +23,7 @@ export const PUSH_CONSUMER = 'claude-tasks'
  *  missed cycle doesn't lapse the registration. */
 export const REGISTRATION_TTL_MS = 10 * 60_000
 export const REGISTRATION_REFRESH_MS = REGISTRATION_TTL_MS / 2
+export const CLEAR_REGISTRATION_TIMEOUT_MS = 5_000
 
 /** Settle window for query watchers: no user-typing semantics to wait
  *  out (rows appear atomically), just burst-coalescing. */
@@ -139,10 +140,10 @@ const isPermanentRejection = (error: unknown): boolean => {
 }
 
 export const buildRegistrationWatchers = async (
-  config: DaemonConfig,
+  watchers: readonly Watcher[],
   graph: Pick<Graph, 'resolvePageId'>,
 ): Promise<WatchEventsWatcher[]> =>
-  Promise.all(config.watchers.map(async (watcher): Promise<WatchEventsWatcher> =>
+  Promise.all(watchers.map(async (watcher): Promise<WatchEventsWatcher> =>
     watcher.kind === 'backlinks'
       ? {
           kind: 'backlinks',
@@ -159,8 +160,20 @@ export const buildRegistrationWatchers = async (
           params: watcher.params,
           tables: watcher.tables,
           settleMs: QUERY_SETTLE_MS,
-        },
+      },
   ))
+
+const sendWatchEventsRegistration = (
+  client: Pick<BridgeClient, 'runCommand'>,
+  watchers: readonly WatchEventsWatcher[],
+  options: {timeoutMs?: number} = {},
+): Promise<unknown> =>
+  client.runCommand({
+    type: 'watch-events',
+    consumer: PUSH_CONSUMER,
+    watchers: [...watchers],
+    ttlMs: REGISTRATION_TTL_MS,
+  }, options)
 
 export const startPushLoop = async (deps: PushDeps): Promise<void> => {
   const {client, config, graph, requestTick, log, isStopping, nap, stopSignal} = deps
@@ -176,13 +189,8 @@ export const startPushLoop = async (deps: PushDeps): Promise<void> => {
   while (!isStopping()) {
     try {
       if (registeredAt === null || now() - registeredAt >= REGISTRATION_REFRESH_MS) {
-        const watchers = await buildRegistrationWatchers(config, graph)
-        await client.runCommand({
-          type: 'watch-events',
-          consumer: PUSH_CONSUMER,
-          watchers,
-          ttlMs: REGISTRATION_TTL_MS,
-        })
+        const watchers = await buildRegistrationWatchers(config.watchers, graph)
+        await sendWatchEventsRegistration(client, watchers)
         registeredAt = now()
         if (!announced) {
           announced = true
@@ -231,4 +239,8 @@ export const startPushLoop = async (deps: PushDeps): Promise<void> => {
       }
     }
   }
+}
+
+export const clearPushRegistration = async (client: Pick<BridgeClient, 'runCommand'>): Promise<void> => {
+  await sendWatchEventsRegistration(client, [], {timeoutMs: CLEAR_REGISTRATION_TIMEOUT_MS})
 }

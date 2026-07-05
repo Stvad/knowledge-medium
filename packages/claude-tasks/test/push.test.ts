@@ -3,6 +3,8 @@ import type {EventsNextResponse} from '@knowledge-medium/agent-cli/protocol'
 import {parseConfig} from '../src/config'
 import {
   buildRegistrationWatchers,
+  CLEAR_REGISTRATION_TIMEOUT_MS,
+  clearPushRegistration,
   createExemptionPool,
   EXEMPTION_POOL_TTL_MS,
   MAX_EXEMPTION_AGE_MS,
@@ -68,12 +70,25 @@ const runLoop = async (script: Array<EventsNextResponse | Error>, overrides: {no
 
 describe('buildRegistrationWatchers', () => {
   it('maps config watchers to tab-side registrations', async () => {
-    const watchers = await buildRegistrationWatchers(config, graph)
+    const watchers = await buildRegistrationWatchers(config.watchers, graph)
     expect(watchers).toEqual([
       // Quiet period measured at the source: settleMs = quietMs.
       {kind: 'backlinks', name: 'claude-mentions', targetId: 'page:claude', settleMs: 5_000},
       {kind: 'sql', name: 'inbox', sql: 'SELECT id FROM blocks', params: [], tables: ['blocks', 'block_references'], settleMs: 1_000},
     ])
+  })
+
+  it('clears the daemon consumer with an empty registration', async () => {
+    const client = {runCommand: vi.fn(async () => ({}))}
+
+    await clearPushRegistration(client)
+
+    expect(client.runCommand).toHaveBeenCalledWith({
+      type: 'watch-events',
+      consumer: PUSH_CONSUMER,
+      watchers: [],
+      ttlMs: REGISTRATION_TTL_MS,
+    }, {timeoutMs: CLEAR_REGISTRATION_TIMEOUT_MS})
   })
 })
 

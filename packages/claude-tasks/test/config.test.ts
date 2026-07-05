@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import os from 'node:os'
 import path from 'node:path'
-import {parseConfig} from '../src/config'
+import {configSchema, parseConfig} from '../src/config'
 
 describe('parseConfig', () => {
   it('applies defaults for a minimal mention-watcher config', () => {
@@ -56,18 +56,45 @@ describe('parseConfig', () => {
       {kind: 'backlinks', name: 'new-mentions', target: 'new'},
     ]})
 
+    expect(config.configuredWatcherCount).toBe(2)
     expect(config.watchers).toHaveLength(1)
     expect(config.watchers[0]).toMatchObject({name: 'new-mentions', target: 'new'})
+    expect(config.watchers[0]).not.toHaveProperty('disabled')
   })
 
-  it('does not count disabled watchers when checking active watcher name uniqueness', () => {
-    const config = parseConfig({watchers: [
+  it('exports configSchema as the same active runtime schema parseConfig uses', () => {
+    const config = configSchema.parse({watchers: [
+      {kind: 'backlinks', name: 'old-mentions', target: 'old', disabled: true},
+      {kind: 'backlinks', name: 'new-mentions', target: 'new'},
+    ]})
+
+    expect(config.configuredWatcherCount).toBe(2)
+    expect(config.watchers).toHaveLength(1)
+    expect(config.watchers[0]).toMatchObject({name: 'new-mentions', target: 'new'})
+    expect(config.watchers[0]).not.toHaveProperty('disabled')
+  })
+
+  it('rejects duplicate watcher names even when one watcher is disabled', () => {
+    expect(() => parseConfig({watchers: [
+      {kind: 'backlinks', name: 'mentions', target: 'parked', disabled: true},
+      {kind: 'backlinks', name: 'mentions', target: 'live'},
+    ]})).toThrow(/duplicate/i)
+
+    const directResult = configSchema.safeParse({watchers: [
       {kind: 'backlinks', name: 'mentions', target: 'parked', disabled: true},
       {kind: 'backlinks', name: 'mentions', target: 'live'},
     ]})
+    expect(directResult.success).toBe(false)
+    if (!directResult.success) expect(directResult.error.issues[0]?.message).toMatch(/duplicate watcher name "mentions"/)
+  })
 
-    expect(config.watchers).toHaveLength(1)
-    expect(config.watchers[0]).toMatchObject({name: 'mentions', target: 'live'})
+  it('still validates disabled watchers as real watchers before filtering them out', () => {
+    expect(() => parseConfig({watchers: [
+      {kind: 'query', name: 'parked-query', disabled: true},
+    ]})).toThrow()
+    expect(() => parseConfig({watchers: [
+      {kind: 'query', name: 'parked-query', disabled: true, sql: 'UPDATE blocks SET content = ? RETURNING id'},
+    ]})).toThrow(/read-only/)
   })
 
   it('rejects misspelled keys instead of silently dropping them', () => {
