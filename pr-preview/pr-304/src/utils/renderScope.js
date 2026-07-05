@@ -1,20 +1,2 @@
-//#region src/utils/renderScope.ts
-var encodeScopePart = (value) => encodeURIComponent(value);
-var joinScope = (kind, parts) => [kind, ...parts.map(encodeScopePart)].join(":");
-var outlineRenderScopeId = (topLevelBlockId) => joinScope("outline", [topLevelBlockId]);
-var embedRenderScopeId = (parentRenderScopeId, sourceBlockId, occurrenceId, targetBlockId) => joinScope("embed", [
-	sourceBlockId,
-	occurrenceId,
-	targetBlockId,
-	parentRenderScopeId
-]);
-var backlinkRenderScopeId = (parentRenderScopeId, occurrenceId) => joinScope("backlink", [occurrenceId, parentRenderScopeId]);
-var breadcrumbRenderScopeId = (parentRenderScopeId, blockId, occurrenceId) => joinScope("breadcrumb", [
-	blockId,
-	occurrenceId,
-	parentRenderScopeId
-]);
-//#endregion
-export { backlinkRenderScopeId, breadcrumbRenderScopeId, embedRenderScopeId, outlineRenderScopeId };
-
+var e=e=>encodeURIComponent(e),t=(t,n)=>[t,...n.map(e)].join(`:`),n=e=>t(`outline`,[e]),r=(e,n,r,i)=>t(`embed`,[n,r,i,e]),i=(e,n)=>t(`backlink`,[n,e]),a=(e,n,r)=>t(`breadcrumb`,[n,r,e]);export{i as backlinkRenderScopeId,a as breadcrumbRenderScopeId,r as embedRenderScopeId,n as outlineRenderScopeId};
 //# sourceMappingURL=renderScope.js.map

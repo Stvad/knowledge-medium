@@ -1,26 +1,2 @@
-import { propertySchemasFacet, queriesFacet, systemPagesFacet, typesFacet } from "../../data/facets.js";
-import { codeMirrorExtensionsFacet } from "../../editor/codeMirrorExtensions.js";
-import { GEO_PROPERTY_SCHEMAS } from "./properties.js";
-import { GEO_TYPE_CONTRIBUTIONS } from "./blockTypes.js";
-import { getOrCreateLocationsPage } from "./locationsPage.js";
-import { geoCodeMirrorExtensions } from "./codeMirrorExtensions.js";
-import { placesUnderBlockQuery } from "./query.js";
-//#region src/plugins/geo/dataExtension.ts
-/** Data-layer contributions for the geo plugin — types, property
-*  schemas, queries, and the CodeMirror surface (theme + `@`
-*  completion source via languageData). Composed into the user-facing
-*  `geoPlugin` in `./index.ts`. */
-var geoDataExtension = [
-	GEO_TYPE_CONTRIBUTIONS.map((t) => typesFacet.of(t, { source: "geo" })),
-	GEO_PROPERTY_SCHEMAS.map((s) => propertySchemasFacet.of(s, { source: "geo" })),
-	queriesFacet.of(placesUnderBlockQuery, { source: "geo" }),
-	codeMirrorExtensionsFacet.of(geoCodeMirrorExtensions, { source: "geo" }),
-	systemPagesFacet.of({
-		id: "geo:locations",
-		ensure: getOrCreateLocationsPage
-	}, { source: "geo" })
-];
-//#endregion
-export { geoDataExtension };
-
+import{propertySchemasFacet as e,queriesFacet as t,systemPagesFacet as n,typesFacet as r}from"../../data/facets.js";import{codeMirrorExtensionsFacet as i}from"../../editor/codeMirrorExtensions.js";import{GEO_PROPERTY_SCHEMAS as a}from"./properties.js";import{GEO_TYPE_CONTRIBUTIONS as o}from"./blockTypes.js";import{getOrCreateLocationsPage as s}from"./locationsPage.js";import{geoCodeMirrorExtensions as c}from"./codeMirrorExtensions.js";import{placesUnderBlockQuery as l}from"./query.js";var u=[o.map(e=>r.of(e,{source:`geo`})),a.map(t=>e.of(t,{source:`geo`})),t.of(l,{source:`geo`}),i.of(c,{source:`geo`}),n.of({id:`geo:locations`,ensure:s},{source:`geo`})];export{u as geoDataExtension};
 //# sourceMappingURL=dataExtension.js.map

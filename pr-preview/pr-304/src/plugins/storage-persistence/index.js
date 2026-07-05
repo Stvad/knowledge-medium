@@ -1,18 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { diagnosticsFacet } from "../diagnostics/facet.js";
-import { REQUEST_PERSISTENCE_ACTION_ID, persistenceDiagnosticSource } from "./persistenceStatus.js";
-import { requestPersistenceActionContribution } from "./requestAction.js";
-//#region src/plugins/storage-persistence/index.ts
-/** Surfaces an ambient reminder (via the diagnostics seam → status chip) when
-*  the origin's local storage isn't persistent, with a one-tap "Protect"
-*  request. The boot-time silent attempt lives in src/requestPersistentStorage.ts;
-*  this plugin is the contextual, user-initiated path. */
-var storagePersistencePlugin = systemToggle({
-	id: "system:storage-persistence",
-	name: "Storage persistence",
-	description: "Reminds you when local data can be evicted under storage pressure and offers a one-tap request to make it persistent."
-}).of([diagnosticsFacet.of(persistenceDiagnosticSource, { source: "storage-persistence" }), requestPersistenceActionContribution]);
-//#endregion
-export { REQUEST_PERSISTENCE_ACTION_ID, storagePersistencePlugin };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{diagnosticsFacet as t}from"../diagnostics/facet.js";import{REQUEST_PERSISTENCE_ACTION_ID as n,persistenceDiagnosticSource as r}from"./persistenceStatus.js";import{requestPersistenceActionContribution as i}from"./requestAction.js";var a=e({id:`system:storage-persistence`,name:`Storage persistence`,description:`Reminds you when local data can be evicted under storage pressure and offers a one-tap request to make it persistent.`}).of([t.of(r,{source:`storage-persistence`}),i]);export{n as REQUEST_PERSISTENCE_ACTION_ID,a as storagePersistencePlugin};
 //# sourceMappingURL=index.js.map

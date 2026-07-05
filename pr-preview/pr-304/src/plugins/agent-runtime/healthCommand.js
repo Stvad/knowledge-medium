@@ -1,23 +1,2 @@
-import { materializeQueueCountSql, uploadQueueCountCap, uploadQueuePreviewCountSql } from "../system-status/queueCounts.js";
-//#region src/plugins/agent-runtime/healthCommand.ts
-var countOf = async (repo, sql) => (await repo.db.get(sql)).count;
-var runHealthCommand = async (repo) => {
-	const [blocks, blocksSynced, uploadQueueBlocks, materializeBacklog] = await Promise.all([
-		countOf(repo, "SELECT count(*) AS count FROM blocks WHERE deleted = 0"),
-		countOf(repo, "SELECT count(*) AS count FROM blocks_synced WHERE deleted = 0"),
-		countOf(repo, uploadQueuePreviewCountSql),
-		countOf(repo, materializeQueueCountSql)
-	]);
-	return {
-		activeWorkspaceId: repo.activeWorkspaceId,
-		blocks,
-		blocksSynced,
-		uploadQueueBlocks,
-		uploadQueueApproximate: uploadQueueBlocks > uploadQueueCountCap,
-		materializeBacklog
-	};
-};
-//#endregion
-export { runHealthCommand };
-
+import{materializeQueueCountSql as e,uploadQueueCountCap as t,uploadQueuePreviewCountSql as n}from"../system-status/queueCounts.js";var r=async(e,t)=>(await e.db.get(t)).count,i=async i=>{let[a,o,s,c]=await Promise.all([r(i,`SELECT count(*) AS count FROM blocks WHERE deleted = 0`),r(i,`SELECT count(*) AS count FROM blocks_synced WHERE deleted = 0`),r(i,n),r(i,e)]);return{activeWorkspaceId:i.activeWorkspaceId,blocks:a,blocksSynced:o,uploadQueueBlocks:s,uploadQueueApproximate:s>t,materializeBacklog:c}};export{i as runHealthCommand};
 //# sourceMappingURL=healthCommand.js.map

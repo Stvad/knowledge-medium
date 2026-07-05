@@ -1,11 +1,2 @@
-import { defineFacet } from "../../facets/facet.js";
-//#region src/plugins/grouped-backlinks/facet.ts
-var isGroupedBacklinksGroupHeaderAction = (value) => typeof value === "object" && value !== null && typeof value.actionId === "string";
-var groupedBacklinksGroupHeaderActionsFacet = defineFacet({
-	id: "grouped-backlinks.group-header-actions",
-	validate: isGroupedBacklinksGroupHeaderAction
-});
-//#endregion
-export { groupedBacklinksGroupHeaderActionsFacet };
-
+import{defineFacet as e}from"../../facets/facet.js";var t=e({id:`grouped-backlinks.group-header-actions`,validate:e=>typeof e==`object`&&!!e&&typeof e.actionId==`string`});export{t as groupedBacklinksGroupHeaderActionsFacet};
 //# sourceMappingURL=facet.js.map

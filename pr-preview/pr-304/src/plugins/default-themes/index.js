@@ -1,14 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { themesFacet } from "../theme-toggle/theme.js";
-import "../theme-toggle/index.js";
-import { DEFAULT_THEME_ID_DARK, DEFAULT_THEME_ID_LIGHT, defaultThemeContributions } from "./themes.js";
-//#region src/plugins/default-themes/index.ts
-var defaultThemesPlugin = systemToggle({
-	id: "system:default-themes",
-	name: "Default themes",
-	description: "Bundles the built-in colour palettes (light, dark, sunset, indigo, solarized). Disabling falls back to the bootstrap palette only."
-}).of(defaultThemeContributions.map((theme) => themesFacet.of(theme, { source: "default-themes" })));
-//#endregion
-export { DEFAULT_THEME_ID_DARK, DEFAULT_THEME_ID_LIGHT, defaultThemeContributions, defaultThemesPlugin };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{themesFacet as t}from"../theme-toggle/theme.js";import"../theme-toggle/index.js";import{DEFAULT_THEME_ID_DARK as n,DEFAULT_THEME_ID_LIGHT as r,defaultThemeContributions as i}from"./themes.js";var a=e({id:`system:default-themes`,name:`Default themes`,description:`Bundles the built-in colour palettes (light, dark, sunset, indigo, solarized). Disabling falls back to the bootstrap palette only.`}).of(i.map(e=>t.of(e,{source:`default-themes`})));export{n as DEFAULT_THEME_ID_DARK,r as DEFAULT_THEME_ID_LIGHT,i as defaultThemeContributions,a as defaultThemesPlugin};
 //# sourceMappingURL=index.js.map

@@ -1,7 +1,2 @@
-import { createContext } from "react";
-//#region src/components/references/cycleGuardContext.ts
-var BlockRefAncestorsContext = createContext(/* @__PURE__ */ new Set());
-//#endregion
-export { BlockRefAncestorsContext };
-
+import{createContext as e}from"react";var t=e(new Set);export{t as BlockRefAncestorsContext};
 //# sourceMappingURL=cycleGuardContext.js.map

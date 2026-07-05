@@ -1,17 +1,2 @@
-import { propertySchemasFacet, typesFacet } from "../../data/facets.js";
-import { srsArchivedProp, srsFactorProp, srsGradeProp, srsIntervalProp, srsNextReviewDateProp, srsReviewCountProp, srsSm25Type, srsSnapshotHistoryProp } from "./schema.js";
-//#region src/plugins/srs-rescheduling/dataExtension.ts
-var srsReschedulingDataExtension = [
-	propertySchemasFacet.of(srsIntervalProp, { source: "srs-rescheduling" }),
-	propertySchemasFacet.of(srsFactorProp, { source: "srs-rescheduling" }),
-	propertySchemasFacet.of(srsNextReviewDateProp, { source: "srs-rescheduling" }),
-	propertySchemasFacet.of(srsReviewCountProp, { source: "srs-rescheduling" }),
-	propertySchemasFacet.of(srsGradeProp, { source: "srs-rescheduling" }),
-	propertySchemasFacet.of(srsArchivedProp, { source: "srs-rescheduling" }),
-	propertySchemasFacet.of(srsSnapshotHistoryProp, { source: "srs-rescheduling" }),
-	typesFacet.of(srsSm25Type, { source: "srs-rescheduling" })
-];
-//#endregion
-export { srsReschedulingDataExtension };
-
+import{propertySchemasFacet as e,typesFacet as t}from"../../data/facets.js";import{srsArchivedProp as n,srsFactorProp as r,srsGradeProp as i,srsIntervalProp as a,srsNextReviewDateProp as o,srsReviewCountProp as s,srsSm25Type as c,srsSnapshotHistoryProp as l}from"./schema.js";var u=[e.of(a,{source:`srs-rescheduling`}),e.of(r,{source:`srs-rescheduling`}),e.of(o,{source:`srs-rescheduling`}),e.of(s,{source:`srs-rescheduling`}),e.of(i,{source:`srs-rescheduling`}),e.of(n,{source:`srs-rescheduling`}),e.of(l,{source:`srs-rescheduling`}),t.of(c,{source:`srs-rescheduling`})];export{u as srsReschedulingDataExtension};
 //# sourceMappingURL=dataExtension.js.map

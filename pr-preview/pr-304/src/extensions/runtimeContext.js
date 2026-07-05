@@ -1,13 +1,2 @@
-import { createContext, useContext } from "react";
-//#region src/extensions/runtimeContext.ts
-var AppRuntimeContext = createContext(void 0);
-var AppRuntimeContextProvider = AppRuntimeContext;
-function useAppRuntime() {
-	const runtime = useContext(AppRuntimeContext);
-	if (!runtime) throw new Error("useAppRuntime must be used within an AppRuntimeProvider");
-	return runtime;
-}
-//#endregion
-export { AppRuntimeContextProvider, useAppRuntime };
-
+import{createContext as e,useContext as t}from"react";var n=e(void 0),r=n;function i(){let e=t(n);if(!e)throw Error(`useAppRuntime must be used within an AppRuntimeProvider`);return e}export{r as AppRuntimeContextProvider,i as useAppRuntime};
 //# sourceMappingURL=runtimeContext.js.map

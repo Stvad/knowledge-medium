@@ -1,7 +1,2 @@
-import { getEffectiveActions } from "../shortcuts/effectiveActions.js";
-//#region src/extensions/runtimeActions.ts
-var readRuntimeActions = (runtime) => getEffectiveActions(runtime);
-//#endregion
-export { readRuntimeActions };
-
+import{getEffectiveActions as e}from"../shortcuts/effectiveActions.js";var t=t=>e(t);export{t as readRuntimeActions};
 //# sourceMappingURL=runtimeActions.js.map
