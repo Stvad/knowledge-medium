@@ -463,6 +463,15 @@ describe('planTriggerDeletion', () => {
         to: endOfLineFrom + '#Area'.length,
       })
   })
+
+  it('preserves indentation before a line-start tag command', () => {
+    const doc = 'Intro\n  #Area notes'
+    const from = doc.indexOf('#Area')
+    expect(planTriggerDeletion(doc, from, from + '#Area'.length)).toEqual({
+      from,
+      to: from + '#Area '.length,
+    })
+  })
 })
 
 describe('findCompletableTypeByName', () => {
