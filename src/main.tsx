@@ -13,7 +13,6 @@ import { requestPersistentStorage } from '@/requestPersistentStorage.js'
 import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { startStartupObservers } from '@/utils/startupTimeline.js'
 import { installDbForensicsLifecycle } from '@/utils/dbForensicsHooks.js'
-import { startCurrentPreviewScopeLease } from '@/sw/previewDatabases.js'
 
 // Begin tracking main-thread long tasks immediately, so the startup-metrics
 // plugin can later find when boot contention stopped (time to interactivity).
@@ -49,27 +48,21 @@ void requestPersistentStorage()
 // truth for "what mounts at the app root". Bootstrap errors before
 // the runtime is up still flow through ErrorBoundary →
 // BootstrapErrorFallback below, not via toast.
-const renderApp = () => {
-  createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-      <Suspense fallback={<SuspenseFallback/>}>
-        <Login>
-          <ErrorBoundary FallbackComponent={BootstrapErrorFallback}>
-            {/* Routes a RUNTIME sync-apply corruption (which opens fine, so it
-                never throws through init) into this same boundary → recovery UI. */}
-            <LocalDbCorruptionSentinel />
-            <RepoProvider>
-              <Suspense fallback={<SuspenseFallback/>}>
-                <App/>
-              </Suspense>
-            </RepoProvider>
-          </ErrorBoundary>
-        </Login>
-      </Suspense>
-    </StrictMode>,
-  )
-}
-
-void startCurrentPreviewScopeLease(import.meta.env.BASE_URL, window.location.href)
-  .catch(() => {})
-  .then(renderApp)
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <Suspense fallback={<SuspenseFallback/>}>
+      <Login>
+        <ErrorBoundary FallbackComponent={BootstrapErrorFallback}>
+          {/* Routes a RUNTIME sync-apply corruption (which opens fine, so it
+              never throws through init) into this same boundary → recovery UI. */}
+          <LocalDbCorruptionSentinel />
+          <RepoProvider>
+            <Suspense fallback={<SuspenseFallback/>}>
+              <App/>
+            </Suspense>
+          </RepoProvider>
+        </ErrorBoundary>
+      </Login>
+    </Suspense>
+  </StrictMode>,
+)

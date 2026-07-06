@@ -75,7 +75,6 @@ import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import {
   SERVICE_WORKER_META_CACHE,
-  acquirePreviewScopeLease,
   previewIdFromBasePath,
   previewDatabaseRecordUrl,
 } from '@/sw/previewDatabases.js'
@@ -148,7 +147,6 @@ export const recordPreviewDatabaseForReaper = async (dbFilename: string): Promis
   if (typeof window === 'undefined' || typeof caches === 'undefined') return
 
   const scopeUrl = new URL(import.meta.env.BASE_URL, window.location.href)
-  const {releaseOnFailure} = await acquirePreviewScopeLease(scopeUrl)
   try {
     const cache = await caches.open(SERVICE_WORKER_META_CACHE)
     await cache.put(
@@ -158,7 +156,6 @@ export const recordPreviewDatabaseForReaper = async (dbFilename: string): Promis
       }),
     )
   } catch (err) {
-    releaseOnFailure()
     throw new Error('Failed to record preview database for cleanup before opening it.', {
       cause: err,
     })

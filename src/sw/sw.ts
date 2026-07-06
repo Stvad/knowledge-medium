@@ -103,8 +103,6 @@ const sw = createServiceWorker(
     now: () => Date.now(),
     storage: navigator.storage,
     indexedDB,
-    clients: self.clients,
-    locks: navigator.locks,
   },
 )
 
