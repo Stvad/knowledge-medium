@@ -12,14 +12,27 @@ import {
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { ChangeScope } from '@/data/api'
 
+const EMPTY_FORCE_OPEN_BLOCK_IDS: readonly string[] = []
+const EMPTY_FORCE_OPEN_BLOCK_ID_SET = new Set<string>()
+
+const toForceOpenSet = (forceOpenBlockIds: readonly string[]) =>
+  forceOpenBlockIds.length ? new Set(forceOpenBlockIds) : EMPTY_FORCE_OPEN_BLOCK_ID_SET
+
 /** True if `block` is collapsed *and* the caller cares. The scope root
  *  is treated as always-expanded ONLY when its surface force-opens it
  *  (`scopeRootForcesOpen`) — true for a focal panel/top-level root
  *  (rendered `open` regardless of its own collapse flag), false for a
  *  nested surface root (backlink/embed), which honours its collapse flag
- *  in both render and navigation. Reads the property synchronously from
- *  cache; assumes the row has been loaded. */
-const isExpanded = (block: Block, scopeRootId: string, scopeRootForcesOpen: boolean): boolean => {
+ *  in both render and navigation unless a forced-open list overrides it.
+ *  Reads the property synchronously from cache; assumes the row has
+ *  been loaded. */
+const isExpanded = (
+  block: Block,
+  scopeRootId: string,
+  scopeRootForcesOpen: boolean,
+  forceOpen: ReadonlySet<string>,
+): boolean => {
+  if (forceOpen.has(block.id)) return true
   if (block.id === scopeRootId && scopeRootForcesOpen) return true
   return !(block.peekProperty(isCollapsedProp) ?? false)
 }
@@ -40,12 +53,14 @@ export const nextVisibleBlock = async (
   current: Block,
   scopeRootId: string,
   scopeRootForcesOpen = true,
+  forceOpenBlockIds: readonly string[] = EMPTY_FORCE_OPEN_BLOCK_IDS,
 ): Promise<Block | null> => {
   const repo = current.repo
+  const forceOpen = toForceOpenSet(forceOpenBlockIds)
   await current.load()
 
   // Step into the first child if expanded.
-  if (isExpanded(current, scopeRootId, scopeRootForcesOpen)) {
+  if (isExpanded(current, scopeRootId, scopeRootForcesOpen, forceOpen)) {
     const childIds = await current.childIds.load()
     if (childIds.length > 0) return repo.block(childIds[0])
   }
@@ -76,9 +91,12 @@ export const nextVisibleBlock = async (
 export const previousVisibleBlock = async (
   current: Block,
   scopeRootId: string,
+  scopeRootForcesOpen = true,
+  forceOpenBlockIds: readonly string[] = EMPTY_FORCE_OPEN_BLOCK_IDS,
 ): Promise<Block | null> => {
   if (current.id === scopeRootId) return null
   const repo = current.repo
+  const forceOpen = toForceOpenSet(forceOpenBlockIds)
   await current.load()
 
   const data = current.peek()
@@ -92,7 +110,12 @@ export const previousVisibleBlock = async (
 
   if (idx > 0) {
     // Descend into the previous sibling's last visible descendant.
-    return getLastVisibleDescendant(repo.block(siblingIds[idx - 1]))
+    return getLastVisibleDescendant(
+      repo.block(siblingIds[idx - 1]),
+      scopeRootId,
+      scopeRootForcesOpen,
+      forceOpenBlockIds,
+    )
   }
   // No previous sibling — the parent is the previous visible block.
   // When current is a direct child of scopeRootId, parent === scopeRootId,
@@ -159,14 +182,16 @@ export const getLastVisibleDescendant = async (
   block: Block,
   scopeRootId?: string,
   scopeRootForcesOpen = true,
+  forceOpenBlockIds: readonly string[] = EMPTY_FORCE_OPEN_BLOCK_IDS,
 ): Promise<Block> => {
   const repo = block.repo
+  const forceOpen = toForceOpenSet(forceOpenBlockIds)
   await block.load()
   let current = block
   while (true) {
     const isScopeRoot = current.id === scopeRootId && scopeRootForcesOpen
     const collapsed = current.peekProperty(isCollapsedProp) ?? false
-    if (collapsed && !isScopeRoot) return current
+    if (collapsed && !isScopeRoot && !forceOpen.has(current.id)) return current
     const childIds = await current.childIds.load()
     if (childIds.length === 0) return current
     current = repo.block(childIds[childIds.length - 1])
@@ -361,6 +386,7 @@ export async function getBlocksInRange(
   scopeRootId: string,
   repo: Repo,
   scopeRootForcesOpen = true,
+  forceOpenBlockIds: readonly string[] = EMPTY_FORCE_OPEN_BLOCK_IDS,
 ): Promise<string[]> {
   if (startBlockId === endBlockId) {
     return validateSelectionHierarchy([startBlockId], repo)
@@ -373,7 +399,12 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await nextVisibleBlock(walker, scopeRootId, scopeRootForcesOpen)
+      walker = await nextVisibleBlock(
+        walker,
+        scopeRootId,
+        scopeRootForcesOpen,
+        forceOpenBlockIds,
+      )
       if (!walker) return null
       ids.push(walker.id)
       if (walker.id === endBlockId) return ids
@@ -385,7 +416,12 @@ export async function getBlocksInRange(
     const ids: string[] = [startBlockId]
     let walker: Block | null = start
     while (walker) {
-      walker = await previousVisibleBlock(walker, scopeRootId)
+      walker = await previousVisibleBlock(
+        walker,
+        scopeRootId,
+        scopeRootForcesOpen,
+        forceOpenBlockIds,
+      )
       if (!walker) return null
       ids.unshift(walker.id)
       if (walker.id === endBlockId) return ids
@@ -421,6 +457,7 @@ export async function extendSelection(
   repo: Repo,
   scopeRootId: string | undefined,
   scopeRootForcesOpen = true,
+  forceOpenBlockIds: readonly string[] = EMPTY_FORCE_OPEN_BLOCK_IDS,
   clearEditing = false,
 ): Promise<boolean> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
@@ -431,7 +468,14 @@ export async function extendSelection(
   const currentAnchor = currentState?.anchorBlockId || focusedId
   if (!currentAnchor) return false
 
-  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, scopeRootId, repo, scopeRootForcesOpen)
+  const rangeIds = await getBlocksInRange(
+    currentAnchor,
+    targetBlockId,
+    scopeRootId,
+    repo,
+    scopeRootForcesOpen,
+    forceOpenBlockIds,
+  )
 
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
   // Returns false when the range resolved empty (commitSelectionRange writes

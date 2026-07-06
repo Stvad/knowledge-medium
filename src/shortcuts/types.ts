@@ -134,6 +134,10 @@ export interface BaseShortcutDependencies {
    *  primitives use it so they don't descend into a collapsed nested
    *  root whose children aren't rendered. Defaults to true (focal). */
   scopeRootForcesOpen?: boolean;
+  /** Surface-local force-open ids supplied to navigation/render so
+   *  constrained views can keep specific ancestors visibly expanded
+   *  even when collapsed in persisted state. */
+  forceOpenBlockIds?: readonly string[];
 }
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {

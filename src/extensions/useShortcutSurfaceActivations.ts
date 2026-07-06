@@ -104,7 +104,12 @@ export function useShortcutSurfaceActivations(
     // having to forward it by hand.
     }).map(activation => ({
       ...activation,
-      dependencies: {...(activation.dependencies ?? {}), scopeRootId, scopeRootForcesOpen},
+      dependencies: {
+        ...(activation.dependencies ?? {}),
+        scopeRootId,
+        scopeRootForcesOpen,
+        forceOpenBlockIds: blockContext.forceOpenBlockIds,
+      },
     })),
     [
       block,

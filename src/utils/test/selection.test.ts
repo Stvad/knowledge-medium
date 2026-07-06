@@ -9,6 +9,8 @@ import {
   blockIdsInOrderedSelectionRange,
   findBestSelectionAnchorIndex,
   getLastVisibleDescendant,
+  nextVisibleBlock,
+  previousVisibleBlock,
 } from '@/utils/selection.js'
 
 const WS = 'ws-1'
@@ -223,5 +225,46 @@ describe('getLastVisibleDescendant', () => {
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
     const result = await getLastVisibleDescendant(env.repo.block('b'), 'top')
     expect(result.id).toBe('b')
+  })
+
+  it('overrides a forced-open explicit ancestor in getLastVisibleDescendant', async () => {
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'a1', parentId: 'a', orderKey: 'c'},
+      {id: 'a2', parentId: 'a', orderKey: 'd'},
+    ])
+    await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: true})
+    const result = await getLastVisibleDescendant(
+      env.repo.block('top'),
+      'top',
+      false,
+      ['a'],
+    )
+    expect(result.id).toBe('a2')
+  })
+})
+
+describe('previous / next visible block', () => {
+  it('uses force-open block ids for both directions in a collapsed subtree', async () => {
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'a1', parentId: 'a', orderKey: 'c'},
+      {id: 'a2', parentId: 'top', orderKey: 'd'},
+    ])
+    await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: true})
+
+    const nextWithoutForceOpen = await nextVisibleBlock(env.repo.block('a'), 'top', false)
+    expect(nextWithoutForceOpen?.id).toBe('a2')
+
+    const nextWithForceOpen = await nextVisibleBlock(env.repo.block('a'), 'top', false, ['a'])
+    expect(nextWithForceOpen?.id).toBe('a1')
+
+    const prevWithoutForceOpen = await previousVisibleBlock(env.repo.block('a2'), 'top', false)
+    expect(prevWithoutForceOpen?.id).toBe('a')
+
+    const prevWithForceOpen = await previousVisibleBlock(env.repo.block('a2'), 'top', false, ['a'])
+    expect(prevWithForceOpen?.id).toBe('a1')
   })
 })

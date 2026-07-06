@@ -589,6 +589,7 @@ export const blockPointerDepsFrom = (
     uiStateBlock: context.uiStateBlock,
     scopeRootId: context.scopeRootId,
     scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
+    forceOpenBlockIds: context.blockContext?.forceOpenBlockIds,
     targetElement: event.currentTarget,
     ...(renderScopeId ? {renderScopeId} : {}),
   }

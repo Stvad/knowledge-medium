@@ -598,7 +598,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtStart(deps.editorView)) return
       const extended = await extendSelectionUp(
-        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true,
+        deps.uiStateBlock,
+        repo,
+        deps.scopeRootId,
+        deps.scopeRootForcesOpen,
+        deps.forceOpenBlockIds ?? [],
+        /* clearEditing */ true,
       )
       if (extended) trigger.preventDefault()
     },
@@ -614,7 +619,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
       if (!cursorIsAtEnd(deps.editorView)) return
       const extended = await extendSelectionDown(
-        deps.uiStateBlock, repo, deps.scopeRootId, deps.scopeRootForcesOpen, /* clearEditing */ true,
+        deps.uiStateBlock,
+        repo,
+        deps.scopeRootId,
+        deps.scopeRootForcesOpen,
+        deps.forceOpenBlockIds ?? [],
+        /* clearEditing */ true,
       )
       if (extended) trigger.preventDefault()
     },
@@ -772,7 +782,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, scopeRootId)
+        const prevVisible = await previousVisibleBlock(
+          block,
+          scopeRootId,
+          deps.scopeRootForcesOpen,
+          deps.forceOpenBlockIds ?? [],
+        )
         if (!prevVisible) return
         const data = block.peek() ?? await block.load()
         if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last')) {
@@ -820,7 +835,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           return
         }
 
-        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
+        const nextVisible = await nextVisibleBlock(
+          block,
+          scopeRootId,
+          deps.scopeRootForcesOpen,
+          deps.forceOpenBlockIds ?? [],
+        )
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -849,7 +869,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const prevVisible = await previousVisibleBlock(block, scopeRootId)
+        const prevVisible = await previousVisibleBlock(
+          block,
+          scopeRootId,
+          deps.scopeRootForcesOpen,
+          deps.forceOpenBlockIds ?? [],
+        )
         if (!prevVisible) return
 
         const prevData = await prevVisible.load()
@@ -879,7 +904,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         trigger.preventDefault()
 
-        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
+        const nextVisible = await nextVisibleBlock(
+          block,
+          scopeRootId,
+          deps.scopeRootForcesOpen,
+          deps.forceOpenBlockIds ?? [],
+        )
         if (!nextVisible) return
 
         await uiStateBlock.set(editorSelection, {
@@ -918,7 +948,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Empty block: delete it and move focus up.
         if (liveContent === '') {
           trigger.preventDefault()
-          const prevVisible = await previousVisibleBlock(block, scopeRootId)
+          const prevVisible = await previousVisibleBlock(
+            block,
+            scopeRootId,
+            deps.scopeRootForcesOpen,
+            deps.forceOpenBlockIds ?? [],
+          )
           if (prevVisible) {
             const prevData = await prevVisible.load()
             await uiStateBlock.set(editorSelection, {
@@ -938,7 +973,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // block lives outside the surface.
         if (!canMergeUp) return
 
-        const prevVisible = await previousVisibleBlock(block, scopeRootId)
+        const prevVisible = await previousVisibleBlock(
+          block,
+          scopeRootId,
+          deps.scopeRootForcesOpen,
+          deps.forceOpenBlockIds ?? [],
+        )
         if (!prevVisible || prevVisible.id === scopeRootId) return
 
         // Roam rule: refuse when both blocks have independent children — the
@@ -1006,7 +1046,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // Backspace would merge upward if the caret sat at its start
         // (previousVisibleBlock and nextVisibleBlock are inverses over the
         // visible-order list, so this stays at the same boundary).
-        const nextVisible = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
+        const nextVisible = await nextVisibleBlock(
+          block,
+          scopeRootId,
+          deps.scopeRootForcesOpen,
+          deps.forceOpenBlockIds ?? [],
+        )
         if (!nextVisible) return
 
         // Roam rule (mirror of Backspace): refuse when both blocks have

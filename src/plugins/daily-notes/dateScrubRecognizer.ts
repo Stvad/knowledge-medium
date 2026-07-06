@@ -118,6 +118,7 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
     uiStateBlock,
     scopeRootId: context.scopeRootId,
     scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
+    forceOpenBlockIds: context.blockContext?.forceOpenBlockIds,
     targetElement: ctx.element,
     ...(renderScopeId ? { renderScopeId } : {}),
   })
