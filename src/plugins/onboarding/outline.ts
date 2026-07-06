@@ -396,7 +396,7 @@ export const tutorialOutline = (variant: TutorialVariant): TutorialNode[] => {
           { content: "`kmagent eval 'await createBlock({parentId: ..., content: ...})'` — same operation via the eval surface; useful for batching or conditional logic." },
         ],
       },
-      'Runtime bindings available inside `eval`: `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document`. Use these to script edits, drive extensions, dump subtrees, or wire an agent into your workflow.',
+      'Runtime bindings available inside `eval`: `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `moveBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document`. Use these to script edits, drive extensions, dump subtrees, or wire an agent into your workflow.',
       'Defaults & security: the bridge binds to `http://127.0.0.1:8787` (loopback only); only configured app origins can talk to it. Override the pairing target with `AGENT_RUNTIME_APP_URL`, browser endpoint with `VITE_AGENT_RUNTIME_URL`, CLI endpoint with `AGENT_RUNTIME_URL`. Allow extra origins via `AGENT_RUNTIME_ALLOWED_ORIGINS` (comma-separated, no paths).',
       'See the **Agent Runtime Access** section of `README.md` for full setup, plus `kmagent pair-url` if you want a bridge-only pairing URL.',
     ]),

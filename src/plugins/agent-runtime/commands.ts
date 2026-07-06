@@ -64,6 +64,8 @@ import type {
   ExtensionVerificationResult,
   InstallExtensionInput,
   InstallExtensionResult,
+  MoveBlockInput,
+  MoveBlockPosition,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -119,6 +121,19 @@ const getPosition = (value: unknown): BlockPosition | undefined => {
     throw new Error('position must be "first", "last", or a number')
   }
   return value
+}
+
+const getMoveBlockPosition = (value: unknown): MoveBlockPosition => {
+  if (!isRecord(value)) {
+    throw new Error('position must be an object with kind first|last|before|after')
+  }
+  if (value.kind === 'first' || value.kind === 'last') {
+    return {kind: value.kind}
+  }
+  if (value.kind === 'before' || value.kind === 'after') {
+    return {kind: value.kind, siblingId: requireString(value.siblingId, 'position.siblingId')}
+  }
+  throw new Error('position.kind must be one of: first, last, before, after')
 }
 
 const getBlockDataInput = (command: KnownAgentCommand): Partial<BlockData> => {
@@ -339,6 +354,14 @@ const updateRuntimeBlock = async (
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
 
   if (!found) throw new Error(`updateBlock: block ${input.id} not found`)
+  return repo.load(input.id)
+}
+
+const moveRuntimeBlock = async (
+  repo: Repo,
+  input: MoveBlockInput,
+): Promise<BlockData | null> => {
+  await repo.mutate.move(input)
   return repo.load(input.id)
 }
 
@@ -1045,6 +1068,7 @@ const {
   getSubtree,
   createBlock,
   updateBlock,
+  moveBlock,
   installExtension,
   setExtensionEnabled,
   uninstallExtension,
@@ -1082,6 +1106,7 @@ export const createAgentRuntimeContext = ({
     getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
+    moveBlock: input => moveRuntimeBlock(repo, input),
     installExtension: input => installRuntimeExtension(repo, input, context),
     setExtensionEnabled: input => setExtensionEnabled(repo, input),
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
@@ -1179,6 +1204,17 @@ export const executeCommand = async (
           : requireString(command.content, 'content'),
         properties,
         replaceProperties: Boolean(command.replaceProperties),
+      })
+    }
+
+    case 'move-block': {
+      const parentId = command.parentId === null
+        ? null
+        : requireString(command.parentId, 'parentId')
+      return context.moveBlock({
+        id: requireString(command.blockId ?? command.id, 'blockId'),
+        parentId,
+        position: getMoveBlockPosition(command.position),
       })
     }
 

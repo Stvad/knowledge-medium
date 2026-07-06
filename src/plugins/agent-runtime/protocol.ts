@@ -33,6 +33,18 @@ export interface UpdateBlockInput {
   replaceProperties?: boolean
 }
 
+export type MoveBlockPosition =
+  | {kind: 'first'}
+  | {kind: 'last'}
+  | {kind: 'before'; siblingId: string}
+  | {kind: 'after'; siblingId: string}
+
+export interface MoveBlockInput {
+  id: string
+  parentId: string | null
+  position: MoveBlockPosition
+}
+
 export interface InstallExtensionInput {
   source: string
   label?: string
@@ -139,6 +151,7 @@ export interface AgentRuntimeContext {
   getSubtree: (rootId: string) => Promise<SubtreeRow[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
+  moveBlock: (input: MoveBlockInput) => Promise<BlockData | null>
   installExtension: (input: InstallExtensionInput) => Promise<InstallExtensionResult>
   setExtensionEnabled: (input: SetExtensionEnabledInput) => Promise<SetExtensionEnabledResult>
   uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>

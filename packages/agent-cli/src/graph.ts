@@ -41,6 +41,18 @@ export interface BlockData extends BlockView {
   workspaceId?: string
 }
 
+export type MoveBlockPosition =
+  | {kind: 'first'}
+  | {kind: 'last'}
+  | {kind: 'before', siblingId: string}
+  | {kind: 'after', siblingId: string}
+
+export interface MoveBlockInput {
+  id: string
+  parentId: string | null
+  position: MoveBlockPosition
+}
+
 const asRecord = (value: unknown, label: string): Record<string, unknown> => {
   if (!value || typeof value !== 'object') throw new Error(`Unexpected ${label} result shape`)
   return value as Record<string, unknown>
@@ -168,6 +180,12 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return client.runCommand({type: 'update-block', id, ...patch})
   }
 
+  const moveBlock = async (input: MoveBlockInput): Promise<BlockData | null> => {
+    const result = await client.runCommand({type: 'move-block', ...input})
+    if (result === null || result === undefined) return null
+    return asRecord(result, 'move-block') as unknown as BlockData
+  }
+
   /** Overwrite a block's content — used to stream the in-progress reply
    *  text into an early-created reply block. */
   const updateBlockContent = async (id: string, content: string): Promise<void> => {
@@ -210,6 +228,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     getSubtree,
     createBlock,
     updateBlock,
+    moveBlock,
     updateBlockContent,
     sqlAll,
     blockViews,

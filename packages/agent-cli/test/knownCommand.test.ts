@@ -23,6 +23,7 @@ describe('knownCommandSchema — branch acceptance', () => {
     ['get-subtree', {type: 'get-subtree', rootId: 'r-1'}],
     ['create-block', {type: 'create-block', parentId: 'p-1', content: 'hi'}],
     ['update-block', {type: 'update-block', id: 'b-1', content: 'hi'}],
+    ['move-block', {type: 'move-block', id: 'b-1', parentId: 'p-1', position: {kind: 'last'}}],
     ['install-extension', {type: 'install-extension', source: '// source', label: 'foo'}],
     ['enable-extension', {type: 'enable-extension', label: 'foo'}],
     ['disable-extension', {type: 'disable-extension', label: 'foo'}],
@@ -104,6 +105,20 @@ describe('knownCommandSchema — rejection', () => {
 
   it('rejects get-subtree without rootId', () => {
     expect(knownCommandSchema.safeParse({type: 'get-subtree'}).success).toBe(false)
+  })
+
+  it('rejects move-block without a parentId or valid position', () => {
+    expect(knownCommandSchema.safeParse({
+      type: 'move-block',
+      id: 'b-1',
+      position: {kind: 'last'},
+    }).success).toBe(false)
+    expect(knownCommandSchema.safeParse({
+      type: 'move-block',
+      id: 'b-1',
+      parentId: 'p-1',
+      position: {kind: 'before'},
+    }).success).toBe(false)
   })
 
   it('rejects backlinks / grouped-backlinks with a non-string id', () => {

@@ -159,7 +159,7 @@ yarn agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }
 
 `yarn agent connect` prints an app URL, opens the token dialog when that URL is loaded, then waits for the copied token to be pasted back into the terminal. After that one-time pairing, normal `yarn agent ...` commands use the stored token automatically.
 
-Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
+Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `moveBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
 
 For an agent-facing orientation to the data model, run `yarn agent data-model`.
 

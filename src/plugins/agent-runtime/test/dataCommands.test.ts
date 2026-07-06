@@ -22,6 +22,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
+import { keyAtEnd } from '@/data/orderKey'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 
@@ -74,6 +75,8 @@ beforeEach(async () => {
 const create = async (args: {
   id: string
   content?: string
+  parentId?: string | null
+  orderKey?: string
   references?: BlockReference[]
   properties?: BlockProperties
 }) => {
@@ -81,13 +84,20 @@ const create = async (args: {
     await tx.create({
       id: args.id,
       workspaceId: WS,
-      parentId: null,
-      orderKey: `key-${args.id}`,
+      parentId: args.parentId ?? null,
+      orderKey: args.orderKey ?? `key-${args.id}`,
       content: args.content ?? args.id,
       references: args.references ?? [],
       ...(args.properties ? {properties: args.properties} : {}),
     })
   }, {scope: ChangeScope.BlockDefault})
+}
+
+const childIds = async (parentId: string | null): Promise<string[]> => {
+  const rows = parentId === null
+    ? await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks WHERE parent_id IS NULL AND deleted = 0 ORDER BY order_key, id')
+    : await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [parentId])
+  return rows.map(row => row.id)
 }
 
 describe('backlinks command', () => {
@@ -308,5 +318,31 @@ describe('update-block command', () => {
       executeCommand({commandId: 'c-b', type: 'update-block', id: 'u2', properties: {cancel: ''}}, context),
     ])
     expect((await repo.load('u2'))?.properties).toEqual({status: 'done', cancel: ''})
+  })
+})
+
+describe('move-block command', () => {
+  it('moves a block under a target parent at the requested position', async () => {
+    const firstOrderKey = keyAtEnd()
+    const lastOrderKey = keyAtEnd(firstOrderKey)
+    await create({id: 'parent'})
+    await create({id: 'first', parentId: 'parent', orderKey: firstOrderKey})
+    await create({id: 'last', parentId: 'parent', orderKey: lastOrderKey})
+    await create({id: 'moved'})
+
+    const out = await executeCommand(
+      {
+        commandId: 'mv-1',
+        type: 'move-block',
+        id: 'moved',
+        parentId: 'parent',
+        position: {kind: 'before', siblingId: 'last'},
+      },
+      context,
+    ) as {id: string; parentId: string | null}
+
+    expect(out).toMatchObject({id: 'moved', parentId: 'parent'})
+    expect(await childIds('parent')).toEqual(['first', 'moved', 'last'])
+    expect(await childIds(null)).toEqual(['parent'])
   })
 })

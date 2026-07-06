@@ -147,6 +147,22 @@ export const updateBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+export const moveBlockPositionSchema = z.discriminatedUnion('kind', [
+  z.object({kind: z.literal('first')}),
+  z.object({kind: z.literal('last')}),
+  z.object({kind: z.literal('before'), siblingId: z.string()}),
+  z.object({kind: z.literal('after'), siblingId: z.string()}),
+])
+
+export const moveBlockCommandSchema = z.looseObject({
+  type: z.literal('move-block'),
+  id: z.string().optional(),
+  blockId: z.string().optional(),
+  parentId: z.string().nullable(),
+  position: moveBlockPositionSchema,
+  ...commandIdField,
+})
+
 export const installExtensionCommandSchema = z.looseObject({
   type: z.literal('install-extension'),
   source: z.string(),
@@ -405,6 +421,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   getSubtreeCommandSchema,
   createBlockCommandSchema,
   updateBlockCommandSchema,
+  moveBlockCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -441,6 +458,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   getSubtreeCommandSchema,
   createBlockCommandSchema,
   updateBlockCommandSchema,
+  moveBlockCommandSchema,
   installExtensionCommandSchema,
   enableExtensionCommandSchema,
   disableExtensionCommandSchema,
@@ -546,6 +564,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Update a block (body shape per <json>).',
     readOnly: false,
   },
+  'move-block': {
+    usage: 'kmagent move-block <json>',
+    description: 'Move a block to a new parent/position. Body: {id|blockId, parentId:string|null, position:{kind:first|last|before|after, siblingId?}}.',
+    readOnly: false,
+  },
   'install-extension': {
     usage: 'kmagent install-extension [--verify] [--description <text>] <file> [label]',
     description: 'Install a JS extension. Reload is automatic; --verify reports the contributed facets/actions; label defaults to the filename without ext.',
@@ -574,7 +597,7 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   },
   'eval': {
     usage: 'kmagent eval [--raw] [--file <path>] [--data <path> | --data-json <json>] <code>',
-    description: 'Run JS in the app. Use "return …" to print a value. The code runs with `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` already in scope. `--data <path>` reads JSON from a file (or `--data-json <inline>` for an inline payload) and binds the parsed value as `data` — avoids template-embedding structured input in the code string.',
+    description: 'Run JS in the app. Use "return …" to print a value. The code runs with `repo`, `db`, `runtime`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `moveBlock`, `installExtension`, `setExtensionEnabled`, `uninstallExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, `document` already in scope. `--data <path>` reads JSON from a file (or `--data-json <inline>` for an inline payload) and binds the parsed value as `data` — avoids template-embedding structured input in the code string.',
     // Arbitrary code execution — never read-only.
     readOnly: false,
   },

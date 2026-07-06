@@ -21,6 +21,7 @@ import { createBridgeClient, type BridgeClient } from './client.js'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from './subtreeOutline.js'
 import { createBridgeGraph } from './graph.js'
 import { BLOCKED_WIKILINKS_ENV, decodeBlockedWikilinks, findBlockedRef, findBlockedRefInProperties, isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
+import { moveBlockPositionSchema } from './protocol.js'
 
 export interface GraphMcpServerOptions {
   client?: BridgeClient
@@ -139,7 +140,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     inputSchema: {sql: z.string(), params: z.array(z.unknown()).optional()},
   }, async ({sql, params}) => {
     if (!isReadOnlySql(sql)) {
-      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block for writes.')
+      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block / move_block for writes.')
     }
     return json(await graph.sqlAll(sql, params ?? []))
   })
@@ -167,6 +168,16 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     await assertNoBlockedRefs(content, properties)
     return json(await graph.updateBlock(id, {content, properties}))
   })
+
+  server.registerTool('move_block' satisfies KmMcpToolName, {
+    description: 'Move a block under a new parent, or to the workspace root with parentId:null. Positions: first, last, before/after siblingId.',
+    inputSchema: {
+      id: z.string(),
+      parentId: z.string().nullable(),
+      position: moveBlockPositionSchema,
+    },
+  }, async ({id, parentId, position}) =>
+    json(await graph.moveBlock({id, parentId, position})))
 
   return server
 }

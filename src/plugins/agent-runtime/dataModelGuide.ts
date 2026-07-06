@@ -184,6 +184,8 @@ The convenience commands above wrap the starred ones (★) and add hydration.
   order — already sorted; read it top-to-bottom, don't re-sort (see "Sibling
   order").
 - \`yarn agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.
+- \`yarn agent move-block <json>\` — structural move via \`repo.mutate.move\`;
+  body is \`{id, parentId:string|null, position:{kind:"first"|"last"|"before"|"after", siblingId?}}\`.
 - \`yarn agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.
