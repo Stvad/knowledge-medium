@@ -532,11 +532,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       for (const {name} of databases) {
         try {
           await deleteOpfsSqliteDatabase(name)
-          await deleteIndexedDatabase(name)
+          await deleteIndexedDatabase(name).catch(() => {})
         } catch {
           // Keep this scope's ledger and caches so a later activation can retry
-          // after a locked database handle, transient OPFS failure, or blocked
-          // IDB delete.
+          // after a locked database handle or transient OPFS failure.
           failedScopes.add(scopeUrl)
           return
         }

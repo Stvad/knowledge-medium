@@ -615,7 +615,7 @@ describe('activate — stale preview cache sweep', () => {
     expect(await metaMatch(caches, previewDatabaseRecord(334, 'kmp-v6~pr-334~user.db'))).toBeUndefined()
   })
 
-  it('keeps stale retry metadata when legacy IndexedDB cleanup fails after OPFS deletion', async () => {
+  it('drops stale retry metadata when legacy IndexedDB cleanup fails after OPFS deletion', async () => {
     const opfs = new MockOpfsRoot()
     const idb = new MockIndexedDB()
     opfs.add('kmp-v6~pr-339~user.db')
@@ -637,8 +637,9 @@ describe('activate — stale preview cache sweep', () => {
 
     expect(opfs.has('kmp-v6~pr-339~user.db')).toBe(false)
     expect(idb.has('kmp-v6~pr-339~user.db')).toBe(true)
-    expect(await metaMatch(caches, previewScope(339))).toBeDefined()
-    expect(await metaMatch(caches, previewDatabaseRecord(339, 'kmp-v6~pr-339~user.db'))).toBeDefined()
+    expect(await caches.has('km-shell-pvStale')).toBe(false)
+    expect(await metaMatch(caches, previewScope(339))).toBeUndefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(339, 'kmp-v6~pr-339~user.db'))).toBeUndefined()
   })
 
   it('never reaps production, however old its ledger (not a preview scope)', async () => {
