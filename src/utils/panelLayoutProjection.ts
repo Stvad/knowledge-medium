@@ -75,65 +75,97 @@ export const panelRowsInLayoutOrder = (
   return (childrenByParent.get(rootId) ?? []).flatMap(visit)
 }
 
-const firstPanelRowInSlotInTx = async (tx: Tx, row: BlockData): Promise<BlockData | undefined> => {
+const firstPanelRowInSlot = (
+  row: BlockData,
+  childrenByParent: Map<string, BlockData[]>,
+): BlockData | undefined => {
   if (!isPanelStackRow(row)) return row
-  const children = await tx.childrenOf(row.id, row.workspaceId)
+  const children = childrenByParent.get(row.id) ?? []
   for (const child of children) {
-    const panel = await firstPanelRowInSlotInTx(tx, child)
+    const panel = firstPanelRowInSlot(child, childrenByParent)
     if (panel) return panel
   }
   return undefined
 }
 
-const lastPanelRowInSlotInTx = async (tx: Tx, row: BlockData): Promise<BlockData | undefined> => {
+const lastPanelRowInSlot = (
+  row: BlockData,
+  childrenByParent: Map<string, BlockData[]>,
+): BlockData | undefined => {
   if (!isPanelStackRow(row)) return row
-  const children = await tx.childrenOf(row.id, row.workspaceId)
+  const children = childrenByParent.get(row.id) ?? []
   for (let index = children.length - 1; index >= 0; index--) {
-    const panel = await lastPanelRowInSlotInTx(tx, children[index])
+    const panel = lastPanelRowInSlot(children[index], childrenByParent)
     if (panel) return panel
   }
   return undefined
 }
 
-const adjacentPanelRowInParentInTx = async (
-  tx: Tx,
+const adjacentPanelRowInParent = (
   parent: BlockData,
   rowId: string,
-): Promise<BlockData | undefined> => {
-  const siblings = await tx.childrenOf(parent.id, parent.workspaceId)
+  childrenByParent: Map<string, BlockData[]>,
+): BlockData | undefined => {
+  const siblings = childrenByParent.get(parent.id) ?? []
   const index = siblings.findIndex(sibling => sibling.id === rowId)
   if (index < 0) return undefined
 
   for (let nextIndex = index + 1; nextIndex < siblings.length; nextIndex++) {
-    const panel = await firstPanelRowInSlotInTx(tx, siblings[nextIndex])
+    const panel = firstPanelRowInSlot(siblings[nextIndex], childrenByParent)
     if (panel) return panel
   }
 
   for (let prevIndex = index - 1; prevIndex >= 0; prevIndex--) {
-    const panel = await lastPanelRowInSlotInTx(tx, siblings[prevIndex])
+    const panel = lastPanelRowInSlot(siblings[prevIndex], childrenByParent)
     if (panel) return panel
   }
 
   return undefined
 }
 
-const nextActivePanelAfterCloseInTx = async (
-  tx: Tx,
+const nextActivePanelAfterClose = (
   row: BlockData,
   parent: BlockData | null,
-): Promise<string | undefined> => {
-  if (!parent) return undefined
+  rowsBeforeDelete: readonly BlockData[],
+): string | undefined => {
+  const rowsById = new Map(rowsBeforeDelete.map(row => [row.id, row]))
+  const childrenByParent = buildChildrenByParent(rowsBeforeDelete)
+  let childId = row.id
+  let container = parent
 
-  const sibling = await adjacentPanelRowInParentInTx(tx, parent, row.id)
-  if (sibling) return sibling.id
+  while (container) {
+    const sibling = adjacentPanelRowInParent(container, childId, childrenByParent)
+    if (sibling) return sibling.id
+    if (!isPanelStackRow(container)) return undefined
+    childId = container.id
+    container = container.parentId ? rowsById.get(container.parentId) ?? null : null
+  }
 
-  if (!isPanelStackRow(parent)) return undefined
+  return undefined
+}
 
-  const stackParent = parent.parentId ? await tx.get(parent.parentId) : null
-  const stackSibling = stackParent
-    ? await adjacentPanelRowInParentInTx(tx, stackParent, parent.id)
-    : undefined
-  return stackSibling?.id
+const stackAncestorIdsEmptiedByClose = (
+  row: BlockData,
+  parent: BlockData | null,
+  rowsBeforeDelete: readonly BlockData[],
+): string[] => {
+  const rowsById = new Map(rowsBeforeDelete.map(row => [row.id, row]))
+  const childrenByParent = buildChildrenByParent(rowsBeforeDelete)
+  const stackIds: string[] = []
+  let removedChildId = row.id
+  let container = parent
+
+  while (container && isPanelStackRow(container)) {
+    const remainingChildren = (childrenByParent.get(container.id) ?? [])
+      .filter(child => child.id !== removedChildId)
+    if (remainingChildren.length > 0) break
+
+    stackIds.push(container.id)
+    removedChildId = container.id
+    container = container.parentId ? rowsById.get(container.parentId) ?? null : null
+  }
+
+  return stackIds
 }
 
 const flattenLayoutSlots = (slots: readonly LayoutSlot[]): string[] =>
@@ -444,21 +476,23 @@ export const deletePanelRow = async (
     const row = await tx.get(panelId)
     if (!row) return
     const parent = row.parentId ? await tx.get(row.parentId) : null
-    const layoutSessionId = parent && isPanelStackRow(parent)
-      ? parent.parentId
-      : row.parentId
-    const layoutSession = layoutSessionId ? await tx.get(layoutSessionId) : null
-    const stackSiblingCount = parent && isPanelStackRow(parent)
-      ? (await tx.childrenOf(parent.id, parent.workspaceId)).length
-      : 0
-    const nextActivePanelId = layoutSession?.properties[activePanelIdProp.name] === panelId
-      ? await nextActivePanelAfterCloseInTx(tx, row, parent)
+    let layoutSession = parent
+    while (layoutSession && isPanelStackRow(layoutSession)) {
+      layoutSession = layoutSession.parentId ? await tx.get(layoutSession.parentId) : null
+    }
+    const rowsBeforeDelete = layoutSession
+      ? await loadSubtreeRowsInTx(tx, layoutSession)
+      : []
+    const stackIdsToDelete = stackAncestorIdsEmptiedByClose(row, parent, rowsBeforeDelete)
+    const deletingActivePanel = layoutSession?.properties[activePanelIdProp.name] === panelId
+    const nextActivePanelId = deletingActivePanel
+      ? nextActivePanelAfterClose(row, parent, rowsBeforeDelete)
       : undefined
     await tx.delete(panelId)
-    if (parent && isPanelStackRow(parent) && stackSiblingCount <= 1) {
-      await tx.delete(parent.id)
+    for (const stackId of stackIdsToDelete) {
+      await tx.delete(stackId)
     }
-    if (layoutSession?.properties[activePanelIdProp.name] === panelId) {
+    if (deletingActivePanel && layoutSession) {
       await tx.setProperty(layoutSession.id, activePanelIdProp, nextActivePanelId)
     }
   }, {scope: ChangeScope.UiState, description: 'close panel'})

@@ -380,6 +380,30 @@ describe('deletePanelRow', () => {
       'c',
     ])
   })
+
+  it('keeps climbing out of nested stacks to find the next panel', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/(s:(s:b))/c',
+    })
+    const byBlock = await rowIdsByBlock()
+    const rowB = byBlock.get('b')
+    if (!rowB) throw new Error('missing nested stack row')
+
+    await layoutSessionBlock().set(activePanelIdProp, rowB)
+    await deletePanelRow(env.repo, rowB)
+
+    const afterRows = await layoutRows()
+    const activePanelId = layoutSessionBlock().peekProperty(activePanelIdProp)
+    const activeRow = afterRows.find(row => row.id === activePanelId)
+    expect(activeRow ? panelBlockId(activeRow) : undefined).toBe('c')
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, afterRows)).toEqual([
+      'a',
+      'c',
+    ])
+  })
 })
 
 describe('PanelLayoutProjection', () => {
