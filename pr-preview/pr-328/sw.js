@@ -85,21 +85,18 @@
 	var normalizeLedger = (raw) => {
 		if (Array.isArray(raw)) return {
 			ids: raw,
-			updatedAt: void 0,
-			databaseNames: []
+			updatedAt: void 0
 		};
 		if (raw && typeof raw === "object" && Array.isArray(raw.ids)) {
-			const { ids, updatedAt, databaseNames } = raw;
+			const { ids, updatedAt } = raw;
 			return {
 				ids,
-				updatedAt: typeof updatedAt === "number" ? updatedAt : void 0,
-				databaseNames: Array.isArray(databaseNames) ? databaseNames.filter((name) => typeof name === "string") : []
+				updatedAt: typeof updatedAt === "number" ? updatedAt : void 0
 			};
 		}
 		return {
 			ids: [],
-			updatedAt: void 0,
-			databaseNames: []
+			updatedAt: void 0
 		};
 	};
 	/**
@@ -211,15 +208,13 @@
 				const res = await (await caches.open(META_CACHE)).match(LEDGER_KEY);
 				if (!res) return {
 					ids: [],
-					updatedAt: void 0,
-					databaseNames: []
+					updatedAt: void 0
 				};
 				return normalizeLedger(await res.json());
 			} catch {
 				return {
 					ids: [],
-					updatedAt: void 0,
-					databaseNames: []
+					updatedAt: void 0
 				};
 			}
 		};
@@ -314,12 +309,11 @@
 				if (req.url.endsWith(`/${LEDGER_BASENAME}`)) {
 					const res = await meta.match(req);
 					if (!res) continue;
-					const { ids, updatedAt, databaseNames } = normalizeLedger(await res.json().catch(() => null));
+					const { ids, updatedAt } = normalizeLedger(await res.json().catch(() => null));
 					ledgers.push({
 						scopeUrl: req.url,
 						ids,
-						updatedAt,
-						databaseNames
+						updatedAt
 					});
 					continue;
 				}
@@ -332,7 +326,7 @@
 			}
 			const ledgersWithFreshSignals = preserveScopes([...ledgers, ...databaseOnlyLedgers(databaseRecords, new Set(ledgers.map((ledger) => ledger.scopeUrl)))], freshDatabaseRecordScopeUrls(databaseRecords));
 			const finalPlan = computeReapableCaches({
-				ledgers: preserveScopes(ledgersWithFreshSignals, await sweepStalePreviewDatabases(meta, ledgersWithFreshSignals, computeReapableCaches({
+				ledgers: preserveScopes(ledgersWithFreshSignals, await sweepStalePreviewDatabases(meta, computeReapableCaches({
 					ledgers: ledgersWithFreshSignals,
 					now: now(),
 					staleMs: config.staleScopeMs,
@@ -382,11 +376,10 @@
 			return [...newestStaleRecordByScope].map(([scopeUrl, updatedAt]) => ({
 				scopeUrl,
 				ids: [],
-				updatedAt,
-				databaseNames: []
+				updatedAt
 			}));
 		};
-		const databaseNamesForReapedScopes = (ledgers, ledgerScopeUrls, databaseRecords) => {
+		const databaseRecordsForReapedScopes = (ledgerScopeUrls, databaseRecords) => {
 			const reapedScopes = new Set(ledgerScopeUrls);
 			const names = [];
 			const seen = /* @__PURE__ */ new Set();
@@ -398,25 +391,12 @@
 				seen.add(key);
 				names.push(record);
 			}
-			for (const ledger of ledgers) {
-				if (!reapedScopes.has(ledger.scopeUrl)) continue;
-				for (const name of ledger.databaseNames) {
-					if (!isDatabaseNameForPreviewScope(name, ledger.scopeUrl)) continue;
-					const key = `${ledger.scopeUrl}\n${name}`;
-					if (seen.has(key)) continue;
-					seen.add(key);
-					names.push({
-						scopeUrl: ledger.scopeUrl,
-						name
-					});
-				}
-			}
 			return names;
 		};
-		const sweepStalePreviewDatabases = async (meta, ledgers, ledgerScopeUrls, databaseRecords) => {
+		const sweepStalePreviewDatabases = async (meta, ledgerScopeUrls, databaseRecords) => {
 			const failedScopes = /* @__PURE__ */ new Set();
 			const databasesByScope = /* @__PURE__ */ new Map();
-			for (const database of databaseNamesForReapedScopes(ledgers, ledgerScopeUrls, databaseRecords)) {
+			for (const database of databaseRecordsForReapedScopes(ledgerScopeUrls, databaseRecords)) {
 				const databases = databasesByScope.get(database.scopeUrl) ?? [];
 				databases.push(database);
 				databasesByScope.set(database.scopeUrl, databases);
@@ -531,7 +511,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "5d4b0e343f04",
+		buildId: "7c8e6503a8c2",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
