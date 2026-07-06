@@ -41,6 +41,12 @@ interface GroupedQueryArgs {
 interface SnapshotState {
   data: GroupedBacklinksSnapshot
   queryKey: string
+  groupOrder: string[]
+}
+
+interface StableGroupedResult {
+  grouped: GroupedBacklinksResult
+  groupOrder: string[]
 }
 
 const EMPTY_GROUPED_BACKLINKS_SNAPSHOT: GroupedBacklinksSnapshot = {
@@ -79,6 +85,48 @@ const snapshotFromGroupedResult = (
     ]),
   ),
 })
+
+const stabilizeGroupedResult = (
+  grouped: GroupedBacklinksResult,
+  previousOrder: readonly string[] | null,
+): StableGroupedResult => {
+  const nextGroups = grouped.groups.filter(group => !group.fallback)
+  const fallbackGroup = grouped.groups.find(group => group.fallback)
+  const nextGroupsById = new Map(nextGroups.map(group => [group.groupId, group]))
+  const groupOrder = [
+    ...(previousOrder ?? []),
+    ...nextGroups
+      .map(group => group.groupId)
+      .filter(groupId => !(previousOrder ?? []).includes(groupId)),
+  ]
+
+  return {
+    grouped: {
+      ...grouped,
+      groups: [
+        ...groupOrder
+          .map(groupId => nextGroupsById.get(groupId))
+          .filter((group): group is GroupedBacklinkGroup => group !== undefined),
+        ...(fallbackGroup ? [fallbackGroup] : []),
+      ],
+    },
+    groupOrder,
+  }
+}
+
+const stabilizeSnapshotData = (
+  data: GroupedBacklinksSnapshot,
+  previousOrder: readonly string[] | null,
+): {data: GroupedBacklinksSnapshot; groupOrder: string[]} => {
+  const {grouped, groupOrder} = stabilizeGroupedResult(data.grouped, previousOrder)
+  return {
+    data: {
+      ...data,
+      grouped,
+    },
+    groupOrder,
+  }
+}
 
 const GroupItems = ({
   sourceBlocks,
@@ -238,7 +286,14 @@ function GroupedLinkedReferencesInner({
 
   const handleLiveData = useCallback(
     (data: GroupedBacklinksSnapshot) => {
-      setSnapshot({data, queryKey: currentQueryKey})
+      setSnapshot(prev => {
+        const previousOrder = prev?.queryKey === currentQueryKey ? prev.groupOrder : null
+        const stabilized = stabilizeSnapshotData(data, previousOrder)
+        return {
+          ...stabilized,
+          queryKey: currentQueryKey,
+        }
+      })
     },
     [currentQueryKey],
   )
@@ -260,9 +315,16 @@ function GroupedLinkedReferencesInner({
     handle.load().then(
       result => {
         if (cancelled) return
-        setSnapshot({
-          data: snapshotFromGroupedResult(repo, result),
-          queryKey: currentQueryKey,
+        setSnapshot(prev => {
+          const previousOrder = prev?.queryKey === currentQueryKey ? prev.groupOrder : null
+          const stabilized = stabilizeSnapshotData(
+            snapshotFromGroupedResult(repo, result),
+            previousOrder,
+          )
+          return {
+            ...stabilized,
+            queryKey: currentQueryKey,
+          }
         })
       },
       () => {/* error is stored on the handle */},

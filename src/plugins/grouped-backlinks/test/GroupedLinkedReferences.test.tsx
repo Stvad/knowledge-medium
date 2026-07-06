@@ -3,32 +3,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.js'
+import type { GroupedBacklinksConfig } from '../config.ts'
 import type { GroupedBacklinksResult } from '../query.ts'
 import { GroupedLinkedReferences } from '../GroupedLinkedReferences.tsx'
 
 const state = vi.hoisted(() => {
-  const grouped: GroupedBacklinksResult = {
-    groups: [{
-      groupId: 'topic',
-      label: 'Topic',
-      sourceIds: ['src-1'],
-      fallback: false,
-    }],
-    total: 1,
-    unfilteredSourceIds: ['src-1'],
-    sourceParents: [{sourceId: 'src-1', parentIds: []}],
+  const makeGrouped = (groups: GroupedBacklinksResult['groups']): GroupedBacklinksResult => {
+    const sourceIds = Array.from(new Set(groups.flatMap(group => group.sourceIds)))
+    return {
+      groups,
+      total: sourceIds.length,
+      unfilteredSourceIds: sourceIds,
+      sourceParents: sourceIds.map(sourceId => ({sourceId, parentIds: []})),
+    }
   }
+
+  const grouped = makeGrouped([{
+    groupId: 'topic',
+    label: 'Topic',
+    sourceIds: ['src-1'],
+    fallback: false,
+  }])
 
   return {
     backlinkMounts: 0,
     liveSubscriptions: 0,
+    makeGrouped,
     grouped,
     groupingConfig: {
       highPriorityTags: [],
       lowPriorityTags: [],
       excludedTags: [],
       excludedPatterns: [],
-    },
+    } as GroupedBacklinksConfig,
     repo: undefined as BacklinksViewRendererProps['block']['repo'] | undefined,
   }
 })
@@ -95,10 +102,28 @@ vi.mock('@/plugins/backlinks/BacklinkEntry.tsx', async () => {
   }
 })
 
+const groupButtonLabels = (): string[] =>
+  screen.getAllByRole('button')
+    .map(button => button.textContent ?? '')
+    .map(text => text.replace(/[▾▸]/g, '').replace(/\d+$/, '').trim())
+    .filter(label => ['Alpha', 'Beta', 'Gamma', 'Other', 'Topic'].includes(label))
+
 describe('GroupedLinkedReferences live updates toggle', () => {
   beforeEach(() => {
     state.backlinkMounts = 0
     state.liveSubscriptions = 0
+    state.grouped = state.makeGrouped([{
+      groupId: 'topic',
+      label: 'Topic',
+      sourceIds: ['src-1'],
+      fallback: false,
+    }])
+    state.groupingConfig = {
+      highPriorityTags: [],
+      lowPriorityTags: [],
+      excludedTags: [],
+      excludedPatterns: [],
+    }
 
     const repo = {
       activeWorkspaceId: 'ws-1',
@@ -128,5 +153,80 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     expect(screen.getByRole('button', {name: 'Resume live updates'})).toBeInTheDocument()
     expect(screen.getByTestId('backlink-src-1')).toBe(item)
     expect(screen.getByTestId('backlink-src-1')).toHaveTextContent('src-1 mount 1')
+  })
+
+  it('keeps the first mounted group order while live results change', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+    ])
+
+    const {rerender} = render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta']))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b', 'src-c'], fallback: false},
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'other', label: 'Other', sourceIds: ['src-d'], fallback: true},
+    ])
+    rerender(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta', 'Other']))
+  })
+
+  it('remembers missing group slots and appends new groups', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+    ])
+
+    const {rerender} = render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta']))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+      {groupId: 'gamma', label: 'Gamma', sourceIds: ['src-g'], fallback: false},
+    ])
+    rerender(<GroupedLinkedReferences block={block} />)
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Beta', 'Gamma']))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'gamma', label: 'Gamma', sourceIds: ['src-g'], fallback: false},
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+    ])
+    rerender(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta', 'Gamma']))
+  })
+
+  it('resets the mounted group order when the grouping query args change', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+    ])
+
+    const {rerender} = render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta']))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+    ])
+    state.groupingConfig = {
+      highPriorityTags: ['Beta'],
+      lowPriorityTags: [],
+      excludedTags: [],
+      excludedPatterns: [],
+    }
+    rerender(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Beta', 'Alpha']))
   })
 })
