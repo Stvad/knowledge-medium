@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import type { Block } from '@/data/block'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -73,7 +73,13 @@ vi.mock('@/shortcuts/useActionContext', () => ({
 
 vi.mock('@/components/BlockComponent.tsx', () => ({
   BlockComponent: vi.fn(({blockId}: {blockId: string}) => (
-    <div data-testid="panel-top-level-block" data-block-id={blockId}/>
+    <div data-testid="panel-top-level-block" data-block-id={blockId}>
+      <button
+        type="button"
+        data-testid="panel-content-control"
+        onPointerDown={event => event.stopPropagation()}
+      />
+    </div>
   )),
 }))
 
@@ -147,6 +153,7 @@ describe('PanelRenderer', () => {
   })
 
   afterEach(async () => {
+    panelHistory.clear(env.panel.id)
     cleanup()
     repoRef.current = undefined
   })
@@ -166,7 +173,10 @@ describe('PanelRenderer', () => {
       </AppRuntimeContextProvider>,
     )
 
-  const renderPanelInLayoutSession = async (activePanelId: string) => {
+  const renderPanelInLayoutSession = async (
+    activePanelId: string,
+    options: {canClosePanel?: boolean} = {},
+  ) => {
     await env.repo.block('layout-session').set(activePanelIdProp, activePanelId)
 
     return render(
@@ -176,6 +186,7 @@ describe('PanelRenderer', () => {
             layoutBoundary: true,
             layoutSessionBlockId: 'layout-session',
             panelId: env.panel.id,
+            canClosePanel: options.canClosePanel,
           }}
         >
           <PanelRenderer block={env.panel}/>
@@ -199,6 +210,37 @@ describe('PanelRenderer', () => {
     expect(backButton.className).toContain('pointer-events-auto')
     expect(backButton.parentElement?.className).toContain('pointer-events-none')
     expect(backButton.parentElement?.parentElement?.className).toContain('pointer-events-none')
+  })
+
+  it('activates the panel from history chrome pointer events', async () => {
+    panelHistory.push(env.panel.id, {blockId: 'page-prev'})
+    await renderPanelInLayoutSession('panel-b')
+    const sessionBlock = env.repo.block('layout-session')
+    const setSpy = vi.spyOn(sessionBlock, 'set')
+
+    fireEvent.pointerDown(await screen.findByLabelText('Back'))
+
+    expect(setSpy).toHaveBeenCalledWith(activePanelIdProp, env.panel.id)
+  })
+
+  it('activates the panel from content capture when child controls stop propagation', async () => {
+    await renderPanelInLayoutSession('panel-b')
+    const sessionBlock = env.repo.block('layout-session')
+    const setSpy = vi.spyOn(sessionBlock, 'set')
+
+    fireEvent.pointerDown(await screen.findByTestId('panel-content-control'))
+
+    expect(setSpy).toHaveBeenCalledWith(activePanelIdProp, env.panel.id)
+  })
+
+  it('does not activate the panel from close pointer events', async () => {
+    await renderPanelInLayoutSession('panel-b', {canClosePanel: true})
+    const sessionBlock = env.repo.block('layout-session')
+    const setSpy = vi.spyOn(sessionBlock, 'set')
+
+    fireEvent.pointerDown(await screen.findByLabelText('Close panel'))
+
+    expect(setSpy).not.toHaveBeenCalled()
   })
 
   it('does not add a content-width frame for normal panel columns', async () => {

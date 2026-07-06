@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import type { User } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -10,7 +10,6 @@ import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { BlockContextProvider, useBlockContext } from '@/context/block'
 import { insertPanelRow } from '@/utils/panelLayoutProjection'
 import { LayoutRenderer } from './LayoutRenderer'
-import { activePanelIdProp } from '@/data/properties'
 
 const isMobileRef = vi.hoisted(() => ({
   current: false,
@@ -28,13 +27,7 @@ vi.mock('@/components/BlockComponent.tsx', () => ({
         data-testid={`block-${blockId}`}
         data-stacked={String(Boolean(context.stackedPanel))}
         data-wide-scroll-surface={String(Boolean(context.wideScrollSurface))}
-      >
-        <button
-          type="button"
-          data-testid={`panel-chrome-${blockId}`}
-          data-panel-activation-ignore="true"
-        />
-      </div>
+      />
     )
   },
 }))
@@ -122,24 +115,5 @@ describe('LayoutRenderer', () => {
       'data-wide-scroll-surface',
       'true',
     )
-  })
-
-  it('does not activate a panel from ignored panel chrome pointer events', async () => {
-    const firstPanelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-a')
-    const secondPanelId = await insertPanelRow(env.repo, layoutSessionBlock(), 'page-b')
-    const sessionBlock = layoutSessionBlock()
-    await sessionBlock.set(activePanelIdProp, firstPanelId)
-    const setSpy = vi.spyOn(sessionBlock, 'set')
-
-    renderLayout(sessionBlock)
-
-    fireEvent.pointerDown(await screen.findByTestId(`panel-chrome-${secondPanelId}`))
-
-    expect(setSpy).not.toHaveBeenCalled()
-    expect(sessionBlock.peekProperty(activePanelIdProp)).toBe(firstPanelId)
-
-    fireEvent.pointerDown(await screen.findByTestId(`block-${secondPanelId}`))
-
-    expect(setSpy).toHaveBeenCalledWith(activePanelIdProp, secondPanelId)
   })
 })

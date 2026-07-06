@@ -4,6 +4,7 @@ import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
+  activePanelIdProp,
   peekFocusedBlockLocation,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -65,6 +66,10 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const canClosePanel = Boolean(blockContext.canClosePanel)
   const stackedPanel = Boolean(blockContext.stackedPanel)
   const wideScrollSurface = Boolean(blockContext.wideScrollSurface) && !stackedPanel
+  const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
+    ? blockContext.layoutSessionBlockId
+    : undefined
+  const trackPanelFocus = Boolean(blockContext.trackPanelFocus)
 
   const repo = useRepo()
 
@@ -76,6 +81,24 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const pendingScrollTopRef = useRef<number | undefined>(undefined)
   const scrollWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingActivationRef = useRef(false)
+
+  const activatePanel = useCallback(() => {
+    if (!layoutSessionBlockId) return
+    const layoutSessionBlock = repo.block(layoutSessionBlockId)
+    if (layoutSessionBlock.peekProperty(activePanelIdProp) === block.id) return
+    if (pendingActivationRef.current) return
+
+    pendingActivationRef.current = true
+    void layoutSessionBlock.set(activePanelIdProp, block.id)
+      .finally(() => {
+        pendingActivationRef.current = false
+      })
+  }, [block.id, layoutSessionBlockId, repo])
+
+  useEffect(() => {
+    if (isActivePanel) pendingActivationRef.current = false
+  }, [isActivePanel])
 
   const flushScrollTop = useCallback(() => {
     if (scrollWriteTimerRef.current) {
@@ -155,7 +178,10 @@ export function PanelRenderer({block}: BlockRendererProps) {
         variant="ghost"
         size="icon"
         className={PANEL_HISTORY_BUTTON_CLASS}
-        onClick={() => { void goBackInPanel(block) }}
+        onClick={() => {
+          activatePanel()
+          void goBackInPanel(block)
+        }}
         disabled={!canBack}
         aria-label="Back"
         title="Back"
@@ -166,7 +192,10 @@ export function PanelRenderer({block}: BlockRendererProps) {
         variant="ghost"
         size="icon"
         className={PANEL_HISTORY_BUTTON_CLASS}
-        onClick={() => { void goForwardInPanel(block) }}
+        onClick={() => {
+          activatePanel()
+          void goForwardInPanel(block)
+        }}
         disabled={!canForward}
         aria-label="Forward"
         title="Forward"
@@ -178,7 +207,6 @@ export function PanelRenderer({block}: BlockRendererProps) {
           variant="ghost"
           size="icon"
           className={PANEL_ACTION_BUTTON_CLASS}
-          data-panel-activation-ignore="true"
           onPointerDown={handleClosePointerDown}
           onClick={handleClose}
           aria-label="Close panel"
@@ -205,6 +233,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
     <div
       data-panel-id={block.id}
       data-panel-active={isActivePanel ? 'true' : undefined}
+      onPointerDown={activatePanel}
       className={`panel min-w-0 max-w-full flex flex-col relative ${
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
       } ${isActivePanel ? 'panel-active' : ''}`}>
@@ -223,6 +252,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
       <div
         ref={scrollRef}
         className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-0'}
+        onPointerDownCapture={activatePanel}
+        onFocusCapture={trackPanelFocus ? activatePanel : undefined}
         onScroll={scheduleScrollTopWrite}
       >
         {wideScrollSurface ? (

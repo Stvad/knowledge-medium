@@ -3,8 +3,7 @@ import { BlockRendererProps } from '@/types.js'
 import { NestedBlockContextProvider } from '@/context/block.js'
 import { useIsMobile } from '@/utils/react.js'
 import { useHandle, usePropertyValue } from '@/hooks/block.js'
-import { useCallback, useEffect, useMemo } from 'react'
-import type { FocusEvent, PointerEvent } from 'react'
+import { useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { activePanelIdProp } from '@/data/properties.js'
@@ -25,10 +24,6 @@ const WIDE_SCROLL_COLUMN_CLASS =
   'h-full w-full min-w-0 shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0'
 const STACK_CHILD_CLASS =
   'w-full min-w-0 shrink-0 border-t border-border pt-2 first:border-t-0 first:pt-0'
-const PANEL_ACTIVATION_IGNORE_SELECTOR = '[data-panel-activation-ignore="true"]'
-
-const shouldIgnorePanelActivation = (target: EventTarget | null): boolean =>
-  target instanceof Element && Boolean(target.closest(PANEL_ACTIVATION_IGNORE_SELECTOR))
 
 const buildRenderSlots = (rootId: string, rows: readonly BlockData[]): RenderSlot[] => {
   const childrenByParent = new Map<string, BlockData[]>()
@@ -79,12 +74,6 @@ function PanelSlotView({
   // div carries the column attribute and this child must omit it.
   columnId?: string
 }) {
-  const markActivePanel = useCallback((event: FocusEvent<HTMLDivElement> | PointerEvent<HTMLDivElement>) => {
-    if (shouldIgnorePanelActivation(event.target)) return
-    if (layoutSessionBlock.peekProperty(activePanelIdProp) === slot.id) return
-    void layoutSessionBlock.set(activePanelIdProp, slot.id)
-  }, [layoutSessionBlock, slot.id])
-
   return (
     <NestedBlockContextProvider
       overrides={{
@@ -94,14 +83,13 @@ function PanelSlotView({
         canClosePanel,
         stackedPanel: stacked,
         wideScrollSurface,
+        trackPanelFocus: trackFocus,
       }}
       key={slot.id}
     >
       <div
         data-layout-column-id={columnId}
         className={className}
-        onPointerDownCapture={markActivePanel}
-        onFocusCapture={trackFocus ? markActivePanel : undefined}
       >
         <BlockComponent blockId={slot.id}/>
       </div>
