@@ -40,8 +40,13 @@ interface GroupedQueryArgs {
 interface SnapshotState {
   data: GroupedBacklinksSnapshot
   queryKey: string
-  queryArgs: GroupedQueryArgs
+  queryEpoch: number
   sticky: StickyGroupedBacklinksState
+}
+
+interface QueryEpochState {
+  key: string
+  epoch: number
 }
 
 interface StableGroupedResult {
@@ -297,22 +302,22 @@ const stabilizeSnapshotForQuery = ({
   data,
   previousSnapshot,
   queryKey,
-  queryArgs,
+  queryEpoch,
 }: {
   data: GroupedBacklinksSnapshot
   previousSnapshot: SnapshotState | null
   queryKey: string
-  queryArgs: GroupedQueryArgs
+  queryEpoch: number
 }): SnapshotState => {
   const previousState = previousSnapshot?.queryKey === queryKey &&
-    previousSnapshot.queryArgs === queryArgs
+    previousSnapshot.queryEpoch === queryEpoch
     ? previousSnapshot
     : null
   const stabilized = stabilizeSnapshotData(data, previousState)
   return {
     ...stabilized,
     queryKey,
-    queryArgs,
+    queryEpoch,
   }
 }
 
@@ -498,6 +503,15 @@ function GroupedLinkedReferencesInner({
   // render snapshot — no subscription, so unrelated row edits still
   // don't trigger work.
   const currentQueryKey = groupedHandle.key
+  const [queryEpochState, setQueryEpochState] = useState<QueryEpochState>(() => ({
+    key: currentQueryKey,
+    epoch: 0,
+  }))
+  let currentQueryEpoch = queryEpochState.epoch
+  if (queryEpochState.key !== currentQueryKey) {
+    currentQueryEpoch = queryEpochState.epoch + 1
+    setQueryEpochState({key: currentQueryKey, epoch: currentQueryEpoch})
+  }
 
   const setFilter = useCallback((next: BacklinksFilter) => {
     setStoredFilter(next)
@@ -513,10 +527,10 @@ function GroupedLinkedReferencesInner({
         data,
         previousSnapshot: prev,
         queryKey: currentQueryKey,
-        queryArgs: groupedArgs,
+        queryEpoch: currentQueryEpoch,
       }))
     },
-    [currentQueryKey, groupedArgs],
+    [currentQueryKey, currentQueryEpoch],
   )
   const handleToggleLiveUpdates = useCallback(() => {
     setLiveUpdates(prev => !prev)
@@ -541,14 +555,14 @@ function GroupedLinkedReferencesInner({
           data,
           previousSnapshot: prev,
           queryKey: currentQueryKey,
-          queryArgs: groupedArgs,
+          queryEpoch: currentQueryEpoch,
         }))
       },
       () => {
         if (cancelled) return
         setSnapshot(prev => (
           prev?.queryKey === currentQueryKey &&
-          prev.queryArgs === groupedArgs
+          prev.queryEpoch === currentQueryEpoch
             ? prev
             : {
                 data: EMPTY_GROUPED_BACKLINKS_SNAPSHOT,
@@ -558,13 +572,13 @@ function GroupedLinkedReferencesInner({
                   ownedSourceIdsByGroupId: new Map(),
                 },
                 queryKey: currentQueryKey,
-                queryArgs: groupedArgs,
+                queryEpoch: currentQueryEpoch,
               }
         ))
       },
     )
     return () => { cancelled = true }
-  }, [loadSnapshotForCurrentQuery, currentQueryKey, groupedArgs])
+  }, [loadSnapshotForCurrentQuery, currentQueryKey, currentQueryEpoch])
 
   const previousLiveUpdatesRef = useRef(liveUpdates)
   useEffect(() => {
@@ -579,13 +593,13 @@ function GroupedLinkedReferencesInner({
           data,
           previousSnapshot: prev,
           queryKey: currentQueryKey,
-          queryArgs: groupedArgs,
+          queryEpoch: currentQueryEpoch,
         }))
       },
       () => {/* keep the paused snapshot until a later live refresh succeeds */},
     )
     return () => { cancelled = true }
-  }, [liveUpdates, loadSnapshotForCurrentQuery, currentQueryKey, groupedArgs])
+  }, [liveUpdates, loadSnapshotForCurrentQuery, currentQueryKey, currentQueryEpoch])
 
   const shared: SharedViewProps = {
     block,
@@ -602,7 +616,7 @@ function GroupedLinkedReferencesInner({
     openDefaultFilterConfig,
   }
   const data = snapshot?.queryKey === currentQueryKey &&
-    snapshot.queryArgs === groupedArgs
+    snapshot.queryEpoch === currentQueryEpoch
     ? snapshot.data
     : EMPTY_GROUPED_BACKLINKS_SNAPSHOT
 

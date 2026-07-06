@@ -131,6 +131,7 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     state.groupedLoadError = undefined
     state.liveListeners = []
     state.groupedHandlesByKey = new Map()
+    state.emptyFilter = {}
     state.groupingConfig = {
       highPriorityTags: [],
       lowPriorityTags: [],
@@ -263,6 +264,31 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     await emitGrouped()
 
     await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance', 'Practice']))
+    expect(screen.getByRole('button', {name: /Dance\s*2/})).toBeInTheDocument()
+    expect(screen.queryByText('Matrix')).not.toBeInTheDocument()
+    expect(screen.queryByText('Lesson')).not.toBeInTheDocument()
+  })
+
+  it('keeps sticky ownership when equal query args are recreated', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'dance', label: 'Dance', sourceIds: ['src-a', 'src-b', 'src-c'], fallback: false},
+    ])
+
+    const {rerender} = render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(screen.getByRole('button', {name: /Dance\s*3/})).toBeInTheDocument())
+
+    state.emptyFilter = {}
+    state.grouped = state.makeGrouped([
+      {groupId: 'matrix', label: 'Matrix', sourceIds: ['src-b'], fallback: false},
+      {groupId: 'lesson', label: 'Lesson', sourceIds: ['src-c'], fallback: false},
+    ])
+    rerender(<GroupedLinkedReferences block={block} />)
+    await act(async () => {})
+    await emitGrouped()
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance']))
     expect(screen.getByRole('button', {name: /Dance\s*2/})).toBeInTheDocument()
     expect(screen.queryByText('Matrix')).not.toBeInTheDocument()
     expect(screen.queryByText('Lesson')).not.toBeInTheDocument()
