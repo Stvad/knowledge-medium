@@ -426,11 +426,10 @@ describe('activate — stale preview cache sweep', () => {
     caches: MockCaches,
     n: number,
     name: string,
-    updatedAt = NOW - 15 * DAY,
   ) => {
     ;(await caches.open('km-meta')).store.set(
       previewDatabaseRecord(n, name),
-      new Response(JSON.stringify({name, updatedAt})),
+      new Response(JSON.stringify({name})),
     )
   }
 
@@ -579,29 +578,7 @@ describe('activate — stale preview cache sweep', () => {
     expect(await newWorker.readLedger()).toEqual(['oldGen', 'newGen'])
   })
 
-  it('treats a fresh preview database record as a stale-sweep keep signal', async () => {
-    const opfs = new MockOpfsRoot()
-    opfs.add('kmp-v6~pr-330~user.db')
-    const {sw, caches} = build({}, async () => ok(), () => NOW, {
-      storage: {getDirectory: async () => opfs},
-    })
-    await seedScope(
-      caches,
-      previewScope(330),
-      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
-      ['pvStale'],
-    )
-    await seedDatabaseRecord(caches, 330, 'kmp-v6~pr-330~user.db', NOW)
-
-    await sw.activate()
-
-    expect(await caches.has('km-shell-pvStale')).toBe(true)
-    expect(opfs.has('kmp-v6~pr-330~user.db')).toBe(true)
-    expect(await metaMatch(caches, previewScope(330))).toBeDefined()
-    expect(await metaMatch(caches, previewDatabaseRecord(330, 'kmp-v6~pr-330~user.db'))).toBeDefined()
-  })
-
-  it('reaps stale preview databases even when only a stale database record remains', async () => {
+  it('does not reap a preview database record without a stale generation ledger', async () => {
     const opfs = new MockOpfsRoot()
     opfs.add('kmp-v6~pr-334~user.db')
     const {sw, caches} = build({}, async () => ok(), () => NOW, {
@@ -611,8 +588,8 @@ describe('activate — stale preview cache sweep', () => {
 
     await sw.activate()
 
-    expect(opfs.has('kmp-v6~pr-334~user.db')).toBe(false)
-    expect(await metaMatch(caches, previewDatabaseRecord(334, 'kmp-v6~pr-334~user.db'))).toBeUndefined()
+    expect(opfs.has('kmp-v6~pr-334~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewDatabaseRecord(334, 'kmp-v6~pr-334~user.db'))).toBeDefined()
   })
 
   it('drops stale retry metadata when legacy IndexedDB cleanup fails after OPFS deletion', async () => {

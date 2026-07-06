@@ -33,7 +33,6 @@ interface PreviewDatabaseRecord {
   scopeUrl: string
   recordUrl: string
   name: string
-  updatedAt: number | undefined
 }
 
 // The HTML shell + icons the app boots from — a static set (not build-injected),
@@ -385,20 +384,11 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
         databaseRecords.push({
           ...recordInfo,
           recordUrl: req.url,
-          updatedAt: await readJsonUpdatedAt(meta, req),
         })
       }
     }
-    const ledgersWithDatabaseOnlyScopes = [
-      ...ledgers,
-      ...databaseOnlyLedgers(databaseRecords, new Set(ledgers.map((ledger) => ledger.scopeUrl))),
-    ]
-    const ledgersWithFreshSignals = preserveScopes(
-      ledgersWithDatabaseOnlyScopes,
-      freshDatabaseRecordScopeUrls(databaseRecords),
-    )
     const plan = computeReapableCaches({
-      ledgers: ledgersWithFreshSignals,
+      ledgers,
       now: now(),
       staleMs: config.staleScopeMs,
       cachePrefix: CACHE_PREFIX,
@@ -410,7 +400,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       databaseRecords,
     )
     const finalPlan = computeReapableCaches({
-      ledgers: preserveScopes(ledgersWithFreshSignals, databaseFailures),
+      ledgers: preserveScopes(ledgers, databaseFailures),
       now: now(),
       staleMs: config.staleScopeMs,
       cachePrefix: CACHE_PREFIX,
@@ -437,14 +427,6 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     return new RegExp(`^kmp-v\\d+~${escapedPreviewId}~[A-Za-z0-9_-]*\\.db$`).test(databaseName)
   }
 
-  const readJsonUpdatedAt = async (cache: Cache, req: Request): Promise<number | undefined> => {
-    const res = await cache.match(req)
-    const raw: unknown = await res?.json().catch(() => null)
-    return raw && typeof raw === 'object' && typeof (raw as {updatedAt?: unknown}).updatedAt === 'number'
-      ? (raw as {updatedAt: number}).updatedAt
-      : undefined
-  }
-
   const preserveScopes = (
     ledgers: ScopeLedger[],
     scopeUrls: ReadonlySet<string>,
@@ -452,43 +434,6 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     ledgers.map((ledger) =>
       scopeUrls.has(ledger.scopeUrl) ? {...ledger, updatedAt: undefined} : ledger,
     )
-
-  const recordIsFresh = (record: Pick<PreviewDatabaseRecord, 'updatedAt'>): boolean =>
-    typeof record.updatedAt === 'number' && now() - record.updatedAt <= config.staleScopeMs
-
-  const recordIsStale = (record: Pick<PreviewDatabaseRecord, 'updatedAt'>): boolean =>
-    typeof record.updatedAt === 'number' && now() - record.updatedAt > config.staleScopeMs
-
-  const freshDatabaseRecordScopeUrls = (
-    databaseRecords: PreviewDatabaseRecord[],
-  ): Set<string> =>
-    new Set(
-      databaseRecords
-        .filter(recordIsFresh)
-        .map((record) => record.scopeUrl),
-    )
-
-  const databaseOnlyLedgers = (
-    databaseRecords: PreviewDatabaseRecord[],
-    existingScopeUrls: ReadonlySet<string>,
-  ): ScopeLedger[] => {
-    const newestStaleRecordByScope = new Map<string, number>()
-    for (const record of databaseRecords) {
-      if (existingScopeUrls.has(record.scopeUrl)) continue
-      if (!isDatabaseNameForPreviewScope(record.name, record.scopeUrl)) continue
-      const updatedAt = record.updatedAt
-      if (typeof updatedAt !== 'number' || !recordIsStale({updatedAt})) continue
-      newestStaleRecordByScope.set(
-        record.scopeUrl,
-        Math.max(newestStaleRecordByScope.get(record.scopeUrl) ?? Number.NEGATIVE_INFINITY, updatedAt),
-      )
-    }
-    return [...newestStaleRecordByScope].map(([scopeUrl, updatedAt]) => ({
-      scopeUrl,
-      ids: [],
-      updatedAt,
-    }))
-  }
 
   const databaseRecordsForReapedScopes = (
     ledgerScopeUrls: string[],
