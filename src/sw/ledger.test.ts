@@ -32,7 +32,6 @@ describe('normalizeLedger', () => {
     expect(normalizeLedger(['a', 'b'])).toEqual({
       ids: ['a', 'b'],
       updatedAt: undefined,
-      databaseNames: [],
     })
   })
 
@@ -40,19 +39,6 @@ describe('normalizeLedger', () => {
     expect(normalizeLedger({ids: ['a'], updatedAt: 123})).toEqual({
       ids: ['a'],
       updatedAt: 123,
-      databaseNames: [],
-    })
-  })
-
-  it('reads recorded preview database names from the ledger shape', () => {
-    expect(normalizeLedger({
-      ids: ['a'],
-      updatedAt: 123,
-      databaseNames: ['kmp-v6-user-pr-1.db', 42, 'kmp-v6-other-pr-1.db'],
-    })).toEqual({
-      ids: ['a'],
-      updatedAt: 123,
-      databaseNames: ['kmp-v6-user-pr-1.db', 'kmp-v6-other-pr-1.db'],
     })
   })
 
@@ -60,22 +46,19 @@ describe('normalizeLedger', () => {
     expect(normalizeLedger({ids: ['a']})).toEqual({
       ids: ['a'],
       updatedAt: undefined,
-      databaseNames: [],
     })
     expect(normalizeLedger({ids: ['a'], updatedAt: 'soon'})).toEqual({
       ids: ['a'],
       updatedAt: undefined,
-      databaseNames: [],
     })
   })
 
   it('falls back to an empty ledger for null / garbage / a non-array ids', () => {
-    expect(normalizeLedger(null)).toEqual({ids: [], updatedAt: undefined, databaseNames: []})
-    expect(normalizeLedger(42)).toEqual({ids: [], updatedAt: undefined, databaseNames: []})
+    expect(normalizeLedger(null)).toEqual({ids: [], updatedAt: undefined})
+    expect(normalizeLedger(42)).toEqual({ids: [], updatedAt: undefined})
     expect(normalizeLedger({ids: 'nope'})).toEqual({
       ids: [],
       updatedAt: undefined,
-      databaseNames: [],
     })
   })
 })
@@ -88,12 +71,9 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
   const prod = 'https://stvad.github.io/knowledge-medium/__km_generations__'
   const preview = (n: number) =>
     `https://stvad.github.io/knowledge-medium/pr-preview/pr-${n}/__km_generations__`
-  type TestScopeLedger = Omit<ScopeLedger, 'databaseNames'> & {databaseNames?: string[]}
-  const withDatabaseNames = (ledgers: TestScopeLedger[]): ScopeLedger[] =>
-    ledgers.map(ledger => ({...ledger, databaseNames: ledger.databaseNames ?? []}))
-  const reap = (ledgers: TestScopeLedger[]) =>
+  const reap = (ledgers: ScopeLedger[]) =>
     computeReapableCaches({
-      ledgers: withDatabaseNames(ledgers),
+      ledgers,
       now: NOW,
       staleMs: STALE_MS,
       cachePrefix: PREFIX,
@@ -141,7 +121,7 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
   it('never reaps the sweeping SW’s OWN scope, even if its ledger looks stale', () => {
     const self = preview(313)
     const plan = computeReapableCaches({
-      ledgers: withDatabaseNames([{scopeUrl: self, ids: ['selfId'], updatedAt: NOW - 99 * DAY}]),
+      ledgers: [{scopeUrl: self, ids: ['selfId'], updatedAt: NOW - 99 * DAY}],
       now: NOW,
       staleMs: STALE_MS,
       cachePrefix: PREFIX,

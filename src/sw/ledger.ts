@@ -26,13 +26,6 @@ export interface LedgerEntry {
   ids: string[]
   /** epoch ms of the last write; undefined for a legacy bare-array ledger. */
   updatedAt: number | undefined
-  /**
-   * Legacy preview DB filenames from an earlier PR implementation. New preview
-   * DB records are independent meta-cache keys so generation-ledger writes can't
-   * clobber them, but normalization keeps this readable until old local state is
-   * swept.
-   */
-  databaseNames: string[]
 }
 
 /**
@@ -43,22 +36,18 @@ export interface LedgerEntry {
  * garbage, non-array ids) degrades to an empty ledger.
  */
 export const normalizeLedger = (raw: unknown): LedgerEntry => {
-  if (Array.isArray(raw)) return {ids: raw, updatedAt: undefined, databaseNames: []}
+  if (Array.isArray(raw)) return {ids: raw, updatedAt: undefined}
   if (raw && typeof raw === 'object' && Array.isArray((raw as {ids?: unknown}).ids)) {
-    const {ids, updatedAt, databaseNames} = raw as {
+    const {ids, updatedAt} = raw as {
       ids: string[]
       updatedAt?: unknown
-      databaseNames?: unknown
     }
     return {
       ids,
       updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined,
-      databaseNames: Array.isArray(databaseNames)
-        ? databaseNames.filter((name): name is string => typeof name === 'string')
-        : [],
     }
   }
-  return {ids: [], updatedAt: undefined, databaseNames: []}
+  return {ids: [], updatedAt: undefined}
 }
 
 /** One scope's ledger, tagged with the ledger-entry key URL it was read from. */

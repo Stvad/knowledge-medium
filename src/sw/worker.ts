@@ -136,10 +136,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     try {
       const cache = await caches.open(META_CACHE)
       const res = await cache.match(LEDGER_KEY)
-      if (!res) return {ids: [], updatedAt: undefined, databaseNames: []}
+      if (!res) return {ids: [], updatedAt: undefined}
       return normalizeLedger(await res.json())
     } catch {
-      return {ids: [], updatedAt: undefined, databaseNames: []}
+      return {ids: [], updatedAt: undefined}
     }
   }
 
@@ -375,8 +375,8 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
         const res = await meta.match(req)
         if (!res) continue
         const raw: unknown = await res.json().catch(() => null)
-        const {ids, updatedAt, databaseNames} = normalizeLedger(raw)
-        ledgers.push({scopeUrl: req.url, ids, updatedAt, databaseNames})
+        const {ids, updatedAt} = normalizeLedger(raw)
+        ledgers.push({scopeUrl: req.url, ids, updatedAt})
         continue
       }
 
@@ -406,7 +406,6 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     })
     const databaseFailures = await sweepStalePreviewDatabases(
       meta,
-      ledgersWithFreshSignals,
       plan.ledgerScopeUrls,
       databaseRecords,
     )
@@ -488,12 +487,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       scopeUrl,
       ids: [],
       updatedAt,
-      databaseNames: [],
     }))
   }
 
-  const databaseNamesForReapedScopes = (
-    ledgers: ScopeLedger[],
+  const databaseRecordsForReapedScopes = (
     ledgerScopeUrls: string[],
     databaseRecords: PreviewDatabaseRecord[],
   ): Array<{scopeUrl: string; name: string; recordUrl?: string}> => {
@@ -508,22 +505,11 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       seen.add(key)
       names.push(record)
     }
-    for (const ledger of ledgers) {
-      if (!reapedScopes.has(ledger.scopeUrl)) continue
-      for (const name of ledger.databaseNames) {
-        if (!isDatabaseNameForPreviewScope(name, ledger.scopeUrl)) continue
-        const key = `${ledger.scopeUrl}\n${name}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        names.push({scopeUrl: ledger.scopeUrl, name})
-      }
-    }
     return names
   }
 
   const sweepStalePreviewDatabases = async (
     meta: Cache,
-    ledgers: ScopeLedger[],
     ledgerScopeUrls: string[],
     databaseRecords: PreviewDatabaseRecord[],
   ): Promise<Set<string>> => {
@@ -532,8 +518,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       string,
       Array<{scopeUrl: string; name: string; recordUrl?: string}>
     >()
-    for (const database of databaseNamesForReapedScopes(
-      ledgers,
+    for (const database of databaseRecordsForReapedScopes(
       ledgerScopeUrls,
       databaseRecords,
     )) {

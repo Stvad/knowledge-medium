@@ -504,33 +504,6 @@ describe('activate — stale preview cache sweep', () => {
     expect(await metaMatch(caches, prodScope)).toBeDefined()
   })
 
-  it('ignores recorded database names that do not match the stale preview scope', async () => {
-    const opfs = new MockOpfsRoot()
-    opfs.add('kmp-v6-prod.db')
-    opfs.add('kmp-v6-user-pr-309.db')
-    opfs.add('kmp-v6~pr-310~user.db')
-    const {sw, caches} = build({}, async () => ok(), () => NOW, {
-      storage: {getDirectory: async () => opfs},
-    })
-    await seedScope(
-      caches,
-      previewScope(309),
-      {
-        ids: ['pvStale'],
-        updatedAt: NOW - 15 * DAY,
-        databaseNames: ['kmp-v6-prod.db', 'kmp-v6-user-pr-309.db', 'kmp-v6~pr-310~user.db'],
-      },
-      ['pvStale'],
-    )
-
-    await sw.activate()
-
-    expect(opfs.has('kmp-v6-prod.db')).toBe(true)
-    expect(opfs.has('kmp-v6-user-pr-309.db')).toBe(true)
-    expect(opfs.has('kmp-v6~pr-310~user.db')).toBe(true)
-    expect(await metaMatch(caches, previewScope(309))).toBeUndefined()
-  })
-
   it('keeps the stale preview ledger when main database deletion fails so a later sweep can retry', async () => {
     const opfs = new MockOpfsRoot()
     opfs.add('kmp-v6~pr-309~user.db')
