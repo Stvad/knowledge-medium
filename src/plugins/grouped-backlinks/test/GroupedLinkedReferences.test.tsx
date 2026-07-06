@@ -386,4 +386,33 @@ describe('GroupedLinkedReferences live updates toggle', () => {
 
     await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta']))
   })
+
+  it('clears a stale snapshot when a query-key refresh fails', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+    ])
+
+    const {rerender} = render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha']))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+    ])
+    state.groupedLoadError = new Error('transient load failure')
+    state.groupingConfig = {
+      highPriorityTags: ['Beta'],
+      lowPriorityTags: [],
+      excludedTags: [],
+      excludedPatterns: [],
+    }
+    rerender(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(screen.queryByText('Alpha')).not.toBeInTheDocument())
+
+    await emitGrouped()
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Beta']))
+  })
 })

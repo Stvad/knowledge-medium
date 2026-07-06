@@ -415,7 +415,18 @@ function GroupedLinkedReferencesInner({
           }
         })
       },
-      () => {/* error is stored on the handle */},
+      () => {
+        if (cancelled) return
+        setSnapshot(prev => (
+          prev?.queryKey === currentQueryKey
+            ? prev
+            : {
+                data: EMPTY_GROUPED_BACKLINKS_SNAPSHOT,
+                groupOrder: [],
+                queryKey: currentQueryKey,
+              }
+        ))
+      },
     )
     return () => { cancelled = true }
   }, [repo, groupedArgs, currentQueryKey])
