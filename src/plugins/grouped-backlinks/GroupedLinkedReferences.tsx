@@ -53,6 +53,8 @@ interface StickySourceClaims {
   fieldClaimedSourceIds: Set<string>
 }
 
+const MAX_POST_SETTLE_DRAIN_ATTEMPTS = 20
+
 const EMPTY_GROUPED_BACKLINKS_SNAPSHOT: GroupedBacklinksSnapshot = {
   unfilteredBacklinks: [],
   grouped: {
@@ -159,12 +161,23 @@ const stabilizeGroupedResult = (
   ]
   const currentSourceIds = currentSourceIdsForGroupedResult(grouped)
   const previousFallbackGroup = previousState?.data.grouped.groups.find(group => group.fallback)
-  const retainedFallbackSourceIds = new Set(
-    previousFallbackGroup?.sourceIds.filter(sourceId => currentSourceIds.has(sourceId)) ?? [],
-  )
+  const retainedSourceIdsByGroupId = new Map<string, ReadonlySet<string>>()
   const claims: StickySourceClaims = {
-    claimedSourceIds: new Set(retainedFallbackSourceIds),
+    claimedSourceIds: new Set(),
     fieldClaimedSourceIds: new Set(),
+  }
+  for (const group of [...previousGroups, ...(previousFallbackGroup ? [previousFallbackGroup] : [])]) {
+    const retainedSourceIds = new Set(
+      group.sourceIds.filter(sourceId => currentSourceIds.has(sourceId)),
+    )
+    if (retainedSourceIds.size === 0) continue
+    retainedSourceIdsByGroupId.set(group.groupId, retainedSourceIds)
+    for (const sourceId of retainedSourceIds) {
+      claims.claimedSourceIds.add(sourceId)
+      if (groupCanShareClaimedSources(group.groupId)) {
+        claims.fieldClaimedSourceIds.add(sourceId)
+      }
+    }
   }
   const groups = groupOrder
     .map(groupId => {
@@ -178,6 +191,7 @@ const stabilizeGroupedResult = (
         nextGroup,
         currentSourceIds,
         claims,
+        retainedSourceIds: retainedSourceIdsByGroupId.get(groupId),
       })
       if (sourceIds.length === 0) return undefined
       return {...group, sourceIds, fallback: false}
@@ -193,7 +207,7 @@ const stabilizeGroupedResult = (
       nextGroup: nextFallbackGroup,
       currentSourceIds,
       claims,
-      retainedSourceIds: retainedFallbackSourceIds,
+      retainedSourceIds: retainedSourceIdsByGroupId.get(fallbackGroup.groupId),
     })
     if (sourceIds.length > 0) groups.push({...fallbackGroup, sourceIds, fallback: true})
   }
@@ -231,13 +245,13 @@ const loadSettledGroupedResult = async (
   // A LoaderHandle load invalidated mid-flight resolves with its dirty
   // read, then schedules a clean rerun in a microtask. Drain that rerun
   // before using the result as a new display-order baseline.
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_POST_SETTLE_DRAIN_ATTEMPTS; attempt += 1) {
     await waitForPostSettleReload()
     const next = await handle.load()
     if (Object.is(next, result)) return next
     result = next
   }
-  return result
+  throw new Error('Grouped backlinks load did not settle after repeated post-settle reloads')
 }
 
 const loadSettledGroupedResultWithRetry = async (
@@ -484,7 +498,9 @@ function GroupedLinkedReferencesInner({
     setFilter,
     openDefaultFilterConfig,
   }
-  const data = snapshot?.data ?? EMPTY_GROUPED_BACKLINKS_SNAPSHOT
+  const data = snapshot?.queryKey === currentQueryKey
+    ? snapshot.data
+    : EMPTY_GROUPED_BACKLINKS_SNAPSHOT
 
   return (
     <>

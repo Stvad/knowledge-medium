@@ -34,7 +34,7 @@ const state = vi.hoisted(() => {
     makeGrouped,
     grouped,
     groupedLoadResult: undefined as GroupedBacklinksResult | undefined,
-    groupedLoadQueue: [] as GroupedBacklinksResult[],
+    groupedLoadQueue: [] as Array<GroupedBacklinksResult | Promise<GroupedBacklinksResult>>,
     groupedLoadErrors: [] as Error[],
     groupedLoadError: undefined as Error | undefined,
     liveListeners: [] as Array<(value: GroupedBacklinksResult) => void>,
@@ -255,6 +255,29 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     expect(screen.getByRole('button', {name: /Matrix\s*1/})).toBeInTheDocument()
   })
 
+  it('prevents earlier groups from stealing rows already assigned to later groups', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+    ])
+
+    render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta']))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a', 'src-b'], fallback: false},
+    ])
+    await emitGrouped()
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta']))
+    expect(screen.getByRole('button', {name: /Alpha\s*1/})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Beta\s*1/})).toBeInTheDocument()
+    expect(screen.getByTestId('backlink-src-a')).toHaveTextContent('src-a mount 1')
+    expect(screen.getByTestId('backlink-src-b')).toHaveTextContent('src-b mount 2')
+  })
+
   it('keeps existing fallback rows assigned to the fallback group', async () => {
     const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
     state.grouped = state.makeGrouped([
@@ -347,6 +370,28 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     await waitFor(() => expect(groupButtonLabels()).toEqual(['Beta', 'Alpha']))
   })
 
+  it('does not render a stale snapshot while a query-key refresh is pending', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+    ])
+
+    const {rerender} = render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha']))
+
+    state.groupedLoadQueue = [new Promise<GroupedBacklinksResult>(() => {})]
+    state.groupingConfig = {
+      highPriorityTags: ['Beta'],
+      lowPriorityTags: [],
+      excludedTags: [],
+      excludedPatterns: [],
+    }
+    rerender(<GroupedLinkedReferences block={block} />)
+
+    expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
+  })
+
   it('does not seed a reset baseline from a stale live value', async () => {
     const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
     state.grouped = state.makeGrouped([
@@ -377,7 +422,7 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     await waitFor(() => expect(groupButtonLabels()).toEqual(['Beta', 'Alpha']))
   })
 
-  it('drains a dirty mid-load result before seeding a reset baseline', async () => {
+  it('drains repeated dirty mid-load results before seeding a reset baseline', async () => {
     const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
     state.grouped = state.makeGrouped([
       {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
@@ -397,7 +442,23 @@ describe('GroupedLinkedReferences live updates toggle', () => {
       {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
     ])
     state.grouped = stale
-    state.groupedLoadQueue = [stale, fresh, fresh]
+    const dirtyOne = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'gamma', label: 'Gamma', sourceIds: ['src-g'], fallback: false},
+    ])
+    const dirtyTwo = state.makeGrouped([
+      {groupId: 'gamma', label: 'Gamma', sourceIds: ['src-g'], fallback: false},
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+    ])
+    const dirtyThree = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'delta', label: 'Delta', sourceIds: ['src-d'], fallback: false},
+    ])
+    const dirtyFour = state.makeGrouped([
+      {groupId: 'delta', label: 'Delta', sourceIds: ['src-d'], fallback: false},
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+    ])
+    state.groupedLoadQueue = [stale, dirtyOne, dirtyTwo, dirtyThree, dirtyFour, fresh, fresh]
     state.groupingConfig = {
       highPriorityTags: ['Beta'],
       lowPriorityTags: [],
