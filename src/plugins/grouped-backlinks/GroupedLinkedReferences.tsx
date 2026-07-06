@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MouseEvent, type SetStateAction } from 'react'
 import { Filter, Pause, Play } from 'lucide-react'
 import { Block } from '@/data/block'
 import { useWorkspaceId } from '@/hooks/block.js'
@@ -16,7 +16,6 @@ import { useBacklinkFilterState } from '@/plugins/backlinks/useStoredBacklinkFil
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import type { GroupedBacklinkGroup } from './grouping.ts'
 import { useGroupedBacklinksConfig } from './useGroupedBacklinksConfig.ts'
-import { useGroupedBacklinks } from './useGroupedBacklinks.ts'
 import type { GroupedBacklinksConfig } from './config.ts'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
@@ -41,7 +40,33 @@ interface GroupedQueryArgs {
 interface SnapshotState {
   data: GroupedBacklinksSnapshot
   queryKey: string
+  queryEpoch: number
+  sticky: StickyGroupedBacklinksState
 }
+
+interface QueryEpochState {
+  key: string
+  epoch: number
+}
+
+interface StableGroupedResult {
+  grouped: GroupedBacklinksResult
+  sticky: StickyGroupedBacklinksState
+}
+
+interface StickySourceClaims {
+  claimedSourceIds: Set<string>
+  fieldClaimedSourceIds: Set<string>
+}
+
+interface StickyGroupedBacklinksState {
+  groupOrder: string[]
+  groupsById: ReadonlyMap<string, GroupedBacklinkGroup>
+  ownedSourceIdsByGroupId: ReadonlyMap<string, readonly string[]>
+  fallbackGroupId?: string
+}
+
+const MAX_POST_SETTLE_DRAIN_ATTEMPTS = 20
 
 const EMPTY_GROUPED_BACKLINKS_SNAPSHOT: GroupedBacklinksSnapshot = {
   unfilteredBacklinks: [],
@@ -79,6 +104,256 @@ const snapshotFromGroupedResult = (
     ]),
   ),
 })
+
+const currentSourceIdsForGroupedResult = (
+  grouped: GroupedBacklinksResult,
+): ReadonlySet<string> => {
+  const parentSourceIds = grouped.sourceParents.map(entry => entry.sourceId)
+  if (parentSourceIds.length > 0 || grouped.total === 0) return new Set(parentSourceIds)
+  return new Set(grouped.groups.flatMap(group => group.sourceIds))
+}
+
+const groupCanShareClaimedSources = (groupId: string): boolean =>
+  groupId.startsWith('field:')
+
+const uniqueSourceIds = (sourceIds: readonly string[]): string[] => {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const sourceId of sourceIds) {
+    if (seen.has(sourceId)) continue
+    seen.add(sourceId)
+    result.push(sourceId)
+  }
+  return result
+}
+
+const stickySourceIdsForGroup = ({
+  groupId,
+  previousGroup,
+  nextGroup,
+  currentSourceIds,
+  claims,
+  retainedSourceIds,
+}: {
+  groupId: string
+  previousGroup?: GroupedBacklinkGroup
+  nextGroup?: GroupedBacklinkGroup
+  currentSourceIds: ReadonlySet<string>
+  claims: StickySourceClaims
+  retainedSourceIds?: ReadonlySet<string>
+}): string[] => {
+  const canShareClaimedSources = groupCanShareClaimedSources(groupId)
+  const sourceIds: string[] = []
+  const seenSourceIds = new Set<string>()
+  const append = (sourceId: string) => {
+    if (!currentSourceIds.has(sourceId)) return
+    if (seenSourceIds.has(sourceId)) return
+    if (
+      claims.claimedSourceIds.has(sourceId) &&
+      !retainedSourceIds?.has(sourceId) &&
+      (!canShareClaimedSources || !claims.fieldClaimedSourceIds.has(sourceId))
+    ) return
+    seenSourceIds.add(sourceId)
+    sourceIds.push(sourceId)
+  }
+
+  for (const sourceId of previousGroup?.sourceIds ?? []) append(sourceId)
+  for (const sourceId of nextGroup?.sourceIds ?? []) append(sourceId)
+  for (const sourceId of sourceIds) {
+    claims.claimedSourceIds.add(sourceId)
+    if (canShareClaimedSources) claims.fieldClaimedSourceIds.add(sourceId)
+  }
+
+  return sourceIds
+}
+
+const fallbackGroupFromStickyState = (
+  sticky: StickyGroupedBacklinksState | undefined,
+): GroupedBacklinkGroup | undefined => (
+  sticky?.fallbackGroupId ? sticky.groupsById.get(sticky.fallbackGroupId) : undefined
+)
+
+const stabilizeGroupedResult = (
+  grouped: GroupedBacklinksResult,
+  previousState: SnapshotState | null,
+): StableGroupedResult => {
+  const nextGroups = grouped.groups.filter(group => !group.fallback)
+  const previousGroups = previousState?.sticky.groupOrder
+    .map(groupId => previousState.sticky.groupsById.get(groupId))
+    .filter((group): group is GroupedBacklinkGroup => group !== undefined) ?? []
+  const nextGroupsById = new Map(nextGroups.map(group => [group.groupId, group]))
+  const previousGroupsById = new Map(previousGroups.map(group => [group.groupId, group]))
+  const previousGroupOrder = previousState?.sticky.groupOrder ?? []
+  const knownGroupIds = new Set(previousGroupOrder)
+  const groupOrder = [
+    ...previousGroupOrder,
+    ...nextGroups
+      .map(group => group.groupId)
+      .filter(groupId => !knownGroupIds.has(groupId)),
+  ]
+  const currentSourceIds = currentSourceIdsForGroupedResult(grouped)
+  const previousFallbackGroup = fallbackGroupFromStickyState(previousState?.sticky)
+  const previousOwnedSourceIdsByGroupId: ReadonlyMap<string, readonly string[]> =
+    previousState?.sticky.ownedSourceIdsByGroupId ?? new Map()
+  const retainedSourceIdsByGroupId = new Map<string, ReadonlySet<string>>()
+  const claims: StickySourceClaims = {
+    claimedSourceIds: new Set(),
+    fieldClaimedSourceIds: new Set(),
+  }
+  for (const group of [...previousGroups, ...(previousFallbackGroup ? [previousFallbackGroup] : [])]) {
+    const previousOwnedSourceIds = previousOwnedSourceIdsByGroupId.get(group.groupId) ?? group.sourceIds
+    const retainedSourceIds = new Set(
+      previousOwnedSourceIds.filter(sourceId => currentSourceIds.has(sourceId)),
+    )
+    if (retainedSourceIds.size === 0) continue
+    retainedSourceIdsByGroupId.set(group.groupId, retainedSourceIds)
+    for (const sourceId of retainedSourceIds) {
+      claims.claimedSourceIds.add(sourceId)
+      if (groupCanShareClaimedSources(group.groupId)) {
+        claims.fieldClaimedSourceIds.add(sourceId)
+      }
+    }
+  }
+  const stickyGroupsById = new Map<string, GroupedBacklinkGroup>(
+    previousState?.sticky.groupsById ?? [],
+  )
+  const stickyOwnedSourceIdsByGroupId = new Map<string, readonly string[]>(
+    previousState?.sticky.ownedSourceIdsByGroupId ?? [],
+  )
+  const groups = groupOrder
+    .map(groupId => {
+      const previousGroup = previousGroupsById.get(groupId)
+      const nextGroup = nextGroupsById.get(groupId)
+      const group = nextGroup ?? previousGroup
+      if (!group) return undefined
+      const previousOwnedSourceIds = previousOwnedSourceIdsByGroupId.get(groupId) ?? previousGroup?.sourceIds ?? []
+      const sourceIds = stickySourceIdsForGroup({
+        groupId,
+        previousGroup: previousGroup ? {...previousGroup, sourceIds: [...previousOwnedSourceIds]} : undefined,
+        nextGroup,
+        currentSourceIds,
+        claims,
+        retainedSourceIds: retainedSourceIdsByGroupId.get(groupId),
+      })
+      stickyGroupsById.set(groupId, {...group, sourceIds: []})
+      const ownedSourceIds = uniqueSourceIds([...previousOwnedSourceIds, ...sourceIds])
+      if (ownedSourceIds.length > 0) stickyOwnedSourceIdsByGroupId.set(groupId, ownedSourceIds)
+      if (sourceIds.length === 0) return undefined
+      return {...group, sourceIds, fallback: false}
+    })
+    .filter((group): group is GroupedBacklinkGroup => group !== undefined)
+
+  const nextFallbackGroup = grouped.groups.find(group => group.fallback)
+  const fallbackGroup = nextFallbackGroup ?? previousFallbackGroup
+  let fallbackGroupId = previousState?.sticky.fallbackGroupId
+  if (fallbackGroup) {
+    fallbackGroupId = fallbackGroup.groupId
+    const previousOwnedSourceIds = previousOwnedSourceIdsByGroupId.get(fallbackGroup.groupId)
+      ?? previousFallbackGroup?.sourceIds
+      ?? []
+    const sourceIds = stickySourceIdsForGroup({
+      groupId: fallbackGroup.groupId,
+      previousGroup: previousFallbackGroup ? {
+        ...previousFallbackGroup,
+        sourceIds: [...previousOwnedSourceIds],
+      } : undefined,
+      nextGroup: nextFallbackGroup,
+      currentSourceIds,
+      claims,
+      retainedSourceIds: retainedSourceIdsByGroupId.get(fallbackGroup.groupId),
+    })
+    stickyGroupsById.set(fallbackGroup.groupId, {...fallbackGroup, sourceIds: [], fallback: true})
+    const ownedSourceIds = uniqueSourceIds([...previousOwnedSourceIds, ...sourceIds])
+    if (ownedSourceIds.length > 0) {
+      stickyOwnedSourceIdsByGroupId.set(fallbackGroup.groupId, ownedSourceIds)
+    }
+    if (sourceIds.length > 0) groups.push({...fallbackGroup, sourceIds, fallback: true})
+  }
+
+  return {
+    grouped: {
+      ...grouped,
+      groups,
+    },
+    sticky: {
+      groupOrder,
+      groupsById: stickyGroupsById,
+      ownedSourceIdsByGroupId: stickyOwnedSourceIdsByGroupId,
+      fallbackGroupId,
+    },
+  }
+}
+
+const stabilizeSnapshotData = (
+  data: GroupedBacklinksSnapshot,
+  previousState: SnapshotState | null,
+): {data: GroupedBacklinksSnapshot; sticky: StickyGroupedBacklinksState} => {
+  const {grouped, sticky} = stabilizeGroupedResult(data.grouped, previousState)
+  return {
+    data: {
+      ...data,
+      grouped,
+    },
+    sticky,
+  }
+}
+
+const stabilizeSnapshotForQuery = ({
+  data,
+  previousSnapshot,
+  queryKey,
+  queryEpoch,
+}: {
+  data: GroupedBacklinksSnapshot
+  previousSnapshot: SnapshotState | null
+  queryKey: string
+  queryEpoch: number
+}): SnapshotState => {
+  const previousState = previousSnapshot?.queryKey === queryKey &&
+    previousSnapshot.queryEpoch === queryEpoch
+    ? previousSnapshot
+    : null
+  const stabilized = stabilizeSnapshotData(data, previousState)
+  return {
+    ...stabilized,
+    queryKey,
+    queryEpoch,
+  }
+}
+
+const waitForPostSettleReload = (): Promise<void> =>
+  new Promise(resolve => queueMicrotask(resolve))
+
+const loadSettledGroupedResult = async (
+  handle: {load: () => Promise<GroupedBacklinksResult>},
+): Promise<GroupedBacklinksResult> => {
+  let result = await handle.load()
+  // A LoaderHandle load invalidated mid-flight resolves with its dirty
+  // read, then schedules a clean rerun in a microtask. Drain that rerun
+  // before using the result as a new display-order baseline.
+  for (let attempt = 0; attempt < MAX_POST_SETTLE_DRAIN_ATTEMPTS; attempt += 1) {
+    await waitForPostSettleReload()
+    const next = await handle.load()
+    if (Object.is(next, result)) return next
+    result = next
+  }
+  throw new Error('Grouped backlinks load did not settle after repeated post-settle reloads')
+}
+
+const loadSettledGroupedResultWithRetry = async (
+  handle: {load: () => Promise<GroupedBacklinksResult>},
+): Promise<GroupedBacklinksResult> => {
+  try {
+    return await loadSettledGroupedResult(handle)
+  } catch (error) {
+    await waitForPostSettleReload()
+    try {
+      return await loadSettledGroupedResult(handle)
+    } catch {
+      throw error
+    }
+  }
+}
 
 const GroupItems = ({
   sourceBlocks,
@@ -220,13 +495,23 @@ function GroupedLinkedReferencesInner({
     () => buildGroupedQueryArgs(workspaceId, block.id, groupingConfig, effectiveFilter),
     [workspaceId, block.id, groupingConfig, effectiveFilter],
   )
+  const groupedHandle = repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
   // Stable string identity of the grouped-query args. The snapshot
   // carries the key of the args it was captured under; whenever the
   // current key drifts (filter or config change while paused), the
   // parent fires a one-shot `handle.load()` to refresh the whole
   // render snapshot — no subscription, so unrelated row edits still
   // don't trigger work.
-  const currentQueryKey = useMemo(() => JSON.stringify(groupedArgs), [groupedArgs])
+  const currentQueryKey = groupedHandle.key
+  const [queryEpochState, setQueryEpochState] = useState<QueryEpochState>(() => ({
+    key: currentQueryKey,
+    epoch: 0,
+  }))
+  let currentQueryEpoch = queryEpochState.epoch
+  if (queryEpochState.key !== currentQueryKey) {
+    currentQueryEpoch = queryEpochState.epoch + 1
+    setQueryEpochState({key: currentQueryKey, epoch: currentQueryEpoch})
+  }
 
   const setFilter = useCallback((next: BacklinksFilter) => {
     setStoredFilter(next)
@@ -238,37 +523,83 @@ function GroupedLinkedReferencesInner({
 
   const handleLiveData = useCallback(
     (data: GroupedBacklinksSnapshot) => {
-      setSnapshot({data, queryKey: currentQueryKey})
+      setSnapshot(prev => stabilizeSnapshotForQuery({
+        data,
+        previousSnapshot: prev,
+        queryKey: currentQueryKey,
+        queryEpoch: currentQueryEpoch,
+      }))
     },
-    [currentQueryKey],
+    [currentQueryKey, currentQueryEpoch],
   )
   const handleToggleLiveUpdates = useCallback(() => {
     setLiveUpdates(prev => !prev)
   }, [])
 
-  const snapshotQueryKey = snapshot?.queryKey
-  const snapshotStale = snapshotQueryKey !== undefined && snapshotQueryKey !== currentQueryKey
+  const loadSnapshotForCurrentQuery = useCallback(async () => {
+    const result = await loadSettledGroupedResultWithRetry(groupedHandle)
+    return snapshotFromGroupedResult(repo, result)
+  }, [groupedHandle, repo])
 
-  // While paused, keep the visible tree mounted and run the same one-shot
-  // refresh the old frozen body used when filter/config args drift. This
-  // refresh loads imperatively, so it does not subscribe to live query
-  // invalidations.
+  // A query-key change establishes a new display-order baseline from an
+  // explicit fresh load. `useHandle` may synchronously expose a cached
+  // stale `peek()` value before its own load settles; accepting that
+  // payload would preserve the old order after switching back to a
+  // previously used filter/config key.
   useEffect(() => {
-    if (liveUpdates || !snapshotStale) return
     let cancelled = false
-    const handle = repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
-    handle.load().then(
-      result => {
+    loadSnapshotForCurrentQuery().then(
+      data => {
         if (cancelled) return
-        setSnapshot({
-          data: snapshotFromGroupedResult(repo, result),
+        setSnapshot(prev => stabilizeSnapshotForQuery({
+          data,
+          previousSnapshot: prev,
           queryKey: currentQueryKey,
-        })
+          queryEpoch: currentQueryEpoch,
+        }))
       },
-      () => {/* error is stored on the handle */},
+      () => {
+        if (cancelled) return
+        setSnapshot(prev => (
+          prev?.queryKey === currentQueryKey &&
+          prev.queryEpoch === currentQueryEpoch
+            ? prev
+            : {
+                data: EMPTY_GROUPED_BACKLINKS_SNAPSHOT,
+                sticky: {
+                  groupOrder: [],
+                  groupsById: new Map(),
+                  ownedSourceIdsByGroupId: new Map(),
+                },
+                queryKey: currentQueryKey,
+                queryEpoch: currentQueryEpoch,
+              }
+        ))
+      },
     )
     return () => { cancelled = true }
-  }, [liveUpdates, snapshotStale, repo, groupedArgs, currentQueryKey])
+  }, [loadSnapshotForCurrentQuery, currentQueryKey, currentQueryEpoch])
+
+  const previousLiveUpdatesRef = useRef(liveUpdates)
+  useEffect(() => {
+    const resumed = !previousLiveUpdatesRef.current && liveUpdates
+    previousLiveUpdatesRef.current = liveUpdates
+    if (!resumed) return undefined
+    let cancelled = false
+    loadSnapshotForCurrentQuery().then(
+      data => {
+        if (cancelled) return
+        setSnapshot(prev => stabilizeSnapshotForQuery({
+          data,
+          previousSnapshot: prev,
+          queryKey: currentQueryKey,
+          queryEpoch: currentQueryEpoch,
+        }))
+      },
+      () => {/* keep the paused snapshot until a later live refresh succeeds */},
+    )
+    return () => { cancelled = true }
+  }, [liveUpdates, loadSnapshotForCurrentQuery, currentQueryKey, currentQueryEpoch])
 
   const shared: SharedViewProps = {
     block,
@@ -284,7 +615,10 @@ function GroupedLinkedReferencesInner({
     setFilter,
     openDefaultFilterConfig,
   }
-  const data = snapshot?.data ?? EMPTY_GROUPED_BACKLINKS_SNAPSHOT
+  const data = snapshot?.queryKey === currentQueryKey &&
+    snapshot.queryEpoch === currentQueryEpoch
+    ? snapshot.data
+    : EMPTY_GROUPED_BACKLINKS_SNAPSHOT
 
   return (
     <>
@@ -297,9 +631,7 @@ function GroupedLinkedReferencesInner({
       {liveUpdates && (
         <GroupedBacklinksLiveBridge
           block={block}
-          workspaceId={workspaceId}
-          groupingConfig={groupingConfig}
-          filter={filterActive ? effectiveFilter : undefined}
+          groupedHandle={groupedHandle}
           onData={handleLiveData}
         />
       )}
@@ -309,32 +641,20 @@ function GroupedLinkedReferencesInner({
 
 function GroupedBacklinksLiveBridge({
   block,
-  workspaceId,
-  groupingConfig,
-  filter,
+  groupedHandle,
   onData,
 }: {
   block: Block
-  workspaceId: string
-  groupingConfig: GroupedBacklinksConfig
-  filter?: BacklinksFilter
+  groupedHandle: {
+    subscribe: (listener: (grouped: GroupedBacklinksResult) => void) => () => void
+  }
   onData: (data: GroupedBacklinksSnapshot) => void
 }) {
-  const grouped = useGroupedBacklinks(
-    block,
-    workspaceId,
-    groupingConfig,
-    filter,
-  )
-
-  const data = useMemo<GroupedBacklinksSnapshot>(
-    () => snapshotFromGroupedResult(block.repo, grouped),
-    [block.repo, grouped],
-  )
-
   useEffect(() => {
-    onData(data)
-  }, [onData, data])
+    return groupedHandle.subscribe(grouped => {
+      onData(snapshotFromGroupedResult(block.repo, grouped))
+    })
+  }, [block.repo, groupedHandle, onData])
 
   return null
 }
