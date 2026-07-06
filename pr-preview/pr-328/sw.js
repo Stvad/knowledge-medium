@@ -672,8 +672,10 @@
 				}
 				const databases = databasesByScope.get(scopeUrl) ?? [];
 				for (const { name } of databases) try {
-					await deleteOpfsSqliteDatabase(name);
-					await deleteIndexedDatabase(name);
+					await deleteOpfsSqliteDatabase(name, async () => {
+						if (!await previewScopeStillReapable(meta, scopeUrl)) throw new Error(`Preview scope became live before deleting ${name}`);
+					});
+					await deleteIndexedDatabase(name).catch(() => {});
 				} catch {
 					failedScopes.add(scopeUrl);
 					return;
@@ -682,11 +684,13 @@
 			}));
 			return failedScopes;
 		};
-		const deleteOpfsSqliteDatabase = async (databaseName) => {
+		const deleteOpfsSqliteDatabase = async (databaseName, shouldContinue) => {
 			if (typeof env.storage?.getDirectory !== "function") return;
 			const root = await env.storage.getDirectory();
+			await shouldContinue();
 			const siblingFailure = (await Promise.allSettled(SQLITE_DB_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)))).find((result) => result.status === "rejected");
 			if (siblingFailure) throw siblingFailure.reason;
+			await shouldContinue();
 			await removeOpfsEntryIfExists(root, databaseName);
 		};
 		const removeOpfsEntryIfExists = async (root, name) => {
@@ -779,7 +783,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "b6828cca3925",
+		buildId: "9e1064c7ffa2",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
