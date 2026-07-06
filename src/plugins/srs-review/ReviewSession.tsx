@@ -30,6 +30,7 @@ import { NestedBlockContextProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
+import { buildForceOpenBlockIds } from '@/utils/forceOpenBlockIds.js'
 import { showError, showInfo } from '@/utils/toast.js'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.js'
 import { useBlockOpener } from '@/utils/navigation.js'
@@ -518,6 +519,14 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   // is always a concrete block id (the card, or a promoted ancestor).
   const surfaceId = shownId
   const showingCard = surfaceId === currentId
+  const forceOpenBlockIds = useMemo(
+    () => buildForceOpenBlockIds({
+      anchorId: currentId,
+      shownBlockId: surfaceId,
+      anchorParents: currentParents,
+    }),
+    [currentId, surfaceId, currentParents],
+  )
 
   return (
     <div
@@ -554,10 +563,12 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
             [SRS_REVIEW_CARD_ID]: currentId,
             [SRS_REVIEW_REVEALED]: revealed,
             isNestedSurface: true,
+            forceOpenBlockIds,
             scopeRootId: currentId,
             renderScopeId: `srs-review:${currentId}`,
           } : {
             isNestedSurface: true,
+            forceOpenBlockIds,
             scopeRootId: surfaceId,
             renderScopeId: `srs-review:${currentId}:${surfaceId}`,
           }}

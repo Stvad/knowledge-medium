@@ -137,6 +137,10 @@ export interface BlockContextType {
      *  layout self-gate (render the navigating link + raw content) without
      *  matching embeds or backlink entries. */
     isReference?: boolean
+    /** Surface-local list of block ids that must render expanded regardless
+     *  of their own collapsed flag. Used to force-open specific ancestors
+     *  when rendering constrained/embeddable views (e.g. backlinks, review). */
+    forceOpenBlockIds?: readonly string[]
     [key: string]: unknown
 }
 

@@ -9,6 +9,7 @@ import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
 import { useParents } from '@/hooks/block.js'
 import { useRepo } from '@/context/repo.js'
+import { buildForceOpenBlockIds } from '@/utils/forceOpenBlockIds.js'
 import {
   backlinkEntryShortcutContextOverrides,
   promoteClosestBreadcrumb,
@@ -46,12 +47,14 @@ const BacklinkItemContent = ({
   onSelect,
   onShowBlock,
   renderScopeId,
+  forceOpenBlockIds,
 }: {
   shownBlock: Block
   parents: readonly Block[]
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
   renderScopeId: string
+  forceOpenBlockIds: readonly string[]
 }) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
@@ -76,8 +79,9 @@ const BacklinkItemContent = ({
     // it like a panel's top-level block instead of restructuring the
     // real tree around it (which lives outside the entry).
     scopeRootId: shownBlock.id,
+    forceOpenBlockIds,
     ...backlinkEntryShortcutContextOverrides(shortcutController),
-  }), [renderScopeId, shownBlock.id, shortcutController])
+  }), [forceOpenBlockIds, renderScopeId, shownBlock.id, shortcutController])
 
   return (
     <>
@@ -104,11 +108,13 @@ const BacklinkDynamicContent = ({
   onSelect,
   onShowBlock,
   renderScopeId,
+  forceOpenBlockIds,
 }: {
   shownBlock: Block
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
   renderScopeId: string
+  forceOpenBlockIds: readonly string[]
 }) => {
   const parents = useParents(shownBlock)
   return (
@@ -118,6 +124,7 @@ const BacklinkDynamicContent = ({
       onSelect={onSelect}
       onShowBlock={onShowBlock}
       renderScopeId={renderScopeId}
+      forceOpenBlockIds={forceOpenBlockIds}
     />
   )
 }
@@ -133,6 +140,7 @@ const BacklinkItem = ({
 }) => {
   const repo = useRepo()
   const parentContext = useBlockContext()
+  const anchorAncestors = initialParents
   // Promote-in-place state (unfurl an ancestor, with the panel-nav
   // crossfade) shared with the SRS review session.
   const {shownId, isInitial, promote, showBlock} = usePromotableBreadcrumb(block.id)
@@ -143,6 +151,14 @@ const BacklinkItem = ({
   const renderScopeId = useMemo(
     () => backlinkRenderScopeId(parentRenderScopeId, scopeId),
     [parentRenderScopeId, scopeId],
+  )
+  const forceOpenBlockIds = useMemo(
+    () => buildForceOpenBlockIds({
+      anchorId: block.id,
+      shownBlockId: shownBlock.id,
+      anchorParents: anchorAncestors,
+    }),
+    [anchorAncestors, block.id, shownBlock.id],
   )
 
   return (
@@ -155,6 +171,7 @@ const BacklinkItem = ({
               onSelect={promote}
               onShowBlock={showBlock}
               renderScopeId={renderScopeId}
+              forceOpenBlockIds={forceOpenBlockIds}
             />
           )
         : (
@@ -163,6 +180,7 @@ const BacklinkItem = ({
               onSelect={promote}
               onShowBlock={showBlock}
               renderScopeId={renderScopeId}
+              forceOpenBlockIds={forceOpenBlockIds}
             />
           )}
     </div>

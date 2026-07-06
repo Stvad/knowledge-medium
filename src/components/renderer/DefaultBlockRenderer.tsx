@@ -63,6 +63,8 @@ import {
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 
+const EMPTY_FORCE_OPEN_BLOCK_IDS: readonly string[] = []
+
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
@@ -251,7 +253,12 @@ export const DefaultBlockLayout: BlockLayout = ({
 }) => {
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
+  const {forceOpenBlockIds = EMPTY_FORCE_OPEN_BLOCK_IDS} = useBlockContext()
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const forceOpen = useMemo(
+    () => new Set(forceOpenBlockIds),
+    [forceOpenBlockIds],
+  )
 
   // No per-block `view-transition-name`. Tried it (commit b1bfa4ef,
   // reverted): the slide-between-positions effect was barely
@@ -280,7 +287,7 @@ export const DefaultBlockLayout: BlockLayout = ({
           return (
             <Collapsible
               {...collapsibleProps}
-              open={!isCollapsed || isTopLevel}
+              open={!isCollapsed || isTopLevel || forceOpen.has(block.id)}
               className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>
