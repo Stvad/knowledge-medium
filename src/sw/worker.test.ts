@@ -757,6 +757,32 @@ describe('activate — stale preview cache sweep', () => {
     expect(await metaMatch(caches, previewDatabaseRecord(334, 'kmp-v6~pr-334~user.db'))).toBeUndefined()
   })
 
+  it('drops stale retry metadata when legacy IndexedDB cleanup fails after OPFS deletion', async () => {
+    const opfs = new MockOpfsRoot()
+    const idb = new MockIndexedDB()
+    opfs.add('kmp-v6~pr-339~user.db')
+    idb.add('kmp-v6~pr-339~user.db')
+    idb.failDeleteFor.add('kmp-v6~pr-339~user.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+      indexedDB: idb as unknown as SwEnv['indexedDB'],
+    })
+    await seedScope(
+      caches,
+      previewScope(339),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 339, 'kmp-v6~pr-339~user.db')
+
+    await sw.activate()
+
+    expect(opfs.has('kmp-v6~pr-339~user.db')).toBe(false)
+    expect(idb.has('kmp-v6~pr-339~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(339))).toBeUndefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(339, 'kmp-v6~pr-339~user.db'))).toBeUndefined()
+  })
+
   it('skips the cross-scope stale preview sweep when Web Locks are unavailable', async () => {
     const opfs = new MockOpfsRoot()
     opfs.add('kmp-v6~pr-335~user.db')
@@ -828,6 +854,36 @@ describe('activate — stale preview cache sweep', () => {
     expect(opfs.has('kmp-v6~pr-336~user.db')).toBe(true)
     expect(await metaMatch(caches, previewScope(336))).toBeDefined()
     expect(await metaMatch(caches, previewDatabaseRecord(336, 'kmp-v6~pr-336~user.db'))).toBeDefined()
+  })
+
+  it('aborts database deletion when liveness appears during OPFS setup', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-338~user.db')
+    let livenessWritten = false
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {
+        getDirectory: async () => {
+          if (!livenessWritten) {
+            livenessWritten = true
+            await seedScopeLivenessRecord(caches, 338, NOW)
+          }
+          return opfs
+        },
+      },
+    })
+    await seedScope(
+      caches,
+      previewScope(338),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 338, 'kmp-v6~pr-338~user.db')
+
+    await sw.activate()
+
+    expect(opfs.has('kmp-v6~pr-338~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(338))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(338, 'kmp-v6~pr-338~user.db'))).toBeDefined()
   })
 
   it('revalidates a stale preview ledger before deleting its stable database name', async () => {

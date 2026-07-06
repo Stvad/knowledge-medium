@@ -888,8 +888,12 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       const databases = databasesByScope.get(scopeUrl) ?? []
       for (const {name} of databases) {
         try {
-          await deleteOpfsSqliteDatabase(name)
-          await deleteIndexedDatabase(name)
+          await deleteOpfsSqliteDatabase(name, async () => {
+            if (!(await previewScopeStillReapable(meta, scopeUrl))) {
+              throw new Error(`Preview scope became live before deleting ${name}`)
+            }
+          })
+          await deleteIndexedDatabase(name).catch(() => {})
         } catch {
           // Keep this scope's ledger and caches so a later activation can retry
           // after a locked database handle, transient OPFS failure, or blocked
@@ -909,9 +913,13 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     return failedScopes
   }
 
-  const deleteOpfsSqliteDatabase = async (databaseName: string): Promise<void> => {
+  const deleteOpfsSqliteDatabase = async (
+    databaseName: string,
+    shouldContinue: () => Promise<void>,
+  ): Promise<void> => {
     if (typeof env.storage?.getDirectory !== 'function') return
     const root = await env.storage.getDirectory()
+    await shouldContinue()
     const siblingResults = await Promise.allSettled(
       SQLITE_DB_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
     )
@@ -919,6 +927,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       (result): result is PromiseRejectedResult => result.status === 'rejected',
     )
     if (siblingFailure) throw siblingFailure.reason
+    await shouldContinue()
     await removeOpfsEntryIfExists(root, databaseName)
   }
 
