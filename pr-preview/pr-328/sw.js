@@ -307,8 +307,8 @@
 			lastTouchAt = t;
 			const touch = (async () => {
 				try {
-					await recordOwnPreviewScopeLiveness();
 					await withOwnPreviewScopeLease(async () => {
+						await recordOwnPreviewScopeLiveness();
 						await mutateLedgerEntry((entry) => entry);
 					});
 				} catch {}
@@ -675,7 +675,7 @@
 					await deleteOpfsSqliteDatabase(name, async () => {
 						if (!await previewScopeStillReapable(meta, scopeUrl)) throw new Error(`Preview scope became live before deleting ${name}`);
 					});
-					await deleteIndexedDatabase(name).catch(() => {});
+					await deleteIndexedDatabase(name);
 				} catch {
 					failedScopes.add(scopeUrl);
 					return;
@@ -783,7 +783,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "9e1064c7ffa2",
+		buildId: "5147cbb8faec",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
