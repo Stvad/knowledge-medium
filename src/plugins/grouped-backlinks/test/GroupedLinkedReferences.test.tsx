@@ -186,6 +186,27 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     expect(screen.getByTestId('backlink-src-1')).toHaveTextContent('src-1 mount 1')
   })
 
+  it('refreshes with retry when live updates resume', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+    ])
+
+    render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha']))
+    fireEvent.click(screen.getByRole('button', {name: 'Pause live updates'}))
+    await waitFor(() => expect(state.liveSubscriptions).toBe(0))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+    ])
+    state.groupedLoadError = new Error('transient resume failure')
+    fireEvent.click(screen.getByRole('button', {name: 'Resume live updates'}))
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Beta']))
+  })
+
   it('keeps the first mounted group order while live results change', async () => {
     const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
     state.grouped = state.makeGrouped([
@@ -276,6 +297,30 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     expect(screen.getByRole('button', {name: /Beta\s*1/})).toBeInTheDocument()
     expect(screen.getByTestId('backlink-src-a')).toHaveTextContent('src-a mount 1')
     expect(screen.getByTestId('backlink-src-b')).toHaveTextContent('src-b mount 2')
+  })
+
+  it('remembers row ownership while a row is temporarily absent', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'dance', label: 'Dance', sourceIds: ['src-a'], fallback: false},
+    ])
+
+    render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance']))
+
+    state.grouped = state.makeGrouped([])
+    await emitGrouped()
+    await waitFor(() => expect(screen.queryByText('Dance')).not.toBeInTheDocument())
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'matrix', label: 'Matrix', sourceIds: ['src-a'], fallback: false},
+    ])
+    await emitGrouped()
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance']))
+    expect(screen.getByTestId('backlink-src-a')).toHaveTextContent('src-a mount 2')
+    expect(screen.queryByText('Matrix')).not.toBeInTheDocument()
   })
 
   it('keeps existing fallback rows assigned to the fallback group', async () => {
@@ -390,6 +435,43 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     rerender(<GroupedLinkedReferences block={block} />)
 
     expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
+  })
+
+  it('does not reuse an old snapshot after switching away and back to a query key', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
+    ])
+
+    const {rerender} = render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta']))
+
+    state.groupedLoadQueue = [
+      new Promise<GroupedBacklinksResult>(() => {}),
+      new Promise<GroupedBacklinksResult>(() => {}),
+    ]
+    state.groupingConfig = {
+      highPriorityTags: ['Beta'],
+      lowPriorityTags: [],
+      excludedTags: [],
+      excludedPatterns: [],
+    }
+    rerender(<GroupedLinkedReferences block={block} />)
+    expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
+    expect(screen.queryByText('Beta')).not.toBeInTheDocument()
+
+    state.groupingConfig = {
+      highPriorityTags: [],
+      lowPriorityTags: [],
+      excludedTags: [],
+      excludedPatterns: [],
+    }
+    rerender(<GroupedLinkedReferences block={block} />)
+
+    expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
+    expect(screen.queryByText('Beta')).not.toBeInTheDocument()
   })
 
   it('does not seed a reset baseline from a stale live value', async () => {
