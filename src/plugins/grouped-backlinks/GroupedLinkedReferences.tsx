@@ -48,6 +48,11 @@ interface StableGroupedResult {
   groupOrder: string[]
 }
 
+interface StickySourceClaims {
+  claimedSourceIds: Set<string>
+  fieldClaimedSourceIds: Set<string>
+}
+
 const EMPTY_GROUPED_BACKLINKS_SNAPSHOT: GroupedBacklinksSnapshot = {
   unfilteredBacklinks: [],
   grouped: {
@@ -101,13 +106,15 @@ const stickySourceIdsForGroup = ({
   previousGroup,
   nextGroup,
   currentSourceIds,
-  claimedSourceIds,
+  claims,
+  retainedSourceIds,
 }: {
   groupId: string
   previousGroup?: GroupedBacklinkGroup
   nextGroup?: GroupedBacklinkGroup
   currentSourceIds: ReadonlySet<string>
-  claimedSourceIds: Set<string>
+  claims: StickySourceClaims
+  retainedSourceIds?: ReadonlySet<string>
 }): string[] => {
   const canShareClaimedSources = groupCanShareClaimedSources(groupId)
   const sourceIds: string[] = []
@@ -115,14 +122,21 @@ const stickySourceIdsForGroup = ({
   const append = (sourceId: string) => {
     if (!currentSourceIds.has(sourceId)) return
     if (seenSourceIds.has(sourceId)) return
-    if (!canShareClaimedSources && claimedSourceIds.has(sourceId)) return
+    if (
+      claims.claimedSourceIds.has(sourceId) &&
+      !retainedSourceIds?.has(sourceId) &&
+      (!canShareClaimedSources || !claims.fieldClaimedSourceIds.has(sourceId))
+    ) return
     seenSourceIds.add(sourceId)
     sourceIds.push(sourceId)
   }
 
   for (const sourceId of previousGroup?.sourceIds ?? []) append(sourceId)
   for (const sourceId of nextGroup?.sourceIds ?? []) append(sourceId)
-  for (const sourceId of sourceIds) claimedSourceIds.add(sourceId)
+  for (const sourceId of sourceIds) {
+    claims.claimedSourceIds.add(sourceId)
+    if (canShareClaimedSources) claims.fieldClaimedSourceIds.add(sourceId)
+  }
 
   return sourceIds
 }
@@ -144,7 +158,14 @@ const stabilizeGroupedResult = (
       .filter(groupId => !knownGroupIds.has(groupId)),
   ]
   const currentSourceIds = currentSourceIdsForGroupedResult(grouped)
-  const claimedSourceIds = new Set<string>()
+  const previousFallbackGroup = previousState?.data.grouped.groups.find(group => group.fallback)
+  const retainedFallbackSourceIds = new Set(
+    previousFallbackGroup?.sourceIds.filter(sourceId => currentSourceIds.has(sourceId)) ?? [],
+  )
+  const claims: StickySourceClaims = {
+    claimedSourceIds: new Set(retainedFallbackSourceIds),
+    fieldClaimedSourceIds: new Set(),
+  }
   const groups = groupOrder
     .map(groupId => {
       const previousGroup = previousGroupsById.get(groupId)
@@ -156,14 +177,13 @@ const stabilizeGroupedResult = (
         previousGroup,
         nextGroup,
         currentSourceIds,
-        claimedSourceIds,
+        claims,
       })
       if (sourceIds.length === 0) return undefined
       return {...group, sourceIds, fallback: false}
     })
     .filter((group): group is GroupedBacklinkGroup => group !== undefined)
 
-  const previousFallbackGroup = previousState?.data.grouped.groups.find(group => group.fallback)
   const nextFallbackGroup = grouped.groups.find(group => group.fallback)
   const fallbackGroup = nextFallbackGroup ?? previousFallbackGroup
   if (fallbackGroup) {
@@ -172,7 +192,8 @@ const stabilizeGroupedResult = (
       previousGroup: previousFallbackGroup,
       nextGroup: nextFallbackGroup,
       currentSourceIds,
-      claimedSourceIds,
+      claims,
+      retainedSourceIds: retainedFallbackSourceIds,
     })
     if (sourceIds.length > 0) groups.push({...fallbackGroup, sourceIds, fallback: true})
   }
@@ -217,6 +238,21 @@ const loadSettledGroupedResult = async (
     result = next
   }
   return result
+}
+
+const loadSettledGroupedResultWithRetry = async (
+  handle: {load: () => Promise<GroupedBacklinksResult>},
+): Promise<GroupedBacklinksResult> => {
+  try {
+    return await loadSettledGroupedResult(handle)
+  } catch (error) {
+    await waitForPostSettleReload()
+    try {
+      return await loadSettledGroupedResult(handle)
+    } catch {
+      throw error
+    }
+  }
 }
 
 const GroupItems = ({
@@ -359,13 +395,17 @@ function GroupedLinkedReferencesInner({
     () => buildGroupedQueryArgs(workspaceId, block.id, groupingConfig, effectiveFilter),
     [workspaceId, block.id, groupingConfig, effectiveFilter],
   )
+  const groupedHandle = useMemo(
+    () => repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs),
+    [repo, groupedArgs],
+  )
   // Stable string identity of the grouped-query args. The snapshot
   // carries the key of the args it was captured under; whenever the
   // current key drifts (filter or config change while paused), the
   // parent fires a one-shot `handle.load()` to refresh the whole
   // render snapshot — no subscription, so unrelated row edits still
   // don't trigger work.
-  const currentQueryKey = useMemo(() => JSON.stringify(groupedArgs), [groupedArgs])
+  const currentQueryKey = groupedHandle.key
 
   const setFilter = useCallback((next: BacklinksFilter) => {
     setStoredFilter(next)
@@ -399,8 +439,7 @@ function GroupedLinkedReferencesInner({
   // previously used filter/config key.
   useEffect(() => {
     let cancelled = false
-    const handle = repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
-    loadSettledGroupedResult(handle).then(
+    loadSettledGroupedResultWithRetry(groupedHandle).then(
       result => {
         if (cancelled) return
         setSnapshot(prev => {
@@ -429,7 +468,7 @@ function GroupedLinkedReferencesInner({
       },
     )
     return () => { cancelled = true }
-  }, [repo, groupedArgs, currentQueryKey])
+  }, [repo, groupedHandle, currentQueryKey])
 
   const shared: SharedViewProps = {
     block,
@@ -490,13 +529,16 @@ function GroupedBacklinksLiveBridge({
     ),
     [workspaceId, block.id, groupingConfig, filter],
   )
+  const groupedHandle = useMemo(
+    () => block.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs),
+    [block.repo, groupedArgs],
+  )
 
   useEffect(() => {
-    const handle = block.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
-    return handle.subscribe(grouped => {
+    return groupedHandle.subscribe(grouped => {
       onData(snapshotFromGroupedResult(block.repo, grouped))
     })
-  }, [block.repo, groupedArgs, onData])
+  }, [block.repo, groupedHandle, onData])
 
   return null
 }

@@ -35,6 +35,7 @@ const state = vi.hoisted(() => {
     grouped,
     groupedLoadResult: undefined as GroupedBacklinksResult | undefined,
     groupedLoadQueue: [] as GroupedBacklinksResult[],
+    groupedLoadErrors: [] as Error[],
     groupedLoadError: undefined as Error | undefined,
     liveListeners: [] as Array<(value: GroupedBacklinksResult) => void>,
     emptyFilter: {},
@@ -121,6 +122,7 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     }])
     state.groupedLoadResult = undefined
     state.groupedLoadQueue = []
+    state.groupedLoadErrors = []
     state.groupedLoadError = undefined
     state.liveListeners = []
     state.groupingConfig = {
@@ -134,8 +136,11 @@ describe('GroupedLinkedReferences live updates toggle', () => {
       activeWorkspaceId: 'ws-1',
       block: (id: string) => ({id, repo}),
       query: {
-        [GROUPED_BACKLINKS_FOR_BLOCK_QUERY]: () => ({
+        [GROUPED_BACKLINKS_FOR_BLOCK_QUERY]: (args: unknown) => ({
+          key: `${GROUPED_BACKLINKS_FOR_BLOCK_QUERY}:${JSON.stringify(args)}`,
           load: () => {
+            const queuedError = state.groupedLoadErrors.shift()
+            if (queuedError) return Promise.reject(queuedError)
             if (state.groupedLoadError) {
               const error = state.groupedLoadError
               state.groupedLoadError = undefined
@@ -248,6 +253,41 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance', 'Matrix']))
     expect(screen.getByRole('button', {name: /Dance\s*2/})).toBeInTheDocument()
     expect(screen.getByRole('button', {name: /Matrix\s*1/})).toBeInTheDocument()
+  })
+
+  it('keeps existing fallback rows assigned to the fallback group', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'other', label: 'Other', sourceIds: ['src-a'], fallback: true},
+    ])
+
+    render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Other']))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'project', label: 'Project', sourceIds: ['src-a', 'src-b'], fallback: false},
+    ])
+    await emitGrouped()
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Project', 'Other']))
+    expect(screen.getByRole('button', {name: /Project\s*1/})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Other\s*1/})).toBeInTheDocument()
+    expect(screen.getByTestId('backlink-src-a')).toHaveTextContent('src-a mount 1')
+    expect(screen.getByTestId('backlink-src-b')).toHaveTextContent('src-b mount 2')
+  })
+
+  it('allows source-field groups to share field-assigned rows', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'field:reviewer', label: 'Reviewer', sourceIds: ['src-a'], fallback: false},
+      {groupId: 'field:status', label: 'Status', sourceIds: ['src-a'], fallback: false},
+    ])
+
+    render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Reviewer', 'Status']))
+    expect(screen.getAllByTestId('backlink-src-a')).toHaveLength(2)
   })
 
   it('remembers missing group slots and appends new groups', async () => {
@@ -369,7 +409,7 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     await waitFor(() => expect(groupButtonLabels()).toEqual(['Beta', 'Alpha']))
   })
 
-  it('can initialize the current query key from a later clean notification after load fails', async () => {
+  it('retries a failed initial load for the current query key', async () => {
     const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
     state.grouped = state.makeGrouped([
       {groupId: 'alpha', label: 'Alpha', sourceIds: ['src-a'], fallback: false},
@@ -380,10 +420,6 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     render(<GroupedLinkedReferences block={block} />)
 
     await waitFor(() => expect(state.liveSubscriptions).toBe(1))
-    expect(screen.queryByText('Alpha')).not.toBeInTheDocument()
-
-    await emitGrouped()
-
     await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta']))
   })
 
@@ -400,7 +436,10 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     state.grouped = state.makeGrouped([
       {groupId: 'beta', label: 'Beta', sourceIds: ['src-b'], fallback: false},
     ])
-    state.groupedLoadError = new Error('transient load failure')
+    state.groupedLoadErrors = [
+      new Error('transient load failure'),
+      new Error('still failing'),
+    ]
     state.groupingConfig = {
       highPriorityTags: ['Beta'],
       lowPriorityTags: [],
