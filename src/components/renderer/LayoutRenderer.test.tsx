@@ -73,10 +73,10 @@ describe('LayoutRenderer', () => {
 
   const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)
 
-  const renderLayout = () =>
+  const renderLayout = (block = layoutSessionBlock()) =>
     render(
       <BlockContextProvider initialValue={{layoutBoundary: false}}>
-        <LayoutRenderer block={layoutSessionBlock()}/>
+        <LayoutRenderer block={block}/>
       </BlockContextProvider>,
     )
 

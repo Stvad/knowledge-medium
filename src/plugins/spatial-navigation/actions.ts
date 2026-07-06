@@ -19,7 +19,6 @@ import {
 import type { BlockAction } from '@/shortcuts/blockActions.js'
 import { bindBlockActionContext } from '@/shortcuts/blockActions.js'
 import {
-  activePanelIdProp,
   focusedBlockLocationProp,
   focusBlock,
   isEditingProp,
@@ -44,6 +43,7 @@ import {
   resolveCurrentAnchor,
   verticalNeighbor,
 } from './walker.ts'
+import { activatePanelRowInTx } from '@/utils/panelLayoutProjection'
 
 /**
  * Locate the anchor instance to walk from. Prefers the live DOM
@@ -272,12 +272,13 @@ const crossPanelFocus = async (
     : null
   const layoutSessionId = layoutEl?.dataset.layoutSessionId
   // Single tx that flips both ends of the activation gate at once.
-  // Same shape as `focusBlock` but adds the activePanelId write on
-  // the layout-session block; row deps still resolve identically
-  // (same kind:'row' invalidation per touched block).
+  // Same shape as `focusBlock` but validates and activates the destination
+  // panel on the layout-session block first; row deps still resolve
+  // identically (same kind:'row' invalidation per touched block).
   await repo.tx(async tx => {
     if (layoutSessionId) {
-      await tx.setProperty(layoutSessionId, activePanelIdProp, destPanelId)
+      const activated = await activatePanelRowInTx(tx, layoutSessionId, destPanelId)
+      if (!activated) return
     }
     await tx.setProperty(destPanelBlock.id, focusedBlockLocationProp, destLocation)
     if (destPanelBlock.peekProperty(isEditingProp) === true) {

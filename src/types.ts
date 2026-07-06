@@ -118,6 +118,10 @@ export interface BlockContextType {
      *  whole layout surface while constraining its document content inside
      *  the panel renderer. */
     wideScrollSurface?: boolean
+    /** Whether focus entering the panel body should mark this panel active.
+     *  Desktop tracks focus for keyboard ownership; mobile renders only the
+     *  active panel, so pointer activation is enough there. */
+    trackPanelFocus?: boolean
     /** Umbrella surface flag — set by every non-document mount
      *  (`BlockEmbed`, `BacklinkEntry`, breadcrumb list). Consulted by
      *  `useIsFocalRender` / `isFocalRender` so a new surface only has
