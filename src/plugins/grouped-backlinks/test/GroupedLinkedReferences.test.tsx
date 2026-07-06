@@ -38,6 +38,11 @@ const state = vi.hoisted(() => {
     groupedLoadErrors: [] as Error[],
     groupedLoadError: undefined as Error | undefined,
     liveListeners: [] as Array<(value: GroupedBacklinksResult) => void>,
+    groupedHandlesByKey: new Map<string, {
+      key: string
+      load: () => Promise<GroupedBacklinksResult>
+      subscribe: (listener: (value: GroupedBacklinksResult) => void) => () => void
+    }>(),
     emptyFilter: {},
     groupingConfig: {
       highPriorityTags: [],
@@ -125,6 +130,7 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     state.groupedLoadErrors = []
     state.groupedLoadError = undefined
     state.liveListeners = []
+    state.groupedHandlesByKey = new Map()
     state.groupingConfig = {
       highPriorityTags: [],
       lowPriorityTags: [],
@@ -136,29 +142,36 @@ describe('GroupedLinkedReferences live updates toggle', () => {
       activeWorkspaceId: 'ws-1',
       block: (id: string) => ({id, repo}),
       query: {
-        [GROUPED_BACKLINKS_FOR_BLOCK_QUERY]: (args: unknown) => ({
-          key: `${GROUPED_BACKLINKS_FOR_BLOCK_QUERY}:${JSON.stringify(args)}`,
-          load: () => {
-            const queuedError = state.groupedLoadErrors.shift()
-            if (queuedError) return Promise.reject(queuedError)
-            if (state.groupedLoadError) {
-              const error = state.groupedLoadError
-              state.groupedLoadError = undefined
-              return Promise.reject(error)
-            }
-            return Promise.resolve(
-              state.groupedLoadQueue.shift() ?? state.groupedLoadResult ?? state.grouped,
-            )
-          },
-          subscribe: (listener: (value: GroupedBacklinksResult) => void) => {
-            state.liveSubscriptions += 1
-            state.liveListeners.push(listener)
-            return () => {
-              state.liveSubscriptions -= 1
-              state.liveListeners = state.liveListeners.filter(entry => entry !== listener)
-            }
-          },
-        }),
+        [GROUPED_BACKLINKS_FOR_BLOCK_QUERY]: (args: unknown) => {
+          const key = `${GROUPED_BACKLINKS_FOR_BLOCK_QUERY}:${JSON.stringify(args)}`
+          const existing = state.groupedHandlesByKey.get(key)
+          if (existing) return existing
+          const handle = {
+            key,
+            load: () => {
+              const queuedError = state.groupedLoadErrors.shift()
+              if (queuedError) return Promise.reject(queuedError)
+              if (state.groupedLoadError) {
+                const error = state.groupedLoadError
+                state.groupedLoadError = undefined
+                return Promise.reject(error)
+              }
+              return Promise.resolve(
+                state.groupedLoadQueue.shift() ?? state.groupedLoadResult ?? state.grouped,
+              )
+            },
+            subscribe: (listener: (value: GroupedBacklinksResult) => void) => {
+              state.liveSubscriptions += 1
+              state.liveListeners.push(listener)
+              return () => {
+                state.liveSubscriptions -= 1
+                state.liveListeners = state.liveListeners.filter(entry => entry !== listener)
+              }
+            },
+          }
+          state.groupedHandlesByKey.set(key, handle)
+          return handle
+        },
       },
     } as unknown as BacklinksViewRendererProps['block']['repo']
     state.repo = repo

@@ -490,10 +490,7 @@ function GroupedLinkedReferencesInner({
     () => buildGroupedQueryArgs(workspaceId, block.id, groupingConfig, effectiveFilter),
     [workspaceId, block.id, groupingConfig, effectiveFilter],
   )
-  const groupedHandle = useMemo(
-    () => repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs),
-    [repo, groupedArgs],
-  )
+  const groupedHandle = repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
   // Stable string identity of the grouped-query args. The snapshot
   // carries the key of the args it was captured under; whenever the
   // current key drifts (filter or config change while paused), the
@@ -620,9 +617,7 @@ function GroupedLinkedReferencesInner({
       {liveUpdates && (
         <GroupedBacklinksLiveBridge
           block={block}
-          workspaceId={workspaceId}
-          groupingConfig={groupingConfig}
-          filter={filterActive ? effectiveFilter : undefined}
+          groupedHandle={groupedHandle}
           onData={handleLiveData}
         />
       )}
@@ -632,31 +627,15 @@ function GroupedLinkedReferencesInner({
 
 function GroupedBacklinksLiveBridge({
   block,
-  workspaceId,
-  groupingConfig,
-  filter,
+  groupedHandle,
   onData,
 }: {
   block: Block
-  workspaceId: string
-  groupingConfig: GroupedBacklinksConfig
-  filter?: BacklinksFilter
+  groupedHandle: {
+    subscribe: (listener: (grouped: GroupedBacklinksResult) => void) => () => void
+  }
   onData: (data: GroupedBacklinksSnapshot) => void
 }) {
-  const groupedArgs = useMemo(
-    () => buildGroupedQueryArgs(
-      workspaceId,
-      block.id,
-      groupingConfig,
-      filter ?? {},
-    ),
-    [workspaceId, block.id, groupingConfig, filter],
-  )
-  const groupedHandle = useMemo(
-    () => block.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs),
-    [block.repo, groupedArgs],
-  )
-
   useEffect(() => {
     return groupedHandle.subscribe(grouped => {
       onData(snapshotFromGroupedResult(block.repo, grouped))
