@@ -75,6 +75,67 @@ export const panelRowsInLayoutOrder = (
   return (childrenByParent.get(rootId) ?? []).flatMap(visit)
 }
 
+const firstPanelRowInSlotInTx = async (tx: Tx, row: BlockData): Promise<BlockData | undefined> => {
+  if (!isPanelStackRow(row)) return row
+  const children = await tx.childrenOf(row.id, row.workspaceId)
+  for (const child of children) {
+    const panel = await firstPanelRowInSlotInTx(tx, child)
+    if (panel) return panel
+  }
+  return undefined
+}
+
+const lastPanelRowInSlotInTx = async (tx: Tx, row: BlockData): Promise<BlockData | undefined> => {
+  if (!isPanelStackRow(row)) return row
+  const children = await tx.childrenOf(row.id, row.workspaceId)
+  for (let index = children.length - 1; index >= 0; index--) {
+    const panel = await lastPanelRowInSlotInTx(tx, children[index])
+    if (panel) return panel
+  }
+  return undefined
+}
+
+const adjacentPanelRowInParentInTx = async (
+  tx: Tx,
+  parent: BlockData,
+  rowId: string,
+): Promise<BlockData | undefined> => {
+  const siblings = await tx.childrenOf(parent.id, parent.workspaceId)
+  const index = siblings.findIndex(sibling => sibling.id === rowId)
+  if (index < 0) return undefined
+
+  for (let nextIndex = index + 1; nextIndex < siblings.length; nextIndex++) {
+    const panel = await firstPanelRowInSlotInTx(tx, siblings[nextIndex])
+    if (panel) return panel
+  }
+
+  for (let prevIndex = index - 1; prevIndex >= 0; prevIndex--) {
+    const panel = await lastPanelRowInSlotInTx(tx, siblings[prevIndex])
+    if (panel) return panel
+  }
+
+  return undefined
+}
+
+const nextActivePanelAfterCloseInTx = async (
+  tx: Tx,
+  row: BlockData,
+  parent: BlockData | null,
+): Promise<string | undefined> => {
+  if (!parent) return undefined
+
+  const sibling = await adjacentPanelRowInParentInTx(tx, parent, row.id)
+  if (sibling) return sibling.id
+
+  if (!isPanelStackRow(parent)) return undefined
+
+  const stackParent = parent.parentId ? await tx.get(parent.parentId) : null
+  const stackSibling = stackParent
+    ? await adjacentPanelRowInParentInTx(tx, stackParent, parent.id)
+    : undefined
+  return stackSibling?.id
+}
+
 const flattenLayoutSlots = (slots: readonly LayoutSlot[]): string[] =>
   slots.flatMap(slot => slot.kind === 'leaf' ? [slot.blockId] : flattenLayoutSlots(slot.children))
 
@@ -390,13 +451,14 @@ export const deletePanelRow = async (
     const stackSiblingCount = parent && isPanelStackRow(parent)
       ? (await tx.childrenOf(parent.id, parent.workspaceId)).length
       : 0
+    const nextActivePanelId = layoutSession?.properties[activePanelIdProp.name] === panelId
+      ? await nextActivePanelAfterCloseInTx(tx, row, parent)
+      : undefined
     await tx.delete(panelId)
     if (parent && isPanelStackRow(parent) && stackSiblingCount <= 1) {
       await tx.delete(parent.id)
     }
     if (layoutSession?.properties[activePanelIdProp.name] === panelId) {
-      const rows = await loadSubtreeRowsInTx(tx, layoutSession)
-      const nextActivePanelId = panelRowsInLayoutOrder(layoutSession.id, rows).at(-1)?.id
       await tx.setProperty(layoutSession.id, activePanelIdProp, nextActivePanelId)
     }
   }, {scope: ChangeScope.UiState, description: 'close panel'})

@@ -7,6 +7,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
 import {
+  activePanelIdProp,
   focusedBlockLocationProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -16,6 +17,7 @@ import {
   PanelLayoutProjection,
   applyCurrentLayoutUrl,
   createPanelRowInTx,
+  deletePanelRow,
   insertPanelRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
@@ -327,6 +329,56 @@ describe('insertPanelRow', () => {
     // Lands EXACTLY after the source panel — between the two tied panels
     // (re-keys the second), not past the whole run. Nothing rolled back.
     expect((await rows()).map(row => row.id)).toEqual([seeded[0], newId, seeded[1], seeded[2]])
+  })
+})
+
+describe('deletePanelRow', () => {
+  it('activates the next sibling in a stack when closing the active stacked panel', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/(s:x,b,y)/c',
+    })
+    const byBlock = await rowIdsByBlock()
+    const rowB = byBlock.get('b')
+    const rowY = byBlock.get('y')
+    if (!rowB || !rowY) throw new Error('missing stacked rows')
+
+    await layoutSessionBlock().set(activePanelIdProp, rowB)
+    await deletePanelRow(env.repo, rowB)
+
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(rowY)
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      'a',
+      'x',
+      'y',
+      'c',
+    ])
+  })
+
+  it('falls back to the previous sibling before leaving the stack', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/(s:x,b,y)/c',
+    })
+    const byBlock = await rowIdsByBlock()
+    const rowB = byBlock.get('b')
+    const rowY = byBlock.get('y')
+    if (!rowB || !rowY) throw new Error('missing stacked rows')
+
+    await layoutSessionBlock().set(activePanelIdProp, rowY)
+    await deletePanelRow(env.repo, rowY)
+
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(rowB)
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      'a',
+      'x',
+      'b',
+      'c',
+    ])
   })
 })
 

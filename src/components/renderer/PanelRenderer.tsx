@@ -25,6 +25,7 @@ import {
 } from '@/utils/panelHistory.js'
 import { deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import type { MouseEvent, PointerEvent } from 'react'
 
 const SCROLL_WRITE_DELAY_MS = 200
 const PANEL_ACTION_BUTTON_CLASS =
@@ -134,7 +135,12 @@ export function PanelRenderer({block}: BlockRendererProps) {
     }
   }, [flushScrollTop])
 
-  const handleClose = () => {
+  const handleClosePointerDown = (event: PointerEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
+  }
+
+  const handleClose = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation()
     void deletePanelRow(repo, block.id)
   }
 
@@ -172,6 +178,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
           variant="ghost"
           size="icon"
           className={PANEL_ACTION_BUTTON_CLASS}
+          data-panel-activation-ignore="true"
+          onPointerDown={handleClosePointerDown}
           onClick={handleClose}
           aria-label="Close panel"
         >
