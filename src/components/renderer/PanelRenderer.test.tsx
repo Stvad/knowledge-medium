@@ -125,7 +125,7 @@ const setup = async (): Promise<Harness> => {
       await tx.create({
         id: 'panel-a',
         workspaceId: WS,
-        parentId: null,
+        parentId: 'layout-session',
         orderKey: 'a2',
         content: 'Panel A',
         properties: {
@@ -175,7 +175,7 @@ describe('PanelRenderer', () => {
 
   const renderPanelInLayoutSession = async (
     activePanelId: string,
-    options: {canClosePanel?: boolean} = {},
+    options: {canClosePanel?: boolean; trackPanelFocus?: boolean} = {},
   ) => {
     await env.repo.block('layout-session').set(activePanelIdProp, activePanelId)
 
@@ -187,6 +187,7 @@ describe('PanelRenderer', () => {
             layoutSessionBlockId: 'layout-session',
             panelId: env.panel.id,
             canClosePanel: options.canClosePanel,
+            trackPanelFocus: options.trackPanelFocus,
           }}
         >
           <PanelRenderer block={env.panel}/>
@@ -216,31 +217,53 @@ describe('PanelRenderer', () => {
     panelHistory.push(env.panel.id, {blockId: 'page-prev'})
     await renderPanelInLayoutSession('panel-b')
     const sessionBlock = env.repo.block('layout-session')
-    const setSpy = vi.spyOn(sessionBlock, 'set')
 
     fireEvent.pointerDown(await screen.findByLabelText('Back'))
 
-    expect(setSpy).toHaveBeenCalledWith(activePanelIdProp, env.panel.id)
+    await vi.waitFor(() => {
+      expect(sessionBlock.peekProperty(activePanelIdProp)).toBe(env.panel.id)
+    })
+  })
+
+  it('activates the panel from history chrome focus when focus tracking is enabled', async () => {
+    panelHistory.push(env.panel.id, {blockId: 'page-prev'})
+    await renderPanelInLayoutSession('panel-b', {trackPanelFocus: true})
+    const sessionBlock = env.repo.block('layout-session')
+
+    fireEvent.focus(await screen.findByLabelText('Back'))
+
+    await vi.waitFor(() => {
+      expect(sessionBlock.peekProperty(activePanelIdProp)).toBe(env.panel.id)
+    })
   })
 
   it('activates the panel from content capture when child controls stop propagation', async () => {
     await renderPanelInLayoutSession('panel-b')
     const sessionBlock = env.repo.block('layout-session')
-    const setSpy = vi.spyOn(sessionBlock, 'set')
 
     fireEvent.pointerDown(await screen.findByTestId('panel-content-control'))
 
-    expect(setSpy).toHaveBeenCalledWith(activePanelIdProp, env.panel.id)
+    await vi.waitFor(() => {
+      expect(sessionBlock.peekProperty(activePanelIdProp)).toBe(env.panel.id)
+    })
   })
 
   it('does not activate the panel from close pointer events', async () => {
     await renderPanelInLayoutSession('panel-b', {canClosePanel: true})
-    const sessionBlock = env.repo.block('layout-session')
-    const setSpy = vi.spyOn(sessionBlock, 'set')
+    const txSpy = vi.spyOn(env.repo, 'tx')
 
     fireEvent.pointerDown(await screen.findByLabelText('Close panel'))
 
-    expect(setSpy).not.toHaveBeenCalled()
+    expect(txSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not activate the panel from close focus events', async () => {
+    await renderPanelInLayoutSession('panel-b', {canClosePanel: true, trackPanelFocus: true})
+    const sessionBlock = env.repo.block('layout-session')
+
+    fireEvent.focus(await screen.findByLabelText('Close panel'))
+
+    expect(sessionBlock.peekProperty(activePanelIdProp)).toBe('panel-b')
   })
 
   it('does not add a content-width frame for normal panel columns', async () => {

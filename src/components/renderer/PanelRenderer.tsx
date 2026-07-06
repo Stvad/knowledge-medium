@@ -4,7 +4,6 @@ import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
-  activePanelIdProp,
   peekFocusedBlockLocation,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -24,7 +23,7 @@ import {
   panelHistory,
   usePanelHistory,
 } from '@/utils/panelHistory.js'
-import { deletePanelRow } from '@/utils/panelLayoutProjection.js'
+import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
 import type { MouseEvent, PointerEvent } from 'react'
 
@@ -85,12 +84,10 @@ export function PanelRenderer({block}: BlockRendererProps) {
 
   const activatePanel = useCallback(() => {
     if (!layoutSessionBlockId) return
-    const layoutSessionBlock = repo.block(layoutSessionBlockId)
-    if (layoutSessionBlock.peekProperty(activePanelIdProp) === block.id) return
     if (pendingActivationRef.current) return
 
     pendingActivationRef.current = true
-    void layoutSessionBlock.set(activePanelIdProp, block.id)
+    void activatePanelRow(repo, layoutSessionBlockId, block.id)
       .finally(() => {
         pendingActivationRef.current = false
       })
@@ -178,6 +175,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
         variant="ghost"
         size="icon"
         className={PANEL_HISTORY_BUTTON_CLASS}
+        onFocus={trackPanelFocus ? activatePanel : undefined}
         onClick={() => {
           activatePanel()
           void goBackInPanel(block)
@@ -192,6 +190,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
         variant="ghost"
         size="icon"
         className={PANEL_HISTORY_BUTTON_CLASS}
+        onFocus={trackPanelFocus ? activatePanel : undefined}
         onClick={() => {
           activatePanel()
           void goForwardInPanel(block)

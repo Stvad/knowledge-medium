@@ -168,6 +168,35 @@ const stackAncestorIdsEmptiedByClose = (
   return stackIds
 }
 
+const activePanelIdAfterReconcile = (
+  activePanelId: unknown,
+  rootId: string,
+  currentRows: readonly BlockData[],
+  finalRows: readonly BlockData[],
+): string | undefined => {
+  if (typeof activePanelId !== 'string') return undefined
+
+  const finalPanels = panelRowsInLayoutOrder(rootId, finalRows)
+  const finalPanelIds = new Set(finalPanels.map(row => row.id))
+  if (finalPanelIds.has(activePanelId)) return activePanelId
+
+  const currentPanels = panelRowsInLayoutOrder(rootId, currentRows)
+  const activeIndex = currentPanels.findIndex(row => row.id === activePanelId)
+  if (activeIndex >= 0) {
+    for (let index = activeIndex + 1; index < currentPanels.length; index++) {
+      const id = currentPanels[index].id
+      if (finalPanelIds.has(id)) return id
+    }
+
+    for (let index = activeIndex - 1; index >= 0; index--) {
+      const id = currentPanels[index].id
+      if (finalPanelIds.has(id)) return id
+    }
+  }
+
+  return undefined
+}
+
 const flattenLayoutSlots = (slots: readonly LayoutSlot[]): string[] =>
   slots.flatMap(slot => slot.kind === 'leaf' ? [slot.blockId] : flattenLayoutSlots(slot.children))
 
@@ -467,6 +496,45 @@ export const insertSidebarStackedPanel = async (
     return panelId
   }, {scope: ChangeScope.UiState, description: 'insert sidebar stack panel'})
 
+export const activatePanelRowInTx = async (
+  tx: Tx,
+  layoutSessionBlockId: string,
+  panelId: string,
+): Promise<boolean> => {
+  const layoutSession = await tx.get(layoutSessionBlockId)
+  const row = await tx.get(panelId)
+  if (!layoutSession || layoutSession.deleted || !row || row.deleted) return false
+  const alreadyActive = layoutSession.properties[activePanelIdProp.name] === panelId
+
+  let parentId = row.parentId
+  while (parentId) {
+    if (parentId === layoutSessionBlockId) {
+      if (!alreadyActive) {
+        await tx.setProperty(layoutSessionBlockId, activePanelIdProp, panelId)
+      }
+      return true
+    }
+
+    const parent = await tx.get(parentId)
+    if (!parent || parent.deleted || !isPanelStackRow(parent)) return false
+    parentId = parent.parentId
+  }
+
+  return false
+}
+
+export const activatePanelRow = async (
+  repo: Repo,
+  layoutSessionBlockId: string,
+  panelId: string,
+): Promise<boolean> => {
+  let activated = false
+  await repo.tx(async tx => {
+    activated = await activatePanelRowInTx(tx, layoutSessionBlockId, panelId)
+  }, {scope: ChangeScope.UiState, description: 'activate panel'})
+  return activated
+}
+
 export const deletePanelRow = async (
   repo: Repo,
   panelId: string,
@@ -513,8 +581,24 @@ export const reconcilePanelRows = async (
     if (!parent) throw new Error(`reconcilePanelRows: layout session block ${layoutSessionBlock.id} not found`)
 
     const currentRows = await loadSubtreeRowsInTx(tx, parent)
+    const activePanelId = parent.properties[activePanelIdProp.name]
     const currentLayoutSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
-    if (sameLayoutSlots(currentLayoutSlots, targetSlots)) return
+    const repairActivePanelId = async (finalRows: readonly BlockData[]) => {
+      if (activePanelId === undefined) return
+      const nextActivePanelId = activePanelIdAfterReconcile(
+        activePanelId,
+        layoutSessionBlock.id,
+        currentRows,
+        finalRows,
+      )
+      if (nextActivePanelId !== activePanelId) {
+        await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, nextActivePanelId)
+      }
+    }
+    if (sameLayoutSlots(currentLayoutSlots, targetSlots)) {
+      await repairActivePanelId(currentRows)
+      return
+    }
 
     const currentSlots = currentRows
       .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
@@ -579,6 +663,8 @@ export const reconcilePanelRows = async (
     for (const stackRow of stackRowsToDelete) {
       await tx.delete(stackRow.id)
     }
+
+    await repairActivePanelId(await loadSubtreeRowsInTx(tx, parent))
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 }
 
@@ -643,12 +729,9 @@ export const applyCurrentLayoutUrl = async ({
     return {kind: 'empty'}
   }
 
-  if (sameLayoutSlots(currentSlots, route.slots)) {
-    return {kind: 'noop'}
-  }
-
+  const layoutAlreadyMatches = sameLayoutSlots(currentSlots, route.slots)
   await reconcilePanelRows(repo, layoutSessionBlock, route.slots)
-  return {kind: 'applied'}
+  return {kind: layoutAlreadyMatches ? 'noop' : 'applied'}
 }
 
 export interface PanelLayoutProjectionOptions {

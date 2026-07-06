@@ -7,10 +7,7 @@ import { useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { activePanelIdProp } from '@/data/properties.js'
-import {
-  isPanelStackRow,
-  panelRowsInLayoutOrder,
-} from '@/utils/panelLayoutProjection.js'
+import { isPanelStackRow } from '@/utils/panelLayoutProjection.js'
 
 type RenderSlot =
   | {kind: 'panel'; id: string}
@@ -153,10 +150,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     selector: data => data ?? EMPTY_ROWS,
   })
   const slots = useMemo(() => buildRenderSlots(block.id, rows), [block.id, rows])
-  const panelSlots = useMemo(() => {
-    const panelIds = new Set(panelRowsInLayoutOrder(block.id, rows).map(row => row.id))
-    return flattenPanelSlots(slots).filter(slot => panelIds.has(slot.id))
-  }, [block.id, rows, slots])
+  const panelSlots = useMemo(() => flattenPanelSlots(slots), [slots])
   const activePanelSlot = activePanelId
     ? panelSlots.find(slot => slot.id === activePanelId)
     : undefined

@@ -15,6 +15,7 @@ import {
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import {
   PanelLayoutProjection,
+  activatePanelRow,
   applyCurrentLayoutUrl,
   createPanelRowInTx,
   deletePanelRow,
@@ -78,7 +79,9 @@ const rows = async () => layoutSessionBlock().children.load()
 const layoutRows = async () => env.repo.query.subtree({id: env.layoutSessionBlockId}).load()
 
 const rowIdsByBlock = async (): Promise<Map<string, string>> =>
-  new Map((await layoutRows()).map(row => [row.properties[topLevelBlockIdProp.name] as string, row.id]))
+  new Map((await layoutRows())
+    .map(row => [panelBlockId(row), row.id] as const)
+    .filter((entry): entry is readonly [string, string] => Boolean(entry[0])))
 
 describe('applyCurrentLayoutUrl', () => {
   it('creates panel rows for an explicit layout URL', async () => {
@@ -115,6 +118,52 @@ describe('applyCurrentLayoutUrl', () => {
       },
       {kind: 'leaf', blockId: 'c'},
     ])
+  })
+
+  it('repairs active panel when URL reconciliation deletes the active row', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/b/c',
+    })
+    const beforeByBlock = await rowIdsByBlock()
+    const rowB = beforeByBlock.get('b')
+    if (!rowB) throw new Error('missing panel row b')
+    await layoutSessionBlock().set(activePanelIdProp, rowB)
+
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/c',
+    })
+
+    const afterRows = await layoutRows()
+    const activePanelId = layoutSessionBlock().peekProperty(activePanelIdProp)
+    const activeRow = afterRows.find(row => row.id === activePanelId)
+    expect(activeRow ? panelBlockId(activeRow) : undefined).toBe('c')
+    expect(activePanelId).not.toBe(rowB)
+  })
+
+  it('clears stale active panel when the URL already matches the layout', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/c',
+    })
+    await layoutSessionBlock().set(activePanelIdProp, 'deleted-panel-b')
+
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/c',
+    })
+
+    expect(result.kind).toBe('noop')
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBeUndefined()
   })
 
   it('inserts in the middle while preserving surviving row ids', async () => {
@@ -403,6 +452,50 @@ describe('deletePanelRow', () => {
       'a',
       'c',
     ])
+  })
+})
+
+describe('activatePanelRow', () => {
+  it('ignores activation for deleted panel rows', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/b',
+    })
+    const byBlock = await rowIdsByBlock()
+    const rowA = byBlock.get('a')
+    const rowB = byBlock.get('b')
+    if (!rowA || !rowB) throw new Error('missing panel rows')
+    await layoutSessionBlock().set(activePanelIdProp, rowA)
+    await env.repo.tx(tx => tx.delete(rowB), {
+      scope: ChangeScope.UiState,
+      description: 'delete panel row for activation guard',
+    })
+
+    await activatePanelRow(env.repo, env.layoutSessionBlockId, rowB)
+
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(rowA)
+  })
+
+  it('rejects already-active rows moved out of the layout session', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a/b',
+    })
+    const byBlock = await rowIdsByBlock()
+    const rowB = byBlock.get('b')
+    if (!rowB) throw new Error('missing panel row b')
+    await layoutSessionBlock().set(activePanelIdProp, rowB)
+    await env.repo.tx(tx => tx.move(rowB, {parentId: null, orderKey: 'z0'}), {
+      scope: ChangeScope.UiState,
+      description: 'move panel row out of layout session',
+    })
+
+    await expect(activatePanelRow(env.repo, env.layoutSessionBlockId, rowB))
+      .resolves.toBe(false)
   })
 })
 
