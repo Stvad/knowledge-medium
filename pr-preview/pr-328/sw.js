@@ -320,14 +320,12 @@
 				const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME);
 				if (recordInfo) databaseRecords.push({
 					...recordInfo,
-					recordUrl: req.url,
-					updatedAt: await readJsonUpdatedAt(meta, req)
+					recordUrl: req.url
 				});
 			}
-			const ledgersWithFreshSignals = preserveScopes([...ledgers, ...databaseOnlyLedgers(databaseRecords, new Set(ledgers.map((ledger) => ledger.scopeUrl)))], freshDatabaseRecordScopeUrls(databaseRecords));
 			const finalPlan = computeReapableCaches({
-				ledgers: preserveScopes(ledgersWithFreshSignals, await sweepStalePreviewDatabases(meta, computeReapableCaches({
-					ledgers: ledgersWithFreshSignals,
+				ledgers: preserveScopes(ledgers, await sweepStalePreviewDatabases(meta, computeReapableCaches({
+					ledgers,
 					now: now(),
 					staleMs: config.staleScopeMs,
 					cachePrefix: CACHE_PREFIX,
@@ -353,32 +351,10 @@
 			const escapedPreviewId = previewId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 			return new RegExp(`^kmp-v\\d+~${escapedPreviewId}~[A-Za-z0-9_-]*\\.db$`).test(databaseName);
 		};
-		const readJsonUpdatedAt = async (cache, req) => {
-			const raw = await (await cache.match(req))?.json().catch(() => null);
-			return raw && typeof raw === "object" && typeof raw.updatedAt === "number" ? raw.updatedAt : void 0;
-		};
 		const preserveScopes = (ledgers, scopeUrls) => ledgers.map((ledger) => scopeUrls.has(ledger.scopeUrl) ? {
 			...ledger,
 			updatedAt: void 0
 		} : ledger);
-		const recordIsFresh = (record) => typeof record.updatedAt === "number" && now() - record.updatedAt <= config.staleScopeMs;
-		const recordIsStale = (record) => typeof record.updatedAt === "number" && now() - record.updatedAt > config.staleScopeMs;
-		const freshDatabaseRecordScopeUrls = (databaseRecords) => new Set(databaseRecords.filter(recordIsFresh).map((record) => record.scopeUrl));
-		const databaseOnlyLedgers = (databaseRecords, existingScopeUrls) => {
-			const newestStaleRecordByScope = /* @__PURE__ */ new Map();
-			for (const record of databaseRecords) {
-				if (existingScopeUrls.has(record.scopeUrl)) continue;
-				if (!isDatabaseNameForPreviewScope(record.name, record.scopeUrl)) continue;
-				const updatedAt = record.updatedAt;
-				if (typeof updatedAt !== "number" || !recordIsStale({ updatedAt })) continue;
-				newestStaleRecordByScope.set(record.scopeUrl, Math.max(newestStaleRecordByScope.get(record.scopeUrl) ?? Number.NEGATIVE_INFINITY, updatedAt));
-			}
-			return [...newestStaleRecordByScope].map(([scopeUrl, updatedAt]) => ({
-				scopeUrl,
-				ids: [],
-				updatedAt
-			}));
-		};
 		const databaseRecordsForReapedScopes = (ledgerScopeUrls, databaseRecords) => {
 			const reapedScopes = new Set(ledgerScopeUrls);
 			const names = [];
@@ -511,7 +487,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "0126481cd7be",
+		buildId: "a70313236896",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
