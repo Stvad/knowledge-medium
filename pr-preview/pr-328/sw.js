@@ -405,7 +405,7 @@
 				const databases = databasesByScope.get(scopeUrl) ?? [];
 				for (const { name } of databases) try {
 					await deleteOpfsSqliteDatabase(name);
-					await deleteIndexedDatabase(name);
+					await deleteIndexedDatabase(name).catch(() => {});
 				} catch {
 					failedScopes.add(scopeUrl);
 					return;
@@ -511,7 +511,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "7c8e6503a8c2",
+		buildId: "28af6693af8b",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
