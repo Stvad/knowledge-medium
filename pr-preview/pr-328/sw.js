@@ -143,11 +143,6 @@
 	//#region src/sw/previewDatabases.ts
 	var SERVICE_WORKER_META_CACHE = "km-meta";
 	var PREVIEW_DATABASE_RECORD_BASENAME = "__km_database__";
-	var PREVIEW_SCOPE_LIVENESS_BASENAME = "__km_scope_liveness__";
-	var normalizeUrl = (url) => new URL(url.toString()).toString();
-	var previewScopeLockName = (scopeUrl) => `km-preview-scope:${normalizeUrl(scopeUrl)}`;
-	var previewLedgerLockName = (ledgerUrl) => `km-preview-ledger:${normalizeUrl(ledgerUrl)}`;
-	var previewScopeLivenessUrl = (scopeUrl) => new URL(`./${PREVIEW_SCOPE_LIVENESS_BASENAME}`, scopeUrl).toString();
 	var previewDatabaseRecordInfo = (recordUrl, ledgerBasename) => {
 		try {
 			const url = new URL(recordUrl);
@@ -157,25 +152,9 @@
 			const encodedName = url.pathname.slice(markerIndex + marker.length);
 			if (!encodedName || encodedName.includes("/")) return null;
 			const scopePath = url.pathname.slice(0, markerIndex + 1);
-			const scopeBaseUrl = `${url.origin}${scopePath}`;
 			return {
-				scopeUrl: `${scopeBaseUrl}${ledgerBasename}`,
-				scopeBaseUrl,
+				scopeUrl: `${`${url.origin}${scopePath}`}${ledgerBasename}`,
 				name: decodeURIComponent(encodedName)
-			};
-		} catch {
-			return null;
-		}
-	};
-	var previewScopeLivenessInfo = (recordUrl, ledgerBasename) => {
-		try {
-			const url = new URL(recordUrl);
-			if (!url.pathname.endsWith(`/__km_scope_liveness__`)) return null;
-			const scopePath = url.pathname.slice(0, -21);
-			const scopeBaseUrl = `${url.origin}${scopePath}`;
-			return {
-				scopeUrl: `${scopeBaseUrl}${ledgerBasename}`,
-				scopeBaseUrl
 			};
 		} catch {
 			return null;
@@ -254,15 +233,9 @@
 			await cache.put(LEDGER_KEY, new Response(JSON.stringify(nextEntry), { headers: { "content-type": "application/json" } }));
 		};
 		let ledgerMutationChain = Promise.resolve();
-		const withPreviewLedgerMutationLock = async (work) => {
-			if (!env.locks?.request) return work();
-			return env.locks.request(previewLedgerLockName(LEDGER_KEY), work);
-		};
 		const mutateLedgerEntry = async (mutate) => {
 			const run = ledgerMutationChain.then(async () => {
-				await withPreviewLedgerMutationLock(async () => {
-					await writeLedgerEntry(await mutate(await readLedgerEntry()));
-				});
+				await writeLedgerEntry(await mutate(await readLedgerEntry()));
 			});
 			ledgerMutationChain = run.catch(() => {});
 			await run;
@@ -290,16 +263,6 @@
 			}));
 		};
 		let lastTouchAt = 0;
-		const recordOwnPreviewScopeLiveness = async () => {
-			await (await caches.open(META_CACHE)).put(previewScopeLivenessUrl(scopeURL), new Response(JSON.stringify({ updatedAt: now() }), { headers: { "content-type": "application/json" } }));
-		};
-		const withOwnPreviewScopeLease = async (work) => {
-			if (!env.locks?.request) {
-				await work();
-				return;
-			}
-			await env.locks.request(previewScopeLockName(scopeURL), { mode: "shared" }, work);
-		};
 		const maybeTouchOwnLedger = (waitUntil) => {
 			if (!OWN_SCOPE_IS_PREVIEW) return;
 			const t = now();
@@ -307,10 +270,7 @@
 			lastTouchAt = t;
 			const touch = (async () => {
 				try {
-					await withOwnPreviewScopeLease(async () => {
-						await recordOwnPreviewScopeLiveness();
-						await mutateLedgerEntry((entry) => entry);
-					});
+					await mutateLedgerEntry((entry) => entry);
 				} catch {}
 			})();
 			if (waitUntil) waitUntil(touch);
@@ -347,11 +307,9 @@
 			} catch {}
 		};
 		const sweepStalePreviewGenerations = async () => {
-			if (!env.locks?.request) return;
 			const meta = await caches.open(META_CACHE);
 			const ledgers = [];
 			const databaseRecords = [];
-			const livenessRecords = [];
 			for (const req of await meta.keys()) {
 				if (req.url.endsWith(`/${LEDGER_BASENAME}`)) {
 					const res = await meta.match(req);
@@ -366,79 +324,27 @@
 					continue;
 				}
 				const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME);
-				if (recordInfo) {
-					databaseRecords.push({
-						...recordInfo,
-						recordUrl: req.url,
-						updatedAt: await readJsonUpdatedAt(meta, req)
-					});
-					continue;
-				}
-				const livenessInfo = previewScopeLivenessInfo(req.url, LEDGER_BASENAME);
-				if (!livenessInfo) continue;
-				livenessRecords.push({
-					...livenessInfo,
+				if (recordInfo) databaseRecords.push({
+					...recordInfo,
 					recordUrl: req.url,
 					updatedAt: await readJsonUpdatedAt(meta, req)
 				});
 			}
-			const ledgersWithFreshSignals = preserveScopes([...ledgers, ...databaseOnlyLedgers(databaseRecords, new Set(ledgers.map((ledger) => ledger.scopeUrl)))], new Set([...freshDatabaseRecordScopeUrls(databaseRecords), ...freshLivenessRecordScopeUrls(livenessRecords)]));
-			const revalidatedLedgers = await revalidateReapableLedgers(meta, ledgersWithFreshSignals, computeReapableCaches({
-				ledgers: ledgersWithFreshSignals,
-				now: now(),
-				staleMs: config.staleScopeMs,
-				cachePrefix: CACHE_PREFIX,
-				selfScopeUrl: LEDGER_KEY
-			}).ledgerScopeUrls);
-			const revalidatedPlan = computeReapableCaches({
-				ledgers: revalidatedLedgers,
-				now: now(),
-				staleMs: config.staleScopeMs,
-				cachePrefix: CACHE_PREFIX,
-				selfScopeUrl: LEDGER_KEY
-			});
-			await withAvailablePreviewScopeLocks(revalidatedPlan.ledgerScopeUrls, async (scopeLockedUrls) => {
-				const scopeLockedLedgers = preserveScopes(revalidatedLedgers, new Set(revalidatedPlan.ledgerScopeUrls.filter((scopeUrl) => !scopeLockedUrls.has(scopeUrl))));
-				const scopeLockedPlan = computeReapableCaches({
-					ledgers: scopeLockedLedgers,
+			const ledgersWithFreshSignals = preserveScopes([...ledgers, ...databaseOnlyLedgers(databaseRecords, new Set(ledgers.map((ledger) => ledger.scopeUrl)))], freshDatabaseRecordScopeUrls(databaseRecords));
+			const finalPlan = computeReapableCaches({
+				ledgers: preserveScopes(ledgersWithFreshSignals, await sweepStalePreviewDatabases(meta, ledgersWithFreshSignals, computeReapableCaches({
+					ledgers: ledgersWithFreshSignals,
 					now: now(),
 					staleMs: config.staleScopeMs,
 					cachePrefix: CACHE_PREFIX,
 					selfScopeUrl: LEDGER_KEY
-				});
-				await withAvailablePreviewLedgerLocks(scopeLockedPlan.ledgerScopeUrls, async (ledgerLockedUrls) => {
-					const lockedLedgers = preserveScopes(scopeLockedLedgers, new Set(scopeLockedPlan.ledgerScopeUrls.filter((scopeUrl) => !ledgerLockedUrls.has(scopeUrl))));
-					const livenessCheckedLedgers = preserveScopes(lockedLedgers, await noLongerReapableScopes(meta, computeReapableCaches({
-						ledgers: lockedLedgers,
-						now: now(),
-						staleMs: config.staleScopeMs,
-						cachePrefix: CACHE_PREFIX,
-						selfScopeUrl: LEDGER_KEY
-					}).ledgerScopeUrls));
-					const databaseFailures = await sweepStalePreviewDatabases(meta, livenessCheckedLedgers, computeReapableCaches({
-						ledgers: livenessCheckedLedgers,
-						now: now(),
-						staleMs: config.staleScopeMs,
-						cachePrefix: CACHE_PREFIX,
-						selfScopeUrl: LEDGER_KEY
-					}).ledgerScopeUrls, databaseRecords);
-					const lastLivenessFailures = await noLongerReapableScopes(meta, computeReapableCaches({
-						ledgers: preserveScopes(livenessCheckedLedgers, databaseFailures),
-						now: now(),
-						staleMs: config.staleScopeMs,
-						cachePrefix: CACHE_PREFIX,
-						selfScopeUrl: LEDGER_KEY
-					}).ledgerScopeUrls);
-					const lastPlan = computeReapableCaches({
-						ledgers: preserveScopes(livenessCheckedLedgers, new Set([...databaseFailures, ...lastLivenessFailures])),
-						now: now(),
-						staleMs: config.staleScopeMs,
-						cachePrefix: CACHE_PREFIX,
-						selfScopeUrl: LEDGER_KEY
-					});
-					await Promise.all([...lastPlan.cacheNames.map((name) => caches.delete(name)), ...lastPlan.ledgerScopeUrls.map((url) => meta.delete(url))]);
-				});
+				}).ledgerScopeUrls, databaseRecords)),
+				now: now(),
+				staleMs: config.staleScopeMs,
+				cachePrefix: CACHE_PREFIX,
+				selfScopeUrl: LEDGER_KEY
 			});
+			await Promise.all([...finalPlan.cacheNames.map((name) => caches.delete(name)), ...finalPlan.ledgerScopeUrls.map((url) => meta.delete(url))]);
 		};
 		const previewIdForScopeUrl = (scopeUrl) => {
 			try {
@@ -457,115 +363,6 @@
 			const raw = await (await cache.match(req))?.json().catch(() => null);
 			return raw && typeof raw === "object" && typeof raw.updatedAt === "number" ? raw.updatedAt : void 0;
 		};
-		const scopePathForLedgerUrl = (scopeUrl) => {
-			try {
-				const pathname = new URL(scopeUrl).pathname;
-				return pathname.endsWith(`/${LEDGER_BASENAME}`) ? pathname.slice(0, -18) : null;
-			} catch {
-				return null;
-			}
-		};
-		const scopeBaseUrlForLedgerUrl = (scopeUrl) => {
-			try {
-				const url = new URL(scopeUrl);
-				const scopePath = scopePathForLedgerUrl(scopeUrl);
-				return scopePath ? `${url.origin}${scopePath}` : null;
-			} catch {
-				return null;
-			}
-		};
-		const previewScopeHasOpenClient = async (scopeUrl) => {
-			if (typeof env.clients?.matchAll !== "function") return false;
-			const scopePath = scopePathForLedgerUrl(scopeUrl);
-			if (!scopePath) return false;
-			return (await env.clients.matchAll({
-				includeUncontrolled: true,
-				type: "window"
-			})).some((client) => {
-				try {
-					return new URL(client.url).pathname.startsWith(scopePath);
-				} catch {
-					return false;
-				}
-			});
-		};
-		const previewScopeHasPendingLock = async (scopeUrl) => {
-			const scopeBaseUrl = scopeBaseUrlForLedgerUrl(scopeUrl);
-			if (!scopeBaseUrl || typeof env.locks?.query !== "function") return false;
-			const lockName = previewScopeLockName(scopeBaseUrl);
-			return (await env.locks.query().catch(() => null))?.pending?.some((lock) => lock.name === lockName) ?? false;
-		};
-		const withAvailableLocks = async (lockNames, work) => {
-			const uniqueLockNames = [...new Set(lockNames)];
-			const locks = env.locks;
-			if (!locks?.request) {
-				await work(new Set(uniqueLockNames));
-				return;
-			}
-			const lockedNames = /* @__PURE__ */ new Set();
-			const acquire = async (index) => {
-				if (index >= uniqueLockNames.length) {
-					await work(lockedNames);
-					return;
-				}
-				const lockName = uniqueLockNames[index];
-				await locks.request(lockName, { ifAvailable: true }, async (lock) => {
-					if (lock) lockedNames.add(lockName);
-					await acquire(index + 1);
-				});
-			};
-			await acquire(0);
-		};
-		const withAvailablePreviewScopeLocks = async (scopeUrls, work) => {
-			const lockNameByScopeUrl = /* @__PURE__ */ new Map();
-			for (const scopeUrl of scopeUrls) {
-				const scopeBaseUrl = scopeBaseUrlForLedgerUrl(scopeUrl);
-				if (scopeBaseUrl) lockNameByScopeUrl.set(scopeUrl, previewScopeLockName(scopeBaseUrl));
-			}
-			await withAvailableLocks([...lockNameByScopeUrl.values()], async (lockedNames) => {
-				const lockedScopeUrls = /* @__PURE__ */ new Set();
-				for (const [scopeUrl, lockName] of lockNameByScopeUrl) if (lockedNames.has(lockName)) lockedScopeUrls.add(scopeUrl);
-				await work(lockedScopeUrls);
-			});
-		};
-		const withAvailablePreviewLedgerLocks = async (scopeUrls, work) => {
-			const lockNameByScopeUrl = new Map(scopeUrls.map((scopeUrl) => [scopeUrl, previewLedgerLockName(scopeUrl)]));
-			await withAvailableLocks([...lockNameByScopeUrl.values()], async (lockedNames) => {
-				const lockedScopeUrls = /* @__PURE__ */ new Set();
-				for (const [scopeUrl, lockName] of lockNameByScopeUrl) if (lockedNames.has(lockName)) lockedScopeUrls.add(scopeUrl);
-				await work(lockedScopeUrls);
-			});
-		};
-		const readScopeLedger = async (meta, scopeUrl) => {
-			const res = await meta.match(scopeUrl);
-			if (!res) return null;
-			const { ids, updatedAt, databaseNames } = normalizeLedger(await res.json().catch(() => null));
-			return {
-				scopeUrl,
-				ids,
-				updatedAt,
-				databaseNames
-			};
-		};
-		const revalidateReapableLedgers = async (meta, ledgers, reapableScopeUrls) => {
-			const candidates = new Set(reapableScopeUrls);
-			return Promise.all(ledgers.map(async (ledger) => {
-				if (!candidates.has(ledger.scopeUrl)) return ledger;
-				if (await previewScopeHasOpenClient(ledger.scopeUrl)) return {
-					...ledger,
-					updatedAt: void 0
-				};
-				const current = await readScopeLedger(meta, ledger.scopeUrl);
-				if (current) return current;
-				if (ledger.ids.length === 0 && ledger.databaseNames.length === 0) return ledger;
-				return {
-					scopeUrl: ledger.scopeUrl,
-					ids: [],
-					updatedAt: void 0,
-					databaseNames: []
-				};
-			}));
-		};
 		const preserveScopes = (ledgers, scopeUrls) => ledgers.map((ledger) => scopeUrls.has(ledger.scopeUrl) ? {
 			...ledger,
 			updatedAt: void 0
@@ -573,7 +370,6 @@
 		const recordIsFresh = (record) => typeof record.updatedAt === "number" && now() - record.updatedAt <= config.staleScopeMs;
 		const recordIsStale = (record) => typeof record.updatedAt === "number" && now() - record.updatedAt > config.staleScopeMs;
 		const freshDatabaseRecordScopeUrls = (databaseRecords) => new Set(databaseRecords.filter(recordIsFresh).map((record) => record.scopeUrl));
-		const freshLivenessRecordScopeUrls = (livenessRecords) => new Set(livenessRecords.filter(recordIsFresh).map((record) => record.scopeUrl));
 		const databaseOnlyLedgers = (databaseRecords, existingScopeUrls) => {
 			const newestStaleRecordByScope = /* @__PURE__ */ new Map();
 			for (const record of databaseRecords) {
@@ -589,45 +385,6 @@
 				updatedAt,
 				databaseNames: []
 			}));
-		};
-		const scopeHasFreshRecord = async (meta, scopeUrl) => {
-			for (const req of await meta.keys()) {
-				const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME);
-				const livenessInfo = previewScopeLivenessInfo(req.url, LEDGER_BASENAME);
-				if (recordInfo?.scopeUrl !== scopeUrl && livenessInfo?.scopeUrl !== scopeUrl) continue;
-				if (recordIsFresh({ updatedAt: await readJsonUpdatedAt(meta, req) })) return true;
-			}
-			return false;
-		};
-		const scopeHasStaleDatabaseRecord = async (meta, scopeUrl) => {
-			for (const req of await meta.keys()) {
-				const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME);
-				if (!recordInfo || recordInfo.scopeUrl !== scopeUrl) continue;
-				if (!isDatabaseNameForPreviewScope(recordInfo.name, recordInfo.scopeUrl)) continue;
-				if (recordIsStale({ updatedAt: await readJsonUpdatedAt(meta, req) })) return true;
-			}
-			return false;
-		};
-		const previewScopeStillReapable = async (meta, scopeUrl) => {
-			if (await previewScopeHasOpenClient(scopeUrl)) return false;
-			if (await previewScopeHasPendingLock(scopeUrl)) return false;
-			if (await scopeHasFreshRecord(meta, scopeUrl)) return false;
-			const current = await readScopeLedger(meta, scopeUrl);
-			if (!current) return scopeHasStaleDatabaseRecord(meta, scopeUrl);
-			return computeReapableCaches({
-				ledgers: [current],
-				now: now(),
-				staleMs: config.staleScopeMs,
-				cachePrefix: CACHE_PREFIX,
-				selfScopeUrl: LEDGER_KEY
-			}).ledgerScopeUrls.includes(scopeUrl);
-		};
-		const noLongerReapableScopes = async (meta, scopeUrls) => {
-			const failures = /* @__PURE__ */ new Set();
-			await Promise.all(scopeUrls.map(async (scopeUrl) => {
-				if (!await previewScopeStillReapable(meta, scopeUrl)) failures.add(scopeUrl);
-			}));
-			return failures;
 		};
 		const databaseNamesForReapedScopes = (ledgers, ledgerScopeUrls, databaseRecords) => {
 			const reapedScopes = new Set(ledgerScopeUrls);
@@ -658,7 +415,6 @@
 		};
 		const sweepStalePreviewDatabases = async (meta, ledgers, ledgerScopeUrls, databaseRecords) => {
 			const failedScopes = /* @__PURE__ */ new Set();
-			if (!env.locks?.request) return failedScopes;
 			const databasesByScope = /* @__PURE__ */ new Map();
 			for (const database of databaseNamesForReapedScopes(ledgers, ledgerScopeUrls, databaseRecords)) {
 				const databases = databasesByScope.get(database.scopeUrl) ?? [];
@@ -666,15 +422,9 @@
 				databasesByScope.set(database.scopeUrl, databases);
 			}
 			await Promise.all(ledgerScopeUrls.map(async (scopeUrl) => {
-				if (!await previewScopeStillReapable(meta, scopeUrl)) {
-					failedScopes.add(scopeUrl);
-					return;
-				}
 				const databases = databasesByScope.get(scopeUrl) ?? [];
 				for (const { name } of databases) try {
-					await deleteOpfsSqliteDatabase(name, async () => {
-						if (!await previewScopeStillReapable(meta, scopeUrl)) throw new Error(`Preview scope became live before deleting ${name}`);
-					});
+					await deleteOpfsSqliteDatabase(name);
 					await deleteIndexedDatabase(name);
 				} catch {
 					failedScopes.add(scopeUrl);
@@ -684,13 +434,11 @@
 			}));
 			return failedScopes;
 		};
-		const deleteOpfsSqliteDatabase = async (databaseName, shouldContinue) => {
+		const deleteOpfsSqliteDatabase = async (databaseName) => {
 			if (typeof env.storage?.getDirectory !== "function") return;
 			const root = await env.storage.getDirectory();
-			await shouldContinue();
 			const siblingFailure = (await Promise.allSettled(SQLITE_DB_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)))).find((result) => result.status === "rejected");
 			if (siblingFailure) throw siblingFailure.reason;
-			await shouldContinue();
 			await removeOpfsEntryIfExists(root, databaseName);
 		};
 		const removeOpfsEntryIfExists = async (root, name) => {
@@ -783,7 +531,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "5147cbb8faec",
+		buildId: "5d4b0e343f04",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
@@ -797,9 +545,7 @@
 		origin: self.location.origin,
 		now: () => Date.now(),
 		storage: navigator.storage,
-		indexedDB,
-		clients: self.clients,
-		locks: navigator.locks
+		indexedDB
 	});
 	self.addEventListener("install", (event) => {
 		event.waitUntil(sw.install());
