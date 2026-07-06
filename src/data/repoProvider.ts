@@ -155,10 +155,9 @@ export const recordPreviewDatabaseForReaper = async (dbFilename: string): Promis
         headers: {'content-type': 'application/json'},
       }),
     )
-  } catch (err) {
-    throw new Error('Failed to record preview database for cleanup before opening it.', {
-      cause: err,
-    })
+  } catch {
+    // Preview-local data is disposable; failing to record cleanup metadata should
+    // not block opening the preview DB.
   }
 }
 
@@ -263,24 +262,15 @@ const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   },
 })
 
-let powerSyncDbFactory = buildPowerSyncDb
-
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   const existing = dbsByUser.get(userId)
   if (existing) return existing
-  const db = powerSyncDbFactory(userId)
+  const db = buildPowerSyncDb(userId)
   dbsByUser.set(userId, db)
   return db
 }
 
-export const __setPowerSyncDbFactoryForTest = (
-  factory: typeof buildPowerSyncDb,
-): void => {
-  powerSyncDbFactory = factory
-}
-
 export const __resetRepoProviderForTest = (): void => {
-  powerSyncDbFactory = buildPowerSyncDb
   dbsByUser.clear()
   initPromises.clear()
   syncResolversByUser.clear()

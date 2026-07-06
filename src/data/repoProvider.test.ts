@@ -2,9 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   __resetRepoProviderForTest,
-  __setPowerSyncDbFactoryForTest,
   dbFilenameForUser,
-  ensurePowerSyncReady,
   previewDbId,
   recordPreviewDatabaseForReaper,
 } from '@/data/repoProvider'
@@ -121,15 +119,14 @@ describe('recordPreviewDatabaseForReaper', () => {
     })
   })
 
-  it('fails preview DB preparation when the metadata record cannot be persisted', async () => {
+  it('does not fail preview DB preparation when the metadata record cannot be persisted', async () => {
     vi.stubEnv('BASE_URL', '/knowledge-medium/pr-preview/pr-292/')
     const caches = new MockCaches()
     caches.failOpen = true
     stubCaches(caches)
 
-    await expect(recordPreviewDatabaseForReaper('kmp-v6~pr-292~user.db')).rejects.toThrow(
-      'Failed to record preview database for cleanup',
-    )
+    await expect(recordPreviewDatabaseForReaper('kmp-v6~pr-292~user.db')).resolves.toBeUndefined()
+    expect(caches.openedNames).toEqual([SERVICE_WORKER_META_CACHE])
   })
 
   it('does not require metadata for production databases', async () => {
@@ -140,59 +137,5 @@ describe('recordPreviewDatabaseForReaper', () => {
 
     await expect(recordPreviewDatabaseForReaper('kmp-v6-user.db')).resolves.toBeUndefined()
     expect(caches.openedNames).toEqual([])
-  })
-})
-
-describe('ensurePowerSyncReady preview DB recording', () => {
-  const stubOpfs = () => {
-    Object.defineProperty(navigator, 'storage', {
-      configurable: true,
-      value: {getDirectory: vi.fn(async () => ({removeEntry: vi.fn()}))},
-    })
-  }
-
-  const fakePowerSyncDb = () => ({
-    currentStatus: {hasSynced: true},
-    init: vi.fn(async () => {}),
-    execute: vi.fn(async () => {}),
-    getAll: vi.fn(async () => []),
-    getOptional: vi.fn(async () => null),
-    connect: vi.fn(async () => {}),
-  })
-
-  it('awaits preview metadata persistence before constructing the local database', async () => {
-    vi.stubEnv('BASE_URL', '/knowledge-medium/pr-preview/pr-292/')
-    stubOpfs()
-    const events: string[] = []
-    const caches = new MockCaches()
-    const originalPut = caches.cache.put.bind(caches.cache)
-    caches.cache.put = async (req, res) => {
-      events.push('record')
-      await originalPut(req, res)
-    }
-    stubCaches(caches)
-    __setPowerSyncDbFactoryForTest((userId) => {
-      events.push(`construct:${userId}`)
-      return fakePowerSyncDb() as never
-    })
-
-    await ensurePowerSyncReady('user-1', false)
-
-    expect(events.slice(0, 2)).toEqual(['record', 'construct:user-1'])
-  })
-
-  it('rejects before constructing the local database when preview metadata cannot be recorded', async () => {
-    vi.stubEnv('BASE_URL', '/knowledge-medium/pr-preview/pr-292/')
-    stubOpfs()
-    const caches = new MockCaches()
-    caches.failOpen = true
-    stubCaches(caches)
-    const factory = vi.fn(() => fakePowerSyncDb() as never)
-    __setPowerSyncDbFactoryForTest(factory)
-
-    await expect(ensurePowerSyncReady('user-1', false)).rejects.toThrow(
-      'Failed to record preview database for cleanup',
-    )
-    expect(factory).not.toHaveBeenCalled()
   })
 })
