@@ -19,10 +19,12 @@ import {
   normalizeLedger,
   type ScopeLedger,
 } from './ledger'
+import {RECORD_PREVIEW_DATABASE_MESSAGE} from './messages'
 import {isForeignPreviewRequest, PREVIEW_SUBTREE} from './preview'
 
 const CACHE_PREFIX = 'km-'
 const VENDOR_HOSTS = new Set(['esm.sh'])
+const SQLITE_DB_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
 
 // The HTML shell + icons the app boots from — a static set (not build-injected),
 // resolved against the SW scope. Served network-first (HTML) / cache-first
@@ -79,6 +81,17 @@ export interface SwEnv {
   origin: string
   /** Injected clock (Date.now) — stamps ledger writes / drives the stale sweep. */
   now: () => number
+  /** navigator.storage, injected so OPFS cleanup stays testable. */
+  storage?: {
+    getDirectory?: () => Promise<{
+      removeEntry: (name: string) => Promise<void>
+    }>
+  }
+  /** indexedDB, injected so legacy IndexedDB-backed database cleanup is testable. */
+  indexedDB?: {
+    databases?: () => Promise<Array<{name?: string | null}>>
+    deleteDatabase?: (name: string) => IDBOpenDBRequest
+  }
 }
 
 export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
@@ -113,10 +126,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     try {
       const cache = await caches.open(META_CACHE)
       const res = await cache.match(LEDGER_KEY)
-      if (!res) return {ids: [], updatedAt: undefined}
+      if (!res) return {ids: [], updatedAt: undefined, databaseNames: []}
       return normalizeLedger(await res.json())
     } catch {
-      return {ids: [], updatedAt: undefined}
+      return {ids: [], updatedAt: undefined, databaseNames: []}
     }
   }
 
@@ -126,19 +139,25 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // sweep reads to tell an ABANDONED preview (SW stopped running after merge) from
   // a live one — and it's refreshed on this scope's install/activate, so the
   // current scope's own ledger always looks fresh and is never self-reaped.
-  const writeLedger = async (ids: string[]): Promise<void> => {
+  const writeLedgerEntry = async (entry: LedgerEntry): Promise<void> => {
     const cache = await caches.open(META_CACHE)
-    const entry: LedgerEntry = {ids, updatedAt: now()}
+    const nextEntry: LedgerEntry = {...entry, updatedAt: now()}
     await cache.put(
       LEDGER_KEY,
-      new Response(JSON.stringify(entry), {headers: {'content-type': 'application/json'}}),
+      new Response(JSON.stringify(nextEntry), {headers: {'content-type': 'application/json'}}),
     )
   }
 
   const recordGeneration = async (id: string): Promise<void> => {
-    const ids = (await readLedger()).filter((x) => x !== id)
+    const entry = await readLedgerEntry()
+    const ids = entry.ids.filter((x) => x !== id)
     ids.push(id)
-    await writeLedger(ids)
+    await writeLedgerEntry({...entry, ids})
+  }
+
+  const writeLedger = async (ids: string[]): Promise<void> => {
+    const entry = await readLedgerEntry()
+    await writeLedgerEntry({...entry, ids})
   }
 
   // Touch-on-use: the cross-scope sweep reaps a preview whose ledger `updatedAt`
@@ -160,7 +179,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     lastTouchAt = t // set optimistically so concurrent fetches don't pile on writes
     const touch = (async () => {
       try {
-        await writeLedger((await readLedgerEntry()).ids)
+        await writeLedgerEntry(await readLedgerEntry())
       } catch {
         // best-effort — a missed touch just means the next fetch after the
         // interval tries again; worst case the sweep reaps a genuinely idle scope.
@@ -330,8 +349,8 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       const res = await meta.match(req)
       if (!res) continue
       const raw: unknown = await res.json().catch(() => null)
-      const {ids, updatedAt} = normalizeLedger(raw)
-      ledgers.push({scopeUrl: req.url, ids, updatedAt})
+      const {ids, updatedAt, databaseNames} = normalizeLedger(raw)
+      ledgers.push({scopeUrl: req.url, ids, updatedAt, databaseNames})
     }
     const {cacheNames, ledgerScopeUrls} = computeReapableCaches({
       ledgers,
@@ -340,10 +359,138 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
       cachePrefix: CACHE_PREFIX,
       selfScopeUrl: LEDGER_KEY,
     })
+    const databaseFailures = await sweepStalePreviewDatabases(ledgers, ledgerScopeUrls)
     await Promise.all([
       ...cacheNames.map((name) => caches.delete(name)),
-      ...ledgerScopeUrls.map((url) => meta.delete(url)),
+      ...ledgerScopeUrls
+        .filter((url) => !databaseFailures.has(url))
+        .map((url) => meta.delete(url)),
     ])
+  }
+
+  const previewIdForScopeUrl = (scopeUrl: string): string | null => {
+    try {
+      return new URL(scopeUrl).pathname.match(/\/pr-preview\/(pr-[^/]+)\//)?.[1] ?? null
+    } catch {
+      return null
+    }
+  }
+
+  const isDatabaseNameForPreviewScope = (databaseName: string, scopeUrl: string): boolean => {
+    const previewId = previewIdForScopeUrl(scopeUrl)
+    if (!previewId) return false
+    const escapedPreviewId = previewId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`^kmp-v\\d+-[A-Za-z0-9_-]*-${escapedPreviewId}\\.db$`).test(databaseName)
+  }
+
+  const databaseNamesForReapedScopes = (
+    ledgers: ScopeLedger[],
+    ledgerScopeUrls: string[],
+  ): Array<{scopeUrl: string; name: string}> => {
+    const reapedScopes = new Set(ledgerScopeUrls)
+    const names: Array<{scopeUrl: string; name: string}> = []
+    const seen = new Set<string>()
+    for (const ledger of ledgers) {
+      if (!reapedScopes.has(ledger.scopeUrl)) continue
+      for (const name of ledger.databaseNames) {
+        if (!isDatabaseNameForPreviewScope(name, ledger.scopeUrl)) continue
+        const key = `${ledger.scopeUrl}\n${name}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        names.push({scopeUrl: ledger.scopeUrl, name})
+      }
+    }
+    return names
+  }
+
+  const sweepStalePreviewDatabases = async (
+    ledgers: ScopeLedger[],
+    ledgerScopeUrls: string[],
+  ): Promise<Set<string>> => {
+    const failedScopes = new Set<string>()
+    const databases = databaseNamesForReapedScopes(ledgers, ledgerScopeUrls)
+    await Promise.all(databases.map(async ({scopeUrl, name}) => {
+      try {
+        await Promise.all([
+          deleteOpfsSqliteDatabase(name),
+          deleteIndexedDatabase(name),
+        ])
+      } catch {
+        // Keep this scope's ledger so a later activation can retry after a
+        // locked database handle, transient OPFS failure, or blocked IDB delete.
+        failedScopes.add(scopeUrl)
+      }
+    }))
+    return failedScopes
+  }
+
+  const deleteOpfsSqliteDatabase = async (databaseName: string): Promise<void> => {
+    if (typeof env.storage?.getDirectory !== 'function') return
+    const root = await env.storage.getDirectory()
+    const siblingResults = await Promise.allSettled(
+      SQLITE_DB_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
+    )
+    const siblingFailure = siblingResults.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    )
+    if (siblingFailure) throw siblingFailure.reason
+    await removeOpfsEntryIfExists(root, databaseName)
+  }
+
+  const removeOpfsEntryIfExists = async (
+    root: {removeEntry: (name: string) => Promise<void>},
+    name: string,
+  ): Promise<void> => {
+    try {
+      await root.removeEntry(name)
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'NotFoundError')) throw err
+    }
+  }
+
+  const deleteIndexedDatabase = async (databaseName: string): Promise<void> => {
+    const idb = env.indexedDB
+    if (typeof idb?.deleteDatabase !== 'function') return
+    if (typeof idb.databases === 'function') {
+      const existing = await idb.databases().catch(() => null)
+      if (existing && !existing.some((db) => db.name === databaseName)) return
+    }
+    await new Promise<void>((resolve, reject) => {
+      const request = idb.deleteDatabase!(databaseName)
+      let settled = false
+      const settle = (fn: () => void) => {
+        if (settled) return
+        settled = true
+        fn()
+      }
+      request.onsuccess = () => settle(resolve)
+      request.onerror = () => settle(() => reject(request.error))
+      request.onblocked = () => settle(() =>
+        reject(new Error(`IndexedDB delete blocked for ${databaseName}`)),
+      )
+    })
+  }
+
+  const recordPreviewDatabase = async (databaseName: string): Promise<void> => {
+    if (!OWN_SCOPE_IS_PREVIEW) return
+    if (!isDatabaseNameForPreviewScope(databaseName, LEDGER_KEY)) return
+    const entry = await readLedgerEntry()
+    const databaseNames = entry.databaseNames.includes(databaseName)
+      ? entry.databaseNames
+      : [...entry.databaseNames, databaseName]
+    await writeLedgerEntry({...entry, databaseNames})
+  }
+
+  const handleMessage = (data: unknown): Promise<void> | undefined => {
+    if (
+      !data ||
+      typeof data !== 'object' ||
+      (data as {type?: unknown}).type !== RECORD_PREVIEW_DATABASE_MESSAGE ||
+      typeof (data as {databaseName?: unknown}).databaseName !== 'string'
+    ) {
+      return undefined
+    }
+    return recordPreviewDatabase((data as {databaseName: string}).databaseName)
   }
 
   const isNavigationRequest = (request: Request): boolean =>
@@ -451,7 +598,16 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     return undefined
   }
 
-  return {install, activate, handleFetch, readLedger, writeLedger, recordGeneration}
+  return {
+    install,
+    activate,
+    handleFetch,
+    handleMessage,
+    readLedger,
+    writeLedger,
+    recordGeneration,
+    recordPreviewDatabase,
+  }
 }
 
 export type ServiceWorkerInstance = ReturnType<typeof createServiceWorker>

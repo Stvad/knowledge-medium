@@ -26,6 +26,13 @@ export interface LedgerEntry {
   ids: string[]
   /** epoch ms of the last write; undefined for a legacy bare-array ledger. */
   updatedAt: number | undefined
+  /**
+   * PowerSync SQLite database filenames opened by this preview scope. Kept in
+   * the scope ledger so stale-preview cleanup deletes exact recorded names
+   * instead of guessing from OPFS/IndexedDB filenames, where a production
+   * local-only user id can legitimately end with a preview-looking suffix.
+   */
+  databaseNames: string[]
 }
 
 /**
@@ -36,12 +43,22 @@ export interface LedgerEntry {
  * garbage, non-array ids) degrades to an empty ledger.
  */
 export const normalizeLedger = (raw: unknown): LedgerEntry => {
-  if (Array.isArray(raw)) return {ids: raw, updatedAt: undefined}
+  if (Array.isArray(raw)) return {ids: raw, updatedAt: undefined, databaseNames: []}
   if (raw && typeof raw === 'object' && Array.isArray((raw as {ids?: unknown}).ids)) {
-    const {ids, updatedAt} = raw as {ids: string[]; updatedAt?: unknown}
-    return {ids, updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined}
+    const {ids, updatedAt, databaseNames} = raw as {
+      ids: string[]
+      updatedAt?: unknown
+      databaseNames?: unknown
+    }
+    return {
+      ids,
+      updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined,
+      databaseNames: Array.isArray(databaseNames)
+        ? databaseNames.filter((name): name is string => typeof name === 'string')
+        : [],
+    }
   }
-  return {ids: [], updatedAt: undefined}
+  return {ids: [], updatedAt: undefined, databaseNames: []}
 }
 
 /** One scope's ledger, tagged with the ledger-entry key URL it was read from. */

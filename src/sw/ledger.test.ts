@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'vitest'
-import {computeExpiredIds, computeKeepIds, computeReapableCaches, normalizeLedger} from './ledger'
+import {
+  computeExpiredIds,
+  computeKeepIds,
+  computeReapableCaches,
+  normalizeLedger,
+  type ScopeLedger,
+} from './ledger'
 
 describe('generation ledger retention', () => {
   it('keeps the most recent `keep` ids and expires the older ones (disjoint partition)', () => {
@@ -23,22 +29,54 @@ describe('generation ledger retention', () => {
 
 describe('normalizeLedger', () => {
   it('reads a legacy bare array as ids with no timestamp', () => {
-    expect(normalizeLedger(['a', 'b'])).toEqual({ids: ['a', 'b'], updatedAt: undefined})
+    expect(normalizeLedger(['a', 'b'])).toEqual({
+      ids: ['a', 'b'],
+      updatedAt: undefined,
+      databaseNames: [],
+    })
   })
 
   it('reads the timestamped {ids, updatedAt} shape', () => {
-    expect(normalizeLedger({ids: ['a'], updatedAt: 123})).toEqual({ids: ['a'], updatedAt: 123})
+    expect(normalizeLedger({ids: ['a'], updatedAt: 123})).toEqual({
+      ids: ['a'],
+      updatedAt: 123,
+      databaseNames: [],
+    })
+  })
+
+  it('reads recorded preview database names from the ledger shape', () => {
+    expect(normalizeLedger({
+      ids: ['a'],
+      updatedAt: 123,
+      databaseNames: ['kmp-v6-user-pr-1.db', 42, 'kmp-v6-other-pr-1.db'],
+    })).toEqual({
+      ids: ['a'],
+      updatedAt: 123,
+      databaseNames: ['kmp-v6-user-pr-1.db', 'kmp-v6-other-pr-1.db'],
+    })
   })
 
   it('treats a missing or non-numeric updatedAt as undefined', () => {
-    expect(normalizeLedger({ids: ['a']})).toEqual({ids: ['a'], updatedAt: undefined})
-    expect(normalizeLedger({ids: ['a'], updatedAt: 'soon'})).toEqual({ids: ['a'], updatedAt: undefined})
+    expect(normalizeLedger({ids: ['a']})).toEqual({
+      ids: ['a'],
+      updatedAt: undefined,
+      databaseNames: [],
+    })
+    expect(normalizeLedger({ids: ['a'], updatedAt: 'soon'})).toEqual({
+      ids: ['a'],
+      updatedAt: undefined,
+      databaseNames: [],
+    })
   })
 
   it('falls back to an empty ledger for null / garbage / a non-array ids', () => {
-    expect(normalizeLedger(null)).toEqual({ids: [], updatedAt: undefined})
-    expect(normalizeLedger(42)).toEqual({ids: [], updatedAt: undefined})
-    expect(normalizeLedger({ids: 'nope'})).toEqual({ids: [], updatedAt: undefined})
+    expect(normalizeLedger(null)).toEqual({ids: [], updatedAt: undefined, databaseNames: []})
+    expect(normalizeLedger(42)).toEqual({ids: [], updatedAt: undefined, databaseNames: []})
+    expect(normalizeLedger({ids: 'nope'})).toEqual({
+      ids: [],
+      updatedAt: undefined,
+      databaseNames: [],
+    })
   })
 })
 
@@ -50,8 +88,16 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
   const prod = 'https://stvad.github.io/knowledge-medium/__km_generations__'
   const preview = (n: number) =>
     `https://stvad.github.io/knowledge-medium/pr-preview/pr-${n}/__km_generations__`
-  const reap = (ledgers: Parameters<typeof computeReapableCaches>[0]['ledgers']) =>
-    computeReapableCaches({ledgers, now: NOW, staleMs: STALE_MS, cachePrefix: PREFIX})
+  type TestScopeLedger = Omit<ScopeLedger, 'databaseNames'> & {databaseNames?: string[]}
+  const withDatabaseNames = (ledgers: TestScopeLedger[]): ScopeLedger[] =>
+    ledgers.map(ledger => ({...ledger, databaseNames: ledger.databaseNames ?? []}))
+  const reap = (ledgers: TestScopeLedger[]) =>
+    computeReapableCaches({
+      ledgers: withDatabaseNames(ledgers),
+      now: NOW,
+      staleMs: STALE_MS,
+      cachePrefix: PREFIX,
+    })
 
   it('reaps a stale preview scope: its generation caches AND its ledger entry', () => {
     const plan = reap([
@@ -95,7 +141,7 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
   it('never reaps the sweeping SW’s OWN scope, even if its ledger looks stale', () => {
     const self = preview(313)
     const plan = computeReapableCaches({
-      ledgers: [{scopeUrl: self, ids: ['selfId'], updatedAt: NOW - 99 * DAY}],
+      ledgers: withDatabaseNames([{scopeUrl: self, ids: ['selfId'], updatedAt: NOW - 99 * DAY}]),
       now: NOW,
       staleMs: STALE_MS,
       cachePrefix: PREFIX,

@@ -73,6 +73,10 @@ import {
 } from '@/data/localSchema.js'
 import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import {
+  RECORD_PREVIEW_DATABASE_MESSAGE,
+  type RecordPreviewDatabaseMessage,
+} from '@/sw/messages.js'
 
 const appSchema = new Schema({})
 // Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
@@ -132,6 +136,19 @@ export const dbFilenameForUser = (
     .replace(/[^a-zA-Z0-9_-]/g, '_')
     .slice(0, Math.max(0, MAX_USER_SEGMENT - suffix.length))
   return `kmp-v6-${sanitized}${suffix}.db`
+}
+
+const recordPreviewDatabaseForReaper = (dbFilename: string): void => {
+  if (!previewDbSuffix(import.meta.env.BASE_URL)) return
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+
+  const message: RecordPreviewDatabaseMessage = {
+    type: RECORD_PREVIEW_DATABASE_MESSAGE,
+    databaseName: dbFilename,
+  }
+  navigator.serviceWorker.ready
+    .then((registration) => registration.active?.postMessage(message))
+    .catch(() => {})
 }
 
 const dbsByUser = new Map<string, PowerSyncDatabase>()
@@ -276,6 +293,7 @@ export const ensurePowerSyncReady = async (
 
   const db = getPowerSyncDb(userId)
   const dbFilename = dbFilenameForUser(userId)
+  recordPreviewDatabaseForReaper(dbFilename)
 
   let initPromise = initPromises.get(userId)
   if (!initPromise) {

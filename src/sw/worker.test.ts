@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from 'vitest'
-import {createServiceWorker, type SwConfig} from './worker'
+import {createServiceWorker, type SwConfig, type SwEnv} from './worker'
 
 // --- in-memory CacheStorage mock -------------------------------------------
 // Enough of the Cache / CacheStorage surface for the worker: open/keys/has/
@@ -57,6 +57,64 @@ class MockCaches {
   }
 }
 
+class MockOpfsRoot {
+  entries = new Set<string>()
+  failRemoveFor = new Set<string>()
+
+  add(name: string) {
+    this.entries.add(name)
+  }
+
+  has(name: string) {
+    return this.entries.has(name)
+  }
+
+  async removeEntry(name: string) {
+    if (this.failRemoveFor.has(name)) {
+      throw new DOMException('simulated lock', 'NoModificationAllowedError')
+    }
+    if (!this.entries.delete(name)) {
+      throw new DOMException('missing', 'NotFoundError')
+    }
+  }
+}
+
+class MockIndexedDB {
+  names = new Set<string>()
+  failDeleteFor = new Set<string>()
+  blockedDeleteFor = new Set<string>()
+
+  add(name: string) {
+    this.names.add(name)
+  }
+
+  has(name: string) {
+    return this.names.has(name)
+  }
+
+  async databases() {
+    return [...this.names].map(name => ({name}))
+  }
+
+  deleteDatabase(name: string) {
+    const request = {error: null} as unknown as IDBOpenDBRequest
+    queueMicrotask(() => {
+      if (this.blockedDeleteFor.has(name)) {
+        request.onblocked?.(new Event('blocked') as IDBVersionChangeEvent)
+        return
+      }
+      if (this.failDeleteFor.has(name)) {
+        ;(request as {error: DOMException}).error = new DOMException('simulated failure')
+        request.onerror?.(new Event('error'))
+        return
+      }
+      this.names.delete(name)
+      request.onsuccess?.(new Event('success'))
+    })
+    return request
+  }
+}
+
 const ORIGIN = 'https://app.example'
 const SCOPE = `${ORIGIN}/knowledge-medium/`
 const DAY = 24 * 60 * 60 * 1000
@@ -84,6 +142,7 @@ const build = (
   configOverrides: Partial<SwConfig> = {},
   fetchImpl: (req: Request) => Promise<Response> = async () => ok(),
   now: () => number = () => NOW,
+  envOverrides: Partial<SwEnv> = {},
 ) => {
   const caches = new MockCaches()
   const fetchMock = vi.fn(fetchImpl)
@@ -93,6 +152,7 @@ const build = (
     fetch: fetchMock as unknown as typeof fetch,
     origin: ORIGIN,
     now,
+    ...envOverrides,
   })
   return {sw, caches, fetchMock, config}
 }
@@ -374,24 +434,132 @@ describe('activate — stale preview cache sweep', () => {
     }
   }
 
-  it('reaps a merged preview’s caches + ledger entry, keeps prod and fresh previews', async () => {
-    const {sw, caches} = build() // current scope = production
+  it('reaps a merged preview’s caches, recorded databases, and ledger entry', async () => {
+    const opfs = new MockOpfsRoot()
+    const idb = new MockIndexedDB()
+    for (const name of [
+      'kmp-v6-user-1-pr-309.db',
+      'kmp-v6-user-1-pr-309.db-journal',
+      'kmp-v6-user-1-pr-310.db',
+      'kmp-v6-prod-pr-309.db',
+    ]) {
+      opfs.add(name)
+      idb.add(name.replace(/-journal$/, ''))
+    }
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+      indexedDB: idb as unknown as SwEnv['indexedDB'],
+    }) // current scope = production
     await seedScope(caches, prodScope, {ids: ['prodA'], updatedAt: NOW - DAY}, ['prodA'])
-    await seedScope(caches, previewScope(309), {ids: ['pvStale'], updatedAt: NOW - 15 * DAY}, ['pvStale'])
-    await seedScope(caches, previewScope(310), {ids: ['pvFresh'], updatedAt: NOW - DAY}, ['pvFresh'])
+    await seedScope(
+      caches,
+      previewScope(309),
+      {
+        ids: ['pvStale'],
+        updatedAt: NOW - 15 * DAY,
+        databaseNames: ['kmp-v6-user-1-pr-309.db'],
+      },
+      ['pvStale'],
+    )
+    await seedScope(
+      caches,
+      previewScope(310),
+      {
+        ids: ['pvFresh'],
+        updatedAt: NOW - DAY,
+        databaseNames: ['kmp-v6-user-1-pr-310.db'],
+      },
+      ['pvFresh'],
+    )
 
     await sw.activate()
 
-    // stale preview 309 fully reclaimed (both caches + its ledger entry)
+    // stale preview 309 fully reclaimed (caches + recorded DB files + ledger entry)
     expect(await caches.has('km-shell-pvStale')).toBe(false)
     expect(await caches.has('km-assets-pvStale')).toBe(false)
+    expect(opfs.has('kmp-v6-user-1-pr-309.db')).toBe(false)
+    expect(opfs.has('kmp-v6-user-1-pr-309.db-journal')).toBe(false)
+    expect(idb.has('kmp-v6-user-1-pr-309.db')).toBe(false)
     expect(await metaMatch(caches, previewScope(309))).toBeUndefined()
     // fresh preview 310 kept
     expect(await caches.has('km-shell-pvFresh')).toBe(true)
+    expect(opfs.has('kmp-v6-user-1-pr-310.db')).toBe(true)
+    expect(idb.has('kmp-v6-user-1-pr-310.db')).toBe(true)
     expect(await metaMatch(caches, previewScope(310))).toBeDefined()
     // production untouched
     expect(await caches.has('km-shell-prodA')).toBe(true)
+    expect(opfs.has('kmp-v6-prod-pr-309.db')).toBe(true)
+    expect(idb.has('kmp-v6-prod-pr-309.db')).toBe(true)
     expect(await metaMatch(caches, prodScope)).toBeDefined()
+  })
+
+  it('ignores recorded database names that do not match the stale preview scope', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6-prod.db')
+    opfs.add('kmp-v6-user-pr-310.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    await seedScope(
+      caches,
+      previewScope(309),
+      {
+        ids: ['pvStale'],
+        updatedAt: NOW - 15 * DAY,
+        databaseNames: ['kmp-v6-prod.db', 'kmp-v6-user-pr-310.db'],
+      },
+      ['pvStale'],
+    )
+
+    await sw.activate()
+
+    expect(opfs.has('kmp-v6-prod.db')).toBe(true)
+    expect(opfs.has('kmp-v6-user-pr-310.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(309))).toBeUndefined()
+  })
+
+  it('keeps the stale preview ledger when database deletion fails so a later sweep can retry', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6-user-pr-309.db')
+    opfs.add('kmp-v6-user-pr-309.db-journal')
+    opfs.failRemoveFor.add('kmp-v6-user-pr-309.db-journal')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    await seedScope(
+      caches,
+      previewScope(309),
+      {
+        ids: ['pvStale'],
+        updatedAt: NOW - 15 * DAY,
+        databaseNames: ['kmp-v6-user-pr-309.db'],
+      },
+      ['pvStale'],
+    )
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(false)
+    expect(opfs.has('kmp-v6-user-pr-309.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(309))).toBeDefined()
+  })
+
+  it('records exact preview database names only from a preview-scoped worker', async () => {
+    const selfScope = new URL(`${ORIGIN}/knowledge-medium/pr-preview/pr-500/`)
+    const {sw, caches} = build({scopeURL: selfScope, buildId: 'selfGen'})
+    await sw.writeLedger(['selfGen'])
+
+    await sw.recordPreviewDatabase('kmp-v6-user-pr-500.db')
+    await sw.recordPreviewDatabase('kmp-v6-prod.db') // not a preview DB for this scope
+
+    const res = await metaMatch(
+      caches,
+      `${ORIGIN}/knowledge-medium/pr-preview/pr-500/__km_generations__`,
+    )
+    expect(await res?.json()).toMatchObject({
+      ids: ['selfGen'],
+      databaseNames: ['kmp-v6-user-pr-500.db'],
+    })
   })
 
   it('never reaps production, however old its ledger (not a preview scope)', async () => {
