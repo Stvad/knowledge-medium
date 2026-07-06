@@ -16,7 +16,6 @@ import { useBacklinkFilterState } from '@/plugins/backlinks/useStoredBacklinkFil
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import type { GroupedBacklinkGroup } from './grouping.ts'
 import { useGroupedBacklinksConfig } from './useGroupedBacklinksConfig.ts'
-import { useGroupedBacklinks } from './useGroupedBacklinks.ts'
 import type { GroupedBacklinksConfig } from './config.ts'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
@@ -93,11 +92,13 @@ const stabilizeGroupedResult = (
   const nextGroups = grouped.groups.filter(group => !group.fallback)
   const fallbackGroup = grouped.groups.find(group => group.fallback)
   const nextGroupsById = new Map(nextGroups.map(group => [group.groupId, group]))
+  const previousGroupOrder = previousOrder ?? []
+  const knownGroupIds = new Set(previousGroupOrder)
   const groupOrder = [
-    ...(previousOrder ?? []),
+    ...previousGroupOrder,
     ...nextGroups
       .map(group => group.groupId)
-      .filter(groupId => !(previousOrder ?? []).includes(groupId)),
+      .filter(groupId => !knownGroupIds.has(groupId)),
   ]
 
   return {
@@ -126,6 +127,25 @@ const stabilizeSnapshotData = (
     },
     groupOrder,
   }
+}
+
+const waitForPostSettleReload = (): Promise<void> =>
+  new Promise(resolve => queueMicrotask(resolve))
+
+const loadSettledGroupedResult = async (
+  handle: {load: () => Promise<GroupedBacklinksResult>},
+): Promise<GroupedBacklinksResult> => {
+  let result = await handle.load()
+  // A LoaderHandle load invalidated mid-flight resolves with its dirty
+  // read, then schedules a clean rerun in a microtask. Drain that rerun
+  // before using the result as a new display-order baseline.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await waitForPostSettleReload()
+    const next = await handle.load()
+    if (Object.is(next, result)) return next
+    result = next
+  }
+  return result
 }
 
 const GroupItems = ({
@@ -301,18 +321,15 @@ function GroupedLinkedReferencesInner({
     setLiveUpdates(prev => !prev)
   }, [])
 
-  const snapshotQueryKey = snapshot?.queryKey
-  const snapshotStale = snapshotQueryKey !== undefined && snapshotQueryKey !== currentQueryKey
-
-  // While paused, keep the visible tree mounted and run the same one-shot
-  // refresh the old frozen body used when filter/config args drift. This
-  // refresh loads imperatively, so it does not subscribe to live query
-  // invalidations.
+  // A query-key change establishes a new display-order baseline from an
+  // explicit fresh load. `useHandle` may synchronously expose a cached
+  // stale `peek()` value before its own load settles; accepting that
+  // payload would preserve the old order after switching back to a
+  // previously used filter/config key.
   useEffect(() => {
-    if (liveUpdates || !snapshotStale) return
     let cancelled = false
     const handle = repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
-    handle.load().then(
+    loadSettledGroupedResult(handle).then(
       result => {
         if (cancelled) return
         setSnapshot(prev => {
@@ -330,7 +347,7 @@ function GroupedLinkedReferencesInner({
       () => {/* error is stored on the handle */},
     )
     return () => { cancelled = true }
-  }, [liveUpdates, snapshotStale, repo, groupedArgs, currentQueryKey])
+  }, [repo, groupedArgs, currentQueryKey])
 
   const shared: SharedViewProps = {
     block,
@@ -382,21 +399,22 @@ function GroupedBacklinksLiveBridge({
   filter?: BacklinksFilter
   onData: (data: GroupedBacklinksSnapshot) => void
 }) {
-  const grouped = useGroupedBacklinks(
-    block,
-    workspaceId,
-    groupingConfig,
-    filter,
-  )
-
-  const data = useMemo<GroupedBacklinksSnapshot>(
-    () => snapshotFromGroupedResult(block.repo, grouped),
-    [block.repo, grouped],
+  const groupedArgs = useMemo(
+    () => buildGroupedQueryArgs(
+      workspaceId,
+      block.id,
+      groupingConfig,
+      filter ?? {},
+    ),
+    [workspaceId, block.id, groupingConfig, filter],
   )
 
   useEffect(() => {
-    onData(data)
-  }, [onData, data])
+    const handle = block.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
+    return handle.subscribe(grouped => {
+      onData(snapshotFromGroupedResult(block.repo, grouped))
+    })
+  }, [block.repo, groupedArgs, onData])
 
   return null
 }
