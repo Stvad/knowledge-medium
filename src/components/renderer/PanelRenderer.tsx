@@ -25,6 +25,7 @@ import {
 } from '@/utils/panelHistory.js'
 import { deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import { buildForceOpenBlockIds } from '@/utils/forceOpenBlockIds.js'
 
 const SCROLL_WRITE_DELAY_MS = 200
 const PANEL_ACTION_BUTTON_CLASS =
@@ -95,6 +96,16 @@ export function PanelRenderer({block}: BlockRendererProps) {
     if (scrollWriteTimerRef.current) clearTimeout(scrollWriteTimerRef.current)
     scrollWriteTimerRef.current = setTimeout(flushScrollTop, SCROLL_WRITE_DELAY_MS)
   }, [flushScrollTop])
+
+  const forceOpenBlockIds = useMemo<string[]>(() => {
+    return topLevelBlockId
+      ? buildForceOpenBlockIds({
+          anchorId: topLevelBlockId,
+          shownBlockId: topLevelBlockId,
+          anchorParents: [],
+        })
+      : []
+  }, [topLevelBlockId])
 
   // Register a snapshotter so panelHistory can capture (focused block,
   // scroll) before any navigation away from the current top-level. The
@@ -187,7 +198,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
           layoutBoundary: false,
           renderScopeId: outlineRenderScopeId(topLevelBlockId),
           scopeRootId: topLevelBlockId,
-          forceOpenBlockIds: [topLevelBlockId],
+          forceOpenBlockIds,
         }}
       >
         <BlockComponent blockId={topLevelBlockId}/>
