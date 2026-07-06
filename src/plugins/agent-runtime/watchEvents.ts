@@ -3,7 +3,7 @@
  * where the data layer is reactive instead of being re-derived by
  * polling from outside the process.
  *
- * External consumers (the claude-tasks daemon, other bridge clients)
+ * External consumers (the agent-dispatch daemon, other bridge clients)
  * register named watchers over the bridge (`watch-events` command); each
  * watcher re-runs a read-only query when its tables change and, once the
  * result set has been stable for `settleMs`, pushes a small

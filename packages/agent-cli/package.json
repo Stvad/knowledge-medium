@@ -1,7 +1,7 @@
 {
   "name": "@knowledge-medium/agent-cli",
   "version": "0.2.0",
-  "description": "CLI + local HTTP bridge for driving the Knowledge Medium app from an agent (Claude/etc.). Pairs once with a browser tab, then forwards JSON commands over loopback.",
+  "description": "CLI, local HTTP bridge, and graph MCP server for driving the Knowledge Medium app from local agents.",
   "keywords": [
     "cli",
     "agent",
@@ -31,7 +31,8 @@
   "bin": {
     "agent-cli": "./dist/cli.js",
     "kmagent": "./dist/cli.js",
-    "kmagent-server": "./dist/server.js"
+    "kmagent-server": "./dist/server.js",
+    "km-mcp": "./dist/mcp.js"
   },
   "main": "./dist/cli.js",
   "exports": {
@@ -39,6 +40,10 @@
     "./server": "./dist/server.js",
     "./client": "./dist/client.js",
     "./config": "./dist/config.js",
+    "./graph": "./dist/graph.js",
+    "./mcpShared": "./dist/mcpShared.js",
+    "./mcpServer": "./dist/mcpServer.js",
+    "./mcp": "./dist/mcp.js",
     "./protocol": "./dist/protocol.js",
     "./subtreeOutline": "./dist/subtreeOutline.js"
   },
@@ -47,7 +52,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -b && node scripts/build-kernel-types.mjs && chmod +x ./dist/cli.js ./dist/server.js",
+    "build": "tsc -b && node scripts/build-kernel-types.mjs && chmod +x ./dist/cli.js ./dist/server.js ./dist/mcp.js",
     "build:clean": "tsc -b --clean",
     "prepublishOnly": "yarn run build:clean && yarn run build"
   },
@@ -56,6 +61,7 @@
     "typescript": "^6.0.0"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cac": "^7.0.0",
     "zod": "^4.0.0"
   }

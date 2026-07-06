@@ -39,7 +39,7 @@ import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { backlinksViewPlugin } from '@/plugins/backlinks-view'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
-import { claudeTasksCompanionPlugin } from '@/plugins/claude-tasks-companion'
+import { agentDispatchCompanionPlugin } from '@/plugins/agent-dispatch-companion'
 import { appIntentsPlugin } from '@/plugins/app-intents'
 import { roamImportPlugin } from '@/plugins/roam-import'
 import { blockTaggingPlugin } from '@/plugins/block-tagging'
@@ -142,7 +142,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   startupMetricsPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
-  claudeTasksCompanionPlugin,
+  agentDispatchCompanionPlugin,
   roamImportPlugin({repo}),
   birthdayPlugin,
   // appIntentsPlugin's bootstrap effect resolves the layout-session

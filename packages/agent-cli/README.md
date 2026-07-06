@@ -1,8 +1,8 @@
 # @knowledge-medium/agent-cli
 
-`kmagent` — CLI + local HTTP bridge for driving the [Knowledge Medium](https://github.com/stvad/knowledge-medium) app from an agent (Claude, your own scripts, anything that can spawn a child process).
+`kmagent` — CLI + local HTTP bridge for driving the [Knowledge Medium](https://github.com/stvad/knowledge-medium) app from an agent (Claude, Codex, your own scripts, anything that can spawn a child process).
 
-Pairs once with a browser tab over a localhost relay, then forwards JSON commands to a long-poll loop inside the app. The CLI is the agent-facing surface; the bridge is the loopback HTTP server that brokers the connection.
+Pairs once with a browser tab over a localhost relay, then forwards JSON commands to a long-poll loop inside the app. The CLI is the agent-facing surface; the bridge is the loopback HTTP server that brokers the connection. The package also ships `km-mcp`, a generic graph MCP server backed by the same bridge.
 
 ## Install
 
@@ -64,6 +64,38 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent raw <json>` | Send an arbitrary JSON command envelope to the bridge. |
 
 Run `kmagent <command> --help` for per-command details or `kmagent --help` for the full menu.
+
+## MCP Server
+
+`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query`, `create_block`, and `update_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
+
+```json
+{
+  "mcpServers": {
+    "km": {
+      "command": "km-mcp",
+      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch"}
+    }
+  }
+}
+```
+
+When running from a repo checkout instead of an installed package, point at
+the built entrypoint directly:
+
+```json
+{
+  "mcpServers": {
+    "km": {
+      "command": "node",
+      "args": ["<repo>/packages/agent-cli/dist/mcp.js"],
+      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch"}
+    }
+  }
+}
+```
+
+Set `KM_MCP_BLOCKED_WIKILINKS` to a JSON array of page aliases when a caller needs write tools to refuse links back to trigger pages, for example `["claude", "codex"]`.
 
 ## Eval execution scope
 

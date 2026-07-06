@@ -298,7 +298,7 @@ const SIDE_EFFECTING_FN = /\bpowersync_/i
 
 /** Textual read-only enforcement, shared by every surface that accepts
  *  SQL it will run repeatedly or on someone else's authority (the km MCP
- *  graph tools, claude-tasks watcher configs, watch-events registrations,
+ *  graph tools, agent-dispatch watcher configs, watch-events registrations,
  *  the bridge's read-only token scope): single statement, no
  *  side-effecting function call, and either a SELECT/PRAGMA-info/EXPLAIN
  *  prologue or a WITH containing no mutating keyword — CTEs can head
@@ -319,7 +319,7 @@ export const isReadOnlySql = (sql: string): boolean => {
 // ----- watch-events (push detection) ----------------------------------
 
 /** Schema bounds, exported so consumers building registrations (e.g.
- *  the claude-tasks daemon's config) can validate against the SAME
+ *  the agent-dispatch daemon's config) can validate against the SAME
  *  limits — an over-cap value fails the tab's schema at registration
  *  time, where it's indistinguishable from an old bundle. */
 export const WATCH_EVENTS_MAX_SETTLE_MS = 600_000

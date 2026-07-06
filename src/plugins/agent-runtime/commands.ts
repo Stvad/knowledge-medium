@@ -320,8 +320,8 @@ const updateRuntimeBlock = async (
   // same block can land between this read and this write. A prior
   // repo.load-then-merge OUTSIDE the tx had a TOCTOU: a full-map write built
   // from a stale snapshot clobbered any property another writer set in the
-  // gap (e.g. a claude-tasks orphan-clear reverting a channel task's
-  // concurrently-written claude:status back to `running`).
+  // gap (e.g. an agent-dispatch orphan-clear reverting a channel task's
+  // concurrently-written agent:status back to `running`).
   let found = false
   await repo.tx(async tx => {
     const before = await tx.get(input.id)
