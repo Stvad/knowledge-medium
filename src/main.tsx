@@ -33,7 +33,6 @@ window.React = React
 window.ReactDOM = ReactDOM
 
 registerServiceWorker()
-void startCurrentPreviewScopeLease(import.meta.env.BASE_URL, window.location.href).catch(() => {})
 
 // Ask the browser to keep our local-first state (SQLite DB, workspace keys)
 // exempt from automatic eviction under storage pressure. Checks persisted()
@@ -50,21 +49,27 @@ void requestPersistentStorage()
 // truth for "what mounts at the app root". Bootstrap errors before
 // the runtime is up still flow through ErrorBoundary →
 // BootstrapErrorFallback below, not via toast.
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <Suspense fallback={<SuspenseFallback/>}>
-      <Login>
-        <ErrorBoundary FallbackComponent={BootstrapErrorFallback}>
-          {/* Routes a RUNTIME sync-apply corruption (which opens fine, so it
-              never throws through init) into this same boundary → recovery UI. */}
-          <LocalDbCorruptionSentinel />
-          <RepoProvider>
-            <Suspense fallback={<SuspenseFallback/>}>
-              <App/>
-            </Suspense>
-          </RepoProvider>
-        </ErrorBoundary>
-      </Login>
-    </Suspense>
-  </StrictMode>,
-)
+const renderApp = () => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <Suspense fallback={<SuspenseFallback/>}>
+        <Login>
+          <ErrorBoundary FallbackComponent={BootstrapErrorFallback}>
+            {/* Routes a RUNTIME sync-apply corruption (which opens fine, so it
+                never throws through init) into this same boundary → recovery UI. */}
+            <LocalDbCorruptionSentinel />
+            <RepoProvider>
+              <Suspense fallback={<SuspenseFallback/>}>
+                <App/>
+              </Suspense>
+            </RepoProvider>
+          </ErrorBoundary>
+        </Login>
+      </Suspense>
+    </StrictMode>,
+  )
+}
+
+void startCurrentPreviewScopeLease(import.meta.env.BASE_URL, window.location.href)
+  .catch(() => {})
+  .then(renderApp)

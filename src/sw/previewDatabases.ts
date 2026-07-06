@@ -128,6 +128,6 @@ export const startCurrentPreviewScopeLease = async (
 ): Promise<void> => {
   if (!previewIdFromBasePath(base)) return
   const scopeUrl = new URL(base, href)
-  await recordPreviewScopeLiveness(scopeUrl)
   await acquirePreviewScopeLease(scopeUrl)
+  await recordPreviewScopeLiveness(scopeUrl)
 }

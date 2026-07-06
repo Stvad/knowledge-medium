@@ -251,8 +251,8 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     lastTouchAt = t // set optimistically so concurrent fetches don't pile on writes
     const touch = (async () => {
       try {
-        await recordOwnPreviewScopeLiveness()
         await withOwnPreviewScopeLease(async () => {
+          await recordOwnPreviewScopeLiveness()
           await mutateLedgerEntry((entry) => entry)
         })
       } catch {
@@ -893,7 +893,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
               throw new Error(`Preview scope became live before deleting ${name}`)
             }
           })
-          await deleteIndexedDatabase(name).catch(() => {})
+          await deleteIndexedDatabase(name)
         } catch {
           // Keep this scope's ledger and caches so a later activation can retry
           // after a locked database handle, transient OPFS failure, or blocked

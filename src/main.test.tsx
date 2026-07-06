@@ -40,18 +40,27 @@ afterEach(() => {
 })
 
 describe('main bootstrap', () => {
-  it('starts the current preview scope lease with the app base before rendering', async () => {
+  it('waits for the current preview scope lease before rendering', async () => {
     vi.stubEnv('BASE_URL', '/knowledge-medium/pr-preview/pr-328/')
     document.body.innerHTML = '<div id="root"></div>'
+    let releaseLease!: () => void
+    mocks.startCurrentPreviewScopeLease.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        releaseLease = resolve
+      }),
+    )
 
-    await import('./main')
+    const main = import('./main')
+    await vi.waitFor(() => expect(mocks.startCurrentPreviewScopeLease).toHaveBeenCalled())
+
+    expect(mocks.createRoot).not.toHaveBeenCalled()
+    releaseLease()
+    await main
 
     expect(mocks.startCurrentPreviewScopeLease).toHaveBeenCalledWith(
       '/knowledge-medium/pr-preview/pr-328/',
       window.location.href,
     )
-    expect(mocks.startCurrentPreviewScopeLease.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.createRoot.mock.invocationCallOrder[0],
-    )
+    await vi.waitFor(() => expect(mocks.createRoot).toHaveBeenCalled())
   })
 })

@@ -757,7 +757,7 @@ describe('activate — stale preview cache sweep', () => {
     expect(await metaMatch(caches, previewDatabaseRecord(334, 'kmp-v6~pr-334~user.db'))).toBeUndefined()
   })
 
-  it('drops stale retry metadata when legacy IndexedDB cleanup fails after OPFS deletion', async () => {
+  it('keeps stale retry metadata when legacy IndexedDB cleanup fails after OPFS deletion', async () => {
     const opfs = new MockOpfsRoot()
     const idb = new MockIndexedDB()
     opfs.add('kmp-v6~pr-339~user.db')
@@ -779,8 +779,8 @@ describe('activate — stale preview cache sweep', () => {
 
     expect(opfs.has('kmp-v6~pr-339~user.db')).toBe(false)
     expect(idb.has('kmp-v6~pr-339~user.db')).toBe(true)
-    expect(await metaMatch(caches, previewScope(339))).toBeUndefined()
-    expect(await metaMatch(caches, previewDatabaseRecord(339, 'kmp-v6~pr-339~user.db'))).toBeUndefined()
+    expect(await metaMatch(caches, previewScope(339))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(339, 'kmp-v6~pr-339~user.db'))).toBeDefined()
   })
 
   it('skips the cross-scope stale preview sweep when Web Locks are unavailable', async () => {
@@ -1117,7 +1117,7 @@ describe('touch-on-use keeps a live preview from being reaped', () => {
     expect(extended).toHaveLength(1) // unchanged — a throttled fetch schedules nothing
   })
 
-  it('records preview scope liveness before taking the shared scope lock', async () => {
+  it('records preview scope liveness while holding the shared scope lock', async () => {
     let clock = NOW
     const {sw, caches, locks} = buildPreview(() => clock)
     await sw.install()
@@ -1137,6 +1137,6 @@ describe('touch-on-use keeps a live preview from being reaped', () => {
     sw.handleFetch(new Request(`${previewScopeURL}src/main.js`), p => extended.push(p))
     await Promise.all(extended)
 
-    expect(events.slice(0, 2)).toEqual(['liveness', 'lock'])
+    expect(events.slice(0, 2)).toEqual(['lock', 'liveness'])
   })
 })
