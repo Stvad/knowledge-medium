@@ -103,6 +103,8 @@ const sw = createServiceWorker(
     now: () => Date.now(),
     storage: navigator.storage,
     indexedDB,
+    clients: self.clients,
+    locks: navigator.locks,
   },
 )
 
@@ -119,8 +121,6 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting()
-  const handled = sw.handleMessage(event.data)
-  if (handled) event.waitUntil(handled)
 })
 
 self.addEventListener('fetch', (event) => {

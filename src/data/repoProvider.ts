@@ -74,9 +74,11 @@ import {
 import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
 import {
-  RECORD_PREVIEW_DATABASE_MESSAGE,
-  type RecordPreviewDatabaseMessage,
-} from '@/sw/messages.js'
+  SERVICE_WORKER_META_CACHE,
+  acquirePreviewScopeLease,
+  previewIdFromBasePath,
+  previewDatabaseRecordUrl,
+} from '@/sw/previewDatabases.js'
 
 const appSchema = new Schema({})
 // Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
@@ -110,45 +112,57 @@ const MAX_USER_SEGMENT = 40
 // tabs enabled. Each VFS bump gets a fresh filename so we don't reuse
 // storage across backends.
 // PR previews are served under /<repo>/pr-preview/pr-<n>/ on the SAME origin as
-// production, and OPFS/IndexedDB is per-origin — so without a per-deploy suffix a
-// signed-in preview would open production's REAL local DB, and any client schema
+// production, and OPFS/IndexedDB is per-origin — so without a per-deploy namespace
+// a signed-in preview would open production's REAL local DB, and any client schema
 // change / migration / PowerSync bump in the PR would mutate it (the app is
 // offline-first, so the local store is authoritative). Derive a namespace from
 // the deploy path so previews get their own DB. Production (BASE_URL = /<repo>/)
 // matches nothing here, so its filename stays byte-for-byte identical and
-// existing users keep their data. The `-pr-<n>` suffix is short enough to stay
-// under the 64-char wa-sqlite pathname cap (see MAX_USER_SEGMENT).
-export const previewDbSuffix = (base: string): string => {
-  const match = base.match(/\/pr-preview\/(pr-[^/]+)\//)
-  return match ? `-${match[1]}` : ''
+// existing users keep their data. The preview namespace uses `~`, which production
+// sanitized user ids can never contain, so a production local-only name like
+// `alice-pr-309` cannot collide with preview PR 309 user `alice`.
+export const previewDbId = (base: string): string | null => {
+  return previewIdFromBasePath(base)
 }
 
 export const dbFilenameForUser = (
   userId: string,
   base: string = import.meta.env.BASE_URL,
 ) => {
-  const suffix = previewDbSuffix(base)
-  // The preview suffix comes OUT of the user budget, so the base name stays
+  const previewId = previewDbId(base)
+  const previewNamespace = previewId ? `~${previewId}~` : ''
+  // The preview namespace comes OUT of the user budget, so the base name stays
   // within the same envelope as production (`kmp-v6-` + <=MAX_USER_SEGMENT +
-  // `.db` = 50) regardless of the suffix — preserving the headroom the 64-char
+  // `.db` = 50) regardless of the namespace — preserving the headroom the 64-char
   // wa-sqlite pathname cap needs for the -journal/-wal/-shm derivatives.
   const sanitized = userId
     .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .slice(0, Math.max(0, MAX_USER_SEGMENT - suffix.length))
-  return `kmp-v6-${sanitized}${suffix}.db`
+    .slice(0, Math.max(0, MAX_USER_SEGMENT - previewNamespace.length))
+  return previewId
+    ? `kmp-v6${previewNamespace}${sanitized}.db`
+    : `kmp-v6-${sanitized}.db`
 }
 
-const recordPreviewDatabaseForReaper = (dbFilename: string): void => {
-  if (!previewDbSuffix(import.meta.env.BASE_URL)) return
-  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+export const recordPreviewDatabaseForReaper = async (dbFilename: string): Promise<void> => {
+  if (!previewDbId(import.meta.env.BASE_URL)) return
+  if (typeof window === 'undefined' || typeof caches === 'undefined') return
 
-  const message: RecordPreviewDatabaseMessage = {
-    type: RECORD_PREVIEW_DATABASE_MESSAGE,
-    databaseName: dbFilename,
+  const scopeUrl = new URL(import.meta.env.BASE_URL, window.location.href)
+  const {releaseOnFailure} = await acquirePreviewScopeLease(scopeUrl)
+  try {
+    const cache = await caches.open(SERVICE_WORKER_META_CACHE)
+    await cache.put(
+      previewDatabaseRecordUrl(scopeUrl, dbFilename),
+      new Response(JSON.stringify({name: dbFilename, updatedAt: Date.now()}), {
+        headers: {'content-type': 'application/json'},
+      }),
+    )
+  } catch (err) {
+    releaseOnFailure()
+    throw new Error('Failed to record preview database for cleanup before opening it.', {
+      cause: err,
+    })
   }
-  navigator.serviceWorker.ready
-    .then((registration) => registration.active?.postMessage(message))
-    .catch(() => {})
 }
 
 const dbsByUser = new Map<string, PowerSyncDatabase>()
@@ -252,12 +266,31 @@ const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   },
 })
 
+let powerSyncDbFactory = buildPowerSyncDb
+
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   const existing = dbsByUser.get(userId)
   if (existing) return existing
-  const db = buildPowerSyncDb(userId)
+  const db = powerSyncDbFactory(userId)
   dbsByUser.set(userId, db)
   return db
+}
+
+export const __setPowerSyncDbFactoryForTest = (
+  factory: typeof buildPowerSyncDb,
+): void => {
+  powerSyncDbFactory = factory
+}
+
+export const __resetRepoProviderForTest = (): void => {
+  powerSyncDbFactory = buildPowerSyncDb
+  dbsByUser.clear()
+  initPromises.clear()
+  syncResolversByUser.clear()
+  activeUserId = null
+  activeRemoteSync = false
+  connectChain = Promise.resolve()
+  opfsProbe = null
 }
 
 /**
@@ -291,9 +324,9 @@ export const ensurePowerSyncReady = async (
 ) => {
   await assertOpfsAvailable()
 
-  const db = getPowerSyncDb(userId)
   const dbFilename = dbFilenameForUser(userId)
-  recordPreviewDatabaseForReaper(dbFilename)
+  await recordPreviewDatabaseForReaper(dbFilename)
+  const db = getPowerSyncDb(userId)
 
   let initPromise = initPromises.get(userId)
   if (!initPromise) {

@@ -1,5 +1,10 @@
 import {describe, expect, it, vi} from 'vitest'
 import {createServiceWorker, type SwConfig, type SwEnv} from './worker'
+import {
+  previewDatabaseRecordUrl,
+  previewScopeLivenessUrl,
+  previewScopeLockName,
+} from './previewDatabases'
 
 // --- in-memory CacheStorage mock -------------------------------------------
 // Enough of the Cache / CacheStorage surface for the worker: open/keys/has/
@@ -115,6 +120,53 @@ class MockIndexedDB {
   }
 }
 
+class MockLocks {
+  held = new Set<string>()
+  pending: LockInfo[] = []
+  onAcquire: ((name: string) => void) | undefined
+
+  hold(name: string): () => void {
+    this.held.add(name)
+    return () => {
+      this.held.delete(name)
+      this.pending = this.pending.filter((lock) => lock.name !== name)
+    }
+  }
+
+  queuePending(name: string, mode: LockMode = 'shared') {
+    this.pending.push({clientId: 'pending-client', mode, name})
+  }
+
+  async query(): Promise<LockManagerSnapshot> {
+    return {
+      held: [...this.held].map(name => ({clientId: 'held-client', mode: 'exclusive', name})),
+      pending: this.pending,
+    }
+  }
+
+  async request<T>(
+    name: string,
+    optionsOrCallback: LockOptions | LockGrantedCallback<T>,
+    callback?: LockGrantedCallback<T>,
+  ): Promise<T> {
+    const options = typeof optionsOrCallback === 'function' ? {} : optionsOrCallback
+    const run = typeof optionsOrCallback === 'function' ? optionsOrCallback : callback!
+    if (options.ifAvailable && this.held.has(name)) return run(null)
+    if (this.held.has(name)) throw new Error(`lock already held: ${name}`)
+
+    this.held.add(name)
+    try {
+      this.onAcquire?.(name)
+      return await run({
+        name,
+        mode: options.mode ?? 'exclusive',
+      } as Lock)
+    } finally {
+      this.held.delete(name)
+    }
+  }
+}
+
 const ORIGIN = 'https://app.example'
 const SCOPE = `${ORIGIN}/knowledge-medium/`
 const DAY = 24 * 60 * 60 * 1000
@@ -145,6 +197,7 @@ const build = (
   envOverrides: Partial<SwEnv> = {},
 ) => {
   const caches = new MockCaches()
+  const locks = new MockLocks()
   const fetchMock = vi.fn(fetchImpl)
   const config = makeConfig(configOverrides)
   const sw = createServiceWorker(config, {
@@ -152,9 +205,10 @@ const build = (
     fetch: fetchMock as unknown as typeof fetch,
     origin: ORIGIN,
     now,
+    locks: locks as unknown as LockManager,
     ...envOverrides,
   })
-  return {sw, caches, fetchMock, config}
+  return {sw, caches, locks, fetchMock, config}
 }
 
 const abs = (p: string) => new URL(p, SCOPE).toString()
@@ -415,9 +469,35 @@ describe('shellCacheFirst (HTML navigation)', () => {
 describe('activate — stale preview cache sweep', () => {
   const previewScope = (n: number) =>
     `${ORIGIN}/knowledge-medium/pr-preview/pr-${n}/__km_generations__`
+  const previewScopeUrl = (n: number) => `${ORIGIN}/knowledge-medium/pr-preview/pr-${n}/`
+  const previewDatabaseRecord = (n: number, name: string) =>
+    previewDatabaseRecordUrl(previewScopeUrl(n), name)
+  const previewScopeLivenessRecord = (n: number) =>
+    previewScopeLivenessUrl(previewScopeUrl(n))
   const prodScope = `${SCOPE}__km_generations__` // this (production) scope's own ledger key
   const metaMatch = async (caches: MockCaches, url: string) =>
     (await caches.open('km-meta')).match(url)
+  const seedDatabaseRecord = async (
+    caches: MockCaches,
+    n: number,
+    name: string,
+    updatedAt = NOW - 15 * DAY,
+  ) => {
+    ;(await caches.open('km-meta')).store.set(
+      previewDatabaseRecord(n, name),
+      new Response(JSON.stringify({name, updatedAt})),
+    )
+  }
+  const seedScopeLivenessRecord = async (
+    caches: MockCaches,
+    n: number,
+    updatedAt: number,
+  ) => {
+    ;(await caches.open('km-meta')).store.set(
+      previewScopeLivenessRecord(n),
+      new Response(JSON.stringify({updatedAt})),
+    )
+  }
 
   // Seed one scope's ledger entry into the shared meta cache + its generation
   // caches — mimicking a PR preview a client visited earlier.
@@ -438,9 +518,9 @@ describe('activate — stale preview cache sweep', () => {
     const opfs = new MockOpfsRoot()
     const idb = new MockIndexedDB()
     for (const name of [
-      'kmp-v6-user-1-pr-309.db',
-      'kmp-v6-user-1-pr-309.db-journal',
-      'kmp-v6-user-1-pr-310.db',
+      'kmp-v6~pr-309~user-1.db',
+      'kmp-v6~pr-309~user-1.db-journal',
+      'kmp-v6~pr-310~user-1.db',
       'kmp-v6-prod-pr-309.db',
     ]) {
       opfs.add(name)
@@ -454,38 +534,34 @@ describe('activate — stale preview cache sweep', () => {
     await seedScope(
       caches,
       previewScope(309),
-      {
-        ids: ['pvStale'],
-        updatedAt: NOW - 15 * DAY,
-        databaseNames: ['kmp-v6-user-1-pr-309.db'],
-      },
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
       ['pvStale'],
     )
+    await seedDatabaseRecord(caches, 309, 'kmp-v6~pr-309~user-1.db')
     await seedScope(
       caches,
       previewScope(310),
-      {
-        ids: ['pvFresh'],
-        updatedAt: NOW - DAY,
-        databaseNames: ['kmp-v6-user-1-pr-310.db'],
-      },
+      {ids: ['pvFresh'], updatedAt: NOW - DAY},
       ['pvFresh'],
     )
+    await seedDatabaseRecord(caches, 310, 'kmp-v6~pr-310~user-1.db')
 
     await sw.activate()
 
     // stale preview 309 fully reclaimed (caches + recorded DB files + ledger entry)
     expect(await caches.has('km-shell-pvStale')).toBe(false)
     expect(await caches.has('km-assets-pvStale')).toBe(false)
-    expect(opfs.has('kmp-v6-user-1-pr-309.db')).toBe(false)
-    expect(opfs.has('kmp-v6-user-1-pr-309.db-journal')).toBe(false)
-    expect(idb.has('kmp-v6-user-1-pr-309.db')).toBe(false)
+    expect(opfs.has('kmp-v6~pr-309~user-1.db')).toBe(false)
+    expect(opfs.has('kmp-v6~pr-309~user-1.db-journal')).toBe(false)
+    expect(idb.has('kmp-v6~pr-309~user-1.db')).toBe(false)
     expect(await metaMatch(caches, previewScope(309))).toBeUndefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(309, 'kmp-v6~pr-309~user-1.db'))).toBeUndefined()
     // fresh preview 310 kept
     expect(await caches.has('km-shell-pvFresh')).toBe(true)
-    expect(opfs.has('kmp-v6-user-1-pr-310.db')).toBe(true)
-    expect(idb.has('kmp-v6-user-1-pr-310.db')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-310~user-1.db')).toBe(true)
+    expect(idb.has('kmp-v6~pr-310~user-1.db')).toBe(true)
     expect(await metaMatch(caches, previewScope(310))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(310, 'kmp-v6~pr-310~user-1.db'))).toBeDefined()
     // production untouched
     expect(await caches.has('km-shell-prodA')).toBe(true)
     expect(opfs.has('kmp-v6-prod-pr-309.db')).toBe(true)
@@ -496,7 +572,8 @@ describe('activate — stale preview cache sweep', () => {
   it('ignores recorded database names that do not match the stale preview scope', async () => {
     const opfs = new MockOpfsRoot()
     opfs.add('kmp-v6-prod.db')
-    opfs.add('kmp-v6-user-pr-310.db')
+    opfs.add('kmp-v6-user-pr-309.db')
+    opfs.add('kmp-v6~pr-310~user.db')
     const {sw, caches} = build({}, async () => ok(), () => NOW, {
       storage: {getDirectory: async () => opfs},
     })
@@ -506,7 +583,7 @@ describe('activate — stale preview cache sweep', () => {
       {
         ids: ['pvStale'],
         updatedAt: NOW - 15 * DAY,
-        databaseNames: ['kmp-v6-prod.db', 'kmp-v6-user-pr-310.db'],
+        databaseNames: ['kmp-v6-prod.db', 'kmp-v6-user-pr-309.db', 'kmp-v6~pr-310~user.db'],
       },
       ['pvStale'],
     )
@@ -514,52 +591,337 @@ describe('activate — stale preview cache sweep', () => {
     await sw.activate()
 
     expect(opfs.has('kmp-v6-prod.db')).toBe(true)
-    expect(opfs.has('kmp-v6-user-pr-310.db')).toBe(true)
+    expect(opfs.has('kmp-v6-user-pr-309.db')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-310~user.db')).toBe(true)
     expect(await metaMatch(caches, previewScope(309))).toBeUndefined()
   })
 
-  it('keeps the stale preview ledger when database deletion fails so a later sweep can retry', async () => {
+  it('keeps the stale preview ledger when main database deletion fails so a later sweep can retry', async () => {
     const opfs = new MockOpfsRoot()
-    opfs.add('kmp-v6-user-pr-309.db')
-    opfs.add('kmp-v6-user-pr-309.db-journal')
-    opfs.failRemoveFor.add('kmp-v6-user-pr-309.db-journal')
+    opfs.add('kmp-v6~pr-309~user.db')
+    opfs.add('kmp-v6~pr-309~user.db-journal')
+    opfs.failRemoveFor.add('kmp-v6~pr-309~user.db')
     const {sw, caches} = build({}, async () => ok(), () => NOW, {
       storage: {getDirectory: async () => opfs},
     })
     await seedScope(
       caches,
       previewScope(309),
-      {
-        ids: ['pvStale'],
-        updatedAt: NOW - 15 * DAY,
-        databaseNames: ['kmp-v6-user-pr-309.db'],
-      },
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
       ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 309, 'kmp-v6~pr-309~user.db')
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-309~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(309))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(309, 'kmp-v6~pr-309~user.db'))).toBeDefined()
+  })
+
+  it('keeps the stale preview ledger when database sidecar deletion fails before touching the main db', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-337~user.db')
+    opfs.add('kmp-v6~pr-337~user.db-wal')
+    opfs.failRemoveFor.add('kmp-v6~pr-337~user.db-wal')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    await seedScope(
+      caches,
+      previewScope(337),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 337, 'kmp-v6~pr-337~user.db')
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-337~user.db')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-337~user.db-wal')).toBe(true)
+    expect(await metaMatch(caches, previewScope(337))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(337, 'kmp-v6~pr-337~user.db'))).toBeDefined()
+  })
+
+  it('does not lose a database record when another worker instance updates the generation ledger', async () => {
+    const selfScope = new URL(`${ORIGIN}/knowledge-medium/pr-preview/pr-502/`)
+    const caches = new MockCaches()
+    const locks = new MockLocks()
+    const env: SwEnv = {
+      caches: caches as unknown as CacheStorage,
+      fetch: (async () => ok()) as unknown as typeof fetch,
+      origin: ORIGIN,
+      now: () => NOW,
+      locks: locks as unknown as LockManager,
+    }
+    const oldWorker = createServiceWorker(
+      makeConfig({scopeURL: selfScope, buildId: 'oldGen'}),
+      env,
+    )
+    const newWorker = createServiceWorker(
+      makeConfig({scopeURL: selfScope, buildId: 'newGen'}),
+      env,
+    )
+    await oldWorker.writeLedger(['oldGen'])
+
+    await seedDatabaseRecord(caches, 502, 'kmp-v6~pr-502~alice.db')
+    await newWorker.recordGeneration('newGen')
+
+    expect(await metaMatch(caches, previewDatabaseRecord(502, 'kmp-v6~pr-502~alice.db'))).toBeDefined()
+    expect(await newWorker.readLedger()).toEqual(['oldGen', 'newGen'])
+  })
+
+  it('skips stale preview deletion when an open client is under that preview scope', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-309~user.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+      clients: {
+        matchAll: async () => [{url: `${ORIGIN}/knowledge-medium/pr-preview/pr-309/`}],
+      },
+    })
+    await seedScope(
+      caches,
+      previewScope(309),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 309, 'kmp-v6~pr-309~user.db')
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-309~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(309))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(309, 'kmp-v6~pr-309~user.db'))).toBeDefined()
+  })
+
+  it('treats a fresh preview database record as scope liveness', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-330~user.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    await seedScope(
+      caches,
+      previewScope(330),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 330, 'kmp-v6~pr-330~user.db', NOW)
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-330~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(330))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(330, 'kmp-v6~pr-330~user.db'))).toBeDefined()
+  })
+
+  it('treats a fresh preview scope liveness record as scope liveness', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-332~user.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    await seedScope(
+      caches,
+      previewScope(332),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 332, 'kmp-v6~pr-332~user.db')
+    await seedScopeLivenessRecord(caches, 332, NOW)
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-332~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(332))).toBeDefined()
+    expect(await metaMatch(caches, previewScopeLivenessRecord(332))).toBeDefined()
+  })
+
+  it('reaps stale preview databases even when only a stale database record remains', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-334~user.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    await seedDatabaseRecord(caches, 334, 'kmp-v6~pr-334~user.db')
+
+    await sw.activate()
+
+    expect(opfs.has('kmp-v6~pr-334~user.db')).toBe(false)
+    expect(await metaMatch(caches, previewDatabaseRecord(334, 'kmp-v6~pr-334~user.db'))).toBeUndefined()
+  })
+
+  it('skips the cross-scope stale preview sweep when Web Locks are unavailable', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-335~user.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+      locks: undefined,
+    })
+    await seedScope(
+      caches,
+      previewScope(335),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 335, 'kmp-v6~pr-335~user.db')
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-335~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(335))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(335, 'kmp-v6~pr-335~user.db'))).toBeDefined()
+  })
+
+  it('skips stale preview deletion when the preview scope lease is held', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-331~user.db')
+    const {sw, caches, locks} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    const release = locks.hold(previewScopeLockName(previewScopeUrl(331)))
+    await seedScope(
+      caches,
+      previewScope(331),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 331, 'kmp-v6~pr-331~user.db')
+
+    await sw.activate()
+    release()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-331~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(331))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(331, 'kmp-v6~pr-331~user.db'))).toBeDefined()
+  })
+
+  it('skips stale preview deletion when a preview scope lease is pending behind the sweep', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-336~user.db')
+    const {sw, caches, locks} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    const lockName = previewScopeLockName(previewScopeUrl(336))
+    locks.onAcquire = (name) => {
+      if (name === lockName) locks.queuePending(lockName)
+    }
+    await seedScope(
+      caches,
+      previewScope(336),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 336, 'kmp-v6~pr-336~user.db')
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-336~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(336))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(336, 'kmp-v6~pr-336~user.db'))).toBeDefined()
+  })
+
+  it('revalidates a stale preview ledger before deleting its stable database name', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-309~user.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+      clients: {
+        matchAll: async () => {
+          ;(await caches.open('km-meta')).store.set(
+            previewScope(309),
+            new Response(JSON.stringify({
+              ids: ['pvStale'],
+              updatedAt: NOW,
+            })),
+          )
+          return []
+        },
+      },
+    })
+    await seedScope(
+      caches,
+      previewScope(309),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 309, 'kmp-v6~pr-309~user.db')
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-309~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(309))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(309, 'kmp-v6~pr-309~user.db'))).toBeDefined()
+  })
+
+  it('keeps a stale preview if a client opens during the final deletion check', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-333~user.db')
+    let matchAllCalls = 0
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+      clients: {
+        matchAll: async () => {
+          matchAllCalls += 1
+          return matchAllCalls >= 2
+            ? [{url: `${ORIGIN}/knowledge-medium/pr-preview/pr-333/`}]
+            : []
+        },
+      },
+    })
+    await seedScope(
+      caches,
+      previewScope(333),
+      {ids: ['pvStale'], updatedAt: NOW - 15 * DAY},
+      ['pvStale'],
+    )
+    await seedDatabaseRecord(caches, 333, 'kmp-v6~pr-333~user.db')
+
+    await sw.activate()
+
+    expect(await caches.has('km-shell-pvStale')).toBe(true)
+    expect(opfs.has('kmp-v6~pr-333~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(333))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(333, 'kmp-v6~pr-333~user.db'))).toBeDefined()
+  })
+
+  it('keeps shared caches when an open preview shares a build id with a stale preview', async () => {
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      clients: {
+        matchAll: async () => [{url: `${ORIGIN}/knowledge-medium/pr-preview/pr-401/`}],
+      },
+    })
+    await seedScope(
+      caches,
+      previewScope(401),
+      {ids: ['sharedBuild', 'openOnly'], updatedAt: NOW - 15 * DAY},
+      ['sharedBuild', 'openOnly'],
+    )
+    await seedScope(
+      caches,
+      previewScope(402),
+      {ids: ['sharedBuild', 'staleOnly'], updatedAt: NOW - 15 * DAY},
+      ['sharedBuild', 'staleOnly'],
     )
 
     await sw.activate()
 
-    expect(await caches.has('km-shell-pvStale')).toBe(false)
-    expect(opfs.has('kmp-v6-user-pr-309.db')).toBe(true)
-    expect(await metaMatch(caches, previewScope(309))).toBeDefined()
-  })
-
-  it('records exact preview database names only from a preview-scoped worker', async () => {
-    const selfScope = new URL(`${ORIGIN}/knowledge-medium/pr-preview/pr-500/`)
-    const {sw, caches} = build({scopeURL: selfScope, buildId: 'selfGen'})
-    await sw.writeLedger(['selfGen'])
-
-    await sw.recordPreviewDatabase('kmp-v6-user-pr-500.db')
-    await sw.recordPreviewDatabase('kmp-v6-prod.db') // not a preview DB for this scope
-
-    const res = await metaMatch(
-      caches,
-      `${ORIGIN}/knowledge-medium/pr-preview/pr-500/__km_generations__`,
-    )
-    expect(await res?.json()).toMatchObject({
-      ids: ['selfGen'],
-      databaseNames: ['kmp-v6-user-pr-500.db'],
-    })
+    expect(await caches.has('km-shell-sharedBuild')).toBe(true)
+    expect(await caches.has('km-assets-sharedBuild')).toBe(true)
+    expect(await caches.has('km-shell-openOnly')).toBe(true)
+    expect(await caches.has('km-shell-staleOnly')).toBe(false)
+    expect(await metaMatch(caches, previewScope(401))).toBeDefined()
+    expect(await metaMatch(caches, previewScope(402))).toBeUndefined()
   })
 
   it('never reaps production, however old its ledger (not a preview scope)', async () => {
@@ -697,5 +1059,28 @@ describe('touch-on-use keeps a live preview from being reaped', () => {
     clock = NOW + 2 * DAY + 60 * 60 * 1000 // +1h, within the interval → no touch
     sw.handleFetch(new Request(`${previewScopeURL}b.js`), waitUntil)
     expect(extended).toHaveLength(1) // unchanged — a throttled fetch schedules nothing
+  })
+
+  it('records preview scope liveness before taking the shared scope lock', async () => {
+    let clock = NOW
+    const {sw, caches, locks} = buildPreview(() => clock)
+    await sw.install()
+    clock = NOW + 2 * DAY
+    const events: string[] = []
+    const meta = await caches.open('km-meta')
+    const originalPut = meta.put.bind(meta)
+    meta.put = async (req, res) => {
+      if (keyOf(req).endsWith('/__km_scope_liveness__')) events.push('liveness')
+      await originalPut(req, res)
+    }
+    locks.onAcquire = (name) => {
+      if (name === previewScopeLockName(previewScopeURL)) events.push('lock')
+    }
+
+    const extended: Promise<unknown>[] = []
+    sw.handleFetch(new Request(`${previewScopeURL}src/main.js`), p => extended.push(p))
+    await Promise.all(extended)
+
+    expect(events.slice(0, 2)).toEqual(['liveness', 'lock'])
   })
 })

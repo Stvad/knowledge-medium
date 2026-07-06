@@ -19,12 +19,34 @@ import {
   normalizeLedger,
   type ScopeLedger,
 } from './ledger'
-import {RECORD_PREVIEW_DATABASE_MESSAGE} from './messages'
 import {isForeignPreviewRequest, PREVIEW_SUBTREE} from './preview'
+import {
+  SERVICE_WORKER_META_CACHE,
+  previewLedgerLockName,
+  previewDatabaseRecordInfo,
+  previewScopeLivenessInfo,
+  previewScopeLivenessUrl,
+  previewScopeLockName,
+} from './previewDatabases'
 
 const CACHE_PREFIX = 'km-'
 const VENDOR_HOSTS = new Set(['esm.sh'])
 const SQLITE_DB_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
+
+interface PreviewDatabaseRecord {
+  scopeUrl: string
+  scopeBaseUrl: string
+  recordUrl: string
+  name: string
+  updatedAt: number | undefined
+}
+
+interface PreviewScopeLivenessRecord {
+  scopeUrl: string
+  scopeBaseUrl: string
+  recordUrl: string
+  updatedAt: number | undefined
+}
 
 // The HTML shell + icons the app boots from — a static set (not build-injected),
 // resolved against the SW scope. Served network-first (HTML) / cache-first
@@ -92,6 +114,12 @@ export interface SwEnv {
     databases?: () => Promise<Array<{name?: string | null}>>
     deleteDatabase?: (name: string) => IDBOpenDBRequest
   }
+  /** self.clients, injected so stale sweeps can avoid open preview windows. */
+  clients?: {
+    matchAll?: (options?: ClientQueryOptions) => Promise<ReadonlyArray<{url: string}>>
+  }
+  /** navigator.locks, injected so stale sweep deletion can coordinate with preview pages. */
+  locks?: LockManager
 }
 
 export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
@@ -101,7 +129,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   const SHELL_CACHE = `${CACHE_PREFIX}shell-${buildId}`
   const ASSET_CACHE = `${CACHE_PREFIX}assets-${buildId}`
   const VENDOR_CACHE = `${CACHE_PREFIX}vendor`
-  const META_CACHE = `${CACHE_PREFIX}meta`
+  const META_CACHE = SERVICE_WORKER_META_CACHE
 
   const toScopeUrl = (p: string) => new URL(p, scopeURL).toString()
   const SHELL_URLS = SHELL_PATHS.map(toScopeUrl)
@@ -148,16 +176,42 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     )
   }
 
+  let ledgerMutationChain: Promise<void> = Promise.resolve()
+  const withPreviewLedgerMutationLock = async <T>(work: () => Promise<T>): Promise<T> => {
+    if (!env.locks?.request) return work()
+    return env.locks.request(previewLedgerLockName(LEDGER_KEY), work)
+  }
+
+  const mutateLedgerEntry = async (
+    mutate: (entry: LedgerEntry) => LedgerEntry | Promise<LedgerEntry>,
+  ): Promise<void> => {
+    const run = ledgerMutationChain.then(async () => {
+      await withPreviewLedgerMutationLock(async () => {
+        const entry = await readLedgerEntry()
+        await writeLedgerEntry(await mutate(entry))
+      })
+    })
+    ledgerMutationChain = run.catch(() => {})
+    await run
+  }
+
   const recordGeneration = async (id: string): Promise<void> => {
-    const entry = await readLedgerEntry()
-    const ids = entry.ids.filter((x) => x !== id)
-    ids.push(id)
-    await writeLedgerEntry({...entry, ids})
+    await mutateLedgerEntry((entry) => {
+      const ids = entry.ids.filter((x) => x !== id)
+      ids.push(id)
+      return {...entry, ids}
+    })
   }
 
   const writeLedger = async (ids: string[]): Promise<void> => {
-    const entry = await readLedgerEntry()
-    await writeLedgerEntry({...entry, ids})
+    await mutateLedgerEntry((entry) => ({...entry, ids}))
+  }
+
+  const trimLedger = async (): Promise<void> => {
+    await mutateLedgerEntry((entry) => ({
+      ...entry,
+      ids: computeKeepIds(entry.ids, keepGenerations),
+    }))
   }
 
   // Touch-on-use: the cross-scope sweep reaps a preview whose ledger `updatedAt`
@@ -172,6 +226,24 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // browser can't terminate the worker mid-write; a failure just retries next
   // interval.
   let lastTouchAt = 0
+  const recordOwnPreviewScopeLiveness = async (): Promise<void> => {
+    const cache = await caches.open(META_CACHE)
+    await cache.put(
+      previewScopeLivenessUrl(scopeURL),
+      new Response(JSON.stringify({updatedAt: now()}), {
+        headers: {'content-type': 'application/json'},
+      }),
+    )
+  }
+
+  const withOwnPreviewScopeLease = async (work: () => Promise<void>): Promise<void> => {
+    if (!env.locks?.request) {
+      await work()
+      return
+    }
+    await env.locks.request(previewScopeLockName(scopeURL), {mode: 'shared'}, work)
+  }
+
   const maybeTouchOwnLedger = (waitUntil?: (p: Promise<unknown>) => void): void => {
     if (!OWN_SCOPE_IS_PREVIEW) return
     const t = now()
@@ -179,7 +251,10 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     lastTouchAt = t // set optimistically so concurrent fetches don't pile on writes
     const touch = (async () => {
       try {
-        await writeLedgerEntry(await readLedgerEntry())
+        await recordOwnPreviewScopeLiveness()
+        await withOwnPreviewScopeLease(async () => {
+          await mutateLedgerEntry((entry) => entry)
+        })
       } catch {
         // best-effort — a missed touch just means the next fetch after the
         // interval tries again; worst case the sweep reaps a genuinely idle scope.
@@ -302,7 +377,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     )
     if (ledger.length > keepIds.size) {
       try {
-        await writeLedger([...keepIds])
+        await trimLedger()
       } catch {
         // benign — the ledger keeps a few extra ids; next activate re-trims.
       }
@@ -330,42 +405,152 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // is structurally unreapable; timestamped-and-stale only; never a cache a
   // surviving scope still references). See src/sw/ledger.ts.
   //
-  // Best-effort + snapshot-based: it reads a snapshot of all ledgers, then
-  // deletes. In the (near-impossible) window where a 14-day-dormant preview
-  // redeploys — re-stamping its ledger — DURING another client's sweep, that
-  // sweep's delete can drop the just-written entry. Harmless and self-healing:
-  // only ledger TRACKING is lost (the fresh generation's caches are keyed by a
-  // new id the snapshot never saw, so they're untouched), and the next deploy
-  // re-records it.
+  // Best-effort + revalidated: it starts from a meta-cache snapshot, then
+  // re-reads candidate ledgers and checks open preview clients before deleting.
+  // Any scope that no longer proves stale/inactive is preserved and still counts
+  // as a kept generation source, so shared build ids are protected.
   const sweepStalePreviewGenerations = async (): Promise<void> => {
+    // The DB reaper's safety model depends on Web Locks for cross-context
+    // coordination with preview pages. In runtimes without locks, skip the
+    // cross-scope sweep entirely rather than performing destructive cleanup
+    // without the race guard.
+    if (!env.locks?.request) return
+
     const meta = await caches.open(META_CACHE)
     const ledgers: ScopeLedger[] = []
+    const databaseRecords: PreviewDatabaseRecord[] = []
+    const livenessRecords: PreviewScopeLivenessRecord[] = []
     for (const req of await meta.keys()) {
       // Only <scope>/__km_generations__ keys are scope ledgers. META_CACHE holds
-      // nothing else today, but guard structurally so a future non-ledger entry
-      // — especially one under a /pr-preview/ path — can never be misread as a
-      // reapable scope and deleted.
-      if (!req.url.endsWith(`/${LEDGER_BASENAME}`)) continue
-      const res = await meta.match(req)
-      if (!res) continue
-      const raw: unknown = await res.json().catch(() => null)
-      const {ids, updatedAt, databaseNames} = normalizeLedger(raw)
-      ledgers.push({scopeUrl: req.url, ids, updatedAt, databaseNames})
+      // database-name records too, but guard structurally so any other future
+      // entry under a /pr-preview/ path can never be misread as a reapable scope.
+      if (req.url.endsWith(`/${LEDGER_BASENAME}`)) {
+        const res = await meta.match(req)
+        if (!res) continue
+        const raw: unknown = await res.json().catch(() => null)
+        const {ids, updatedAt, databaseNames} = normalizeLedger(raw)
+        ledgers.push({scopeUrl: req.url, ids, updatedAt, databaseNames})
+        continue
+      }
+
+      const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME)
+      if (recordInfo) {
+        databaseRecords.push({
+          ...recordInfo,
+          recordUrl: req.url,
+          updatedAt: await readJsonUpdatedAt(meta, req),
+        })
+        continue
+      }
+
+      const livenessInfo = previewScopeLivenessInfo(req.url, LEDGER_BASENAME)
+      if (!livenessInfo) continue
+      livenessRecords.push({
+        ...livenessInfo,
+        recordUrl: req.url,
+        updatedAt: await readJsonUpdatedAt(meta, req),
+      })
     }
-    const {cacheNames, ledgerScopeUrls} = computeReapableCaches({
-      ledgers,
+    const ledgersWithDatabaseOnlyScopes = [
+      ...ledgers,
+      ...databaseOnlyLedgers(databaseRecords, new Set(ledgers.map((ledger) => ledger.scopeUrl))),
+    ]
+    const freshScopeUrls = new Set([
+      ...freshDatabaseRecordScopeUrls(databaseRecords),
+      ...freshLivenessRecordScopeUrls(livenessRecords),
+    ])
+    const ledgersWithFreshSignals = preserveScopes(
+      ledgersWithDatabaseOnlyScopes,
+      freshScopeUrls,
+    )
+    const initialPlan = computeReapableCaches({
+      ledgers: ledgersWithFreshSignals,
       now: now(),
       staleMs: config.staleScopeMs,
       cachePrefix: CACHE_PREFIX,
       selfScopeUrl: LEDGER_KEY,
     })
-    const databaseFailures = await sweepStalePreviewDatabases(ledgers, ledgerScopeUrls)
-    await Promise.all([
-      ...cacheNames.map((name) => caches.delete(name)),
-      ...ledgerScopeUrls
-        .filter((url) => !databaseFailures.has(url))
-        .map((url) => meta.delete(url)),
-    ])
+    const revalidatedLedgers = await revalidateReapableLedgers(
+      meta,
+      ledgersWithFreshSignals,
+      initialPlan.ledgerScopeUrls,
+    )
+    const revalidatedPlan = computeReapableCaches({
+      ledgers: revalidatedLedgers,
+      now: now(),
+      staleMs: config.staleScopeMs,
+      cachePrefix: CACHE_PREFIX,
+      selfScopeUrl: LEDGER_KEY,
+    })
+    await withAvailablePreviewScopeLocks(revalidatedPlan.ledgerScopeUrls, async (scopeLockedUrls) => {
+      const scopeLockFailures = new Set(
+        revalidatedPlan.ledgerScopeUrls.filter((scopeUrl) => !scopeLockedUrls.has(scopeUrl)),
+      )
+      const scopeLockedLedgers = preserveScopes(revalidatedLedgers, scopeLockFailures)
+      const scopeLockedPlan = computeReapableCaches({
+        ledgers: scopeLockedLedgers,
+        now: now(),
+        staleMs: config.staleScopeMs,
+        cachePrefix: CACHE_PREFIX,
+        selfScopeUrl: LEDGER_KEY,
+      })
+      await withAvailablePreviewLedgerLocks(scopeLockedPlan.ledgerScopeUrls, async (ledgerLockedUrls) => {
+        const ledgerLockFailures = new Set(
+          scopeLockedPlan.ledgerScopeUrls.filter((scopeUrl) => !ledgerLockedUrls.has(scopeUrl)),
+        )
+        const lockedLedgers = preserveScopes(scopeLockedLedgers, ledgerLockFailures)
+        const lockedPlan = computeReapableCaches({
+          ledgers: lockedLedgers,
+          now: now(),
+          staleMs: config.staleScopeMs,
+          cachePrefix: CACHE_PREFIX,
+          selfScopeUrl: LEDGER_KEY,
+        })
+        const finalLivenessFailures = await noLongerReapableScopes(
+          meta,
+          lockedPlan.ledgerScopeUrls,
+        )
+        const livenessCheckedLedgers = preserveScopes(lockedLedgers, finalLivenessFailures)
+        const livenessCheckedPlan = computeReapableCaches({
+          ledgers: livenessCheckedLedgers,
+          now: now(),
+          staleMs: config.staleScopeMs,
+          cachePrefix: CACHE_PREFIX,
+          selfScopeUrl: LEDGER_KEY,
+        })
+        const databaseFailures = await sweepStalePreviewDatabases(
+          meta,
+          livenessCheckedLedgers,
+          livenessCheckedPlan.ledgerScopeUrls,
+          databaseRecords,
+        )
+        const finalPlan = computeReapableCaches({
+          ledgers: preserveScopes(livenessCheckedLedgers, databaseFailures),
+          now: now(),
+          staleMs: config.staleScopeMs,
+          cachePrefix: CACHE_PREFIX,
+          selfScopeUrl: LEDGER_KEY,
+        })
+        const lastLivenessFailures = await noLongerReapableScopes(
+          meta,
+          finalPlan.ledgerScopeUrls,
+        )
+        const lastPlan = computeReapableCaches({
+          ledgers: preserveScopes(livenessCheckedLedgers, new Set([
+            ...databaseFailures,
+            ...lastLivenessFailures,
+          ])),
+          now: now(),
+          staleMs: config.staleScopeMs,
+          cachePrefix: CACHE_PREFIX,
+          selfScopeUrl: LEDGER_KEY,
+        })
+        await Promise.all([
+          ...lastPlan.cacheNames.map((name) => caches.delete(name)),
+          ...lastPlan.ledgerScopeUrls.map((url) => meta.delete(url)),
+        ])
+      })
+    })
   }
 
   const previewIdForScopeUrl = (scopeUrl: string): string | null => {
@@ -380,16 +565,285 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     const previewId = previewIdForScopeUrl(scopeUrl)
     if (!previewId) return false
     const escapedPreviewId = previewId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    return new RegExp(`^kmp-v\\d+-[A-Za-z0-9_-]*-${escapedPreviewId}\\.db$`).test(databaseName)
+    return new RegExp(`^kmp-v\\d+~${escapedPreviewId}~[A-Za-z0-9_-]*\\.db$`).test(databaseName)
+  }
+
+  const readJsonUpdatedAt = async (cache: Cache, req: Request): Promise<number | undefined> => {
+    const res = await cache.match(req)
+    const raw: unknown = await res?.json().catch(() => null)
+    return raw && typeof raw === 'object' && typeof (raw as {updatedAt?: unknown}).updatedAt === 'number'
+      ? (raw as {updatedAt: number}).updatedAt
+      : undefined
+  }
+
+  const scopePathForLedgerUrl = (scopeUrl: string): string | null => {
+    try {
+      const pathname = new URL(scopeUrl).pathname
+      return pathname.endsWith(`/${LEDGER_BASENAME}`)
+        ? pathname.slice(0, -LEDGER_BASENAME.length)
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  const scopeBaseUrlForLedgerUrl = (scopeUrl: string): string | null => {
+    try {
+      const url = new URL(scopeUrl)
+      const scopePath = scopePathForLedgerUrl(scopeUrl)
+      return scopePath ? `${url.origin}${scopePath}` : null
+    } catch {
+      return null
+    }
+  }
+
+  const previewScopeHasOpenClient = async (scopeUrl: string): Promise<boolean> => {
+    if (typeof env.clients?.matchAll !== 'function') return false
+    const scopePath = scopePathForLedgerUrl(scopeUrl)
+    if (!scopePath) return false
+    const clients = await env.clients.matchAll({includeUncontrolled: true, type: 'window'})
+    return clients.some((client) => {
+      try {
+        return new URL(client.url).pathname.startsWith(scopePath)
+      } catch {
+        return false
+      }
+    })
+  }
+
+  const previewScopeHasPendingLock = async (scopeUrl: string): Promise<boolean> => {
+    const scopeBaseUrl = scopeBaseUrlForLedgerUrl(scopeUrl)
+    if (!scopeBaseUrl || typeof env.locks?.query !== 'function') return false
+    const lockName = previewScopeLockName(scopeBaseUrl)
+    const snapshot = await env.locks.query().catch(() => null)
+    return snapshot?.pending?.some((lock) => lock.name === lockName) ?? false
+  }
+
+  const withAvailableLocks = async (
+    lockNames: string[],
+    work: (lockedNames: ReadonlySet<string>) => Promise<void>,
+  ): Promise<void> => {
+    const uniqueLockNames = [...new Set(lockNames)]
+    const locks = env.locks
+    if (!locks?.request) {
+      await work(new Set(uniqueLockNames))
+      return
+    }
+
+    const lockedNames = new Set<string>()
+    const acquire = async (index: number): Promise<void> => {
+      if (index >= uniqueLockNames.length) {
+        await work(lockedNames)
+        return
+      }
+      const lockName = uniqueLockNames[index]
+      await locks.request(lockName, {ifAvailable: true}, async (lock) => {
+        if (lock) lockedNames.add(lockName)
+        await acquire(index + 1)
+      })
+    }
+    await acquire(0)
+  }
+
+  const withAvailablePreviewScopeLocks = async (
+    scopeUrls: string[],
+    work: (lockedScopeUrls: ReadonlySet<string>) => Promise<void>,
+  ): Promise<void> => {
+    const lockNameByScopeUrl = new Map<string, string>()
+    for (const scopeUrl of scopeUrls) {
+      const scopeBaseUrl = scopeBaseUrlForLedgerUrl(scopeUrl)
+      if (scopeBaseUrl) lockNameByScopeUrl.set(scopeUrl, previewScopeLockName(scopeBaseUrl))
+    }
+    await withAvailableLocks([...lockNameByScopeUrl.values()], async (lockedNames) => {
+      const lockedScopeUrls = new Set<string>()
+      for (const [scopeUrl, lockName] of lockNameByScopeUrl) {
+        if (lockedNames.has(lockName)) lockedScopeUrls.add(scopeUrl)
+      }
+      await work(lockedScopeUrls)
+    })
+  }
+
+  const withAvailablePreviewLedgerLocks = async (
+    scopeUrls: string[],
+    work: (lockedScopeUrls: ReadonlySet<string>) => Promise<void>,
+  ): Promise<void> => {
+    const lockNameByScopeUrl = new Map(
+      scopeUrls.map((scopeUrl) => [scopeUrl, previewLedgerLockName(scopeUrl)]),
+    )
+    await withAvailableLocks([...lockNameByScopeUrl.values()], async (lockedNames) => {
+      const lockedScopeUrls = new Set<string>()
+      for (const [scopeUrl, lockName] of lockNameByScopeUrl) {
+        if (lockedNames.has(lockName)) lockedScopeUrls.add(scopeUrl)
+      }
+      await work(lockedScopeUrls)
+    })
+  }
+
+  const readScopeLedger = async (
+    meta: Cache,
+    scopeUrl: string,
+  ): Promise<ScopeLedger | null> => {
+    const res = await meta.match(scopeUrl)
+    if (!res) return null
+    const raw: unknown = await res.json().catch(() => null)
+    const {ids, updatedAt, databaseNames} = normalizeLedger(raw)
+    return {scopeUrl, ids, updatedAt, databaseNames}
+  }
+
+  const revalidateReapableLedgers = async (
+    meta: Cache,
+    ledgers: ScopeLedger[],
+    reapableScopeUrls: string[],
+  ): Promise<ScopeLedger[]> => {
+    const candidates = new Set(reapableScopeUrls)
+    return Promise.all(ledgers.map(async (ledger) => {
+      if (!candidates.has(ledger.scopeUrl)) return ledger
+      if (await previewScopeHasOpenClient(ledger.scopeUrl)) {
+        return {...ledger, updatedAt: undefined}
+      }
+      const current = await readScopeLedger(meta, ledger.scopeUrl)
+      if (current) return current
+      if (ledger.ids.length === 0 && ledger.databaseNames.length === 0) return ledger
+      return {
+        scopeUrl: ledger.scopeUrl,
+        ids: [],
+        updatedAt: undefined,
+        databaseNames: [],
+      }
+    }))
+  }
+
+  const preserveScopes = (
+    ledgers: ScopeLedger[],
+    scopeUrls: ReadonlySet<string>,
+  ): ScopeLedger[] =>
+    ledgers.map((ledger) =>
+      scopeUrls.has(ledger.scopeUrl) ? {...ledger, updatedAt: undefined} : ledger,
+    )
+
+  const recordIsFresh = (
+    record: Pick<PreviewDatabaseRecord | PreviewScopeLivenessRecord, 'updatedAt'>,
+  ): boolean =>
+    typeof record.updatedAt === 'number' && now() - record.updatedAt <= config.staleScopeMs
+
+  const recordIsStale = (
+    record: Pick<PreviewDatabaseRecord | PreviewScopeLivenessRecord, 'updatedAt'>,
+  ): boolean =>
+    typeof record.updatedAt === 'number' && now() - record.updatedAt > config.staleScopeMs
+
+  const freshDatabaseRecordScopeUrls = (
+    databaseRecords: PreviewDatabaseRecord[],
+  ): Set<string> =>
+    new Set(
+      databaseRecords
+        .filter(recordIsFresh)
+        .map((record) => record.scopeUrl),
+    )
+
+  const freshLivenessRecordScopeUrls = (
+    livenessRecords: PreviewScopeLivenessRecord[],
+  ): Set<string> =>
+    new Set(
+      livenessRecords
+        .filter(recordIsFresh)
+        .map((record) => record.scopeUrl),
+    )
+
+  const databaseOnlyLedgers = (
+    databaseRecords: PreviewDatabaseRecord[],
+    existingScopeUrls: ReadonlySet<string>,
+  ): ScopeLedger[] => {
+    const newestStaleRecordByScope = new Map<string, number>()
+    for (const record of databaseRecords) {
+      if (existingScopeUrls.has(record.scopeUrl)) continue
+      if (!isDatabaseNameForPreviewScope(record.name, record.scopeUrl)) continue
+      const updatedAt = record.updatedAt
+      if (typeof updatedAt !== 'number' || !recordIsStale({updatedAt})) continue
+      newestStaleRecordByScope.set(
+        record.scopeUrl,
+        Math.max(newestStaleRecordByScope.get(record.scopeUrl) ?? Number.NEGATIVE_INFINITY, updatedAt),
+      )
+    }
+    return [...newestStaleRecordByScope].map(([scopeUrl, updatedAt]) => ({
+      scopeUrl,
+      ids: [],
+      updatedAt,
+      databaseNames: [],
+    }))
+  }
+
+  const scopeHasFreshRecord = async (
+    meta: Cache,
+    scopeUrl: string,
+  ): Promise<boolean> => {
+    for (const req of await meta.keys()) {
+      const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME)
+      const livenessInfo = previewScopeLivenessInfo(req.url, LEDGER_BASENAME)
+      if (recordInfo?.scopeUrl !== scopeUrl && livenessInfo?.scopeUrl !== scopeUrl) continue
+      const updatedAt = await readJsonUpdatedAt(meta, req)
+      if (recordIsFresh({updatedAt})) return true
+    }
+    return false
+  }
+
+  const scopeHasStaleDatabaseRecord = async (
+    meta: Cache,
+    scopeUrl: string,
+  ): Promise<boolean> => {
+    for (const req of await meta.keys()) {
+      const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME)
+      if (!recordInfo || recordInfo.scopeUrl !== scopeUrl) continue
+      if (!isDatabaseNameForPreviewScope(recordInfo.name, recordInfo.scopeUrl)) continue
+      if (recordIsStale({updatedAt: await readJsonUpdatedAt(meta, req)})) return true
+    }
+    return false
+  }
+
+  const previewScopeStillReapable = async (
+    meta: Cache,
+    scopeUrl: string,
+  ): Promise<boolean> => {
+    if (await previewScopeHasOpenClient(scopeUrl)) return false
+    if (await previewScopeHasPendingLock(scopeUrl)) return false
+    if (await scopeHasFreshRecord(meta, scopeUrl)) return false
+    const current = await readScopeLedger(meta, scopeUrl)
+    if (!current) return scopeHasStaleDatabaseRecord(meta, scopeUrl)
+    return computeReapableCaches({
+      ledgers: [current],
+      now: now(),
+      staleMs: config.staleScopeMs,
+      cachePrefix: CACHE_PREFIX,
+      selfScopeUrl: LEDGER_KEY,
+    }).ledgerScopeUrls.includes(scopeUrl)
+  }
+
+  const noLongerReapableScopes = async (
+    meta: Cache,
+    scopeUrls: string[],
+  ): Promise<Set<string>> => {
+    const failures = new Set<string>()
+    await Promise.all(scopeUrls.map(async (scopeUrl) => {
+      if (!(await previewScopeStillReapable(meta, scopeUrl))) failures.add(scopeUrl)
+    }))
+    return failures
   }
 
   const databaseNamesForReapedScopes = (
     ledgers: ScopeLedger[],
     ledgerScopeUrls: string[],
-  ): Array<{scopeUrl: string; name: string}> => {
+    databaseRecords: PreviewDatabaseRecord[],
+  ): Array<{scopeUrl: string; name: string; recordUrl?: string}> => {
     const reapedScopes = new Set(ledgerScopeUrls)
-    const names: Array<{scopeUrl: string; name: string}> = []
+    const names: Array<{scopeUrl: string; name: string; recordUrl?: string}> = []
     const seen = new Set<string>()
+    for (const record of databaseRecords) {
+      if (!reapedScopes.has(record.scopeUrl)) continue
+      if (!isDatabaseNameForPreviewScope(record.name, record.scopeUrl)) continue
+      const key = `${record.scopeUrl}\n${record.name}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      names.push(record)
+    }
     for (const ledger of ledgers) {
       if (!reapedScopes.has(ledger.scopeUrl)) continue
       for (const name of ledger.databaseNames) {
@@ -404,22 +858,53 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   }
 
   const sweepStalePreviewDatabases = async (
+    meta: Cache,
     ledgers: ScopeLedger[],
     ledgerScopeUrls: string[],
+    databaseRecords: PreviewDatabaseRecord[],
   ): Promise<Set<string>> => {
     const failedScopes = new Set<string>()
-    const databases = databaseNamesForReapedScopes(ledgers, ledgerScopeUrls)
-    await Promise.all(databases.map(async ({scopeUrl, name}) => {
-      try {
-        await Promise.all([
-          deleteOpfsSqliteDatabase(name),
-          deleteIndexedDatabase(name),
-        ])
-      } catch {
-        // Keep this scope's ledger so a later activation can retry after a
-        // locked database handle, transient OPFS failure, or blocked IDB delete.
+    if (!env.locks?.request) return failedScopes
+    const databasesByScope = new Map<
+      string,
+      Array<{scopeUrl: string; name: string; recordUrl?: string}>
+    >()
+    for (const database of databaseNamesForReapedScopes(
+      ledgers,
+      ledgerScopeUrls,
+      databaseRecords,
+    )) {
+      const databases = databasesByScope.get(database.scopeUrl) ?? []
+      databases.push(database)
+      databasesByScope.set(database.scopeUrl, databases)
+    }
+
+    await Promise.all(ledgerScopeUrls.map(async (scopeUrl) => {
+      if (!(await previewScopeStillReapable(meta, scopeUrl))) {
         failedScopes.add(scopeUrl)
+        return
       }
+
+      const databases = databasesByScope.get(scopeUrl) ?? []
+      for (const {name} of databases) {
+        try {
+          await deleteOpfsSqliteDatabase(name)
+          await deleteIndexedDatabase(name)
+        } catch {
+          // Keep this scope's ledger and caches so a later activation can retry
+          // after a locked database handle, transient OPFS failure, or blocked
+          // IDB delete.
+          failedScopes.add(scopeUrl)
+          return
+        }
+      }
+
+      await Promise.all(
+        databases
+          .map(({recordUrl}) => recordUrl)
+          .filter((recordUrl): recordUrl is string => Boolean(recordUrl))
+          .map((recordUrl) => meta.delete(recordUrl).catch(() => false)),
+      )
     }))
     return failedScopes
   }
@@ -469,28 +954,6 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
         reject(new Error(`IndexedDB delete blocked for ${databaseName}`)),
       )
     })
-  }
-
-  const recordPreviewDatabase = async (databaseName: string): Promise<void> => {
-    if (!OWN_SCOPE_IS_PREVIEW) return
-    if (!isDatabaseNameForPreviewScope(databaseName, LEDGER_KEY)) return
-    const entry = await readLedgerEntry()
-    const databaseNames = entry.databaseNames.includes(databaseName)
-      ? entry.databaseNames
-      : [...entry.databaseNames, databaseName]
-    await writeLedgerEntry({...entry, databaseNames})
-  }
-
-  const handleMessage = (data: unknown): Promise<void> | undefined => {
-    if (
-      !data ||
-      typeof data !== 'object' ||
-      (data as {type?: unknown}).type !== RECORD_PREVIEW_DATABASE_MESSAGE ||
-      typeof (data as {databaseName?: unknown}).databaseName !== 'string'
-    ) {
-      return undefined
-    }
-    return recordPreviewDatabase((data as {databaseName: string}).databaseName)
   }
 
   const isNavigationRequest = (request: Request): boolean =>
@@ -602,11 +1065,9 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     install,
     activate,
     handleFetch,
-    handleMessage,
     readLedger,
     writeLedger,
     recordGeneration,
-    recordPreviewDatabase,
   }
 }
 

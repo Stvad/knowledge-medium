@@ -13,6 +13,7 @@ import { requestPersistentStorage } from '@/requestPersistentStorage.js'
 import { setDevAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { startStartupObservers } from '@/utils/startupTimeline.js'
 import { installDbForensicsLifecycle } from '@/utils/dbForensicsHooks.js'
+import { startCurrentPreviewScopeLease } from '@/sw/previewDatabases.js'
 
 // Begin tracking main-thread long tasks immediately, so the startup-metrics
 // plugin can later find when boot contention stopped (time to interactivity).
@@ -32,6 +33,7 @@ window.React = React
 window.ReactDOM = ReactDOM
 
 registerServiceWorker()
+void startCurrentPreviewScopeLease(import.meta.env.BASE_URL, window.location.href).catch(() => {})
 
 // Ask the browser to keep our local-first state (SQLite DB, workspace keys)
 // exempt from automatic eviction under storage pressure. Checks persisted()

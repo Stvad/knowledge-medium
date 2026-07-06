@@ -27,10 +27,10 @@ export interface LedgerEntry {
   /** epoch ms of the last write; undefined for a legacy bare-array ledger. */
   updatedAt: number | undefined
   /**
-   * PowerSync SQLite database filenames opened by this preview scope. Kept in
-   * the scope ledger so stale-preview cleanup deletes exact recorded names
-   * instead of guessing from OPFS/IndexedDB filenames, where a production
-   * local-only user id can legitimately end with a preview-looking suffix.
+   * Legacy preview DB filenames from an earlier PR implementation. New preview
+   * DB records are independent meta-cache keys so generation-ledger writes can't
+   * clobber them, but normalization keeps this readable until old local state is
+   * swept.
    */
   databaseNames: string[]
 }
