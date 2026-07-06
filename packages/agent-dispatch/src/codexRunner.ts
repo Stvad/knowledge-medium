@@ -90,8 +90,6 @@ export const buildCodexArgs = (options: CodexRunOptions): string[] => {
   const args = ['exec']
   args.push('--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config')
   if (options.model) args.push('-m', options.model)
-  if (options.resumeSessionId) args.push('resume')
-  if (options.resumeSessionId) args.push(options.resumeSessionId)
   if (options.mcpServer) {
     const {name, command, args: serverArgs, env} = options.mcpServer
     // -c values parse as TOML, not JSON (live-verified): a JSON array of
@@ -110,6 +108,7 @@ export const buildCodexArgs = (options: CodexRunOptions): string[] => {
       args.push('-c', `mcp_servers.${name}.env.${key}=${JSON.stringify(value)}`)
     }
   }
+  if (options.resumeSessionId) args.push('resume', options.resumeSessionId)
   args.push('-')
   return args
 }

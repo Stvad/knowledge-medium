@@ -9,6 +9,7 @@
 export const AGENT_PROPS = {
   status: 'agent:status',
   executor: 'agent:executor',
+  watcher: 'agent:watcher',
   updatedAt: 'agent:updated-at',
   attempts: 'agent:attempts',
   error: 'agent:error',

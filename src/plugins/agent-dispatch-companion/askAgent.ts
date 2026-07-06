@@ -37,7 +37,7 @@ const REQUEUE_CLEARED_PROPS = [
   // clears agent:cancel on every terminal write, but drop it here too so
   // a re-queue can't hand a leftover flag to the fresh run).
   AGENT_PROPS.cancel,
-  'agent:watcher',
+  AGENT_PROPS.watcher,
 ] as const
 
 export const contentWithAgentMention = (content: string): string => {
@@ -51,8 +51,7 @@ export const contentWithAgentMention = (content: string): string => {
  *  doc, which leads the DB by up to the BlockEditor's commit debounce. */
 export const askAgent = async (block: Block, liveContent?: string): Promise<void> => {
   if (block.repo.isReadOnly) return
-  const row = block.peek() ?? await block.load()
-  if (!row) return
+  let wrote = false
 
   // ALWAYS make a real write — even when the mention and props already
   // look right (tx.update short-circuits a no-change patch WITHOUT
@@ -78,7 +77,9 @@ export const askAgent = async (block: Block, liveContent?: string): Promise<void
       content: contentWithAgentMention(liveContent ?? fresh.content ?? ''),
       properties,
     })
+    wrote = true
   }, {scope: ChangeScope.BlockDefault, description: 'ask agent'})
+  if (!wrote) return
 
   markAskedAgent(block.id)
   // Explicit ask = the user is done by construction: skip the settle

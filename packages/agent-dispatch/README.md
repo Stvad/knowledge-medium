@@ -38,6 +38,72 @@ By default a watcher runs `claude`. Set `"executor": "codex"` on any watcher to 
 - **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. `allowedTools` / `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
 - **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
+## Upgrade from claude-tasks
+
+This rename intentionally does **not** carry a permanent `claude:*` compatibility layer in app or daemon code. Do the migration once before loading the new LaunchAgent:
+
+1. Stop the old LaunchAgent so old and new daemons cannot both claim the same `[[claude]]` block:
+
+   ```bash
+   launchctl bootout gui/$(id -u)/org.knowledge-medium.claude-tasks 2>/dev/null || true
+   ```
+
+2. Preserve query cursors and backlink baselines by copying the old local state file if the new one does not exist yet:
+
+   ```bash
+   config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/knowledge-medium"
+   if [ -f "$config_dir/agent-dispatch-state.json" ]; then
+     echo "agent-dispatch-state.json already exists; stop and reconcile it with claude-tasks-state.json before continuing" >&2
+     exit 1
+   fi
+   if [ -f "$config_dir/claude-tasks-state.json" ]; then
+     cp "$config_dir/claude-tasks-state.json" "$config_dir/agent-dispatch-state.json"
+   fi
+   ```
+
+3. With the app tab open and a read-write bridge profile paired, run a one-time bridge eval to copy existing task properties into the new namespace. This leaves the old `claude:*` keys in place and writes only missing `agent:*` keys:
+
+   ```js
+   const pairs = [
+     ['claude:status', 'agent:status'],
+     ['claude:session', 'agent:session'],
+     ['claude:watcher', 'agent:watcher'],
+     ['claude:updated-at', 'agent:updated-at'],
+     ['claude:attempts', 'agent:attempts'],
+     ['claude:error', 'agent:error'],
+     ['claude:reply', 'agent:reply'],
+     ['claude:activity', 'agent:activity'],
+     ['claude:asked-at', 'agent:asked-at'],
+     ['claude:cancel', 'agent:cancel'],
+   ]
+
+   const rows = await sql(
+     "select id, properties_json from blocks where deleted = 0 and properties_json like ?",
+     ['%claude:%'],
+   )
+
+   let updated = 0
+   for (const row of rows) {
+     const props = JSON.parse(row.properties_json || '{}')
+     const patch = {}
+     for (const [from, to] of pairs) {
+       if (Object.hasOwn(props, from) && !Object.hasOwn(props, to)) patch[to] = props[from]
+     }
+     if ((Object.hasOwn(props, 'claude:status')
+       || Object.hasOwn(props, 'claude:session')
+       || Object.hasOwn(props, 'claude:reply'))
+       && !Object.hasOwn(props, 'agent:executor')) {
+       patch['agent:executor'] = 'claude'
+     }
+     if (Object.keys(patch).length > 0) {
+       await updateBlock({id: row.id, properties: patch})
+       updated += 1
+     }
+   }
+
+   return {scanned: rows.length, updated}
+   ```
+
 ## Setup
 
 1. **Pair a dedicated bridge profile** (revocable independently of your interactive one) with a **read-write** token:

@@ -153,7 +153,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     },
   }, async ({parentId, content, properties}) => {
     await assertNoBlockedRefs(content, properties)
-    return json(await client.runCommand({type: 'create-block', parentId, content, properties}))
+    return json(await graph.createBlock(parentId, content, properties))
   })
 
   server.registerTool('update_block' satisfies KmMcpToolName, {
@@ -165,7 +165,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     },
   }, async ({id, content, properties}) => {
     await assertNoBlockedRefs(content, properties)
-    return json(await client.runCommand({type: 'update-block', id, content, properties}))
+    return json(await graph.updateBlock(id, {content, properties}))
   })
 
   return server

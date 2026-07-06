@@ -73,8 +73,22 @@ Run `kmagent <command> --help` for per-command details or `kmagent --help` for t
 {
   "mcpServers": {
     "km": {
+      "command": "km-mcp",
+      "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch"}
+    }
+  }
+}
+```
+
+When running from a repo checkout instead of an installed package, point at
+the built entrypoint directly:
+
+```json
+{
+  "mcpServers": {
+    "km": {
       "command": "node",
-      "args": ["<repo-or-package>/packages/agent-cli/dist/mcp.js"],
+      "args": ["<repo>/packages/agent-cli/dist/mcp.js"],
       "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch"}
     }
   }
