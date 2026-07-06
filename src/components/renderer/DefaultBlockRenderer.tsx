@@ -283,11 +283,11 @@ export const DefaultBlockLayout: BlockLayout = ({
 
       <Shell>
         {(shellProps) => {
-          const {className: shellClassName, ...collapsibleProps} = shellProps
-          return (
+              const {className: shellClassName, ...collapsibleProps} = shellProps
+              return (
             <Collapsible
               {...collapsibleProps}
-              open={!isCollapsed || isTopLevel || forceOpen.has(block.id)}
+              open={!isCollapsed || forceOpen.has(block.id)}
               className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>

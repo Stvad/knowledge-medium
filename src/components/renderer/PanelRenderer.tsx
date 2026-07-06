@@ -181,16 +181,17 @@ export function PanelRenderer({block}: BlockRendererProps) {
     </>
   )
 
-  const panelBody = (
-    <NestedBlockContextProvider
-      overrides={{
-        layoutBoundary: false,
-        renderScopeId: outlineRenderScopeId(topLevelBlockId),
-        scopeRootId: topLevelBlockId,
-      }}
-    >
-      <BlockComponent blockId={topLevelBlockId}/>
-    </NestedBlockContextProvider>
+    const panelBody = (
+      <NestedBlockContextProvider
+        overrides={{
+          layoutBoundary: false,
+          renderScopeId: outlineRenderScopeId(topLevelBlockId),
+          scopeRootId: topLevelBlockId,
+          forceOpenBlockIds: [topLevelBlockId],
+        }}
+      >
+        <BlockComponent blockId={topLevelBlockId}/>
+      </NestedBlockContextProvider>
   )
 
   return (
