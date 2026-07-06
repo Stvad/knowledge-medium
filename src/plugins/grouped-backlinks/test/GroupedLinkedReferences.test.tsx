@@ -204,6 +204,52 @@ describe('GroupedLinkedReferences live updates toggle', () => {
     await waitFor(() => expect(groupButtonLabels()).toEqual(['Alpha', 'Beta', 'Other']))
   })
 
+  it('keeps existing backlink rows assigned to their first rendered group', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'dance', label: 'Dance', sourceIds: ['src-a', 'src-b', 'src-c'], fallback: false},
+      {groupId: 'practice', label: 'Practice', sourceIds: ['src-d'], fallback: false},
+    ])
+
+    render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance', 'Practice']))
+    await waitFor(() => expect(screen.getByRole('button', {name: /Dance\s*3/})).toBeInTheDocument())
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'matrix', label: 'Matrix', sourceIds: ['src-b'], fallback: false},
+      {groupId: 'lesson', label: 'Lesson', sourceIds: ['src-c'], fallback: false},
+      {groupId: 'practice', label: 'Practice', sourceIds: ['src-d'], fallback: false},
+    ])
+    await emitGrouped()
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance', 'Practice']))
+    expect(screen.getByRole('button', {name: /Dance\s*2/})).toBeInTheDocument()
+    expect(screen.queryByText('Matrix')).not.toBeInTheDocument()
+    expect(screen.queryByText('Lesson')).not.toBeInTheDocument()
+  })
+
+  it('appends genuinely new groups without moving already assigned rows', async () => {
+    const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
+    state.grouped = state.makeGrouped([
+      {groupId: 'dance', label: 'Dance', sourceIds: ['src-a', 'src-b'], fallback: false},
+    ])
+
+    render(<GroupedLinkedReferences block={block} />)
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance']))
+
+    state.grouped = state.makeGrouped([
+      {groupId: 'matrix', label: 'Matrix', sourceIds: ['src-a', 'src-c'], fallback: false},
+      {groupId: 'dance', label: 'Dance', sourceIds: ['src-b'], fallback: false},
+    ])
+    await emitGrouped()
+
+    await waitFor(() => expect(groupButtonLabels()).toEqual(['Dance', 'Matrix']))
+    expect(screen.getByRole('button', {name: /Dance\s*2/})).toBeInTheDocument()
+    expect(screen.getByRole('button', {name: /Matrix\s*1/})).toBeInTheDocument()
+  })
+
   it('remembers missing group slots and appends new groups', async () => {
     const block = {id: 'target', repo: state.repo!} as BacklinksViewRendererProps['block']
     state.grouped = state.makeGrouped([

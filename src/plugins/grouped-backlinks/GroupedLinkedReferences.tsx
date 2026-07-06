@@ -85,14 +85,57 @@ const snapshotFromGroupedResult = (
   ),
 })
 
+const currentSourceIdsForGroupedResult = (
+  grouped: GroupedBacklinksResult,
+): ReadonlySet<string> => {
+  const parentSourceIds = grouped.sourceParents.map(entry => entry.sourceId)
+  if (parentSourceIds.length > 0 || grouped.total === 0) return new Set(parentSourceIds)
+  return new Set(grouped.groups.flatMap(group => group.sourceIds))
+}
+
+const groupCanShareClaimedSources = (groupId: string): boolean =>
+  groupId.startsWith('field:')
+
+const stickySourceIdsForGroup = ({
+  groupId,
+  previousGroup,
+  nextGroup,
+  currentSourceIds,
+  claimedSourceIds,
+}: {
+  groupId: string
+  previousGroup?: GroupedBacklinkGroup
+  nextGroup?: GroupedBacklinkGroup
+  currentSourceIds: ReadonlySet<string>
+  claimedSourceIds: Set<string>
+}): string[] => {
+  const canShareClaimedSources = groupCanShareClaimedSources(groupId)
+  const sourceIds: string[] = []
+  const seenSourceIds = new Set<string>()
+  const append = (sourceId: string) => {
+    if (!currentSourceIds.has(sourceId)) return
+    if (seenSourceIds.has(sourceId)) return
+    if (!canShareClaimedSources && claimedSourceIds.has(sourceId)) return
+    seenSourceIds.add(sourceId)
+    sourceIds.push(sourceId)
+  }
+
+  for (const sourceId of previousGroup?.sourceIds ?? []) append(sourceId)
+  for (const sourceId of nextGroup?.sourceIds ?? []) append(sourceId)
+  for (const sourceId of sourceIds) claimedSourceIds.add(sourceId)
+
+  return sourceIds
+}
+
 const stabilizeGroupedResult = (
   grouped: GroupedBacklinksResult,
-  previousOrder: readonly string[] | null,
+  previousState: SnapshotState | null,
 ): StableGroupedResult => {
   const nextGroups = grouped.groups.filter(group => !group.fallback)
-  const fallbackGroup = grouped.groups.find(group => group.fallback)
+  const previousGroups = previousState?.data.grouped.groups.filter(group => !group.fallback) ?? []
   const nextGroupsById = new Map(nextGroups.map(group => [group.groupId, group]))
-  const previousGroupOrder = previousOrder ?? []
+  const previousGroupsById = new Map(previousGroups.map(group => [group.groupId, group]))
+  const previousGroupOrder = previousState?.groupOrder ?? []
   const knownGroupIds = new Set(previousGroupOrder)
   const groupOrder = [
     ...previousGroupOrder,
@@ -100,16 +143,44 @@ const stabilizeGroupedResult = (
       .map(group => group.groupId)
       .filter(groupId => !knownGroupIds.has(groupId)),
   ]
+  const currentSourceIds = currentSourceIdsForGroupedResult(grouped)
+  const claimedSourceIds = new Set<string>()
+  const groups = groupOrder
+    .map(groupId => {
+      const previousGroup = previousGroupsById.get(groupId)
+      const nextGroup = nextGroupsById.get(groupId)
+      const group = nextGroup ?? previousGroup
+      if (!group) return undefined
+      const sourceIds = stickySourceIdsForGroup({
+        groupId,
+        previousGroup,
+        nextGroup,
+        currentSourceIds,
+        claimedSourceIds,
+      })
+      if (sourceIds.length === 0) return undefined
+      return {...group, sourceIds, fallback: false}
+    })
+    .filter((group): group is GroupedBacklinkGroup => group !== undefined)
+
+  const previousFallbackGroup = previousState?.data.grouped.groups.find(group => group.fallback)
+  const nextFallbackGroup = grouped.groups.find(group => group.fallback)
+  const fallbackGroup = nextFallbackGroup ?? previousFallbackGroup
+  if (fallbackGroup) {
+    const sourceIds = stickySourceIdsForGroup({
+      groupId: fallbackGroup.groupId,
+      previousGroup: previousFallbackGroup,
+      nextGroup: nextFallbackGroup,
+      currentSourceIds,
+      claimedSourceIds,
+    })
+    if (sourceIds.length > 0) groups.push({...fallbackGroup, sourceIds, fallback: true})
+  }
 
   return {
     grouped: {
       ...grouped,
-      groups: [
-        ...groupOrder
-          .map(groupId => nextGroupsById.get(groupId))
-          .filter((group): group is GroupedBacklinkGroup => group !== undefined),
-        ...(fallbackGroup ? [fallbackGroup] : []),
-      ],
+      groups,
     },
     groupOrder,
   }
@@ -117,9 +188,9 @@ const stabilizeGroupedResult = (
 
 const stabilizeSnapshotData = (
   data: GroupedBacklinksSnapshot,
-  previousOrder: readonly string[] | null,
+  previousState: SnapshotState | null,
 ): {data: GroupedBacklinksSnapshot; groupOrder: string[]} => {
-  const {grouped, groupOrder} = stabilizeGroupedResult(data.grouped, previousOrder)
+  const {grouped, groupOrder} = stabilizeGroupedResult(data.grouped, previousState)
   return {
     data: {
       ...data,
@@ -307,8 +378,8 @@ function GroupedLinkedReferencesInner({
   const handleLiveData = useCallback(
     (data: GroupedBacklinksSnapshot) => {
       setSnapshot(prev => {
-        const previousOrder = prev?.queryKey === currentQueryKey ? prev.groupOrder : null
-        const stabilized = stabilizeSnapshotData(data, previousOrder)
+        const previousState = prev?.queryKey === currentQueryKey ? prev : null
+        const stabilized = stabilizeSnapshotData(data, previousState)
         return {
           ...stabilized,
           queryKey: currentQueryKey,
@@ -333,10 +404,10 @@ function GroupedLinkedReferencesInner({
       result => {
         if (cancelled) return
         setSnapshot(prev => {
-          const previousOrder = prev?.queryKey === currentQueryKey ? prev.groupOrder : null
+          const previousState = prev?.queryKey === currentQueryKey ? prev : null
           const stabilized = stabilizeSnapshotData(
             snapshotFromGroupedResult(repo, result),
-            previousOrder,
+            previousState,
           )
           return {
             ...stabilized,
