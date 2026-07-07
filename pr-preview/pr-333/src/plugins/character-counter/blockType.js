@@ -1,0 +1,2 @@
+import{defineBlockType as e}from"../../data/api/blockType.js";import"../../data/api/index.js";import{charLimitProp as t}from"./properties.js";var n=`char-counter`,r=[e({id:n,label:`Character counter`,description:"Shows a live character count below the block. Set an optional limit to see `count / limit` and an over-limit warning.",properties:[t]})];export{n as CHAR_COUNTER_TYPE,r as CHAR_COUNTER_TYPE_CONTRIBUTIONS};
+//# sourceMappingURL=blockType.js.map
