@@ -386,10 +386,14 @@
         transaction commits, so under concurrent appends a higher seq can become visible before a
         lower one commits, and a reader tailing <code>commit_seq &gt; cursor</code> advances past the
         gap and never sees the late-committing lower seq (the classic CDC visibility gap). So the
-        frontier must be <strong>commit-ordered</strong>: a commit timestamp
-        (<code>track_commit_timestamp</code>), a logical-replication LSN, or appends serialized through
-        a sequence assigned <em>at commit</em> — or a watermark cursor that refuses to advance past a
-        non-contiguous (uncommitted) gap. The client's <code>(install_id, seq)</code> is carried only
+        frontier must be <strong>commit-ordered</strong>: a logical-replication LSN, or appends
+        serialized through a sequence assigned <em>at commit</em> — or a watermark cursor that refuses
+        to advance past a non-contiguous (uncommitted) gap. A bare commit timestamp
+        (<code>track_commit_timestamp</code>) is <em>not</em> sufficient alone: concurrent commits can
+        share a timestamp, so a single <code>commit_seq &gt; cursor</code> seek can skip same-timestamp
+        rows across a page boundary — pair it with a unique tiebreaker (the LSN, or
+        <code>(install_id, seq)</code>) as a compound cursor. The client's <code>(install_id, seq)</code>
+        is carried only
         for <em>idempotent dedup</em> (<code>INSERT … ON CONFLICT DO NOTHING</code>), never as the
         global order. This is the line between "client log dumped into a table" and server-as-log.
       </li>
@@ -422,13 +426,17 @@
         landed.
       </li>
       <li>
-        <strong>Authorization at the append endpoint.</strong> The append RPC runs
+        <strong>Authorization &amp; actor integrity at the append endpoint.</strong> The append RPC runs
         <code>SECURITY DEFINER</code> (the table is default-deny, like <code>blocks_history</code>) and
-        must verify, per appended row, that <code>auth.uid()</code> is a <strong>writer</strong> of
-        that row's <code>workspace_id</code> via <code>private.is_workspace_writer</code> (owner/editor)
-        — <em>not</em> <code>is_workspace_member</code>, which would let a read-only viewer append
-        forged provenance. <code>set search_path = ''</code> + schema-qualified names, matching the
-        existing definer functions.
+        must, per appended row: (a) verify <code>auth.uid()</code> is a <strong>writer</strong> of that
+        row's <code>workspace_id</code> via <code>private.is_workspace_writer</code> (owner/editor) —
+        <em>not</em> <code>is_workspace_member</code>, which would let a read-only viewer append forged
+        provenance; and (b) <strong>stamp <code>user_id</code> from <code>auth.uid()</code></strong>
+        rather than trusting a client-supplied value, or a caller could forge "who" made a command as
+        another user. <code>client_id</code> (the device/source, below) is self-asserted and cannot be
+        server-verified, so it stays advisory — never treat it as a security boundary. Any system-actor
+        exceptions must be explicit. <code>set search_path = ''</code> + schema-qualified names,
+        matching the existing definer functions.
       </li>
       <li>
         <strong>Encrypt content, keep identifiers clear.</strong> <code>before_json</code> /
@@ -451,10 +459,11 @@
       its own commit-ordered <code>commit_seq</code> (not a pre-commit serial — see §6).
     </p>
     <pre><code>command_events_log (
-  install_id   text not null,  -- per-install nonce, regenerated on wipe (NOT a durable device id)
+  install_id   text not null,  -- per-install nonce, regenerated on wipe — the DEDUP key (not provenance)
+  client_id    text,           -- durable-ish device/source identity — the "which client made it" PROVENANCE
   tx_id        text not null,
   workspace_id text,           -- nullable: zero-write/no-op txs pin no workspace
-  user_id      text not null,
+  user_id      text not null,  -- stamped from auth.uid() server-side, not client-supplied (§6)
   scope        text not null,
   machine_origin text,         -- explicit processor/import marker (NOT source/scope); gates compaction (§7)
   description   text,          -- enc:v1: on e2ee workspaces
@@ -484,13 +493,34 @@ grant select on … to authenticated;
 create policy …_read on … for select
   using (private.is_workspace_member(workspace_id, (auth.uid())::text));</code></pre>
     <p>
-      <strong>Identity is reset-proof by construction:</strong> <code>install_id</code> is a per-install
-      UUID nonce regenerated on every wipe/reinstall (a fresh DB restarts the
-      <code>row_events.id</code> autoincrement at 1, so the id alone is not stable). Post-wipe events
-      carry a new <code>install_id</code>, so they can never collide with already-uploaded ids — no
-      silent <code>ON CONFLICT</code> drop. <code>install_id</code> is a per-<em>install</em> dedup
-      nonce; a durable per-<em>device</em> identity, if ever wanted for "originating device" grouping,
-      is a separate concern and is not required here.
+      <strong>Two ids, two jobs — don't conflate them.</strong>
+    </p>
+    <ul>
+      <li>
+        <strong><code>install_id</code> — the dedup key (correctness-critical).</strong> A per-install
+        UUID nonce regenerated on every wipe/reinstall. A fresh DB restarts the
+        <code>row_events.id</code> autoincrement at 1, so <code>seq</code> alone is not stable; pairing
+        it with a fresh-per-install <code>install_id</code> means post-wipe events can never collide
+        with already-uploaded ids — no silent <code>ON CONFLICT</code> drop. It <em>must</em> reset on
+        wipe for this to hold.
+      </li>
+      <li>
+        <strong><code>client_id</code> — the source-of-change provenance (advisory).</strong> A
+        durable-ish device/client identity that answers "which client made this change," recorded on
+        each command. Unlike <code>install_id</code> it <em>wants</em> to persist across the app's life
+        so one device reads as one source. Honest caveats: (a) it is <strong>self-asserted</strong> —
+        the server can't verify a physical device, so it is display/audit provenance, not a trust
+        boundary (contrast <code>user_id</code>, which the RPC stamps from <code>auth.uid()</code>);
+        (b) on web it can't reliably survive a full storage wipe, so a wiped device may reappear as a
+        new source unless registered in a per-user device table. If stable, human-nameable sources are
+        wanted ("edited on the laptop"), a small per-user device registry is the clean home for it;
+        otherwise a persisted local UUID is the minimum.
+      </li>
+    </ul>
+    <p>
+      The reason to keep them separate is that their requirements <em>conflict</em>:
+      <code>install_id</code> must reset on wipe (for dedup correctness), while <code>client_id</code>
+      wants to persist (for provenance continuity). One column can't be both.
     </p>
 
     <h2 id="compaction">7. Fidelity vs. volume: run-compaction by class</h2>
@@ -742,11 +772,15 @@ create policy …_read on … for select
         marker (source/scope don't distinguish machine from human); which markers are run-compactable;
         bulk-import summary; keep-forever vs. cap.</li>
       <li><strong>Prerequisites (§6).</strong> A per-install <code>install_id</code> nonce (mint + persist
-        in <code>client_schema_state</code>, regenerate on wipe); a <strong>commit-ordered</strong> cursor
-        frontier (LSN / commit-ts / watermark — not a pre-commit <code>BIGSERIAL</code>); per-install
-        <code>seq</code> for exact intra-install order (and a dedicated logical clock only if a
-        cross-install causal hint is needed — <em>not</em> <code>user_updated_at</code>); the append RPC's
-        definer + <code>is_workspace_writer</code> contract; the AAD for an opaque event blob.</li>
+        in <code>client_schema_state</code>, regenerate on wipe) <em>and</em> a durable-ish
+        <code>client_id</code> device/source identity (persisted, or a per-user device registry if stable
+        nameable sources are wanted); a <strong>commit-ordered</strong> cursor frontier — a unique LSN, or
+        a compound <code>(commit_ts, install_id, seq)</code> since bare commit timestamps aren't unique —
+        not a pre-commit <code>BIGSERIAL</code>; per-install <code>seq</code> for exact intra-install order
+        (and a dedicated logical clock only if a cross-install causal hint is needed — <em>not</em>
+        <code>user_updated_at</code>); the append RPC's definer + <code>is_workspace_writer</code> check
+        <em>and</em> server-stamped <code>user_id</code> from <code>auth.uid()</code>; the AAD for an
+        opaque event blob.</li>
     </ol>
     <p>
       The direction (append-only log, server-sequenced, additive to collapsed state, complementing
