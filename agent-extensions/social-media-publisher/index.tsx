@@ -12,6 +12,7 @@ import {
   openDialog,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
+  renderMarkdownHtml,
   showError,
   showInfo,
   showPropertiesProp,
@@ -25,9 +26,16 @@ import {
   type PropertyEditorProps,
 } from '@/extensions/api.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
-import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.js'
-import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType.js'
-import { charLimitProp } from '@/plugins/character-counter/properties.js'
+import { getBlockTypes } from '@/data/properties.js'
+import { useContent } from '@/hooks/block.js'
+import {
+  CHAR_COUNTER_TYPE,
+  charLimitProp,
+  charProfileProp,
+  charScopeProp,
+  characterCountProfilesFacet,
+  type CharacterCountProfile,
+} from '@/plugins/character-counter/index.js'
 import { Button } from '@/components/ui/button.js'
 import {
   Dialog,
@@ -39,10 +47,8 @@ import {
 } from '@/components/ui/dialog.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
-import { renderToStaticMarkup } from 'react-dom/server'
 import { useEffect, useMemo, useState, type CSSProperties, type SVGProps } from 'react'
 import { AtpAgent, RichText } from 'https://esm.sh/@atproto/api@0.19.3?bundle'
-import Markdown from 'https://esm.sh/react-markdown@10.1.0?bundle&external=react'
 
 const source = 'social-media-publisher'
 const BUFFER_TOKEN_KEY = 'knowledge-medium:social-publisher:buffer-token:v1'
@@ -51,6 +57,8 @@ const LESSWRONG_TOKEN_KEY = 'knowledge-medium:social-publisher:lesswrong-token:v
 
 const TWITTER_CHAR_LIMIT = 280
 const BLUESKY_CHAR_LIMIT = 300
+const TWITTER_COUNT_PROFILE_ID = 'social-publisher-twitter'
+const BLUESKY_COUNT_PROFILE_ID = 'social-publisher-bluesky'
 const BUFFER_API_URL = 'https://api.buffer.com'
 const BSKY_SERVICE_URL = 'https://bsky.social'
 const LW_GRAPHQL_URL = 'https://www.lesswrong.com/graphql'
@@ -367,6 +375,46 @@ const graphemeLength = (text: string): number => {
   return [...text].length
 }
 
+const useProcessedSocialText = (block: any): string => {
+  const content = useContent(block)
+  const [processed, setProcessed] = useState<{content: string, text: string}>({
+    content: '',
+    text: '',
+  })
+
+  useEffect(() => {
+    let cancelled = false
+    setProcessed(current =>
+      current.content === content ? current : {content, text: ''})
+    void processBlockText(content, block.repo)
+      .then(result => {
+        if (!cancelled) setProcessed({content, text: result.text})
+      })
+      .catch(() => {
+        if (!cancelled) setProcessed({content, text: content.trim()})
+      })
+    return () => { cancelled = true }
+  }, [block, content])
+
+  return processed.content === content ? processed.text : ''
+}
+
+const useTwitterSocialCount = (block: any): number =>
+  useProcessedSocialText(block).length
+
+const useBlueskySocialCount = (block: any): number =>
+  graphemeLength(useProcessedSocialText(block))
+
+const twitterCountProfile: CharacterCountProfile = {
+  id: TWITTER_COUNT_PROFILE_ID,
+  useCount: useTwitterSocialCount,
+}
+
+const blueskyCountProfile: CharacterCountProfile = {
+  id: BLUESKY_COUNT_PROFILE_ID,
+  useCount: useBlueskySocialCount,
+}
+
 const validateThread = (
   blocks: ProcessedBlock[],
   platform: PlatformId,
@@ -379,35 +427,6 @@ const validateThread = (
     if (count > limit) return [`Post ${index + 1} is ${count - limit} chars over ${PLATFORM_LABELS[platform]}'s limit`]
     return []
   })
-}
-
-const staticMarkdownContext = (content: string) => ({
-  block: {} as any,
-  blockContext: {},
-  data: {content, references: [], workspaceId: ''},
-})
-
-const StaticMarkdownImage = ({node: _node, ...props}: any) => {
-  void _node
-  return <img {...props} />
-}
-
-const stripReactResourceHints = (html: string): string =>
-  html.replace(/<link rel="preload" as="image" href="[^"]*"\/>/g, '')
-
-const renderMarkdownHtml = (content: string): string => {
-  const gfmConfig = gfmMarkdownExtension(staticMarkdownContext(content)) || {}
-  return stripReactResourceHints(renderToStaticMarkup(
-    <Markdown
-      remarkPlugins={gfmConfig.remarkPlugins}
-      components={{
-        ...gfmConfig.components,
-        img: StaticMarkdownImage,
-      }}
-    >
-      {content}
-    </Markdown>,
-  ))
 }
 
 const normalizeBlockMarkdownForHtml = async (raw: string, repo: any): Promise<string> => {
@@ -695,32 +714,75 @@ const readChildBlocks = async (repo: any, blockId: string): Promise<PostBlock[]>
   }))
 }
 
-const characterLimitForTarget = (
-  target: TargetPlatform,
-  config: PlatformConfig,
-): number | undefined => {
-  if (target === 'twitter') return TWITTER_CHAR_LIMIT
-  if (target === 'bluesky') return BLUESKY_CHAR_LIMIT
-  if (target === 'lesswrong') return undefined
-  const platforms = configuredPlatforms(config)
-  if (platforms.includes('twitter')) return TWITTER_CHAR_LIMIT
-  if (platforms.includes('bluesky')) return BLUESKY_CHAR_LIMIT
+interface SocialCounterConfig {
+  limit: number
+  profileId: string
+}
+
+const SOCIAL_COUNT_PROFILE_IDS = new Set([
+  TWITTER_COUNT_PROFILE_ID,
+  BLUESKY_COUNT_PROFILE_ID,
+])
+
+const socialCounterForTarget = (target: TargetPlatform): SocialCounterConfig | undefined => {
+  if (target === 'twitter') {
+    return {limit: TWITTER_CHAR_LIMIT, profileId: TWITTER_COUNT_PROFILE_ID}
+  }
+  if (target === 'bluesky') {
+    return {limit: BLUESKY_CHAR_LIMIT, profileId: BLUESKY_COUNT_PROFILE_ID}
+  }
+  if (target === 'all') {
+    return {limit: TWITTER_CHAR_LIMIT, profileId: TWITTER_COUNT_PROFILE_ID}
+  }
   return undefined
 }
 
-const applyBuiltInCharacterCounters = async (
+const ensureSocialCounterForCommand = async (
   repo: any,
-  blocks: PostBlock[],
-  limit: number | undefined,
+  blockId: string,
+  target: TargetPlatform,
 ): Promise<void> => {
-  if (limit === undefined || blocks.length === 0) return
+  const block = repo.block(blockId)
+  const data = await block.load()
+  if (!data) return
+
+  const counter = socialCounterForTarget(target)
+  const currentTypes = getBlockTypes(data)
+  const currentProfile = block.peekProperty(charProfileProp)
+
+  if (!counter) {
+    if (
+      currentTypes.includes(CHAR_COUNTER_TYPE) &&
+      currentProfile &&
+      SOCIAL_COUNT_PROFILE_IDS.has(currentProfile)
+    ) {
+      await repo.tx(async (tx: any) => {
+        await repo.removeTypeInTx(tx, blockId, CHAR_COUNTER_TYPE)
+      }, {scope: ChangeScope.BlockDefault, description: 'clear social publisher counter'})
+    }
+    return
+  }
+
+  const currentScope = block.peekProperty(charScopeProp)
+  const currentLimit = block.peekProperty(charLimitProp)
+  if (
+    currentTypes.includes(CHAR_COUNTER_TYPE) &&
+    currentScope === 'children' &&
+    currentLimit === counter.limit &&
+    currentProfile === counter.profileId
+  ) {
+    return
+  }
+
+  if (!repo.types?.has?.(CHAR_COUNTER_TYPE)) return
+
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: any) => {
-    for (const block of blocks) {
-      await repo.addTypeInTx(tx, block.id, CHAR_COUNTER_TYPE, {}, typeSnapshot)
-      await tx.setProperty(block.id, charLimitProp, limit)
-    }
-  }, {scope: ChangeScope.BlockDefault, description: 'social publisher character counters'})
+    await repo.addTypeInTx(tx, blockId, CHAR_COUNTER_TYPE, {}, typeSnapshot)
+    await tx.setProperty(blockId, charScopeProp, 'children')
+    await tx.setProperty(blockId, charLimitProp, counter.limit)
+    await tx.setProperty(blockId, charProfileProp, counter.profileId)
+  }, {scope: ChangeScope.BlockDefault, description: 'social publisher character counter'})
 }
 
 const annotateParent = async (
@@ -793,11 +855,6 @@ const PublishDialog = ({
       try {
         const nextConfig = await loadConfig(repo)
         const blocks = await readChildBlocks(repo, blockId)
-        await applyBuiltInCharacterCounters(
-          repo,
-          blocks,
-          characterLimitForTarget(target, nextConfig),
-        )
         const processed = await processBlocks(blocks, repo)
         if (cancelled) return
         setConfig(nextConfig)
@@ -1202,6 +1259,27 @@ const CommandBlockButton = ({
   </Button>
 )
 
+const SocialCounterConfigurator = ({
+  block,
+  target,
+}: {
+  block: any
+  target: TargetPlatform
+}) => {
+  useEffect(() => {
+    let cancelled = false
+    void ensureSocialCounterForCommand(block.repo, block.id, target)
+      .catch(error => {
+        if (!cancelled) {
+          console.error('[social-media-publisher] failed to configure counter', error)
+        }
+      })
+    return () => { cancelled = true }
+  }, [block, target])
+
+  return null
+}
+
 const commandDecoratorCache = new Map<TargetPlatform, WeakMap<BlockRenderer, BlockRenderer>>()
 
 const decorateCommandBlock = (target: TargetPlatform): BlockContentDecorator => inner => {
@@ -1215,12 +1293,15 @@ const decorateCommandBlock = (target: TargetPlatform): BlockContentDecorator => 
   const Decorated: BlockRenderer = props => {
     const Inner = inner
     return (
-      <div style={commandStyles.wrapper}>
-        <div style={commandStyles.content}>
-          <Inner {...props} />
+      <>
+        <SocialCounterConfigurator block={props.block} target={target} />
+        <div style={commandStyles.wrapper}>
+          <div style={commandStyles.content}>
+            <Inner {...props} />
+          </div>
+          <CommandBlockButton block={props.block} target={target} />
         </div>
-        <CommandBlockButton block={props.block} target={target} />
-      </div>
+      </>
     )
   }
   Decorated.displayName = 'WithSocialPublishCommand'
@@ -1310,6 +1391,9 @@ export default [
   propertyEditorOverridesFacet.of(twitterConnectedEditor, {source}),
   propertyEditorOverridesFacet.of(blueskyConnectedEditor, {source}),
   propertyEditorOverridesFacet.of(lesswrongConnectedEditor, {source}),
+
+  characterCountProfilesFacet.of(twitterCountProfile, {source}),
+  characterCountProfilesFacet.of(blueskyCountProfile, {source}),
 
   blockContentDecoratorsFacet.of(commandBlockDecorator, {source}),
 
