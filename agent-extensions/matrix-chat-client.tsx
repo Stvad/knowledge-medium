@@ -230,38 +230,27 @@ const clearMatrixDiagnostic = (): void => {
   setMatrixDiagnostic(null)
 }
 
-const unconfiguredMatrixDiagnostic: DiagnosticSnapshot = {
+const matrixWarningDiagnostic = (summary: string, detail: string): DiagnosticSnapshot => ({
   severity: 'warning',
-  summary: 'Matrix ingest is not configured',
-  detail: 'Open Matrix settings and configure homeserver and room, then save a token.',
-  actionId: MATRIX_CONFIGURE_ACTION_ID,
-  actionLabel: 'Open settings',
-  nudge: true,
-}
-const missingTokenMatrixDiagnostic: DiagnosticSnapshot = {
-  severity: 'warning',
-  summary: 'Matrix token is missing',
-  detail: 'Save an access token in Matrix settings so this device can ingest messages.',
-  actionId: MATRIX_CONFIGURE_ACTION_ID,
-  actionLabel: 'Open settings',
-  nudge: true,
-}
-const retryErrorMatrixDiagnostic = (message: string): DiagnosticSnapshot => ({
-  severity: 'warning',
-  summary: 'Matrix ingest is retrying',
-  detail: message,
+  summary,
+  detail,
   actionId: MATRIX_CONFIGURE_ACTION_ID,
   actionLabel: 'Open settings',
   nudge: true,
 })
-const hardErrorMatrixDiagnostic = (message: string): DiagnosticSnapshot => ({
-  severity: 'warning',
-  summary: 'Matrix ingest error',
-  detail: message,
-  actionId: MATRIX_CONFIGURE_ACTION_ID,
-  actionLabel: 'Open settings',
-  nudge: true,
-})
+
+const unconfiguredMatrixDiagnostic = matrixWarningDiagnostic(
+  'Matrix ingest is not configured',
+  'Open Matrix settings and configure homeserver and room, then save a token.',
+)
+const missingTokenMatrixDiagnostic = matrixWarningDiagnostic(
+  'Matrix token is missing',
+  'Save an access token in Matrix settings so this device can ingest messages.',
+)
+const retryErrorMatrixDiagnostic = (message: string): DiagnosticSnapshot =>
+  matrixWarningDiagnostic('Matrix ingest is retrying', message)
+const hardErrorMatrixDiagnostic = (message: string): DiagnosticSnapshot =>
+  matrixWarningDiagnostic('Matrix ingest error', message)
 
 const matrixDiagnosticSource: DiagnosticSourceContribution = {
   id: MATRIX_DIAGNOSTIC_ID,
