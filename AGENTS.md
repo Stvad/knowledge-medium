@@ -9,7 +9,10 @@ inner loop (this repo is built primarily by agents — keep the edit→verify cy
 - `yarn run check` does NOT cover `agent-extensions/` (eslint-ignored, outside the app tsconfig). Verify those separately with a scoped `tsc` against the kernel-types stubs (`yarn agent types`).
 
 delegate code to cheaper models:
-- top-tier context is the scarce resource here (this repo is built primarily by agents). Spend it on judgement, review, and synthesis. When a task is primarily *writing / editing* code, delegate it to a lower-power model in a subagent — the Agent tool with `model:` set, or `agent(prompt, {model})` in a Workflow — and keep the deciding / auditing / data-synthesis in the main loop. Rough default (your call per task): `sonnet` for substantive implementation, `haiku` for trivial / mechanical edits. Don't delegate the parts where a subtle mistake is expensive to catch later — data-layer invariants, tricky concurrency, security-sensitive paths.
+- top-tier context is the scarce resource here (this repo is built primarily by agents). Spend it on judgement, review, and synthesis. When a task is primarily *writing / editing* code, delegate it to a cheaper subagent when the work is bounded and easy to audit, and keep the deciding / auditing / data-synthesis in the main loop.
+- Claude Code: use the Agent tool with `model:` set, or `agent(prompt, {model})` in a Workflow. Rough default (your call per task): `sonnet` for substantive implementation, `haiku` for trivial / mechanical edits.
+- Codex: when spawning subagents, prefer `gpt-5.3-codex-spark` with `xhigh` reasoning effort for concrete, self-contained, parallelizable tasks with clear file ownership or file-path evidence. Additional reason: subagents have a separate token budget, so this can preserve main-agent context while advancing work in parallel.
+- don't delegate the parts where a subtle mistake is expensive to catch later — architecture calls, data-layer invariants, tricky state semantics, concurrency, migrations, security-sensitive paths, final integration, final verification, or commit decisions.
 
 secret handling:
 - do not read `.env`, `.env.*`, or other local secret files unless the user explicitly asks for it
