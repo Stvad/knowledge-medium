@@ -594,6 +594,27 @@ describe('activate — stale preview cache sweep', () => {
     expect(await metaMatch(caches, previewDatabaseRecord(334, 'kmp-v6~pr-334~user.db'))).toBeDefined()
   })
 
+  it('does not reap an old preview database record while its generation ledger is fresh', async () => {
+    const opfs = new MockOpfsRoot()
+    opfs.add('kmp-v6~pr-336~user.db')
+    const {sw, caches} = build({}, async () => ok(), () => NOW, {
+      storage: {getDirectory: async () => opfs},
+    })
+    await seedScope(
+      caches,
+      previewScope(336),
+      {ids: ['pvFresh'], updatedAt: NOW - DAY},
+      ['pvFresh'],
+    )
+    await seedDatabaseRecord(caches, 336, 'kmp-v6~pr-336~user.db', NOW - 15 * DAY)
+
+    await sw.activate()
+
+    expect(opfs.has('kmp-v6~pr-336~user.db')).toBe(true)
+    expect(await metaMatch(caches, previewScope(336))).toBeDefined()
+    expect(await metaMatch(caches, previewDatabaseRecord(336, 'kmp-v6~pr-336~user.db'))).toBeDefined()
+  })
+
   it('retries a stale preview database record after its generation ledger is gone', async () => {
     const opfs = new MockOpfsRoot()
     opfs.add('kmp-v6~pr-335~user.db')

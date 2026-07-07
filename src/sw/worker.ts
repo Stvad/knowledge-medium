@@ -402,6 +402,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     await Promise.all([
       sweepStalePreviewDatabases(meta, {
         ledgerScopeUrls: plan.ledgerScopeUrls,
+        knownLedgerScopeUrls: ledgers.map(({scopeUrl}) => scopeUrl),
         databaseRecords,
         sweepNow,
         staleMs: config.staleScopeMs,
@@ -434,17 +435,20 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
 
   const databaseRecordsToSweep = (
     ledgerScopeUrls: string[],
+    knownLedgerScopeUrls: string[],
     databaseRecords: PreviewDatabaseRecord[],
     sweepNow: number,
     staleMs: number,
   ): PreviewDatabaseRecord[] => {
     const reapedScopes = new Set(ledgerScopeUrls)
+    const knownScopes = new Set(knownLedgerScopeUrls)
     const records: PreviewDatabaseRecord[] = []
     const seen = new Set<string>()
     for (const record of databaseRecords) {
       const staleRecord =
         typeof record.updatedAt === 'number' && sweepNow - record.updatedAt > staleMs
-      if (!reapedScopes.has(record.scopeUrl) && !staleRecord) continue
+      const orphanedStaleRecord = staleRecord && !knownScopes.has(record.scopeUrl)
+      if (!reapedScopes.has(record.scopeUrl) && !orphanedStaleRecord) continue
       if (!isDatabaseNameForPreviewScope(record.name, record.scopeUrl)) continue
       const key = `${record.scopeUrl}\n${record.name}`
       if (seen.has(key)) continue
@@ -458,11 +462,13 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     meta: Cache,
     {
       ledgerScopeUrls,
+      knownLedgerScopeUrls,
       databaseRecords,
       sweepNow,
       staleMs,
     }: {
       ledgerScopeUrls: string[]
+      knownLedgerScopeUrls: string[]
       databaseRecords: PreviewDatabaseRecord[]
       sweepNow: number
       staleMs: number
@@ -470,6 +476,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   ): Promise<void> => {
     const databases = databaseRecordsToSweep(
       ledgerScopeUrls,
+      knownLedgerScopeUrls,
       databaseRecords,
       sweepNow,
       staleMs,
