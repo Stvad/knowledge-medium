@@ -218,6 +218,14 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     return siblings.slice(anchor + 1, runEnd + 1)
   }
 
+  const assertNoBlockedRefsInLiveSubtree = async (rootId: string): Promise<void> => {
+    if (blockedNames.length === 0) return
+    const rows = await graph.getSubtree(rootId)
+    for (const row of rows) {
+      await assertNoBlockedRefs(row.content, row.properties)
+    }
+  }
+
   const json = (value: unknown) => ({
     content: [{type: 'text' as const, text: JSON.stringify(value, null, 2)}],
   })
@@ -318,8 +326,10 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     inputSchema: {
       id: z.string(),
     },
-  }, async ({id}) =>
-    json(await graph.deleteBlock(id)))
+  }, async ({id}) => {
+    await assertNoBlockedRefsInLiveSubtree(id)
+    return json(await graph.deleteBlock(id))
+  })
 
   server.registerTool('restore_block' satisfies KmMcpToolName, {
     description: 'Restore one soft-deleted block. Descendants remain deleted unless restored separately.',

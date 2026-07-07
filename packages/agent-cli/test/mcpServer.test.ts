@@ -151,6 +151,52 @@ describe('createGraphMcpServer', () => {
     ])
   })
 
+  it('blocks delete_block when subtree content could inline a blocked ref into referrers', async () => {
+    const commands: KnownCommand[] = []
+    const client = clientFrom(async command => {
+      commands.push(command)
+      switch (command.type) {
+        case 'get-subtree':
+          return [
+            {id: 'source-block', content: 'safe root', properties: {}},
+            {id: 'child-block', content: 'child mentions [[claude]]', properties: {}},
+          ]
+        case 'page':
+          return {
+            match: {id: 'blocked-page', content: 'claude', types: [], deepLink: ''},
+            candidates: [],
+          }
+        case 'get-block':
+          return {
+            id: 'blocked-page',
+            content: 'claude',
+            properties: {},
+          }
+        case 'delete-block':
+          return {id: command.id, deleted: true}
+        default:
+          throw new Error(`Unexpected command: ${command.type}`)
+      }
+    })
+
+    const server = createGraphMcpServer({
+      client,
+      blockedWikilinks: ['claude'],
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const deleteBlock = (server as unknown as RegisteredToolHarness)._registeredTools.delete_block
+
+    await expect(deleteBlock.handler({
+      id: 'source-block',
+    }, {})).rejects.toThrow('references a blocked page')
+
+    expect(commands.map(command => command.type)).toEqual([
+      'get-subtree',
+      'page',
+      'get-block',
+    ])
+  })
+
   it('blocks restore_block when the tombstoned block references a blocked wikilink target', async () => {
     const commands: KnownCommand[] = []
     const client = clientFrom(async command => {
