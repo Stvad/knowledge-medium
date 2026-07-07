@@ -1,8 +1,14 @@
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import {fileURLToPath} from 'node:url'
 import type {BridgeClient} from '../src/client'
 import type {KnownCommand} from '../src/protocol'
-import {createGraphMcpServer} from '../src/mcpServer'
+import {createGraphMcpServer, type GraphMcpWriteOperation} from '../src/mcpServer'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const packageJsonPath = path.resolve(here, '../package.json')
 
 interface RegisteredToolHarness {
   _registeredTools: Record<string, {
@@ -11,6 +17,14 @@ interface RegisteredToolHarness {
       extra: Record<string, never>,
     ) => CallToolResult | Promise<CallToolResult>
   }>
+}
+
+interface ServerInfoHarness {
+  server: {
+    _serverInfo: {
+      version: string
+    }
+  }
 }
 
 const clientFrom = (
@@ -31,227 +45,89 @@ const clientFrom = (
 })
 
 describe('createGraphMcpServer', () => {
-  it('blocks move_block when the existing block references a blocked wikilink target', async () => {
-    const commands: KnownCommand[] = []
+  it('advertises the package version in MCP server metadata', async () => {
+    const raw = await fs.readFile(packageJsonPath, 'utf8')
+    const pkg = JSON.parse(raw) as {version: string}
     const client = clientFrom(async command => {
-      commands.push(command)
-      switch (command.type) {
-        case 'page':
-          return {
-            match: {id: 'blocked-page', content: 'claude', types: [], deepLink: ''},
-            candidates: [],
-          }
-        case 'get-block':
-          if (command.id === 'source-block') {
-            return {
-              id: 'source-block',
-              content: 'old mention of [[claude]]',
-              properties: {},
-              parentId: 'old-parent',
-            }
-          }
-          if (command.id === 'blocked-page') {
-            return {
-              id: 'blocked-page',
-              content: 'claude',
-              properties: {alias: ['cc']},
-            }
-          }
-          return null
-        case 'move-block':
-          return {id: command.id, parentId: command.parentId}
-        default:
-          throw new Error(`Unexpected command: ${command.type}`)
-      }
+      throw new Error(`Unexpected command: ${command.type}`)
     })
-
     const server = createGraphMcpServer({
       client,
-      blockedWikilinks: ['claude'],
       serverOptions: {capabilities: {tools: {}}},
     })
-    const moveBlock = (server as unknown as RegisteredToolHarness)._registeredTools.move_block
 
-    await expect(moveBlock.handler({
-      id: 'source-block',
-      parentId: 'new-parent',
-      position: {kind: 'last'},
-    }, {})).rejects.toThrow('references a blocked page')
-
-    expect(commands.map(command => command.type)).toEqual([
-      'get-block',
-      'page',
-      'get-block',
-    ])
+    expect((server as unknown as ServerInfoHarness).server._serverInfo.version).toBe(pkg.version)
   })
 
-  it('blocks move_block when exact placement would re-key a tied blocked sibling', async () => {
+  it('runs the optional write guard before mutating tools', async () => {
     const commands: KnownCommand[] = []
+    const operations: GraphMcpWriteOperation[] = []
     const client = clientFrom(async command => {
       commands.push(command)
       switch (command.type) {
-        case 'page':
-          return {
-            match: {id: 'blocked-page', content: 'claude', types: [], deepLink: ''},
-            candidates: [],
-          }
-        case 'get-block':
-          if (command.id === 'moving') {
-            return {
-              id: 'moving',
-              content: 'clean source',
-              properties: {},
-              parentId: 'old-parent',
-              workspaceId: 'ws-1',
-            }
-          }
-          if (command.id === 'blocked-page') {
-            return {
-              id: 'blocked-page',
-              content: 'claude',
-              properties: {},
-            }
-          }
-          return null
-        case 'sql':
-          if (command.sql.includes('SELECT workspace_id')) {
-            return [{workspace_id: 'ws-1'}]
-          }
-          return [
-            {id: 'anchor', content: 'anchor', properties_json: '{}', order_key: 'a0'},
-            {id: 'blocked-sibling', content: 'mentions [[claude]]', properties_json: '{}', order_key: 'a0'},
-            {id: 'later', content: 'later', properties_json: '{}', order_key: 'a1'},
-          ]
+        case 'create-block':
+          return {id: 'created'}
+        case 'update-block':
+          return {id: command.id, content: command.content}
         case 'move-block':
           return {id: command.id, parentId: command.parentId}
-        default:
-          throw new Error(`Unexpected command: ${command.type}`)
-      }
-    })
-
-    const server = createGraphMcpServer({
-      client,
-      blockedWikilinks: ['claude'],
-      serverOptions: {capabilities: {tools: {}}},
-    })
-    const moveBlock = (server as unknown as RegisteredToolHarness)._registeredTools.move_block
-
-    await expect(moveBlock.handler({
-      id: 'moving',
-      parentId: 'parent',
-      position: {kind: 'after', siblingId: 'anchor'},
-    }, {})).rejects.toThrow('references a blocked page')
-
-    expect(commands.map(command => command.type)).toEqual([
-      'get-block',
-      'page',
-      'get-block',
-      'sql',
-      'sql',
-    ])
-  })
-
-  it('blocks delete_block when deep subtree content could inline a blocked ref into referrers', async () => {
-    const commands: KnownCommand[] = []
-    const client = clientFrom(async command => {
-      commands.push(command)
-      switch (command.type) {
-        case 'sql':
-          if (command.sql.includes('WHERE id = ?')) {
-            return [{id: 'source-block', content: 'safe root', properties_json: '{}'}]
-          }
-          if (command.sql.includes('WHERE parent_id = ?')) {
-            const parentId = command.params?.[0]
-            if (parentId === 'source-block') {
-              return [{id: 'child-block', content: 'safe child', properties_json: '{}'}]
-            }
-            if (parentId === 'child-block') {
-              return [{id: 'deep-block', content: 'deep mentions [[claude]]', properties_json: '{}'}]
-            }
-            return []
-          }
-          throw new Error(`Unexpected sql: ${command.sql}`)
-        case 'page':
-          return {
-            match: {id: 'blocked-page', content: 'claude', types: [], deepLink: ''},
-            candidates: [],
-          }
-        case 'get-block':
-          return {
-            id: 'blocked-page',
-            content: 'claude',
-            properties: {},
-          }
         case 'delete-block':
           return {id: command.id, deleted: true}
-        default:
-          throw new Error(`Unexpected command: ${command.type}`)
-      }
-    })
-
-    const server = createGraphMcpServer({
-      client,
-      blockedWikilinks: ['claude'],
-      serverOptions: {capabilities: {tools: {}}},
-    })
-    const deleteBlock = (server as unknown as RegisteredToolHarness)._registeredTools.delete_block
-
-    await expect(deleteBlock.handler({
-      id: 'source-block',
-    }, {})).rejects.toThrow('references a blocked page')
-
-    expect(commands.map(command => command.type)).toEqual([
-      'sql',
-      'page',
-      'get-block',
-      'sql',
-      'sql',
-    ])
-  })
-
-  it('blocks restore_block when the tombstoned block references a blocked wikilink target', async () => {
-    const commands: KnownCommand[] = []
-    const client = clientFrom(async command => {
-      commands.push(command)
-      switch (command.type) {
-        case 'sql':
-          return [{
-            content: 'old mention of ((blocked-page))',
-            properties_json: '{}',
-          }]
-        case 'page':
-          return {
-            match: {id: 'blocked-page', content: 'claude', types: [], deepLink: ''},
-            candidates: [],
-          }
-        case 'get-block':
-          return {
-            id: 'blocked-page',
-            content: 'claude',
-            properties: {},
-          }
         case 'restore-block':
           return {id: command.id, content: 'restored'}
         default:
           throw new Error(`Unexpected command: ${command.type}`)
       }
     })
-
     const server = createGraphMcpServer({
       client,
-      blockedWikilinks: ['claude'],
+      writeGuard: {
+        beforeWrite: operation => {
+          operations.push(operation)
+        },
+      },
       serverOptions: {capabilities: {tools: {}}},
     })
-    const restoreBlock = (server as unknown as RegisteredToolHarness)._registeredTools.restore_block
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
 
-    await expect(restoreBlock.handler({
-      id: 'source-block',
-    }, {})).rejects.toThrow('references a blocked page')
+    await tools.create_block.handler({parentId: 'p', content: 'hi', properties: {x: 1}}, {})
+    await tools.update_block.handler({id: 'b', content: 'edited'}, {})
+    await tools.move_block.handler({id: 'b', parentId: null, position: {kind: 'last'}}, {})
+    await tools.delete_block.handler({id: 'b'}, {})
+    await tools.restore_block.handler({id: 'b'}, {})
 
-    expect(commands.map(command => command.type)).toEqual([
-      'sql',
-      'page',
-      'get-block',
+    expect(operations).toEqual([
+      {type: 'create_block', parentId: 'p', content: 'hi', properties: {x: 1}},
+      {type: 'update_block', id: 'b', content: 'edited', properties: undefined},
+      {type: 'move_block', id: 'b', parentId: null, position: {kind: 'last'}},
+      {type: 'delete_block', id: 'b'},
+      {type: 'restore_block', id: 'b'},
     ])
+    expect(commands.map(command => command.type)).toEqual([
+      'create-block',
+      'update-block',
+      'move-block',
+      'delete-block',
+      'restore-block',
+    ])
+  })
+
+  it('does not call the bridge when the write guard rejects', async () => {
+    const runCommand = vi.fn<BridgeClient['runCommand']>()
+    const client = clientFrom(runCommand)
+    const server = createGraphMcpServer({
+      client,
+      writeGuard: {
+        beforeWrite: () => {
+          throw new Error('blocked by caller policy')
+        },
+      },
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const tools = (server as unknown as RegisteredToolHarness)._registeredTools
+
+    await expect(tools.update_block.handler({id: 'b', content: 'edited'}, {}))
+      .rejects.toThrow('blocked by caller policy')
+    expect(runCommand).not.toHaveBeenCalled()
   })
 })

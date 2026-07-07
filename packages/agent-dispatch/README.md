@@ -181,7 +181,7 @@ Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:erro
 ### Loop guards
 
 - Replies carry `agent:reply` and are skipped. (User-typed follow-ups *under* a reply are legit and do fire.)
-- The default prompt forbids writing `[[claude]]`, and the MCP write tools **refuse** any reference to a watcher-target page — every alias of the page (`[[any-alias]]`) and its id in every block-ref form (`((id))`, `!((id))`, `[label](((id)))`). The daemon passes the target names (`KM_MCP_BLOCKED_WIKILINKS`); the MCP server resolves each page's full alias set + id itself and refreshes it every 10 min.
+- The default prompt forbids writing `[[claude]]`, and the dispatch MCP wrapper's write guard **refuses** any reference to a watcher-target page — every alias of the page (`[[any-alias]]`) and its id in every block-ref form (`((id))`, `!((id))`, `[label](((id)))`). The daemon passes the target names (`KM_MCP_BLOCKED_WIKILINKS`); the dispatch wrapper resolves each page's full alias set + id at write time.
 - `runsPerHour` bounds whatever slips past both.
 
 ## Live progress
@@ -204,7 +204,7 @@ Rows must select a stable `id` column. First tick establishes a baseline without
 
 ## km MCP server standalone
 
-The same graph tools work from any MCP client — e.g. Claude Desktop / interactive Claude Code:
+The same generic graph tools work from any MCP client — e.g. Claude Desktop / interactive Claude Code:
 
 ```json
 {
@@ -218,7 +218,7 @@ The same graph tools work from any MCP client — e.g. Claude Desktop / interact
 }
 ```
 
-Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block` (single block only; descendants remain deleted unless restored separately). The content/property write tools also refuse watcher-target references in **property values**, not just `content` (a ref-typed property whose value is the target id would otherwise project a backlink and re-trigger the loop). Deliberately excluded: `eval`, `sql execute`, extension lifecycle.
+Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block` (single block only; descendants remain deleted unless restored separately). Deliberately excluded: `eval`, `sql execute`, extension lifecycle. The standalone `agent-cli` `km-mcp` server does not apply dispatch watcher-target guards; use `packages/agent-dispatch/dist/mcp.js` when the session is acting as part of an agent-dispatch watcher loop.
 
 ## Security posture
 
@@ -230,7 +230,7 @@ Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql
 
 ## Ambient mode via channels (EXPERIMENTAL)
 
-Claude Code's channels primitive (research preview, v2.1.80+) can push watcher events into one *persistent* session instead of spawning a run per task. The dispatch channel MCP wrapper layers that listener on top of the generic km graph tools; it's off unless all three pieces are opted in:
+Claude Code's channels primitive (research preview, v2.1.80+) can push watcher events into one *persistent* session instead of spawning a run per task. The dispatch MCP wrapper layers dispatch write policy and that listener on top of the generic km graph tools; the channel listener is off unless all three pieces are opted in:
 
 1. Register km in the project's `.mcp.json` with the channel port:
 
@@ -238,7 +238,7 @@ Claude Code's channels primitive (research preview, v2.1.80+) can push watcher e
    {"mcpServers": {"km": {"command": "node", "args": ["<repo>/packages/agent-dispatch/dist/mcp.js"], "env": {"AGENT_RUNTIME_PROFILE": "agent-dispatch", "KM_AGENT_DISPATCH_CHANNEL_PORT": "8790", "KM_MCP_BLOCKED_WIKILINKS": "[\"claude\"]"}}}}
    ```
 
-   (`KM_MCP_BLOCKED_WIKILINKS` matters here too — without it the ambient session's write tools would happily write `[[claude]]` and re-trigger the watcher.)
+   (`KM_MCP_BLOCKED_WIKILINKS` is consumed by the dispatch wrapper — without it the ambient session's write tools would happily write `[[claude]]` and re-trigger the watcher.)
 
 2. Run the ambient session (custom channels aren't on the preview allowlist, hence the dev flag):
 

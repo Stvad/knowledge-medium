@@ -73,21 +73,6 @@ const parseProps = (value: unknown): Record<string, unknown> => {
   }
 }
 
-/** Property values arrive either as a real array or as a JSON-encoded
- *  string depending on the write path; accept both, keep only strings. */
-const decodeStringList = (raw: unknown): string[] => {
-  const keepStrings = (values: unknown[]) =>
-    values.filter((entry): entry is string => typeof entry === 'string')
-  if (Array.isArray(raw)) return keepStrings(raw)
-  if (typeof raw !== 'string') return []
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? keepStrings(parsed) : []
-  } catch {
-    return []
-  }
-}
-
 export const createBridgeGraph = (client: BridgeClient) => {
   const sqlAll = async (sql: string, params: unknown[] = []): Promise<unknown[]> => {
     const result = await client.runCommand({type: 'sql', mode: 'all', sql, params})
@@ -102,16 +87,6 @@ export const createBridgeGraph = (client: BridgeClient) => {
       )
     }
     return result.match.id
-  }
-
-  /** All aliases of a page block (the `alias` property, list-encoded)
-   *  plus its own id — the full set a wikilink/block-ref guard must
-   *  block to prevent watcher re-trigger loops. */
-  const targetGuardSet = async (alias: string): Promise<{id: string, aliases: string[]}> => {
-    const id = await resolvePageId(alias)
-    const block = await getBlock(id)
-    const decoded = decodeStringList(block?.properties?.['alias'])
-    return {id, aliases: [...new Set([alias, ...decoded])]}
   }
 
   const backlinkSources = async (blockId: string): Promise<BacklinkSource[]> => {
@@ -237,7 +212,6 @@ export const createBridgeGraph = (client: BridgeClient) => {
 
   return {
     resolvePageId,
-    targetGuardSet,
     backlinkSources,
     getBlock,
     ancestors,

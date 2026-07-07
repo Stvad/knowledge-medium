@@ -77,7 +77,6 @@ export const createGraph = (client: BridgeClient) => {
 type DispatchBridgeGraph = Pick<
   BridgeGraph,
   | 'resolvePageId'
-  | 'targetGuardSet'
   | 'backlinkSources'
   | 'getBlock'
   | 'ancestors'

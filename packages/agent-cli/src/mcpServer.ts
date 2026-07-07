@@ -8,28 +8,52 @@
  *
  * Env:
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
- * - KM_MCP_BLOCKED_WIKILINKS: page aliases the write tools refuse to
- *   reference. JSON array; legacy comma-separated also accepted.
- *   Enforced against ALL
- *   reference syntaxes: each name is
- *   resolved to its page, and that page's full alias set plus its id
- *   ([[any-alias]], ((id)), (((id))) embeds/labels) is blocked.
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { createBridgeClient, type BridgeClient } from './client.js'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from './subtreeOutline.js'
-import { createBridgeGraph } from './graph.js'
-import { BLOCKED_WIKILINKS_ENV, decodeBlockedWikilinks, findBlockedRef, findBlockedRefInProperties, isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
+import { createBridgeGraph, type BridgeGraph } from './graph.js'
+import { isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import { moveBlockPositionSchema } from './protocol.js'
 
+interface PackageJson {
+  version?: unknown
+}
+
+const agentCliPackageVersion = (() => {
+  const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+  const pkg = JSON.parse(raw) as PackageJson
+  if (typeof pkg.version !== 'string') {
+    throw new Error('@knowledge-medium/agent-cli package.json is missing a string version')
+  }
+  return pkg.version
+})()
+
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
+
+export type GraphMcpWriteOperation =
+  | {type: 'create_block', parentId: string, content: string, properties?: Record<string, unknown>}
+  | {type: 'update_block', id: string, content?: string, properties?: Record<string, unknown>}
+  | {type: 'move_block', id: string, parentId: string | null, position: MoveBlockPositionInput}
+  | {type: 'delete_block', id: string}
+  | {type: 'restore_block', id: string}
+
+export interface GraphMcpWriteGuard {
+  beforeWrite: (operation: GraphMcpWriteOperation) => void | Promise<void>
+}
+
+export interface GraphMcpWriteGuardContext {
+  client: BridgeClient
+  graph: BridgeGraph
+}
 
 export interface GraphMcpServerOptions {
   client?: BridgeClient
   profile?: string
   timeoutMs?: number
-  blockedWikilinks?: string[]
+  writeGuard?: GraphMcpWriteGuard | ((context: GraphMcpWriteGuardContext) => GraphMcpWriteGuard)
   serverOptions?: ConstructorParameters<typeof McpServer>[1]
 }
 
@@ -39,228 +63,12 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     timeoutMs: options.timeoutMs ?? 60_000,
   })
   const graph = createBridgeGraph(client)
+  const writeGuard = typeof options.writeGuard === 'function'
+    ? options.writeGuard({client, graph})
+    : options.writeGuard
 
-  // ----- write guard: optional re-trigger prevention ------------------
-
-  const blockedNames = options.blockedWikilinks ?? decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
-
-  let guardCache: {set: RefGuardSet, fetchedAt: number} | null = null
-  const GUARD_TTL_MS = 10 * 60_000
-
-  /** Resolve the blocked names to their pages' FULL alias sets + ids via
-   *  the bridge (lazily, cached). A guard that only blocks the literal
-   *  configured string is trivially bypassed with `((page-id))` or any
-   *  other alias of the same page. Falls back to the raw names when a
-   *  page can't be resolved (it may not exist yet). */
-  const guardSet = async (): Promise<RefGuardSet> => {
-    if (blockedNames.length === 0) return {aliases: [], ids: []}
-    if (guardCache && Date.now() - guardCache.fetchedAt < GUARD_TTL_MS) return guardCache.set
-
-    const aliases = new Set(blockedNames)
-    const ids = new Set<string>()
-    let complete = true
-    for (const name of blockedNames) {
-      try {
-        const target = await graph.targetGuardSet(name)
-        ids.add(target.id)
-        for (const alias of target.aliases) aliases.add(alias)
-      } catch {
-        // Page missing / bridge hiccup: fall back to the raw-name guard,
-        // but do NOT cache a partial fill — otherwise an id/alias bypass
-        // would be open for the whole TTL. Retry on the next call.
-        complete = false
-      }
-    }
-    const set = {aliases: [...aliases], ids: [...ids]}
-    if (complete) guardCache = {set, fetchedAt: Date.now()}
-    return set
-  }
-
-  const assertNoBlockedRefs = async (
-    content: string | undefined,
-    properties?: Record<string, unknown>,
-  ) => {
-    if (blockedNames.length === 0) return
-    if (!content && !properties) return
-    const guard = await guardSet()
-    const blocked =
-      (content ? findBlockedRef(content, guard) : null)
-      ?? findBlockedRefInProperties(properties, guard)
-    if (blocked) {
-      throw new Error(
-        `Refusing to write "${blocked}": it references a blocked page. Refer to the page without linking it.`,
-      )
-    }
-  }
-
-  const propertiesFromJson = (value: unknown): Record<string, unknown> | undefined => {
-    if (typeof value !== 'string') return undefined
-    try {
-      const parsed = JSON.parse(value)
-      return parsed && typeof parsed === 'object'
-        ? parsed as Record<string, unknown>
-        : undefined
-    } catch {
-      return undefined
-    }
-  }
-
-  const refsFromSqlRow = (
-    row: unknown,
-  ): {content?: string, properties?: Record<string, unknown>} => {
-    if (!row || typeof row !== 'object') return {}
-    const {content, properties_json} = row as {content?: unknown, properties_json?: unknown}
-    const properties = propertiesFromJson(properties_json)
-    return {
-      ...(typeof content === 'string' ? {content} : {}),
-      ...(properties ? {properties} : {}),
-    }
-  }
-
-  const tombstoneRefsForGuard = async (
-    id: string,
-  ): Promise<{content?: string, properties?: Record<string, unknown>}> => {
-    if (blockedNames.length === 0) return {}
-    const rows = await graph.sqlAll(
-      'SELECT content, properties_json FROM blocks WHERE id = ? LIMIT 1',
-      [id],
-    )
-    return refsFromSqlRow(rows[0])
-  }
-
-  interface MoveSiblingRow {
-    id: string
-    orderKey: string
-    content?: string
-    properties?: Record<string, unknown>
-  }
-
-  const moveSiblingFromSqlRow = (row: unknown): MoveSiblingRow | null => {
-    if (!row || typeof row !== 'object') return null
-    const {id, order_key} = row as {id?: unknown, order_key?: unknown}
-    if (typeof id !== 'string' || typeof order_key !== 'string') return null
-    return {
-      id,
-      orderKey: order_key,
-      ...refsFromSqlRow(row),
-    }
-  }
-
-  interface DeleteGuardRow {
-    id: string
-    content?: string
-    properties?: Record<string, unknown>
-  }
-
-  const deleteGuardRowFromSqlRow = (row: unknown): DeleteGuardRow | null => {
-    if (!row || typeof row !== 'object') return null
-    const {id} = row as {id?: unknown}
-    if (typeof id !== 'string') return null
-    return {id, ...refsFromSqlRow(row)}
-  }
-
-  const workspaceIdForMoveTarget = async (
-    movedId: string,
-    parentId: string | null,
-  ): Promise<string | null> => {
-    const targetId = parentId ?? movedId
-    const rows = await graph.sqlAll(
-      'SELECT workspace_id FROM blocks WHERE id = ? AND deleted = 0 LIMIT 1',
-      [targetId],
-    )
-    const row = rows[0]
-    if (!row || typeof row !== 'object') return null
-    const {workspace_id} = row as {workspace_id?: unknown}
-    return typeof workspace_id === 'string' ? workspace_id : null
-  }
-
-  const moveTiedRewriteRowsForGuard = async (
-    input: {id: string, parentId: string | null, position: MoveBlockPositionInput},
-  ): Promise<MoveSiblingRow[]> => {
-    if (blockedNames.length === 0) return []
-    const {id, parentId, position} = input
-    if (position.kind !== 'before' && position.kind !== 'after') return []
-
-    const workspaceId = await workspaceIdForMoveTarget(id, parentId)
-    if (!workspaceId) return []
-    const rows = parentId === null
-      ? await graph.sqlAll(
-        `SELECT id, content, properties_json, order_key
-           FROM blocks
-          WHERE workspace_id = ?
-            AND parent_id IS NULL
-            AND deleted = 0
-            AND id <> ?
-          ORDER BY order_key, id`,
-        [workspaceId, id],
-      )
-      : await graph.sqlAll(
-        `SELECT id, content, properties_json, order_key
-           FROM blocks
-          WHERE workspace_id = ?
-            AND parent_id = ?
-            AND deleted = 0
-            AND id <> ?
-          ORDER BY order_key, id`,
-        [workspaceId, parentId, id],
-      )
-    const siblings = rows.flatMap(row => {
-      const sibling = moveSiblingFromSqlRow(row)
-      return sibling ? [sibling] : []
-    })
-    const anchor = siblings.findIndex(row => row.id === position.siblingId)
-    if (anchor < 0) return []
-    const anchorKey = siblings[anchor].orderKey
-
-    if (position.kind === 'before') {
-      const prev = anchor > 0 ? siblings[anchor - 1] : undefined
-      if (!prev || prev.orderKey < anchorKey) return []
-      let runEnd = anchor
-      while (runEnd + 1 < siblings.length && siblings[runEnd + 1].orderKey === anchorKey) {
-        runEnd++
-      }
-      return siblings.slice(anchor, runEnd + 1)
-    }
-
-    const next = anchor + 1 < siblings.length ? siblings[anchor + 1] : undefined
-    if (!next || anchorKey < next.orderKey) return []
-    let runEnd = anchor + 1
-    while (runEnd + 1 < siblings.length && siblings[runEnd + 1].orderKey === anchorKey) {
-      runEnd++
-    }
-    return siblings.slice(anchor + 1, runEnd + 1)
-  }
-
-  const assertNoBlockedRefsInLiveSubtree = async (rootId: string): Promise<void> => {
-    if (blockedNames.length === 0) return
-    const rootRows = await graph.sqlAll(
-      'SELECT id, content, properties_json FROM blocks WHERE id = ? AND deleted = 0 LIMIT 1',
-      [rootId],
-    )
-    const root = deleteGuardRowFromSqlRow(rootRows[0])
-    if (!root) return
-
-    const stack = [root]
-    const seen = new Set<string>()
-    while (stack.length > 0) {
-      const row = stack.pop()!
-      if (seen.has(row.id)) continue
-      seen.add(row.id)
-      await assertNoBlockedRefs(row.content, row.properties)
-
-      const childRows = await graph.sqlAll(
-        `SELECT id, content, properties_json
-           FROM blocks
-          WHERE parent_id = ?
-            AND deleted = 0
-          ORDER BY order_key, id`,
-        [row.id],
-      )
-      for (const childRow of childRows) {
-        const child = deleteGuardRowFromSqlRow(childRow)
-        if (child) stack.push(child)
-      }
-    }
+  const beforeWrite = async (operation: GraphMcpWriteOperation) => {
+    await writeGuard?.beforeWrite(operation)
   }
 
   const json = (value: unknown) => ({
@@ -271,7 +79,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   const server = new McpServer(
-    {name: MCP_SERVER_NAME, version: '0.1.0'},
+    {name: MCP_SERVER_NAME, version: agentCliPackageVersion},
     options.serverOptions,
   )
 
@@ -325,7 +133,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       properties: z.record(z.string(), z.unknown()).optional(),
     },
   }, async ({parentId, content, properties}) => {
-    await assertNoBlockedRefs(content, properties)
+    await beforeWrite({type: 'create_block', parentId, content, properties})
     return json(await graph.createBlock(parentId, content, properties))
   })
 
@@ -337,7 +145,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       properties: z.record(z.string(), z.unknown()).optional(),
     },
   }, async ({id, content, properties}) => {
-    await assertNoBlockedRefs(content, properties)
+    await beforeWrite({type: 'update_block', id, content, properties})
     return json(await graph.updateBlock(id, {content, properties}))
   })
 
@@ -349,12 +157,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       position: moveBlockPositionSchema,
     },
   }, async ({id, parentId, position}) => {
-    const block = await graph.getBlock(id)
-    await assertNoBlockedRefs(block?.content, block?.properties)
-    const tiedRewriteRows = await moveTiedRewriteRowsForGuard({id, parentId, position})
-    for (const row of tiedRewriteRows) {
-      await assertNoBlockedRefs(row.content, row.properties)
-    }
+    await beforeWrite({type: 'move_block', id, parentId, position})
     return json(await graph.moveBlock({id, parentId, position}))
   })
 
@@ -364,7 +167,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       id: z.string(),
     },
   }, async ({id}) => {
-    await assertNoBlockedRefsInLiveSubtree(id)
+    await beforeWrite({type: 'delete_block', id})
     return json(await graph.deleteBlock(id))
   })
 
@@ -374,8 +177,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       id: z.string(),
     },
   }, async ({id}) => {
-    const {content, properties} = await tombstoneRefsForGuard(id)
-    await assertNoBlockedRefs(content, properties)
+    await beforeWrite({type: 'restore_block', id})
     return json(await graph.restoreBlock(id))
   })
 

@@ -2,17 +2,20 @@
 /**
  * Dispatch channel MCP entrypoint. Graph tools are registered by the
  * generic @knowledge-medium/agent-cli MCP server factory; this wrapper
- * only adds the experimental Claude Code channel listener used by
- * delivery: "channel" watchers.
+ * adds dispatch-owned write policy plus the experimental Claude Code
+ * channel listener used by delivery: "channel" watchers.
  */
 import http from 'node:http'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createGraphMcpServer } from '@knowledge-medium/agent-cli/mcpServer'
+import { BLOCKED_WIKILINKS_ENV, createBlockedWikilinkWriteGuard, decodeBlockedWikilinks } from './blockedWikilinks.js'
 import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
 const channelPort = Number(process.env[CHANNEL_PORT_ENV] ?? '') || null
+const blockedWikilinks = decodeBlockedWikilinks(process.env[BLOCKED_WIKILINKS_ENV])
 
 const server = createGraphMcpServer({
+  writeGuard: ({graph}) => createBlockedWikilinkWriteGuard(graph, blockedWikilinks),
   serverOptions: channelPort
     ? {
         capabilities: {experimental: {'claude/channel': {}}, tools: {}},
