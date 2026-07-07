@@ -141,19 +141,21 @@ export const createBlockedWikilinkWriteGuard = (
     return {beforeWrite: () => {}}
   }
 
-  const resolveGuardSet = async (): Promise<RefGuardSet> => {
+  const resolveGuardSet = async (): Promise<{guard: RefGuardSet, complete: boolean}> => {
     const aliases = new Set(blockedNames)
     const ids = new Set<string>()
+    let complete = true
     for (const name of blockedNames) {
       try {
         const target = await targetGuardSet(graph, name)
         ids.add(target.id)
         for (const alias of target.aliases) aliases.add(alias)
       } catch {
+        complete = false
         // Page missing / bridge hiccup: fall back to the raw-name guard.
       }
     }
-    return {aliases: [...aliases], ids: [...ids]}
+    return {guard: {aliases: [...aliases], ids: [...ids]}, complete}
   }
 
   const storedRefsForGuard = async (
@@ -239,9 +241,13 @@ export const createBlockedWikilinkWriteGuard = (
 
   const createWriteAssertions = () => {
     let guardSetForWrite: Promise<RefGuardSet> | null = null
-    const guardSet = () => {
-      guardSetForWrite ??= resolveGuardSet()
-      return guardSetForWrite
+    const guardSet = async () => {
+      if (guardSetForWrite) return guardSetForWrite
+      const resolution = await resolveGuardSet()
+      if (resolution.complete) {
+        guardSetForWrite = Promise.resolve(resolution.guard)
+      }
+      return resolution.guard
     }
 
     const assertNoBlockedRefs = async (
