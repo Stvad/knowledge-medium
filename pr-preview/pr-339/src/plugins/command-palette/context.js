@@ -1,0 +1,2 @@
+import{Block as e}from"../../data/block.js";var t=`command-palette`,n=`command_palette`,r=`command_palette_for_block`,i={type:t,displayName:`Command Palette`,modal:!0,validateDependencies:t=>typeof t==`object`&&!!t&&`uiStateBlock`in t&&t.uiStateBlock instanceof e};export{n as COMMAND_PALETTE_ACTION_ID,t as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,i as commandPaletteActionContext};
+//# sourceMappingURL=context.js.map
