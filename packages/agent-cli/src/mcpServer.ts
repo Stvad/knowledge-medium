@@ -23,6 +23,8 @@ import { createBridgeGraph } from './graph.js'
 import { BLOCKED_WIKILINKS_ENV, decodeBlockedWikilinks, findBlockedRef, findBlockedRefInProperties, isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME, type RefGuardSet } from './mcpShared.js'
 import { moveBlockPositionSchema } from './protocol.js'
 
+type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
+
 export interface GraphMcpServerOptions {
   client?: BridgeClient
   profile?: string
@@ -91,6 +93,30 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     }
   }
 
+  const propertiesFromJson = (value: unknown): Record<string, unknown> | undefined => {
+    if (typeof value !== 'string') return undefined
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object'
+        ? parsed as Record<string, unknown>
+        : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  const refsFromSqlRow = (
+    row: unknown,
+  ): {content?: string, properties?: Record<string, unknown>} => {
+    if (!row || typeof row !== 'object') return {}
+    const {content, properties_json} = row as {content?: unknown, properties_json?: unknown}
+    const properties = propertiesFromJson(properties_json)
+    return {
+      ...(typeof content === 'string' ? {content} : {}),
+      ...(properties ? {properties} : {}),
+    }
+  }
+
   const tombstoneRefsForGuard = async (
     id: string,
   ): Promise<{content?: string, properties?: Record<string, unknown>}> => {
@@ -99,24 +125,97 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       'SELECT content, properties_json FROM blocks WHERE id = ? LIMIT 1',
       [id],
     )
-    const row = rows[0]
-    if (!row || typeof row !== 'object') return {}
-    const {content, properties_json} = row as {content?: unknown, properties_json?: unknown}
-    let properties: Record<string, unknown> | undefined
-    if (typeof properties_json === 'string') {
-      try {
-        const parsed = JSON.parse(properties_json)
-        properties = parsed && typeof parsed === 'object'
-          ? parsed as Record<string, unknown>
-          : undefined
-      } catch {
-        properties = undefined
-      }
-    }
+    return refsFromSqlRow(rows[0])
+  }
+
+  interface MoveSiblingRow {
+    id: string
+    orderKey: string
+    content?: string
+    properties?: Record<string, unknown>
+  }
+
+  const moveSiblingFromSqlRow = (row: unknown): MoveSiblingRow | null => {
+    if (!row || typeof row !== 'object') return null
+    const {id, order_key} = row as {id?: unknown, order_key?: unknown}
+    if (typeof id !== 'string' || typeof order_key !== 'string') return null
     return {
-      ...(typeof content === 'string' ? {content} : {}),
-      ...(properties ? {properties} : {}),
+      id,
+      orderKey: order_key,
+      ...refsFromSqlRow(row),
     }
+  }
+
+  const workspaceIdForMoveTarget = async (
+    movedId: string,
+    parentId: string | null,
+  ): Promise<string | null> => {
+    const targetId = parentId ?? movedId
+    const rows = await graph.sqlAll(
+      'SELECT workspace_id FROM blocks WHERE id = ? AND deleted = 0 LIMIT 1',
+      [targetId],
+    )
+    const row = rows[0]
+    if (!row || typeof row !== 'object') return null
+    const {workspace_id} = row as {workspace_id?: unknown}
+    return typeof workspace_id === 'string' ? workspace_id : null
+  }
+
+  const moveTiedRewriteRowsForGuard = async (
+    input: {id: string, parentId: string | null, position: MoveBlockPositionInput},
+  ): Promise<MoveSiblingRow[]> => {
+    if (blockedNames.length === 0) return []
+    const {id, parentId, position} = input
+    if (position.kind !== 'before' && position.kind !== 'after') return []
+
+    const workspaceId = await workspaceIdForMoveTarget(id, parentId)
+    if (!workspaceId) return []
+    const rows = parentId === null
+      ? await graph.sqlAll(
+        `SELECT id, content, properties_json, order_key
+           FROM blocks
+          WHERE workspace_id = ?
+            AND parent_id IS NULL
+            AND deleted = 0
+            AND id <> ?
+          ORDER BY order_key, id`,
+        [workspaceId, id],
+      )
+      : await graph.sqlAll(
+        `SELECT id, content, properties_json, order_key
+           FROM blocks
+          WHERE workspace_id = ?
+            AND parent_id = ?
+            AND deleted = 0
+            AND id <> ?
+          ORDER BY order_key, id`,
+        [workspaceId, parentId, id],
+      )
+    const siblings = rows.flatMap(row => {
+      const sibling = moveSiblingFromSqlRow(row)
+      return sibling ? [sibling] : []
+    })
+    const anchor = siblings.findIndex(row => row.id === position.siblingId)
+    if (anchor < 0) return []
+    const anchorKey = siblings[anchor].orderKey
+
+    if (position.kind === 'before') {
+      const prev = anchor > 0 ? siblings[anchor - 1] : undefined
+      if (!prev || prev.orderKey < anchorKey) return []
+      let runEnd = anchor
+      while (runEnd + 1 < siblings.length && siblings[runEnd + 1].orderKey === anchorKey) {
+        runEnd++
+      }
+      return siblings.slice(anchor, runEnd + 1)
+    }
+
+    const next = anchor + 1 < siblings.length ? siblings[anchor + 1] : undefined
+    if (!next || anchorKey < next.orderKey) return []
+    let runEnd = anchor + 1
+    while (runEnd + 1 < siblings.length && siblings[runEnd + 1].orderKey === anchorKey) {
+      runEnd++
+    }
+    return siblings.slice(anchor + 1, runEnd + 1)
   }
 
   const json = (value: unknown) => ({
@@ -207,6 +306,10 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   }, async ({id, parentId, position}) => {
     const block = await graph.getBlock(id)
     await assertNoBlockedRefs(block?.content, block?.properties)
+    const tiedRewriteRows = await moveTiedRewriteRowsForGuard({id, parentId, position})
+    for (const row of tiedRewriteRows) {
+      await assertNoBlockedRefs(row.content, row.properties)
+    }
     return json(await graph.moveBlock({id, parentId, position}))
   })
 

@@ -85,6 +85,72 @@ describe('createGraphMcpServer', () => {
     ])
   })
 
+  it('blocks move_block when exact placement would re-key a tied blocked sibling', async () => {
+    const commands: KnownCommand[] = []
+    const client = clientFrom(async command => {
+      commands.push(command)
+      switch (command.type) {
+        case 'page':
+          return {
+            match: {id: 'blocked-page', content: 'claude', types: [], deepLink: ''},
+            candidates: [],
+          }
+        case 'get-block':
+          if (command.id === 'moving') {
+            return {
+              id: 'moving',
+              content: 'clean source',
+              properties: {},
+              parentId: 'old-parent',
+              workspaceId: 'ws-1',
+            }
+          }
+          if (command.id === 'blocked-page') {
+            return {
+              id: 'blocked-page',
+              content: 'claude',
+              properties: {},
+            }
+          }
+          return null
+        case 'sql':
+          if (command.sql.includes('SELECT workspace_id')) {
+            return [{workspace_id: 'ws-1'}]
+          }
+          return [
+            {id: 'anchor', content: 'anchor', properties_json: '{}', order_key: 'a0'},
+            {id: 'blocked-sibling', content: 'mentions [[claude]]', properties_json: '{}', order_key: 'a0'},
+            {id: 'later', content: 'later', properties_json: '{}', order_key: 'a1'},
+          ]
+        case 'move-block':
+          return {id: command.id, parentId: command.parentId}
+        default:
+          throw new Error(`Unexpected command: ${command.type}`)
+      }
+    })
+
+    const server = createGraphMcpServer({
+      client,
+      blockedWikilinks: ['claude'],
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const moveBlock = (server as unknown as RegisteredToolHarness)._registeredTools.move_block
+
+    await expect(moveBlock.handler({
+      id: 'moving',
+      parentId: 'parent',
+      position: {kind: 'after', siblingId: 'anchor'},
+    }, {})).rejects.toThrow('references a blocked page')
+
+    expect(commands.map(command => command.type)).toEqual([
+      'get-block',
+      'page',
+      'get-block',
+      'sql',
+      'sql',
+    ])
+  })
+
   it('blocks restore_block when the tombstoned block references a blocked wikilink target', async () => {
     const commands: KnownCommand[] = []
     const client = clientFrom(async command => {
