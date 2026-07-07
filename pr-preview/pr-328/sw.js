@@ -339,6 +339,7 @@
 			await Promise.all([
 				sweepStalePreviewDatabases(meta, {
 					ledgerScopeUrls: plan.ledgerScopeUrls,
+					knownLedgerScopeUrls: ledgers.map(({ scopeUrl }) => scopeUrl),
 					databaseRecords,
 					sweepNow,
 					staleMs: config.staleScopeMs
@@ -365,13 +366,14 @@
 			const escapedPreviewId = previewId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 			return new RegExp(`^kmp-v\\d+~${escapedPreviewId}~[A-Za-z0-9_-]*\\.db$`).test(databaseName);
 		};
-		const databaseRecordsToSweep = (ledgerScopeUrls, databaseRecords, sweepNow, staleMs) => {
+		const databaseRecordsToSweep = (ledgerScopeUrls, knownLedgerScopeUrls, databaseRecords, sweepNow, staleMs) => {
 			const reapedScopes = new Set(ledgerScopeUrls);
+			const knownScopes = new Set(knownLedgerScopeUrls);
 			const records = [];
 			const seen = /* @__PURE__ */ new Set();
 			for (const record of databaseRecords) {
-				const staleRecord = typeof record.updatedAt === "number" && sweepNow - record.updatedAt > staleMs;
-				if (!reapedScopes.has(record.scopeUrl) && !staleRecord) continue;
+				const orphanedStaleRecord = typeof record.updatedAt === "number" && sweepNow - record.updatedAt > staleMs && !knownScopes.has(record.scopeUrl);
+				if (!reapedScopes.has(record.scopeUrl) && !orphanedStaleRecord) continue;
 				if (!isDatabaseNameForPreviewScope(record.name, record.scopeUrl)) continue;
 				const key = `${record.scopeUrl}\n${record.name}`;
 				if (seen.has(key)) continue;
@@ -380,8 +382,8 @@
 			}
 			return records;
 		};
-		const sweepStalePreviewDatabases = async (meta, { ledgerScopeUrls, databaseRecords, sweepNow, staleMs }) => {
-			const databases = databaseRecordsToSweep(ledgerScopeUrls, databaseRecords, sweepNow, staleMs);
+		const sweepStalePreviewDatabases = async (meta, { ledgerScopeUrls, knownLedgerScopeUrls, databaseRecords, sweepNow, staleMs }) => {
+			const databases = databaseRecordsToSweep(ledgerScopeUrls, knownLedgerScopeUrls, databaseRecords, sweepNow, staleMs);
 			await Promise.all(databases.map(async ({ name, recordUrl }) => {
 				try {
 					await deleteOpfsSqliteDatabase(name);
@@ -489,7 +491,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "a0bb6d23429f",
+		buildId: "9a24aa6fd8b4",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
