@@ -13,7 +13,7 @@
   "author": "Vlad Sitalo",
   "repository": {
     "type": "git",
-    "url": "https://github.com/stvad/knowledge-medium.git",
+    "url": "git+https://github.com/stvad/knowledge-medium.git",
     "directory": "packages/agent-cli"
   },
   "homepage": "https://github.com/stvad/knowledge-medium/tree/master/packages/agent-cli#readme",
@@ -29,10 +29,10 @@
     "node": ">=24.0.0"
   },
   "bin": {
-    "agent-cli": "./dist/cli.js",
-    "kmagent": "./dist/cli.js",
-    "kmagent-server": "./dist/server.js",
-    "km-mcp": "./dist/mcp.js"
+    "agent-cli": "dist/cli.js",
+    "kmagent": "dist/cli.js",
+    "kmagent-server": "dist/server.js",
+    "km-mcp": "dist/mcp.js"
   },
   "main": "./dist/cli.js",
   "exports": {
