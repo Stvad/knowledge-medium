@@ -172,7 +172,7 @@ export const createBlockedWikilinkWriteGuard = (
     }
   }
 
-  const tombstoneRefsForGuard = async (
+  const storedRefsForGuard = async (
     id: string,
   ): Promise<{content?: string, properties?: Record<string, unknown>}> => {
     const rows = await graph.sqlAll(
@@ -180,6 +180,11 @@ export const createBlockedWikilinkWriteGuard = (
       [id],
     )
     return refsFromSqlRow(rows[0])
+  }
+
+  const assertNoBlockedRefsInStoredRow = async (id: string): Promise<void> => {
+    const {content, properties} = await storedRefsForGuard(id)
+    await assertNoBlockedRefs(content, properties)
   }
 
   const workspaceIdForMoveTarget = async (
@@ -253,15 +258,19 @@ export const createBlockedWikilinkWriteGuard = (
     return siblings.slice(anchor + 1, runEnd + 1)
   }
 
-  const assertNoBlockedRefsInLiveSubtree = async (rootId: string): Promise<void> => {
-    const rootRows = await graph.sqlAll(
-      'SELECT id, content, properties_json FROM blocks WHERE id = ? AND deleted = 0 LIMIT 1',
+  const assertNoBlockedRefsInLiveDescendants = async (rootId: string): Promise<void> => {
+    const childRows = await graph.sqlAll(
+      `SELECT id, content, properties_json
+         FROM blocks
+        WHERE parent_id = ?
+          AND deleted = 0
+        ORDER BY order_key, id`,
       [rootId],
     )
-    const root = deleteGuardRowFromSqlRow(rootRows[0])
-    if (!root) return
-
-    const stack = [root]
+    const stack = childRows.flatMap(row => {
+      const child = deleteGuardRowFromSqlRow(row)
+      return child ? [child] : []
+    })
     const seen = new Set<string>()
     while (stack.length > 0) {
       const row = stack.pop()!
@@ -269,7 +278,7 @@ export const createBlockedWikilinkWriteGuard = (
       seen.add(row.id)
       await assertNoBlockedRefs(row.content, row.properties)
 
-      const childRows = await graph.sqlAll(
+      const grandchildRows = await graph.sqlAll(
         `SELECT id, content, properties_json
            FROM blocks
           WHERE parent_id = ?
@@ -277,9 +286,9 @@ export const createBlockedWikilinkWriteGuard = (
           ORDER BY order_key, id`,
         [row.id],
       )
-      for (const childRow of childRows) {
-        const child = deleteGuardRowFromSqlRow(childRow)
-        if (child) stack.push(child)
+      for (const grandchildRow of grandchildRows) {
+        const grandchild = deleteGuardRowFromSqlRow(grandchildRow)
+        if (grandchild) stack.push(grandchild)
       }
     }
   }
@@ -292,8 +301,8 @@ export const createBlockedWikilinkWriteGuard = (
           await assertNoBlockedRefs(operation.content, operation.properties)
           return
         case 'move_block': {
-          const block = await graph.getBlock(operation.id)
-          await assertNoBlockedRefs(block?.content, block?.properties)
+          await assertNoBlockedRefsInStoredRow(operation.id)
+          await assertNoBlockedRefsInLiveDescendants(operation.id)
           const tiedRewriteRows = await moveTiedRewriteRowsForGuard(operation)
           for (const row of tiedRewriteRows) {
             await assertNoBlockedRefs(row.content, row.properties)
@@ -301,12 +310,13 @@ export const createBlockedWikilinkWriteGuard = (
           return
         }
         case 'delete_block':
-          await assertNoBlockedRefsInLiveSubtree(operation.id)
+          await assertNoBlockedRefsInStoredRow(operation.id)
+          await assertNoBlockedRefsInLiveDescendants(operation.id)
           return
-        case 'restore_block': {
-          const {content, properties} = await tombstoneRefsForGuard(operation.id)
-          await assertNoBlockedRefs(content, properties)
-        }
+        case 'restore_block':
+          await assertNoBlockedRefsInStoredRow(operation.id)
+          await assertNoBlockedRefsInLiveDescendants(operation.id)
+          return
       }
     },
   }

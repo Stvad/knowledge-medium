@@ -15,7 +15,7 @@
     "build": "tsc -b && chmod +x ./dist/daemon.js ./dist/mcp.js"
   },
   "dependencies": {
-    "@knowledge-medium/agent-cli": "^0.2.0",
+    "@knowledge-medium/agent-cli": "^0.3.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.0.0"
   },

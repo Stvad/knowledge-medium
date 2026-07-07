@@ -80,13 +80,68 @@ describe('createBlockedWikilinkWriteGuard', () => {
   it('blocks move_block when the live moved block already references a blocked target', async () => {
     const guard = createBlockedWikilinkWriteGuard(graphFrom({
       getBlock: async id => {
-        if (id === 'source-block') {
-          return {id, content: 'old mention of [[claude]]', properties: {}, parentId: 'old-parent'}
-        }
         if (id === 'page-id-123') {
           return {id, content: 'claude', properties: {alias: ['cc']}}
         }
         return null
+      },
+      sqlAll: async (sql, params) => {
+        if (sql.includes('SELECT content, properties_json')) {
+          expect(params).toEqual(['source-block'])
+          return [{content: 'old mention of [[claude]]', properties_json: '{}'}]
+        }
+        return []
+      },
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'move_block',
+      id: 'source-block',
+      parentId: 'new-parent',
+      position: {kind: 'last'},
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('blocks move_block when a tombstoned moved block references a blocked target', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      getBlock: async id => id === 'page-id-123'
+        ? {id, content: 'claude', properties: {alias: ['cc']}}
+        : null,
+      sqlAll: async (sql, params) => {
+        if (sql.includes('SELECT content, properties_json')) {
+          expect(params).toEqual(['source-block'])
+          return [{content: 'tombstoned mention of [[cc]]', properties_json: '{}'}]
+        }
+        return []
+      },
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'move_block',
+      id: 'source-block',
+      parentId: 'new-parent',
+      position: {kind: 'last'},
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('blocks move_block when a live descendant references a blocked target', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      getBlock: async id => id === 'page-id-123'
+        ? {id, content: 'claude', properties: {alias: ['cc']}}
+        : null,
+      sqlAll: async (sql, params) => {
+        if (sql.includes('SELECT content, properties_json')) {
+          expect(params).toEqual(['source-block'])
+          return [{content: 'safe parent', properties_json: '{}'}]
+        }
+        if (sql.includes('WHERE parent_id = ?')) {
+          const parentId = params?.[0]
+          if (parentId === 'source-block') {
+            return [{id: 'child-block', content: 'child mentions [[cc]]', properties_json: '{}'}]
+          }
+          return []
+        }
+        return []
       },
     }), ['claude'])
 
@@ -106,6 +161,13 @@ describe('createBlockedWikilinkWriteGuard', () => {
         : null,
       sqlAll: vi.fn(async (sql, params) => {
         sqlCalls.push(sql)
+        if (sql.includes('SELECT content, properties_json')) {
+          expect(params).toEqual(['moving-tombstone'])
+          return [{content: 'safe moving tombstone', properties_json: '{}'}]
+        }
+        if (sql.includes('WHERE parent_id = ?')) {
+          return []
+        }
         if (sql.includes('SELECT workspace_id')) {
           expect(params).toEqual(['moving-tombstone'])
           return [{workspace_id: 'ws-1'}]
@@ -125,8 +187,9 @@ describe('createBlockedWikilinkWriteGuard', () => {
       position: {kind: 'after', siblingId: 'anchor'},
     })).rejects.toThrow('references a blocked page')
 
-    expect(sqlCalls[0]).toContain('WHERE id = ? LIMIT 1')
-    expect(sqlCalls[0]).not.toContain('deleted = 0')
+    const workspaceSql = sqlCalls.find(sql => sql.includes('SELECT workspace_id'))
+    expect(workspaceSql).toContain('WHERE id = ? LIMIT 1')
+    expect(workspaceSql).not.toContain('deleted = 0')
   })
 
   it('blocks delete_block when deep live subtree content could inline a blocked ref', async () => {
@@ -155,12 +218,63 @@ describe('createBlockedWikilinkWriteGuard', () => {
     })).rejects.toThrow('references a blocked page')
   })
 
+  it('blocks delete_block when a tombstoned root has a live descendant with a blocked ref', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      sqlAll: async (sql, params) => {
+        if (sql.includes('WHERE id = ? AND deleted = 0')) {
+          return []
+        }
+        if (sql.includes('SELECT content, properties_json')) {
+          expect(params).toEqual(['source-block'])
+          return [{content: 'safe tombstoned root', properties_json: '{}'}]
+        }
+        if (sql.includes('WHERE parent_id = ?')) {
+          const parentId = params?.[0]
+          if (parentId === 'source-block') {
+            return [{id: 'live-child', content: 'live child mentions [[claude]]', properties_json: '{}'}]
+          }
+          return []
+        }
+        throw new Error(`Unexpected sql: ${sql}`)
+      },
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'delete_block',
+      id: 'source-block',
+    })).rejects.toThrow('references a blocked page')
+  })
+
   it('blocks restore_block when the tombstoned block references a blocked target', async () => {
     const guard = createBlockedWikilinkWriteGuard(graphFrom({
       sqlAll: async () => [{
         content: 'old mention of ((page-id-123))',
         properties_json: '{}',
       }],
+    }), ['claude'])
+
+    await expect(guard.beforeWrite({
+      type: 'restore_block',
+      id: 'source-block',
+    })).rejects.toThrow('references a blocked page')
+  })
+
+  it('blocks restore_block when a live descendant would become reachable with a blocked ref', async () => {
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      sqlAll: async (sql, params) => {
+        if (sql.includes('SELECT content, properties_json')) {
+          expect(params).toEqual(['source-block'])
+          return [{content: 'safe tombstoned root', properties_json: '{}'}]
+        }
+        if (sql.includes('WHERE parent_id = ?')) {
+          const parentId = params?.[0]
+          if (parentId === 'source-block') {
+            return [{id: 'live-child', content: 'live child mentions ((page-id-123))', properties_json: '{}'}]
+          }
+          return []
+        }
+        throw new Error(`Unexpected sql: ${sql}`)
+      },
     }), ['claude'])
 
     await expect(guard.beforeWrite({

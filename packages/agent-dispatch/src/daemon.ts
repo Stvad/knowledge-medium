@@ -16,7 +16,6 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { createBridgeClient, errorMessage, startBridgeInBackground } from '@knowledge-medium/agent-cli/client'
 import { agentRuntimeConfigDir, bridgeUrl as resolveBridgeUrl, isLocalBridgeUrl } from '@knowledge-medium/agent-cli/config'
 import { defaultStatePath, loadConfig, type DaemonConfig } from './config.js'
@@ -28,8 +27,7 @@ import { clearPushRegistration, createExemptionPool, startPushLoop } from './pus
 import { runClaude } from './runner.js'
 import { runCodex } from './codexRunner.js'
 import { reportBillingPosture } from './billing.js'
-import { MCP_SERVER_NAME } from '@knowledge-medium/agent-cli/mcpShared'
-import { BLOCKED_WIKILINKS_ENV, encodeBlockedWikilinks } from './blockedWikilinks.js'
+import { buildMcpServerDef } from './mcpServerDef.js'
 import { CHANNEL_PORT_ENV, CHANNEL_SECRET_HEADER, loadOrCreateChannelSecret } from './channelSecret.js'
 
 const log = (message: string) =>
@@ -47,28 +45,6 @@ const parseArgs = (argv: string[]) => {
 
 // Single-instance lock — see pidfile.ts for the takeover semantics.
 const pidfilePath = () => path.join(agentRuntimeConfigDir(), 'agent-dispatch.pid')
-
-/** The dispatch-owned km MCP server definition, shared between claude's
- *  --mcp-config JSON file (writeMcpConfig) and codex's
- *  `-c mcp_servers.*` overrides (runOptionsFor → runCodex, wired below)
- *  — one source of truth for command/args/env so the two executors can
- *  never drift apart. */
-const buildMcpServerDef = (config: DaemonConfig) => {
-  const mcpServerScript = fileURLToPath(new URL('./mcp.js', import.meta.url))
-  const blockedTargets = config.watchers
-    .filter(watcher => watcher.kind === 'backlinks')
-    .map(watcher => watcher.target)
-
-  return {
-    name: MCP_SERVER_NAME,
-    command: process.execPath,
-    args: [mcpServerScript],
-    env: {
-      AGENT_RUNTIME_PROFILE: config.profile,
-      ...(blockedTargets.length > 0 ? {[BLOCKED_WIKILINKS_ENV]: encodeBlockedWikilinks(blockedTargets)} : {}),
-    },
-  }
-}
 
 /** Generated --mcp-config for spawned claude runs: the dispatch km
  *  server, bound to the daemon's own profile, with watcher targets

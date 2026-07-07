@@ -1,8 +1,14 @@
 import {describe, expect, it, vi} from 'vitest'
 import type {CallToolResult} from '@modelcontextprotocol/sdk/types.js'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import {fileURLToPath} from 'node:url'
 import type {BridgeClient} from '../src/client'
 import type {KnownCommand} from '../src/protocol'
 import {createGraphMcpServer, type GraphMcpWriteOperation} from '../src/mcpServer'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const packageJsonPath = path.resolve(here, '../package.json')
 
 interface RegisteredToolHarness {
   _registeredTools: Record<string, {
@@ -11,6 +17,14 @@ interface RegisteredToolHarness {
       extra: Record<string, never>,
     ) => CallToolResult | Promise<CallToolResult>
   }>
+}
+
+interface ServerInfoHarness {
+  server: {
+    _serverInfo: {
+      version: string
+    }
+  }
 }
 
 const clientFrom = (
@@ -31,6 +45,20 @@ const clientFrom = (
 })
 
 describe('createGraphMcpServer', () => {
+  it('advertises the package version in MCP server metadata', async () => {
+    const raw = await fs.readFile(packageJsonPath, 'utf8')
+    const pkg = JSON.parse(raw) as {version: string}
+    const client = clientFrom(async command => {
+      throw new Error(`Unexpected command: ${command.type}`)
+    })
+    const server = createGraphMcpServer({
+      client,
+      serverOptions: {capabilities: {tools: {}}},
+    })
+
+    expect((server as unknown as ServerInfoHarness).server._serverInfo.version).toBe(pkg.version)
+  })
+
   it('runs the optional write guard before mutating tools', async () => {
     const commands: KnownCommand[] = []
     const operations: GraphMcpWriteOperation[] = []

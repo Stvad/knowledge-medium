@@ -10,12 +10,26 @@
  * - AGENT_RUNTIME_PROFILE: kmagent token profile (default "default")
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { readFileSync } from 'node:fs'
 import { z } from 'zod'
 import { createBridgeClient, type BridgeClient } from './client.js'
 import { renderSubtreeOutline, type SubtreeOutlineRow } from './subtreeOutline.js'
 import { createBridgeGraph, type BridgeGraph } from './graph.js'
 import { isReadOnlySql, type KmMcpToolName, MCP_SERVER_NAME } from './mcpShared.js'
 import { moveBlockPositionSchema } from './protocol.js'
+
+interface PackageJson {
+  version?: unknown
+}
+
+const agentCliPackageVersion = (() => {
+  const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf8')
+  const pkg = JSON.parse(raw) as PackageJson
+  if (typeof pkg.version !== 'string') {
+    throw new Error('@knowledge-medium/agent-cli package.json is missing a string version')
+  }
+  return pkg.version
+})()
 
 type MoveBlockPositionInput = z.infer<typeof moveBlockPositionSchema>
 
@@ -65,7 +79,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
   })
 
   const server = new McpServer(
-    {name: MCP_SERVER_NAME, version: '0.1.0'},
+    {name: MCP_SERVER_NAME, version: agentCliPackageVersion},
     options.serverOptions,
   )
 
