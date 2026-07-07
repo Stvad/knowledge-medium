@@ -1,5 +1,0 @@
-import{actionsFacet as e}from"../../extensions/core.js";import{ActionContextTypes as t}from"../../shortcuts/types.js";import{FALLBACK_THEME as n,applyTheme as r,setThemeRegistry as i,themesFacet as a}from"./theme.js";var o=`data-theme-plugin-managed`,s=`theme-toggle.apply-actions`,c=e=>({id:e.id,label:e.label,mode:e.mode}),l=e=>{let t=Object.entries(e.tokens).map(([e,t])=>`  --${e}: ${t};`).join(`
-`);return`[data-theme="${e.id}"] {\n${t}\n}`},u=e=>e.map(l).join(`
-
-`),d=e=>({id:`theme-toggle.apply.${e.id}`,description:`Theme: ${e.label}`,context:t.GLOBAL,handler:()=>{r(e.id)}}),f={id:`theme-toggle.style-sync`,start:({runtime:t})=>{let r=document.createElement(`style`);r.setAttribute(o,``),document.head.appendChild(r);let l=()=>{let o=t.read(a);r.textContent=u(o),i(o.length===0?[n]:o.map(c)),t.setRuntimeContributions(e,s,o.map(d))};l();let f=t.onFacetChange(a.id,l);return()=>{f(),r.remove(),i([n]),t.setRuntimeContributions(e,s,[])}}};export{d as buildApplyThemeAction,l as buildThemeRule,u as buildThemeStylesheet,f as themeStyleSyncEffect};
-//# sourceMappingURL=effect.js.map
