@@ -232,7 +232,7 @@
   <p class="lede">A proposed model for Google Docs-style comments and future edit suggestions over selected block text. The design assumes individual blocks are usually small and that the app's durable unit of text ownership is the block, not a single document-wide text stream.</p>
 
   <h2>Goal</h2>
-  <p>Let a user select text inside one block, or across a small range of blocks, and create a comment thread attached to that selection. The selected text should be highlighted in read mode and edit mode. The comment thread should be discoverable from the target block, behave like normal user content, and leave room for later accept/reject edit suggestions.</p>
+  <p>Let a user select text inside one block and create a comment thread attached to that selection. The selected text should be highlighted in read mode and edit mode where the renderer can map raw offsets safely. The data model should also allow a future block-range selection to store one segment per block. The comment thread should be discoverable from the target block, behave like normal user content, and leave room for later accept/reject edit suggestions.</p>
 
   <h2>Non-goals</h2>
   <ul>
@@ -258,12 +258,12 @@
     <tr>
       <td>Backlink index</td>
       <td><code>block_references</code> is trigger-maintained from <code>references_json</code> with <code>source_field</code>. See <a href="../src/plugins/references/localSchema.ts">references/localSchema.ts</a>.</td>
-      <td>A ref-typed property can make comment threads appear as typed backlinks to target blocks.</td>
+      <td>A ref-typed property can make comment threads appear as typed backlinks to target blocks after reference projection updates <code>references_json</code>.</td>
     </tr>
     <tr>
       <td>Read rendering</td>
       <td>Markdown rendering is extended through <code>markdownExtensionsFacet</code>. See <a href="../src/components/renderer/MarkdownContentRenderer.tsx">MarkdownContentRenderer.tsx</a>.</td>
-      <td>Read-mode highlights can be generated from annotation anchors without changing source content.</td>
+      <td>Read-mode highlights need a raw-offset-aware decoration layer. Markdown component overrides alone are not enough for syntax and alias mapping.</td>
     </tr>
     <tr>
       <td>Edit rendering</td>
@@ -281,7 +281,7 @@
   <div class="cards">
     <section class="card">
       <h3>Threads are blocks</h3>
-      <p>Comment and suggestion threads should be normal block subtrees. Their content, replies, authorship, deletion, sync, and E2EE behavior then reuse the existing block model.</p>
+      <p>Comment and suggestion threads should be normal block subtrees stored under an annotation-owned container, not as children of the target block. Their visible comment children, replies, authorship, deletion, sync, and E2EE behavior then reuse the existing block model without polluting the outline.</p>
     </section>
     <section class="card">
       <h3>Anchors are payloads</h3>
@@ -289,7 +289,7 @@
     </section>
     <section class="card">
       <h3>Discovery uses refs</h3>
-      <p>A ref-list property on the thread root points at all target blocks. The existing reference projection gives typed backlinks via <code>sourceField</code>.</p>
+      <p>A ref-list property on the thread root points at all target blocks. The existing reference projection gives typed backlinks via <code>sourceField</code>, once the property is projected into <code>references_json</code>.</p>
     </section>
     <section class="card">
       <h3>Decorations are derived</h3>
@@ -298,14 +298,15 @@
   </div>
 
   <h2>Proposed Data Model</h2>
-  <p>Each comment thread root is a block with a dedicated type and a small property payload.</p>
+  <p>Each comment thread root is a block with a dedicated type, a deterministic annotation-container parent, and a small property payload.</p>
 
-  <pre><code>types: ["annotation:thread"]
-content: "Initial comment text"
+  <pre><code>parentId: "annotation-container-for-workspace"
+types: ["annotation:thread"]
+content: ""
 properties: {
   "annotation:kind": "comment",
   "annotation:status": "open",
-  "annotation:targetBlocks": ["block-a", "block-b"],
+  "annotation:targetBlocks": ["block-a"],
   "annotation:anchor": {
     "version": 1,
     "segments": [
@@ -321,13 +322,55 @@ properties: {
     ]
   }
 }
-children: reply blocks</code></pre>
+children: first visible comment block, then reply blocks</code></pre>
 
-  <p><code>annotation:targetBlocks</code> should be a <code>refList</code> property. That makes thread roots visible through the existing reference machinery, while <code>annotation:anchor</code> stores the range selectors.</p>
+  <p><code>annotation:targetBlocks</code> should be a registered <code>refList</code> property. That lets thread roots become visible through the existing reference machinery, while <code>annotation:anchor</code> stores the range selectors.</p>
+
+  <p>For v1, the thread root should be a metadata container with empty content; the first visible comment is its first child. This keeps thread metadata, reply rendering, deletion, and future migrations independent of the body text of the first comment.</p>
+
+  <p><code>annotation:targetBlocks</code> should be a deduped mirror of <code>annotation:anchor.segments[].blockId</code>. If a later feature needs block-level comments with no text segment, it should add an explicit block-level anchor kind instead of silently adding target blocks without resolvable segments.</p>
+
+  <div class="warn">
+    <strong>Projection requirement:</strong> <code>block_references</code> indexes <code>references_json</code>, not raw property values. The annotation schema must register <code>annotation:targetBlocks</code> as a <code>refList</code>, and creation code should either write matching <code>references</code> in the same transaction for immediate discovery or rely on the references processor before querying through <code>block_references</code>. Tests that bypass processors must account for this explicitly.
+  </div>
 
   <div class="decision">
-    <strong>Architectural decision:</strong> the backlink edge and the text anchor are separate concepts. The backlink edge answers "which blocks does this thread relate to?" The anchor answers "which bytes of those block contents should be decorated?"
+    <strong>Architectural decision:</strong> the backlink edge and the text anchor are separate concepts. The backlink edge answers "which blocks does this thread relate to?" The anchor answers "which editor-document ranges of those block contents should be decorated?"
   </div>
+
+  <h2>Thread Placement And Lifecycle</h2>
+  <p>Thread roots need a tree location because they are normal blocks. The recommended v1 shape is one annotation-owned container per workspace, with thread roots as children and replies as descendants of the thread root. The target relationship is expressed only through <code>annotation:targetBlocks</code>, not through the outline parent.</p>
+
+  <table>
+    <tr>
+      <th>Concern</th>
+      <th>Policy</th>
+    </tr>
+    <tr>
+      <td>Normal outline rendering</td>
+      <td>Annotation container subtrees are hidden from ordinary page/outline rendering and opened only through annotation surfaces.</td>
+    </tr>
+    <tr>
+      <td>Export and copy</td>
+      <td>Default content export/copy excludes annotation container subtrees. A later explicit "include comments" mode can serialize them alongside target anchors.</td>
+    </tr>
+    <tr>
+      <td>Target deletion</td>
+      <td>Do not cascade-delete threads automatically. If all target blocks are deleted, hide the thread from normal annotation surfaces and expose it through a workspace-level orphaned/resolved-comments affordance that scans the annotation container instead of starting from a live target block.</td>
+    </tr>
+    <tr>
+      <td>Thread deletion</td>
+      <td>Deleting a thread deletes its block subtree and removes its projected target refs. Resolving a thread only changes <code>annotation:status</code>.</td>
+    </tr>
+    <tr>
+      <td>Comment child deletion</td>
+      <td>An open thread must have at least one visible comment child. Deleting the last visible comment should delete the thread root subtree, resolve it, or be disallowed by the annotation UI; do not leave an open metadata root with target refs and no visible body.</td>
+    </tr>
+    <tr>
+      <td>Multi-block comments</td>
+      <td>The container model avoids choosing one target block as the structural owner; all target blocks are peers in <code>annotation:targetBlocks</code>.</td>
+    </tr>
+  </table>
 
   <h2>Anchor Shape</h2>
   <p>Because blocks are usually small, anchors should be block-local and hybrid: offsets for the normal fast path, exact quote plus context for repair.</p>
@@ -345,7 +388,7 @@ children: reply blocks</code></pre>
     </tr>
     <tr>
       <td><code>from</code>, <code>to</code></td>
-      <td>Offsets in the same coordinate system used by the block editor.</td>
+      <td>Offsets in the same coordinate system used by the block editor: CodeMirror document positions / JavaScript string offsets, not UTF-8 bytes.</td>
       <td>Cheap resolution and direct CodeMirror decoration.</td>
     </tr>
     <tr>
@@ -365,7 +408,7 @@ children: reply blocks</code></pre>
     </tr>
   </table>
 
-  <p>A multi-block selection stores one segment per selected block. The UI can group those segments as one thread, but resolution stays per block.</p>
+  <p>A future multi-block selection should store one segment per selected block. The UI can group those segments as one thread, but resolution stays per block. V1 creation should stay single-block until there is a block-range selection model that can turn a cross-block selection into ordered block-local raw offsets.</p>
 
   <h2>Resolution Algorithm</h2>
   <p>Anchor resolution should be simple and deterministic. Small blocks mean brute-force search is acceptable.</p>
@@ -389,7 +432,7 @@ children: reply blocks</code></pre>
     </div>
     <div class="step">
       <strong>5. Stale fallback</strong>
-      <span class="caption">If no unique match exists, mark the segment stale.</span>
+      <span class="caption">If no unique match exists, return the segment as stale.</span>
     </div>
   </div>
 
@@ -398,10 +441,16 @@ children: reply blocks</code></pre>
   <h2>Anchor Maintenance</h2>
   <p>For a first implementation, anchors can be repaired lazily at render time and persisted only when the user edits or explicitly repairs a stale anchor. A later pass can add automatic remapping on block content edits.</p>
 
+  <p>V1 resolution state should be derived: resolving an anchor returns <code>resolved</code> or <code>stale</code>, but the app persists only explicit user actions such as repair, resolve, reopen, accept, or reject. Do not persist routine stale resolver output as thread state unless a later design introduces an explicit invalidation field with clear write rules.</p>
+
+  <p>Structural edits should have an explicit v1 fallback. Moving, indenting, outdenting, or reordering a block preserves the block id and content, so block-local anchors should survive and only render-surface visibility may change. Splitting or merging can move selected text to a different block id; until split/merge retargeting exists, affected segments resolve as stale.</p>
+
+  <p>Merge handling needs special care because the generic reference retargeting processor rewrites stored <code>BlockReference</code> entries but does not update annotation properties or anchor payloads. Merge invariant: projected refs, <code>annotation:targetBlocks</code>, and anchor segment <code>blockId</code>s must stay aligned. Annotation code should either opt <code>annotation:targetBlocks</code> refs out of generic merge retargeting, or add an annotation same-transaction merge processor that retargets <code>annotation:targetBlocks</code> and retargets or leaves affected anchor segments resolving as stale atomically.</p>
+
   <p>If automatic remapping is needed, prefer a bounded same-transaction processor. Same-tx processors run inside the user's write transaction and can amend writes atomically, so an undo step can cover both the content edit and anchor update. See <a href="../src/data/api/sameTxProcessor.ts">sameTxProcessor.ts</a>.</p>
 
   <div class="warn">
-    <strong>Latency guard:</strong> automatic remapping must stay bounded. If a block has too many annotation segments, or repair is ambiguous, the processor should stop early and mark affected segments stale rather than making content saves feel slow.
+    <strong>Latency guard:</strong> automatic remapping must stay bounded. If a block has too many annotation segments, or repair is ambiguous, the processor should stop early and leave affected segments resolving as stale rather than making content saves feel slow.
   </div>
 
   <h2>UI Model</h2>
@@ -414,11 +463,11 @@ children: reply blocks</code></pre>
     </tr>
     <tr>
       <td>Creation</td>
-      <td>When a non-collapsed selection exists, expose an add-comment command from the editor toolbar, command palette, or compact floating affordance.</td>
+      <td>V1 creation should start from a non-collapsed edit-mode selection, where CodeMirror already gives raw block offsets. Range anchors require <code>from &lt; to</code> and a non-empty <code>exact</code>. Read-mode creation should wait for a reliable rendered-selection to raw-offset mapping. Caret or block-level comments should use an explicit block-level anchor kind later.</td>
     </tr>
     <tr>
       <td>Read mode</td>
-      <td>Resolved segments render as subtle inline highlights. A margin marker or block-level count opens the relevant thread list.</td>
+      <td>Resolved segments render as subtle inline highlights only where the raw-offset mapping layer can preserve markdown syntax and reference aliases. Otherwise, show a margin marker or block-level count that opens the relevant thread list.</td>
     </tr>
     <tr>
       <td>Edit mode</td>
@@ -430,7 +479,7 @@ children: reply blocks</code></pre>
     </tr>
     <tr>
       <td>Backlinks view</td>
-      <td>Comment threads should not pollute the default linked references view. Use a specialized comments section filtered by <code>sourceField = "annotation:targetBlocks"</code>.</td>
+      <td>Comment threads should not pollute the default linked references view. Current backlinks queries include all <code>sourceField</code> values. Flat and grouped backlinks can suppress dedicated annotation-thread sources with a built-in <code>referencedBy.sourceField</code> exclusion, but inline backlink counts and any mixed-source edge semantics still need query/API work. The comments section separately queries <code>sourceField = "annotation:targetBlocks"</code>.</td>
     </tr>
     <tr>
       <td>Resolved comments</td>
@@ -438,24 +487,24 @@ children: reply blocks</code></pre>
     </tr>
   </table>
 
+  <h2>Render Surface Policy</h2>
+  <p>Annotation decorations should be scoped by render surface. Primary document and focused edit surfaces show inline highlights when they can resolve raw offsets correctly. Secondary surfaces such as backlinks, embeds, breadcrumbs, and block references default to compact markers, counts, or no annotation decoration. Any reveal behavior should be render-time policy, not persisted collapse-state mutation.</p>
+
   <h2>Edit Suggestions</h2>
   <p>Edit suggestions can use the same thread and anchor model with a different kind and a patch payload.</p>
 
   <pre><code>{
-  "kind": "suggestion",
-  "status": "open",
-  "anchor": { "version": 1, "segments": [...] },
-  "patch": {
+  "annotation:kind": "suggestion",
+  "annotation:status": "open",
+  "annotation:anchor": { "version": 1, "segments": [...] },
+  "annotation:patch": {
     "op": "replace",
-    "blockId": "block-a",
-    "from": 12,
-    "to": 31,
     "deletedText": "old text",
     "insertedText": "new text"
   }
 }</code></pre>
 
-  <p>Accepting a suggestion should re-resolve the anchor, verify that the current text still matches the expected deleted text, then perform a normal block content update and mark the suggestion accepted in the same user-visible operation. Rejection only changes suggestion status.</p>
+  <p>Accepting a suggestion should re-resolve the anchor, apply the replacement to the resolved anchor range, verify that the current text still matches the expected deleted text, then perform a normal block content update and mark the suggestion accepted in the same user-visible operation. If the target block is mounted in edit mode, accept must be editor-mediated: dispatch the replacement into the mounted CodeMirror document and coordinate or cancel any stale debounced commit, or introduce an awaited editor commit API that can persist the editor document plus suggestion status in the same undoable operation. A repo-only write is not enough because the uncontrolled editor can later flush stale text over it. The patch payload should not carry independent coordinates that can drift from the anchor. Rejection only changes suggestion status.</p>
 
   <div class="note">
     <strong>Scope recommendation:</strong> start with single-block replace suggestions. Multi-block structural suggestions should wait until there is a clear operation model for block splitting, merging, and subtree edits.
@@ -471,8 +520,8 @@ children: reply blocks</code></pre>
     </tr>
     <tr>
       <td>Thread blocks with anchor property</td>
-      <td>Uses existing block sync, undo, E2EE, deletion, and child replies. Easy to query through refList backlinks.</td>
-      <td>Anchor payload is less queryable than a table; thread metadata updates rewrite the thread block properties.</td>
+      <td>Uses existing block sync, undo, E2EE, deletion, and child replies. Queryable through refList backlinks once reference projection is handled.</td>
+      <td>Anchor payload is less queryable than a table; thread metadata updates rewrite the thread block properties; ordinary backlink/export/count surfaces need explicit annotation exclusions.</td>
       <td>Recommended v1.</td>
     </tr>
     <tr>
@@ -496,31 +545,45 @@ children: reply blocks</code></pre>
   </table>
 
   <h2>Implementation Slices</h2>
+  <h3>V1 comments</h3>
   <ol>
-    <li>Define annotation schemas: thread type, target refList property, anchor payload property, status/kind properties.</li>
-    <li>Add anchor utilities: create segments from selection, resolve segment against block content, mark stale, and repair by exact/context search.</li>
+    <li>Define annotation schemas: thread type, annotation container type, target <code>refList</code> property, anchor payload property, status/kind properties.</li>
+    <li>Add the annotation container lifecycle and filter it from ordinary outline rendering, export, and copy flows.</li>
+    <li>Add annotation UI lifecycle rules for first/last visible comment child deletion.</li>
+    <li>Add creation writes that keep target refs discoverable immediately or explicitly wait for reference projection convergence.</li>
+    <li>Add anchor utilities: create segments from CodeMirror selection, resolve segment against block content, return stale resolver results, and repair by exact/context search.</li>
     <li>Add query helpers for "annotation threads targeting block X" via the existing reference index and <code>sourceField</code>.</li>
-    <li>Add read-mode highlights, probably through a markdown extension or content decorator that receives resolved ranges.</li>
+    <li>Extend backlinks behavior so default flat backlinks, grouped backlinks, and inline counts can suppress annotation-thread sources.</li>
+    <li>Add read-mode markers and, where rendered text can be mapped back to raw offsets, inline highlights over resolved ranges.</li>
     <li>Add edit-mode highlights through a CodeMirror decoration extension.</li>
-    <li>Add create-comment flow from an editor selection and render a minimal thread panel.</li>
-    <li>Add resolve/reopen actions and stale-anchor UI.</li>
+    <li>Add create-comment flow from an edit-mode selection and render a minimal thread panel.</li>
+    <li>Add resolve/reopen actions, stale-anchor UI, merge handling that keeps annotation target refs/properties/anchors consistent, and a workspace-level orphan query over the annotation container.</li>
+  </ol>
+
+  <h3>Later suggestions</h3>
+  <ol>
     <li>Add single-block replace suggestions once comments are stable.</li>
   </ol>
 
   <h2>Testing Plan</h2>
   <ul>
     <li>Unit-test anchor creation and resolution with unchanged text, shifted text, repeated text, and missing text.</li>
-    <li>Unit-test multi-block segment creation without requiring a rendered browser selection.</li>
+    <li>Unit-test non-ASCII content so offsets are validated as CodeMirror/JavaScript string positions, not UTF-8 byte offsets.</li>
+    <li>Unit-test target-block invariants: <code>annotation:targetBlocks</code> mirrors segment block ids unless an explicit block-level anchor kind is introduced.</li>
+    <li>Unit-test anchor creation rejects collapsed selections and empty <code>exact</code> text.</li>
+    <li>Unit-test structural edit policy: moves preserve block-local anchors; split and merge either retarget or resolve affected segments as stale without drifting target refs from annotation properties.</li>
+    <li>Unit-test multi-block segment utilities later, when there is a block-range selection model that does not require a rendered browser selection.</li>
+    <li>Data tests should verify annotation thread creation projects or writes <code>annotation:targetBlocks</code> refs before query helpers depend on <code>block_references</code>.</li>
+    <li>Data tests should cover deleting and restoring the last target block, including workspace-level orphan discovery through the annotation container.</li>
+    <li>Lifecycle tests should cover deleting the first and last visible comment child from an open thread.</li>
+    <li>Backlink tests should verify default flat/grouped backlinks and inline counts exclude annotation threads while the annotation query includes them by <code>sourceField</code>.</li>
     <li>Data tests should share one DB per file and reset between tests, matching the project testing convention.</li>
     <li>Component tests should cover create-comment from a selected range, highlight rendering, thread opening, and stale fallback.</li>
-    <li>Suggestion tests should verify accept rejects stale or mismatched text instead of applying a blind replacement.</li>
+    <li>Suggestion tests should verify accept rejects stale or mismatched text instead of applying a blind replacement, handles active edit-mode buffers without stale debounced overwrites, keeps the editor document and persisted content aligned, updates suggestion status, and produces one undo step.</li>
   </ul>
 
   <h2>Open Questions</h2>
   <ul>
-    <li>Should a thread's first comment live in the thread root content, or should the root be a metadata container with the first visible comment as its first child?</li>
-    <li>Should read-mode text selection create comments immediately, or should v1 require edit mode where CodeMirror offsets are already available?</li>
-    <li>How should annotation markers behave in backlinks, embeds, and breadcrumb/reference render surfaces?</li>
     <li>Should stale anchors have an explicit repair command that lets the user select new text and reattach the thread?</li>
     <li>When annotation count grows, is the right graduation path a dedicated synced table or the deferred <code>plugin_block_data</code> escape hatch described in <a href="follow-ups.md">follow-ups.md</a>?</li>
   </ul>
