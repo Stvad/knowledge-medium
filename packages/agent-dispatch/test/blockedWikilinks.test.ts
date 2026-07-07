@@ -218,6 +218,44 @@ describe('createBlockedWikilinkWriteGuard', () => {
     })).rejects.toThrow('references a blocked page')
   })
 
+  it('reuses the resolved guard set within one write and refreshes it between writes', async () => {
+    const resolvePageId = vi.fn(async () => 'page-id-123')
+    const getBlock = vi.fn(async id => id === 'page-id-123'
+      ? {id, content: 'claude', properties: {alias: ['cc']}}
+      : null)
+    const guard = createBlockedWikilinkWriteGuard(graphFrom({
+      resolvePageId,
+      getBlock,
+      sqlAll: async (sql, params) => {
+        if (sql.includes('SELECT content, properties_json')) {
+          expect(params).toEqual(['source-block'])
+          return [{content: 'safe root', properties_json: '{}'}]
+        }
+        if (sql.includes('WHERE parent_id = ?')) {
+          const parentId = params?.[0]
+          if (parentId === 'source-block') {
+            return [
+              {id: 'child-a', content: 'safe child a', properties_json: '{}'},
+              {id: 'child-b', content: 'safe child b', properties_json: '{}'},
+            ]
+          }
+          return []
+        }
+        throw new Error(`Unexpected sql: ${sql}`)
+      },
+    }), ['claude'])
+
+    await guard.beforeWrite({type: 'delete_block', id: 'source-block'})
+
+    expect(resolvePageId).toHaveBeenCalledTimes(1)
+    expect(getBlock).toHaveBeenCalledTimes(1)
+
+    await guard.beforeWrite({type: 'delete_block', id: 'source-block'})
+
+    expect(resolvePageId).toHaveBeenCalledTimes(2)
+    expect(getBlock).toHaveBeenCalledTimes(2)
+  })
+
   it('blocks delete_block when a tombstoned root has a live descendant with a blocked ref', async () => {
     const guard = createBlockedWikilinkWriteGuard(graphFrom({
       sqlAll: async (sql, params) => {

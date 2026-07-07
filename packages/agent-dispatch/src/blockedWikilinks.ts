@@ -141,7 +141,7 @@ export const createBlockedWikilinkWriteGuard = (
     return {beforeWrite: () => {}}
   }
 
-  const guardSet = async (): Promise<RefGuardSet> => {
+  const resolveGuardSet = async (): Promise<RefGuardSet> => {
     const aliases = new Set(blockedNames)
     const ids = new Set<string>()
     for (const name of blockedNames) {
@@ -156,22 +156,6 @@ export const createBlockedWikilinkWriteGuard = (
     return {aliases: [...aliases], ids: [...ids]}
   }
 
-  const assertNoBlockedRefs = async (
-    content: string | undefined,
-    properties?: Record<string, unknown>,
-  ) => {
-    if (!content && !properties) return
-    const guard = await guardSet()
-    const blocked =
-      (content ? findBlockedRef(content, guard) : null)
-      ?? findBlockedRefInProperties(properties, guard)
-    if (blocked) {
-      throw new Error(
-        `Refusing to write "${blocked}": it references a blocked page. Refer to the page without linking it.`,
-      )
-    }
-  }
-
   const storedRefsForGuard = async (
     id: string,
   ): Promise<{content?: string, properties?: Record<string, unknown>}> => {
@@ -180,11 +164,6 @@ export const createBlockedWikilinkWriteGuard = (
       [id],
     )
     return refsFromSqlRow(rows[0])
-  }
-
-  const assertNoBlockedRefsInStoredRow = async (id: string): Promise<void> => {
-    const {content, properties} = await storedRefsForGuard(id)
-    await assertNoBlockedRefs(content, properties)
   }
 
   const workspaceIdForMoveTarget = async (
@@ -258,43 +237,79 @@ export const createBlockedWikilinkWriteGuard = (
     return siblings.slice(anchor + 1, runEnd + 1)
   }
 
-  const assertNoBlockedRefsInLiveDescendants = async (rootId: string): Promise<void> => {
-    const childRows = await graph.sqlAll(
-      `SELECT id, content, properties_json
+  const createWriteAssertions = () => {
+    let guardSetForWrite: Promise<RefGuardSet> | null = null
+    const guardSet = () => {
+      guardSetForWrite ??= resolveGuardSet()
+      return guardSetForWrite
+    }
+
+    const assertNoBlockedRefs = async (
+      content: string | undefined,
+      properties?: Record<string, unknown>,
+    ) => {
+      if (!content && !properties) return
+      const guard = await guardSet()
+      const blocked =
+        (content ? findBlockedRef(content, guard) : null)
+        ?? findBlockedRefInProperties(properties, guard)
+      if (blocked) {
+        throw new Error(
+          `Refusing to write "${blocked}": it references a blocked page. Refer to the page without linking it.`,
+        )
+      }
+    }
+
+    const assertNoBlockedRefsInStoredRow = async (id: string): Promise<void> => {
+      const {content, properties} = await storedRefsForGuard(id)
+      await assertNoBlockedRefs(content, properties)
+    }
+
+    const assertNoBlockedRefsInLiveDescendants = async (rootId: string): Promise<void> => {
+      const childRows = await graph.sqlAll(
+        `SELECT id, content, properties_json
          FROM blocks
         WHERE parent_id = ?
           AND deleted = 0
         ORDER BY order_key, id`,
-      [rootId],
-    )
-    const stack = childRows.flatMap(row => {
-      const child = deleteGuardRowFromSqlRow(row)
-      return child ? [child] : []
-    })
-    const seen = new Set<string>()
-    while (stack.length > 0) {
-      const row = stack.pop()!
-      if (seen.has(row.id)) continue
-      seen.add(row.id)
-      await assertNoBlockedRefs(row.content, row.properties)
-
-      const grandchildRows = await graph.sqlAll(
-        `SELECT id, content, properties_json
-           FROM blocks
-          WHERE parent_id = ?
-            AND deleted = 0
-          ORDER BY order_key, id`,
-        [row.id],
+        [rootId],
       )
-      for (const grandchildRow of grandchildRows) {
-        const grandchild = deleteGuardRowFromSqlRow(grandchildRow)
-        if (grandchild) stack.push(grandchild)
+      const stack = childRows.flatMap(row => {
+        const child = deleteGuardRowFromSqlRow(row)
+        return child ? [child] : []
+      })
+      const seen = new Set<string>()
+      while (stack.length > 0) {
+        const row = stack.pop()!
+        if (seen.has(row.id)) continue
+        seen.add(row.id)
+        await assertNoBlockedRefs(row.content, row.properties)
+
+        const grandchildRows = await graph.sqlAll(
+          `SELECT id, content, properties_json
+             FROM blocks
+            WHERE parent_id = ?
+              AND deleted = 0
+            ORDER BY order_key, id`,
+          [row.id],
+        )
+        for (const grandchildRow of grandchildRows) {
+          const grandchild = deleteGuardRowFromSqlRow(grandchildRow)
+          if (grandchild) stack.push(grandchild)
+        }
       }
     }
+
+    return {assertNoBlockedRefs, assertNoBlockedRefsInStoredRow, assertNoBlockedRefsInLiveDescendants}
   }
 
   return {
     beforeWrite: async operation => {
+      const {
+        assertNoBlockedRefs,
+        assertNoBlockedRefsInStoredRow,
+        assertNoBlockedRefsInLiveDescendants,
+      } = createWriteAssertions()
       switch (operation.type) {
         case 'create_block':
         case 'update_block':
