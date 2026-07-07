@@ -1,11 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  __resetRepoProviderForTest,
   dbFilenameForUser,
   previewDbId,
   recordPreviewDatabaseForReaper,
-} from '@/data/repoProvider'
+} from '@/data/localDbStorage'
 import {
   SERVICE_WORKER_META_CACHE,
   previewDatabaseRecordUrl,
@@ -36,14 +35,13 @@ const stubCaches = (caches: unknown) => {
 }
 
 afterEach(() => {
-  __resetRepoProviderForTest()
   vi.unstubAllEnvs()
   Reflect.deleteProperty(globalThis, 'caches')
   Reflect.deleteProperty(navigator, 'storage')
 })
 
 // The local SQLite DB is per-origin; PR previews share production's origin. These
-// pin the two data-safety invariants of the preview namespacing (repoProvider.ts):
+// pin the two data-safety invariants of the preview namespacing:
 // production's filename must stay byte-for-byte identical (existing users keep
 // their data), and a preview must get an isolated filename (a preview's client
 // migration can't touch the real local DB).

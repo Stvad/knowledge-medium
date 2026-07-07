@@ -17,7 +17,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { Zip, ZipPassThrough } from 'fflate'
 import type { Repo } from '../data/repo'
-import { dbFilenameForUser } from '@/data/repoProvider'
+import { dbFilenameForUser } from '@/data/localDbStorage'
 
 export interface RawSqliteDbBlobExport {
   blob: Blob
