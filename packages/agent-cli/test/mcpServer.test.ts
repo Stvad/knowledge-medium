@@ -84,4 +84,50 @@ describe('createGraphMcpServer', () => {
       'get-block',
     ])
   })
+
+  it('blocks restore_block when the tombstoned block references a blocked wikilink target', async () => {
+    const commands: KnownCommand[] = []
+    const client = clientFrom(async command => {
+      commands.push(command)
+      switch (command.type) {
+        case 'sql':
+          return [{
+            content: 'old mention of ((blocked-page))',
+            properties_json: '{}',
+          }]
+        case 'page':
+          return {
+            match: {id: 'blocked-page', content: 'claude', types: [], deepLink: ''},
+            candidates: [],
+          }
+        case 'get-block':
+          return {
+            id: 'blocked-page',
+            content: 'claude',
+            properties: {},
+          }
+        case 'restore-block':
+          return {id: command.id, content: 'restored'}
+        default:
+          throw new Error(`Unexpected command: ${command.type}`)
+      }
+    })
+
+    const server = createGraphMcpServer({
+      client,
+      blockedWikilinks: ['claude'],
+      serverOptions: {capabilities: {tools: {}}},
+    })
+    const restoreBlock = (server as unknown as RegisteredToolHarness)._registeredTools.restore_block
+
+    await expect(restoreBlock.handler({
+      id: 'source-block',
+    }, {})).rejects.toThrow('references a blocked page')
+
+    expect(commands.map(command => command.type)).toEqual([
+      'sql',
+      'page',
+      'get-block',
+    ])
+  })
 })

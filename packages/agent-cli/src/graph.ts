@@ -53,6 +53,11 @@ export interface MoveBlockInput {
   position: MoveBlockPosition
 }
 
+export interface DeleteBlockResult {
+  id: string
+  deleted: true
+}
+
 const asRecord = (value: unknown, label: string): Record<string, unknown> => {
   if (!value || typeof value !== 'object') throw new Error(`Unexpected ${label} result shape`)
   return value as Record<string, unknown>
@@ -186,6 +191,17 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'move-block') as unknown as BlockData
   }
 
+  const deleteBlock = async (id: string): Promise<DeleteBlockResult> => {
+    const result = await client.runCommand({type: 'delete-block', id})
+    return asRecord(result, 'delete-block') as unknown as DeleteBlockResult
+  }
+
+  const restoreBlock = async (id: string): Promise<BlockData | null> => {
+    const result = await client.runCommand({type: 'restore-block', id})
+    if (result === null || result === undefined) return null
+    return asRecord(result, 'restore-block') as unknown as BlockData
+  }
+
   /** Overwrite a block's content — used to stream the in-progress reply
    *  text into an early-created reply block. */
   const updateBlockContent = async (id: string, content: string): Promise<void> => {
@@ -229,6 +245,8 @@ export const createBridgeGraph = (client: BridgeClient) => {
     createBlock,
     updateBlock,
     moveBlock,
+    deleteBlock,
+    restoreBlock,
     updateBlockContent,
     sqlAll,
     blockViews,

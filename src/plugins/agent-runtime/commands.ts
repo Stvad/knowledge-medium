@@ -61,11 +61,14 @@ import type {
   AgentRuntimeContext,
   BlockPosition,
   CreateBlockInput,
+  DeleteBlockInput,
+  DeleteBlockResult,
   ExtensionVerificationResult,
   InstallExtensionInput,
   InstallExtensionResult,
   MoveBlockInput,
   MoveBlockPosition,
+  RestoreBlockInput,
   SetExtensionEnabledInput,
   SetExtensionEnabledResult,
   SqlMode,
@@ -362,6 +365,22 @@ const moveRuntimeBlock = async (
   input: MoveBlockInput,
 ): Promise<BlockData | null> => {
   await repo.mutate.move(input)
+  return repo.load(input.id)
+}
+
+const deleteRuntimeBlock = async (
+  repo: Repo,
+  input: DeleteBlockInput,
+): Promise<DeleteBlockResult> => {
+  await repo.mutate.delete(input)
+  return {id: input.id, deleted: true}
+}
+
+const restoreRuntimeBlock = async (
+  repo: Repo,
+  input: RestoreBlockInput,
+): Promise<BlockData | null> => {
+  await repo.mutate.restore(input)
   return repo.load(input.id)
 }
 
@@ -1069,6 +1088,8 @@ const {
   createBlock,
   updateBlock,
   moveBlock,
+  deleteBlock,
+  restoreBlock,
   installExtension,
   setExtensionEnabled,
   uninstallExtension,
@@ -1107,6 +1128,8 @@ export const createAgentRuntimeContext = ({
     createBlock: input => createRuntimeBlock(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
     moveBlock: input => moveRuntimeBlock(repo, input),
+    deleteBlock: input => deleteRuntimeBlock(repo, input),
+    restoreBlock: input => restoreRuntimeBlock(repo, input),
     installExtension: input => installRuntimeExtension(repo, input, context),
     setExtensionEnabled: input => setExtensionEnabled(repo, input),
     uninstallExtension: input => uninstallRuntimeExtension(repo, input),
@@ -1217,6 +1240,16 @@ export const executeCommand = async (
         position: getMoveBlockPosition(command.position),
       })
     }
+
+    case 'delete-block':
+      return context.deleteBlock({
+        id: requireString(command.blockId ?? command.id, 'blockId'),
+      })
+
+    case 'restore-block':
+      return context.restoreBlock({
+        id: requireString(command.blockId ?? command.id, 'blockId'),
+      })
 
     case 'install-extension':
       return context.installExtension({

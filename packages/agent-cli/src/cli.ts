@@ -827,6 +827,18 @@ cli
   })
 
 cli
+  .command('delete-block <id>', wireDescription('delete-block'))
+  .action(async (id: string) => {
+    await runAndPrint({type: 'delete-block', id})
+  })
+
+cli
+  .command('restore-block <id>', wireDescription('restore-block'))
+  .action(async (id: string) => {
+    await runAndPrint({type: 'restore-block', id})
+  })
+
+cli
   .command('install-extension <file> [...label]', wireDescription('install-extension'))
   .option('--verify', 'Verify the extension shape and report what it contributes')
   .option('--description <text>', 'Human-readable description')

@@ -55,6 +55,8 @@ The CLI exposes both *local* commands (pairing, profile management) and *bridge*
 | `kmagent create-block <json>` | Create a block from a JSON body. |
 | `kmagent update-block <json>` | Update a block from a JSON body. |
 | `kmagent move-block <json>` | Move a block to a parent/position from a JSON body. |
+| `kmagent delete-block <id>` | Soft-delete a block and its descendants. |
+| `kmagent restore-block <id>` | Restore one soft-deleted block; descendants stay deleted unless restored separately. |
 | `kmagent install-extension <file> [label]` | Install a JS extension; `--verify` reports what it contributed. |
 | `kmagent enable-extension <handle>` | Enable / `disable-extension`, `uninstall-extension`. |
 | `kmagent run-action <id> [depsJson]` | Run a registered action by id. |
@@ -68,7 +70,7 @@ Run `kmagent <command> --help` for per-command details or `kmagent --help` for t
 
 ## MCP Server
 
-`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query`, `create_block`, `update_block`, and `move_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
+`km-mcp` exposes the graph-safe subset of bridge operations as MCP tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query`, `create_block`, `update_block`, `move_block`, `delete_block`, and `restore_block`. It deliberately excludes eval, SQL execute, and extension lifecycle commands.
 
 ```json
 {
@@ -110,7 +112,7 @@ Set `KM_MCP_BLOCKED_WIKILINKS` to a JSON array of page aliases when a caller nee
 | `safeMode` | `true` when the runtime is paused for safe-mode boot. |
 | `sql(sql, params?, mode?)` | Thin SQL helper, matches `kmagent sql`. |
 | `block(id)` / `getBlock(id)` / `getSubtree(rootId)` | Block accessors. |
-| `createBlock(input)` / `updateBlock(input)` / `moveBlock(input)` | Block mutators (same shape as the wire commands). |
+| `createBlock(input)` / `updateBlock(input)` / `moveBlock(input)` / `deleteBlock(input)` / `restoreBlock(input)` | Block mutators (same shape as the wire commands; restore is one block only). |
 | `installExtension(input)` / `setExtensionEnabled(input)` / `uninstallExtension(input)` | Extension lifecycle. |
 | `actions`, `renderers` | Registered actions and block renderers. |
 | `refreshAppRuntime` | Re-run runtime registration (rarely needed). |

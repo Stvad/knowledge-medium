@@ -186,6 +186,10 @@ The convenience commands above wrap the starred ones (★) and add hydration.
 - \`yarn agent sql <all|get|optional|execute> <sql> [paramsJson]\` — raw SQL.
 - \`yarn agent move-block <json>\` — structural move via \`repo.mutate.move\`;
   body is \`{id, parentId:string|null, position:{kind:"first"|"last"|"before"|"after", siblingId?}}\`.
+- \`yarn agent delete-block <id>\` — soft-delete a block and its descendants
+  via \`repo.mutate.delete\`.
+- \`yarn agent restore-block <id>\` — restore one tombstoned block via
+  \`repo.mutate.restore\`; descendants stay deleted unless restored separately.
 - \`yarn agent eval <code>\` — run JS in the app; the named queries above are
   callable directly. The dedicated commands wrap them with config
   resolution + hydration, so prefer them unless you need something custom.

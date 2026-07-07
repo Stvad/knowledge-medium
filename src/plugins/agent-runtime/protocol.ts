@@ -45,6 +45,19 @@ export interface MoveBlockInput {
   position: MoveBlockPosition
 }
 
+export interface DeleteBlockInput {
+  id: string
+}
+
+export interface DeleteBlockResult {
+  id: string
+  deleted: true
+}
+
+export interface RestoreBlockInput {
+  id: string
+}
+
 export interface InstallExtensionInput {
   source: string
   label?: string
@@ -152,6 +165,8 @@ export interface AgentRuntimeContext {
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   moveBlock: (input: MoveBlockInput) => Promise<BlockData | null>
+  deleteBlock: (input: DeleteBlockInput) => Promise<DeleteBlockResult>
+  restoreBlock: (input: RestoreBlockInput) => Promise<BlockData | null>
   installExtension: (input: InstallExtensionInput) => Promise<InstallExtensionResult>
   setExtensionEnabled: (input: SetExtensionEnabledInput) => Promise<SetExtensionEnabledResult>
   uninstallExtension: (input: UninstallExtensionInput) => Promise<UninstallExtensionResult>

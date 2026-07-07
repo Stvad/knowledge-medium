@@ -14,6 +14,8 @@ export const KM_MCP_TOOL_NAMES = [
   'create_block',
   'update_block',
   'move_block',
+  'delete_block',
+  'restore_block',
 ] as const
 
 export type KmMcpToolName = (typeof KM_MCP_TOOL_NAMES)[number]

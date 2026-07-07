@@ -91,6 +91,34 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     }
   }
 
+  const tombstoneRefsForGuard = async (
+    id: string,
+  ): Promise<{content?: string, properties?: Record<string, unknown>}> => {
+    if (blockedNames.length === 0) return {}
+    const rows = await graph.sqlAll(
+      'SELECT content, properties_json FROM blocks WHERE id = ? LIMIT 1',
+      [id],
+    )
+    const row = rows[0]
+    if (!row || typeof row !== 'object') return {}
+    const {content, properties_json} = row as {content?: unknown, properties_json?: unknown}
+    let properties: Record<string, unknown> | undefined
+    if (typeof properties_json === 'string') {
+      try {
+        const parsed = JSON.parse(properties_json)
+        properties = parsed && typeof parsed === 'object'
+          ? parsed as Record<string, unknown>
+          : undefined
+      } catch {
+        properties = undefined
+      }
+    }
+    return {
+      ...(typeof content === 'string' ? {content} : {}),
+      ...(properties ? {properties} : {}),
+    }
+  }
+
   const json = (value: unknown) => ({
     content: [{type: 'text' as const, text: JSON.stringify(value, null, 2)}],
   })
@@ -140,7 +168,7 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     inputSchema: {sql: z.string(), params: z.array(z.unknown()).optional()},
   }, async ({sql, params}) => {
     if (!isReadOnlySql(sql)) {
-      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block / move_block for writes.')
+      throw new Error('sql_query only accepts a single read-only statement (SELECT, or WITH without mutating keywords). Use create_block / update_block / move_block / delete_block / restore_block for writes.')
     }
     return json(await graph.sqlAll(sql, params ?? []))
   })
@@ -180,6 +208,25 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     const block = await graph.getBlock(id)
     await assertNoBlockedRefs(block?.content, block?.properties)
     return json(await graph.moveBlock({id, parentId, position}))
+  })
+
+  server.registerTool('delete_block' satisfies KmMcpToolName, {
+    description: 'Soft-delete a block and its descendants.',
+    inputSchema: {
+      id: z.string(),
+    },
+  }, async ({id}) =>
+    json(await graph.deleteBlock(id)))
+
+  server.registerTool('restore_block' satisfies KmMcpToolName, {
+    description: 'Restore one soft-deleted block. Descendants remain deleted unless restored separately.',
+    inputSchema: {
+      id: z.string(),
+    },
+  }, async ({id}) => {
+    const {content, properties} = await tombstoneRefsForGuard(id)
+    await assertNoBlockedRefs(content, properties)
+    return json(await graph.restoreBlock(id))
   })
 
   return server

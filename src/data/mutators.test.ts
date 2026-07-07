@@ -396,6 +396,24 @@ describe('core.delete (subtree)', () => {
   })
 })
 
+// ──── restore (single block) ────
+
+describe('core.restore', () => {
+  it('restores only the requested tombstoned block, not its descendants', async () => {
+    await seedABC()
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
+
+    await env.repo.mutate.delete({id: 'A'})
+    expect(env.read('A')?.deleted).toBe(true)
+    expect(env.read('A1')?.deleted).toBe(true)
+
+    await env.repo.mutate.restore({id: 'A'})
+
+    expect(env.read('A')?.deleted).toBe(false)
+    expect(env.read('A1')?.deleted).toBe(true)
+  })
+})
+
 // ──── move ────
 
 describe('core.move', () => {

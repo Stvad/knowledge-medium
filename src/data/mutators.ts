@@ -255,6 +255,18 @@ export const deleteBlock = defineMutator<{id: string}, void>({
   },
 })
 
+// ──── restore (single block) ────
+
+export const restoreBlock = defineMutator<{id: string}, void>({
+  name: 'core.restore',
+  argsSchema: z.object({id: z.string()}),
+  scope: ChangeScope.BlockDefault,
+  describe: ({id}) => `restore ${id}`,
+  apply: async (tx, {id}) => {
+    await tx.restore(id)
+  },
+})
+
 // ──── createChild ────
 
 interface CreateChildArgs {
@@ -785,6 +797,7 @@ export const KERNEL_MUTATORS: ReadonlyArray<AnyMutator> = [
   setContent,
   setProperty,
   deleteBlock,
+  restoreBlock,
   createChild,
   createSiblingAbove,
   createSiblingBelow,
@@ -809,6 +822,7 @@ declare module '@/data/api' {
     'core.setContent': typeof setContent
     'core.setProperty': typeof setProperty
     'core.delete': typeof deleteBlock
+    'core.restore': typeof restoreBlock
     'core.createChild': typeof createChild
     'core.createSiblingAbove': typeof createSiblingAbove
     'core.createSiblingBelow': typeof createSiblingBelow
