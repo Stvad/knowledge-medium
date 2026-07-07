@@ -146,6 +146,19 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
     }
   }
 
+  interface DeleteGuardRow {
+    id: string
+    content?: string
+    properties?: Record<string, unknown>
+  }
+
+  const deleteGuardRowFromSqlRow = (row: unknown): DeleteGuardRow | null => {
+    if (!row || typeof row !== 'object') return null
+    const {id} = row as {id?: unknown}
+    if (typeof id !== 'string') return null
+    return {id, ...refsFromSqlRow(row)}
+  }
+
   const workspaceIdForMoveTarget = async (
     movedId: string,
     parentId: string | null,
@@ -220,9 +233,33 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
 
   const assertNoBlockedRefsInLiveSubtree = async (rootId: string): Promise<void> => {
     if (blockedNames.length === 0) return
-    const rows = await graph.getSubtree(rootId)
-    for (const row of rows) {
+    const rootRows = await graph.sqlAll(
+      'SELECT id, content, properties_json FROM blocks WHERE id = ? AND deleted = 0 LIMIT 1',
+      [rootId],
+    )
+    const root = deleteGuardRowFromSqlRow(rootRows[0])
+    if (!root) return
+
+    const stack = [root]
+    const seen = new Set<string>()
+    while (stack.length > 0) {
+      const row = stack.pop()!
+      if (seen.has(row.id)) continue
+      seen.add(row.id)
       await assertNoBlockedRefs(row.content, row.properties)
+
+      const childRows = await graph.sqlAll(
+        `SELECT id, content, properties_json
+           FROM blocks
+          WHERE parent_id = ?
+            AND deleted = 0
+          ORDER BY order_key, id`,
+        [row.id],
+      )
+      for (const childRow of childRows) {
+        const child = deleteGuardRowFromSqlRow(childRow)
+        if (child) stack.push(child)
+      }
     }
   }
 

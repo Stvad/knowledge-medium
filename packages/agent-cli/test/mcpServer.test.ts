@@ -151,16 +151,26 @@ describe('createGraphMcpServer', () => {
     ])
   })
 
-  it('blocks delete_block when subtree content could inline a blocked ref into referrers', async () => {
+  it('blocks delete_block when deep subtree content could inline a blocked ref into referrers', async () => {
     const commands: KnownCommand[] = []
     const client = clientFrom(async command => {
       commands.push(command)
       switch (command.type) {
-        case 'get-subtree':
-          return [
-            {id: 'source-block', content: 'safe root', properties: {}},
-            {id: 'child-block', content: 'child mentions [[claude]]', properties: {}},
-          ]
+        case 'sql':
+          if (command.sql.includes('WHERE id = ?')) {
+            return [{id: 'source-block', content: 'safe root', properties_json: '{}'}]
+          }
+          if (command.sql.includes('WHERE parent_id = ?')) {
+            const parentId = command.params?.[0]
+            if (parentId === 'source-block') {
+              return [{id: 'child-block', content: 'safe child', properties_json: '{}'}]
+            }
+            if (parentId === 'child-block') {
+              return [{id: 'deep-block', content: 'deep mentions [[claude]]', properties_json: '{}'}]
+            }
+            return []
+          }
+          throw new Error(`Unexpected sql: ${command.sql}`)
         case 'page':
           return {
             match: {id: 'blocked-page', content: 'claude', types: [], deepLink: ''},
@@ -191,9 +201,11 @@ describe('createGraphMcpServer', () => {
     }, {})).rejects.toThrow('references a blocked page')
 
     expect(commands.map(command => command.type)).toEqual([
-      'get-subtree',
+      'sql',
       'page',
       'get-block',
+      'sql',
+      'sql',
     ])
   })
 
