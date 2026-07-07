@@ -96,7 +96,14 @@ const sw = createServiceWorker(
     // the shared vendor cache at install so React resolves on an offline first load.
     precacheVendor: JSON.parse('__PRECACHE_VENDOR__') as string[],
   },
-  {caches, fetch, origin: self.location.origin, now: () => Date.now()},
+  {
+    caches,
+    fetch,
+    origin: self.location.origin,
+    now: () => Date.now(),
+    storage: navigator.storage,
+    indexedDB,
+  },
 )
 
 self.addEventListener('install', (event) => {

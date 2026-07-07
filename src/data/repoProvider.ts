@@ -73,6 +73,10 @@ import {
 } from '@/data/localSchema.js'
 import { guardSyncedTableWrites } from '@/data/syncedTableWriteGuard.js'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.js'
+import {
+  dbFilenameForUser,
+  recordPreviewDatabaseForReaper,
+} from '@/data/localDbStorage.js'
 
 const appSchema = new Schema({})
 // Layout B (design doc §9.2): PowerSync writes EVERY downloaded block — the
@@ -88,51 +92,6 @@ appSchema.withRawTables({
   workspaces: WORKSPACES_RAW_TABLE,
   workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
 })
-
-// wa-sqlite's VFS caps pathnames at 64 chars (mxPathname in
-// node_modules/@journeyapps/wa-sqlite/src/VFS.js). SQLite derives
-// WAL/journal/shm paths from the dbFilename with suffixes up to ~10
-// chars, so the base has to stay well under 64 or sqlite3_open_v2
-// fails with "Filename too long" and no useful error. 7 (prefix) +
-// 40 (user) + 3 (suffix) = 50 — safe headroom.
-const MAX_USER_SEGMENT = 40
-
-// v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.1).
-// History: v3 was the original IDB layout; v4 introduced OPFS; v5
-// reverted to IDB to test whether the bucket-wipe pattern was
-// OPFS-specific (it wasn't — wipes reproduce identically on both, so
-// the cause is upstream of storage). v6 returns to the intended
-// production setup: OPFSCoopSync for fast sync access handles + multi-
-// tabs enabled. Each VFS bump gets a fresh filename so we don't reuse
-// storage across backends.
-// PR previews are served under /<repo>/pr-preview/pr-<n>/ on the SAME origin as
-// production, and OPFS/IndexedDB is per-origin — so without a per-deploy suffix a
-// signed-in preview would open production's REAL local DB, and any client schema
-// change / migration / PowerSync bump in the PR would mutate it (the app is
-// offline-first, so the local store is authoritative). Derive a namespace from
-// the deploy path so previews get their own DB. Production (BASE_URL = /<repo>/)
-// matches nothing here, so its filename stays byte-for-byte identical and
-// existing users keep their data. The `-pr-<n>` suffix is short enough to stay
-// under the 64-char wa-sqlite pathname cap (see MAX_USER_SEGMENT).
-export const previewDbSuffix = (base: string): string => {
-  const match = base.match(/\/pr-preview\/(pr-[^/]+)\//)
-  return match ? `-${match[1]}` : ''
-}
-
-export const dbFilenameForUser = (
-  userId: string,
-  base: string = import.meta.env.BASE_URL,
-) => {
-  const suffix = previewDbSuffix(base)
-  // The preview suffix comes OUT of the user budget, so the base name stays
-  // within the same envelope as production (`kmp-v6-` + <=MAX_USER_SEGMENT +
-  // `.db` = 50) regardless of the suffix — preserving the headroom the 64-char
-  // wa-sqlite pathname cap needs for the -journal/-wal/-shm derivatives.
-  const sanitized = userId
-    .replace(/[^a-zA-Z0-9_-]/g, '_')
-    .slice(0, Math.max(0, MAX_USER_SEGMENT - suffix.length))
-  return `kmp-v6-${sanitized}${suffix}.db`
-}
 
 const dbsByUser = new Map<string, PowerSyncDatabase>()
 const initPromises = new Map<string, Promise<void>>()
@@ -274,8 +233,9 @@ export const ensurePowerSyncReady = async (
 ) => {
   await assertOpfsAvailable()
 
-  const db = getPowerSyncDb(userId)
   const dbFilename = dbFilenameForUser(userId)
+  await recordPreviewDatabaseForReaper(dbFilename)
+  const db = getPowerSyncDb(userId)
 
   let initPromise = initPromises.get(userId)
   if (!initPromise) {

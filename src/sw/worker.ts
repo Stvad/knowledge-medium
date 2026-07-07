@@ -20,9 +20,21 @@ import {
   type ScopeLedger,
 } from './ledger'
 import {isForeignPreviewRequest, PREVIEW_SUBTREE} from './preview'
+import {
+  SERVICE_WORKER_META_CACHE,
+  previewDatabaseRecordInfo,
+} from './previewDatabases'
 
 const CACHE_PREFIX = 'km-'
 const VENDOR_HOSTS = new Set(['esm.sh'])
+const SQLITE_DB_SIBLING_SUFFIXES = ['-journal', '-wal', '-shm'] as const
+
+interface PreviewDatabaseRecord {
+  scopeUrl: string
+  recordUrl: string
+  name: string
+  updatedAt: number | undefined
+}
 
 // The HTML shell + icons the app boots from — a static set (not build-injected),
 // resolved against the SW scope. Served network-first (HTML) / cache-first
@@ -79,6 +91,17 @@ export interface SwEnv {
   origin: string
   /** Injected clock (Date.now) — stamps ledger writes / drives the stale sweep. */
   now: () => number
+  /** navigator.storage, injected so OPFS cleanup stays testable. */
+  storage?: {
+    getDirectory?: () => Promise<{
+      removeEntry: (name: string) => Promise<void>
+    }>
+  }
+  /** indexedDB, injected so legacy IndexedDB-backed database cleanup is testable. */
+  indexedDB?: {
+    databases?: () => Promise<Array<{name?: string | null}>>
+    deleteDatabase?: (name: string) => IDBOpenDBRequest
+  }
 }
 
 export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
@@ -88,7 +111,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   const SHELL_CACHE = `${CACHE_PREFIX}shell-${buildId}`
   const ASSET_CACHE = `${CACHE_PREFIX}assets-${buildId}`
   const VENDOR_CACHE = `${CACHE_PREFIX}vendor`
-  const META_CACHE = `${CACHE_PREFIX}meta`
+  const META_CACHE = SERVICE_WORKER_META_CACHE
 
   const toScopeUrl = (p: string) => new URL(p, scopeURL).toString()
   const SHELL_URLS = SHELL_PATHS.map(toScopeUrl)
@@ -126,19 +149,44 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // sweep reads to tell an ABANDONED preview (SW stopped running after merge) from
   // a live one — and it's refreshed on this scope's install/activate, so the
   // current scope's own ledger always looks fresh and is never self-reaped.
-  const writeLedger = async (ids: string[]): Promise<void> => {
+  const writeLedgerEntry = async (entry: LedgerEntry): Promise<void> => {
     const cache = await caches.open(META_CACHE)
-    const entry: LedgerEntry = {ids, updatedAt: now()}
+    const nextEntry: LedgerEntry = {...entry, updatedAt: now()}
     await cache.put(
       LEDGER_KEY,
-      new Response(JSON.stringify(entry), {headers: {'content-type': 'application/json'}}),
+      new Response(JSON.stringify(nextEntry), {headers: {'content-type': 'application/json'}}),
     )
   }
 
+  let ledgerMutationChain: Promise<void> = Promise.resolve()
+  const mutateLedgerEntry = async (
+    mutate: (entry: LedgerEntry) => LedgerEntry | Promise<LedgerEntry>,
+  ): Promise<void> => {
+    const run = ledgerMutationChain.then(async () => {
+      const entry = await readLedgerEntry()
+      await writeLedgerEntry(await mutate(entry))
+    })
+    ledgerMutationChain = run.catch(() => {})
+    await run
+  }
+
   const recordGeneration = async (id: string): Promise<void> => {
-    const ids = (await readLedger()).filter((x) => x !== id)
-    ids.push(id)
-    await writeLedger(ids)
+    await mutateLedgerEntry((entry) => {
+      const ids = entry.ids.filter((x) => x !== id)
+      ids.push(id)
+      return {...entry, ids}
+    })
+  }
+
+  const writeLedger = async (ids: string[]): Promise<void> => {
+    await mutateLedgerEntry((entry) => ({...entry, ids}))
+  }
+
+  const trimLedger = async (): Promise<void> => {
+    await mutateLedgerEntry((entry) => ({
+      ...entry,
+      ids: computeKeepIds(entry.ids, keepGenerations),
+    }))
   }
 
   // Touch-on-use: the cross-scope sweep reaps a preview whose ledger `updatedAt`
@@ -160,7 +208,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     lastTouchAt = t // set optimistically so concurrent fetches don't pile on writes
     const touch = (async () => {
       try {
-        await writeLedger((await readLedgerEntry()).ids)
+        await mutateLedgerEntry((entry) => entry)
       } catch {
         // best-effort — a missed touch just means the next fetch after the
         // interval tries again; worst case the sweep reaps a genuinely idle scope.
@@ -283,7 +331,7 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     )
     if (ledger.length > keepIds.size) {
       try {
-        await writeLedger([...keepIds])
+        await trimLedger()
       } catch {
         // benign — the ledger keeps a few extra ids; next activate re-trims.
       }
@@ -311,39 +359,190 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
   // is structurally unreapable; timestamped-and-stale only; never a cache a
   // surviving scope still references). See src/sw/ledger.ts.
   //
-  // Best-effort + snapshot-based: it reads a snapshot of all ledgers, then
-  // deletes. In the (near-impossible) window where a 14-day-dormant preview
-  // redeploys — re-stamping its ledger — DURING another client's sweep, that
-  // sweep's delete can drop the just-written entry. Harmless and self-healing:
-  // only ledger TRACKING is lost (the fresh generation's caches are keyed by a
-  // new id the snapshot never saw, so they're untouched), and the next deploy
-  // re-records it.
+  // Best-effort + snapshot-based: it reads a snapshot of ledgers/database records
+  // and deletes anything that is already stale in that snapshot. Preview-local
+  // data is disposable, so a preview opened concurrently with this sweep can lose
+  // its stale local DB; the next preview load will recreate local state.
   const sweepStalePreviewGenerations = async (): Promise<void> => {
     const meta = await caches.open(META_CACHE)
     const ledgers: ScopeLedger[] = []
+    const databaseRecords: PreviewDatabaseRecord[] = []
     for (const req of await meta.keys()) {
       // Only <scope>/__km_generations__ keys are scope ledgers. META_CACHE holds
-      // nothing else today, but guard structurally so a future non-ledger entry
-      // — especially one under a /pr-preview/ path — can never be misread as a
-      // reapable scope and deleted.
-      if (!req.url.endsWith(`/${LEDGER_BASENAME}`)) continue
-      const res = await meta.match(req)
-      if (!res) continue
-      const raw: unknown = await res.json().catch(() => null)
-      const {ids, updatedAt} = normalizeLedger(raw)
-      ledgers.push({scopeUrl: req.url, ids, updatedAt})
+      // database-name records too, but guard structurally so any other future
+      // entry under a /pr-preview/ path can never be misread as a reapable scope.
+      if (req.url.endsWith(`/${LEDGER_BASENAME}`)) {
+        const res = await meta.match(req)
+        if (!res) continue
+        const raw: unknown = await res.json().catch(() => null)
+        const {ids, updatedAt} = normalizeLedger(raw)
+        ledgers.push({scopeUrl: req.url, ids, updatedAt})
+        continue
+      }
+
+      const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME)
+      if (recordInfo) {
+        const res = await meta.match(req)
+        const raw: unknown = res ? await res.json().catch(() => null) : null
+        databaseRecords.push({
+          ...recordInfo,
+          recordUrl: req.url,
+          updatedAt: databaseRecordUpdatedAt(raw),
+        })
+      }
     }
-    const {cacheNames, ledgerScopeUrls} = computeReapableCaches({
+    const sweepNow = now()
+    const plan = computeReapableCaches({
       ledgers,
-      now: now(),
+      now: sweepNow,
       staleMs: config.staleScopeMs,
       cachePrefix: CACHE_PREFIX,
       selfScopeUrl: LEDGER_KEY,
     })
     await Promise.all([
-      ...cacheNames.map((name) => caches.delete(name)),
-      ...ledgerScopeUrls.map((url) => meta.delete(url)),
+      sweepStalePreviewDatabases(meta, {
+        ledgerScopeUrls: plan.ledgerScopeUrls,
+        knownLedgerScopeUrls: ledgers.map(({scopeUrl}) => scopeUrl),
+        databaseRecords,
+        sweepNow,
+        staleMs: config.staleScopeMs,
+      }),
+      ...plan.cacheNames.map((name) => caches.delete(name)),
+      ...plan.ledgerScopeUrls.map((url) => meta.delete(url)),
     ])
+  }
+
+  const databaseRecordUpdatedAt = (raw: unknown): number | undefined => {
+    if (!raw || typeof raw !== 'object') return undefined
+    const {updatedAt} = raw as {updatedAt?: unknown}
+    return typeof updatedAt === 'number' ? updatedAt : undefined
+  }
+
+  const previewIdForScopeUrl = (scopeUrl: string): string | null => {
+    try {
+      return new URL(scopeUrl).pathname.match(/\/pr-preview\/(pr-[^/]+)\//)?.[1] ?? null
+    } catch {
+      return null
+    }
+  }
+
+  const isDatabaseNameForPreviewScope = (databaseName: string, scopeUrl: string): boolean => {
+    const previewId = previewIdForScopeUrl(scopeUrl)
+    if (!previewId) return false
+    const escapedPreviewId = previewId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`^kmp-v\\d+~${escapedPreviewId}~[A-Za-z0-9_-]*\\.db$`).test(databaseName)
+  }
+
+  const databaseRecordsToSweep = (
+    ledgerScopeUrls: string[],
+    knownLedgerScopeUrls: string[],
+    databaseRecords: PreviewDatabaseRecord[],
+    sweepNow: number,
+    staleMs: number,
+  ): PreviewDatabaseRecord[] => {
+    const reapedScopes = new Set(ledgerScopeUrls)
+    const knownScopes = new Set(knownLedgerScopeUrls)
+    const records: PreviewDatabaseRecord[] = []
+    const seen = new Set<string>()
+    for (const record of databaseRecords) {
+      const staleRecord =
+        typeof record.updatedAt === 'number' && sweepNow - record.updatedAt > staleMs
+      const orphanedStaleRecord = staleRecord && !knownScopes.has(record.scopeUrl)
+      if (!reapedScopes.has(record.scopeUrl) && !orphanedStaleRecord) continue
+      if (!isDatabaseNameForPreviewScope(record.name, record.scopeUrl)) continue
+      const key = `${record.scopeUrl}\n${record.name}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      records.push(record)
+    }
+    return records
+  }
+
+  const sweepStalePreviewDatabases = async (
+    meta: Cache,
+    {
+      ledgerScopeUrls,
+      knownLedgerScopeUrls,
+      databaseRecords,
+      sweepNow,
+      staleMs,
+    }: {
+      ledgerScopeUrls: string[]
+      knownLedgerScopeUrls: string[]
+      databaseRecords: PreviewDatabaseRecord[]
+      sweepNow: number
+      staleMs: number
+    },
+  ): Promise<void> => {
+    const databases = databaseRecordsToSweep(
+      ledgerScopeUrls,
+      knownLedgerScopeUrls,
+      databaseRecords,
+      sweepNow,
+      staleMs,
+    )
+    await Promise.all(
+      databases.map(async ({name, recordUrl}) => {
+        try {
+          await deleteOpfsSqliteDatabase(name)
+          await deleteIndexedDatabase(name).catch(() => {})
+        } catch {
+          // Keep the database record as the retry marker; generation caches and
+          // the stale ledger can still be reaped independently.
+          return
+        }
+        await meta.delete(recordUrl).catch(() => false)
+      }),
+    )
+  }
+
+  const deleteOpfsSqliteDatabase = async (
+    databaseName: string,
+  ): Promise<void> => {
+    if (typeof env.storage?.getDirectory !== 'function') return
+    const root = await env.storage.getDirectory()
+    const siblingResults = await Promise.allSettled(
+      SQLITE_DB_SIBLING_SUFFIXES.map((suffix) => removeOpfsEntryIfExists(root, databaseName + suffix)),
+    )
+    const siblingFailure = siblingResults.find(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    )
+    if (siblingFailure) throw siblingFailure.reason
+    await removeOpfsEntryIfExists(root, databaseName)
+  }
+
+  const removeOpfsEntryIfExists = async (
+    root: {removeEntry: (name: string) => Promise<void>},
+    name: string,
+  ): Promise<void> => {
+    try {
+      await root.removeEntry(name)
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'NotFoundError')) throw err
+    }
+  }
+
+  const deleteIndexedDatabase = async (databaseName: string): Promise<void> => {
+    const idb = env.indexedDB
+    if (typeof idb?.deleteDatabase !== 'function') return
+    if (typeof idb.databases === 'function') {
+      const existing = await idb.databases().catch(() => null)
+      if (existing && !existing.some((db) => db.name === databaseName)) return
+    }
+    await new Promise<void>((resolve, reject) => {
+      const request = idb.deleteDatabase!(databaseName)
+      let settled = false
+      const settle = (fn: () => void) => {
+        if (settled) return
+        settled = true
+        fn()
+      }
+      request.onsuccess = () => settle(resolve)
+      request.onerror = () => settle(() => reject(request.error))
+      request.onblocked = () => settle(() =>
+        reject(new Error(`IndexedDB delete blocked for ${databaseName}`)),
+      )
+    })
   }
 
   const isNavigationRequest = (request: Request): boolean =>
@@ -451,7 +650,14 @@ export const createServiceWorker = (config: SwConfig, env: SwEnv) => {
     return undefined
   }
 
-  return {install, activate, handleFetch, readLedger, writeLedger, recordGeneration}
+  return {
+    install,
+    activate,
+    handleFetch,
+    readLedger,
+    writeLedger,
+    recordGeneration,
+  }
 }
 
 export type ServiceWorkerInstance = ReturnType<typeof createServiceWorker>

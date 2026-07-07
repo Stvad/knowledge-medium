@@ -38,8 +38,14 @@ export interface LedgerEntry {
 export const normalizeLedger = (raw: unknown): LedgerEntry => {
   if (Array.isArray(raw)) return {ids: raw, updatedAt: undefined}
   if (raw && typeof raw === 'object' && Array.isArray((raw as {ids?: unknown}).ids)) {
-    const {ids, updatedAt} = raw as {ids: string[]; updatedAt?: unknown}
-    return {ids, updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined}
+    const {ids, updatedAt} = raw as {
+      ids: string[]
+      updatedAt?: unknown
+    }
+    return {
+      ids,
+      updatedAt: typeof updatedAt === 'number' ? updatedAt : undefined,
+    }
   }
   return {ids: [], updatedAt: undefined}
 }

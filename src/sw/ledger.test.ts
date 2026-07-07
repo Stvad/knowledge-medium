@@ -1,5 +1,11 @@
 import {describe, expect, it} from 'vitest'
-import {computeExpiredIds, computeKeepIds, computeReapableCaches, normalizeLedger} from './ledger'
+import {
+  computeExpiredIds,
+  computeKeepIds,
+  computeReapableCaches,
+  normalizeLedger,
+  type ScopeLedger,
+} from './ledger'
 
 describe('generation ledger retention', () => {
   it('keeps the most recent `keep` ids and expires the older ones (disjoint partition)', () => {
@@ -23,22 +29,37 @@ describe('generation ledger retention', () => {
 
 describe('normalizeLedger', () => {
   it('reads a legacy bare array as ids with no timestamp', () => {
-    expect(normalizeLedger(['a', 'b'])).toEqual({ids: ['a', 'b'], updatedAt: undefined})
+    expect(normalizeLedger(['a', 'b'])).toEqual({
+      ids: ['a', 'b'],
+      updatedAt: undefined,
+    })
   })
 
   it('reads the timestamped {ids, updatedAt} shape', () => {
-    expect(normalizeLedger({ids: ['a'], updatedAt: 123})).toEqual({ids: ['a'], updatedAt: 123})
+    expect(normalizeLedger({ids: ['a'], updatedAt: 123})).toEqual({
+      ids: ['a'],
+      updatedAt: 123,
+    })
   })
 
   it('treats a missing or non-numeric updatedAt as undefined', () => {
-    expect(normalizeLedger({ids: ['a']})).toEqual({ids: ['a'], updatedAt: undefined})
-    expect(normalizeLedger({ids: ['a'], updatedAt: 'soon'})).toEqual({ids: ['a'], updatedAt: undefined})
+    expect(normalizeLedger({ids: ['a']})).toEqual({
+      ids: ['a'],
+      updatedAt: undefined,
+    })
+    expect(normalizeLedger({ids: ['a'], updatedAt: 'soon'})).toEqual({
+      ids: ['a'],
+      updatedAt: undefined,
+    })
   })
 
   it('falls back to an empty ledger for null / garbage / a non-array ids', () => {
     expect(normalizeLedger(null)).toEqual({ids: [], updatedAt: undefined})
     expect(normalizeLedger(42)).toEqual({ids: [], updatedAt: undefined})
-    expect(normalizeLedger({ids: 'nope'})).toEqual({ids: [], updatedAt: undefined})
+    expect(normalizeLedger({ids: 'nope'})).toEqual({
+      ids: [],
+      updatedAt: undefined,
+    })
   })
 })
 
@@ -50,8 +71,13 @@ describe('computeReapableCaches (preview-only cache sweeper)', () => {
   const prod = 'https://stvad.github.io/knowledge-medium/__km_generations__'
   const preview = (n: number) =>
     `https://stvad.github.io/knowledge-medium/pr-preview/pr-${n}/__km_generations__`
-  const reap = (ledgers: Parameters<typeof computeReapableCaches>[0]['ledgers']) =>
-    computeReapableCaches({ledgers, now: NOW, staleMs: STALE_MS, cachePrefix: PREFIX})
+  const reap = (ledgers: ScopeLedger[]) =>
+    computeReapableCaches({
+      ledgers,
+      now: NOW,
+      staleMs: STALE_MS,
+      cachePrefix: PREFIX,
+    })
 
   it('reaps a stale preview scope: its generation caches AND its ledger entry', () => {
     const plan = reap([
