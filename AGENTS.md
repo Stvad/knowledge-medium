@@ -35,7 +35,7 @@ design docs (`docs/*.html`) are intent/history, not ground truth:
 - when a doc contradicts the code, say so in your output and (if cheap) fix or re-stamp the doc; don't silently inherit the stale claim.
 
 cloud / remote sessions (Claude Code on the web) and git worktrees:
-- when running in a cloud/remote execution environment, OR working in a non-main git worktree (a checkout that isn't the primary repo dir), open a pull request as soon as the branch has its first commit — don't wait to be asked — then subscribe to the PR's activity so review comments and CI failures come back into the session and can be addressed. (This standing authorization applies to cloud sessions and non-main worktrees; a plain local run in the main checkout still defaults to not opening a PR unless asked.)
+- when running in a cloud/remote execution environment, OR working in a non-main git worktree (a checkout that isn't the primary repo dir), open a ready-for-review pull request as soon as the branch has its first commit — don't wait to be asked — then subscribe to the PR's activity so review comments and CI failures come back into the session and can be addressed. (This standing authorization applies to cloud sessions and non-main worktrees; a plain local run in the main checkout still defaults to not opening a PR unless asked.)
 
 ui event channels (audit B3 — do not reintroduce the untyped window.CustomEvent UI bus):
 - dialogs / pickers / one-shot prompts: `openDialog(Component, props)` from `@/utils/dialogs` (returns a promise; the component takes `resolve`/`cancel` via `DialogContextProps`). The plugin must pull in `dialogAppMountExtension` so DialogHost is mounted.
