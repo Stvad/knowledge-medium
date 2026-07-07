@@ -318,25 +318,39 @@
 					continue;
 				}
 				const recordInfo = previewDatabaseRecordInfo(req.url, LEDGER_BASENAME);
-				if (recordInfo) databaseRecords.push({
-					...recordInfo,
-					recordUrl: req.url
-				});
+				if (recordInfo) {
+					const res = await meta.match(req);
+					const raw = res ? await res.json().catch(() => null) : null;
+					databaseRecords.push({
+						...recordInfo,
+						recordUrl: req.url,
+						updatedAt: databaseRecordUpdatedAt(raw)
+					});
+				}
 			}
-			const finalPlan = computeReapableCaches({
-				ledgers: preserveScopes(ledgers, await sweepStalePreviewDatabases(meta, computeReapableCaches({
-					ledgers,
-					now: now(),
-					staleMs: config.staleScopeMs,
-					cachePrefix: CACHE_PREFIX,
-					selfScopeUrl: LEDGER_KEY
-				}).ledgerScopeUrls, databaseRecords)),
-				now: now(),
+			const sweepNow = now();
+			const plan = computeReapableCaches({
+				ledgers,
+				now: sweepNow,
 				staleMs: config.staleScopeMs,
 				cachePrefix: CACHE_PREFIX,
 				selfScopeUrl: LEDGER_KEY
 			});
-			await Promise.all([...finalPlan.cacheNames.map((name) => caches.delete(name)), ...finalPlan.ledgerScopeUrls.map((url) => meta.delete(url))]);
+			await Promise.all([
+				sweepStalePreviewDatabases(meta, {
+					ledgerScopeUrls: plan.ledgerScopeUrls,
+					databaseRecords,
+					sweepNow,
+					staleMs: config.staleScopeMs
+				}),
+				...plan.cacheNames.map((name) => caches.delete(name)),
+				...plan.ledgerScopeUrls.map((url) => meta.delete(url))
+			]);
+		};
+		const databaseRecordUpdatedAt = (raw) => {
+			if (!raw || typeof raw !== "object") return void 0;
+			const { updatedAt } = raw;
+			return typeof updatedAt === "number" ? updatedAt : void 0;
 		};
 		const previewIdForScopeUrl = (scopeUrl) => {
 			try {
@@ -351,44 +365,32 @@
 			const escapedPreviewId = previewId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 			return new RegExp(`^kmp-v\\d+~${escapedPreviewId}~[A-Za-z0-9_-]*\\.db$`).test(databaseName);
 		};
-		const preserveScopes = (ledgers, scopeUrls) => ledgers.map((ledger) => scopeUrls.has(ledger.scopeUrl) ? {
-			...ledger,
-			updatedAt: void 0
-		} : ledger);
-		const databaseRecordsForReapedScopes = (ledgerScopeUrls, databaseRecords) => {
+		const databaseRecordsToSweep = (ledgerScopeUrls, databaseRecords, sweepNow, staleMs) => {
 			const reapedScopes = new Set(ledgerScopeUrls);
-			const names = [];
+			const records = [];
 			const seen = /* @__PURE__ */ new Set();
 			for (const record of databaseRecords) {
-				if (!reapedScopes.has(record.scopeUrl)) continue;
+				const staleRecord = typeof record.updatedAt === "number" && sweepNow - record.updatedAt > staleMs;
+				if (!reapedScopes.has(record.scopeUrl) && !staleRecord) continue;
 				if (!isDatabaseNameForPreviewScope(record.name, record.scopeUrl)) continue;
 				const key = `${record.scopeUrl}\n${record.name}`;
 				if (seen.has(key)) continue;
 				seen.add(key);
-				names.push(record);
+				records.push(record);
 			}
-			return names;
+			return records;
 		};
-		const sweepStalePreviewDatabases = async (meta, ledgerScopeUrls, databaseRecords) => {
-			const failedScopes = /* @__PURE__ */ new Set();
-			const databasesByScope = /* @__PURE__ */ new Map();
-			for (const database of databaseRecordsForReapedScopes(ledgerScopeUrls, databaseRecords)) {
-				const databases = databasesByScope.get(database.scopeUrl) ?? [];
-				databases.push(database);
-				databasesByScope.set(database.scopeUrl, databases);
-			}
-			await Promise.all(ledgerScopeUrls.map(async (scopeUrl) => {
-				const databases = databasesByScope.get(scopeUrl) ?? [];
-				for (const { name } of databases) try {
+		const sweepStalePreviewDatabases = async (meta, { ledgerScopeUrls, databaseRecords, sweepNow, staleMs }) => {
+			const databases = databaseRecordsToSweep(ledgerScopeUrls, databaseRecords, sweepNow, staleMs);
+			await Promise.all(databases.map(async ({ name, recordUrl }) => {
+				try {
 					await deleteOpfsSqliteDatabase(name);
 					await deleteIndexedDatabase(name).catch(() => {});
 				} catch {
-					failedScopes.add(scopeUrl);
 					return;
 				}
-				await Promise.all(databases.map(({ recordUrl }) => recordUrl).filter((recordUrl) => Boolean(recordUrl)).map((recordUrl) => meta.delete(recordUrl).catch(() => false)));
+				await meta.delete(recordUrl).catch(() => false);
 			}));
-			return failedScopes;
 		};
 		const deleteOpfsSqliteDatabase = async (databaseName) => {
 			if (typeof env.storage?.getDirectory !== "function") return;
@@ -487,7 +489,7 @@
 	//#endregion
 	//#region src/sw/sw.ts
 	var sw = createServiceWorker({
-		buildId: "a70313236896",
+		buildId: "a0bb6d23429f",
 		scopeURL: new URL(self.registration.scope),
 		keepGenerations: 3,
 		staleScopeMs: 336 * 60 * 60 * 1e3,
