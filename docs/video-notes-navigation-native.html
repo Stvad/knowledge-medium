@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Video notes view — navigation-native pane view mode · knowledge-medium</title>
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --surface: #ffffff;
+    --surface-2: #f4f5f7;
+    --ink: #1f2328;
+    --ink-soft: #57606a;
+    --ink-faint: #8b949e;
+    --border: #e3e6ea;
+    --border-strong: #d0d7de;
+    --accent: #2f6fdb;
+    --accent-soft: #e8f0fe;
+    --green: #1a7f37;
+    --green-soft: #e6f4ea;
+    --amber: #9a6700;
+    --amber-soft: #fdf2d6;
+    --red: #cf222e;
+    --red-soft: #ffebe9;
+    --violet: #6639ba;
+    --violet-soft: #efeafb;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --surface: #161b22; --surface-2: #1c2230;
+      --ink: #e6edf3; --ink-soft: #9da7b3; --ink-faint: #6e7681;
+      --border: #2a313c; --border-strong: #3a424e;
+      --accent: #6ea8fe; --accent-soft: #16243d;
+      --green: #4ac26b; --green-soft: #11271a;
+      --amber: #d4a72c; --amber-soft: #2b2410;
+      --red: #ff7b72; --red-soft: #2d1517;
+      --violet: #b083f0; --violet-soft: #20183a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 16px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px 120px; }
+  header.hero {
+    padding: 56px 24px 40px; border-bottom: 1px solid var(--border);
+    background:
+      radial-gradient(1200px 240px at 15% -10%, var(--accent-soft), transparent 60%),
+      var(--surface);
+  }
+  header.hero .inner { max-width: 960px; margin: 0 auto; }
+  .eyebrow { font-size: 12.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  h1 { font-size: 38px; line-height: 1.12; margin: 10px 0 6px; letter-spacing: -0.02em; }
+  .subtitle { font-size: 18px; color: var(--ink-soft); margin: 0 0 18px; max-width: 70ch; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; }
+  .badge { font-size: 12.5px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink-soft); }
+  .badge.green { color: var(--green); background: var(--green-soft); border-color: transparent; }
+
+  nav.toc {
+    position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
+    margin: 0 -24px 8px; padding: 10px 24px;
+  }
+  nav.toc ol { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 0 auto; padding: 0; max-width: 960px; font-size: 13.5px; }
+  nav.toc a { color: var(--ink-soft); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+
+  h2 { font-size: 25px; margin: 52px 0 6px; letter-spacing: -0.01em; padding-top: 8px; }
+  h2 .num { color: var(--ink-faint); font-weight: 600; margin-right: 10px; }
+  h3 { font-size: 18px; margin: 30px 0 4px; }
+  p { margin: 12px 0; }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: 0.86em; background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+  strong { font-weight: 680; }
+
+  pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 18px 0; overflow-x: auto; }
+  pre code { background: none; border: none; padding: 0; font-size: 0.86em; line-height: 1.55; white-space: pre; }
+
+  .callout { border: 1px solid var(--border); border-left: 4px solid var(--accent); background: var(--surface); border-radius: 10px; padding: 14px 18px; margin: 20px 0; }
+  .callout h4 { margin: 0 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-soft); }
+  .callout ul, .callout ol { margin: 6px 0 0; padding-left: 20px; }
+  .callout ul:first-child, .callout ol:first-child, .callout p:first-child { margin-top: 0; }
+  .callout ul:last-child, .callout ol:last-child, .callout p:last-child { margin-bottom: 0; }
+
+  figure { margin: 28px 0; }
+  figure svg { width: 100%; height: auto; display: block; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+  figcaption { font-size: 13px; color: var(--ink-faint); margin-top: 8px; text-align: center; }
+
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14.5px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+  thead th { background: var(--surface-2); border-bottom: 1px solid var(--border-strong); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); }
+  tbody tr:hover { background: var(--surface-2); }
+  td code { white-space: nowrap; }
+
+  .footnote { color: var(--ink-faint); font-size: 13px; }
+  hr.sep { border: 0; border-top: 1px solid var(--border); margin: 40px 0; }
+</style>
+</head>
+<body>
+<aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
+<strong>Status: proposed</strong> &middot; design only, not implemented. Upstream issue: <a href="https://github.com/Stvad/knowledge-medium/issues/335">Stvad/knowledge-medium#335</a>; PR to follow. <strong>Last verified against code:</strong> 2026-07-07 (post-review revision) (src/plugins/video-player/, src/utils/routing.ts, src/utils/panelLayoutProjection.ts).
+</aside>
+
+<header class="hero">
+  <div class="inner">
+    <div class="eyebrow">Design · knowledge-medium</div>
+    <h1>Video notes view as a navigation-native, pane-scoped view mode</h1>
+    <p class="subtitle">The video player's notes view is a viewport-fixed modal overlay invisible to history and layout serialization — this design turns it into a pane-scoped view mode carried by the URL, so Back/Forward and saved perspectives just work — and playback position survives.</p>
+    <div class="badges">
+      <span class="badge green">Proposed</span>
+      <span class="badge">video-player plugin</span>
+      <span class="badge">routing / panel layout</span>
+      <span class="badge">2026-07-07</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+<nav class="toc">
+  <ol>
+    <li><a href="#problem">1 · Problem</a></li>
+    <li><a href="#current">2 · Current implementation</a></li>
+    <li><a href="#goals">3 · Design goals</a></li>
+    <li><a href="#design">4 · Proposed design</a></li>
+    <li><a href="#alternatives">5 · Alternatives</a></li>
+    <li><a href="#implementation">6 · Implementation sketch</a></li>
+    <li><a href="#migration">7 · Migration / compat</a></li>
+    <li><a href="#decisions">8 · Decisions &amp; open questions</a></li>
+  </ol>
+</nav>
+
+<h2 id="problem"><span class="num">1</span> Problem</h2>
+<p>The video player's notes view (video left, editable child notes right — entered via the hover button or <code>$mod+Shift+n</code>) is a <strong>modal takeover, not a place you navigate to</strong>:</p>
+<ul>
+  <li>It renders as a viewport-fixed overlay (<code>fixed inset-0 z-50</code>, <code>VideoPlayerRenderer.tsx:283</code>) painted over the header, sidebar, and every other pane — regardless of which pane the video block actually lives in.</li>
+  <li>It is driven by <code>video:playerView</code>, a <code>ChangeScope.UiState</code> property <strong>on the video block itself</strong> (<code>view.ts:10-14</code>). That has three consequences:
+    <ul>
+      <li><strong>Invisible to navigation.</strong> The hash-route ↔ panel-layout projection (<code>panelLayoutProjection.ts</code>) never sees it. Entering/leaving notes view creates no history entry: browser Back while in notes view doesn't exit the view — it navigates the layout <em>underneath</em> the overlay.</li>
+      <li><strong>Not part of the layout, so layout round-trips destroy it.</strong> Anything that reconciles panel rows (switching to another saved layout/perspective and back, following a link and pressing Back, restoring a session) rebuilds panes from <code>LayoutSlot</code>s, which encode only <em>which block</em> a pane shows — never <em>how</em>. The overlay disappears or reappears at the wrong time, and because the pane content remounts, the <code>&lt;video&gt;</code> element is torn down: playback stops and the position is lost.</li>
+      <li><strong>Wrong scope.</strong> UiState writes sync across devices (<code>changeScope.ts:55-59</code>, see the correction note in <code>navigation-redesign.md</code>), so toggling notes view on one device flips it for the same block everywhere it renders — on every device and in every pane.</li>
+    </ul>
+  </li>
+</ul>
+
+<figure>
+<svg viewBox="0 0 960 460" role="img" aria-label="Comparison of today's viewport-fixed overlay versus the proposed pane-scoped video notes view">
+  <defs>
+    <style>
+      .vn-title{font:700 14px var(--sans);fill:var(--ink);}
+      .vn-lbl{font:600 12px var(--sans);fill:var(--ink-soft);}
+      .vn-sub{font:400 11.5px var(--sans);fill:var(--ink-faint);}
+      .vn-mono{font:600 12px var(--mono);}
+      .vn-frame{fill:var(--surface);stroke:var(--border-strong);stroke-width:1.5;}
+      .vn-chrome{fill:var(--surface-2);stroke:var(--border);stroke-width:1;}
+      .vn-pane{fill:var(--surface);stroke:var(--border);stroke-width:1;}
+      .vn-pane-active{fill:var(--surface);stroke:var(--accent);stroke-width:2;}
+      .vn-overlay{fill:var(--accent);fill-opacity:0.16;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:6 4;}
+      .vn-chip{fill:var(--surface);fill-opacity:0.95;stroke:var(--accent);stroke-width:1;}
+    </style>
+  </defs>
+
+  <!-- LEFT: today -->
+  <text class="vn-title" x="235" y="22" text-anchor="middle">Today: fixed overlay</text>
+
+  <rect class="vn-chrome" x="20" y="38" width="430" height="26" rx="5"/>
+  <text class="vn-mono vn-sub" x="35" y="55">#ws/a/b</text>
+  <text class="vn-sub" x="442" y="55" text-anchor="end">hash unchanged when overlay opens</text>
+
+  <rect class="vn-frame" x="20" y="72" width="430" height="352" rx="10"/>
+  <rect class="vn-chrome" x="20" y="72" width="430" height="28"/>
+  <text class="vn-lbl" x="235" y="91" text-anchor="middle">header</text>
+  <rect class="vn-pane" x="22" y="104" width="204" height="318"/>
+  <rect class="vn-pane" x="234" y="104" width="204" height="318"/>
+
+  <rect class="vn-overlay" x="20" y="72" width="430" height="352" rx="10"/>
+  <rect class="vn-chip" x="66" y="212" width="338" height="92" rx="8"/>
+  <text class="vn-lbl" x="235" y="235" text-anchor="middle" font-weight="700">fixed inset-0 z-50 overlay</text>
+  <text class="vn-sub" x="235" y="255" text-anchor="middle">covers header + all panes;</text>
+  <text class="vn-sub" x="235" y="273" text-anchor="middle">invisible to history/layout</text>
+  <text class="vn-sub" x="235" y="291" text-anchor="middle">(video:playerView on the block)</text>
+
+  <!-- RIGHT: proposed -->
+  <text class="vn-title" x="720" y="22" text-anchor="middle">Proposed: pane-scoped mode</text>
+
+  <rect class="vn-chrome" x="505" y="38" width="430" height="26" rx="5" fill="var(--accent-soft)"/>
+  <text class="vn-mono" x="520" y="55" fill="var(--accent)">#ws/a~video-notes/b</text>
+
+  <rect class="vn-frame" x="505" y="72" width="430" height="352" rx="10"/>
+  <rect class="vn-chrome" x="505" y="72" width="430" height="28"/>
+  <text class="vn-lbl" x="720" y="91" text-anchor="middle">header (untouched)</text>
+
+  <rect class="vn-pane-active" x="507" y="104" width="204" height="318"/>
+  <rect x="509" y="106" width="134" height="314" fill="var(--ink)" fill-opacity="0.88"/>
+  <path d="M568,250 L568,278 L590,264 z" fill="var(--bg)"/>
+  <rect x="647" y="106" width="60" height="314" fill="var(--surface)" stroke="var(--border)"/>
+  <rect x="653" y="120" width="48" height="4" fill="var(--ink-faint)"/>
+  <rect x="653" y="132" width="48" height="4" fill="var(--ink-faint)"/>
+  <rect x="653" y="144" width="34" height="4" fill="var(--ink-faint)"/>
+  <rect x="653" y="164" width="48" height="4" fill="var(--ink-faint)"/>
+  <rect x="653" y="176" width="40" height="4" fill="var(--ink-faint)"/>
+
+  <rect class="vn-pane" x="715" y="104" width="204" height="318"/>
+  <text class="vn-sub" x="817" y="98" text-anchor="middle">other pane (untouched)</text>
+</svg>
+<figcaption>Figure 1 — Today, entering notes view paints a viewport-fixed overlay over the whole app with no hash change. Proposed: the mode is scoped to one pane and encoded in the URL; the header and other panes stay untouched.</figcaption>
+</figure>
+
+<p>What it should be instead: a <strong>pane-scoped view mode that participates in navigation</strong>. Entering notes view is a navigation step (Back exits, Forward re-enters); the mode is part of the pane's identity in the layout, so any layout snapshot/restore (saved perspectives, session restore, URL sharing) brings it back exactly; and playback survives the round-trip — ideally the video <em>keeps playing</em> while you're away and is still playing when you return.</p>
+
+<h2 id="current"><span class="num">2</span> Current implementation (facts)</h2>
+<ul>
+  <li><code>videoPlayerViewProp: 'default' | 'notes'</code> + <code>videoNotesPaneRatioProp</code> — <code>src/plugins/video-player/view.ts</code>.</li>
+  <li>The notes layout is a <code>blockLayoutFacet</code> contribution gated on <code>ctx.block.id === ctx.blockContext.videoPlayerBlockId</code> (<code>VideoPlayerRenderer.tsx:356-364</code>); <code>VideoPlayerLayout</code> early-returns <code>DefaultBlockLayout</code> unless <code>view === 'notes'</code> (<code>:263-264</code>) and otherwise renders the fixed overlay, mounting <code>Shell</code> so the video block keeps its shortcut surface (<code>:343</code>).</li>
+  <li>Enter/exit paths: hover button → <code>enterVideoNotesView</code> (<code>notes.ts:67-74</code>, sets the prop + ensures an editable child); <code>video.toggle_notes_view</code> (<code>actions.ts:136-157</code>) reads/writes the prop; close button calls <code>setView('default')</code> (<code>VideoPlayerRenderer.tsx:333</code>).</li>
+  <li>Player handles are registered per <code>(renderScopeId, blockId)</code> in <code>registry.ts</code>; <code>video.insert_timestamp</code> / <code>video.toggle_focus</code> resolve the player through it. Toggling the view swaps <code>VideoPlayerLayout</code>'s root element type (<code>DefaultBlockLayout</code> vs <code>Shell</code>, <code>:264</code>/<code>:343</code>), so React <strong>remounts</strong> <code>VideoPlayerContentRenderer</code> — the <code>&lt;video&gt;</code> is torn down and playback position is lost <em>even on today's plain enter/exit toggle</em>. The actions keep working only because the new mount re-registers under the same <code>(renderScopeId, blockId)</code> key (<code>:101-111</code>).</li>
+  <li>One pre-existing weakness this design makes first-class: at panel top level, <code>renderScopeId</code> is a pure function of the block id (<code>outlineRenderScopeId(topLevelBlockId)</code>, <code>PanelRenderer.tsx:188</code>, <code>renderScope.ts:6-7</code>) — so <strong>two panes showing the same video share one registry key</strong> and the last mount wins; timestamp insertion and focus toggle resolve to whichever pane registered last. See §4.3.</li>
+  <li>Layout substrate (from the navigation redesign, <code>navigation-redesign.md</code>): panel rows are blocks under <code>ui-state/layout-sessions/&lt;sessionId&gt;</code>, each carrying <code>topLevelBlockIdProp</code> / <code>focusedBlockLocationProp</code> / <code>scrollTopProp</code> (<code>panelLayoutProjection.ts:203-229</code>). <code>PanelLayoutProjection</code> projects rows → hash (<code>pushState</code>) and hash → rows (<code>reconcilePanelRows</code>, an LCS diff) on <code>hashchange</code>/<code>popstate</code>. The hash grammar (<code>routing.ts:1-14</code>) is <code>#&lt;workspaceId&gt;/&lt;slot&gt;/...</code> where a slot is a bare block id or a stack <code>(s:a,b)</code>. Query params after <code>?</code> are carried across rewrites (<code>preserveHashQueryParams</code>) but are <strong>not</strong> compared by <code>sameLayoutSlots</code>.</li>
+</ul>
+
+<table>
+  <thead><tr><th>Mechanism</th><th>Location</th></tr></thead>
+  <tbody>
+    <tr><td>Prop: <code>videoPlayerViewProp: 'default' | 'notes'</code> + <code>videoNotesPaneRatioProp</code></td><td><code>src/plugins/video-player/view.ts</code></td></tr>
+    <tr><td>Layout contribution: <code>blockLayoutFacet</code> gated on <code>ctx.block.id === ctx.blockContext.videoPlayerBlockId</code>; early-returns <code>DefaultBlockLayout</code> unless <code>view === 'notes'</code>; mounts <code>Shell</code> for the shortcut surface</td><td><code>VideoPlayerRenderer.tsx:356-364</code> (gate) · <code>:263-264</code> (early return) · <code>:343</code> (Shell)</td></tr>
+    <tr><td>Enter/exit paths: hover button → <code>enterVideoNotesView</code>; <code>video.toggle_notes_view</code> action; close button → <code>setView('default')</code></td><td><code>notes.ts:67-74</code> · <code>actions.ts:136-157</code> · <code>VideoPlayerRenderer.tsx:333</code></td></tr>
+    <tr><td>Registry: player handles keyed <code>(renderScopeId, blockId)</code>; resolved by <code>video.insert_timestamp</code> / <code>video.toggle_focus</code>; view toggle swaps the layout root type → <code>VideoPlayerContentRenderer</code> remounts, working only via re-registration under the same key</td><td><code>registry.ts</code> · <code>VideoPlayerRenderer.tsx:264</code>/<code>:343</code>/<code>:101-111</code></td></tr>
+    <tr><td>Render-scope collision: top-level <code>renderScopeId</code> is a pure function of the block id (<code>outlineRenderScopeId(topLevelBlockId)</code>) — two panes with the same video share one registry key, last mount wins</td><td><code>PanelRenderer.tsx:188</code> · <code>renderScope.ts:6-7</code></td></tr>
+    <tr><td>Layout substrate: panel rows under <code>ui-state/layout-sessions/&lt;sessionId&gt;</code> carry <code>topLevelBlockIdProp</code> / <code>focusedBlockLocationProp</code> / <code>scrollTopProp</code>; projected rows ↔ hash by <code>PanelLayoutProjection</code>; grammar <code>#&lt;workspaceId&gt;/&lt;slot&gt;/...</code></td><td><code>panelLayoutProjection.ts:203-229</code> · <code>routing.ts:1-14</code></td></tr>
+  </tbody>
+</table>
+
+<h2 id="goals"><span class="num">3</span> Design goals</h2>
+<ol>
+  <li><strong>History-native:</strong> entering notes view pushes a history entry; browser Back exits to the plain block view; Forward re-enters.</li>
+  <li><strong>Layout-native:</strong> the mode is encoded in the layout (slot grammar + panel row), so <em>any</em> consumer of layout serialization — session restore, saved layouts/perspectives (including downstream extensions that snapshot slots via <code>buildLayoutFromSlots</code>), shared URLs — restores it for free.</li>
+  <li><strong>Pane-scoped:</strong> the mode belongs to one pane, not to the block. Two panes can show the same video, one in notes view; another device is unaffected.</li>
+  <li><strong>Playback continuity:</strong> returning to the notes view (Back/Forward, perspective switch and back) does not lose playback position; stretch goal: the video keeps playing while its pane is away and is still playing on return.</li>
+  <li><strong>No regression</strong> to the in-view features: timestamp insertion, focus toggle, resizable split, note auto-creation, shortcut surface.</li>
+</ol>
+
+<div class="callout">
+  <h4>Non-goals (this change)</h4>
+  <ul>
+    <li>True chrome-hiding "theater mode" routes (header/sidebar suppression). The pane-scoped view fills the pane; whole-layout immersion is the companion <strong>maximize-pane gesture</strong> (§4.4), not a video feature.</li>
+    <li>Durable cross-restart playback position (would mean sync writes per pause; revisit separately).</li>
+    <li>A general per-pane renderer-override system. We add a minimal <em>view mode</em> channel; generalizing to arbitrary renderer selection stays open (§8).</li>
+  </ul>
+</div>
+
+<h2 id="design"><span class="num">4</span> Proposed design</h2>
+
+<h3>4.1 Pane view mode in the layout substrate</h3>
+<p>New property on <strong>panel rows</strong> (same family as <code>topLevelBlockIdProp</code>):</p>
+<pre><code>// src/data/properties.ts (or panel-scoped module)
+export const panelViewModeProp = defineProperty&lt;string | undefined&gt;(
+  'panel:viewMode',
+  {codec: codecs.optionalString, defaultValue: undefined, changeScope: ChangeScope.UiState},
+)</code></pre>
+<p>Semantics: an opaque mode id, owned by whichever plugin recognizes it (here: <code>'video-notes'</code>). Unset = default rendering. It lives on the panel row, so it inherits the panel substrate's properties: per-tab layout session, restored on reload, reconciled by the projection, deleted with the pane.</p>
+
+<h3>4.2 Slot grammar: leaf annotations — <code>&lt;blockId&gt;(~&lt;annotation&gt;)*</code></h3>
+<p>Extend the leaf token with a <code>~</code>-separated annotation list: <code>#ws/a/b~video-notes/c</code> (stacks unchanged; a stack child is a leaf and can carry annotations). Two annotation kinds, sharing one channel:</p>
+<ul>
+  <li>a <strong>view mode</strong> — a plugin-owned opaque id (<code>video-notes</code>), at most one per leaf, projected from <code>panelViewModeProp</code>;</li>
+  <li><strong><code>max</code></strong> — a core-owned reserved annotation for the maximize-pane gesture (§4.4), projected from <code>panelMaximizedProp</code>.</li>
+</ul>
+<p><code>~</code> is the separator because it's in RFC 3986's <em>unreserved</em> set — nothing percent-encodes it (<code>encodeURIComponent</code> leaves it intact), it cannot appear in a UUID, and it doesn't collide with the grammar's reserved <code>/ ( ) : ,</code>. (<code>!</code> is a sub-delim that defensive encoders sometimes escape; <code>.</code> is the likeliest char to appear in future non-UUID ids.)</p>
+
+<p>Plumbing:</p>
+<ul>
+  <li><code>parseSlot</code> (<code>routing.ts:83-96</code>): split leaf tokens on <code>~</code>; <code>LayoutSlot</code> leaf gains optional <code>viewMode?: string</code> and <code>maximized?: boolean</code>.</li>
+  <li><code>buildLayoutSlot</code> (<code>routing.ts:117-120</code>): append annotations when set (stable order: mode first, then <code>max</code>).</li>
+  <li><code>layoutSlotsFromRows</code> (<code>panelLayoutProjection.ts:90-112</code>): read <code>panelViewModeProp</code> / <code>panelMaximizedProp</code> off leaf rows into the slot.</li>
+  <li><code>sameLayoutSlots</code> (<code>panelLayoutProjection.ts:81-88</code>): compare annotations — this is what makes a mode/maximize change count as a layout change, driving both directions of the projection.</li>
+  <li><code>reconcilePanelRows</code> (<code>panelLayoutProjection.ts:405-…</code>): when a row is <strong>reused</strong> for a leaf with the same <code>blockId</code> but different annotations, set the properties on the existing row rather than delete/create — this keeps the panel id (and therefore the pane's React subtree, focus, scroll, and panel history) stable across toggles. The plan-matching step needs <strong>no</strong> change: <code>planReconciliation</code>/<code>lcsMatches</code> (<code>panelLayoutProjection.ts:133-201</code>) already match purely on block ids, so an annotation-only diff maps the same row to the same-id leaf as-is. The whole reconcile delta is the <code>sameLayoutSlots</code> gate, the prop writes on reused rows, and seeding new rows in <code>createPanelRowInTx</code>.</li>
+</ul>
+
+<p>Result: toggling an annotation writes the panel prop → projection pushes a new hash (history entry). Back/Forward → <code>popstate</code> → <code>reconcilePanelRows</code> → prop update → layout re-renders. Goals 1–3 fall out of the existing machinery; no new sync or storage concepts.</p>
+
+<figure>
+<svg viewBox="0 0 960 400" role="img" aria-label="Bidirectional projection between panel rows, LayoutSlot array, and the URL hash, plus a token breakdown of a leaf annotation">
+  <defs>
+    <marker id="vn-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-faint)"/>
+    </marker>
+    <style>
+      .vf-box{fill:var(--surface-2);stroke:var(--border-strong);stroke-width:1.5;}
+      .vf-title{font:700 13.5px var(--sans);fill:var(--ink);}
+      .vf-sub{font:400 11.5px var(--sans);fill:var(--ink-soft);}
+      .vf-mono{font:600 11px var(--mono);fill:var(--ink-soft);}
+      .vf-flow{stroke:var(--ink-faint);stroke-width:1.6;}
+      .vf-lbl{font:600 11px var(--sans);fill:var(--ink-soft);}
+      .vf-h{font:700 15px var(--sans);fill:var(--ink);}
+      .seg{stroke-width:1.5;rx:6;}
+      .seg-block{fill:var(--accent-soft);stroke:var(--accent);}
+      .seg-mode{fill:var(--violet-soft);stroke:var(--violet);}
+      .seg-max{fill:var(--amber-soft);stroke:var(--amber);}
+      .seg-txt{font:600 12px var(--mono);}
+      .leader{stroke:var(--ink-faint);stroke-width:1.2;stroke-dasharray:3 3;}
+      .anno-lbl{font:600 11px var(--sans);}
+      .anno-sub{font:400 10.5px var(--sans);fill:var(--ink-faint);}
+    </style>
+  </defs>
+
+  <!-- boxes -->
+  <rect class="vf-box" x="15" y="55" width="250" height="110" rx="10"/>
+  <text class="vf-title" x="140" y="78" text-anchor="middle">panel rows</text>
+  <text class="vf-sub" x="140" y="96" text-anchor="middle">ui-state blocks</text>
+  <text class="vf-mono" x="140" y="112" text-anchor="middle">topLevelBlockId</text>
+  <text class="vf-mono" x="140" y="128" text-anchor="middle">panel:viewMode</text>
+  <text class="vf-mono" x="140" y="144" text-anchor="middle">panel:maximized</text>
+
+  <rect class="vf-box" x="355" y="55" width="250" height="110" rx="10"/>
+  <text class="vf-title" x="480" y="78" text-anchor="middle">LayoutSlot[]</text>
+  <text class="vf-sub" x="480" y="96" text-anchor="middle">leaf annotation</text>
+  <text class="vf-mono" x="480" y="112" text-anchor="middle">blockId</text>
+  <text class="vf-mono" x="480" y="128" text-anchor="middle">viewMode?</text>
+  <text class="vf-mono" x="480" y="144" text-anchor="middle">maximized?</text>
+
+  <rect class="vf-box" x="695" y="55" width="250" height="110" rx="10"/>
+  <text class="vf-title" x="820" y="78" text-anchor="middle">URL hash</text>
+  <text class="vf-mono" x="820" y="104" text-anchor="middle">#ws/a/b~video-notes~max/c</text>
+  <text class="vf-sub" x="820" y="126" text-anchor="middle">pushState / popstate</text>
+
+  <!-- top lane: forward projection -->
+  <line class="vf-flow" x1="270" y1="42" x2="350" y2="42" marker-end="url(#vn-arrow)"/>
+  <text class="vf-lbl" x="310" y="26" text-anchor="middle">layoutSlotsFromRows</text>
+
+  <line class="vf-flow" x1="610" y1="42" x2="690" y2="42" marker-end="url(#vn-arrow)"/>
+  <text class="vf-lbl" x="650" y="26" text-anchor="middle">buildLayoutFromSlots → pushState</text>
+
+  <!-- bottom lane: inbound reconciliation -->
+  <line class="vf-flow" x1="350" y1="182" x2="270" y2="182" marker-end="url(#vn-arrow)"/>
+  <text class="vf-lbl" x="310" y="200" text-anchor="middle">reconcilePanelRows</text>
+  <text class="anno-sub" x="310" y="213" text-anchor="middle">(row reused on annotation-only diff)</text>
+
+  <line class="vf-flow" x1="690" y1="182" x2="610" y2="182" marker-end="url(#vn-arrow)"/>
+  <text class="vf-lbl" x="650" y="200" text-anchor="middle">parseLayout</text>
+  <text class="anno-sub" x="650" y="213" text-anchor="middle">(popstate / hashchange)</text>
+
+  <!-- token breakdown -->
+  <text class="vf-h" x="480" y="252" text-anchor="middle">Leaf token breakdown</text>
+
+  <rect class="seg seg-block" x="330" y="266" width="40" height="30"/>
+  <text class="seg-txt" x="350" y="286" text-anchor="middle" fill="var(--accent)">b</text>
+  <text class="seg-txt" x="378" y="286" text-anchor="middle" fill="var(--ink-faint)">~</text>
+  <rect class="seg seg-mode" x="386" y="266" width="150" height="30"/>
+  <text class="seg-txt" x="461" y="286" text-anchor="middle" fill="var(--violet)">video-notes</text>
+  <text class="seg-txt" x="543" y="286" text-anchor="middle" fill="var(--ink-faint)">~</text>
+  <rect class="seg seg-max" x="551" y="266" width="55" height="30"/>
+  <text class="seg-txt" x="578" y="286" text-anchor="middle" fill="var(--amber)">max</text>
+
+  <line class="leader" x1="350" y1="296" x2="350" y2="330"/>
+  <line class="leader" x1="461" y1="296" x2="461" y2="330"/>
+  <line class="leader" x1="578" y1="296" x2="578" y2="330"/>
+
+  <text class="anno-lbl" x="350" y="345" text-anchor="middle" fill="var(--accent)">blockId</text>
+  <text class="anno-sub" x="350" y="359" text-anchor="middle">from the LayoutSlot leaf</text>
+
+  <text class="anno-lbl" x="461" y="345" text-anchor="middle" fill="var(--violet)">plugin-owned view mode</text>
+  <text class="anno-sub" x="461" y="359" text-anchor="middle">opaque id, e.g. 'video-notes'</text>
+
+  <text class="anno-lbl" x="578" y="345" text-anchor="middle" fill="var(--amber)">core-owned max</text>
+  <text class="anno-sub" x="578" y="359" text-anchor="middle">maximize-pane gesture (§4.4)</text>
+</svg>
+<figcaption>Figure 2 — The bidirectional rows ↔ slots ↔ hash projection, and the annotation channel a leaf token carries (blockId plus optional plugin-owned mode and/or core-owned <code>max</code>).</figcaption>
+</figure>
+
+<div class="callout">
+  <h4>Mode lifetime — cleared on in-pane navigation</h4>
+  <p>A view mode belongs to the <em>(pane, block)</em> pair, not the pane alone: when <code>writePanelContent</code> / <code>navigateInPanel</code> (<code>panelHistory.ts:219-270</code>) changes the pane's top-level block, <code>panel:viewMode</code> is cleared in the same tx (otherwise the next block renders under a mode it doesn't own and the hash reads <code>B~video-notes</code>). So that panel-level Back can restore it, <code>VisitState</code> — explicitly designed extensible (<code>panelHistory.ts:35-41</code>) — gains <code>viewMode?: string</code>: the snapshotter <code>PanelRenderer</code> registers captures the pane's current mode, and restore writes it back. Without this, browser-Back (hash-driven) and chevron-back (panelHistory-driven) would diverge — exactly the navigation-split this design exists to remove. <strong>Precedence:</strong> on a URL-driven reconcile, the slot annotation is authoritative for the mode; <code>VisitState.viewMode</code> is consulted only by panel-level chevron back/forward. (<code>reconcileUrlNavigation</code> matches history entries by blockId alone, <code>panelHistory.ts:127-147</code> — a multi-step browser jump can land on a hash entry whose matched <code>VisitState</code> carries a mode captured at a different time, and the restore must not overwrite what the hash says.) <code>max</code> is <em>not</em> cleared on in-pane navigation: maximize is pane-arrangement state, independent of which block the pane shows.</p>
+</div>
+
+<h3>4.3 Video plugin changes</h3>
+<ul>
+  <li><code>VideoPlayerLayout</code> gates on the <strong>panel's</strong> mode instead of the block prop: read <code>blockContext.panelId</code> → <code>usePropertyValue(panelBlock, panelViewModeProp) === 'video-notes'</code>, and only when the block is the pane's top-level block (a video embedded mid-outline shouldn't take the pane over; entering notes view on a nested video first navigates the pane to that block <em>and</em> sets the mode).</li>
+  <li><strong>Navigate+mode must be one tx, via an explicit API.</strong> <code>navigateInPanel</code> owns its whole tx (<code>panelHistory.ts:244-269</code>) with no seam for extra writes, and a two-tx fallback (navigate, then set mode) is nondeterministic — the projection's subtree subscription may coalesce the two writes into one pushState or deliver two, so Back would sometimes exit to plain-V and sometimes skip it. PR 1 extends the seam: <code>navigateInPanel(panelBlock, blockId, {viewMode})</code> threading into <code>writePanelContent</code>, whose clearing rule becomes "set <code>panel:viewMode</code> to the incoming option (default: unset)" — clear and set are the same write.</li>
+  <li><strong>Note auto-creation stays gesture-only.</strong> With the mode in the layout, it can now arrive with <em>no user gesture</em> — Back/Forward, a shared <code>V~video-notes</code> URL, session restore, a layout-snapshot apply. The render path must never write: <code>ensureEditableVideoNoteChild</code> is a durable, undoable, synced document mutation (<code>repo.mutate.createChild</code>), and navigation must not mutate the document. Only the enter <em>gestures</em> (hover button, <code>video.toggle_notes_view</code>) call it; a notes pane whose video has zero children renders an empty-state affordance (click / Enter creates the first note) instead.</li>
+  <li><strong>Close semantics after a nested-video enter.</strong> Enter-on-nested-video navigates the pane P→V; a close that merely clears the mode would strand the pane zoomed into V (today's overlay close reveals P underneath). Close therefore goes back (<code>goBackInPanel</code>) when the pane's previous history entry is the enter transition it created, and just clears the mode when the mode arrived without a navigation (URL, session restore, snapshot apply).</li>
+  <li>Enter/exit (<code>enterVideoNotesView</code>, the toggle action, the close button) write <code>panelViewModeProp</code> on the panel row instead of <code>videoPlayerViewProp</code>. <code>videoPlayerViewProp</code> is deleted; stale <code>video:playerView</code> values on blocks are simply ignored (it was UiState, nothing durable depends on it).</li>
+  <li><strong>Presentation: pane takeover, not viewport takeover.</strong> The notes layout drops <code>fixed inset-0 z-50</code> for <code>absolute inset-0</code> within the pane (the pane is <code>relative</code>). With a single pane this looks nearly identical (header stays visible); with splits, other panes stay usable — which is what "notes view in <em>this</em> pane" means. This is a deliberate behavior change and called out in the upstream issue.</li>
+  <li>Shortcut surface, <code>videoPlayerBlockId</code> context, timestamp/focus actions, and the pane-ratio pref are untouched: the same <code>VideoPlayerRenderer</code> wraps the block and the layout still mounts <code>Shell</code>.</li>
+  <li><strong>Per-pane player identity (fixes the §2 registry collision).</strong> Goal 3 ("two panes, same video, one in notes view") makes the shared-scope collision first-class, so PR 1 threads the panel id into the top-level render scope (<code>outlineRenderScopeId</code> gains a panel discriminator at the <code>PanelRenderer</code> call site) — registry handles, and therefore <code>video.insert_timestamp</code> / <code>video.toggle_focus</code>, resolve per pane. Without this, goal 3 only holds for <em>different</em> videos.</li>
+</ul>
+
+<h3>4.4 Companion: generic maximize-pane gesture (core)</h3>
+<p>Making the notes view pane-scoped removes today's accidental "fullscreen": in a split layout the video now gets only its pane. The immersion story is deliberately <strong>not</strong> video-specific — it's a generic core gesture, riding the same annotation channel (decision from design discussion; alternatives were native <code>requestFullscreen()</code> — transient, no chrome, not navigation state — and leaving it to downstream window-management extensions).</p>
+<ul>
+  <li><strong>Substrate:</strong> <code>panel:maximized</code> boolean prop on the panel row (UiState), projected ↔ the <code>~max</code> leaf annotation exactly like <code>viewMode</code> (§4.2). Keeping it a <em>row</em> prop (not a layout-session-level pointer like <code>activePanelIdProp</code>) keeps the projection a pure function of rows. Invariant — at most one maximized leaf — has a <strong>single writer</strong>: the toggle action clears any other row's flag in the same tx. Reconcile writes whatever the hash says (a multi-<code>max</code> hash can only be hand-crafted; outbound rebuilds it stably, no loop), and the renderer tolerates it by rendering the first maximized row.</li>
+  <li><strong>Rendering:</strong> <code>LayoutRenderer</code> already has a single-pane path — on mobile it renders only the active (or fallback) panel (<code>LayoutRenderer.tsx:169-175</code>). Maximize is the desktop analog: if a visible row is maximized, render only that pane. Sibling rows are untouched in the substrate, so un-maximize restores the exact arrangement (nothing was closed). On mobile the flag is ignored (already single-pane).</li>
+  <li><strong>The maximized pane must be (or become) the active panel.</strong> <code>~max</code> also arrives inbound with no gesture — Back/Forward, shared URL, snapshot apply — and <code>reconcilePanelRows</code> sets the row flag without touching <code>activePanelIdProp</code>. Today a stale active pane is at worst un-highlighted but visible; maximize is the first configuration where the <em>active</em> panel can be invisible while keyboard dispatch still targets it (keys landing in a pane the user cannot see). The existing repair effect (<code>LayoutRenderer.tsx:179-186</code>) only fires when <code>activePanelId</code> is unset — PR 2 adds the symmetric coercion: when a maximized row renders alone, <code>activePanelIdProp</code> is coerced to it.</li>
+  <li><strong>Gesture:</strong> a <code>layout.toggle_maximize_panel</code> action targeting the active panel, bindable + surfaced in panel chrome (binding choice left to upstream).</li>
+  <li><strong>Semantics:</strong> maximizing is a slot change → history entry → <strong>Back un-maximizes</strong>, consistent with the notes-view story. Closing the maximized pane deletes its row, flag included. In-pane navigation keeps maximize (see §4.2 — it's arrangement state, not (pane, block) state). Notes view does <strong>not</strong> auto-maximize; the two annotations compose (<code>b~video-notes~max</code>) and the user stacks gestures.</li>
+</ul>
+<p>Ships as its own PR after the annotation grammar lands (§6 sequencing) — pure core, no video-plugin coupling.</p>
+
+<h3>4.5 Playback continuity</h3>
+<p>Two stages; the first ships with the main change, the second is a follow-up.</p>
+<p><strong>Stage A — position restore (cheap, robust).</strong> A module-level in-memory map <code>Map&lt;blockId, {currentTime: number, playing: boolean, at: number}&gt;</code> in the video plugin. <code>VideoPlayerContentRenderer</code> records into it on pause/rate/seek events and on unmount (via the existing <code>player.current</code> ref); on mount, if an entry is fresh, seek to <code>currentTime</code> and, when <code>playing</code> was true, resume. In-memory only — no UiState writes (playback position is high-frequency, device-local, and worthless cross-device), no persistence across reload. This makes Back/Forward and perspective round-trips lossless up to a brief remount gap — and it is <strong>load-bearing for the plain notes toggle too</strong>: entering/leaving notes view swaps the layout root type and remounts the player (§2), so today even the in-place toggle drops position. Two honest limits: blockId keying means the same video live in two panes restores whichever pane unmounted last (accepted — positions are conceptually per-video, and the dual-pane case is rare); and auto-resume is best-effort under autoplay policies — Back/Forward rides recent user activation, but e.g. a keyboard-driven snapshot apply may not, degrading to paused-at-position.</p>
+<p><strong>Stage B — keep-alive (video keeps playing while away).</strong> No precedent in the codebase today (no <code>&lt;Activity&gt;</code> usage, portals only for floating UI), so this is deliberately separated. Sketch:</p>
+<ul>
+  <li>A <strong>parked-player host</strong>: a component mounted once at app level (same seam as <code>DialogHost</code>) owns a hidden "parking lot" element and a module map <code>Map&lt;blockId, HTMLDivElement&gt;</code> of stable container divs. It renders each active <code>ReactPlayer</code> via <code>createPortal</code> into its container <strong>once</strong>; the portal target never changes, so React never remounts the <code>&lt;video&gt;</code>.</li>
+  <li>Panes <strong>adopt</strong> the container DOM node on mount and return it to the parking lot on unmount. Honest platform limits: <code>element.moveBefore()</code> is state-preserving by spec but Chromium-only today; the <code>appendChild</code> fallback keeps a playing <strong>native <code>&lt;video&gt;</code></strong> alive (the spec's remove-pause task is skipped on synchronous reinsertion) but <strong>reloads iframe-based sources unconditionally</strong> — and ReactPlayer renders YouTube / Vimeo / etc. as iframes. So true keep-alive is scoped to native-<code>&lt;video&gt;</code> sources or Chromium; everywhere else Stage B degrades to Stage A (seek-and-resume), which must therefore ship first and stand alone.</li>
+  <li><strong>Retention policy</strong> (must be bounded): a parked container is kept only while its video <code>playing === true</code>, plus a short grace period (~30s) for paused ones; otherwise the player is released and Stage A's position map takes over. At most N (say 2) parked players; oldest <strong>parked</strong> container evicted (pause → record position → release) — a currently-adopted, visible container is never evicted out from under its pane.</li>
+  <li><strong>Ownership moves.</strong> Once the host owns the <code>ReactPlayer</code>, the handle registration, <code>player</code> ref, and <code>isPlaying</code> state move with it — the registry entry is fed by the host, not the pane renderer. Stage B is a re-plumbing of <code>VideoPlayerContentRenderer</code>, not an overlay on it.</li>
+  <li><strong>Multi-pane same video:</strong> the registry already anticipates one block live in several render scopes. The adopted live element goes to one pane (last-requested); additional simultaneous panes get ordinary fresh players.</li>
+</ul>
+<p>Stage B is the only part with real platform risk (browser quirks around moving media elements), which is why Stage A must be able to stand alone.</p>
+
+<h2 id="alternatives"><span class="num">5</span> Alternatives considered</h2>
+<ul>
+  <li><strong>Hash query param</strong> (<code>#…?video-notes=&lt;panelId&gt;</code>): params already survive rewrites (<code>preserveHashQueryParams</code>), but <code>sameLayoutSlots</code> ignores them, so inbound reconciliation and history comparison wouldn't fire without special cases; panel ids in a shared URL are meaningless on another device. The slot is where per-pane display state belongs. Rejected.</li>
+  <li><strong>Keep the block prop, add a history shim</strong> (manual <code>pushState</code> on enter + <code>popstate</code> listener): fights the projection (which owns the hash), invisible to layout serialization (perspectives/session restore still lose it), still block-global and cross-device. Rejected.</li>
+  <li><strong><code>rendererProp</code> override / a dedicated "notes view" renderer id</strong>: <code>rendererProp</code> is <code>ChangeScope.BlockDefault</code> — a synced, undoable <em>document</em> property; flipping it changes the block for everyone, everywhere, and lands in the undo stack. Also renderer selection can't express "only in this pane". Rejected.</li>
+  <li><strong>React <code>&lt;Activity&gt;</code> around panes for keep-alive</strong>: perspective/layout switches <em>delete panel rows</em>, so the pane subtree is genuinely gone — you'd have to keep every historical layout mounted hidden. Way out of proportion; the parked-player host scopes retention to exactly the expensive resource (the media element). Rejected for now.</li>
+</ul>
+
+<h2 id="implementation"><span class="num">6</span> Implementation sketch</h2>
+<p>Sequenced as two PRs: <strong>PR 1</strong> = annotation grammar + <code>viewMode</code> + video plugin (+ <code>VisitState</code>); <strong>PR 2</strong> = maximize-pane (pure core, builds on the grammar from PR 1).</p>
+
+<p><strong>PR 1 — core (small, generic):</strong></p>
+<ul>
+  <li><code>routing.ts</code>: <code>LayoutSlot</code> leaf annotation <code>viewMode?</code>, <code>parseSlot</code>/<code>buildLayoutSlot</code>; grammar comment reserves the <code>max</code> token (the <code>maximized?</code> field itself ships with PR 2 — no dead code ahead of its consumer).</li>
+  <li><code>properties.ts</code> (or alongside panel props): <code>panelViewModeProp</code>.</li>
+  <li><code>panelLayoutProjection.ts</code>: <code>layoutSlotsFromRows</code>, <code>sameLayoutSlots</code>, <code>reconcilePanelRows</code> learn the annotation (plan-matching untouched, §4.2).</li>
+  <li><code>panelHistory.ts</code>: <code>navigateInPanel(…, {viewMode})</code> → <code>writePanelContent</code> sets/clears <code>panel:viewMode</code> in the same tx; <code>VisitState.viewMode</code> capture/restore (slot annotation authoritative on URL-driven reconcile, §4.2).</li>
+  <li><code>renderScope.ts</code> / <code>PanelRenderer.tsx</code>: panel discriminator in the top-level render scope (§4.3, per-pane player identity).</li>
+</ul>
+
+<p><strong>PR 1 — video plugin:</strong></p>
+<ul>
+  <li><code>view.ts</code>: drop <code>videoPlayerViewProp</code> (keep <code>videoNotesPaneRatioProp</code>).</li>
+  <li><code>notes.ts</code> / <code>actions.ts</code> / <code>VideoPlayerRenderer.tsx</code>: enter/exit/gate via the panel prop; gesture-only note creation + empty-state affordance; close-goes-back semantics (§4.3); overlay → pane-scoped <code>absolute</code> layout.</li>
+  <li>New <code>playbackState.ts</code> (Stage A map) wired into <code>VideoPlayerContentRenderer</code>.</li>
+</ul>
+
+<p><strong>PR 2 — maximize:</strong></p>
+<ul>
+  <li><code>panelMaximizedProp</code> + <code>LayoutSlot.maximized?</code>; <code>~max</code> projection; single-maximized invariant in the toggle action (sole writer); <code>LayoutRenderer</code> desktop single-pane path + active-panel coercion (§4.4); <code>layout.toggle_maximize_panel</code> action + panel-chrome affordance.</li>
+</ul>
+
+<p><strong>Tests:</strong></p>
+<ul>
+  <li><code>routing.test</code>: parse/build round-trip of annotated leaves (mode, <code>max</code>, both), incl. inside stacks; ids containing no <code>~</code> unaffected.</li>
+  <li><code>panelLayoutProjection.test</code>: annotation-only change is a slot change (projection pushes); inbound annotation-only diff updates props on the <strong>same</strong> panel row (id stable); annotations cleared when the hash has none.</li>
+  <li><code>panelHistory.test</code>: mode cleared on in-pane navigation; chevron-back restores it via <code>VisitState</code>; navigate+mode is a single history entry; slot annotation beats a stale <code>VisitState.viewMode</code> on URL-driven reconcile.</li>
+  <li>Video plugin: toggle action writes panel prop; layout gates on it; Stage A restore (seek + resume) on remount; <strong>no document write on a navigation-driven mode arrival</strong> (zero-child video, mode set via reconcile → no child created); per-pane handle resolution with the same video in two panes.</li>
+  <li><code>LayoutRenderer</code>: maximized row renders alone on desktop (first wins when several are flagged); flag ignored on mobile; un-maximize restores siblings; maximized row coerced to active panel.</li>
+</ul>
+
+<h2 id="migration"><span class="num">7</span> Migration / compat</h2>
+<ul>
+  <li>Old URLs (no <code>~</code>) parse unchanged. On an <strong>old client</strong>, a new-grammar URL degrades concretely as: <code>parseSlot</code> reads the whole token as a block id, <code>reconcilePanelRows</code> persists a panel row whose <code>topLevelBlockIdProp</code> is the literal <code>V~video-notes</code>, and the pane renders blank until navigated away — no crash, but a persisted dead pane in that layout session. The realistic "old client" is a lagging PWA install (iOS caches aggressively), not a hypothetical.</li>
+  <li><code>video:playerView</code> values left on blocks are ignored dead data (UiState scope; safe to leave, cheap to sweep later).</li>
+  <li>Downstream code that round-trips layouts <strong>as slots or strings</strong> (<code>layoutSlotsFromRows</code> → <code>buildLayoutFromSlots</code> → <code>parseLayout</code> → <code>reconcilePanelRows</code>) carries annotations with no rebuild at all — the slot objects/tokens pass through opaquely. Only code that reconstructs bare <code>{kind: 'leaf', blockId}</code> literals from block ids drops annotations and needs touching.</li>
+</ul>
+
+<h2 id="decisions"><span class="num">8</span> Resolved decisions &amp; remaining open questions</h2>
+<p>Resolved in design discussion (2026-07-07) — rationale lives in §4, one line each here:</p>
+<table>
+  <thead><tr><th>Question</th><th>Decision</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Q1 · Mode registry?</td>
+      <td>Opaque mode string, no registry</td>
+      <td>Unknown modes degrade gracefully (no contribution claims them → default rendering); a <code>panelViewModesFacet</code> earns its keep only with a second consumer.</td>
+    </tr>
+    <tr>
+      <td>Q2 · Separator character</td>
+      <td><code>~</code> separator</td>
+      <td>Rationale in §4.2.</td>
+    </tr>
+    <tr>
+      <td>Q3 · <code>VisitState</code> captures the mode?</td>
+      <td>Yes — required</td>
+      <td>Required once the clearing rule exists — otherwise browser-Back and chevron-back diverge (§4.2).</td>
+    </tr>
+    <tr>
+      <td>Q4 · Whole-pane immersion</td>
+      <td>Generic maximize-pane gesture in core</td>
+      <td>§4.4, ships as PR 2 (native <code>requestFullscreen()</code> = transient, not navigation state; extension-owned = not shareable machinery).</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Still open for upstream:</p>
+<ol>
+  <li><strong>Grammar sign-off:</strong> the <code>~</code> annotation channel and the reserved <code>max</code> token become permanent URL grammar — needs owner approval.</li>
+  <li><strong>Maximize binding + chrome:</strong> which keybinding and what panel-header affordance (if any) upstream wants for <code>layout.toggle_maximize_panel</code>.</li>
+</ol>
+
+</div>
+</body>
+</html>
