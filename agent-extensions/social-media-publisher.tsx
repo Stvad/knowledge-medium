@@ -25,7 +25,8 @@ import {
   type PropertyEditorProps,
 } from '@/extensions/api.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
-import { useHandle } from '@/hooks/block.js'
+import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType.js'
+import { charLimitProp } from '@/plugins/character-counter/properties.js'
 import { Button } from '@/components/ui/button.js'
 import {
   Dialog,
@@ -38,6 +39,7 @@ import {
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
 import { useEffect, useMemo, useState, type CSSProperties, type SVGProps } from 'react'
+import { AtpAgent, RichText } from 'https://esm.sh/@atproto/api@0.19.3?bundle'
 
 const source = 'social-media-publisher'
 const BUFFER_TOKEN_KEY = 'knowledge-medium:social-publisher:buffer-token:v1'
@@ -183,6 +185,34 @@ const publisherPrefsType = defineBlockType({
     lesswrongConnectedHintProp,
   ],
 })
+
+const publishAllType = defineBlockType({
+  id: 'social-publisher-publish',
+  label: 'Social publish',
+  description: 'Command block: publish child blocks to configured social platforms.',
+})
+const publishTwitterType = defineBlockType({
+  id: 'social-publisher-twitter',
+  label: 'Social publish: X / Twitter',
+  description: 'Command block: publish child blocks to X / Twitter via Buffer.',
+})
+const publishBlueskyType = defineBlockType({
+  id: 'social-publisher-bluesky',
+  label: 'Social publish: Bluesky',
+  description: 'Command block: publish child blocks to Bluesky.',
+})
+const publishLessWrongType = defineBlockType({
+  id: 'social-publisher-lesswrong',
+  label: 'Social publish: LessWrong',
+  description: 'Command block: publish child blocks to LessWrong shortform.',
+})
+
+const commandTypes = [
+  {type: publishAllType, target: 'all' as const},
+  {type: publishTwitterType, target: 'twitter' as const},
+  {type: publishBlueskyType, target: 'bluesky' as const},
+  {type: publishLessWrongType, target: 'lesswrong' as const},
+] as const
 
 const loadBufferToken = (): string | null => window.localStorage.getItem(BUFFER_TOKEN_KEY)
 const saveBufferToken = (value: string): void =>
@@ -530,64 +560,20 @@ const fetchImageAsBlob = async (url: string, corsProxyUrl: string): Promise<Blob
   return response.blob()
 }
 
-const bskyRequest = async (
-  path: string,
-  init: RequestInit,
-): Promise<any> => {
-  const response = await fetch(`${BSKY_SERVICE_URL}/xrpc/${path}`, init)
-  const result = await response.json().catch(() => null)
-  if (!response.ok) {
-    const message = result?.message ?? result?.error ?? response.statusText
-    throw new Error(`Bluesky API HTTP ${response.status}: ${message}`)
-  }
-  return result
-}
-
-const byteOffset = (text: string, index: number): number =>
-  new TextEncoder().encode(text.slice(0, index)).length
-
-const richTextFacets = (text: string): unknown[] => {
-  const facets: unknown[] = []
-  const linkRanges: Array<{start: number; end: number}> = []
-  for (const match of text.matchAll(/https?:\/\/[^\s<]+/g)) {
-    const start = match.index ?? 0
-    const end = start + match[0].length
-    linkRanges.push({start, end})
-    facets.push({
-      index: {byteStart: byteOffset(text, start), byteEnd: byteOffset(text, end)},
-      features: [{$type: 'app.bsky.richtext.facet#link', uri: match[0]}],
-    })
-  }
-  for (const match of text.matchAll(/(^|\s)#([A-Za-z0-9_][A-Za-z0-9_-]*)/g)) {
-    const start = (match.index ?? 0) + match[1].length
-    const end = start + match[2].length + 1
-    if (linkRanges.some(range => start < range.end && end > range.start)) continue
-    facets.push({
-      index: {byteStart: byteOffset(text, start), byteEnd: byteOffset(text, end)},
-      features: [{$type: 'app.bsky.richtext.facet#tag', tag: match[2]}],
-    })
-  }
-  return facets
-}
-
 const uploadBlueskyImages = async (
   mediaUrls: string[],
-  accessJwt: string,
+  agent: any,
   corsProxyUrl: string,
 ): Promise<unknown | null> => {
   if (mediaUrls.length === 0) return null
   const images = await Promise.all(mediaUrls.slice(0, 4).map(async url => {
     const blob = await fetchImageAsBlob(url, corsProxyUrl)
-    const result = await bskyRequest('com.atproto.repo.uploadBlob', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessJwt}`,
-        'Content-Type': blob.type || 'image/jpeg',
-      },
-      body: blob,
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    const {data} = await agent.uploadBlob(bytes, {
+      encoding: blob.type || 'image/jpeg',
     })
-    if (!result.blob) throw new Error('Bluesky did not return an image blob reference')
-    return {alt: 'Image from Knowledge Medium', image: result.blob}
+    if (!data?.blob) throw new Error('Bluesky did not return an image blob reference')
+    return {alt: 'Image from Knowledge Medium', image: data.blob}
   }))
   return {$type: 'app.bsky.embed.images', images}
 }
@@ -604,13 +590,10 @@ const postToBluesky = async (
   if (postable.length === 0) return {platform: 'bluesky', success: false, error: 'No content to post'}
 
   try {
-    const session = await bskyRequest('com.atproto.server.createSession', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        identifier: config.blueskyHandle,
-        password: config.blueskyAppPassword,
-      }),
+    const agent = new AtpAgent({service: BSKY_SERVICE_URL})
+    await agent.login({
+      identifier: config.blueskyHandle,
+      password: config.blueskyAppPassword,
     })
 
     let rootRef: {uri: string; cid: string} | undefined
@@ -618,32 +601,27 @@ const postToBluesky = async (
     let firstPostUrl: string | undefined
 
     for (const block of postable) {
+      const richText = new RichText({text: block.text})
+      await richText.detectFacets(agent)
+
       const record: Record<string, unknown> = {
-        text: block.text,
-        facets: richTextFacets(block.text),
+        text: richText.text,
+        facets: richText.facets,
         createdAt: new Date().toISOString(),
       }
       if (rootRef && parentRef) record.reply = {root: rootRef, parent: parentRef}
-      const embed = await uploadBlueskyImages(block.mediaUrls, session.accessJwt, config.corsProxyUrl)
+      const embed = await uploadBlueskyImages(block.mediaUrls, agent, config.corsProxyUrl)
       if (embed) record.embed = embed
 
-      const created = await bskyRequest('com.atproto.repo.createRecord', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.accessJwt}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          repo: session.did,
-          collection: 'app.bsky.feed.post',
-          record,
-        }),
-      })
+      const created = await agent.api.app.bsky.feed.post.create(
+        {repo: agent.session!.did},
+        record,
+      )
       const ref = {uri: created.uri, cid: created.cid}
       if (!rootRef) {
         rootRef = ref
         const rkey = String(created.uri).split('/').pop()
-        firstPostUrl = `https://bsky.app/profile/${session.handle ?? config.blueskyHandle}/post/${rkey}`
+        firstPostUrl = `https://bsky.app/profile/${agent.session?.handle ?? config.blueskyHandle}/post/${rkey}`
       }
       parentRef = ref
     }
@@ -728,6 +706,34 @@ const readChildBlocks = async (repo: any, blockId: string): Promise<PostBlock[]>
   }))
 }
 
+const characterLimitForTarget = (
+  target: TargetPlatform,
+  config: PlatformConfig,
+): number | undefined => {
+  if (target === 'twitter') return TWITTER_CHAR_LIMIT
+  if (target === 'bluesky') return BLUESKY_CHAR_LIMIT
+  if (target === 'lesswrong') return undefined
+  const platforms = configuredPlatforms(config)
+  if (platforms.includes('twitter')) return TWITTER_CHAR_LIMIT
+  if (platforms.includes('bluesky')) return BLUESKY_CHAR_LIMIT
+  return undefined
+}
+
+const applyBuiltInCharacterCounters = async (
+  repo: any,
+  blocks: PostBlock[],
+  limit: number | undefined,
+): Promise<void> => {
+  if (limit === undefined || blocks.length === 0) return
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  await repo.tx(async (tx: any) => {
+    for (const block of blocks) {
+      await repo.addTypeInTx(tx, block.id, CHAR_COUNTER_TYPE, {}, typeSnapshot)
+      await tx.setProperty(block.id, charLimitProp, limit)
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'social publisher character counters'})
+}
+
 const annotateParent = async (
   repo: any,
   blockId: string,
@@ -798,6 +804,11 @@ const PublishDialog = ({
       try {
         const nextConfig = await loadConfig(repo)
         const blocks = await readChildBlocks(repo, blockId)
+        await applyBuiltInCharacterCounters(
+          repo,
+          blocks,
+          characterLimitForTarget(target, nextConfig),
+        )
         const processed = await processBlocks(blocks, repo)
         if (cancelled) return
         setConfig(nextConfig)
@@ -1162,14 +1173,8 @@ const lesswrongConnectedEditor = definePropertyEditorOverride<boolean>({
   Editor: ConnectedHintEditor,
 })
 
-const commandTarget = (content: string): TargetPlatform | null => {
-  const match = content.trim().match(/^\{\{\s*(?:\[\[)?(publish|tweet|bsky|lesswrong)(?:\]\])?\s*\}\}$/i)
-  if (!match) return null
-  if (match[1].toLowerCase() === 'publish') return 'all'
-  if (match[1].toLowerCase() === 'tweet') return 'twitter'
-  if (match[1].toLowerCase() === 'bsky') return 'bluesky'
-  return 'lesswrong'
-}
+const commandTargetForTypes = (types: readonly string[]): TargetPlatform | null =>
+  commandTypes.find(command => types.includes(command.type.id))?.target ?? null
 
 const commandStyles = {
   wrapper: {
@@ -1208,18 +1213,18 @@ const CommandBlockButton = ({
   </Button>
 )
 
-const commandDecoratorCache = new WeakMap<BlockRenderer, BlockRenderer>()
+const commandDecoratorCache = new Map<TargetPlatform, WeakMap<BlockRenderer, BlockRenderer>>()
 
-const decorateCommandBlock: BlockContentDecorator = inner => {
-  const existing = commandDecoratorCache.get(inner)
+const decorateCommandBlock = (target: TargetPlatform): BlockContentDecorator => inner => {
+  let cache = commandDecoratorCache.get(target)
+  if (!cache) {
+    cache = new WeakMap<BlockRenderer, BlockRenderer>()
+    commandDecoratorCache.set(target, cache)
+  }
+  const existing = cache.get(inner)
   if (existing) return existing
   const Decorated: BlockRenderer = props => {
     const Inner = inner
-    const content = useHandle(props.block, {
-      selector: data => data?.content ?? '',
-    })
-    const target = commandTarget(content)
-    if (!target) return <Inner {...props} />
     return (
       <div style={commandStyles.wrapper}>
         <div style={commandStyles.content}>
@@ -1230,11 +1235,14 @@ const decorateCommandBlock: BlockContentDecorator = inner => {
     )
   }
   Decorated.displayName = 'WithSocialPublishCommand'
-  commandDecoratorCache.set(inner, Decorated)
+  cache.set(inner, Decorated)
   return Decorated
 }
 
-const commandBlockDecorator: BlockContentDecoratorContribution = () => decorateCommandBlock
+const commandBlockDecorator: BlockContentDecoratorContribution = ctx => {
+  const target = commandTargetForTypes(ctx.types)
+  return target ? decorateCommandBlock(target) : null
+}
 
 const openSettingsAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: 'social-publisher.configure',
@@ -1300,6 +1308,7 @@ export default [
   dialogAppMountExtension,
 
   typesFacet.of(publisherPrefsType, {source}),
+  ...commandTypes.map(command => typesFacet.of(command.type, {source})),
 
   propertySchemasFacet.of(blueskyHandleProp, {source}),
   propertySchemasFacet.of(corsProxyUrlProp, {source}),
