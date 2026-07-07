@@ -19,6 +19,7 @@ import {
   getCommandMeta,
   type KnownCommand,
   type KnownCommandType,
+  moveBlockCommandSchema,
   sqlModeSchema,
   type WhoamiInfo,
 } from './protocol.js'
@@ -816,6 +817,25 @@ cli
   .action(async (json: string) => {
     const parsed = parseJson(json, 'update-block json') as Record<string, unknown>
     await runAndPrint({type: 'update-block', ...parsed})
+  })
+
+cli
+  .command('move-block <json>', wireDescription('move-block'))
+  .action(async (json: string) => {
+    const parsed = parseJson(json, 'move-block json') as Record<string, unknown>
+    await runAndPrint(moveBlockCommandSchema.parse({type: 'move-block', ...parsed}))
+  })
+
+cli
+  .command('delete-block <id>', wireDescription('delete-block'))
+  .action(async (id: string) => {
+    await runAndPrint({type: 'delete-block', id})
+  })
+
+cli
+  .command('restore-block <id>', wireDescription('restore-block'))
+  .action(async (id: string) => {
+    await runAndPrint({type: 'restore-block', id})
   })
 
 cli

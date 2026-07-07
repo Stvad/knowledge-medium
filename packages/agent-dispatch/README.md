@@ -218,7 +218,7 @@ The same graph tools work from any MCP client — e.g. Claude Desktop / interact
 }
 ```
 
-Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`. The write tools also refuse watcher-target references in **property values**, not just `content` (a ref-typed property whose value is the target id would otherwise project a backlink and re-trigger the loop). Deliberately excluded: `eval`, `sql execute`, extension lifecycle.
+Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql_query` (single read-only statement — SELECT, or WITH without mutating keywords; multi-statement, `WITH … UPDATE` forms, and side-effecting `powersync_*()` function calls are rejected), `create_block`, `update_block`, `move_block`, `delete_block`, `restore_block` (single block only; descendants remain deleted unless restored separately). The content/property write tools also refuse watcher-target references in **property values**, not just `content` (a ref-typed property whose value is the target id would otherwise project a backlink and re-trigger the loop). Deliberately excluded: `eval`, `sql execute`, extension lifecycle.
 
 ## Security posture
 

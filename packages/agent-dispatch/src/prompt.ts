@@ -30,7 +30,7 @@ Block id: {{blockId}}
 
 Instructions:
 - Read the mention as a request addressed to you. If the subtree contains sub-items, treat them as part of the request.
-- Use the km MCP tools when you need more of the graph (search, get_block, subtree, backlinks) or to make edits (create_block, update_block).
+- Use the km MCP tools when you need more of the graph (search, get_block, subtree, backlinks) or to make edits (create_block, update_block, move_block, delete_block, restore_block).
 - Your final text response is posted verbatim as a reply block under the mention. Keep it concise, notes-style markdown. No preamble.
 - Never write the literal token [[claude]] (or any watcher-target wikilink) into the graph or your reply — it would re-trigger the watcher.`
 
@@ -57,7 +57,7 @@ Path from the page root (nearest last):
 {{ancestors}}
 
 Handle it now, then close the task out yourself:
-1. Do the work, using the km tools (search, get_block, subtree, backlinks; create_block/update_block for edits).
+1. Do the work, using the km tools (search, get_block, subtree, backlinks; create_block/update_block/move_block/delete_block/restore_block for edits).
 2. Post your answer with create_block: parentId {{blockId}}, your reply as content, and properties {"agent:reply": true}.
 3. Mark the task finished with update_block on {{blockId}}: properties {"agent:status": "done"} (or "error" plus {"agent:error": "<why>"} if you could not complete it).
 Never write the literal token [[claude]] (or any watcher-target wikilink) anywhere — it re-triggers the watcher.`

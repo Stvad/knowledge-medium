@@ -22,6 +22,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension'
 import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes'
+import { keyAtEnd } from '@/data/orderKey'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext } from '../protocol'
 
@@ -74,6 +75,8 @@ beforeEach(async () => {
 const create = async (args: {
   id: string
   content?: string
+  parentId?: string | null
+  orderKey?: string
   references?: BlockReference[]
   properties?: BlockProperties
 }) => {
@@ -81,13 +84,29 @@ const create = async (args: {
     await tx.create({
       id: args.id,
       workspaceId: WS,
-      parentId: null,
-      orderKey: `key-${args.id}`,
+      parentId: args.parentId ?? null,
+      orderKey: args.orderKey ?? `key-${args.id}`,
       content: args.content ?? args.id,
       references: args.references ?? [],
       ...(args.properties ? {properties: args.properties} : {}),
     })
   }, {scope: ChangeScope.BlockDefault})
+}
+
+const childIds = async (parentId: string | null): Promise<string[]> => {
+  const rows = parentId === null
+    ? await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks WHERE parent_id IS NULL AND deleted = 0 ORDER BY order_key, id')
+    : await sharedDb.db.getAll<{id: string}>('SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [parentId])
+  return rows.map(row => row.id)
+}
+
+const deletedById = async (ids: string[]): Promise<Record<string, number>> => {
+  const placeholders = ids.map(() => '?').join(', ')
+  const rows = await sharedDb.db.getAll<{id: string, deleted: number}>(
+    `SELECT id, deleted FROM blocks WHERE id IN (${placeholders})`,
+    ids,
+  )
+  return Object.fromEntries(rows.map(row => [row.id, row.deleted]))
 }
 
 describe('backlinks command', () => {
@@ -308,5 +327,58 @@ describe('update-block command', () => {
       executeCommand({commandId: 'c-b', type: 'update-block', id: 'u2', properties: {cancel: ''}}, context),
     ])
     expect((await repo.load('u2'))?.properties).toEqual({status: 'done', cancel: ''})
+  })
+})
+
+describe('move-block command', () => {
+  it('moves a block under a target parent at the requested position', async () => {
+    const firstOrderKey = keyAtEnd()
+    const lastOrderKey = keyAtEnd(firstOrderKey)
+    await create({id: 'parent'})
+    await create({id: 'first', parentId: 'parent', orderKey: firstOrderKey})
+    await create({id: 'last', parentId: 'parent', orderKey: lastOrderKey})
+    await create({id: 'moved'})
+
+    const out = await executeCommand(
+      {
+        commandId: 'mv-1',
+        type: 'move-block',
+        id: 'moved',
+        parentId: 'parent',
+        position: {kind: 'before', siblingId: 'last'},
+      },
+      context,
+    ) as {id: string; parentId: string | null}
+
+    expect(out).toMatchObject({id: 'moved', parentId: 'parent'})
+    expect(await childIds('parent')).toEqual(['first', 'moved', 'last'])
+    expect(await childIds(null)).toEqual(['parent'])
+  })
+})
+
+describe('delete-block / restore-block commands', () => {
+  it('soft-deletes a block subtree, then restores only the requested block', async () => {
+    await create({id: 'root', content: 'root'})
+    await create({id: 'child', content: 'child', parentId: 'root'})
+
+    const deleted = await executeCommand(
+      {commandId: 'del-1', type: 'delete-block', id: 'root'},
+      context,
+    ) as {id: string, deleted: boolean}
+
+    expect(deleted).toEqual({id: 'root', deleted: true})
+    expect(await repo.load('root')).toBeNull()
+    expect(await repo.load('child')).toBeNull()
+    expect(await deletedById(['root', 'child'])).toEqual({root: 1, child: 1})
+
+    const restored = await executeCommand(
+      {commandId: 'restore-1', type: 'restore-block', id: 'root'},
+      context,
+    ) as {id: string}
+
+    expect(restored.id).toBe('root')
+    expect(await repo.load('root')).toMatchObject({id: 'root', deleted: false})
+    expect(await repo.load('child')).toBeNull()
+    expect(await deletedById(['root', 'child'])).toEqual({root: 0, child: 1})
   })
 })
