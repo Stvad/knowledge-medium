@@ -176,8 +176,11 @@ export const createGraphMcpServer = (options: GraphMcpServerOptions = {}): McpSe
       parentId: z.string().nullable(),
       position: moveBlockPositionSchema,
     },
-  }, async ({id, parentId, position}) =>
-    json(await graph.moveBlock({id, parentId, position})))
+  }, async ({id, parentId, position}) => {
+    const block = await graph.getBlock(id)
+    await assertNoBlockedRefs(block?.content, block?.properties)
+    return json(await graph.moveBlock({id, parentId, position}))
+  })
 
   return server
 }
