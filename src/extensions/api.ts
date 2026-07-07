@@ -245,6 +245,14 @@ export type {
 
 export { pluginBlockId } from '@/extensions/pluginIds.js'
 
+// Shared diagnostics seam — modules can contribute structured health snapshots to
+// the system-status chip instead of owning their own status UI.
+export { diagnosticsFacet } from '@/plugins/diagnostics/facet.js'
+export type {
+  DiagnosticSnapshot,
+  DiagnosticSourceContribution,
+} from '@/plugins/diagnostics/facet.js'
+
 // React hook for accessing the live Repo from inside an
 // `appMountsFacet` component. Action handlers receive `repo` through
 // `uiStateBlock.repo`; components rendered inside the app tree should

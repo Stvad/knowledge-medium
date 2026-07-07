@@ -1,9 +1,12 @@
 import {
   actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
   blockContentDecoratorsFacet,
+  diagnosticsFacet,
   ChangeScope, codecs, defineBlockType, defineProperty, definePropertyEditorOverride,
   getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, propertySchemasFacet,
   showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
+  type DiagnosticSnapshot,
+  type DiagnosticSourceContribution,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,
   type PropertyEditorProps,
@@ -95,16 +98,11 @@ const autoStartProp = defineProperty<boolean>('matrix:autoStart', {
   defaultValue: true,
   changeScope: ChangeScope.BlockDefault,
 })
-// UI hints mirrored onto the prefs block so the settings panel can render
-// connection/status without subscribing to localStorage or the poll loop.
+// UI hint mirrored onto the prefs block so the settings panel can render
+// connectivity without subscribing to localStorage or the poll loop.
 const connectedHintProp = defineProperty<boolean>('matrix:connected', {
   codec: codecs.boolean,
   defaultValue: false,
-  changeScope: ChangeScope.UserPrefs,
-})
-const statusProp = defineProperty<string | undefined>('matrix:status', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
 
@@ -142,7 +140,7 @@ const matrixChatPrefsType = defineBlockType({
   // must offer creating the user's own type, not tag with this);
   // the chip stays informative on the container block itself.
   hideFromCompletion: true,
-  properties: [homeserverProp, roomIdProp, autoStartProp, connectedHintProp, statusProp],
+  properties: [homeserverProp, roomIdProp, autoStartProp, connectedHintProp],
 })
 const matrixMessageType = defineBlockType({
   id: MATRIX_MESSAGE_TYPE,
@@ -176,6 +174,15 @@ interface MatrixConfig {
   accessToken: string
   autoStart: boolean
 }
+interface MatrixConfigCandidate {
+  baseUrl: string
+  roomId: string
+  accessToken: string | null
+  autoStart: boolean
+}
+type MatrixConfigState =
+  | {kind: 'no-workspace'}
+  | {kind: 'candidate', config: MatrixConfigCandidate}
 
 const prefsBlock = (repo: any) => {
   const workspaceId = repo.activeWorkspaceId
@@ -183,23 +190,78 @@ const prefsBlock = (repo: any) => {
   return getPluginPrefsBlock(repo, workspaceId, repo.user, matrixChatPrefsType)
 }
 
-const loadConfig = async (repo: any): Promise<MatrixConfig | null> => {
+const loadConfig = async (repo: any): Promise<MatrixConfigState> => {
   const prefs = await prefsBlock(repo)
-  if (!prefs) return null
+  if (!prefs) return {kind: 'no-workspace'}
   const baseUrl = normalizeBaseUrl(prefs.get(homeserverProp))
   const roomId = prefs.get(roomIdProp)
   const accessToken = loadToken()
-  if (!baseUrl || !roomId || !accessToken) return null
-  return {baseUrl, roomId, accessToken, autoStart: prefs.get(autoStartProp)}
+  return {kind: 'candidate', config: {baseUrl, roomId, accessToken, autoStart: prefs.get(autoStartProp)}}
 }
 
-const setStatus = async (repo: any, status: string): Promise<void> => {
-  try {
-    const prefs = await prefsBlock(repo)
-    if (prefs && prefs.peekProperty(statusProp) !== status) await prefs.set(statusProp, status)
-  } catch {
-    // status is a best-effort UI hint — never let it break the poll loop
-  }
+const MATRIX_DIAGNOSTIC_ID = 'matrix-chat-client'
+const MATRIX_CONFIGURE_ACTION_ID = 'matrix.configure'
+const matrixDiagnosticListeners = new Set<() => void>()
+let matrixDiagnosticSnapshot: DiagnosticSnapshot | null = null
+
+const matrixDiagnosticSame = (
+  left: DiagnosticSnapshot | null,
+  right: DiagnosticSnapshot | null,
+): boolean => {
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    left.severity === right.severity &&
+    left.summary === right.summary &&
+    left.detail === right.detail &&
+    left.actionId === right.actionId &&
+    left.actionLabel === right.actionLabel &&
+    left.nudge === right.nudge
+  )
+}
+
+const setMatrixDiagnostic = (next: DiagnosticSnapshot | null): void => {
+  if (matrixDiagnosticSame(matrixDiagnosticSnapshot, next)) return
+  matrixDiagnosticSnapshot = next
+  matrixDiagnosticListeners.forEach(notify => notify())
+}
+
+const clearMatrixDiagnostic = (): void => {
+  setMatrixDiagnostic(null)
+}
+
+const matrixWarningDiagnostic = (summary: string, detail: string): DiagnosticSnapshot => ({
+  severity: 'warning',
+  summary,
+  detail,
+  actionId: MATRIX_CONFIGURE_ACTION_ID,
+  actionLabel: 'Open settings',
+  nudge: true,
+})
+
+const unconfiguredMatrixDiagnostic = matrixWarningDiagnostic(
+  'Matrix ingest is not configured',
+  'Open Matrix settings and configure homeserver and room, then save a token.',
+)
+const missingTokenMatrixDiagnostic = matrixWarningDiagnostic(
+  'Matrix token is missing',
+  'Save an access token in Matrix settings so this device can ingest messages.',
+)
+const retryErrorMatrixDiagnostic = (message: string): DiagnosticSnapshot =>
+  matrixWarningDiagnostic('Matrix ingest is retrying', message)
+const hardErrorMatrixDiagnostic = (message: string): DiagnosticSnapshot =>
+  matrixWarningDiagnostic('Matrix ingest error', message)
+
+const matrixDiagnosticSource: DiagnosticSourceContribution = {
+  id: MATRIX_DIAGNOSTIC_ID,
+  label: 'Matrix',
+  subscribe: (notify) => {
+    matrixDiagnosticListeners.add(notify)
+    return () => {
+      matrixDiagnosticListeners.delete(notify)
+    }
+  },
+  getSnapshot: () => matrixDiagnosticSnapshot,
 }
 
 // ---------------------------------------------------------------------------
@@ -720,11 +782,11 @@ const migrateLegacyConfig = async (repo: any): Promise<void> => {
 // poll loop
 
 // Transient failures clear on the next poll, so they should stay out of the
-// user's face — log them, reflect them in the (quiet) status hint, but don't
-// toast. This covers network blips (fetch rejects with a TypeError; matrix-js-
-// sdk may rewrap it as a ConnectionError) and server-side conditions that the
-// long-poll naturally rides out (429 rate-limit, 5xx). Actionable errors — a
-// bad/expired token, a malformed request — fall through to the loud path.
+// user's face — log them, reflect them in diagnostics, but don't toast.
+// This covers network blips (fetch rejects with a TypeError; matrix-js-sdk may
+// rewrap it as a ConnectionError) and server-side conditions that the
+// long-poll naturally rides out (429 rate-limit, 5xx). Actionable errors —
+// a bad/expired token, a malformed request — fall through to the loud path.
 const RETRYABLE_MESSAGE_RE = /failed to fetch|fetch failed|network ?error|load failed/i
 
 const isRetryableError = (error: unknown): boolean => {
@@ -740,11 +802,10 @@ const isRetryableError = (error: unknown): boolean => {
 const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, matrixClient: any): Promise<void> => {
   let nextBatch = loadNextBatch(config)
   // `toasted` gates the one-per-streak toast (loud, actionable errors only);
-  // `degraded` tracks whether the status hint is currently non-running so a
-  // recovered poll clears it — regardless of which kind of error set it.
+  // `degraded` tracks whether a warning is currently shown so recovery clears it.
   let toasted = false
   let degraded = false
-  await setStatus(repo, 'running')
+  clearMatrixDiagnostic()
 
   while (!signal.aborted) {
     try {
@@ -764,7 +825,7 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
       if (degraded) {
         degraded = false
         toasted = false
-        await setStatus(repo, 'running')
+        clearMatrixDiagnostic()
       }
     } catch (error) {
       if (signal.aborted) return
@@ -772,10 +833,10 @@ const pollLoop = async (repo: any, config: MatrixConfig, signal: AbortSignal, ma
       degraded = true
       if (isRetryableError(error)) {
         console.warn('[matrix-messages] transient poll error (will retry):', message)
-        await setStatus(repo, `retrying: ${message}`)
+        setMatrixDiagnostic(retryErrorMatrixDiagnostic(message))
       } else {
         console.error('[matrix-messages]', error)
-        await setStatus(repo, `error: ${message}`)
+        setMatrixDiagnostic(hardErrorMatrixDiagnostic(message))
         // One toast per failure streak — a long-poll can fail every few
         // seconds and we don't want to bury the user in toasts.
         if (!toasted) {
@@ -804,20 +865,37 @@ const matrixIngestEffect = {
       currentAbort = null
       if (cancelled) return
 
-      const config = await loadConfig(repo).catch(() => null)
-      if (!config) {
-        await setStatus(repo, 'unconfigured')
+      const configState = await loadConfig(repo).catch(() => ({kind: 'no-workspace'} as const))
+      if (configState.kind === 'no-workspace') {
+        clearMatrixDiagnostic()
         return
       }
+
+      const config = configState.config
       if (!config.autoStart) {
-        await setStatus(repo, 'stopped')
+        clearMatrixDiagnostic()
         return
+      }
+
+      if (!config.baseUrl || !config.roomId) {
+        setMatrixDiagnostic(unconfiguredMatrixDiagnostic)
+        return
+      }
+
+      if (!config.accessToken) {
+        setMatrixDiagnostic(missingTokenMatrixDiagnostic)
+        return
+      }
+
+      const activeConfig: MatrixConfig = {
+        ...config,
+        accessToken: config.accessToken,
       }
 
       const abort = new AbortController()
       currentAbort = abort
-      const matrixClient = createMatrixClient(config)
-      void pollLoop(repo, config, abort.signal, matrixClient).catch(error => {
+      const matrixClient = createMatrixClient(activeConfig)
+      void pollLoop(repo, activeConfig, abort.signal, matrixClient).catch(error => {
         if (!abort.signal.aborted) console.error('[matrix-messages]', error)
       })
     }
@@ -999,19 +1077,10 @@ const ConnectedEditor = ({value, onChange}: PropertyEditorProps<boolean>) => {
   )
 }
 
-const StatusEditor = ({value}: PropertyEditorProps<string | undefined>) => (
-  <span style={{color: 'var(--muted-foreground)'}}>{value ?? 'idle'}</span>
-)
-
 const connectedEditor = definePropertyEditorOverride<boolean>({
   name: connectedHintProp.name,
   label: 'Matrix',
   Editor: ConnectedEditor,
-})
-const statusEditor = definePropertyEditorOverride<string | undefined>({
-  name: statusProp.name,
-  label: 'Status',
-  Editor: StatusEditor,
 })
 const homeserverEditor = definePropertyEditorOverride<string>({
   name: homeserverProp.name,
@@ -1211,7 +1280,6 @@ export default [
   propertySchemasFacet.of(roomIdProp, {source}),
   propertySchemasFacet.of(autoStartProp, {source}),
   propertySchemasFacet.of(connectedHintProp, {source}),
-  propertySchemasFacet.of(statusProp, {source}),
   propertySchemasFacet.of(eventIdProp, {source}),
   propertySchemasFacet.of(eventRoomProp, {source}),
   propertySchemasFacet.of(eventUrlProp, {source}),
@@ -1219,10 +1287,11 @@ export default [
   propertySchemasFacet.of(eventTimestampProp, {source}),
 
   propertyEditorOverridesFacet.of(connectedEditor, {source}),
-  propertyEditorOverridesFacet.of(statusEditor, {source}),
   propertyEditorOverridesFacet.of(homeserverEditor, {source}),
   propertyEditorOverridesFacet.of(roomIdEditor, {source}),
   propertyEditorOverridesFacet.of(autoStartEditor, {source}),
+
+  diagnosticsFacet.of(matrixDiagnosticSource, {source}),
 
   appMountsFacet.of({id: 'matrix.setup-dialog', component: MatrixSetupDialog}, {source}),
   appEffectsFacet.of(matrixIngestEffect, {source}),
