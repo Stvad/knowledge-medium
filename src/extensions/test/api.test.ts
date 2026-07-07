@@ -16,6 +16,7 @@ describe('@/extensions/api — public surface', () => {
     'actionTransformsFacet',
     'actionsFacet',
     'actionContextsFacet',
+    'diagnosticsFacet',
     'appEffectsFacet',
     'appMountsFacet',
     'blockRenderersFacet',
