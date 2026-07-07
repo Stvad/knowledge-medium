@@ -11,7 +11,7 @@ inner loop (this repo is built primarily by agents — keep the edit→verify cy
 delegate code to cheaper models:
 - top-tier context is the scarce resource here (this repo is built primarily by agents). Spend it on judgement, review, and synthesis. When a task is primarily *writing / editing* code, delegate it to a cheaper subagent when the work is bounded and easy to audit, and keep the deciding / auditing / data-synthesis in the main loop.
 - Claude Code: use the Agent tool with `model:` set, or `agent(prompt, {model})` in a Workflow. Rough default (your call per task): `sonnet` for substantive implementation, `haiku` for trivial / mechanical edits.
-- Codex: when spawning subagents, prefer `gpt-5.3-codex-spark` with `xhigh` reasoning effort for concrete, self-contained, parallelizable tasks with clear file ownership or file-path evidence. Additional reason: subagents have a separate token budget, so this can preserve main-agent context while advancing work in parallel.
+- Codex: when `spawn_agent` exposes `gpt-5.3-codex-spark`, prefer it with `xhigh` reasoning effort for concrete, self-contained, parallelizable tasks with clear file ownership or file-path evidence. Otherwise use the cheapest available suitable subagent model or omit the model override. Additional reason: subagents have a separate token budget, so this can preserve main-agent context while advancing work in parallel.
 - don't delegate the parts where a subtle mistake is expensive to catch later — architecture calls, data-layer invariants, tricky state semantics, concurrency, migrations, security-sensitive paths, final integration, final verification, or commit decisions.
 
 secret handling:
