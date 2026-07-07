@@ -98,7 +98,7 @@ the built entrypoint directly:
 }
 ```
 
-Set `KM_MCP_BLOCKED_WIKILINKS` to a JSON array of page aliases when a caller needs write tools to refuse links back to trigger pages, for example `["claude", "codex"]`.
+`km-mcp` is generic graph access. Dispatch-specific loop-prevention policy, including blocked watcher-target wikilinks, lives in the `agent-dispatch` MCP wrapper.
 
 ## Eval execution scope
 

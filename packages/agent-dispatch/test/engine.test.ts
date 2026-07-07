@@ -30,7 +30,6 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
 
   const graph: Graph = {
     resolvePageId: vi.fn(async () => seed.pageId ?? 'page-claude'),
-    targetGuardSet: vi.fn(async () => ({id: seed.pageId ?? 'page-claude', aliases: ['claude']})),
     backlinkSources: vi.fn(async () =>
       (seed.backlinks ?? []).map(({id, deepLink}) => ({
         id, content: blocks.get(id)?.content ?? '', types: [], deepLink: deepLink ?? `link:${id}`, sourceFields: ['content'],
