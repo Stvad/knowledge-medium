@@ -25,6 +25,7 @@ import {
   type PropertyEditorProps,
 } from '@/extensions/api.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
+import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.js'
 import { CHAR_COUNTER_TYPE } from '@/plugins/character-counter/blockType.js'
 import { charLimitProp } from '@/plugins/character-counter/properties.js'
 import { Button } from '@/components/ui/button.js'
@@ -38,8 +39,10 @@ import {
 } from '@/components/ui/dialog.js'
 import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { useEffect, useMemo, useState, type CSSProperties, type SVGProps } from 'react'
 import { AtpAgent, RichText } from 'https://esm.sh/@atproto/api@0.19.3?bundle'
+import Markdown from 'https://esm.sh/react-markdown@10.1.0?bundle&external=react'
 
 const source = 'social-media-publisher'
 const BUFFER_TOKEN_KEY = 'knowledge-medium:social-publisher:buffer-token:v1'
@@ -284,7 +287,6 @@ const BLOCK_REF_REGEX = /\(\(([\w\d-]{6,64})\)\)/g
 const PAGE_REF_REGEX = /\[\[([^\]]+)\]\]/g
 const HASHTAG_PAGE_REF_REGEX = /#\[\[([^\]]+)\]\]/g
 const IMAGE_REGEX = /!\[[^\]]*\]\(([^\s)]*)\)/g
-const IMAGE_WITH_ALT_REGEX = /!\[([^\]]*)\]\(([^\s)]*)\)/g
 const ALIAS_REGEX = /\[([^\]]*)\]\(([^)]+)\)/g
 const BUTTON_REGEX = /\{\{[^}]*\}\}/g
 const BOLD_REGEX = /\*\*(.+?)\*\*/g
@@ -379,62 +381,54 @@ const validateThread = (
   })
 }
 
-const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
+const staticMarkdownContext = (content: string) => ({
+  block: {} as any,
+  blockContext: {},
+  data: {content, references: [], workspaceId: ''},
+})
 
-const escapeAttr = (value: string): string =>
-  escapeHtml(value).replace(/"/g, '&quot;')
+const StaticMarkdownImage = ({node: _node, ...props}: any) => {
+  void _node
+  return <img {...props} />
+}
 
-const blockToHtml = async (raw: string, repo: any): Promise<string> => {
+const stripReactResourceHints = (html: string): string =>
+  html.replace(/<link rel="preload" as="image" href="[^"]*"\/>/g, '')
+
+const renderMarkdownHtml = (content: string): string => {
+  const gfmConfig = gfmMarkdownExtension(staticMarkdownContext(content)) || {}
+  return stripReactResourceHints(renderToStaticMarkup(
+    <Markdown
+      remarkPlugins={gfmConfig.remarkPlugins}
+      components={{
+        ...gfmConfig.components,
+        img: StaticMarkdownImage,
+      }}
+    >
+      {content}
+    </Markdown>,
+  ))
+}
+
+const normalizeBlockMarkdownForHtml = async (raw: string, repo: any): Promise<string> => {
   let text = raw
-  const images: Array<{alt: string; url: string}> = []
 
-  text = text.replace(IMAGE_WITH_ALT_REGEX, (_match, alt, url) => {
-    images.push({alt, url})
-    return ''
-  })
   text = await replaceAsync(text, BLOCK_REF_REGEX, async (_match, id) =>
     resolveBlockReference(repo, id))
   text = text.replace(BUTTON_REGEX, '')
-
-  const linkPlaceholders: string[] = []
-  text = text.replace(ALIAS_REGEX, (_match, label, url) => {
-    const token = `__SMP_LINK_${linkPlaceholders.length}__`
-    linkPlaceholders.push(`<a href="${escapeAttr(url)}">${escapeHtml(label)}</a>`)
-    return token
-  })
   text = text.replace(HASHTAG_PAGE_REF_REGEX, (_match, pageName) => String(pageName))
   text = text.replace(PAGE_REF_REGEX, (_match, pageName) => String(pageName))
-  text = escapeHtml(text)
-  text = text.replace(BOLD_REGEX, '<strong>$1</strong>')
-  text = text.replace(ITALIC_REGEX, '<em>$1</em>')
-  text = text.replace(HIGHLIGHT_REGEX, '<mark>$1</mark>')
-  text = text.replace(STRIKETHROUGH_REGEX, '<del>$1</del>')
-  text = text.replace(INLINE_CODE_REGEX, '<code>$1</code>')
-  text = text.replace(
-    /(?<!href=")(https?:\/\/[^\s<]+)/g,
-    '<a href="$1">$1</a>',
-  )
-  linkPlaceholders.forEach((html, index) => {
-    text = text.replace(`__SMP_LINK_${index}__`, html)
-  })
+  return text.trim()
+}
 
-  let html = text.trim()
-  if (images.length > 0) {
-    html += images
-      .map(img => `<img src="${escapeAttr(img.url)}" alt="${escapeAttr(img.alt || 'Image from Knowledge Medium')}" />`)
-      .join('')
-  }
-  return html
+const blockToHtml = async (raw: string, repo: any): Promise<string> => {
+  const markdown = await normalizeBlockMarkdownForHtml(raw, repo)
+  return markdown ? renderMarkdownHtml(markdown) : ''
 }
 
 const blocksToHtml = async (blocks: PostBlock[], repo: any): Promise<string> => {
   const htmlBlocks = await Promise.all(blocks.map(async block => {
-    const html = await blockToHtml(block.content, repo)
-    return html ? `<p>${html}</p>` : ''
+    return blockToHtml(block.content, repo)
   }))
   return htmlBlocks.filter(Boolean).join('\n')
 }
@@ -499,34 +493,29 @@ const postToTwitter = async (
 
   try {
     const channelId = await resolveTwitterChannelId(config.bufferToken, config.corsProxyUrl)
-    const buildAssets = (mediaUrls: string[]) => {
-      if (mediaUrls.length === 0) return undefined
-      return {
-        images: mediaUrls.slice(0, 4).map(url => ({
+    const buildAssets = (mediaUrls: string[]) =>
+      mediaUrls.slice(0, 4).map(url => ({
+        image: {
           url,
           metadata: {altText: 'Image from Knowledge Medium'},
-        })),
-      }
-    }
+        },
+      }))
 
     const input: Record<string, unknown> = {
       text: postable[0].text,
       channelId,
       schedulingType: 'automatic',
       mode: 'shareNow',
+      assets: buildAssets(postable[0].mediaUrls),
     }
-    const firstAssets = buildAssets(postable[0].mediaUrls)
-    if (firstAssets) input.assets = firstAssets
 
     if (postable.length > 1) {
       input.metadata = {
         twitter: {
-          thread: postable.map(block => {
-            const item: Record<string, unknown> = {text: block.text}
-            const assets = buildAssets(block.mediaUrls)
-            if (assets) item.assets = assets
-            return item
-          }),
+          thread: postable.map(block => ({
+            text: block.text,
+            assets: buildAssets(block.mediaUrls),
+          })),
         },
       }
     }

@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "allowImportingTsExtensions": true,
-    "baseUrl": "..",
+    "baseUrl": "../..",
     "ignoreDeprecations": "6.0",
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -16,5 +16,5 @@
     "target": "ES2022",
     "types": ["react", "react-dom"]
   },
-  "include": ["social-media-publisher.tsx", "social-media-publisher.remote.d.ts"]
+  "include": ["index.tsx", "remote.d.ts"]
 }
