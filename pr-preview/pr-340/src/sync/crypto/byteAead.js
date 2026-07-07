@@ -1,0 +1,2 @@
+import{decodeBinaryEnvelope as e,encodeBinaryEnvelope as t}from"./binaryEnvelope.js";var n=async(e,n,r)=>{let i=crypto.getRandomValues(new Uint8Array(12));return t(i,new Uint8Array(await crypto.subtle.encrypt({name:`AES-GCM`,iv:i,additionalData:r},e,n)))},r=async(t,n,r)=>{let{nonce:i,ciphertext:a}=e(n);return new Uint8Array(await crypto.subtle.decrypt({name:`AES-GCM`,iv:i,additionalData:r},t,a))};export{r as openBytes,n as sealBytes};
+//# sourceMappingURL=byteAead.js.map
