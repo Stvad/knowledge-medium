@@ -447,7 +447,7 @@ const normalizeBlockMarkdownForHtml = async (raw: string, repo: any): Promise<st
 
 const blockToHtml = async (raw: string, repo: any): Promise<string> => {
   const markdown = await normalizeBlockMarkdownForHtml(raw, repo)
-  return markdown ? renderMarkdownHtml(markdown) : ''
+  return markdown ? renderMarkdownHtml(markdown, {mode: 'external'}) : ''
 }
 
 const blocksToHtml = async (blocks: PostBlock[], repo: any): Promise<string> => {
