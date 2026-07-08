@@ -20,8 +20,10 @@ export default defineConfig({
     maxWorkers: '100%',
     // node_modules + dist are vitest defaults; .claude/worktrees holds
     // full repo copies from agent runs whose tests we don't want to
-    // re-execute here.
-    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**', 'tmp/**'],
+    // re-execute here. agent-extensions are standalone packages with their own
+    // dependency installs and Vitest configs, so root collection must not pick
+    // up their tests accidentally.
+    exclude: ['**/node_modules/**', '**/dist/**', '.claude/**', 'tmp/**', 'agent-extensions/**'],
     coverage: {
       reporter: ['text', 'json', 'html'],
       exclude: ['node_modules/', 'src/test/setup.ts']

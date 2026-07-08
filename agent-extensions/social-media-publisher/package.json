@@ -1,0 +1,15 @@
+{
+  "name": "social-media-publisher-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "../../node_modules/.bin/tsc -p tsconfig.json --noEmit",
+    "test": "../../node_modules/.bin/vitest run --config vitest.config.ts",
+    "build": "../../node_modules/.bin/vite build --config vite.config.ts",
+    "check": "yarn run typecheck && yarn run test && yarn run build"
+  },
+  "dependencies": {
+    "@atproto/api": "0.19.3",
+    "twitter-text": "3.1.0"
+  }
+}
