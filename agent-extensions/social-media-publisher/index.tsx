@@ -196,22 +196,22 @@ const publisherPrefsType = defineBlockType({
 
 const publishAllType = defineBlockType({
   id: 'social-publisher-publish',
-  label: 'Social publish',
+  label: 'Publish',
   description: 'Command block: publish child blocks to configured social platforms.',
 })
 const publishTwitterType = defineBlockType({
   id: 'social-publisher-twitter',
-  label: 'Social publish: X / Twitter',
+  label: 'Tweet',
   description: 'Command block: publish child blocks to X / Twitter via Buffer.',
 })
 const publishBlueskyType = defineBlockType({
   id: 'social-publisher-bluesky',
-  label: 'Social publish: Bluesky',
+  label: 'Bsky',
   description: 'Command block: publish child blocks to Bluesky.',
 })
 const publishLessWrongType = defineBlockType({
   id: 'social-publisher-lesswrong',
-  label: 'Social publish: LessWrong',
+  label: 'LW',
   description: 'Command block: publish child blocks to LessWrong shortform.',
 })
 
