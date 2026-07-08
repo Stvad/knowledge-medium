@@ -18,6 +18,31 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+const stubBufferFetch = () => {
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body))
+    if (String(body.query).includes('account { organizations')) {
+      return Response.json({data: {account: {organizations: [{id: 'org1'}]}}})
+    }
+    if (String(body.query).includes('query GetChannels')) {
+      return Response.json({data: {channels: [{id: 'channel1', name: 'X', service: 'twitter'}]}})
+    }
+    return Response.json({
+      data: {
+        createPost: {
+          post: {
+            id: 'post1',
+            status: 'sent',
+            externalLink: 'https://twitter.test/post1',
+          },
+        },
+      },
+    })
+  })
+  vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+  return fetchMock
+}
+
 describe('social publisher text preprocessing', () => {
   it('prepares block text for platform character counts and posting', async () => {
     const repo = repoWithRefs({
@@ -68,27 +93,7 @@ describe('optional CORS proxy URL handling', () => {
 
 describe('Twitter publishing', () => {
   it('sends Buffer image assets in the list shape expected by createPost', async () => {
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body))
-      if (String(body.query).includes('account { organizations')) {
-        return Response.json({data: {account: {organizations: [{id: 'org1'}]}}})
-      }
-      if (String(body.query).includes('query GetChannels')) {
-        return Response.json({data: {channels: [{id: 'channel1', name: 'X', service: 'twitter'}]}})
-      }
-      return Response.json({
-        data: {
-          createPost: {
-            post: {
-              id: 'post1',
-              status: 'sent',
-              externalLink: 'https://twitter.test/post1',
-            },
-          },
-        },
-      })
-    })
-    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    const fetchMock = stubBufferFetch()
 
     const result = await postToTwitter(
       [
@@ -142,7 +147,34 @@ describe('Twitter publishing', () => {
           },
         ],
       },
-      {text: 'second'},
+      {text: 'second', assets: []},
     ])
+  })
+
+  it('sends an empty Buffer asset list for a text-only post', async () => {
+    const fetchMock = stubBufferFetch()
+
+    await postToTwitter(
+      [
+        {
+          id: 'only',
+          raw: 'only text',
+          text: 'only text',
+          mediaUrls: [],
+        },
+      ],
+      {
+        bufferToken: 'buffer-token-for-empty-assets-test',
+        blueskyHandle: '',
+        blueskyAppPassword: null,
+        lesswrongToken: null,
+        corsProxyUrl: '',
+      },
+    )
+
+    const createPostRequest = fetchMock.mock.calls.at(-1)?.[1] as RequestInit
+    const createPostBody = JSON.parse(String(createPostRequest.body))
+    expect(createPostBody.variables.input.assets).toEqual([])
+    expect(createPostBody.variables.input.metadata).toBeUndefined()
   })
 })
