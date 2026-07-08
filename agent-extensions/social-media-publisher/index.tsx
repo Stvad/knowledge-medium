@@ -43,6 +43,7 @@ import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
 import { useEffect, useMemo, useState, type CSSProperties, type SVGProps } from 'react'
 import { AtpAgent, RichText } from 'https://esm.sh/@atproto/api@0.19.3?bundle'
+import twitterText from 'https://esm.sh/twitter-text@3.1.0?bundle'
 
 const source = 'social-media-publisher'
 const BUFFER_TOKEN_KEY = 'knowledge-medium:social-publisher:buffer-token:v1'
@@ -53,9 +54,6 @@ const TWITTER_CHAR_LIMIT = 280
 const BLUESKY_CHAR_LIMIT = 300
 const TWITTER_COUNT_PROFILE_ID = 'social-publisher-twitter'
 const BLUESKY_COUNT_PROFILE_ID = 'social-publisher-bluesky'
-const TWITTER_WEIGHT_SCALE = 100
-const TWITTER_DEFAULT_CHAR_WEIGHT = 200
-const TWITTER_TRANSFORMED_URL_LENGTH = 23
 const BUFFER_API_URL = 'https://api.buffer.com'
 const BSKY_SERVICE_URL = 'https://bsky.social'
 const LW_GRAPHQL_URL = 'https://www.lesswrong.com/graphql'
@@ -363,52 +361,9 @@ const processBlocks = async (blocks: PostBlock[], repo: any): Promise<ProcessedB
     ...(await processBlockText(block.content, repo)),
   })))
 
-const graphemeLength = (text: string): number => {
-  const Segmenter = Intl.Segmenter
-  if (Segmenter) {
-    const segmenter = new Segmenter(undefined, {granularity: 'grapheme'})
-    return Array.from(segmenter.segment(text)).length
-  }
-  return [...text].length
-}
+const twitterWeightedLength = (text: string): number => twitterText.parseTweet(text).weightedLength
 
-const twitterSingleWeightRanges: Array<[number, number]> = [
-  [0, 0x10ff],
-  [0x2000, 0x200d],
-  [0x2010, 0x201f],
-  [0x2032, 0x2037],
-]
-
-const twitterUrlRegex = /\b(?:https?:\/\/|www\.)[^\s<>()]+/giu
-
-const twitterCodePointWeight = (codePoint: number): number =>
-  twitterSingleWeightRanges.some(([start, end]) => codePoint >= start && codePoint <= end)
-    ? TWITTER_WEIGHT_SCALE
-    : TWITTER_DEFAULT_CHAR_WEIGHT
-
-const twitterWeightedSegmentLength = (text: string): number => {
-  let total = 0
-  for (let index = 0; index < text.length;) {
-    const codePoint = text.codePointAt(index)
-    if (codePoint === undefined) break
-    total += twitterCodePointWeight(codePoint)
-    index += codePoint > 0xffff ? 2 : 1
-  }
-  return total
-}
-
-const twitterWeightedLength = (text: string): number => {
-  let total = 0
-  let lastIndex = 0
-  for (const match of text.matchAll(twitterUrlRegex)) {
-    const index = match.index ?? 0
-    total += twitterWeightedSegmentLength(text.slice(lastIndex, index))
-    total += TWITTER_TRANSFORMED_URL_LENGTH * TWITTER_WEIGHT_SCALE
-    lastIndex = index + match[0].length
-  }
-  total += twitterWeightedSegmentLength(text.slice(lastIndex))
-  return Math.ceil(total / TWITTER_WEIGHT_SCALE)
-}
+const blueskyGraphemeLength = (text: string): number => new RichText({text}).graphemeLength
 
 const useProcessedSocialText = (block: any): string => {
   const content = useContent(block)
@@ -438,7 +393,7 @@ const useTwitterSocialCount = (block: any): number =>
   twitterWeightedLength(useProcessedSocialText(block))
 
 const useBlueskySocialCount = (block: any): number =>
-  graphemeLength(useProcessedSocialText(block))
+  blueskyGraphemeLength(useProcessedSocialText(block))
 
 const twitterCountProfile: CharacterCountProfile = {
   id: TWITTER_COUNT_PROFILE_ID,
@@ -458,7 +413,7 @@ const validateThread = (
   const limit = platform === 'twitter' ? TWITTER_CHAR_LIMIT : BLUESKY_CHAR_LIMIT
   return blocks.flatMap((block, index) => {
     const count = platform === 'bluesky'
-      ? graphemeLength(block.text)
+      ? blueskyGraphemeLength(block.text)
       : twitterWeightedLength(block.text)
     if (!block.text && block.mediaUrls.length === 0) return [`Post ${index + 1} is empty`]
     if (count > limit) return [`Post ${index + 1} is ${count - limit} chars over ${PLATFORM_LABELS[platform]}'s limit`]
@@ -845,7 +800,11 @@ const annotateParent = async (
 }
 
 const countForPlatform = (block: ProcessedBlock, platform: PlatformId): number =>
-  platform === 'bluesky' ? graphemeLength(block.text) : block.text.length
+  platform === 'bluesky'
+    ? blueskyGraphemeLength(block.text)
+    : platform === 'twitter'
+      ? twitterWeightedLength(block.text)
+      : block.text.length
 
 const postToPlatform = async (
   platform: PlatformId,
