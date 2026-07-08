@@ -114,6 +114,11 @@ export {
 
 // --- Markdown rendering pipeline ---
 export { markdownExtensionsFacet } from '@/markdown/extensions.js'
+export {
+  renderMarkdownHtml,
+  type RenderMarkdownHtmlMode,
+  type RenderMarkdownHtmlOptions,
+} from '@/markdown/renderMarkdownHtml.js'
 
 // --- Paste decision seam (override how clipboard content lands: split into
 // an outline vs drop as a single block, optionally rewriting the text) ---
