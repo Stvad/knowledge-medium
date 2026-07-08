@@ -485,9 +485,11 @@ const defaultBlockUploadSink: BlockUploadSink = {
  *  create+patch still uploads as one insert-or-skip PUT and DOES need the heal).
  *  A separate patch is a real server-changing write (patches aren't insert-or-
  *  skip) whose echo re-reconciles the id on its own; re-staging the create here
- *  would only risk a transient on-disk revert in the ack-to-echo window. (In the
- *  batch path the patch is in the same `operations`; in the per-tx fallback the
- *  PENDING GATE above catches it while the patch is still queued.)
+ *  would only risk a transient on-disk revert in the ack-to-echo window. Both
+ *  paths pass the sibling patch in `operations` — the batch as one compacted
+ *  batch, the per-tx fallback by collecting all ops from succeeded txs — so the
+ *  exclusion applies uniformly (a REJECTED sibling patch isn't collected there,
+ *  so its create still heals).
  *
  *  DATA-LOSS INVARIANT (unenforced): the heal applies the server row over the
  *  local one, so a create that FUSES genuinely-unrecoverable user content on a
@@ -774,14 +776,14 @@ const uploadTransactionsWithFallback = async (
   // observer would skip-stale and CONSUME the synthetic upsert, and if the later
   // tx is then quarantined (no server echo) the phantom would stay stuck. Draining
   // first guarantees no sibling op is pending when we re-stage.
-  const drainedCreateOps: CompactedBlockOperation[] = []
+  const drainedOps: CompactedBlockOperation[] = []
   try {
     for (const transaction of transactions) {
       const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
       try {
         await deps.applyOperations(database, txOps)
         await transaction.complete()
-        drainedCreateOps.push(...txOps.filter(op => op.kind === 'create'))
+        drainedOps.push(...txOps)
         forgetAmbiguousAttempts(ambiguousAttempts, transaction)
       } catch (err) {
         const classification = classifyUploadError(err)
@@ -811,19 +813,23 @@ const uploadTransactionsWithFallback = async (
       }
     }
   } finally {
-    // Re-stage every create that DRAINED ps_crud — in a `finally` so it still runs
+    // Re-stage the creates that DRAINED ps_crud — in a `finally` so it still runs
     // when a later tx re-throws (a transient error, or `encryptOps` throwing before
     // its inner `try`). A drained create has been complete()d, so PowerSync's retry
     // re-collects only the UNdrained txs and would never re-enqueue it — stranding
     // its insert-or-skip phantom. The one-time reconcile-rescan backstop is
-    // marker-gated (repo.runReconcileRescan) and may already be spent, so there may
-    // be no later recovery; the finally runs BEFORE the re-throw propagates, so the
-    // heal fires in this pass. Only CREATE ops are collected, so the cross-tx
-    // patch-exclusion doesn't apply — deliberate: a sibling patch here may have been
-    // REJECTED (no echo), so the create's phantom still needs the heal; a drained
-    // create whose id still has a pending same-id op is safely skip-stale'd by the
-    // observer and reconciled by that op's echo.
-    await restageCreatedQuietly(deps, database, drainedCreateOps)
+    // marker-gated (repo.runReconcileRescan) and may already be spent, so the
+    // finally runs BEFORE the re-throw propagates and heals in this pass.
+    //
+    // Collect ALL ops from the SUCCEEDED txs (not creates-only) so restageCreatedIds
+    // sees same-id patch context and its patch-exclusion applies here too, matching
+    // the batch path: a create whose SEPARATE patch also SUCCEEDED is dropped — the
+    // patch's echo heals it, and re-staging would transiently revert the acked patch
+    // on disk until the echo lands. A REJECTED sibling patch is NOT collected (only
+    // successful txs push here), so its create is still re-staged and the phantom
+    // heals. The PENDING GATE inside restageCreatedIds additionally defers any id
+    // whose same-id op is still queued in ps_crud (a later, uncollected batch).
+    await restageCreatedQuietly(deps, database, drainedOps)
   }
 }
 

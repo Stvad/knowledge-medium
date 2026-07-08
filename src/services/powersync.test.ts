@@ -477,6 +477,32 @@ describe('uploadTransactionsWithFallback', () => {
     expect(restagedIds).toEqual(['block-a'])
   })
 
+  it('per-tx fallback preserves same-id patch context (create + succeeded patch not stripped)', async () => {
+    // Batch fails → per-tx. tx1 create block-x and tx2 patch block-x both succeed.
+    // The re-stage must see BOTH ops so restageCreatedIds' patch-exclusion drops
+    // block-x — its patch echo heals it; re-staging would transiently revert the
+    // acked patch on disk. (Collecting creates-only would strip the patch context.)
+    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-x', 1, {content: 'X'})])
+    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-x', 2, {content: 'X2'})])
+    const {applyOperations, recordRejection} = collectCalls()
+    applyOperations
+      .mockRejectedValueOnce(fkError())   // batch fails → per-tx fallback
+      .mockResolvedValueOnce(undefined)   // tx1 create ok
+      .mockResolvedValueOnce(undefined)   // tx2 patch ok
+    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>().mockResolvedValue(undefined)
+
+    await __uploadTransactionsWithFallbackForTest(
+      fakeDb,
+      [tx1, tx2] as unknown as CrudTransaction[],
+      {applyOperations, recordRejection, restageCreated},
+    )
+
+    expect(restageCreated).toHaveBeenCalledTimes(1)
+    const ops = restageCreated.mock.calls[0]![1]
+    expect(ops.some(o => o.kind === 'create' && o.id === 'block-x')).toBe(true)
+    expect(ops.some(o => o.kind === 'patch' && o.id === 'block-x')).toBe(true)
+  })
+
   it('a re-stage failure does not fail the already-drained upload (best-effort self-heal)', async () => {
     // The server writes succeeded and complete() drained ps_crud; a re-stage error
     // must only forfeit this pass's heal, never re-throw (which would tell
