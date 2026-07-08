@@ -67,7 +67,7 @@ describe('optional CORS proxy URL handling', () => {
 })
 
 describe('Twitter publishing', () => {
-  it('sends Buffer image assets in the object shape expected by createPost', async () => {
+  it('sends Buffer image assets in the list shape expected by createPost', async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body))
       if (String(body.query).includes('account { organizations')) {
@@ -122,25 +122,25 @@ describe('Twitter publishing', () => {
 
     const createPostRequest = fetchMock.mock.calls.at(-1)?.[1] as RequestInit
     const createPostBody = JSON.parse(String(createPostRequest.body))
-    expect(createPostBody.variables.input.assets).toEqual({
-      images: [
-        {
+    expect(createPostBody.variables.input.assets).toEqual([
+      {
+        image: {
           url: 'https://images.test/first.jpg',
           metadata: {altText: 'Image from Knowledge Medium'},
         },
-      ],
-    })
+      },
+    ])
     expect(createPostBody.variables.input.metadata.twitter.thread).toEqual([
       {
         text: 'first',
-        assets: {
-          images: [
-            {
+        assets: [
+          {
+            image: {
               url: 'https://images.test/first.jpg',
               metadata: {altText: 'Image from Knowledge Medium'},
             },
-          ],
-        },
+          },
+        ],
       },
       {text: 'second'},
     ])

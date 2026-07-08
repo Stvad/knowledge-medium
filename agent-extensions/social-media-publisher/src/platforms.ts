@@ -23,12 +23,12 @@ import {withOptionalProxy} from './url'
 
 let cachedBufferChannelId: {token: string; channelId: string} | null = null
 type BlueskyImageEmbed = AppBskyEmbedImages.Main & {$type: 'app.bsky.embed.images'}
-type BufferImageAssets = {
-  images: Array<{
+type BufferImageAssets = Array<{
+  image: {
     url: string
     metadata: {altText: string}
-  }>
-}
+  }
+}>
 
 const bufferGraphQL = async (
   apiToken: string,
@@ -90,12 +90,12 @@ export const postToTwitter = async (
     const channelId = await resolveTwitterChannelId(config.bufferToken, config.corsProxyUrl)
     const buildAssets = (mediaUrls: string[]): BufferImageAssets | undefined => {
       if (mediaUrls.length === 0) return undefined
-      return {
-        images: mediaUrls.slice(0, 4).map(url => ({
+      return mediaUrls.slice(0, 4).map(url => ({
+        image: {
           url,
           metadata: {altText: 'Image from Knowledge Medium'},
-        })),
-      }
+        },
+      }))
     }
 
     const firstAssets = buildAssets(postable[0].mediaUrls)
