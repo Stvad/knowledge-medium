@@ -27,7 +27,7 @@ const denylistFor = (executor: 'claude' | 'codex'): readonly string[] =>
 /** The billing-redirecting env vars relevant to the executors this
  *  config actually uses (a codex-free config need not mention OPENAI_*). */
 export const relevantBillingEnvVars = (config: DaemonConfig): string[] => {
-  const executors = new Set(config.watchers.map(watcher => watcher.executor))
+  const executors = new Set(config.watchers.map(watcher => watcher.runner.executor))
   // A config with no watchers still runs claude by default if any are
   // added at runtime; include claude so the report is never empty-by-omission.
   if (executors.size === 0) executors.add('claude')

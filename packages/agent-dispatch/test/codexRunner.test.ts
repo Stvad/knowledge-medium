@@ -26,15 +26,25 @@ describe('buildCodexArgs', () => {
     expect(args.at(-1)).toBe('-')
   })
 
-  it('threads resume/model through', () => {
+  it('threads resume/model and codex permissions through', () => {
     const args = buildCodexArgs({
       ...baseOptions,
       resumeSessionId: 'thread-1',
       model: 'gpt-5-codex',
+      sandbox: 'workspace-write',
+      addDirs: ['/private/tmp', '/repo/worktree'],
+      networkAccess: true,
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
     })
     expect(args).toEqual([
       'exec',
-      '--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config',
+      '--json', '-s', 'workspace-write', '--skip-git-repo-check', '--ignore-user-config',
+      '--add-dir', '/private/tmp',
+      '--add-dir', '/repo/worktree',
+      '-c', 'sandbox_workspace_write.network_access=true',
+      '-c', 'approval_policy="on-request"',
+      '-c', 'approvals_reviewer="auto_review"',
       '-m', 'gpt-5-codex',
       'resume',
       'thread-1',

@@ -14,14 +14,14 @@
  * scrubbing can't touch it; that's a login-state caveat, documented in
  * the README, not something this can fix.
  *
- * Permissions: `-s read-only` is NOT "no shell" — codex still EXECUTES
- * model-generated shell commands, but the sandbox restricts them to
- * reading the filesystem (full-disk read) with network egress blocked.
- * So an injected prompt can read local files into the model's context
- * (and thus into the reply block); it cannot write files or reach the
- * network from a command. km MCP is the only *write* path. This is a
- * materially weaker posture than the claude executor's fail-closed
- * allowlist — see the README "Executors" section.
+ * Permissions: Codex defaults to `-s read-only` for daemon runs. A
+ * watcher can opt into `workspace-write` plus declared extra roots and
+ * network access through its `runner` config. `read-only` is NOT "no
+ * shell" — codex still EXECUTES model-generated shell commands, but the
+ * sandbox restricts what those commands can do. km MCP is the graph
+ * write path in every mode. This is a materially weaker posture than
+ * the claude executor's fail-closed allowlist — see the README
+ * "Executors" section.
  * `--ignore-user-config` skips `$CODEX_HOME/config.toml` (the user's own
  * MCP servers / settings there); it does NOT guarantee plugins, skills,
  * or a global AGENTS.md outside config.toml stay out, so it's a weaker
@@ -30,6 +30,7 @@
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import { envForBilling, humanizeToolName } from './runner.js'
 import type { AgentRunResult, RunEvent } from './runner.js'
+import type { CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
 
 export type { SpawnImpl }
 
@@ -64,6 +65,11 @@ export interface CodexRunOptions {
   prompt: string
   cwd?: string
   model?: string
+  sandbox?: CodexSandbox
+  addDirs?: string[]
+  networkAccess?: boolean
+  approvalPolicy?: CodexApprovalPolicy
+  approvalsReviewer?: CodexApprovalsReviewer
   /** Resume an existing thread (thread follow-up). */
   resumeSessionId?: string
   timeoutMs: number
@@ -88,7 +94,13 @@ export interface CodexRunOptions {
  *  content belongs in neither failure mode. `-` (stdin) is always LAST. */
 export const buildCodexArgs = (options: CodexRunOptions): string[] => {
   const args = ['exec']
-  args.push('--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config')
+  args.push('--json', '-s', options.sandbox ?? 'read-only', '--skip-git-repo-check', '--ignore-user-config')
+  for (const dir of options.addDirs ?? []) args.push('--add-dir', dir)
+  if (options.networkAccess) args.push('-c', 'sandbox_workspace_write.network_access=true')
+  if (options.approvalPolicy === 'on-request' && options.approvalsReviewer === 'auto_review') {
+    args.push('-c', 'approval_policy="on-request"')
+    args.push('-c', 'approvals_reviewer="auto_review"')
+  }
   if (options.model) args.push('-m', options.model)
   if (options.mcpServer) {
     const {name, command, args: serverArgs, env} = options.mcpServer

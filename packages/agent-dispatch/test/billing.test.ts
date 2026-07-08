@@ -35,7 +35,7 @@ describe('reportBillingPosture', () => {
     const withCodex = relevantBillingEnvVars(config({
       watchers: [
         {kind: 'backlinks', name: 'c', target: 'claude'},
-        {kind: 'backlinks', name: 'x', target: 'codex', executor: 'codex'},
+        {kind: 'backlinks', name: 'x', target: 'codex', runner: {executor: 'codex'}},
       ],
     }))
     expect(withCodex).toContain('ANTHROPIC_API_KEY')

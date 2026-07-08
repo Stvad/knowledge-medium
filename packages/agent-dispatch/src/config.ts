@@ -50,6 +50,87 @@ export const PROPS = {
 export type TaskStatus = 'queued' | 'running' | 'done' | 'error'
 export type Executor = 'claude' | 'codex'
 
+const runnerBase = {
+  /** Working directory for the spawned agent process. */
+  cwd: z.string().optional(),
+  model: z.string().optional(),
+  /** Kill the agent run after this long. Capped WELL below the
+   *  30-minute stale-running sweep (watchers.ts) so a live slow run is
+   *  never concurrently re-claimed as crashed. */
+  timeoutMs: z.number().int().positive().max(25 * 60_000).default(10 * 60_000),
+}
+
+const claudeRunnerSchema = z.strictObject({
+  executor: z.literal('claude'),
+  ...runnerBase,
+  /** EXTRA --allowedTools entries beyond the km MCP graph tools.
+   *  Empty by default: mention tasks get graph access only, no Bash. */
+  allowedTools: z.array(z.string()).default([]),
+})
+
+const codexSandboxSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access'])
+const codexApprovalPolicySchema = z.enum(['on-request', 'never'])
+const codexApprovalsReviewerSchema = z.enum(['auto_review'])
+
+const codexRunnerSchema = z.strictObject({
+  executor: z.literal('codex'),
+  ...runnerBase,
+  /** Codex's own sandbox. Defaults to the historical dispatch posture:
+   *  shell commands may read, but not write, the local filesystem. */
+  sandbox: codexSandboxSchema.default('read-only'),
+  /** Additional writable roots passed as `--add-dir`. Only meaningful
+   *  once the sandbox can write. */
+  addDirs: z.array(z.string()).default([]),
+  /** Enables `[sandbox_workspace_write].network_access` for this run.
+   *  Codex only exposes that network toggle for workspace-write. */
+  networkAccess: z.boolean().default(false),
+  /** Headless dispatch defaults to never asking. Codex exec ignores the
+   *  interactive `-a` path; on-request is only supported when routed to
+   *  the auto-review classifier via `approvalsReviewer: "auto_review"`. */
+  approvalPolicy: codexApprovalPolicySchema.default('never'),
+  approvalsReviewer: codexApprovalsReviewerSchema.optional(),
+})
+
+const runnerSchema = z.preprocess(
+  value => value === undefined ? {executor: 'claude'} : value,
+  z.discriminatedUnion('executor', [claudeRunnerSchema, codexRunnerSchema]),
+).superRefine((runner, ctx) => {
+  if (runner.executor !== 'codex') return
+  if (runner.networkAccess && runner.sandbox !== 'workspace-write') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['networkAccess'],
+      message: 'networkAccess is only supported with sandbox="workspace-write"',
+    })
+  }
+  if (runner.addDirs.length > 0 && runner.sandbox === 'read-only') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['addDirs'],
+      message: 'addDirs requires sandbox="workspace-write" or "danger-full-access"',
+    })
+  }
+  if (runner.approvalPolicy !== 'never' && runner.approvalsReviewer !== 'auto_review') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['approvalPolicy'],
+      message: 'Codex exec only supports non-never approvalPolicy with approvalsReviewer="auto_review"',
+    })
+  }
+  if (runner.approvalsReviewer === 'auto_review' && runner.approvalPolicy !== 'on-request') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['approvalsReviewer'],
+      message: 'approvalsReviewer="auto_review" requires approvalPolicy="on-request"',
+    })
+  }
+})
+
+export type Runner = z.infer<typeof runnerSchema>
+export type CodexSandbox = z.infer<typeof codexSandboxSchema>
+export type CodexApprovalPolicy = z.infer<typeof codexApprovalPolicySchema>
+export type CodexApprovalsReviewer = z.infer<typeof codexApprovalsReviewerSchema>
+
 const watcherBase = {
   name: z.string().min(1),
   /** Keep a watcher parked in the config without registering it,
@@ -58,28 +139,16 @@ const watcherBase = {
   disabled: z.boolean().default(false),
   /** Prompt template; see prompt.ts for available {{placeholders}}. */
   prompt: z.string().optional(),
-  /** Working directory for the spawned agent process. */
-  cwd: z.string().optional(),
-  /** EXTRA --allowedTools entries beyond the km MCP graph tools.
-   *  Empty by default: mention tasks get graph access only, no Bash. */
-  allowedTools: z.array(z.string()).default([]),
-  model: z.string().optional(),
-  /** Kill the agent run after this long. Capped WELL below the
-   *  30-minute stale-running sweep (watchers.ts) so a live slow run is
-   *  never concurrently re-claimed as crashed. */
-  timeoutMs: z.number().int().positive().max(25 * 60_000).default(10 * 60_000),
+  /** Runner-specific process config. Kept nested so Claude's
+   *  allowlisted tools and Codex's sandbox/approval controls cannot
+   *  silently apply to the wrong executor. */
+  runner: runnerSchema,
   /** 'spawn' (default): one CLI run per task, full lifecycle
    *  handled by the daemon. 'channel' (EXPERIMENTAL, research-preview
    *  Claude Code channels): push the event into a persistent ambient
    *  session via the km MCP channel port; that session completes the
    *  lifecycle itself using the graph tools. */
   delivery: z.enum(['spawn', 'channel']).default('spawn'),
-  /** Which CLI runs the task. 'claude' (default) bills the Claude
-   *  subscription; 'codex' bills the ChatGPT plan (OpenAI's `codex`
-   *  CLI) and gets the km MCP server injected plus its own built-ins.
-   *  allowedTools / defaultAllowedTools are claude-only and ignored for
-   *  a codex watcher. */
-  executor: z.enum(['claude', 'codex']).default('claude'),
 }
 
 const backlinksWatcherSchema = z.strictObject({
@@ -161,7 +230,7 @@ const rawConfigSchema = z.strictObject({
    *  to pure polling when the tab/bridge doesn't support it. */
   push: z.boolean().default(true),
   claudeBin: z.string().default('claude'),
-  /** Path/name of the codex CLI, for watchers with `executor: 'codex'`. */
+  /** Path/name of the codex CLI, for watchers with `runner.executor: 'codex'`. */
   codexBin: z.string().default('codex'),
   /** Which account a run's tokens bill to. 'subscription' (default,
    *  safe): scrub every API-key/token/provider-reroute env var from the
@@ -174,14 +243,15 @@ const rawConfigSchema = z.strictObject({
    *  stored via `claude`/`codex` login (auth.json / apiKeyHelper) lives
    *  outside the env and CANNOT be scrubbed — see the startup log. */
   billing: z.enum(['subscription', 'api']).default('subscription'),
-  /** Tools EVERY spawned run may use, beyond the km MCP graph tools;
-   *  per-watcher `allowedTools` adds on top. Defaults to web research
-   *  (WebSearch + WebFetch) — the common "look this up for me" mention
-   *  needs it, and neither tool touches the local machine. TRADE-OFF:
-   *  WebFetch ingests arbitrary page text, so a prompt-injected page
-   *  can steer a run that also holds graph WRITE tools — including
-   *  exfiltrating note content through crafted fetch URLs. Accepted
-   *  default here; set `defaultAllowedTools: []` to run graph-only. */
+  /** Tools EVERY spawned Claude run may use, beyond the km MCP graph
+   *  tools; per-watcher `runner.allowedTools` adds on top. Defaults to
+   *  web research (WebSearch + WebFetch) — the common "look this up for
+   *  me" mention needs it, and neither tool touches the local machine.
+   *  TRADE-OFF: WebFetch ingests arbitrary page text, so a
+   *  prompt-injected page can steer a run that also holds graph WRITE
+   *  tools — including exfiltrating note content through crafted fetch
+   *  URLs. Accepted default here; set `defaultAllowedTools: []` to run
+   *  Claude graph-only. */
   defaultAllowedTools: z.array(z.string()).default(['WebSearch', 'WebFetch']),
   maxConcurrent: z.number().int().positive().default(2),
   /** Global spend circuit-breaker: at most this many run launches
@@ -208,6 +278,15 @@ const rawConfigSchema = z.strictObject({
       message: `duplicate watcher name "${duplicateName}" — cursors and baselines are keyed by watcher name, so each watcher needs its own even when disabled`,
     })
   }
+  config.watchers.forEach((watcher, index) => {
+    if (watcher.delivery === 'channel' && watcher.runner.executor !== 'claude') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['watchers', index, 'delivery'],
+        message: 'delivery="channel" requires runner.executor="claude"; Codex has no channel transport',
+      })
+    }
+  })
 })
 
 export const defaultConfigPath = () =>
@@ -233,9 +312,16 @@ const duplicateWatcherName = (watchers: RawWatcher[]): string | null => {
 const toActiveWatcher = (rawWatcher: RawWatcher): Watcher => {
   const {disabled, ...watcher} = rawWatcher
   void disabled
+  const runner = watcher.runner
   return {
     ...watcher,
-    cwd: watcher.cwd ? expandHome(watcher.cwd) : watcher.cwd,
+    runner: {
+      ...runner,
+      cwd: runner.cwd ? expandHome(runner.cwd) : runner.cwd,
+      ...(runner.executor === 'codex'
+        ? {addDirs: runner.addDirs.map(expandHome)}
+        : {}),
+    },
   }
 }
 
