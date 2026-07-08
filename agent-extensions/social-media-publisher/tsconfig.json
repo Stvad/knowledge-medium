@@ -16,5 +16,5 @@
     "target": "ES2022",
     "types": ["react", "react-dom"]
   },
-  "include": ["index.tsx", "remote.d.ts"]
+  "include": ["src/**/*", "test/**/*", "remote.d.ts", "vite.config.ts", "vitest.config.ts"]
 }
