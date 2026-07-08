@@ -362,6 +362,81 @@ describe('uploadTransactionsWithFallback', () => {
     expect(tx2.completed).toBe(true)
   })
 
+  it("re-stages the batch's created ids AFTER the tail tx completes (drains ps_crud first)", async () => {
+    // Fix B: after a create upload drains, re-stage its ids so the observer
+    // re-reconciles any insert-or-skip phantom. The ORDER is load-bearing — the
+    // re-stage must run after complete() clears ps_crud, else the still-pending
+    // create makes the observer skip-stale the heal (the trap that caused the bug).
+    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 2, {content: 'B'})])
+    const {applyOperations, recordRejection} = collectCalls()
+    let completedWhenRestaged: boolean | undefined
+    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>(async () => {
+      completedWhenRestaged = tx2.completed
+    })
+
+    await __uploadTransactionsWithFallbackForTest(
+      fakeDb,
+      [tx1, tx2] as unknown as CrudTransaction[],
+      {applyOperations, recordRejection, restageCreated},
+    )
+
+    expect(restageCreated).toHaveBeenCalledTimes(1)
+    expect(completedWhenRestaged).toBe(true)
+    expect(
+      restageCreated.mock.calls[0]![1].filter(o => o.kind === 'create').map(o => o.id),
+    ).toEqual(['block-a'])
+  })
+
+  it('per-tx fallback re-stages each drained tx, but not a quarantined one', async () => {
+    // Batch fails permanently → per-tx. tx1 + tx3 drain and get re-staged; tx2 is
+    // rejected (its create never landed server-side), so it is NOT re-staged.
+    const tx1 = fakeTx(10, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 10, {content: 'A'})])
+    const tx2 = fakeTx(20, [new CrudEntry(2, UpdateType.PUT, 'blocks', 'block-b', 20, {content: 'B'})])
+    const tx3 = fakeTx(30, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 30, {content: 'C'})])
+    const {applyOperations, recordRejection} = collectCalls()
+    applyOperations
+      .mockRejectedValueOnce(fkError())   // batch → per-tx fallback
+      .mockResolvedValueOnce(undefined)   // tx1 ok
+      .mockRejectedValueOnce(fkError())   // tx2 rejected → quarantined
+      .mockResolvedValueOnce(undefined)   // tx3 ok
+    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>().mockResolvedValue(undefined)
+
+    await __uploadTransactionsWithFallbackForTest(
+      fakeDb,
+      [tx1, tx2, tx3] as unknown as CrudTransaction[],
+      {applyOperations, recordRejection, restageCreated},
+    )
+
+    const restagedIds = restageCreated.mock.calls.flatMap(
+      call => call[1].filter(o => o.kind === 'create').map(o => o.id),
+    )
+    expect(restagedIds).toEqual(['block-a', 'block-c'])
+  })
+
+  it('a re-stage failure does not fail the already-drained upload (best-effort self-heal)', async () => {
+    // The server writes succeeded and complete() drained ps_crud; a re-stage error
+    // must only forfeit this pass's heal, never re-throw (which would tell
+    // PowerSync to retry a drained batch).
+    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const {applyOperations, recordRejection} = collectCalls()
+    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>()
+      .mockRejectedValue(new Error('db is locked'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(
+      __uploadTransactionsWithFallbackForTest(
+        fakeDb,
+        [tx1] as unknown as CrudTransaction[],
+        {applyOperations, recordRejection, restageCreated},
+      ),
+    ).resolves.toBeUndefined()
+
+    expect(tx1.completed).toBe(true)
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   it('permanent failure on batch: isolates per-tx, records the bad tx, drains the rest', async () => {
     // The original FK-jam scenario in miniature. The batch fails with
     // 23503; classifier marks permanent; per-tx fallback applies

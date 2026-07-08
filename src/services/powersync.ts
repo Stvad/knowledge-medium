@@ -72,6 +72,14 @@ export interface UploadDeps {
   encryptOps?: (
     operations: readonly CompactedBlockOperation[],
   ) => Promise<readonly CompactedBlockOperation[]>
+  /** Re-stage created ids AFTER their upload drains, so the observer
+   *  re-reconciles them against the (possibly insert-or-skipped) server row.
+   *  Self-heals the insert-or-skip phantom class (see {@link restageCreatedIds}).
+   *  Optional so test deps can omit it; absent ⇒ no-op. */
+  restageCreated?: (
+    database: AbstractPowerSyncDatabase,
+    operations: readonly CompactedBlockOperation[],
+  ) => Promise<void>
 }
 
 /** Resolve a workspace's sync mode for the encrypt-on-upload decision. The
@@ -422,6 +430,78 @@ const defaultBlockUploadSink: BlockUploadSink = {
   deleteRow: applyBlockDelete,
 }
 
+/** Re-enqueue each created id into the observer's change queue
+ *  (`blocks_synced_changes`) so `decideStagingRow` re-runs against the current
+ *  `blocks_synced` row.
+ *
+ *  WHY: client CREATEs upload as insert-or-skip (`applyBlockCreates`,
+ *  `ON CONFLICT (id) DO NOTHING`). When a client mints a deterministic id while
+ *  its already-synced `blocks_synced` row is momentarily un-materialized (the
+ *  offline-reconnect race between a mutating plugin effect and initial sync), it
+ *  writes a phantom `blocks` row with a real-time stamp. The server keeps its
+ *  authoritative row and the skipped create produces NO echo — so nothing ever
+ *  re-triggers reconciliation and the phantom is stuck ahead-of-synced forever.
+ *  Re-staging synthesizes the missing echo: the observer wakes (it subscribes to
+ *  `blocks_synced_changes`), re-reads the staging row, and — now that the upload
+ *  has drained — applies the server's version over the phantom.
+ *
+ *  ORDERING: caller MUST invoke this only AFTER `complete()` has drained
+ *  `ps_crud`. While the create is still queued, `hasPendingUpload` is true and
+ *  the observer `skip-stale`s the re-stage — the exact trap that created the
+ *  phantom.
+ *
+ *  SELF-SELECTING for creates: a skipped create has a staging row to heal to; a
+ *  genuinely-new create has no `blocks_synced` row yet, so the drain finds
+ *  nothing to materialize and no-ops (never deletes the fresh local row —
+ *  `'upsert'` ids never enter the observer's `removed` set). Redundant with the
+ *  natural echo for genuine inserts (harmless: an idempotent LWW-gated re-drain).
+ *
+ *  EXCLUDES a create whose id also carries a SEPARATE patch op (necessarily from
+ *  a different tx — a same-tx patch fuses into the create's payload, so a fused
+ *  create+patch still uploads as one insert-or-skip PUT and DOES need the heal).
+ *  A separate patch is a real server-changing write (patches aren't insert-or-
+ *  skip) whose echo re-reconciles the id on its own; re-staging the create here
+ *  would only risk a transient on-disk revert in the ack-to-echo window.
+ *
+ *  Writes only `blocks_synced_changes` (local bookkeeping, no upload routing),
+ *  so it never enqueues a server write of its own. */
+const restageCreatedIds = async (
+  database: AbstractPowerSyncDatabase,
+  operations: readonly CompactedBlockOperation[],
+): Promise<void> => {
+  const patchedIds = new Set(operations.filter(op => op.kind === 'patch').map(op => op.id))
+  const createdIds = operations
+    .filter(op => op.kind === 'create' && !patchedIds.has(op.id))
+    .map(op => op.id)
+  if (createdIds.length === 0) return
+  await database.writeTransaction(async tx => {
+    for (const id of createdIds) {
+      await tx.execute(
+        "INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')",
+        [id],
+      )
+    }
+  })
+}
+
+/** Best-effort re-stage after a drained upload. Never lets a re-stage failure
+ *  fail the upload loop: the server writes already succeeded and `complete()`
+ *  already drained `ps_crud`, so a re-stage error only forfeits THIS pass's
+ *  auto-heal (the `drainWorkspace` rescan on next open remains a backstop).
+ *  Re-throwing would wrongly signal PowerSync to retry an already-drained
+ *  batch. */
+const restageCreatedQuietly = async (
+  deps: UploadDeps,
+  database: AbstractPowerSyncDatabase,
+  operations: readonly CompactedBlockOperation[],
+): Promise<void> => {
+  try {
+    await deps.restageCreated?.(database, operations)
+  } catch (err) {
+    console.warn('[powersync] re-stage of created ids failed — self-heal skipped this pass', err)
+  }
+}
+
 const collectUploadBatch = async (
   database: AbstractPowerSyncDatabase,
 ): Promise<CrudTransaction[]> => {
@@ -530,6 +610,7 @@ const makeUploadDeps = (
   applyOperations: applyCompactedBlockOperations,
   recordRejection: recordRejectionToTable,
   encryptOps: ops => encryptUploadOps(ops, getWorkspaceMode, getCek),
+  restageCreated: restageCreatedIds,
 })
 
 /** How many upload passes an `ambiguous` tx (a suspected-permanent 4xx with no
@@ -616,6 +697,9 @@ const uploadTransactionsWithFallback = async (
     try {
       await deps.applyOperations(database, batchOps)
       await transactions[transactions.length - 1]?.complete()
+      // After the batch drained ps_crud, re-stage its creates so the observer
+      // re-reconciles any insert-or-skip phantom (hasPendingUpload is now clear).
+      await restageCreatedQuietly(deps, database, batchOps)
       // The whole batch drained — clear any ambiguous retry counters it carried
       // (an earlier pass's transient blip cleared and the batch went through).
       for (const transaction of transactions) {
@@ -646,6 +730,8 @@ const uploadTransactionsWithFallback = async (
     try {
       await deps.applyOperations(database, txOps)
       await transaction.complete()
+      // Same as the batch path: re-stage this tx's creates once it has drained.
+      await restageCreatedQuietly(deps, database, txOps)
       forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     } catch (err) {
       const classification = classifyUploadError(err)
@@ -754,3 +840,4 @@ export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFal
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations
 export const __applyBlockPatchesRpcForTest = applyBlockPatchesRpc
 export const __recordRejectionToTableForTest = recordRejectionToTable
+export const __restageCreatedIdsForTest = restageCreatedIds
