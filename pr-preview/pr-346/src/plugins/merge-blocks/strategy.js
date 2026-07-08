@@ -1,0 +1,2 @@
+import{hasBlockType as e}from"../../data/properties.js";import"../../data/blockTypes.js";var t=(t,n)=>e(t,`page`)||e(n,`page`)?`keepTarget`:`concat`;export{t as pickMergeContentStrategy};
+//# sourceMappingURL=strategy.js.map
