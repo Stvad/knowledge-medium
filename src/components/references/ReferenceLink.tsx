@@ -72,7 +72,7 @@ export function ReferenceLink({block, children}: {block: Block; children: ReactN
   return (
     <a
       href={href}
-      className="blockref text-inherit no-underline cursor-pointer rounded-sm px-0.5 hover:bg-muted/60"
+      className="blockref text-inherit underline decoration-dotted decoration-muted-foreground/60 underline-offset-[0.18em] cursor-pointer rounded-sm px-0.5 hover:bg-muted/60 hover:decoration-muted-foreground/75"
       data-block-id={block.id}
       // An `<a>` is draggable by default, which would start a native LINK drag on
       // press-drag inside the reference — hijacking a video's scrub or an image's

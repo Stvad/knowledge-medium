@@ -258,14 +258,14 @@
   a.blockref {
     text-decoration-line: underline;
     text-decoration-style: dotted;
-    text-decoration-color: hsl(var(--muted-foreground) / 0.48);
+    text-decoration-color: hsl(var(--muted-foreground) / 0.62);
     text-decoration-thickness: 1px;
     text-underline-offset: 0.18em;
   }
 
   .blockref:hover,
   a.blockref:hover {
-    text-decoration-color: hsl(var(--muted-foreground) / 0.68);
+    text-decoration-color: hsl(var(--muted-foreground) / 0.78);
   }
 
   img {
