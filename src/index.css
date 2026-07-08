@@ -254,6 +254,20 @@
     @apply underline;
   }
 
+  .blockref,
+  a.blockref {
+    text-decoration-line: underline;
+    text-decoration-style: dotted;
+    text-decoration-color: hsl(var(--muted-foreground) / 0.48);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.18em;
+  }
+
+  .blockref:hover,
+  a.blockref:hover {
+    text-decoration-color: hsl(var(--muted-foreground) / 0.68);
+  }
+
   img {
     max-width: 100%;
     height: auto;
