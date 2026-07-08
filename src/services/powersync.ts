@@ -753,58 +753,63 @@ const uploadTransactionsWithFallback = async (
   // preserved — losing it would clobber properties_json on a server row
   // the deterministic-id bootstrap already created.
   //
-  // Re-stage is DEFERRED to after the loop (not per-tx): a create in an early tx
-  // with a later same-id patch/delete in a later tx would otherwise re-stage the
-  // create while that later tx is still pending in ps_crud — the observer would
-  // skip-stale and CONSUME the synthetic upsert, and if the later tx is then
-  // quarantined (no server echo) the phantom would stay stuck. Draining the whole
-  // fallback first guarantees no sibling op is pending when we re-stage.
+  // Re-stage is DEFERRED to the `finally` after the whole fallback drains (not
+  // per-tx): a create in an early tx with a later same-id patch/delete would
+  // otherwise re-stage while that later tx is still pending in ps_crud — the
+  // observer would skip-stale and CONSUME the synthetic upsert, and if the later
+  // tx is then quarantined (no server echo) the phantom would stay stuck. Draining
+  // first guarantees no sibling op is pending when we re-stage.
   const drainedCreateOps: CompactedBlockOperation[] = []
-  for (const transaction of transactions) {
-    const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
-    try {
-      await deps.applyOperations(database, txOps)
-      await transaction.complete()
-      drainedCreateOps.push(...txOps.filter(op => op.kind === 'create'))
-      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
-    } catch (err) {
-      const classification = classifyUploadError(err)
-      if (classification === 'transient') {
-        console.error('[powersync] per-tx upload failed (transient, will retry)', err)
-        throw err
-      }
-      // An ambiguous error (a suspected-permanent 4xx with no confirming code)
-      // is retried across a few upload passes before we give up: re-throw until
-      // the budget is spent, then fall through to quarantine. A genuinely
-      // transient blip clears within the budget; a real permanent error
-      // quarantines instead of jamming the queue forever.
-      if (classification === 'ambiguous' && !ambiguousBudgetExhausted(ambiguousAttempts, transaction)) {
+  try {
+    for (const transaction of transactions) {
+      const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
+      try {
+        await deps.applyOperations(database, txOps)
+        await transaction.complete()
+        drainedCreateOps.push(...txOps.filter(op => op.kind === 'create'))
+        forgetAmbiguousAttempts(ambiguousAttempts, transaction)
+      } catch (err) {
+        const classification = classifyUploadError(err)
+        if (classification === 'transient') {
+          console.error('[powersync] per-tx upload failed (transient, will retry)', err)
+          throw err
+        }
+        // An ambiguous error (a suspected-permanent 4xx with no confirming code)
+        // is retried across a few upload passes before we give up: re-throw until
+        // the budget is spent, then fall through to quarantine. A genuinely
+        // transient blip clears within the budget; a real permanent error
+        // quarantines instead of jamming the queue forever.
+        if (classification === 'ambiguous' && !ambiguousBudgetExhausted(ambiguousAttempts, transaction)) {
+          console.warn(
+            `[powersync] tx ${transaction.transactionId} ambiguous upload error — retrying`,
+            err,
+          )
+          throw err
+        }
         console.warn(
-          `[powersync] tx ${transaction.transactionId} ambiguous upload error — retrying`,
+          `[powersync] tx ${transaction.transactionId} rejected — quarantining`,
           err,
         )
-        throw err
+        await deps.recordRejection(database, transaction, err)
+        await transaction.complete()
+        forgetAmbiguousAttempts(ambiguousAttempts, transaction)
       }
-      console.warn(
-        `[powersync] tx ${transaction.transactionId} rejected — quarantining`,
-        err,
-      )
-      await deps.recordRejection(database, transaction, err)
-      await transaction.complete()
-      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     }
+  } finally {
+    // Re-stage every create that DRAINED ps_crud — in a `finally` so it still runs
+    // when a later tx re-throws (a transient error, or `encryptOps` throwing before
+    // its inner `try`). A drained create has been complete()d, so PowerSync's retry
+    // re-collects only the UNdrained txs and would never re-enqueue it — stranding
+    // its insert-or-skip phantom. The one-time reconcile-rescan backstop is
+    // marker-gated (repo.runReconcileRescan) and may already be spent, so there may
+    // be no later recovery; the finally runs BEFORE the re-throw propagates, so the
+    // heal fires in this pass. Only CREATE ops are collected, so the cross-tx
+    // patch-exclusion doesn't apply — deliberate: a sibling patch here may have been
+    // REJECTED (no echo), so the create's phantom still needs the heal; a drained
+    // create whose id still has a pending same-id op is safely skip-stale'd by the
+    // observer and reconciled by that op's echo.
+    await restageCreatedQuietly(deps, database, drainedCreateOps)
   }
-
-  // Every fallback tx has drained ps_crud, so no sibling upload is pending for any
-  // created id — re-stage now to self-heal insert-or-skip phantoms. Only CREATE
-  // ops are collected, so the cross-tx patch-exclusion inside restageCreatedIds
-  // does not apply here: that's deliberate — a sibling patch in this fallback may
-  // have been REJECTED (no echo to reconcile), so the create's phantom still needs
-  // the heal; for a sibling patch that SUCCEEDED, the un-excluded re-stage is a
-  // benign self-healing transient (the echo re-asserts it via the LWW cache gate).
-  // Skipped on a transient re-throw above; the on-open drainWorkspace rescan is
-  // the backstop for that (rarer) case.
-  await restageCreatedQuietly(deps, database, drainedCreateOps)
 }
 
 const runUploadLoop = async (

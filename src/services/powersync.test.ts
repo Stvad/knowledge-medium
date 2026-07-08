@@ -446,6 +446,37 @@ describe('uploadTransactionsWithFallback', () => {
     ).toEqual(['block-x'])
   })
 
+  it('re-stages an already-drained create even when a later tx re-throws (transient)', async () => {
+    // tx1's create drains ps_crud; tx2 hits a transient error and re-throws so
+    // PowerSync retries — but the retry re-collects only the undrained tx2, so
+    // tx1's create is never re-enqueued. The heal must fire in a `finally` before
+    // the re-throw, else the phantom is stranded (the one-time reconcile-rescan
+    // backstop is marker-gated and may already be spent).
+    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PUT, 'blocks', 'block-b', 2, {content: 'B'})])
+    const {applyOperations, recordRejection} = collectCalls()
+    applyOperations
+      .mockRejectedValueOnce(fkError())      // batch fails → per-tx fallback
+      .mockResolvedValueOnce(undefined)      // tx1 ok (drains ps_crud)
+      .mockRejectedValueOnce(networkError()) // tx2 transient → re-throw
+    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>().mockResolvedValue(undefined)
+
+    await expect(
+      __uploadTransactionsWithFallbackForTest(
+        fakeDb,
+        [tx1, tx2] as unknown as CrudTransaction[],
+        {applyOperations, recordRejection, restageCreated},
+      ),
+    ).rejects.toThrow('fetch failed')
+
+    expect(tx1.completed).toBe(true)
+    expect(tx2.completed).toBe(false)
+    const restagedIds = restageCreated.mock.calls.flatMap(
+      call => call[1].filter(o => o.kind === 'create').map(o => o.id),
+    )
+    expect(restagedIds).toEqual(['block-a'])
+  })
+
   it('a re-stage failure does not fail the already-drained upload (best-effort self-heal)', async () => {
     // The server writes succeeded and complete() drained ps_crud; a re-stage error
     // must only forfeit this pass's heal, never re-throw (which would tell
