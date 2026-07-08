@@ -22,21 +22,24 @@ Runs execute via `claude -p` on a machine authenticated with `claude login`. The
 
 ## Executors
 
-By default a watcher runs `claude`. Set `"executor": "codex"` on any watcher to run [OpenAI's `codex` CLI](https://github.com/openai/codex) instead:
+By default a watcher runs `claude`. Configure `"runner": {"executor": "codex"}` on any watcher to run [OpenAI's `codex` CLI](https://github.com/openai/codex) instead:
 
 ```jsonc
 {
   "kind": "backlinks",
   "name": "codex-mentions",
   "target": "codex",
-  "executor": "codex"
+  "runner": {
+    "executor": "codex"
+  }
 }
 ```
 
 - **Billing:** codex runs authenticate with `codex login` (ChatGPT plan) on this machine. The daemon scrubs `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `CODEX_API_KEY`, and `CODEX_ACCESS_TOKEN` from the child environment — same rationale as the claude billing invariant above (any of these env credentials beats the ChatGPT-plan OAuth session in codex's credential order). **Caveat:** a key stored with `codex login --with-api-key` lives in `auth.json`, not the env — env scrubbing can't override it, so if you've done that, daemon codex runs bill the API (the analogue of the claude `apiKeyHelper` caveat above).
-- **Sandboxing — weaker than the claude executor, read this:** codex runs are spawned `-s read-only --skip-git-repo-check --ignore-user-config`. `read-only` does **not** mean "no shell" — codex still *executes* model-generated shell commands; the sandbox restricts them to **reading the filesystem (full-disk read) with network egress blocked**. So a prompt-injected `[[codex]]` mention (or content a run pulled in from the web) can read local files — `~/.ssh`, dotfiles, other repos — into the model's context and thus into the reply block; it cannot write files or exfiltrate over the network from a command. This is a materially weaker posture than the claude executor, which gets no Bash and a fail-closed allowlist. `--ignore-user-config` skips `$CODEX_HOME/config.toml` (the user's own MCP servers/settings there) but does **not** guarantee plugins, skills, or a global `AGENTS.md` outside config.toml stay out of the run — so it's a *weaker* analogue of claude's `--strict-mcp-config`, not an equal one. **Point a codex watcher only at content you'd trust with local read access.**
-- **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. `allowedTools` / `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
-- **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
+- **Sandboxing — weaker than the claude executor, read this:** codex defaults to `-s read-only --skip-git-repo-check --ignore-user-config`. `read-only` does **not** mean "no shell" — codex still *executes* model-generated shell commands; the sandbox restricts them to **reading the filesystem (full-disk read) with network egress blocked**. So a prompt-injected `[[codex]]` mention (or content a run pulled in from the web) can read local files — `~/.ssh`, dotfiles, other repos — into the model's context and thus into the reply block. A watcher can explicitly opt into `"sandbox": "workspace-write"`, `"addDirs": [...]`, and `"networkAccess": true` under `runner`. This is a materially weaker posture than the claude executor, which gets no Bash and a fail-closed allowlist. `--ignore-user-config` skips `$CODEX_HOME/config.toml` (the user's own MCP servers/settings there) but does **not** guarantee plugins, skills, or a global `AGENTS.md` outside config.toml stay out of the run — so it's a *weaker* analogue of claude's `--strict-mcp-config`, not an equal one. **Point a codex watcher only at content you'd trust with the configured local access.**
+- **Approvals:** codex runs default to `--ask-for-approval never`, because launchd has no reliable interactive approval channel. Set `"approvalPolicy": "on-request"` for a watcher you run from an interactive/debug surface. `on-failure` and `untrusted` are accepted because the CLI accepts them, but `on-failure` is deprecated by Codex.
+- **Tools:** the km MCP server is injected into the codex run via `-c mcp_servers.*` config overrides (not a config file), alongside codex's own built-in tools. Claude's `runner.allowedTools` and the top-level `defaultAllowedTools` are **claude-only** and are ignored for a codex watcher — there's no equivalent allowlist gate at the codex CLI layer today.
+- **Sessions don't cross executors:** `agent:session` ids are executor-scoped — codex thread ids are stored as `codex:<id>`, claude session ids bare (matching every pre-executor session). A follow-up whose nearest thread session belongs to the *other* executor starts a **fresh** thread instead of forwarding the foreign id to `--resume`/`resume` (which would fail the run outright). Switching a watcher's `runner.executor` therefore drops thread continuity, never mixes histories, and never burns retries on doomed resumes.
 
 ## Upgrade from claude-tasks
 
@@ -136,6 +139,32 @@ This rename intentionally does **not** carry a permanent `claude:*` compatibilit
          "name": "stale-actions",
          "sql": "SELECT id, content FROM blocks WHERE workspace_id = 'YOUR_WORKSPACE_ID' AND json_extract(properties_json, '$.\"action:status\"') = 'open'",
          "prompt": "New open action items appeared:\n{{newRows}}\nTriage them: add a priority property to each via update_block."
+       },
+       {
+         "kind": "backlinks",
+         "name": "repo-claude",
+         "target": "claude-repo",
+         "prompt": "Handle this repo task:\n{{subtree}}",
+         "runner": {
+           "executor": "claude",
+           "allowedTools": ["Bash(git:*)"],
+           "cwd": "/Users/YOU/code/YOUR_REPO"
+         }
+       },
+       {
+         "kind": "backlinks",
+         "name": "repo-codex",
+         "target": "codex",
+         "prompt": "Handle this repo task:\n{{subtree}}",
+         "runner": {
+           "executor": "codex",
+           "model": "gpt-5.3-codex-spark",
+           "cwd": "/Users/YOU/code/YOUR_REPO",
+           "sandbox": "workspace-write",
+           "addDirs": ["/private/tmp"],
+           "networkAccess": true,
+           "approvalPolicy": "never"
+         }
        }
      ]
    }
@@ -170,7 +199,7 @@ This rename intentionally does **not** carry a permanent `claude:*` compatibilit
 1. Watcher sees a new backlink to `target` whose source block has no `agent:status` property (one batched SQL per tick — processed mentions stay cheap forever). Blocks edited in the last `quietMs` (default 15 s) wait — the daemon shouldn't claim (and bill) a half-typed request.
 2. Claim: `agent:status=running` + `agent:watcher` + `agent:executor` + `agent:attempts` + `agent:updated-at` written to the block, then **claim-verified** (re-read; if a competing daemon overwrote it, this one backs off).
 3. Prompt = mention content + full subtree outline + ancestor path (`prompt.ts` template, overridable per watcher), delivered over **stdin** (never argv — `ps`-visible and ARG_MAX-capped).
-4. `claude -p` runs with the **km MCP graph tools + web research** (fail-closed `--allowedTools` + `--strict-mcp-config`; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and e.g. `"Bash(git:*)"` per watcher opts into more). `cwd` defaults to `$HOME`.
+4. The configured runner starts with the km MCP graph tools. Claude uses fail-closed `--allowedTools` + `--strict-mcp-config`; `WebSearch`/`WebFetch` come from the top-level `defaultAllowedTools`, and `runner.allowedTools` opts into more. Codex uses its `runner.sandbox` / `runner.addDirs` / `runner.networkAccess` / `runner.approvalPolicy` settings. `runner.cwd` defaults to `$HOME`.
 5. Reply text lands as a child block (marked `agent:reply` so it can never re-trigger), status flips to `done`, and the session id is stored as `agent:session`.
 6. **Threads:** a later `[[claude]]` mention anywhere under that block — including directly under Claude's reply — finds the nearest ancestor `agent:session` and `--resume`s it (never two concurrent resumes of one session).
 
@@ -223,10 +252,10 @@ Tools: `get_block`, `subtree`, `backlinks`, `page`, `daily_note`, `search`, `sql
 ## Security posture
 
 - The daemon's bridge token is scoped to its own profile — revoke it in the app's token dialog to kill all graph access at once.
-- **Claude executor:** spawned runs get **no Bash and no filesystem tools by default**; graph MCP tools plus `WebSearch`/`WebFetch` (the top-level `defaultAllowedTools`). Watchers that operate on code repos must opt in via `allowedTools` + `cwd`, which is a deliberate, per-watcher decision. **This fail-closed posture is claude-only** — a `executor: "codex"` watcher runs shell commands with full-disk read under the `read-only` sandbox and ignores `allowedTools` entirely (see the codex Sandboxing bullet above).
+- **Claude executor:** spawned runs get **no Bash and no filesystem tools by default**; graph MCP tools plus `WebSearch`/`WebFetch` (the top-level `defaultAllowedTools`). Watchers that operate on code repos must opt in via `runner.allowedTools` + `runner.cwd`, which is a deliberate, per-watcher decision. **This fail-closed posture is claude-only** — a `"runner": {"executor": "codex"}` watcher runs shell commands under Codex's configured sandbox and ignores `allowedTools` entirely (see the codex Sandboxing bullet above).
 - **Web-tools trade-off:** `WebFetch` ingests arbitrary page text, so a prompt-injected page can steer a run that also holds graph *write* tools — including exfiltrating note content through crafted fetch URLs. Neither web tool touches the local machine, and `runsPerHour` bounds the blast radius, but if your notes are sensitive set `"defaultAllowedTools": []` to keep runs graph-only.
 - **Billing — safe by default, opt in on purpose:** `"billing": "subscription"` (default) scrubs every API-key/token/provider-reroute env var (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, bedrock/vertex/base-url switches, …) from the child, so a key you exported for something else can't silently put an unattended daemon on usage-based billing — the CLI's plan login (OAuth) wins. To *intentionally* run on API credits, set `"billing": "api"`, which skips the scrub. The daemon logs the effective mode at startup, naming (never printing) any credential vars it found. **One gap it can't close:** a key stored via `claude`/`codex` login (`--with-api-key` → `auth.json`, or an `apiKeyHelper`) lives outside the env and is *not* scrubbable — the startup log flags this; verify your login state if you're unsure which account a run bills.
-- No `--dangerously-skip-permissions` anywhere; print mode denies anything outside the allowlist.
+- No Claude `--dangerously-skip-permissions` or Codex `--dangerously-bypass-approvals-and-sandbox` anywhere. Claude print mode denies anything outside the allowlist; Codex authority is bounded by its configured sandbox and approval policy.
 
 ## Ambient mode via channels (EXPERIMENTAL)
 

@@ -14,6 +14,7 @@
  * repo-scoped watcher), which is a deliberate opt-in.
  */
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
+import type { CodexApprovalPolicy, CodexSandbox } from './config.js'
 
 /** Progress observed while a run is in flight — fed to `onEvent` as the
  *  stream-json transcript arrives. `text` is CUMULATIVE: each event
@@ -44,6 +45,10 @@ export interface AgentRunOptions {
    *  runTask wiring); the engine itself stays executor-agnostic — this
    *  field just rides along with the rest of the run options. */
   executor?: 'claude' | 'codex'
+  codexSandbox?: CodexSandbox
+  codexAddDirs?: string[]
+  codexNetworkAccess?: boolean
+  codexApprovalPolicy?: CodexApprovalPolicy
   /** Billing mode (config.ts). 'api' skips the env scrub so the run can
    *  use usage-based credentials; anything else (incl. undefined) scrubs
    *  — the safe default, so a missing value never accidentally bills the

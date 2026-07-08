@@ -18,7 +18,11 @@ describe('parseConfig', () => {
       kind: 'backlinks',
       target: 'claude',
       resume: true,
-      allowedTools: [],
+      runner: {
+        executor: 'claude',
+        allowedTools: [],
+        timeoutMs: 10 * 60_000,
+      },
     })
   })
 
@@ -52,7 +56,7 @@ describe('parseConfig', () => {
 
   it('filters disabled watchers out of the active runtime config', () => {
     const config = parseConfig({watchers: [
-      {kind: 'backlinks', name: 'old-mentions', target: 'old', disabled: true, executor: 'codex'},
+      {kind: 'backlinks', name: 'old-mentions', target: 'old', disabled: true, runner: {executor: 'codex'}},
       {kind: 'backlinks', name: 'new-mentions', target: 'new'},
     ]})
 
@@ -104,19 +108,87 @@ describe('parseConfig', () => {
     })).toThrow()
   })
 
-  it('caps timeoutMs below the stale-running sweep window', () => {
+  it('rejects old flat runner keys; runner-specific config must be nested', () => {
     expect(() => parseConfig({
-      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', timeoutMs: 40 * 60_000}],
+      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', executor: 'codex'}],
+    })).toThrow()
+    expect(() => parseConfig({
+      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', allowedTools: ['Bash']}],
     })).toThrow()
   })
 
-  it('expands ~ in watcher cwd and statePath', () => {
+  it('caps runner timeoutMs below the stale-running sweep window', () => {
+    expect(() => parseConfig({
+      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', runner: {executor: 'claude', timeoutMs: 40 * 60_000}}],
+    })).toThrow()
+  })
+
+  it('expands ~ in runner cwd, codex addDirs, and statePath', () => {
     const config = parseConfig({
       statePath: '~/state.json',
-      watchers: [{kind: 'backlinks', name: 'm', target: 'claude', cwd: '~/code/repo'}],
+      watchers: [{
+        kind: 'backlinks',
+        name: 'm',
+        target: 'claude',
+        runner: {
+          executor: 'codex',
+          cwd: '~/code/repo',
+          sandbox: 'workspace-write',
+          addDirs: ['~/tmp/agent-runs'],
+        },
+      }],
     })
     expect(config.statePath).toBe(path.join(os.homedir(), 'state.json'))
-    expect(config.watchers[0].cwd).toBe(path.join(os.homedir(), 'code/repo'))
+    expect(config.watchers[0].runner.cwd).toBe(path.join(os.homedir(), 'code/repo'))
+    if (config.watchers[0].runner.executor === 'codex') {
+      expect(config.watchers[0].runner.addDirs).toEqual([path.join(os.homedir(), 'tmp/agent-runs')])
+    }
+  })
+
+  it('parses codex runner permissions explicitly', () => {
+    const config = parseConfig({
+      watchers: [{
+        kind: 'backlinks',
+        name: 'codex',
+        target: 'codex',
+        runner: {
+          executor: 'codex',
+          model: 'gpt-5-codex',
+          sandbox: 'workspace-write',
+          addDirs: ['/private/tmp'],
+          networkAccess: true,
+          approvalPolicy: 'on-request',
+        },
+      }],
+    })
+    expect(config.watchers[0].runner).toMatchObject({
+      executor: 'codex',
+      model: 'gpt-5-codex',
+      timeoutMs: 10 * 60_000,
+      sandbox: 'workspace-write',
+      addDirs: ['/private/tmp'],
+      networkAccess: true,
+      approvalPolicy: 'on-request',
+    })
+  })
+
+  it('rejects codex permission combinations the CLI cannot honor', () => {
+    expect(() => parseConfig({
+      watchers: [{
+        kind: 'backlinks',
+        name: 'codex',
+        target: 'codex',
+        runner: {executor: 'codex', networkAccess: true},
+      }],
+    })).toThrow(/networkAccess/)
+    expect(() => parseConfig({
+      watchers: [{
+        kind: 'backlinks',
+        name: 'codex',
+        target: 'codex',
+        runner: {executor: 'codex', addDirs: ['/private/tmp']},
+      }],
+    })).toThrow(/addDirs/)
   })
 
   it('accepts an explicit opt-in to usage-based billing', () => {

@@ -691,7 +691,7 @@ describe('mention lifecycle', () => {
     // up under a codex watcher: `codex exec resume <claude-id>` would
     // fail the run outright, so it must start FRESH instead.
     const codexConfig = () => parseConfig({
-      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor: 'codex'}],
+      watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor: 'codex'}}],
     })
     {
       const {graph, blocks} = fakeGraph({
@@ -760,7 +760,7 @@ describe('mention lifecycle', () => {
       const engine = engineWith({
         graph,
         runTask,
-        config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor}]}),
+        config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, runner: {executor}}]}),
       })
       await engine.tick()
       await engine.drain()
@@ -938,7 +938,13 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, allowedTools: ['Bash(git:*)']}],
+        watchers: [{
+          kind: 'backlinks',
+          name: 'mentions',
+          target: 'claude',
+          quietMs: 0,
+          runner: {executor: 'claude', allowedTools: ['Bash(git:*)']},
+        }],
       }),
     })
 
@@ -976,7 +982,7 @@ describe('mention lifecycle', () => {
     expect(tools).not.toContain('WebFetch')
   })
 
-  it('a watcher with executor: "codex" produces run options with executor "codex"', async () => {
+  it('a watcher with runner.executor: "codex" produces codex run options', async () => {
     const {graph} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] via codex'}},
@@ -986,14 +992,33 @@ describe('mention lifecycle', () => {
       graph,
       runTask,
       config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, executor: 'codex'}],
+        watchers: [{
+          kind: 'backlinks',
+          name: 'mentions',
+          target: 'claude',
+          quietMs: 0,
+          runner: {
+            executor: 'codex',
+            sandbox: 'workspace-write',
+            addDirs: ['/private/tmp'],
+            networkAccess: true,
+            approvalPolicy: 'on-request',
+          },
+        }],
       }),
     })
 
     await engine.tick()
     await engine.drain()
 
-    expect(runTask.mock.calls[0][0]).toMatchObject({executor: 'codex'})
+    expect(runTask.mock.calls[0][0]).toMatchObject({
+      executor: 'codex',
+      allowedTools: [],
+      codexSandbox: 'workspace-write',
+      codexAddDirs: ['/private/tmp'],
+      codexNetworkAccess: true,
+      codexApprovalPolicy: 'on-request',
+    })
   })
 })
 

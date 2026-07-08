@@ -208,24 +208,33 @@ export const createEngine = (deps: EngineDeps) => {
   const runOptionsFor = (
     watcher: Watcher, prompt: string, resumeSessionId?: string, onEvent?: (event: RunEvent) => void,
     signal?: AbortSignal,
-  ): AgentRunOptions => ({
-    claudeBin: config.claudeBin,
-    prompt,
-    cwd: watcher.cwd ?? os.homedir(),
-    allowedTools: [...new Set([
-      ...(mcpConfigPath ? KM_MCP_ALLOWED_TOOLS : []),
-      ...config.defaultAllowedTools,
-      ...watcher.allowedTools,
-    ])],
-    mcpConfigPath: mcpConfigPath ?? undefined,
-    model: watcher.model,
-    resumeSessionId,
-    timeoutMs: watcher.timeoutMs,
-    onEvent,
-    executor: watcher.executor,
-    billing: config.billing,
-    signal,
-  })
+  ): AgentRunOptions => {
+    const {runner} = watcher
+    return {
+      claudeBin: config.claudeBin,
+      prompt,
+      cwd: runner.cwd ?? os.homedir(),
+      allowedTools: runner.executor === 'claude'
+        ? [...new Set([
+          ...(mcpConfigPath ? KM_MCP_ALLOWED_TOOLS : []),
+          ...config.defaultAllowedTools,
+          ...runner.allowedTools,
+        ])]
+        : [],
+      mcpConfigPath: mcpConfigPath ?? undefined,
+      model: runner.model,
+      resumeSessionId,
+      timeoutMs: runner.timeoutMs,
+      onEvent,
+      executor: runner.executor,
+      codexSandbox: runner.executor === 'codex' ? runner.sandbox : undefined,
+      codexAddDirs: runner.executor === 'codex' ? runner.addDirs : undefined,
+      codexNetworkAccess: runner.executor === 'codex' ? runner.networkAccess : undefined,
+      codexApprovalPolicy: runner.executor === 'codex' ? runner.approvalPolicy : undefined,
+      billing: config.billing,
+      signal,
+    }
+  }
 
   /** Park a task that exhausted its retries. Re-read + re-decide first
    *  (the pre-filter used a tick-start snapshot; the ambient session may
@@ -247,6 +256,7 @@ export const createEngine = (deps: EngineDeps) => {
     watcher: BacklinksWatcher, sourceId: string, deepLink: string, baselineMs: number, launchStamp: number,
     quietExempt: boolean,
   ) => {
+    const {runner} = watcher
     // Pre-claim bails spawned nothing — refund the budget slot recorded
     // at the launch decision so phantom launches can't defer real work.
     const block = await graph.getBlock(sourceId)
@@ -258,7 +268,7 @@ export const createEngine = (deps: EngineDeps) => {
     // Resolve the thread session BEFORE claiming so two follow-ups in
     // one thread can't run `--resume <same session>` concurrently.
     const session = watcher.resume
-      ? resumableSessionFor(watcher.executor, findThreadSession(block, ancestorBlocks))
+      ? resumableSessionFor(runner.executor, findThreadSession(block, ancestorBlocks))
       : null
     const sessionKey = session ? `session:${session}` : null
     if (sessionKey && running.has(sessionKey)) return refundLaunch(launchStamp)
@@ -323,7 +333,7 @@ export const createEngine = (deps: EngineDeps) => {
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
-        status: 'running', watcher: watcher.name, executor: watcher.executor, attempts: attempt, nowMs: claimStamp,
+        status: 'running', watcher: watcher.name, executor: runner.executor, attempts: attempt, nowMs: claimStamp,
       })
 
       // Claim-verify: re-read and confirm OUR claim stuck — defends only
@@ -381,7 +391,7 @@ export const createEngine = (deps: EngineDeps) => {
       // streamReply: post the reply block EARLY so its content can be
       // updated as the run streams, instead of created once at the end.
       if (watcher.streamReply) {
-        const streamedReply = await graph.createReply(sourceId, `💭 ${executorLabel(watcher.executor)} is working…`)
+        const streamedReply = await graph.createReply(sourceId, `💭 ${executorLabel(runner.executor)} is working…`)
         replyId = streamedReply.id
       }
 
@@ -422,7 +432,7 @@ export const createEngine = (deps: EngineDeps) => {
           // the terminal write re-affirms the same value.
           if (sessionRecorded) return
           sessionRecorded = true
-          const stored = storedSessionFor(watcher.executor, event.sessionId)
+          const stored = storedSessionFor(runner.executor, event.sessionId)
           if (!stored) return
           // Claim a dedup key for the now-live session BEFORE exposing it
           // on the block (the register is synchronous; the block write is
@@ -431,7 +441,7 @@ export const createEngine = (deps: EngineDeps) => {
           // child computes (resumableSessionFor over the stored value).
           // Skip when we already hold this key (a run that was itself a
           // resume) or someone else does — finally only deletes what we set.
-          const resumable = resumableSessionFor(watcher.executor, stored)
+          const resumable = resumableSessionFor(runner.executor, stored)
           const liveKey = resumable ? `session:${resumable}` : null
           if (liveKey && liveKey !== sessionKey && !running.has(liveKey)) {
             liveSessionKey = liveKey
@@ -451,10 +461,10 @@ export const createEngine = (deps: EngineDeps) => {
         // the billed answer is real — keep it as `done` rather than discard
         // it as `cancelled`. Only a run that ended WITHOUT a result (the
         // error branch below) inspects signal.aborted to label the reason.
-        const finalText = result.resultText.trim() || `(${watcher.executor} returned an empty reply)`
+        const finalText = result.resultText.trim() || `(${runner.executor} returned an empty reply)`
         await deliverReply(finalText)
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(watcher.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
+        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(runner.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
         // A user Stop aborts the run — signal.aborted distinguishes it from
@@ -464,7 +474,7 @@ export const createEngine = (deps: EngineDeps) => {
         const reason = cancelled
           ? 'cancelled'
           : result.timedOut
-            ? `timed out after ${Math.round(watcher.timeoutMs / 1000)}s`
+            ? `timed out after ${Math.round(runner.timeoutMs / 1000)}s`
             : `exit ${result.exitCode}: ${truncate(result.stderr.trim() || result.resultText.trim() || 'no output')}`
         const failureNote = cancelled
           ? '⏹️ agent-dispatch run cancelled'
@@ -475,7 +485,7 @@ export const createEngine = (deps: EngineDeps) => {
         const partial = lastStreamedText.trim()
         await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(watcher.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
+        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(runner.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {

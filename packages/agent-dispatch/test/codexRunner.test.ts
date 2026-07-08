@@ -21,20 +21,28 @@ describe('buildCodexArgs', () => {
   it('builds a fresh read-only exec run WITHOUT the prompt in argv (stdin carries it, "-" last)', () => {
     const args = buildCodexArgs(baseOptions)
     expect(args).toEqual([
-      'exec', '--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config', '-',
+      '-a', 'never', 'exec', '--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config', '-',
     ])
     expect(args.at(-1)).toBe('-')
   })
 
-  it('threads resume/model through', () => {
+  it('threads resume/model and codex permissions through', () => {
     const args = buildCodexArgs({
       ...baseOptions,
       resumeSessionId: 'thread-1',
       model: 'gpt-5-codex',
+      sandbox: 'workspace-write',
+      addDirs: ['/private/tmp', '/repo/worktree'],
+      networkAccess: true,
+      approvalPolicy: 'on-request',
     })
     expect(args).toEqual([
+      '-a', 'on-request',
       'exec',
-      '--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config',
+      '--json', '-s', 'workspace-write', '--skip-git-repo-check', '--ignore-user-config',
+      '--add-dir', '/private/tmp',
+      '--add-dir', '/repo/worktree',
+      '-c', 'sandbox_workspace_write.network_access=true',
       '-m', 'gpt-5-codex',
       'resume',
       'thread-1',
