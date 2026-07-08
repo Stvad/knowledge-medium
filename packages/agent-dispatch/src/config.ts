@@ -213,7 +213,7 @@ const rawConfigSchema = z.strictObject({
    *  to pure polling when the tab/bridge doesn't support it. */
   push: z.boolean().default(true),
   claudeBin: z.string().default('claude'),
-  /** Path/name of the codex CLI, for watchers with `executor: 'codex'`. */
+  /** Path/name of the codex CLI, for watchers with `runner.executor: 'codex'`. */
   codexBin: z.string().default('codex'),
   /** Which account a run's tokens bill to. 'subscription' (default,
    *  safe): scrub every API-key/token/provider-reroute env var from the
@@ -261,6 +261,15 @@ const rawConfigSchema = z.strictObject({
       message: `duplicate watcher name "${duplicateName}" — cursors and baselines are keyed by watcher name, so each watcher needs its own even when disabled`,
     })
   }
+  config.watchers.forEach((watcher, index) => {
+    if (watcher.delivery === 'channel' && watcher.runner.executor !== 'claude') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['watchers', index, 'delivery'],
+        message: 'delivery="channel" requires runner.executor="claude"; Codex has no channel transport',
+      })
+    }
+  })
 })
 
 export const defaultConfigPath = () =>

@@ -191,6 +191,38 @@ describe('parseConfig', () => {
     })).toThrow(/addDirs/)
   })
 
+  it('rejects channel delivery for codex runners', () => {
+    expect(() => parseConfig({
+      watchers: [{
+        kind: 'backlinks',
+        name: 'codex-channel',
+        target: 'codex',
+        delivery: 'channel',
+        runner: {executor: 'codex'},
+      }],
+    })).toThrow(/Codex has no channel transport/)
+
+    expect(() => parseConfig({
+      watchers: [{
+        kind: 'query',
+        name: 'codex-query-channel',
+        sql: 'SELECT id FROM blocks',
+        delivery: 'channel',
+        runner: {executor: 'codex'},
+      }],
+    })).toThrow(/Codex has no channel transport/)
+
+    expect(parseConfig({
+      watchers: [{
+        kind: 'backlinks',
+        name: 'claude-channel',
+        target: 'claude',
+        delivery: 'channel',
+        runner: {executor: 'claude'},
+      }],
+    }).watchers[0]).toMatchObject({delivery: 'channel', runner: {executor: 'claude'}})
+  })
+
   it('accepts an explicit opt-in to usage-based billing', () => {
     expect(parseConfig({billing: 'api', watchers: []}).billing).toBe('api')
     expect(() => parseConfig({billing: 'wallet', watchers: []})).toThrow()
