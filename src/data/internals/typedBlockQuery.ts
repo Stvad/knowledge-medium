@@ -282,14 +282,13 @@ const compilePredicateAgainstRow = (
  *  scope) or as an EXISTS over the ancestor_chain CTE rows that share
  *  `block_id = b.id` (ancestor scope, includes b itself).
  *
- *  Page-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
- *  also matches when the root ancestor's own id IS X — Roam treats a
- *  page as an implicit reference target for every block it contains.
- *  Filtering by a page name should match blocks living on that page
- *  even when no ancestor sources an explicit reference. Pre-unification
- *  SQL encoded this by UNIONing the root ancestor's id into the
- *  context set; `sourceField` predicates target a specific reference
- *  channel and stay strict (the page-is-itself case has no channel). */
+ *  Ancestor-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
+ *  also matches when any ancestor's own id IS X — Roam treats a parent
+ *  block/page as an implicit reference target for everything it contains.
+ *  Filtering by a parent name should match blocks living under that parent
+ *  even when no ancestor sources an explicit reference. `sourceField`
+ *  predicates target a specific reference channel and stay strict (the
+ *  ancestor-is-itself case has no channel). */
 const compileScopedPredicate = (
   predicate: BlockPredicate,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
@@ -318,7 +317,7 @@ const compileScopedPredicate = (
   if (predicate.referencedBy !== undefined) {
     const refExists = compileReferencedByExists(predicate.referencedBy, 'anc.id')
     if (predicate.referencedBy.sourceField === undefined) {
-      clauses.push(`(${refExists.sql} OR (ac.anc_parent_id IS NULL AND anc.id = ?))`)
+      clauses.push(`(${refExists.sql} OR anc.id = ?)`)
       params.push(...refExists.params, predicate.referencedBy.id)
     } else {
       clauses.push(refExists.sql)

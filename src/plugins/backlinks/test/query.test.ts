@@ -341,17 +341,20 @@ describe('backlinksDataExtension query', () => {
     expect(out).toEqual(['child-a'])
   })
 
-  it('treats the containing page as a context tag for ancestor referencedBy', async () => {
-    // Roam-style "page is a tag" semantic: filtering for context = X
-    // should match blocks on the X page even when no ancestor sources
-    // an outgoing reference to X. Pre-unification SQL UNIONed the root
-    // ancestor's id into the context set; this exercises that behaviour
-    // through the typed-query predicate compiler.
+  it('treats containing ancestors as context tags for ancestor referencedBy', async () => {
+    // Roam-style "page is a tag" semantic applies to the whole parent
+    // chain: filtering for context = X should match blocks under X even
+    // when X is an intermediate parent and no ancestor sources an
+    // outgoing reference to X.
     await create({id: 'target'})
-    await create({id: 'roam-memo'})
+    await create({id: 'readwise-library'})
+    await create({
+      id: 'roam-memo',
+      parentId: 'readwise-library',
+    })
     await create({id: 'other-page'})
     await create({
-      id: 'on-roam-memo',
+      id: 'nested-hit',
       parentId: 'roam-memo',
       references: [{id: 'target', alias: 'T'}],
     })
@@ -366,7 +369,7 @@ describe('backlinksDataExtension query', () => {
       id: 'target',
       filter: {include: [{scope: 'ancestor', referencedBy: {id: 'roam-memo'}}]},
     }).load())
-    expect(includeOut).toEqual(['on-roam-memo'])
+    expect(includeOut).toEqual(['nested-hit'])
 
     const excludeOut = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
