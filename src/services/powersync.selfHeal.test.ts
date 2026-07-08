@@ -159,28 +159,45 @@ describe('flushPendingRestage — queue gate', () => {
 })
 
 describe('pending_restage clear-on-synced triggers', () => {
-  it('a real staging insert (server echo) removes the id from the outbox', async () => {
+  // A phantom always already has a staged server row (that's what makes it a
+  // phantom), so a re-delivery is an INSERT OR REPLACE = DELETE-then-INSERT. The
+  // gate must hold on BOTH halves: an unconditional delete-clear would drop the
+  // entry before the gated insert-clear could protect it.
+  it('a re-delivery (REPLACE) with no pending upload clears the outbox — the echo reconciled it', async () => {
+    await stageServerRow(data({ id: 'b1', content: 'server' }))
     await insertOutbox('b1')
-    await stageServerRow(data({ id: 'b1' })) // echo lands ⇒ reconciles ⇒ drop the outbox row
+    await stageServerRow(data({ id: 'b1', content: 'server v2' })) // REPLACE; no pending ⇒ real echo ⇒ clear
     expect(await pendingRestage()).toEqual([])
   })
 
-  it('keeps the outbox id when a same-id upload is still pending (re-stream did not reconcile it)', async () => {
-    // A bulk blocks_synced re-stream can re-insert a row while a sibling edit is
-    // still queued; that echo is skip-staled (didn't actually reconcile), so the
-    // outbox entry must survive — else a later rejection of the sibling would
-    // strand the phantom. The clear only fires once no same-id op is pending.
+  it('a re-delivery (REPLACE) while a same-id upload is pending KEEPS the outbox entry', async () => {
+    // The REPLACE's echo is skip-staled (a sibling upload is pending), so it did
+    // NOT reconcile the id; the entry must survive — else a later rejection of the
+    // sibling strands the phantom. Guards the delete-clear gate specifically: the
+    // REPLACE's implicit DELETE fires before the gated INSERT.
+    await stageServerRow(data({ id: 'b1', content: 'server' }))
     await insertOutbox('b1')
     await queuePendingUpload('b1')
-    await stageServerRow(data({ id: 'b1' }))
+    await stageServerRow(data({ id: 'b1', content: 'server v2' }))
     expect(await pendingRestage()).toEqual([{ id: 'b1' }])
   })
 
-  it('a staging delete (revoke) removes the id from the outbox', async () => {
+  it('a true revoke with no pending upload clears the outbox', async () => {
     await stageServerRow(data({ id: 'b1' }))
     await insertOutbox('b1')
     await deleteStagingRow('b1')
     expect(await pendingRestage()).toEqual([])
+  })
+
+  it('a true revoke while a same-id upload is pending keeps the outbox entry', async () => {
+    // Deferred, not resurrected: once the sibling drains the flush's EXISTS-staging
+    // gate emits no synthetic upsert for the now-gone row, and its ps_crud gate
+    // deletes the entry.
+    await stageServerRow(data({ id: 'b1' }))
+    await insertOutbox('b1')
+    await queuePendingUpload('b1')
+    await deleteStagingRow('b1')
+    expect(await pendingRestage()).toEqual([{ id: 'b1' }])
   })
 })
 

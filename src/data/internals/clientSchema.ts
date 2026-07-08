@@ -436,8 +436,18 @@ const noPendingBlockCrudSql = (idExpr: string) => `NOT EXISTS (
 //     re-stages the id → stuck-forever (the exact bug this table fixes). A
 //     create+later-sibling-that-SUCCEEDS still clears correctly: the succeeding
 //     sibling's echo arrives once its `ps_crud` has drained, so the gate passes.
-//   - DELETE is a stream-exit/revoke: the row is gone, nothing to heal, so drop
-//     the entry unconditionally (the flush's EXISTS-staging gate skips it anyway).
+//   - DELETE fires for BOTH a true stream-exit (revoke) AND the implicit delete
+//     half of an INSERT OR REPLACE — how the raw sync-apply re-delivers an
+//     EXISTING `blocks_synced` row (`BLOCKS_SYNCED_RAW_TABLE.put`; the same DELETE-
+//     then-INSERT the `blocks_synced_changes` triggers are built around). Because a
+//     REPLACE's DELETE fires BEFORE its following INSERT, an UNCONDITIONAL delete-
+//     clear would drop the entry before the gated insert-clear could protect it —
+//     re-opening the stuck-forever on any re-delivery of an existing staged row
+//     while a sibling is pending (e.g. another client edits the block). So gate
+//     the delete-clear the SAME way. A TRUE revoke is still safe: the row is now
+//     gone, so the flush's EXISTS-staging gate emits no synthetic upsert and its
+//     own ps_crud gate deletes the entry once no sibling is pending — a revoked
+//     row is never resurrected, just cleaned a beat later.
 export const CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS pending_restage_clear_on_synced_insert
   AFTER INSERT ON blocks_synced
@@ -451,7 +461,8 @@ export const CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_DELETE_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS pending_restage_clear_on_synced_delete
   AFTER DELETE ON blocks_synced
   BEGIN
-    DELETE FROM pending_restage WHERE id = OLD.id;
+    DELETE FROM pending_restage
+     WHERE id = OLD.id AND ${noPendingBlockCrudSql('OLD.id')};
   END
 `
 
