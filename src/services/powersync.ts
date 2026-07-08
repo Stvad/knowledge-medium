@@ -8,6 +8,7 @@ import {
 import { chunk } from 'lodash-es'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
+import { flushPendingRestage } from '@/data/internals/clientSchema.js'
 import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
@@ -72,14 +73,18 @@ export interface UploadDeps {
   encryptOps?: (
     operations: readonly CompactedBlockOperation[],
   ) => Promise<readonly CompactedBlockOperation[]>
-  /** Re-stage created ids AFTER their upload drains, so the observer
-   *  re-reconciles them against the (possibly insert-or-skipped) server row.
-   *  Self-heals the insert-or-skip phantom class (see {@link restageCreatedIds}).
-   *  Optional so test deps can omit it; absent ⇒ no-op. */
-  restageCreated?: (
+  /** Record drained CREATE ids into the durable `pending_restage` outbox so a
+   *  later flush can re-stage any insert-or-skip phantom once its upload queue
+   *  is clear (see {@link recordDrainedCreatesToOutbox} + the pending_restage
+   *  table in clientSchema.ts). Optional so test deps can omit it; absent ⇒ no-op. */
+  recordDrainedCreates?: (
     database: AbstractPowerSyncDatabase,
     operations: readonly CompactedBlockOperation[],
   ) => Promise<void>
+  /** Flush the `pending_restage` outbox: re-stage recorded ids whose upload
+   *  queue is now clear so the observer re-reconciles them against the server
+   *  row. Called after the upload loop drains. Optional; absent ⇒ no-op. */
+  flushPendingRestage?: (database: AbstractPowerSyncDatabase) => Promise<void>
 }
 
 /** Resolve a workspace's sync mode for the encrypt-on-upload decision. The
@@ -430,66 +435,36 @@ const defaultBlockUploadSink: BlockUploadSink = {
   deleteRow: applyBlockDelete,
 }
 
-/** Re-enqueue each created id into the observer's change queue
- *  (`blocks_synced_changes`) so `decideStagingRow` re-runs against the current
- *  `blocks_synced` row.
+/** Record drained CREATE ids into the durable `pending_restage` outbox. A later
+ *  {@link flushPendingRestage} re-stages them (enqueues a synthetic
+ *  `blocks_synced_changes` upsert) once their upload queue is clear, so the
+ *  observer re-reconciles an insert-or-skip phantom against the server row. See
+ *  the pending_restage table comment in clientSchema.ts for the full mechanism.
  *
- *  WHY: client CREATEs upload as insert-or-skip (`applyBlockCreates`,
- *  `ON CONFLICT (id) DO NOTHING`). When a client mints a deterministic id while
- *  its already-synced `blocks_synced` row is momentarily un-materialized (the
- *  offline-reconnect race between a mutating plugin effect and initial sync), it
- *  writes a phantom `blocks` row with a real-time stamp. The server keeps its
- *  authoritative row and the skipped create produces NO echo — so nothing ever
- *  re-triggers reconciliation and the phantom is stuck ahead-of-synced forever.
- *  Re-staging synthesizes the missing echo: the observer wakes (it subscribes to
- *  `blocks_synced_changes`), re-reads the staging row, and — now that the upload
- *  has drained — applies the server's version over the phantom.
+ *  STAGING-ROW GATE (`EXISTS blocks_synced`): record only ids that ALREADY have a
+ *  server row — a phantom, by definition, has one. A genuinely-new insert has no
+ *  staging row yet (its echo hasn't round-tripped) and reconciles via that later
+ *  sync-down, so recording it would only bloat the outbox on the bulk-create path
+ *  (Roam import ⇒ ~10k creates/batch) for no heal. The gate keeps the outbox to
+ *  actual phantom candidates.
  *
- *  ORDERING: caller MUST invoke this only AFTER `complete()` has drained
- *  `ps_crud`. While the create is still queued, `hasPendingUpload` is true and
- *  the observer `skip-stale`s the re-stage — the exact trap that created the
- *  phantom.
+ *  PATCH EXCLUSION: skip a create whose id also carries a SEPARATE patch op in
+ *  this drained set (necessarily cross-tx — a same-tx patch fuses into the create
+ *  payload). That patch is a real server-changing write whose echo re-reconciles
+ *  the id on its own, so recording the create would risk the flush reverting the
+ *  acked-but-not-yet-echoed patch on disk. Both upload paths pass the sibling
+ *  patch here (the batch as one compacted set; the per-tx fallback by collecting
+ *  all ops from SUCCEEDED txs), so the exclusion applies uniformly — a REJECTED
+ *  sibling patch isn't collected, so its create IS recorded and later heals.
+ *  (RESIDUAL: a create whose separate patch is in a LATER, not-yet-collected
+ *  batch is recorded here; if that patch then SUCCEEDS, the flush may re-stage
+ *  the create in the brief window before the patch's echo lands — a transient,
+ *  self-healing on-disk revert. The clear-on-synced trigger removes the id the
+ *  moment the echo lands, so this only bites if the flush wins that race.)
  *
- *  STAGING-ROW GATE: only re-stage a created id that ALREADY has a `blocks_synced`
- *  row. A phantom, by definition, is an id whose server row is already staged but
- *  un-materialized — so the gate captures every heal case while enqueuing NOTHING
- *  for a genuinely-new insert (whose server echo hasn't round-tripped, so it has
- *  no staging row yet). That matters on two axes:
- *    - Scale: the bulk local-create path (Roam import ⇒ ~10k creates/batch) would
- *      otherwise enqueue a no-op `'upsert'` per id and re-drain them all, ~doubling
- *      `blocks_synced_changes` churn on exactly the path the queue is tuned for.
- *      A genuine insert reconciles via its own later sync-down trigger, so skipping
- *      it here loses no heal.
- *    - Correctness: an `'upsert'` for an id with no staging row could dedup-mask a
- *      concurrent real `'delete'` in the same drain window (server revokes a
- *      deterministic id the client is re-creating), stranding a revoked row. The
- *      gate makes restage never emit such an `'upsert'`.
- *  PENDING GATE: only re-stage an id with NO pending `ps_crud` blocks upload
- *  ANYWHERE (not just in this invocation's txs — `collectUploadBatch` caps each
- *  pass, so a same-id patch/delete can sit in a later, not-yet-collected slice).
- *  Re-staging while a same-id op is still queued would be skip-stale'd by the
- *  observer (the pending upload wins) and CONSUME the synthetic upsert for
- *  nothing; deferring until the queue is clear means a same-id op that SUCCEEDS
- *  heals the id via its own echo, and only a genuinely-orphaned phantom is
- *  re-staged. This also subsumes the per-invocation patch-exclusion below for the
- *  cross-batch case. (RESIDUAL: if the later same-id op is permanently REJECTED,
- *  its create — long drained — is not retried, so the phantom is not auto-healed
- *  here; that is the repair-sweep's job, tracked separately.)
- *
- *  The gate + the enqueue run in one statement (`INSERT … SELECT … WHERE EXISTS
- *  … AND NOT EXISTS`), which also collapses the per-id round-trips into a single
- *  write.
- *
- *  EXCLUDES a create whose id also carries a SEPARATE patch op (necessarily from
- *  a different tx — a same-tx patch fuses into the create's payload, so a fused
- *  create+patch still uploads as one insert-or-skip PUT and DOES need the heal).
- *  A separate patch is a real server-changing write (patches aren't insert-or-
- *  skip) whose echo re-reconciles the id on its own; re-staging the create here
- *  would only risk a transient on-disk revert in the ack-to-echo window. Both
- *  paths pass the sibling patch in `operations` — the batch as one compacted
- *  batch, the per-tx fallback by collecting all ops from succeeded txs — so the
- *  exclusion applies uniformly (a REJECTED sibling patch isn't collected there,
- *  so its create still heals).
+ *  NO PENDING GATE here: recording is unconditional on `ps_crud` state — the
+ *  flush applies the "queue clear" gate, so a create with a still-pending sibling
+ *  is durably carried until its queue drains (the whole point of the outbox).
  *
  *  DATA-LOSS INVARIANT (unenforced): the heal applies the server row over the
  *  local one, so a create that FUSES genuinely-unrecoverable user content on a
@@ -499,12 +474,8 @@ const defaultBlockUploadSink: BlockUploadSink = {
  *  the server already shares (matrix messages), so this can't fire — but a future
  *  deterministic-id creator that fuses unrecoverable content in one tx must not
  *  rely on that content surviving locally. (Can't fix by "exclude creates with
- *  content": matrix message phantoms carry content and ARE the heal target.)
- *
- *  Writes only `blocks_synced_changes` (the observer's private detection queue,
- *  see clientSchema.ts — local bookkeeping, no upload routing), so it never
- *  enqueues a server write of its own. */
-const restageCreatedIds = async (
+ *  content": matrix message phantoms carry content and ARE the heal target.) */
+const recordDrainedCreatesToOutbox = async (
   database: AbstractPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
 ): Promise<void> => {
@@ -515,34 +486,43 @@ const restageCreatedIds = async (
   if (createdIds.length === 0) return
   await database.writeTransaction(async tx => {
     await tx.execute(
-      `INSERT INTO blocks_synced_changes (id, op)
-         SELECT je.value, 'upsert' FROM json_each(?) AS je
-          WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = je.value)
-            AND NOT EXISTS (
-              SELECT 1 FROM ps_crud
-               WHERE json_extract(data, '$.type') = 'blocks'
-                 AND json_extract(data, '$.id') = je.value
-            )`,
+      `INSERT OR IGNORE INTO pending_restage (id)
+         SELECT je.value FROM json_each(?) AS je
+          WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = je.value)`,
       [JSON.stringify(createdIds)],
     )
   })
 }
 
-/** Best-effort re-stage after a drained upload. Never lets a re-stage failure
- *  fail the upload loop: the server writes already succeeded and `complete()`
- *  already drained `ps_crud`, so a re-stage error only forfeits THIS pass's
- *  auto-heal (the `drainWorkspace` rescan on next open remains a backstop).
- *  Re-throwing would wrongly signal PowerSync to retry an already-drained
- *  batch. */
-const restageCreatedQuietly = async (
+/** Best-effort outbox record after a drained upload. Never lets a failure fail
+ *  the upload loop: the server writes already succeeded and `complete()` already
+ *  drained `ps_crud`, so a record error only forfeits THIS pass's phantom
+ *  candidate (a later drain re-records nothing, but the startup flush + the
+ *  marker-gated rescan remain backstops). Re-throwing would wrongly signal
+ *  PowerSync to retry an already-drained batch. */
+const recordDrainedQuietly = async (
   deps: UploadDeps,
   database: AbstractPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
 ): Promise<void> => {
   try {
-    await deps.restageCreated?.(database, operations)
+    await deps.recordDrainedCreates?.(database, operations)
   } catch (err) {
-    console.warn('[powersync] re-stage of created ids failed — self-heal skipped this pass', err)
+    console.warn('[powersync] recording drained creates for self-heal failed — skipped this pass', err)
+  }
+}
+
+/** Best-effort outbox flush after the upload loop drains. Same rationale as
+ *  {@link recordDrainedQuietly}: a flush failure only defers the self-heal to the
+ *  next drain / startup flush; it must never fail the (already-drained) loop. */
+const flushPendingRestageQuietly = async (
+  deps: UploadDeps,
+  database: AbstractPowerSyncDatabase,
+): Promise<void> => {
+  try {
+    await deps.flushPendingRestage?.(database)
+  } catch (err) {
+    console.warn('[powersync] pending_restage flush failed — self-heal deferred to next drain/startup', err)
   }
 }
 
@@ -654,7 +634,8 @@ const makeUploadDeps = (
   applyOperations: applyCompactedBlockOperations,
   recordRejection: recordRejectionToTable,
   encryptOps: ops => encryptUploadOps(ops, getWorkspaceMode, getCek),
-  restageCreated: restageCreatedIds,
+  recordDrainedCreates: recordDrainedCreatesToOutbox,
+  flushPendingRestage,
 })
 
 /** How many upload passes an `ambiguous` tx (a suspected-permanent 4xx with no
@@ -741,9 +722,10 @@ const uploadTransactionsWithFallback = async (
     try {
       await deps.applyOperations(database, batchOps)
       await transactions[transactions.length - 1]?.complete()
-      // After the batch drained ps_crud, re-stage its creates so the observer
-      // re-reconciles any insert-or-skip phantom (hasPendingUpload is now clear).
-      await restageCreatedQuietly(deps, database, batchOps)
+      // After the batch drained ps_crud, record its creates as phantom
+      // candidates; the loop's post-drain flush re-stages any whose queue is now
+      // clear so the observer re-reconciles an insert-or-skip phantom.
+      await recordDrainedQuietly(deps, database, batchOps)
       // The whole batch drained — clear any ambiguous retry counters it carried
       // (an earlier pass's transient blip cleared and the batch went through).
       for (const transaction of transactions) {
@@ -770,12 +752,13 @@ const uploadTransactionsWithFallback = async (
   // preserved — losing it would clobber properties_json on a server row
   // the deterministic-id bootstrap already created.
   //
-  // Re-stage is DEFERRED to the `finally` after the whole fallback drains (not
-  // per-tx): a create in an early tx with a later same-id patch/delete would
-  // otherwise re-stage while that later tx is still pending in ps_crud — the
-  // observer would skip-stale and CONSUME the synthetic upsert, and if the later
-  // tx is then quarantined (no server echo) the phantom would stay stuck. Draining
-  // first guarantees no sibling op is pending when we re-stage.
+  // Outbox record is in a `finally` so it still runs when a later tx re-throws
+  // (a transient error, or `encryptOps` throwing before its inner `try`). A
+  // drained create has been complete()d, so PowerSync's retry re-collects only
+  // the UNdrained txs and would never re-record it — the durable outbox is what
+  // carries it forward. Collecting ALL ops from the SUCCEEDED txs (not creates-
+  // only) gives the same-id patch context the patch-exclusion needs; a REJECTED
+  // sibling patch isn't collected, so its create IS recorded and heals.
   const drainedOps: CompactedBlockOperation[] = []
   try {
     for (const transaction of transactions) {
@@ -813,23 +796,10 @@ const uploadTransactionsWithFallback = async (
       }
     }
   } finally {
-    // Re-stage the creates that DRAINED ps_crud — in a `finally` so it still runs
-    // when a later tx re-throws (a transient error, or `encryptOps` throwing before
-    // its inner `try`). A drained create has been complete()d, so PowerSync's retry
-    // re-collects only the UNdrained txs and would never re-enqueue it — stranding
-    // its insert-or-skip phantom. The one-time reconcile-rescan backstop is
-    // marker-gated (repo.runReconcileRescan) and may already be spent, so the
-    // finally runs BEFORE the re-throw propagates and heals in this pass.
-    //
-    // Collect ALL ops from the SUCCEEDED txs (not creates-only) so restageCreatedIds
-    // sees same-id patch context and its patch-exclusion applies here too, matching
-    // the batch path: a create whose SEPARATE patch also SUCCEEDED is dropped — the
-    // patch's echo heals it, and re-staging would transiently revert the acked patch
-    // on disk until the echo lands. A REJECTED sibling patch is NOT collected (only
-    // successful txs push here), so its create is still re-staged and the phantom
-    // heals. The PENDING GATE inside restageCreatedIds additionally defers any id
-    // whose same-id op is still queued in ps_crud (a later, uncollected batch).
-    await restageCreatedQuietly(deps, database, drainedOps)
+    // Record the creates that DRAINED ps_crud into the outbox (see the finally
+    // rationale above). The loop's post-drain flush (or the startup flush, or a
+    // later drain) re-stages them once their queue is clear.
+    await recordDrainedQuietly(deps, database, drainedOps)
   }
 }
 
@@ -840,9 +810,16 @@ const runUploadLoop = async (
 ): Promise<void> => {
   while (true) {
     const transactions = await collectUploadBatch(database)
-    if (transactions.length === 0) return
+    if (transactions.length === 0) break
     await uploadTransactionsWithFallback(database, transactions, deps, ambiguousAttempts)
   }
+  // Queue fully drained: flush the outbox so any recorded phantom candidate
+  // whose same-id ops are now all gone from ps_crud gets its synthetic echo.
+  // This is where a create whose later sibling was REJECTED finally heals — the
+  // rejection drained the queue, so the id is no longer pending. (A transient
+  // re-throw above skips this pass; PowerSync's retry re-enters and reaches it
+  // once the queue drains.)
+  await flushPendingRestageQuietly(deps, database)
 }
 
 const fetchCredentials = async () => {
@@ -908,7 +885,8 @@ export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
+export const __runUploadLoopForTest = runUploadLoop
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations
 export const __applyBlockPatchesRpcForTest = applyBlockPatchesRpc
 export const __recordRejectionToTableForTest = recordRejectionToTable
-export const __restageCreatedIdsForTest = restageCreatedIds
+export const __recordDrainedCreatesForTest = recordDrainedCreatesToOutbox

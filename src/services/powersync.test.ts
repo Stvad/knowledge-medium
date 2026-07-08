@@ -21,6 +21,7 @@ import {
   __encryptUploadOpsForTest,
   __orderedBlockUpsertsForTest,
   __uploadTransactionsWithFallbackForTest,
+  __runUploadLoopForTest,
   type BlockUploadSink,
   type CompactedBlockOperation,
   type GetWorkspaceMode,
@@ -362,35 +363,35 @@ describe('uploadTransactionsWithFallback', () => {
     expect(tx2.completed).toBe(true)
   })
 
-  it("re-stages the batch's created ids AFTER the tail tx completes (drains ps_crud first)", async () => {
-    // Fix B: after a create upload drains, re-stage its ids so the observer
-    // re-reconciles any insert-or-skip phantom. The ORDER is load-bearing — the
-    // re-stage must run after complete() clears ps_crud, else the still-pending
-    // create makes the observer skip-stale the heal (the trap that caused the bug).
+  it("records the batch's created ids AFTER the tail tx completes (drains ps_crud first)", async () => {
+    // Fix B: after a create upload drains, record its ids into the outbox so the
+    // loop's later flush can re-stage them. The ORDER is load-bearing — recording
+    // (and the flush it feeds) must run after complete() clears ps_crud, else the
+    // still-pending create makes the flush's queue-gate defer the heal.
     const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
     const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-a', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
-    let completedWhenRestaged: boolean | undefined
-    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>(async () => {
-      completedWhenRestaged = tx2.completed
+    let completedWhenRecorded: boolean | undefined
+    const recordDrainedCreates = vi.fn<NonNullable<UploadDeps['recordDrainedCreates']>>(async () => {
+      completedWhenRecorded = tx2.completed
     })
 
     await __uploadTransactionsWithFallbackForTest(
       fakeDb,
       [tx1, tx2] as unknown as CrudTransaction[],
-      {applyOperations, recordRejection, restageCreated},
+      {applyOperations, recordRejection, recordDrainedCreates},
     )
 
-    expect(restageCreated).toHaveBeenCalledTimes(1)
-    expect(completedWhenRestaged).toBe(true)
+    expect(recordDrainedCreates).toHaveBeenCalledTimes(1)
+    expect(completedWhenRecorded).toBe(true)
     expect(
-      restageCreated.mock.calls[0]![1].filter(o => o.kind === 'create').map(o => o.id),
+      recordDrainedCreates.mock.calls[0]![1].filter(o => o.kind === 'create').map(o => o.id),
     ).toEqual(['block-a'])
   })
 
-  it('per-tx fallback re-stages each drained tx, but not a quarantined one', async () => {
-    // Batch fails permanently → per-tx. tx1 + tx3 drain and get re-staged; tx2 is
-    // rejected (its create never landed server-side), so it is NOT re-staged.
+  it('per-tx fallback records each drained tx, but not a quarantined one', async () => {
+    // Batch fails permanently → per-tx. tx1 + tx3 drain and get recorded; tx2 is
+    // rejected (its create never landed server-side), so it is NOT recorded.
     const tx1 = fakeTx(10, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 10, {content: 'A'})])
     const tx2 = fakeTx(20, [new CrudEntry(2, UpdateType.PUT, 'blocks', 'block-b', 20, {content: 'B'})])
     const tx3 = fakeTx(30, [new CrudEntry(3, UpdateType.PUT, 'blocks', 'block-c', 30, {content: 'C'})])
@@ -400,26 +401,26 @@ describe('uploadTransactionsWithFallback', () => {
       .mockResolvedValueOnce(undefined)   // tx1 ok
       .mockRejectedValueOnce(fkError())   // tx2 rejected → quarantined
       .mockResolvedValueOnce(undefined)   // tx3 ok
-    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>().mockResolvedValue(undefined)
+    const recordDrainedCreates = vi.fn<NonNullable<UploadDeps['recordDrainedCreates']>>().mockResolvedValue(undefined)
 
     await __uploadTransactionsWithFallbackForTest(
       fakeDb,
       [tx1, tx2, tx3] as unknown as CrudTransaction[],
-      {applyOperations, recordRejection, restageCreated},
+      {applyOperations, recordRejection, recordDrainedCreates},
     )
 
-    const restagedIds = restageCreated.mock.calls.flatMap(
+    const recordedIds = recordDrainedCreates.mock.calls.flatMap(
       call => call[1].filter(o => o.kind === 'create').map(o => o.id),
     )
-    expect(restagedIds).toEqual(['block-a', 'block-c'])
+    expect(recordedIds).toEqual(['block-a', 'block-c'])
   })
 
-  it('per-tx fallback defers re-stage until later same-id txs drain (still heals when the later tx is rejected)', async () => {
+  it('per-tx fallback records a create whose later same-id sibling is rejected (heals via the flush)', async () => {
     // Regression: a create in tx1 + a later same-id patch in tx2 that is REJECTED.
-    // Re-staging block-x right after tx1 (while tx2 is still pending in ps_crud)
-    // would be skip-stale'd and consumed, then tx2's rejection leaves no echo →
-    // phantom stuck. Deferring to after the loop re-stages block-x only once tx2
-    // has drained, so the heal still fires.
+    // The record runs in the finally after the whole loop, so tx2 has already
+    // drained (quarantined) by then — block-x is recorded, and the durable outbox
+    // + post-drain flush heal it even though the sibling never echoed. (This is
+    // the residual the old in-connector re-stage dropped on the floor.)
     const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-x', 1, {content: 'X'})])
     const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-x', 2, {content: 'X2'})])
     const {applyOperations, recordRejection} = collectCalls()
@@ -427,31 +428,31 @@ describe('uploadTransactionsWithFallback', () => {
       .mockRejectedValueOnce(fkError())   // batch fails → per-tx fallback
       .mockResolvedValueOnce(undefined)   // tx1 (create) ok
       .mockRejectedValueOnce(fkError())   // tx2 (later same-id patch) rejected
-    let tx2CompletedAtRestage: boolean | undefined
-    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>(async () => {
-      tx2CompletedAtRestage = tx2.completed
+    let tx2CompletedAtRecord: boolean | undefined
+    const recordDrainedCreates = vi.fn<NonNullable<UploadDeps['recordDrainedCreates']>>(async () => {
+      tx2CompletedAtRecord = tx2.completed
     })
 
     await __uploadTransactionsWithFallbackForTest(
       fakeDb,
       [tx1, tx2] as unknown as CrudTransaction[],
-      {applyOperations, recordRejection, restageCreated},
+      {applyOperations, recordRejection, recordDrainedCreates},
     )
 
     expect(recordRejection).toHaveBeenCalledTimes(1)
-    expect(restageCreated).toHaveBeenCalledTimes(1)
-    expect(tx2CompletedAtRestage).toBe(true) // re-stage deferred past the sibling
+    expect(recordDrainedCreates).toHaveBeenCalledTimes(1)
+    expect(tx2CompletedAtRecord).toBe(true) // recorded after the sibling drained
     expect(
-      restageCreated.mock.calls[0]![1].filter(o => o.kind === 'create').map(o => o.id),
+      recordDrainedCreates.mock.calls[0]![1].filter(o => o.kind === 'create').map(o => o.id),
     ).toEqual(['block-x'])
   })
 
-  it('re-stages an already-drained create even when a later tx re-throws (transient)', async () => {
+  it('records an already-drained create even when a later tx re-throws (transient)', async () => {
     // tx1's create drains ps_crud; tx2 hits a transient error and re-throws so
     // PowerSync retries — but the retry re-collects only the undrained tx2, so
-    // tx1's create is never re-enqueued. The heal must fire in a `finally` before
-    // the re-throw, else the phantom is stranded (the one-time reconcile-rescan
-    // backstop is marker-gated and may already be spent).
+    // tx1's create is never re-collected. The record must fire in a `finally`
+    // before the re-throw, else the phantom candidate is lost from the outbox
+    // (the create is complete()d and can't be re-collected).
     const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
     const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PUT, 'blocks', 'block-b', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
@@ -459,29 +460,29 @@ describe('uploadTransactionsWithFallback', () => {
       .mockRejectedValueOnce(fkError())      // batch fails → per-tx fallback
       .mockResolvedValueOnce(undefined)      // tx1 ok (drains ps_crud)
       .mockRejectedValueOnce(networkError()) // tx2 transient → re-throw
-    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>().mockResolvedValue(undefined)
+    const recordDrainedCreates = vi.fn<NonNullable<UploadDeps['recordDrainedCreates']>>().mockResolvedValue(undefined)
 
     await expect(
       __uploadTransactionsWithFallbackForTest(
         fakeDb,
         [tx1, tx2] as unknown as CrudTransaction[],
-        {applyOperations, recordRejection, restageCreated},
+        {applyOperations, recordRejection, recordDrainedCreates},
       ),
     ).rejects.toThrow('fetch failed')
 
     expect(tx1.completed).toBe(true)
     expect(tx2.completed).toBe(false)
-    const restagedIds = restageCreated.mock.calls.flatMap(
+    const recordedIds = recordDrainedCreates.mock.calls.flatMap(
       call => call[1].filter(o => o.kind === 'create').map(o => o.id),
     )
-    expect(restagedIds).toEqual(['block-a'])
+    expect(recordedIds).toEqual(['block-a'])
   })
 
   it('per-tx fallback preserves same-id patch context (create + succeeded patch not stripped)', async () => {
     // Batch fails → per-tx. tx1 create block-x and tx2 patch block-x both succeed.
-    // The re-stage must see BOTH ops so restageCreatedIds' patch-exclusion drops
-    // block-x — its patch echo heals it; re-staging would transiently revert the
-    // acked patch on disk. (Collecting creates-only would strip the patch context.)
+    // The record must see BOTH ops so recordDrainedCreatesToOutbox's patch-
+    // exclusion drops block-x — its patch echo heals it; recording it would risk
+    // the flush reverting the acked patch on disk. (Creates-only would strip it.)
     const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-x', 1, {content: 'X'})])
     const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-x', 2, {content: 'X2'})])
     const {applyOperations, recordRejection} = collectCalls()
@@ -489,27 +490,27 @@ describe('uploadTransactionsWithFallback', () => {
       .mockRejectedValueOnce(fkError())   // batch fails → per-tx fallback
       .mockResolvedValueOnce(undefined)   // tx1 create ok
       .mockResolvedValueOnce(undefined)   // tx2 patch ok
-    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>().mockResolvedValue(undefined)
+    const recordDrainedCreates = vi.fn<NonNullable<UploadDeps['recordDrainedCreates']>>().mockResolvedValue(undefined)
 
     await __uploadTransactionsWithFallbackForTest(
       fakeDb,
       [tx1, tx2] as unknown as CrudTransaction[],
-      {applyOperations, recordRejection, restageCreated},
+      {applyOperations, recordRejection, recordDrainedCreates},
     )
 
-    expect(restageCreated).toHaveBeenCalledTimes(1)
-    const ops = restageCreated.mock.calls[0]![1]
+    expect(recordDrainedCreates).toHaveBeenCalledTimes(1)
+    const ops = recordDrainedCreates.mock.calls[0]![1]
     expect(ops.some(o => o.kind === 'create' && o.id === 'block-x')).toBe(true)
     expect(ops.some(o => o.kind === 'patch' && o.id === 'block-x')).toBe(true)
   })
 
-  it('a re-stage failure does not fail the already-drained upload (best-effort self-heal)', async () => {
-    // The server writes succeeded and complete() drained ps_crud; a re-stage error
-    // must only forfeit this pass's heal, never re-throw (which would tell
-    // PowerSync to retry a drained batch).
+  it('a record failure does not fail the already-drained upload (best-effort self-heal)', async () => {
+    // The server writes succeeded and complete() drained ps_crud; a record error
+    // must only forfeit this pass's phantom candidate, never re-throw (which would
+    // tell PowerSync to retry a drained batch).
     const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
     const {applyOperations, recordRejection} = collectCalls()
-    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>()
+    const recordDrainedCreates = vi.fn<NonNullable<UploadDeps['recordDrainedCreates']>>()
       .mockRejectedValue(new Error('db is locked'))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -517,7 +518,7 @@ describe('uploadTransactionsWithFallback', () => {
       __uploadTransactionsWithFallbackForTest(
         fakeDb,
         [tx1] as unknown as CrudTransaction[],
-        {applyOperations, recordRejection, restageCreated},
+        {applyOperations, recordRejection, recordDrainedCreates},
       ),
     ).resolves.toBeUndefined()
 
@@ -684,6 +685,62 @@ describe('uploadTransactionsWithFallback', () => {
         properties_json: '{"types":["page"]}', // PATCH folded into the PUT
       }),
     })
+  })
+})
+
+describe('runUploadLoop — post-drain outbox flush', () => {
+  // A DB whose crud iterator yields the not-yet-completed txs. After the loop
+  // drains (complete()s) them, the next collectUploadBatch pass yields nothing,
+  // so the loop exits and flushes once.
+  const loopDb = (txs: FakeTransaction[]): AbstractPowerSyncDatabase => ({
+    getCrudTransactions: () => ({
+      [Symbol.asyncIterator]: async function* () {
+        for (const tx of txs) if (!tx.completed) yield tx
+      },
+    }),
+  } as unknown as AbstractPowerSyncDatabase)
+
+  it('flushes the pending_restage outbox once, after the queue has fully drained', async () => {
+    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const {applyOperations, recordRejection} = collectCalls()
+    const order: string[] = []
+    const recordDrainedCreates = vi.fn<NonNullable<UploadDeps['recordDrainedCreates']>>(async () => {
+      order.push('record')
+    })
+    const flushPendingRestage = vi.fn<NonNullable<UploadDeps['flushPendingRestage']>>(async () => {
+      order.push('flush')
+    })
+
+    await __runUploadLoopForTest(
+      loopDb([tx1]),
+      {applyOperations, recordRejection, recordDrainedCreates, flushPendingRestage},
+      new Map(),
+    )
+
+    expect(tx1.completed).toBe(true)
+    expect(flushPendingRestage).toHaveBeenCalledTimes(1)
+    // Ordering is load-bearing: the flush runs AFTER the drain's record, so the
+    // just-drained create is in the outbox and its ps_crud row is gone.
+    expect(order).toEqual(['record', 'flush'])
+  })
+
+  it('flushes even when there was nothing to upload (heals a phantom recorded in a prior session)', async () => {
+    // Empty queue ⇒ no record, but the flush still runs so a phantom carried over
+    // from a crashed prior session (recorded but never flushed) heals on the next
+    // upload cycle. (The repo also flushes once on startup for the same reason.)
+    const {applyOperations, recordRejection} = collectCalls()
+    const recordDrainedCreates = vi.fn<NonNullable<UploadDeps['recordDrainedCreates']>>()
+    const flushPendingRestage = vi.fn<NonNullable<UploadDeps['flushPendingRestage']>>().mockResolvedValue(undefined)
+
+    await __runUploadLoopForTest(
+      loopDb([]),
+      {applyOperations, recordRejection, recordDrainedCreates, flushPendingRestage},
+      new Map(),
+    )
+
+    expect(applyOperations).not.toHaveBeenCalled()
+    expect(recordDrainedCreates).not.toHaveBeenCalled()
+    expect(flushPendingRestage).toHaveBeenCalledTimes(1)
   })
 })
 

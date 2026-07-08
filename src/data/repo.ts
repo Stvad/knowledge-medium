@@ -97,6 +97,7 @@ import {
   RECONCILE_RESCAN_MARKER_PREFIX,
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
+  flushPendingRestage,
 } from './internals/clientSchema'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import {
@@ -687,6 +688,16 @@ export class Repo {
     // before issuing sync-style writes into `blocks_synced`.
     if (opts.startSyncObserver ?? true) {
       this.startSyncObserver(opts.syncObserverOptions)
+      // Heal any phantom whose re-stage was recorded into the pending_restage
+      // outbox but not flushed before the app last closed (a crash between the
+      // upload loop's record-on-drain and its post-drain flush). Fire-and-forget
+      // after the observer is subscribed, so its onChange catches the enqueue;
+      // best-effort, since the next upload cycle's flush retries. Gated with the
+      // observer start so tests that drive drain timing manually
+      // (startSyncObserver: false) don't get a surprise enqueue.
+      void flushPendingRestage(this.db).catch(err =>
+        console.warn('[repo] startup pending_restage flush failed — will retry on next upload', err),
+      )
     }
   }
 

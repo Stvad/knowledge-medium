@@ -126,6 +126,8 @@ export const setupObserverTestDb = () => {
       ),
     queueLen: async () => (await env.db.getAll('SELECT seq FROM blocks_synced_changes')).length,
     crudCount: async () => (await env.db.getAll('SELECT id FROM ps_crud')).length,
+    pendingRestage: () =>
+      env.db.getAll<{ id: string }>('SELECT id FROM pending_restage ORDER BY id'),
     queuePendingUpload: (id: string) =>
       env.db.execute(
         "INSERT INTO ps_crud (tx_id, data) VALUES (1, json_object('op','PATCH','type','blocks','id',?,'data',json_object()))",
