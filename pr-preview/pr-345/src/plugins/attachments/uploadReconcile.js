@@ -1,0 +1,2 @@
+var e=async(e,t)=>{let n=await t.store.listByStatus(e,`staged`),r=0,i=0;for(let a of n)await t.isBlockPresent(a.workspaceId,a.assetBlockId)?(await t.store.promote(e,a.assetBlockId),r+=1):i+=1;return{promoted:r,kept:i}};export{e as reconcileUploads};
+//# sourceMappingURL=uploadReconcile.js.map
