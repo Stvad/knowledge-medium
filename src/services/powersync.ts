@@ -752,13 +752,20 @@ const uploadTransactionsWithFallback = async (
   // PUT+PATCH fusion (clientSchema.ts upload triggers + addTypeInTx) is
   // preserved — losing it would clobber properties_json on a server row
   // the deterministic-id bootstrap already created.
+  //
+  // Re-stage is DEFERRED to after the loop (not per-tx): a create in an early tx
+  // with a later same-id patch/delete in a later tx would otherwise re-stage the
+  // create while that later tx is still pending in ps_crud — the observer would
+  // skip-stale and CONSUME the synthetic upsert, and if the later tx is then
+  // quarantined (no server echo) the phantom would stay stuck. Draining the whole
+  // fallback first guarantees no sibling op is pending when we re-stage.
+  const drainedCreateOps: CompactedBlockOperation[] = []
   for (const transaction of transactions) {
     const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
     try {
       await deps.applyOperations(database, txOps)
       await transaction.complete()
-      // Same as the batch path: re-stage this tx's creates once it has drained.
-      await restageCreatedQuietly(deps, database, txOps)
+      drainedCreateOps.push(...txOps.filter(op => op.kind === 'create'))
       forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     } catch (err) {
       const classification = classifyUploadError(err)
@@ -787,6 +794,17 @@ const uploadTransactionsWithFallback = async (
       forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     }
   }
+
+  // Every fallback tx has drained ps_crud, so no sibling upload is pending for any
+  // created id — re-stage now to self-heal insert-or-skip phantoms. Only CREATE
+  // ops are collected, so the cross-tx patch-exclusion inside restageCreatedIds
+  // does not apply here: that's deliberate — a sibling patch in this fallback may
+  // have been REJECTED (no echo to reconcile), so the create's phantom still needs
+  // the heal; for a sibling patch that SUCCEEDED, the un-excluded re-stage is a
+  // benign self-healing transient (the echo re-asserts it via the LWW cache gate).
+  // Skipped on a transient re-throw above; the on-open drainWorkspace rescan is
+  // the backstop for that (rarer) case.
+  await restageCreatedQuietly(deps, database, drainedCreateOps)
 }
 
 const runUploadLoop = async (

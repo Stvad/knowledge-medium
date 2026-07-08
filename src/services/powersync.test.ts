@@ -414,6 +414,38 @@ describe('uploadTransactionsWithFallback', () => {
     expect(restagedIds).toEqual(['block-a', 'block-c'])
   })
 
+  it('per-tx fallback defers re-stage until later same-id txs drain (still heals when the later tx is rejected)', async () => {
+    // Regression: a create in tx1 + a later same-id patch in tx2 that is REJECTED.
+    // Re-staging block-x right after tx1 (while tx2 is still pending in ps_crud)
+    // would be skip-stale'd and consumed, then tx2's rejection leaves no echo →
+    // phantom stuck. Deferring to after the loop re-stages block-x only once tx2
+    // has drained, so the heal still fires.
+    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-x', 1, {content: 'X'})])
+    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-x', 2, {content: 'X2'})])
+    const {applyOperations, recordRejection} = collectCalls()
+    applyOperations
+      .mockRejectedValueOnce(fkError())   // batch fails → per-tx fallback
+      .mockResolvedValueOnce(undefined)   // tx1 (create) ok
+      .mockRejectedValueOnce(fkError())   // tx2 (later same-id patch) rejected
+    let tx2CompletedAtRestage: boolean | undefined
+    const restageCreated = vi.fn<NonNullable<UploadDeps['restageCreated']>>(async () => {
+      tx2CompletedAtRestage = tx2.completed
+    })
+
+    await __uploadTransactionsWithFallbackForTest(
+      fakeDb,
+      [tx1, tx2] as unknown as CrudTransaction[],
+      {applyOperations, recordRejection, restageCreated},
+    )
+
+    expect(recordRejection).toHaveBeenCalledTimes(1)
+    expect(restageCreated).toHaveBeenCalledTimes(1)
+    expect(tx2CompletedAtRestage).toBe(true) // re-stage deferred past the sibling
+    expect(
+      restageCreated.mock.calls[0]![1].filter(o => o.kind === 'create').map(o => o.id),
+    ).toEqual(['block-x'])
+  })
+
   it('a re-stage failure does not fail the already-drained upload (best-effort self-heal)', async () => {
     // The server writes succeeded and complete() drained ps_crud; a re-stage error
     // must only forfeit this pass's heal, never re-throw (which would tell

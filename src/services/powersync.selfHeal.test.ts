@@ -17,7 +17,7 @@
  * onChange wake-up (from a DIRECT `blocks_synced_changes` insert) and the
  * reconcile gate are the production ones.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { BlockCache } from '@/data/blockCache'
@@ -73,14 +73,6 @@ const startObserver = (): BlocksSyncedObserver => {
   observers.push(observer)
   return observer
 }
-const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> => {
-  const t0 = Date.now()
-  while (!(await cond())) {
-    if (Date.now() - t0 > ms) throw new Error('waitFor timed out')
-    await new Promise(r => setTimeout(r, 15))
-  }
-}
-
 describe('restageCreatedIds — enqueue shape', () => {
   // The staging-row gate only re-stages a created id that ALREADY has a
   // `blocks_synced` row (a phantom). Stage server rows for the ids under test —
@@ -158,7 +150,10 @@ describe('restage self-heals an insert-or-skip phantom (fix B, via the real obse
 
     // The direct blocks_synced_changes insert wakes onChange; ps_crud is empty
     // (non-pending), so the gate applies the older server row over the phantom.
-    await waitFor(async () => (await blocks())[0]?.content === 'server truth')
+    await vi.waitFor(
+      async () => expect((await blocks())[0]?.content).toBe('server truth'),
+      { timeout: 3000, interval: 20 },
+    )
   })
 
   it('re-staging a genuinely-new id (no staging row) enqueues nothing — the fresh local row survives', async () => {
