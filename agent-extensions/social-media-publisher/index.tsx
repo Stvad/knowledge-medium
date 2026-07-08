@@ -49,6 +49,7 @@ import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
 import { useEffect, useMemo, useState, type CSSProperties, type SVGProps } from 'react'
 import { AtpAgent, RichText } from 'https://esm.sh/@atproto/api@0.19.3?bundle'
+import { parseTweet } from 'https://esm.sh/twitter-text@3.1.0?bundle'
 
 const source = 'social-media-publisher'
 const BUFFER_TOKEN_KEY = 'knowledge-medium:social-publisher:buffer-token:v1'
@@ -375,6 +376,8 @@ const graphemeLength = (text: string): number => {
   return [...text].length
 }
 
+const twitterWeightedLength = (text: string): number => parseTweet(text).weightedLength
+
 const useProcessedSocialText = (block: any): string => {
   const content = useContent(block)
   const [processed, setProcessed] = useState<{content: string, text: string}>({
@@ -400,7 +403,7 @@ const useProcessedSocialText = (block: any): string => {
 }
 
 const useTwitterSocialCount = (block: any): number =>
-  useProcessedSocialText(block).length
+  twitterWeightedLength(useProcessedSocialText(block))
 
 const useBlueskySocialCount = (block: any): number =>
   graphemeLength(useProcessedSocialText(block))
@@ -422,7 +425,9 @@ const validateThread = (
   if (platform === 'lesswrong') return []
   const limit = platform === 'twitter' ? TWITTER_CHAR_LIMIT : BLUESKY_CHAR_LIMIT
   return blocks.flatMap((block, index) => {
-    const count = platform === 'bluesky' ? graphemeLength(block.text) : block.text.length
+    const count = platform === 'bluesky'
+      ? graphemeLength(block.text)
+      : twitterWeightedLength(block.text)
     if (!block.text && block.mediaUrls.length === 0) return [`Post ${index + 1} is empty`]
     if (count > limit) return [`Post ${index + 1} is ${count - limit} chars over ${PLATFORM_LABELS[platform]}'s limit`]
     return []
@@ -604,22 +609,25 @@ const postToBluesky = async (
       password: config.blueskyAppPassword,
     })
 
+    const preparedPosts = await Promise.all(postable.map(async block => {
+      const richText = new RichText({text: block.text})
+      await richText.detectFacets(agent)
+      const embed = await uploadBlueskyImages(block.mediaUrls, agent, config.corsProxyUrl)
+      return {richText, embed}
+    }))
+
     let rootRef: {uri: string; cid: string} | undefined
     let parentRef: {uri: string; cid: string} | undefined
     let firstPostUrl: string | undefined
 
-    for (const block of postable) {
-      const richText = new RichText({text: block.text})
-      await richText.detectFacets(agent)
-
+    for (const prepared of preparedPosts) {
       const record: Record<string, unknown> = {
-        text: richText.text,
-        facets: richText.facets,
+        text: prepared.richText.text,
+        facets: prepared.richText.facets,
         createdAt: new Date().toISOString(),
       }
       if (rootRef && parentRef) record.reply = {root: rootRef, parent: parentRef}
-      const embed = await uploadBlueskyImages(block.mediaUrls, agent, config.corsProxyUrl)
-      if (embed) record.embed = embed
+      if (prepared.embed) record.embed = prepared.embed
 
       const created = await agent.api.app.bsky.feed.post.create(
         {repo: agent.session!.did},
