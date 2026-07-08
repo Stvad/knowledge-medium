@@ -389,11 +389,18 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 // that made the phantom). But `ps_crud` drains in capped slices across many
 // `uploadData` invocations, and PowerSync retries spin up fresh invocations
 // with no memory. So the connector RECORDS a phantom-candidate create here on
-// drain (crash-safe, in a `finally`), and a FLUSH re-stages ids whose queue is
-// clear whenever the upload loop empties or the app restarts. This carries a
+// drain (the per-tx fallback in a `finally` so a later re-throw still records it;
+// the batch happy-path right after the drain), and a FLUSH re-stages ids whose
+// queue is clear whenever the upload loop empties (also in a `finally`, so a
+// transient re-throw doesn't starve it) or the app restarts. This carries a
 // create across batch boundaries and the retry boundary — including the case a
 // same-id sibling op is later permanently REJECTED, whose drain leaves the
 // queue clear and lets the flush finally fire.
+//
+// Inherent, non-atomic gap: the drain's `complete()` and this record are SEPARATE
+// write-txns, so a hard crash strictly between them loses the record — that
+// phantom then heals only via a later real echo/edit (or the one-time,
+// marker-gated reconcile-rescan), never the outbox. A narrow tail, not the norm.
 //
 // Local-only; never synced (it references the client's own ps_crud state).
 // Holds at most the small set of in-flight phantom candidates.
@@ -405,18 +412,38 @@ export const CREATE_PENDING_RESTAGE_TABLE_SQL = `
   )
 `
 
-// A REAL staging write for the id supersedes any pending synthetic re-stage:
-// an INSERT is the server's own echo (it reconciles the id on its own, so no
-// synthesis is needed), and a DELETE is a stream-exit/revoke (the row is gone —
-// there is nothing to heal). Either way the outbox entry is obsolete, so drop
-// it. This is what keeps a create+later-sibling-that-SUCCEEDS from being
-// re-staged after its echo lands (the echo already healed it), and keeps the
-// table from lingering revoked ids.
+/** Correlated predicate: TRUE when NO `blocks` upload for `idExpr` is still
+ *  pending anywhere in `ps_crud` (the envelope shape the `blocks_upload_*`
+ *  triggers write). Shared by the flush's enqueue + delete gates AND the
+ *  clear-on-synced-insert trigger so the json-path can't drift between the three.
+ *  `idExpr` is always an internal column reference (`pr.id` /
+ *  `pending_restage.id` / `NEW.id`), never user input. A correlated `NOT EXISTS`
+ *  (not `NOT IN`) to dodge the NULL-in-subquery landmine. */
+const noPendingBlockCrudSql = (idExpr: string) => `NOT EXISTS (
+      SELECT 1 FROM ps_crud
+       WHERE json_extract(data, '$.type') = 'blocks'
+         AND json_extract(data, '$.id') = ${idExpr}
+    )`
+
+// A REAL staging write for the id supersedes a pending synthetic re-stage:
+//   - INSERT is the server's own echo — but an echo only RECONCILES the id if it
+//     actually applies. While a same-id upload is still pending, the observer
+//     skip-stale's/defers the echo (the pending local write wins), so it did NOT
+//     heal the id. So GATE the clear on "no same-id op pending": drop the outbox
+//     entry only when a real echo could actually have reconciled it. Without the
+//     gate, a bulk `blocks_synced` re-stream landing while a sibling edit is
+//     queued would drop the entry, and if that sibling then REJECTS nothing
+//     re-stages the id → stuck-forever (the exact bug this table fixes). A
+//     create+later-sibling-that-SUCCEEDS still clears correctly: the succeeding
+//     sibling's echo arrives once its `ps_crud` has drained, so the gate passes.
+//   - DELETE is a stream-exit/revoke: the row is gone, nothing to heal, so drop
+//     the entry unconditionally (the flush's EXISTS-staging gate skips it anyway).
 export const CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS pending_restage_clear_on_synced_insert
   AFTER INSERT ON blocks_synced
   BEGIN
-    DELETE FROM pending_restage WHERE id = NEW.id;
+    DELETE FROM pending_restage
+     WHERE id = NEW.id AND ${noPendingBlockCrudSql('NEW.id')};
   END
 `
 
@@ -432,18 +459,19 @@ export const CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_DELETE_TRIGGER_SQL = `
  *  `blocks_synced_changes` upsert (the synthetic echo) and drop the outbox row.
  *
  *  GATE (both statements): re-stage an id only when NO same-id `blocks` op is
- *  still pending anywhere in `ps_crud`. A pending op means either the create is
- *  still in flight (re-staging now would be skip-stale'd + consume the synthetic
- *  upsert) or a later same-id edit is queued (let it upload — its own echo, or
- *  its rejection draining the queue, resolves the id). The ENQUEUE additionally
- *  requires the staging row to still EXIST — a revoked id (staging row gone) has
- *  nothing to heal, so it is deleted from the outbox without a synthetic upsert.
+ *  still pending anywhere in `ps_crud` ({@link noPendingBlockCrudSql}). A pending
+ *  op means either the create is still in flight (re-staging now would be
+ *  skip-stale'd + consume the synthetic upsert) or a later same-id edit is queued
+ *  (let it upload — its own echo, or its rejection draining the queue, resolves
+ *  the id). The ENQUEUE additionally requires the staging row to still EXIST — a
+ *  revoked id (staging row gone) has nothing to heal, so it is deleted from the
+ *  outbox without a synthetic upsert.
  *
  *  Two statements in one write tx: the ENQUEUE inserts synthetic upserts for
  *  queue-clear ids that still have a staging row; the DELETE then removes every
  *  queue-clear id (those just re-staged AND any revoked ones), leaving only ids
- *  with a still-pending op for a later flush. Same `ps_crud` gate on both, in
- *  one tx, so the sets line up.
+ *  with a still-pending op for a later flush. Same `ps_crud` gate on both, in one
+ *  tx, so the sets line up (enqueued ⊆ deleted).
  *
  *  Writes only `blocks_synced_changes` (the observer's private detection queue —
  *  local bookkeeping, no upload routing), so it never enqueues a server write. */
@@ -451,20 +479,12 @@ export const FLUSH_PENDING_RESTAGE_ENQUEUE_SQL = `
   INSERT INTO blocks_synced_changes (id, op)
     SELECT pr.id, 'upsert' FROM pending_restage AS pr
      WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = pr.id)
-       AND NOT EXISTS (
-         SELECT 1 FROM ps_crud
-          WHERE json_extract(data, '$.type') = 'blocks'
-            AND json_extract(data, '$.id') = pr.id
-       )
+       AND ${noPendingBlockCrudSql('pr.id')}
 `
 
 export const FLUSH_PENDING_RESTAGE_DELETE_SQL = `
   DELETE FROM pending_restage
-   WHERE NOT EXISTS (
-     SELECT 1 FROM ps_crud
-      WHERE json_extract(data, '$.type') = 'blocks'
-        AND json_extract(data, '$.id') = pending_restage.id
-   )
+   WHERE ${noPendingBlockCrudSql('pending_restage.id')}
 `
 
 /** Minimal write surface both {@link PowerSyncDb} (repo startup) and the

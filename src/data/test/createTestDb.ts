@@ -259,6 +259,7 @@ const RESET_CONTENT_TABLES = [
   'blocks',
   'blocks_synced',
   'blocks_synced_changes',
+  'pending_restage', // self-heal outbox — reset so a stray entry can't bleed across tests
   'workspaces',
   'workspace_members',
   'block_aliases',

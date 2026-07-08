@@ -742,6 +742,27 @@ describe('runUploadLoop — post-drain outbox flush', () => {
     expect(recordDrainedCreates).not.toHaveBeenCalled()
     expect(flushPendingRestage).toHaveBeenCalledTimes(1)
   })
+
+  it('still flushes the outbox in a `finally` when the loop re-throws (transient)', async () => {
+    // A persistently-stuck (transient) tx re-throws out of the loop; the flush
+    // must still run so an unrelated, already-queue-clear phantom isn't starved
+    // until an app restart. The flush's per-id ps_crud gate leaves the stuck id.
+    const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const recordRejection = vi.fn<UploadDeps['recordRejection']>().mockResolvedValue(undefined)
+    const applyOperations = vi.fn<UploadDeps['applyOperations']>().mockRejectedValue(networkError())
+    const flushPendingRestage = vi.fn<NonNullable<UploadDeps['flushPendingRestage']>>().mockResolvedValue(undefined)
+
+    await expect(
+      __runUploadLoopForTest(
+        loopDb([tx1]),
+        {applyOperations, recordRejection, flushPendingRestage},
+        new Map(),
+      ),
+    ).rejects.toThrow('fetch failed')
+
+    // Reached despite the re-throw (would be 0 if the flush weren't in a finally).
+    expect(flushPendingRestage).toHaveBeenCalledTimes(1)
+  })
 })
 
 // ===========================================================================

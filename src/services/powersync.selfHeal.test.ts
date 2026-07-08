@@ -106,6 +106,21 @@ describe('recordDrainedCreates — outbox shape', () => {
     ])
     expect(await pendingRestage()).toEqual([{ id: 'c2' }])
   })
+
+  it('excludes a create whose id also has a separate delete op (would else resurrect the delete)', async () => {
+    // A create + a SEPARATE succeeded delete for the same id (cross-tx; a same-
+    // batch create+delete cancels in compaction, so only the per-tx fallback
+    // surfaces both). The delete's echo removes the row; recording c1 would let
+    // the flush enqueue a synthetic upsert from the stale staging row and
+    // resurrect the deleted block before the delete echo lands — exclude it.
+    await stageServerRows('c1', 'c2')
+    await record([
+      createOp('c1'),
+      { kind: 'delete', id: 'c1', order: 1 },
+      createOp('c2'),
+    ])
+    expect(await pendingRestage()).toEqual([{ id: 'c2' }])
+  })
 })
 
 describe('flushPendingRestage — queue gate', () => {
@@ -148,6 +163,17 @@ describe('pending_restage clear-on-synced triggers', () => {
     await insertOutbox('b1')
     await stageServerRow(data({ id: 'b1' })) // echo lands ⇒ reconciles ⇒ drop the outbox row
     expect(await pendingRestage()).toEqual([])
+  })
+
+  it('keeps the outbox id when a same-id upload is still pending (re-stream did not reconcile it)', async () => {
+    // A bulk blocks_synced re-stream can re-insert a row while a sibling edit is
+    // still queued; that echo is skip-staled (didn't actually reconcile), so the
+    // outbox entry must survive — else a later rejection of the sibling would
+    // strand the phantom. The clear only fires once no same-id op is pending.
+    await insertOutbox('b1')
+    await queuePendingUpload('b1')
+    await stageServerRow(data({ id: 'b1' }))
+    expect(await pendingRestage()).toEqual([{ id: 'b1' }])
   })
 
   it('a staging delete (revoke) removes the id from the outbox', async () => {
