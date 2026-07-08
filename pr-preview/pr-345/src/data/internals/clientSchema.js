@@ -148,7 +148,8 @@ import{ALIAS_COLLISION_RAISE_PREFIX as e,PARENT_DELETED_RAISE_PREFIX as t,RAISE_
   CREATE TRIGGER IF NOT EXISTS pending_restage_clear_on_synced_delete
   AFTER DELETE ON blocks_synced
   BEGIN
-    DELETE FROM pending_restage WHERE id = OLD.id;
+    DELETE FROM pending_restage
+     WHERE id = OLD.id AND ${w(`OLD.id`)};
   END
 `,D=`
   INSERT INTO blocks_synced_changes (id, op)
