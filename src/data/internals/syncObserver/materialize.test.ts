@@ -14,21 +14,13 @@
  * the source-gating and trigger interactions are the real ones.
  */
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  BLOCKS_SYNCED_RAW_TABLE,
-  BLOCK_STORAGE_COLUMNS,
-  blockToRowParams,
-} from '@/data/blockSchema'
-import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { materializeStagingRows, type Materializability } from './materialize.js'
+import { describe, expect, it, vi } from 'vitest'
+import { materializeStagingRows } from './materialize.js'
 import { encodeForWire, type GetCek } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
 import type { BlockData } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
-
-const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
-const INSERT_BLOCK_SQL = `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
+import { constMat, noKey, stagingCiphertextParams, setupObserverTestDb } from './test/harness.js'
 
 const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
   id: 'b1',
@@ -47,43 +39,8 @@ const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
   ...overrides,
 })
 
-/** Build positional staging-row params, replacing the three content columns
- *  with already-encoded (ciphertext) strings. */
-const stagingCiphertextParams = (
-  meta: BlockData,
-  wire: { content: string; properties_json: string; references_json: string },
-): unknown[] => {
-  const params = blockToRowParams(meta)
-  params[4] = wire.content
-  params[5] = wire.properties_json
-  params[6] = wire.references_json
-  return params
-}
-
-let sharedDb: TestDb
-let env: TestDb
-beforeAll(async () => { sharedDb = await createTestDb() })
-afterAll(async () => { await sharedDb.cleanup() })
-// Reuse one DB across the file; reset (not reopen) per test.
-beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb })
-
-const stageRow = (data: BlockData, params?: unknown[]) =>
-  env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, params ?? blockToRowParams(data))
-
-const seedLocalBlock = (data: BlockData) =>
-  env.db.execute(INSERT_BLOCK_SQL, blockToRowParams(data))
-
-const allBlocks = () =>
-  env.db.getAll<{ id: string; content: string; properties_json: string; updated_at: number }>(
-    'SELECT id, content, properties_json, updated_at FROM blocks ORDER BY id',
-  )
-
-const crudCount = async () =>
-  (await env.db.getAll('SELECT id FROM ps_crud')).length
-
-const constMat = (m: Materializability) => () => m
-
-const noKey: GetCek = async () => null
+const { env, stageRow, seedLocalBlock, allBlocks, crudCount, queuePendingUpload } =
+  setupObserverTestDb()
 
 /** Wrap the test DB so a racing local write fires exactly once, AFTER the
  *  Phase-1 reads (which use the auto-commit `db`) but BEFORE the Phase-2 write
@@ -107,12 +64,6 @@ const racingDb = (real: PowerSyncDb, raceOnce: () => Promise<unknown>): PowerSyn
     },
   }) as PowerSyncDb
 }
-
-const queuePendingUpload = (id: string) =>
-  env.db.execute(
-    "INSERT INTO ps_crud (tx_id, data) VALUES (1, json_object('op','PATCH','type','blocks','id',?,'data',json_object()))",
-    [id],
-  )
 
 describe('materializeStagingRows — copy-through (plaintext workspace)', () => {
   it('copies a staged plaintext row into blocks verbatim, with no upload echo', async () => {

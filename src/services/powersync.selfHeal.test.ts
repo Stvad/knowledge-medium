@@ -17,18 +17,11 @@
  * onChange wake-up (from a DIRECT `blocks_synced_changes` insert) and the
  * reconcile gate are the production ones.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
-import { BlockCache } from '@/data/blockCache'
-import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import {
-  startBlocksSyncedObserver,
-  type BlocksSyncedObserver,
-} from '@/data/internals/syncObserver/observer.js'
-import type { GetMaterializability } from '@/data/internals/syncObserver/materialize.js'
 import { __restageCreatedIdsForTest, type CompactedBlockOperation } from './powersync'
 import type { BlockData } from '@/data/api'
+import { constMat, setupObserverTestDb } from '@/data/internals/syncObserver/test/harness.js'
 
 const data = (o: Partial<BlockData> = {}): BlockData => ({
   id: 'b1', workspaceId: 'ws-plain', parentId: null, orderKey: 'a0', content: 'hello',
@@ -39,40 +32,12 @@ const data = (o: Partial<BlockData> = {}): BlockData => ({
 const createOp = (id: string): CompactedBlockOperation =>
   ({ kind: 'create', id, order: 0, payload: { id, workspace_id: 'ws-plain' } })
 
-let sharedDb: TestDb
-let env: TestDb
-let observers: BlocksSyncedObserver[]
-beforeAll(async () => { sharedDb = await createTestDb() })
-afterAll(async () => { await sharedDb.cleanup() })
-beforeEach(async () => { await resetTestDb(sharedDb.db); env = sharedDb; observers = [] })
-afterEach(() => { for (const o of observers) o.dispose() })
-
-const BLOCK_COLS =
-  'id, workspace_id, parent_id, order_key, content, properties_json, references_json, ' +
-  'created_at, updated_at, user_updated_at, created_by, updated_by, deleted'
-const seedLocalBlock = (d: BlockData) =>
-  env.db.execute(`INSERT INTO blocks (${BLOCK_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, blockToRowParams(d))
-const stageServerRow = (d: BlockData) =>
-  env.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(d))
-const blocks = () =>
-  env.db.getAll<{ id: string; content: string }>('SELECT id, content FROM blocks ORDER BY id')
-const queueLen = async () => (await env.db.getAll('SELECT seq FROM blocks_synced_changes')).length
+const { env, start, seedLocalBlock, stageRow: stageServerRow, blocks, queueLen } = setupObserverTestDb()
 
 const restage = (ops: CompactedBlockOperation[]) =>
   __restageCreatedIdsForTest(env.db as unknown as AbstractPowerSyncDatabase, ops)
 
-const constMat = (m: 'copy'): GetMaterializability => () => m
-const startObserver = (): BlocksSyncedObserver => {
-  const observer = startBlocksSyncedObserver({
-    db: env.db,
-    cache: new BlockCache(),
-    handleStore: { invalidate: () => {} },
-    deps: { getMaterializability: constMat('copy'), getCek: async () => null },
-    throttleMs: 5,
-  })
-  observers.push(observer)
-  return observer
-}
+const startObserver = () => start({ getMaterializability: constMat('copy') }).observer
 describe('restageCreatedIds — enqueue shape', () => {
   // The staging-row gate only re-stages a created id that ALREADY has a
   // `blocks_synced` row (a phantom). Stage server rows for the ids under test —
