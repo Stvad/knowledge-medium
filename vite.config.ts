@@ -27,6 +27,12 @@ const isDashjsCommonjsVariableWarning = (log: RollupLogLike) => {
     )
 }
 
+const isReactImportExternal = (id: string): boolean =>
+    id === 'react' ||
+    id.startsWith('react/') ||
+    id === 'react-dom' ||
+    id.startsWith('react-dom/')
+
 // Root the dev-server fs allow-list at the primary checkout. In a git worktree
 // (.claude/worktrees/<name>) that's three levels up — the worktree has no
 // node_modules of its own, so deps resolve upward to the main checkout; outside
@@ -70,10 +76,7 @@ export default defineConfig(({command}) => {
             babel({presets: [reactCompilerPreset()]}),
             wasm(),
             externalize({
-                externals: [
-                    'react', // Externalize "react", and all of its subexports (react/*), such as react/jsx-runtime
-                    'react-dom',
-                ],
+                externals: [isReactImportExternal],
             }),
             {
                 name: 'only-main-entry',
@@ -144,15 +147,8 @@ export default defineConfig(({command}) => {
                     if (isDashjsCommonjsVariableWarning(log)) return
                     defaultHandler(level, log)
                 },
-                //     // Mark react and react-dom as external to rely on the import map
-                external: [
-                    'react',
-                    'react/compiler-runtime',
-                    'react/jsx-dev-runtime',
-                    'react/jsx-runtime',
-                    'react-dom',
-                    'react-dom/client',
-                ],
+                // Mark react and react-dom subpaths as external to rely on the import map.
+                external: isReactImportExternal,
                 // input: '/src/main.tsx',
                 // input: {
                 //     index: path.resolve(__dirname, 'index.html'),

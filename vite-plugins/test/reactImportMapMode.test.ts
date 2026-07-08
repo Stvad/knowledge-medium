@@ -72,6 +72,34 @@ describe('rewriteReactImportMapForProduction', () => {
     expect(importMap.integrity[`https://esm.sh/react@${REACT_ESM_VERSION}?dev`]).toBeUndefined()
   })
 
+  it('adds SRI coverage for react-dom/server URLs resolved by the import-map prefix', () => {
+    const html = `
+      <script type="importmap">
+        {
+          "imports": {
+            "react": "https://esm.sh/react@${REACT_ESM_VERSION}?dev",
+            "react-dom/": "https://esm.sh/react-dom@${REACT_ESM_VERSION}&dev/"
+          },
+          "integrity": {}
+        }
+      </script>
+    `
+
+    const importMap = readImportMap(rewriteReactImportMapForProduction(html))
+    const reactDomBase = importMap.imports['react-dom/']
+    const serverGraphUrls = [
+      `${reactDomBase}server`,
+      `${reactDomBase}es2022/server.mjs`,
+      `${reactDomBase}es2022/cjs/react-dom-server-legacy.browser.production.mjs`,
+      `${reactDomBase}es2022/cjs/react-dom-server.browser.production.mjs`,
+    ]
+
+    expect(serverGraphUrls.filter(url => !importMap.integrity[url])).toEqual([])
+    for (const url of serverGraphUrls) {
+      expect(importMap.integrity[url]).toMatch(/^sha384-/)
+    }
+  })
+
   it('leaves unrelated import maps unchanged', () => {
     const html = `
       <script type="importmap">
