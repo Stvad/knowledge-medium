@@ -1,32 +1,25 @@
+import { actionsFacet } from '@/extensions/core.js'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import {
-  actionsFacet,
-  ActionContextTypes,
   blockContentDecoratorsFacet,
+  type BlockContentDecorator,
+  type BlockContentDecoratorContribution,
+} from '@/extensions/blockInteraction.js'
+import {
   ChangeScope,
   codecs,
   defineBlockType,
   defineProperty,
   definePropertyEditorOverride,
-  getPluginPrefsBlock,
-  navigate,
-  openDialog,
-  propertyEditorOverridesFacet,
-  propertySchemasFacet,
-  renderMarkdownHtml,
-  showError,
-  showInfo,
-  showPropertiesProp,
-  showSuccess,
-  typesFacet,
-  type ActionConfig,
-  type BlockContentDecorator,
-  type BlockContentDecoratorContribution,
-  type BlockRenderer,
-  type DialogContextProps,
   type PropertyEditorProps,
 } from '@/extensions/api.js'
+import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
+import { navigate } from '@/utils/navigation.js'
+import { openDialog, type DialogContextProps } from '@/utils/dialogs.js'
+import { propertyEditorOverridesFacet, propertySchemasFacet, typesFacet } from '@/data/facets.js'
+import { showError, showInfo, showSuccess } from '@/utils/toast.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
-import { getBlockTypes } from '@/data/properties.js'
+import { getBlockTypes, showPropertiesProp } from '@/data/properties.js'
 import { useContent } from '@/hooks/block.js'
 import {
   CHAR_COUNTER_TYPE,
@@ -36,6 +29,7 @@ import {
   characterCountProfilesFacet,
   type CharacterCountProfile,
 } from '@/plugins/character-counter/index.js'
+import type { BlockRenderer } from '@/types.js'
 import { Button } from '@/components/ui/button.js'
 import {
   Dialog,
@@ -49,7 +43,6 @@ import { Input } from '@/components/ui/input.js'
 import { Label } from '@/components/ui/label.js'
 import { useEffect, useMemo, useState, type CSSProperties, type SVGProps } from 'react'
 import { AtpAgent, RichText } from 'https://esm.sh/@atproto/api@0.19.3?bundle'
-import { parseTweet } from 'https://esm.sh/twitter-text@3.1.0?bundle'
 
 const source = 'social-media-publisher'
 const BUFFER_TOKEN_KEY = 'knowledge-medium:social-publisher:buffer-token:v1'
@@ -60,6 +53,9 @@ const TWITTER_CHAR_LIMIT = 280
 const BLUESKY_CHAR_LIMIT = 300
 const TWITTER_COUNT_PROFILE_ID = 'social-publisher-twitter'
 const BLUESKY_COUNT_PROFILE_ID = 'social-publisher-bluesky'
+const TWITTER_WEIGHT_SCALE = 100
+const TWITTER_DEFAULT_CHAR_WEIGHT = 200
+const TWITTER_TRANSFORMED_URL_LENGTH = 23
 const BUFFER_API_URL = 'https://api.buffer.com'
 const BSKY_SERVICE_URL = 'https://bsky.social'
 const LW_GRAPHQL_URL = 'https://www.lesswrong.com/graphql'
@@ -376,7 +372,43 @@ const graphemeLength = (text: string): number => {
   return [...text].length
 }
 
-const twitterWeightedLength = (text: string): number => parseTweet(text).weightedLength
+const twitterSingleWeightRanges: Array<[number, number]> = [
+  [0, 0x10ff],
+  [0x2000, 0x200d],
+  [0x2010, 0x201f],
+  [0x2032, 0x2037],
+]
+
+const twitterUrlRegex = /\b(?:https?:\/\/|www\.)[^\s<>()]+/giu
+
+const twitterCodePointWeight = (codePoint: number): number =>
+  twitterSingleWeightRanges.some(([start, end]) => codePoint >= start && codePoint <= end)
+    ? TWITTER_WEIGHT_SCALE
+    : TWITTER_DEFAULT_CHAR_WEIGHT
+
+const twitterWeightedSegmentLength = (text: string): number => {
+  let total = 0
+  for (let index = 0; index < text.length;) {
+    const codePoint = text.codePointAt(index)
+    if (codePoint === undefined) break
+    total += twitterCodePointWeight(codePoint)
+    index += codePoint > 0xffff ? 2 : 1
+  }
+  return total
+}
+
+const twitterWeightedLength = (text: string): number => {
+  let total = 0
+  let lastIndex = 0
+  for (const match of text.matchAll(twitterUrlRegex)) {
+    const index = match.index ?? 0
+    total += twitterWeightedSegmentLength(text.slice(lastIndex, index))
+    total += TWITTER_TRANSFORMED_URL_LENGTH * TWITTER_WEIGHT_SCALE
+    lastIndex = index + match[0].length
+  }
+  total += twitterWeightedSegmentLength(text.slice(lastIndex))
+  return Math.ceil(total / TWITTER_WEIGHT_SCALE)
+}
 
 const useProcessedSocialText = (block: any): string => {
   const content = useContent(block)
@@ -447,7 +479,9 @@ const normalizeBlockMarkdownForHtml = async (raw: string, repo: any): Promise<st
 
 const blockToHtml = async (raw: string, repo: any): Promise<string> => {
   const markdown = await normalizeBlockMarkdownForHtml(raw, repo)
-  return markdown ? renderMarkdownHtml(markdown, {mode: 'external'}) : ''
+  if (!markdown) return ''
+  const {renderMarkdownHtml} = await import('@/markdown/renderMarkdownHtml.js')
+  return renderMarkdownHtml(markdown, {mode: 'external'})
 }
 
 const blocksToHtml = async (blocks: PostBlock[], repo: any): Promise<string> => {
