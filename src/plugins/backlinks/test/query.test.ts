@@ -30,6 +30,7 @@ import {
   BACKLINKS_FOR_BLOCK_QUERY,
   backlinksForBlockQuery,
   mergeBacklinksFilters,
+  normalizeBacklinksFilter,
 } from '../query.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
 import {
@@ -148,6 +149,19 @@ describe('backlinksDataExtension query', () => {
     )).toEqual({
       include: [doneRef, localRef, projectRef],
       exclude: [inboxRef, somedayRef],
+    })
+  })
+
+  it('normalizes duplicate predicates within each filter list', () => {
+    const doneRef = {scope: 'ancestor' as const, referencedBy: {id: 'done'}}
+    const projectRef = {scope: 'ancestor' as const, referencedBy: {id: 'project'}}
+
+    expect(normalizeBacklinksFilter({
+      include: [projectRef, projectRef],
+      exclude: [doneRef, {scope: 'ancestor', referencedBy: {id: 'done'}}],
+    })).toEqual({
+      include: [projectRef],
+      exclude: [doneRef],
     })
   })
 

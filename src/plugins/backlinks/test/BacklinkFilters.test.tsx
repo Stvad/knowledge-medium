@@ -107,6 +107,23 @@ describe('BacklinkFilters', () => {
     expect(openConfig).toHaveBeenCalledOnce()
   })
 
+  it('renders duplicate stored exclude predicates only once', () => {
+    render(
+      <BacklinkFilters
+        workspaceId="ws-1"
+        filter={{
+          exclude: [
+            {scope: 'ancestor', referencedBy: {id: 'done'}},
+            {scope: 'ancestor', referencedBy: {id: 'done'}},
+          ],
+        }}
+        onChange={vi.fn()}
+      />,
+    )
+
+    expect(screen.getAllByTitle('done')).toHaveLength(1)
+  })
+
   it('allows set/unset filters for registered non-comparable properties', () => {
     const listProp = defineProperty<unknown[]>('roam:list', {
       codec: codecs.list(codecs.unsafeIdentity<unknown>()),

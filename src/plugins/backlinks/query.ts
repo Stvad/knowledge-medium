@@ -40,11 +40,21 @@ const stripEmpty = (
 ): BlockPredicate[] =>
   (predicates ?? []).filter(isPredicateMeaningful)
 
+const dedupePredicates = (
+  predicates: readonly BlockPredicate[],
+): BlockPredicate[] => {
+  const out: BlockPredicate[] = []
+  for (const predicate of predicates) {
+    if (!out.some(existing => samePredicate(existing, predicate))) out.push(predicate)
+  }
+  return out
+}
+
 export const normalizeBacklinksFilter = (
   filter: BacklinksFilter | undefined,
 ): Required<BacklinksFilter> => ({
-  include: stripEmpty(filter?.include),
-  exclude: stripEmpty(filter?.exclude),
+  include: dedupePredicates(stripEmpty(filter?.include)),
+  exclude: dedupePredicates(stripEmpty(filter?.exclude)),
 })
 
 const samePredicate = (a: BlockPredicate, b: BlockPredicate): boolean => isEqual(a, b)
