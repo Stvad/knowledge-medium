@@ -82,7 +82,17 @@ const waitFor = async (cond: () => Promise<boolean>, ms = 3000): Promise<void> =
 }
 
 describe('restageCreatedIds — enqueue shape', () => {
-  it('enqueues one upsert per create op, ignoring patches and deletes', async () => {
+  // The staging-row gate only re-stages a created id that ALREADY has a
+  // `blocks_synced` row (a phantom). Stage server rows for the ids under test —
+  // and clear the queue the staging INSERT trigger enqueues, so the assertions
+  // see restage's output alone.
+  const stageServerRows = async (...ids: string[]) => {
+    for (const id of ids) await stageServerRow(data({ id }))
+    await env.db.execute('DELETE FROM blocks_synced_changes')
+  }
+
+  it('enqueues one upsert per create op with a staging row, ignoring patches and deletes', async () => {
+    await stageServerRows('c1', 'c2')
     await restage([
       createOp('c1'),
       { kind: 'patch', id: 'p1', order: 1, payload: {} },
@@ -95,6 +105,15 @@ describe('restageCreatedIds — enqueue shape', () => {
     expect(rows).toEqual([{ id: 'c1', op: 'upsert' }, { id: 'c2', op: 'upsert' }])
   })
 
+  it('skips a created id with no staging row (genuine-new insert — nothing to heal yet)', async () => {
+    await stageServerRows('c1') // c1 staged (phantom); c2 has no server row yet
+    await restage([createOp('c1'), createOp('c2')])
+    const rows = await env.db.getAll<{ id: string; op: string }>(
+      'SELECT id, op FROM blocks_synced_changes ORDER BY seq',
+    )
+    expect(rows).toEqual([{ id: 'c1', op: 'upsert' }])
+  })
+
   it('no-ops when the batch has no create ops', async () => {
     await restage([{ kind: 'patch', id: 'p1', order: 0, payload: {} }])
     expect(await queueLen()).toBe(0)
@@ -104,6 +123,7 @@ describe('restageCreatedIds — enqueue shape', () => {
     // A create + a SEPARATE patch for the same id (cross-tx; same-tx would fuse).
     // The patch is a real server write whose echo reconciles c1, so re-staging c1
     // would only risk a transient disk revert — exclude it. c2 (pure create) stays.
+    await stageServerRows('c1', 'c2')
     await restage([
       createOp('c1'),
       { kind: 'patch', id: 'c1', order: 1, payload: {} },
@@ -141,15 +161,16 @@ describe('restage self-heals an insert-or-skip phantom (fix B, via the real obse
     await waitFor(async () => (await blocks())[0]?.content === 'server truth')
   })
 
-  it('re-staging a genuinely-new id (no staging row) is a no-op — the fresh local row survives', async () => {
+  it('re-staging a genuinely-new id (no staging row) enqueues nothing — the fresh local row survives', async () => {
     // A create the server actually accepted has no blocks_synced row yet, so the
-    // drain finds nothing to materialize and must not delete the fresh local row.
+    // staging-row gate enqueues nothing: no wake, no work, and the fresh local row
+    // is untouched (its own later sync-down echo reconciles it).
     await seedLocalBlock(data({ content: 'fresh local insert', updatedAt: 5000 }))
     const observer = startObserver()
     await observer.flush()
 
     await restage([createOp('b1')])
-    await waitFor(async () => (await queueLen()) === 0) // wake processed + consumed
+    expect(await queueLen()).toBe(0) // gated out at enqueue time
     await observer.flush()
 
     expect(await blocks()).toEqual([{ id: 'b1', content: 'fresh local insert' }])

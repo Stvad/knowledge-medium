@@ -450,21 +450,48 @@ const defaultBlockUploadSink: BlockUploadSink = {
  *  the observer `skip-stale`s the re-stage — the exact trap that created the
  *  phantom.
  *
- *  SELF-SELECTING for creates: a skipped create has a staging row to heal to; a
- *  genuinely-new create has no `blocks_synced` row yet, so the drain finds
- *  nothing to materialize and no-ops (never deletes the fresh local row —
- *  `'upsert'` ids never enter the observer's `removed` set). Redundant with the
- *  natural echo for genuine inserts (harmless: an idempotent LWW-gated re-drain).
+ *  STAGING-ROW GATE: only re-stage a created id that ALREADY has a `blocks_synced`
+ *  row. A phantom, by definition, is an id whose server row is already staged but
+ *  un-materialized — so the gate captures every heal case while enqueuing NOTHING
+ *  for a genuinely-new insert (whose server echo hasn't round-tripped, so it has
+ *  no staging row yet). That matters on two axes:
+ *    - Scale: the bulk local-create path (Roam import ⇒ ~10k creates/batch) would
+ *      otherwise enqueue a no-op `'upsert'` per id and re-drain them all, ~doubling
+ *      `blocks_synced_changes` churn on exactly the path the queue is tuned for.
+ *      A genuine insert reconciles via its own later sync-down trigger, so skipping
+ *      it here loses no heal.
+ *    - Correctness: an `'upsert'` for an id with no staging row could dedup-mask a
+ *      concurrent real `'delete'` in the same drain window (server revokes a
+ *      deterministic id the client is re-creating), stranding a revoked row. The
+ *      gate makes restage never emit such an `'upsert'`.
+ *  The gate + the enqueue run in one statement (`INSERT … SELECT … WHERE EXISTS`),
+ *  which also collapses the per-id round-trips into a single write.
  *
  *  EXCLUDES a create whose id also carries a SEPARATE patch op (necessarily from
  *  a different tx — a same-tx patch fuses into the create's payload, so a fused
  *  create+patch still uploads as one insert-or-skip PUT and DOES need the heal).
  *  A separate patch is a real server-changing write (patches aren't insert-or-
  *  skip) whose echo re-reconciles the id on its own; re-staging the create here
- *  would only risk a transient on-disk revert in the ack-to-echo window.
+ *  would only risk a transient on-disk revert in the ack-to-echo window. NOTE:
+ *  the exclusion is scoped to the `operations` handed in — whole-batch on the
+ *  batch path, single-tx in the per-tx fallback — so a cross-tx create+patch is
+ *  excluded in the batch path but not the fallback; the residual there is a
+ *  self-healing off-UI transient (the pending patch forces skip-stale in the
+ *  common ordering), not a defect worth threading batch-wide state for.
  *
- *  Writes only `blocks_synced_changes` (local bookkeeping, no upload routing),
- *  so it never enqueues a server write of its own. */
+ *  DATA-LOSS INVARIANT (unenforced): the heal applies the server row over the
+ *  local one, so a create that FUSES genuinely-unrecoverable user content on a
+ *  DETERMINISTIC id whose server row differs would be reverted with no echo to
+ *  reconverge. Every deterministic-id creator today fuses only reconstructible
+ *  content (daily-note scaffolds, targets, prefs/ui-state bootstrap) or content
+ *  the server already shares (matrix messages), so this can't fire — but a future
+ *  deterministic-id creator that fuses unrecoverable content in one tx must not
+ *  rely on that content surviving locally. (Can't fix by "exclude creates with
+ *  content": matrix message phantoms carry content and ARE the heal target.)
+ *
+ *  Writes only `blocks_synced_changes` (the observer's private detection queue,
+ *  see clientSchema.ts — local bookkeeping, no upload routing), so it never
+ *  enqueues a server write of its own. */
 const restageCreatedIds = async (
   database: AbstractPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
@@ -475,12 +502,12 @@ const restageCreatedIds = async (
     .map(op => op.id)
   if (createdIds.length === 0) return
   await database.writeTransaction(async tx => {
-    for (const id of createdIds) {
-      await tx.execute(
-        "INSERT INTO blocks_synced_changes (id, op) VALUES (?, 'upsert')",
-        [id],
-      )
-    }
+    await tx.execute(
+      `INSERT INTO blocks_synced_changes (id, op)
+         SELECT je.value, 'upsert' FROM json_each(?) AS je
+          WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = je.value)`,
+      [JSON.stringify(createdIds)],
+    )
   })
 }
 
