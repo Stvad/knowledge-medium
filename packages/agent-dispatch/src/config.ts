@@ -69,7 +69,8 @@ const claudeRunnerSchema = z.strictObject({
 })
 
 const codexSandboxSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access'])
-const codexApprovalPolicySchema = z.enum(['untrusted', 'on-failure', 'on-request', 'never'])
+const codexApprovalPolicySchema = z.enum(['on-request', 'never'])
+const codexApprovalsReviewerSchema = z.enum(['auto_review'])
 
 const codexRunnerSchema = z.strictObject({
   executor: z.literal('codex'),
@@ -83,10 +84,11 @@ const codexRunnerSchema = z.strictObject({
   /** Enables `[sandbox_workspace_write].network_access` for this run.
    *  Codex only exposes that network toggle for workspace-write. */
   networkAccess: z.boolean().default(false),
-  /** Headless dispatch defaults to never asking: a launchd daemon has
-   *  no reliable human approval channel. Use on-request for manual
-   *  debugging or an explicitly interactive run surface. */
+  /** Headless dispatch defaults to never asking. Codex exec ignores the
+   *  interactive `-a` path; on-request is only supported when routed to
+   *  the auto-review classifier via `approvalsReviewer: "auto_review"`. */
   approvalPolicy: codexApprovalPolicySchema.default('never'),
+  approvalsReviewer: codexApprovalsReviewerSchema.optional(),
 })
 
 const runnerSchema = z.preprocess(
@@ -108,11 +110,26 @@ const runnerSchema = z.preprocess(
       message: 'addDirs requires sandbox="workspace-write" or "danger-full-access"',
     })
   }
+  if (runner.approvalPolicy !== 'never' && runner.approvalsReviewer !== 'auto_review') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['approvalPolicy'],
+      message: 'Codex exec only supports non-never approvalPolicy with approvalsReviewer="auto_review"',
+    })
+  }
+  if (runner.approvalsReviewer === 'auto_review' && runner.approvalPolicy !== 'on-request') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['approvalsReviewer'],
+      message: 'approvalsReviewer="auto_review" requires approvalPolicy="on-request"',
+    })
+  }
 })
 
 export type Runner = z.infer<typeof runnerSchema>
 export type CodexSandbox = z.infer<typeof codexSandboxSchema>
 export type CodexApprovalPolicy = z.infer<typeof codexApprovalPolicySchema>
+export type CodexApprovalsReviewer = z.infer<typeof codexApprovalsReviewerSchema>
 
 const watcherBase = {
   name: z.string().min(1),

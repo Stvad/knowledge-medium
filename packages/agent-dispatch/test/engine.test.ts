@@ -1003,6 +1003,7 @@ describe('mention lifecycle', () => {
             addDirs: ['/private/tmp'],
             networkAccess: true,
             approvalPolicy: 'on-request',
+            approvalsReviewer: 'auto_review',
           },
         }],
       }),
@@ -1018,6 +1019,7 @@ describe('mention lifecycle', () => {
       codexAddDirs: ['/private/tmp'],
       codexNetworkAccess: true,
       codexApprovalPolicy: 'on-request',
+      codexApprovalsReviewer: 'auto_review',
     })
   })
 })

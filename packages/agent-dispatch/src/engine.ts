@@ -231,6 +231,7 @@ export const createEngine = (deps: EngineDeps) => {
       codexAddDirs: runner.executor === 'codex' ? runner.addDirs : undefined,
       codexNetworkAccess: runner.executor === 'codex' ? runner.networkAccess : undefined,
       codexApprovalPolicy: runner.executor === 'codex' ? runner.approvalPolicy : undefined,
+      codexApprovalsReviewer: runner.executor === 'codex' ? runner.approvalsReviewer : undefined,
       billing: config.billing,
       signal,
     }

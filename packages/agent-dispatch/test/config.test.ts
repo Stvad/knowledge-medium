@@ -158,6 +158,7 @@ describe('parseConfig', () => {
           addDirs: ['/private/tmp'],
           networkAccess: true,
           approvalPolicy: 'on-request',
+          approvalsReviewer: 'auto_review',
         },
       }],
     })
@@ -169,6 +170,7 @@ describe('parseConfig', () => {
       addDirs: ['/private/tmp'],
       networkAccess: true,
       approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
     })
   })
 
@@ -189,6 +191,30 @@ describe('parseConfig', () => {
         runner: {executor: 'codex', addDirs: ['/private/tmp']},
       }],
     })).toThrow(/addDirs/)
+    expect(() => parseConfig({
+      watchers: [{
+        kind: 'backlinks',
+        name: 'codex',
+        target: 'codex',
+        runner: {executor: 'codex', approvalPolicy: 'on-request'},
+      }],
+    })).toThrow(/approvalsReviewer/)
+    expect(() => parseConfig({
+      watchers: [{
+        kind: 'backlinks',
+        name: 'codex',
+        target: 'codex',
+        runner: {executor: 'codex', approvalPolicy: 'untrusted'},
+      }],
+    })).toThrow()
+    expect(() => parseConfig({
+      watchers: [{
+        kind: 'backlinks',
+        name: 'codex',
+        target: 'codex',
+        runner: {executor: 'codex', approvalsReviewer: 'auto_review'},
+      }],
+    })).toThrow(/approvalPolicy/)
   })
 
   it('rejects channel delivery for codex runners', () => {

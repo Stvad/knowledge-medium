@@ -30,7 +30,7 @@
 import { runJsonlProcess, type SpawnImpl } from './execProcess.js'
 import { envForBilling, humanizeToolName } from './runner.js'
 import type { AgentRunResult, RunEvent } from './runner.js'
-import type { CodexApprovalPolicy, CodexSandbox } from './config.js'
+import type { CodexApprovalPolicy, CodexApprovalsReviewer, CodexSandbox } from './config.js'
 
 export type { SpawnImpl }
 
@@ -69,6 +69,7 @@ export interface CodexRunOptions {
   addDirs?: string[]
   networkAccess?: boolean
   approvalPolicy?: CodexApprovalPolicy
+  approvalsReviewer?: CodexApprovalsReviewer
   /** Resume an existing thread (thread follow-up). */
   resumeSessionId?: string
   timeoutMs: number
@@ -92,10 +93,14 @@ export interface CodexRunOptions {
  *  buildClaudeArgs: argv is `ps`-visible and ARG_MAX-capped, and note
  *  content belongs in neither failure mode. `-` (stdin) is always LAST. */
 export const buildCodexArgs = (options: CodexRunOptions): string[] => {
-  const args = ['-a', options.approvalPolicy ?? 'never', 'exec']
+  const args = ['exec']
   args.push('--json', '-s', options.sandbox ?? 'read-only', '--skip-git-repo-check', '--ignore-user-config')
   for (const dir of options.addDirs ?? []) args.push('--add-dir', dir)
   if (options.networkAccess) args.push('-c', 'sandbox_workspace_write.network_access=true')
+  if (options.approvalPolicy === 'on-request' && options.approvalsReviewer === 'auto_review') {
+    args.push('-c', 'approval_policy="on-request"')
+    args.push('-c', 'approvals_reviewer="auto_review"')
+  }
   if (options.model) args.push('-m', options.model)
   if (options.mcpServer) {
     const {name, command, args: serverArgs, env} = options.mcpServer

@@ -197,6 +197,7 @@ const main = async () => {
         addDirs: options.codexAddDirs,
         networkAccess: options.codexNetworkAccess,
         approvalPolicy: options.codexApprovalPolicy,
+        approvalsReviewer: options.codexApprovalsReviewer,
         resumeSessionId: options.resumeSessionId,
         timeoutMs: options.timeoutMs,
         billing: options.billing,

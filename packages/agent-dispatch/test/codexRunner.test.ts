@@ -21,7 +21,7 @@ describe('buildCodexArgs', () => {
   it('builds a fresh read-only exec run WITHOUT the prompt in argv (stdin carries it, "-" last)', () => {
     const args = buildCodexArgs(baseOptions)
     expect(args).toEqual([
-      '-a', 'never', 'exec', '--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config', '-',
+      'exec', '--json', '-s', 'read-only', '--skip-git-repo-check', '--ignore-user-config', '-',
     ])
     expect(args.at(-1)).toBe('-')
   })
@@ -35,14 +35,16 @@ describe('buildCodexArgs', () => {
       addDirs: ['/private/tmp', '/repo/worktree'],
       networkAccess: true,
       approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
     })
     expect(args).toEqual([
-      '-a', 'on-request',
       'exec',
       '--json', '-s', 'workspace-write', '--skip-git-repo-check', '--ignore-user-config',
       '--add-dir', '/private/tmp',
       '--add-dir', '/repo/worktree',
       '-c', 'sandbox_workspace_write.network_access=true',
+      '-c', 'approval_policy="on-request"',
+      '-c', 'approvals_reviewer="auto_review"',
       '-m', 'gpt-5-codex',
       'resume',
       'thread-1',
