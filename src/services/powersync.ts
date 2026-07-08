@@ -464,20 +464,30 @@ const defaultBlockUploadSink: BlockUploadSink = {
  *      concurrent real `'delete'` in the same drain window (server revokes a
  *      deterministic id the client is re-creating), stranding a revoked row. The
  *      gate makes restage never emit such an `'upsert'`.
- *  The gate + the enqueue run in one statement (`INSERT … SELECT … WHERE EXISTS`),
- *  which also collapses the per-id round-trips into a single write.
+ *  PENDING GATE: only re-stage an id with NO pending `ps_crud` blocks upload
+ *  ANYWHERE (not just in this invocation's txs — `collectUploadBatch` caps each
+ *  pass, so a same-id patch/delete can sit in a later, not-yet-collected slice).
+ *  Re-staging while a same-id op is still queued would be skip-stale'd by the
+ *  observer (the pending upload wins) and CONSUME the synthetic upsert for
+ *  nothing; deferring until the queue is clear means a same-id op that SUCCEEDS
+ *  heals the id via its own echo, and only a genuinely-orphaned phantom is
+ *  re-staged. This also subsumes the per-invocation patch-exclusion below for the
+ *  cross-batch case. (RESIDUAL: if the later same-id op is permanently REJECTED,
+ *  its create — long drained — is not retried, so the phantom is not auto-healed
+ *  here; that is the repair-sweep's job, tracked separately.)
+ *
+ *  The gate + the enqueue run in one statement (`INSERT … SELECT … WHERE EXISTS
+ *  … AND NOT EXISTS`), which also collapses the per-id round-trips into a single
+ *  write.
  *
  *  EXCLUDES a create whose id also carries a SEPARATE patch op (necessarily from
  *  a different tx — a same-tx patch fuses into the create's payload, so a fused
  *  create+patch still uploads as one insert-or-skip PUT and DOES need the heal).
  *  A separate patch is a real server-changing write (patches aren't insert-or-
  *  skip) whose echo re-reconciles the id on its own; re-staging the create here
- *  would only risk a transient on-disk revert in the ack-to-echo window. NOTE:
- *  the exclusion is scoped to the `operations` handed in — whole-batch on the
- *  batch path, single-tx in the per-tx fallback — so a cross-tx create+patch is
- *  excluded in the batch path but not the fallback; the residual there is a
- *  self-healing off-UI transient (the pending patch forces skip-stale in the
- *  common ordering), not a defect worth threading batch-wide state for.
+ *  would only risk a transient on-disk revert in the ack-to-echo window. (In the
+ *  batch path the patch is in the same `operations`; in the per-tx fallback the
+ *  PENDING GATE above catches it while the patch is still queued.)
  *
  *  DATA-LOSS INVARIANT (unenforced): the heal applies the server row over the
  *  local one, so a create that FUSES genuinely-unrecoverable user content on a
@@ -505,7 +515,12 @@ const restageCreatedIds = async (
     await tx.execute(
       `INSERT INTO blocks_synced_changes (id, op)
          SELECT je.value, 'upsert' FROM json_each(?) AS je
-          WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = je.value)`,
+          WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = je.value)
+            AND NOT EXISTS (
+              SELECT 1 FROM ps_crud
+               WHERE json_extract(data, '$.type') = 'blocks'
+                 AND json_extract(data, '$.id') = je.value
+            )`,
       [JSON.stringify(createdIds)],
     )
   })

@@ -32,7 +32,8 @@ const data = (o: Partial<BlockData> = {}): BlockData => ({
 const createOp = (id: string): CompactedBlockOperation =>
   ({ kind: 'create', id, order: 0, payload: { id, workspace_id: 'ws-plain' } })
 
-const { env, start, seedLocalBlock, stageRow: stageServerRow, blocks, queueLen } = setupObserverTestDb()
+const { env, start, seedLocalBlock, stageRow: stageServerRow, blocks, queueLen, queuePendingUpload } =
+  setupObserverTestDb()
 
 const restage = (ops: CompactedBlockOperation[]) =>
   __restageCreatedIdsForTest(env.db as unknown as AbstractPowerSyncDatabase, ops)
@@ -69,6 +70,19 @@ describe('restageCreatedIds — enqueue shape', () => {
       'SELECT id, op FROM blocks_synced_changes ORDER BY seq',
     )
     expect(rows).toEqual([{ id: 'c1', op: 'upsert' }])
+  })
+
+  it('skips a created id with a pending ps_crud upload (a later same-id op still queued anywhere)', async () => {
+    // Both are phantoms, but c1 still has a same-id upload pending in ps_crud (e.g.
+    // a later patch in a not-yet-collected batch). Re-staging c1 now would just be
+    // skip-stale'd + consumed; defer it. c2 (no pending op) re-stages.
+    await stageServerRows('c1', 'c2')
+    await queuePendingUpload('c1')
+    await restage([createOp('c1'), createOp('c2')])
+    const rows = await env.db.getAll<{ id: string; op: string }>(
+      'SELECT id, op FROM blocks_synced_changes ORDER BY seq',
+    )
+    expect(rows).toEqual([{ id: 'c2', op: 'upsert' }])
   })
 
   it('no-ops when the batch has no create ops', async () => {
