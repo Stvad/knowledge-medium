@@ -20,7 +20,7 @@
 import type { TypeContribution } from '@/data/api'
 import type { Block } from '@/data/block.js'
 import { typesProp } from '@/data/properties'
-import { useProperty, useWorkspaceId } from '@/hooks/block.js'
+import { useContent, useProperty, useWorkspaceId } from '@/hooks/block.js'
 import { useTypes } from '@/hooks/typeRegistry.js'
 import { useBlockOpener } from '@/utils/navigation'
 import { buildAppHash } from '@/utils/routing'
@@ -87,6 +87,11 @@ interface TypeChipsDecoratorProps {
   Inner: BlockRenderer
 }
 
+interface VisibleTypeChipsLayoutProps extends TypeChipsDecoratorProps {
+  visible: readonly string[]
+  registry: ReadonlyMap<string, TypeContribution>
+}
+
 /** Layout: chips hug the end of the content instead of claiming a
  *  column. In a flex-WRAP container, line-breaking is decided on the
  *  items' base sizes before any shrinking, so the chip row can never
@@ -95,21 +100,24 @@ interface TypeChipsDecoratorProps {
  *  puts them on their own row below. True Tana inline-in-the-last-line
  *  isn't reachable while the content is a block-level editor — it
  *  would need a CodeMirror end-of-doc widget. */
-const TypeChipsDecorator = ({block, Inner}: TypeChipsDecoratorProps) => {
-  const [types] = useProperty(block, typesProp)
-  const registry = useTypes()
-  const visible = visibleTagTypeIds(types, registry)
+const VisibleTypeChipsLayout = ({
+  block,
+  Inner,
+  visible,
+  registry,
+}: VisibleTypeChipsLayoutProps) => {
+  const content = useContent(block)
+  const alignment = content.trim().length === 0 ? 'items-center' : 'items-baseline'
+
   return (
-    <div className="flex w-full flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-      {/* No chips → full row, exactly the undecorated layout (a fit-
-          content editor on an EMPTY block collapses to ~0px and hides
-          the caret). With chips → intrinsic width so they hug the end
-          of the text, with a 2rem floor for empty editors and a small
-          end gutter so the caret at the final character is not painted
+    <div className={`flex w-full flex-wrap ${alignment} gap-x-1.5 gap-y-0.5`}>
+      {/* Visible chips → intrinsic width so they hug the end of the
+          text, with a 2rem floor for empty editors and a small end
+          gutter so the caret at the final character is not painted
           flush against the following chip. In edit mode the gutter must
           also live inside `.cm-content`: CodeMirror's clipped scroller
-          can otherwise crop the end-of-doc cursor. Scope that padding
-          to the direct block text editor so typed blocks don't restyle
+          can otherwise crop the end-of-doc cursor. Scope that padding to
+          the direct block text editor so typed blocks don't restyle
           nested CodeMirror viewers inside embeds.
           Embed CONTENT renderers (video player etc.) sit inside this
           wrapper even though the decorator is innermost — a 100%-width
@@ -117,13 +125,36 @@ const TypeChipsDecorator = ({block, Inner}: TypeChipsDecoratorProps) => {
           renders an audio element for audio-file URLs), so fit-content
           would collapse it; give those the full row and let the chips
           wrap below. */}
-      <div className={visible.length > 0
-        ? 'min-w-8 max-w-full pr-1 [&>.km-block-text-editor_.cm-content]:!pr-1 has-[iframe]:w-full has-[video]:w-full has-[audio]:w-full'
-        : 'w-full'}>
+      <div className="min-w-8 max-w-full pr-1 [&>.km-block-text-editor_.cm-content]:!pr-1 has-[iframe]:w-full has-[video]:w-full has-[audio]:w-full">
         <Inner block={block}/>
       </div>
-      {visible.length > 0 && <TypeChips block={block} typeIds={visible} registry={registry}/>}
+      <TypeChips block={block} typeIds={visible} registry={registry}/>
     </div>
+  )
+}
+
+const TypeChipsDecorator = ({block, Inner}: TypeChipsDecoratorProps) => {
+  const [types] = useProperty(block, typesProp)
+  const registry = useTypes()
+  const visible = visibleTagTypeIds(types, registry)
+
+  if (visible.length === 0) {
+    return (
+      <div className="flex w-full flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+        <div className="w-full">
+          <Inner block={block}/>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <VisibleTypeChipsLayout
+      block={block}
+      Inner={Inner}
+      visible={visible}
+      registry={registry}
+    />
   )
 }
 
