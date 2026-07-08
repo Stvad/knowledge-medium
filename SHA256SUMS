@@ -1775,7 +1775,7 @@ b3a1bb44f4836dd3bbcaa27384a758edee528919f09657a12021bcf1d142d882  ./packages/age
 1fb947a799f6ec708cfb146c8ca45a6e2bdb94e4619d22848f6c090ee537f9f2  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-0f73b9403307fc6e9e8544333bd7092577f5190a4eb3cd408e348a0bdbdd3793  ./src/appVersion.js
+d3268c8cf8e2f5e2b0658aa8034bd950e3fdefc9b07ea4c58e00655f9ba48748  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 d82fb876b5e2b470c1ee8cf15e17b3f6b8730b52b4802e6e5ab0d9eebc2f7148  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -1841,8 +1841,8 @@ a44918a499ce4b14080d62e41b3926913137a9de8353022cb3699e47a08db390  ./src/componen
 6a8f076026b391043f30329619bc39fd5a09140f371e40056ce3f863988d0ab2  ./src/components/references/BlockEmbed.js.map
 220691c566ac7d27580182adf8c0d7299dbe521c06bcc0f7ea8d5709c43b61d8  ./src/components/references/BlockRef.js
 203743f6566c8440759189624399e14eb191e5bb0e038914dca08ac6fd9c5d3a  ./src/components/references/BlockRef.js.map
-09c5ddc6d44a4568ffbd9d05c40e0daa9f170d47aa00462d50c835742bc6e5e4  ./src/components/references/ReferenceLink.js
-983b69e80839ce64c3a969ad19341a5041bda822717da61ab91c5b6f300d13cf  ./src/components/references/ReferenceLink.js.map
+335aee47c8849e87d55b70f98a89a0f0375008f15436a515a69e014d50356949  ./src/components/references/ReferenceLink.js
+22459f0eaadc8b1810d2a4b35574766fa4525729de025eb6b09d8d9e5dc6b577  ./src/components/references/ReferenceLink.js.map
 854492d242d75206bc95f717722deb189e3f32e7fa98dd990945fd2bb507ac08  ./src/components/references/cycleGuard.js
 d51d4d639a24ffa9f172511053eb9e8221ce8a2c498e6ecc29dc8323aa9b90de  ./src/components/references/cycleGuard.js.map
 82c760651947bcafea5671a6a1f9a71b31c23bde8d8692cb22dadb98d92d4622  ./src/components/references/cycleGuardContext.js
@@ -2207,7 +2207,7 @@ dbdc03f16276b27e18e071d63544929c838181d8fd7902f237ffff0148e706da  ./src/hooks/us
 8a33839baa8d269b2ae91900b79b7129c32e55a1e53029df303fa862d9e6f938  ./src/hooks/useRendererRegistry.js.map
 778f93af2686d2fa82576684fa07773dd388a7b37e50dc412e5ef16092314493  ./src/hooks/useWorkspaces.js
 6b3c25cd192d0dc8dbd88cffc62bbfe1f39ee036bdc1321458dad5d1b5071754  ./src/hooks/useWorkspaces.js.map
-a342243385d2f0e7b8721d0c595a778045ea478bc7c96ba30dc1ee981c0a75fb  ./src/index.css
+e7f01f106c81901c4496853b10113db34c9f6ac72afc3f1cadf48b899476bbc5  ./src/index.css
 7fc7e895da2e47ed92cea68ad37e0d6b788dbd4490c6c1868979b65e32c60d7a  ./src/lib/utils.js
 39d6bb80feba42cdfc6c1fc04d3091bafcd3c29aeb6c6e1bf71b5704dcf6f1c0  ./src/lib/utils.js.map
 fb097c3cd8c8c19bb00b5f6671e76039884998c6f9ff4d31eeb324ec24bc56a8  ./src/main.js
@@ -3165,8 +3165,8 @@ dd7fcf8357bb4f5fbb7478a7d59216cace479438a5e4d040031b2216cf428170  ./src/utils/to
 e15298832ec4effff04e2f6fafb5db3a8e5c3f4b5767822fccbaf55206b77091  ./src/utils/types.js.map
 ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/viewTransition.js
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
-d77a63736862b4012f3bb0dea9439b0172b14234c4a53b352a2717fcb0ad192d  ./sw.js
-d396568763d5b7cea6532dc009c229f02d75ff5d3fef91521f55d1e1a13fd298  ./version.json
+4e8b28298294bf08c08551ac852ca05e44f6407e2d0135669b1e832199f8bb0e  ./sw.js
+338908621682a492684056ef2df16d5f86d3bccf1759a68b4ebd0893953e8d62  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
