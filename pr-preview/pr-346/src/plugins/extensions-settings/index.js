@@ -1,2 +1,0 @@
-import{systemToggle as e}from"../../facets/togglable.js";import{extensionsOverridesProp as t,extensionsPrefsType as n}from"./config.js";import{extensionsDataExtension as r}from"./dataExtension.js";var i=e({id:`system:extensions-settings`,name:`Extensions (toggle storage)`,description:`Stores the overrides map and syncs each change into the localStorage cache so toggles take effect across reloads.`,essential:!0}).of([r]);export{t as extensionsOverridesProp,n as extensionsPrefsType,i as extensionsSettingsPlugin};
-//# sourceMappingURL=index.js.map
