@@ -1,4 +1,10 @@
-import {AtpAgent, RichText} from 'https://esm.sh/@atproto/api@0.19.3?bundle'
+import {
+  AtpAgent,
+  RichText,
+  type AppBskyEmbedImages,
+  type AppBskyFeedPost,
+  type Un$Typed,
+} from '@atproto/api'
 
 import {
   BSKY_SERVICE_URL,
@@ -16,6 +22,7 @@ import type {
 import {withOptionalProxy} from './url'
 
 let cachedBufferChannelId: {token: string; channelId: string} | null = null
+type BlueskyImageEmbed = AppBskyEmbedImages.Main & {$type: 'app.bsky.embed.images'}
 
 const bufferGraphQL = async (
   apiToken: string,
@@ -135,7 +142,7 @@ const uploadBlueskyImages = async (
   mediaUrls: string[],
   agent: any,
   corsProxyUrl: string,
-): Promise<unknown | null> => {
+): Promise<BlueskyImageEmbed | null> => {
   if (mediaUrls.length === 0) return null
   const images = await Promise.all(mediaUrls.slice(0, 4).map(async url => {
     const blob = await fetchImageAsBlob(url, corsProxyUrl)
@@ -179,7 +186,7 @@ export const postToBluesky = async (
     let firstPostUrl: string | undefined
 
     for (const prepared of preparedPosts) {
-      const record: Record<string, unknown> = {
+      const record: Un$Typed<AppBskyFeedPost.Record> = {
         text: prepared.richText.text,
         facets: prepared.richText.facets,
         createdAt: new Date().toISOString(),

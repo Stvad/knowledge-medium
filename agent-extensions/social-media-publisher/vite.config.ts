@@ -13,8 +13,7 @@ const isReactExternal = (id: string): boolean =>
 
 const isExtensionRuntimeExternal = (id: string): boolean =>
   isReactExternal(id) ||
-  id.startsWith('@/') ||
-  id.startsWith('https://esm.sh/')
+  id.startsWith('@/')
 
 export default defineConfig({
   plugins: [react()],

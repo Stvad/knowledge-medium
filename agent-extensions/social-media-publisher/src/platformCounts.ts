@@ -1,5 +1,5 @@
-import {RichText} from 'https://esm.sh/@atproto/api@0.19.3?bundle'
-import twitterText from 'https://esm.sh/twitter-text@3.1.0?bundle'
+import {RichText} from '@atproto/api'
+import twitterText from 'twitter-text'
 
 import {
   BLUESKY_CHAR_LIMIT,
