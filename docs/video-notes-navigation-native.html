@@ -103,7 +103,7 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, not implemented. Upstream issue: <a href="https://github.com/Stvad/knowledge-medium/issues/335">Stvad/knowledge-medium#335</a>; design PR: <a href="https://github.com/Stvad/knowledge-medium/pull/338">#338</a>. <strong>Last verified against code:</strong> 2026-07-07 (post-review revision) (src/plugins/video-player/, src/utils/routing.ts, src/utils/panelLayoutProjection.ts).
+<strong>Status: proposed</strong> &middot; design only, not implemented. Upstream issue: <a href="https://github.com/Stvad/knowledge-medium/issues/335">Stvad/knowledge-medium#335</a>; design PR: <a href="https://github.com/Stvad/knowledge-medium/pull/338">#338</a>. <strong>Last verified against code:</strong> 2026-07-07 (post-review revision) (src/plugins/video-player/, src/utils/routing.ts, src/utils/panelLayoutProjection.ts); kv slot-context revision 2026-07-08 (PR #338 discussion).
 </aside>
 
 <header class="hero">
@@ -188,7 +188,7 @@
   <text class="vn-title" x="720" y="22" text-anchor="middle">Proposed: pane-scoped mode</text>
 
   <rect class="vn-chrome" x="505" y="38" width="430" height="26" rx="5" fill="var(--accent-soft)"/>
-  <text class="vn-mono" x="520" y="55" fill="var(--accent)">#ws/a~video-notes/b</text>
+  <text class="vn-mono" x="520" y="55" fill="var(--accent)">#ws/a~view=video-notes/b</text>
 
   <rect class="vn-frame" x="505" y="72" width="430" height="352" rx="10"/>
   <rect class="vn-chrome" x="505" y="72" width="430" height="28"/>
@@ -263,29 +263,29 @@ export const panelViewModeProp = defineProperty&lt;string | undefined&gt;(
 )</code></pre>
 <p>Semantics: an opaque mode id, owned by whichever plugin recognizes it (here: <code>'video-notes'</code>). Unset = default rendering. It lives on the panel row, so it inherits the panel substrate's properties: per-tab layout session, restored on reload, reconciled by the projection, deleted with the pane.</p>
 
-<h3>4.2 Slot grammar: leaf annotations — <code>&lt;blockId&gt;(~&lt;annotation&gt;)*</code></h3>
-<p>Extend the leaf token with a <code>~</code>-separated annotation list: <code>#ws/a/b~video-notes/c</code> (stacks unchanged; a stack child is a leaf and can carry annotations). Two annotation kinds, sharing one channel:</p>
+<h3>4.2 Slot context: key-value pairs — <code>&lt;blockId&gt;(~&lt;key&gt;(=&lt;value&gt;)?)*</code></h3>
+<p>Extend the leaf token with a <code>~</code>-separated list of key-value pairs — the slot's <strong>context</strong>: <code>#ws/a/b~view=video-notes/c</code> (stacks unchanged; a stack child is a leaf and can carry context keys). The key-value shape was the owner's suggestion in the PR <a href="https://github.com/Stvad/knowledge-medium/pull/338">#338</a> discussion — self-describing, and extensible without further grammar changes. Two known keys, sharing one channel:</p>
 <ul>
-  <li>a <strong>view mode</strong> — a plugin-owned opaque id (<code>video-notes</code>), at most one per leaf, projected from <code>panelViewModeProp</code>;</li>
-  <li><strong><code>max</code></strong> — a core-owned reserved annotation for the maximize-pane gesture (§4.4), projected from <code>panelMaximizedProp</code>.</li>
+  <li><strong><code>view=&lt;mode&gt;</code></strong> — a plugin-owned opaque mode value (here <code>view=video-notes</code>), at most one per leaf, projected from <code>panelViewModeProp</code>;</li>
+  <li><strong><code>max</code></strong> — a core-owned <em>valueless flag key</em> for the maximize-pane gesture (§4.4), projected from <code>panelMaximizedProp</code>; ships in PR 2.</li>
 </ul>
-<p><code>~</code> is the separator because it's in RFC 3986's <em>unreserved</em> set — nothing percent-encodes it (<code>encodeURIComponent</code> leaves it intact), it cannot appear in a UUID, and it doesn't collide with the grammar's reserved <code>/ ( ) : ,</code>. (<code>!</code> is a sub-delim that defensive encoders sometimes escape; <code>.</code> is the likeliest char to appear in future non-UUID ids.)</p>
+<p><code>~</code> is the separator because it's in RFC 3986's <em>unreserved</em> set — nothing percent-encodes it (<code>encodeURIComponent</code> leaves it intact), it cannot appear in a UUID, and it doesn't collide with the grammar's reserved <code>/ ( ) : ,</code>. (<code>!</code> is a sub-delim that defensive encoders sometimes escape; <code>.</code> is the likeliest char to appear in future non-UUID ids.) <code>=</code> is fragment-legal per RFC 3986 (browsers leave it intact in the hash; the hash is written raw via <code>pushState</code>, never through <code>encodeURIComponent</code>).</p>
 
-<p><strong>Parsing is normalizing and deterministic</strong> — one semantics for every caller, so hand-crafted or malformed hashes can't make parse/build sites disagree: <code>parseSlot</code> splits the leaf token on <code>~</code>, drops empty tokens and duplicates; tokens in the <em>reserved set</em> (just <code>max</code>; core-owned, never a view mode) map to their flag; of the remaining tokens the <strong>first</strong> becomes <code>viewMode</code> and any others are dropped. <code>buildLayoutSlot</code> emits the canonical form (mode first, then <code>max</code>), so parse→build is idempotent. Concretely: <code>b~foo~bar</code> → mode <code>foo</code> (<code>bar</code> dropped); <code>b~video-notes~unknown</code> → mode <code>video-notes</code>; <code>b~max~max</code> → maximized once; <code>b~~</code> → bare <code>b</code>. A reserved token the running core doesn't know yet (<code>~max</code> on a PR 1 client) is dropped at parse and omitted from the rebuilt hash — deterministic, at the cost of stripping it; acceptable within a PR 1→PR 2 deploy window. (An <em>unknown view mode</em> is different: it parses into <code>viewMode</code> and survives round-trips — that's the §8 "degrade gracefully" decision.)</p>
+<p><strong>Parsing is normalizing and deterministic</strong> — one semantics for every caller: <code>parseSlot</code> splits the leaf token on <code>~</code>; the first segment is the blockId; each remaining segment parses as <code>key(=value)?</code> with keys <code>[a-z][a-z0-9-]*</code> and values <code>[A-Za-z0-9._-]+</code>. Empty or malformed segments are dropped; duplicate keys are first-wins; <strong>unknown keys are preserved verbatim</strong> through parse→build — so a client that predates a key carries it in rebuilt hashes instead of stripping it (this replaces the old "reserved token dropped on a PR 1 client" rule, which no longer exists). <code>buildLayoutSlot</code> emits canonical lexicographic key order, so parse→build is idempotent. Known-key semantics: <code>view</code> → the slot's <code>viewMode</code>; the valueless <code>max</code> → <code>maximized</code>. <strong>A valueless key is boolean-true shorthand</strong>, and the bare flag is the canonical form: for known boolean keys, parse accepts <code>max=true</code> and normalizes it to <code>max</code> on build, and <code>max=false</code> normalizes to absence — unknown keys get no such treatment (nothing knows they're boolean) and round-trip verbatim, <code>=true</code> and all. An unknown <em>view mode value</em> (a <code>view=foo</code> no plugin claims) still parses into <code>viewMode</code> and degrades gracefully (§8 decision). <strong>Values cannot contain <code>~</code></strong> (or <code>=</code>, <code>/</code>, <code>%</code>) — the value charset excludes them by construction, and there is deliberately no escaping machinery to get wrong; <code>%</code> is kept <em>outside</em> the charset as the reserved escape hatch, so percent-encoding inside values can be enabled later fully backward-compatibly (no currently-valid value contains <code>%</code>, so turning on decoding cannot reinterpret an existing URL). At <em>row</em>-reconcile, unknown keys are dropped (no prop stores them); full row-round-trip fidelity would need a residual <code>panel:urlContext</code> prop — explicitly deferred until a consumer needs it (candidate: per-pane comments state from <a href="https://github.com/Stvad/knowledge-medium/issues/332">#332</a>). Concretely: <code>b~view=foo~view=bar</code> → mode <code>foo</code>; <code>b~max~max</code> → maximized once; <code>b~~</code> → bare <code>b</code>; <code>b~comments=open</code> → preserved through parse→build, dropped at row-reconcile for now.</p>
 
 <p>Plumbing:</p>
 <ul>
-  <li><code>parseSlot</code> (<code>routing.ts:83-96</code>): split leaf tokens on <code>~</code>; <code>LayoutSlot</code> leaf gains optional <code>viewMode?: string</code> and <code>maximized?: boolean</code>.</li>
-  <li><code>buildLayoutSlot</code> (<code>routing.ts:117-120</code>): append annotations when set (stable order: mode first, then <code>max</code>).</li>
+  <li><code>parseSlot</code> (<code>routing.ts:83-96</code>): split leaf tokens on <code>~</code> and parse <code>key(=value)?</code> segments; <code>LayoutSlot</code> leaf gains optional <code>viewMode?: string</code> and <code>maximized?: boolean</code>.</li>
+  <li><code>buildLayoutSlot</code> (<code>routing.ts:117-120</code>): append context keys when set (canonical lexicographic key order).</li>
   <li><code>layoutSlotsFromRows</code> (<code>panelLayoutProjection.ts:90-112</code>): read <code>panelViewModeProp</code> / <code>panelMaximizedProp</code> off leaf rows into the slot.</li>
-  <li><code>sameLayoutSlots</code> (<code>panelLayoutProjection.ts:81-88</code>): compare annotations — this is what makes a mode/maximize change count as a layout change, driving both directions of the projection.</li>
-  <li><code>reconcilePanelRows</code> (<code>panelLayoutProjection.ts:405-…</code>): when a row is <strong>reused</strong> for a leaf with the same <code>blockId</code> but different annotations, set the properties on the existing row rather than delete/create — this keeps the panel id (and therefore the pane's React subtree, focus, scroll, and panel history) stable across toggles. The plan-matching step needs <strong>no</strong> change: <code>planReconciliation</code>/<code>lcsMatches</code> (<code>panelLayoutProjection.ts:133-201</code>) already match purely on block ids, so an annotation-only diff maps the same row to the same-id leaf as-is. The whole reconcile delta is the <code>sameLayoutSlots</code> gate, the prop writes on reused rows, and seeding new rows in <code>createPanelRowInTx</code>.</li>
+  <li><code>sameLayoutSlots</code> (<code>panelLayoutProjection.ts:81-88</code>): compare context keys — this is what makes a mode/maximize change count as a layout change, driving both directions of the projection.</li>
+  <li><code>reconcilePanelRows</code> (<code>panelLayoutProjection.ts:405-…</code>): when a row is <strong>reused</strong> for a leaf with the same <code>blockId</code> but different context, set the properties on the existing row rather than delete/create — this keeps the panel id (and therefore the pane's React subtree, focus, scroll, and panel history) stable across toggles. The plan-matching step needs <strong>no</strong> change: <code>planReconciliation</code>/<code>lcsMatches</code> (<code>panelLayoutProjection.ts:133-201</code>) already match purely on block ids, so a context-only diff maps the same row to the same-id leaf as-is. The whole reconcile delta is the <code>sameLayoutSlots</code> gate, the prop writes on reused rows, and seeding new rows in <code>createPanelRowInTx</code>.</li>
 </ul>
 
-<p>Result: toggling an annotation writes the panel prop → projection pushes a new hash (history entry). Back/Forward → <code>popstate</code> → <code>reconcilePanelRows</code> → prop update → layout re-renders. Goals 1–3 fall out of the existing machinery; no new sync or storage concepts.</p>
+<p>Result: toggling a context key writes the panel prop → projection pushes a new hash (history entry). Back/Forward → <code>popstate</code> → <code>reconcilePanelRows</code> → prop update → layout re-renders. Goals 1–3 fall out of the existing machinery; no new sync or storage concepts.</p>
 
 <figure>
-<svg viewBox="0 0 960 400" role="img" aria-label="Bidirectional projection between panel rows, LayoutSlot array, and the URL hash, plus a token breakdown of a leaf annotation">
+<svg viewBox="0 0 960 400" role="img" aria-label="Bidirectional projection between panel rows, LayoutSlot array, and the URL hash, plus a key-value breakdown of a leaf token's slot context">
   <defs>
     <marker id="vn-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
       <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-faint)"/>
@@ -319,14 +319,14 @@ export const panelViewModeProp = defineProperty&lt;string | undefined&gt;(
 
   <rect class="vf-box" x="355" y="55" width="250" height="110" rx="10"/>
   <text class="vf-title" x="480" y="78" text-anchor="middle">LayoutSlot[]</text>
-  <text class="vf-sub" x="480" y="96" text-anchor="middle">leaf annotation</text>
+  <text class="vf-sub" x="480" y="96" text-anchor="middle">slot context</text>
   <text class="vf-mono" x="480" y="112" text-anchor="middle">blockId</text>
   <text class="vf-mono" x="480" y="128" text-anchor="middle">viewMode?</text>
   <text class="vf-mono" x="480" y="144" text-anchor="middle">maximized?</text>
 
   <rect class="vf-box" x="695" y="55" width="250" height="110" rx="10"/>
   <text class="vf-title" x="820" y="78" text-anchor="middle">URL hash</text>
-  <text class="vf-mono" x="820" y="104" text-anchor="middle">#ws/a/b~video-notes~max/c</text>
+  <text class="vf-mono" x="820" y="104" text-anchor="middle">#ws/a/b~view=video-notes~max/c</text>
   <text class="vf-sub" x="820" y="126" text-anchor="middle">pushState / popstate</text>
 
   <!-- top lane: forward projection -->
@@ -339,7 +339,7 @@ export const panelViewModeProp = defineProperty&lt;string | undefined&gt;(
   <!-- bottom lane: inbound reconciliation -->
   <line class="vf-flow" x1="350" y1="182" x2="270" y2="182" marker-end="url(#vn-arrow)"/>
   <text class="vf-lbl" x="310" y="200" text-anchor="middle">reconcilePanelRows</text>
-  <text class="anno-sub" x="310" y="213" text-anchor="middle">(row reused on annotation-only diff)</text>
+  <text class="anno-sub" x="310" y="213" text-anchor="middle">(row reused on context-only diff)</text>
 
   <line class="vf-flow" x1="690" y1="182" x2="610" y2="182" marker-end="url(#vn-arrow)"/>
   <text class="vf-lbl" x="650" y="200" text-anchor="middle">parseLayout</text>
@@ -352,54 +352,55 @@ export const panelViewModeProp = defineProperty&lt;string | undefined&gt;(
   <text class="seg-txt" x="350" y="286" text-anchor="middle" fill="var(--accent)">b</text>
   <text class="seg-txt" x="378" y="286" text-anchor="middle" fill="var(--ink-faint)">~</text>
   <rect class="seg seg-mode" x="386" y="266" width="150" height="30"/>
-  <text class="seg-txt" x="461" y="286" text-anchor="middle" fill="var(--violet)">video-notes</text>
+  <text class="seg-txt" x="461" y="286" text-anchor="middle" fill="var(--violet)">view=video-notes</text>
   <text class="seg-txt" x="543" y="286" text-anchor="middle" fill="var(--ink-faint)">~</text>
   <rect class="seg seg-max" x="551" y="266" width="55" height="30"/>
   <text class="seg-txt" x="578" y="286" text-anchor="middle" fill="var(--amber)">max</text>
 
   <line class="leader" x1="350" y1="296" x2="350" y2="330"/>
   <line class="leader" x1="461" y1="296" x2="461" y2="330"/>
-  <line class="leader" x1="578" y1="296" x2="578" y2="330"/>
+  <line class="leader" x1="578" y1="296" x2="578" y2="360"/>
 
   <text class="anno-lbl" x="350" y="345" text-anchor="middle" fill="var(--accent)">blockId</text>
   <text class="anno-sub" x="350" y="359" text-anchor="middle">from the LayoutSlot leaf</text>
 
-  <text class="anno-lbl" x="461" y="345" text-anchor="middle" fill="var(--violet)">plugin-owned view mode</text>
-  <text class="anno-sub" x="461" y="359" text-anchor="middle">opaque id, e.g. 'video-notes'</text>
+  <text class="anno-lbl" x="461" y="345" text-anchor="middle" fill="var(--violet)">view= key (plugin-owned mode value)</text>
+  <text class="anno-sub" x="461" y="359" text-anchor="middle">opaque value, e.g. 'video-notes'</text>
 
-  <text class="anno-lbl" x="578" y="345" text-anchor="middle" fill="var(--amber)">core-owned max</text>
-  <text class="anno-sub" x="578" y="359" text-anchor="middle">maximize-pane gesture (§4.4)</text>
+  <text class="anno-lbl" x="578" y="375" text-anchor="middle" fill="var(--amber)">max flag key (core-owned)</text>
+  <text class="anno-sub" x="578" y="389" text-anchor="middle">valueless · maximize-pane gesture (§4.4)</text>
 </svg>
-<figcaption>Figure 2 — The bidirectional rows ↔ slots ↔ hash projection, and the annotation channel a leaf token carries (blockId plus optional plugin-owned mode and/or core-owned <code>max</code>).</figcaption>
+<figcaption>Figure 2 — The bidirectional rows ↔ slots ↔ hash projection, and the slot-context channel a leaf token carries (blockId plus optional key-value context — view mode and/or <code>max</code>).</figcaption>
 </figure>
 
 <div class="callout">
   <h4>Mode lifetime — cleared on in-pane navigation</h4>
-  <p>A view mode belongs to the <em>(pane, block)</em> pair, not the pane alone: when <code>writePanelContent</code> / <code>navigateInPanel</code> (<code>panelHistory.ts:219-270</code>) changes the pane's top-level block, <code>panel:viewMode</code> is cleared in the same tx (otherwise the next block renders under a mode it doesn't own and the hash reads <code>B~video-notes</code>). So that panel-level Back can restore it, <code>VisitState</code> — explicitly designed extensible (<code>panelHistory.ts:35-41</code>) — gains <code>viewMode?: string</code>: the snapshotter <code>PanelRenderer</code> registers captures the pane's current mode, and restore writes it back. Without this, browser-Back (hash-driven) and chevron-back (panelHistory-driven) would diverge — exactly the navigation-split this design exists to remove. <strong>Precedence:</strong> on a URL-driven reconcile, the slot annotation is authoritative for the mode; <code>VisitState.viewMode</code> is consulted only by panel-level chevron back/forward. (<code>reconcileUrlNavigation</code> matches history entries by blockId alone, <code>panelHistory.ts:127-147</code> — a multi-step browser jump can land on a hash entry whose matched <code>VisitState</code> carries a mode captured at a different time, and the restore must not overwrite what the hash says.) <code>max</code> is <em>not</em> cleared on in-pane navigation: maximize is pane-arrangement state, independent of which block the pane shows.</p>
+  <p>A view mode belongs to the <em>(pane, block)</em> pair, not the pane alone: when <code>writePanelContent</code> / <code>navigateInPanel</code> (<code>panelHistory.ts:219-270</code>) changes the pane's top-level block, <code>panel:viewMode</code> is cleared in the same tx (otherwise the next block renders under a mode it doesn't own and the hash reads <code>B~view=video-notes</code>). So that panel-level Back can restore it, <code>VisitState</code> — explicitly designed extensible (<code>panelHistory.ts:35-41</code>) — gains <code>viewMode?: string</code>: the snapshotter <code>PanelRenderer</code> registers captures the pane's current mode, and restore writes it back. Without this, browser-Back (hash-driven) and chevron-back (panelHistory-driven) would diverge — exactly the navigation-split this design exists to remove. <strong>Precedence:</strong> on a URL-driven reconcile, the slot context is authoritative for the mode; <code>VisitState.viewMode</code> is consulted only by panel-level chevron back/forward. (<code>reconcileUrlNavigation</code> matches history entries by blockId alone, <code>panelHistory.ts:127-147</code> — a multi-step browser jump can land on a hash entry whose matched <code>VisitState</code> carries a mode captured at a different time, and the restore must not overwrite what the hash says.) <code>max</code> is <em>not</em> cleared on in-pane navigation: maximize is pane-arrangement state, independent of which block the pane shows.</p>
 </div>
 
 <h3>4.3 Video plugin changes</h3>
 <ul>
   <li><code>VideoPlayerLayout</code> gates on the <strong>panel's</strong> mode instead of the block prop: read <code>blockContext.panelId</code> → <code>usePropertyValue(panelBlock, panelViewModeProp) === 'video-notes'</code>, and only when the block is the pane's top-level block (a video embedded mid-outline shouldn't take the pane over; entering notes view on a nested video first navigates the pane to that block <em>and</em> sets the mode).</li>
   <li><strong>Navigate+mode must be one tx, via an explicit API.</strong> <code>navigateInPanel</code> owns its whole tx (<code>panelHistory.ts:244-269</code>) with no seam for extra writes, and a two-tx fallback (navigate, then set mode) is nondeterministic — the projection's subtree subscription may coalesce the two writes into one pushState or deliver two, so Back would sometimes exit to plain-V and sometimes skip it. PR 1 extends the seam: <code>navigateInPanel(panelBlock, blockId, {viewMode})</code> threading into <code>writePanelContent</code>, whose clearing rule becomes "set <code>panel:viewMode</code> to the incoming option (default: unset)" — clear and set are the same write.</li>
-  <li><strong>Note auto-creation stays gesture-only.</strong> With the mode in the layout, it can now arrive with <em>no user gesture</em> — Back/Forward, a shared <code>V~video-notes</code> URL, session restore, a layout-snapshot apply. The render path must never write: <code>ensureEditableVideoNoteChild</code> is a durable, undoable, synced document mutation (<code>repo.mutate.createChild</code>), and navigation must not mutate the document. Only the enter <em>gestures</em> (hover button, <code>video.toggle_notes_view</code>) call it; a notes pane whose video has zero children renders an empty-state affordance (click / Enter creates the first note) instead.</li>
-  <li><strong>Close semantics after a nested-video enter.</strong> Enter-on-nested-video navigates the pane P→V; a close that merely clears the mode would strand the pane zoomed into V (today's overlay close reveals P underneath). Close goes back (<code>goBackInPanel</code>) <em>only on an explicit marker, never inferred from the back stack</em>: the enter gesture stamps the history entry it pushes (a <code>viewModeEnter: 'video-notes'</code> field on <code>VisitState</code>, or equivalent action-local state), and close checks that marker. Inference from "the previous entry is P→V" is wrong — a mode that arrived by URL / session restore / snapshot apply can sit on top of an unrelated, older P→V back entry, and close must then clear the mode <em>without navigating</em>. (The marker is in-memory panel history, device-local by nature — close-goes-back is a session-scoped nicety, and its absence degrades to clear-only.)</li>
+  <li><strong>Note auto-creation stays gesture-only.</strong> With the mode in the layout, it can now arrive with <em>no user gesture</em> — Back/Forward, a shared <code>V~view=video-notes</code> URL, session restore, a layout-snapshot apply. The render path must never write: <code>ensureEditableVideoNoteChild</code> is a durable, undoable, synced document mutation (<code>repo.mutate.createChild</code>), and navigation must not mutate the document. Only the enter <em>gestures</em> (hover button, <code>video.toggle_notes_view</code>) call it; a notes pane whose video has zero children renders an empty-state affordance (click / Enter creates the first note) instead.</li>
+  <li><strong>Close semantics after a nested-video enter.</strong> Enter-on-nested-video navigates the pane P→V; a close that merely clears the mode would strand the pane zoomed into V (today's overlay close reveals P underneath). Close goes back (<code>goBackInPanel</code>) <em>only on an explicit marker, never inferred from the back stack</em>: the enter gesture stamps the history entry it pushes (a <code>viewModeEnter: 'video-notes'</code> field on <code>VisitState</code>, or equivalent action-local state), and close checks that marker. Inference from "the previous entry is P→V" is wrong — a mode that arrived by URL / session restore / snapshot apply can sit on top of an unrelated, older P→V back entry, and close must then clear the mode <em>without navigating</em>. (The marker is in-memory panel history, device-local by nature — close-goes-back is a session-scoped nicety, and its absence degrades to clear-only.) Close/exit clears the keys the enter set — both <code>view</code> and <code>max</code> when the default gesture set both; the marker logic is unchanged.</li>
   <li>Enter/exit (<code>enterVideoNotesView</code>, the toggle action, the close button) write <code>panelViewModeProp</code> on the panel row instead of <code>videoPlayerViewProp</code>. <code>videoPlayerViewProp</code> is deleted; stale <code>video:playerView</code> values on blocks are simply ignored (it was UiState, nothing durable depends on it).</li>
+  <li><strong>The default gesture maximizes (owner request).</strong> The main notes shortcut (<code>video.toggle_notes_view</code>) sets <code>view=video-notes</code> <em>and</em> <code>max</code> in one tx — one shortcut, one history entry, matching today's fullscreen-overlay experience (minus the header). An un-maximized variant remains for split layouts. Until PR 2 lands, PR 1's shortcut sets <code>view</code> only — <code>max</code> isn't recognized yet and would just ride the unknown-key path (§4.2).</li>
   <li><strong>Presentation: pane takeover, not viewport takeover.</strong> The notes layout drops <code>fixed inset-0 z-50</code> for <code>absolute inset-0</code> within the pane (the pane is <code>relative</code>). With a single pane this looks nearly identical (header stays visible); with splits, other panes stay usable — which is what "notes view in <em>this</em> pane" means. This is a deliberate behavior change and called out in the upstream issue.</li>
   <li>Shortcut surface, <code>videoPlayerBlockId</code> context, timestamp/focus actions, and the pane-ratio pref are untouched: the same <code>VideoPlayerRenderer</code> wraps the block and the layout still mounts <code>Shell</code>.</li>
   <li><strong>Per-pane player identity (fixes the §2 registry collision).</strong> Goal 3 ("two panes, same video, one in notes view") makes the shared-scope collision first-class, so PR 1 threads the panel id into the top-level render scope — registry handles, and therefore <code>video.insert_timestamp</code> / <code>video.toggle_focus</code>, resolve per pane. Without this, goal 3 only holds for <em>different</em> videos. The change lands as <strong>one shared derivation, moved wholesale — not a <code>PanelRenderer</code>-only patch</strong>: a panel-qualified <code>panelRenderScopeId(panelId, blockId)</code> that <em>every</em> producer of a panel top-level scope id goes through, or scope ids written by non-rendering producers stop matching the rendered scope and focus restoration / scoped actions miss the pane. Today's producers beyond <code>PanelRenderer.tsx:188</code>: <code>writePanelContent</code> seeding <code>focusedBlockLocationProp</code> (<code>panelHistory.ts:228</code>), new-panel-row seeding (<code>panelLayoutProjection.ts</code>, <code>createPanelRowInTx</code>), active-panel shortcut targeting (<code>defaultShortcuts.ts:190</code>), the <code>focusBlock</code> default (<code>properties.ts:384</code>), and the selection fallback (<code>selection.ts:447</code>). Embed scopes (<code>embedRenderScopeId</code>, <code>BlockRef</code>) are a separate namespace and stay untouched; consumers that read the scope out of <code>blockContext</code> (the video registry among them) follow automatically.</li>
 </ul>
 
 <h3>4.4 Companion: generic maximize-pane gesture (core)</h3>
-<p>Making the notes view pane-scoped removes today's accidental "fullscreen": in a split layout the video now gets only its pane. The immersion story is deliberately <strong>not</strong> video-specific — it's a generic core gesture, riding the same annotation channel (decision from design discussion; alternatives were native <code>requestFullscreen()</code> — transient, no chrome, not navigation state — and leaving it to downstream window-management extensions).</p>
+<p>Making the notes view pane-scoped removes today's accidental "fullscreen": in a split layout the video now gets only its pane. The immersion story is deliberately <strong>not</strong> video-specific — it's a generic core gesture, riding the same slot-context channel (decision from design discussion; alternatives were native <code>requestFullscreen()</code> — transient, no chrome, not navigation state — and leaving it to downstream window-management extensions).</p>
 <ul>
-  <li><strong>Substrate:</strong> <code>panel:maximized</code> boolean prop on the panel row (UiState), projected ↔ the <code>~max</code> leaf annotation exactly like <code>viewMode</code> (§4.2). Keeping it a <em>row</em> prop (not a layout-session-level pointer like <code>activePanelIdProp</code>) keeps the projection a pure function of rows. Invariant — at most one maximized leaf — has a <strong>single writer</strong>: the toggle action clears any other row's flag in the same tx. Reconcile writes whatever the hash says (a multi-<code>max</code> hash can only be hand-crafted; outbound rebuilds it stably, no loop), and the renderer tolerates it by rendering the first maximized row.</li>
+  <li><strong>Substrate:</strong> <code>panel:maximized</code> boolean prop on the panel row (UiState), projected ↔ the <code>max</code> context key exactly like <code>viewMode</code> (§4.2). Keeping it a <em>row</em> prop (not a layout-session-level pointer like <code>activePanelIdProp</code>) keeps the projection a pure function of rows. Invariant — at most one maximized leaf — has a <strong>single writer</strong>: the toggle action clears any other row's flag in the same tx. Reconcile writes whatever the hash says (a multi-<code>max</code> hash can only be hand-crafted; outbound rebuilds it stably, no loop), and the renderer tolerates it by rendering the first maximized row.</li>
   <li><strong>Rendering:</strong> <code>LayoutRenderer</code> already has a single-pane path — on mobile it renders only the active (or fallback) panel (<code>LayoutRenderer.tsx:169-175</code>). Maximize is the desktop analog: if a visible row is maximized, render only that pane. Sibling rows are untouched in the substrate, so un-maximize restores the exact arrangement (nothing was closed). On mobile the flag is ignored (already single-pane).</li>
-  <li><strong>The maximized pane must be (or become) the active panel.</strong> <code>~max</code> also arrives inbound with no gesture — Back/Forward, shared URL, snapshot apply — and <code>reconcilePanelRows</code> sets the row flag without touching <code>activePanelIdProp</code>. Today a stale active pane is at worst un-highlighted but visible; maximize is the first configuration where the <em>active</em> panel can be invisible while keyboard dispatch still targets it (keys landing in a pane the user cannot see). The existing repair effect (<code>LayoutRenderer.tsx:179-186</code>) only fires when <code>activePanelId</code> is unset — PR 2 adds the symmetric coercion: when a maximized row renders alone, <code>activePanelIdProp</code> is coerced to it.</li>
+  <li><strong>The maximized pane must be (or become) the active panel.</strong> The <code>max</code> key also arrives inbound with no gesture — Back/Forward, shared URL, snapshot apply — and <code>reconcilePanelRows</code> sets the row flag without touching <code>activePanelIdProp</code>. Today a stale active pane is at worst un-highlighted but visible; maximize is the first configuration where the <em>active</em> panel can be invisible while keyboard dispatch still targets it (keys landing in a pane the user cannot see). The existing repair effect (<code>LayoutRenderer.tsx:179-186</code>) only fires when <code>activePanelId</code> is unset — PR 2 adds the symmetric coercion: when a maximized row renders alone, <code>activePanelIdProp</code> is coerced to it.</li>
   <li><strong>Gesture:</strong> a <code>layout.toggle_maximize_panel</code> action targeting the active panel, bindable + surfaced in panel chrome (binding choice left to upstream).</li>
-  <li><strong>Semantics:</strong> maximizing is a slot change → history entry → <strong>Back un-maximizes</strong>, consistent with the notes-view story. Closing the maximized pane deletes its row, flag included. In-pane navigation keeps maximize (see §4.2 — it's arrangement state, not (pane, block) state). Notes view does <strong>not</strong> auto-maximize; the two annotations compose (<code>b~video-notes~max</code>) and the user stacks gestures.</li>
+  <li><strong>Semantics:</strong> maximizing is a slot change → history entry → <strong>Back un-maximizes</strong>, consistent with the notes-view story. Closing the maximized pane deletes its row, flag included. In-pane navigation keeps maximize (see §4.2 — it's arrangement state, not (pane, block) state). The notes shortcut sets both keys by default (owner request, §4.3); maximize remains an independent gesture, and the two context keys compose (<code>b~view=video-notes~max</code>).</li>
 </ul>
-<p>Ships as its own PR after the annotation grammar lands (§6 sequencing) — pure core, no video-plugin coupling.</p>
+<p>Ships as its own PR after the slot-context grammar lands (§6 sequencing) — pure core, no video-plugin coupling.</p>
 
 <h3>4.5 Playback continuity</h3>
 <p>Two stages; the first ships with the main change, the second is a follow-up.</p>
@@ -423,14 +424,14 @@ export const panelViewModeProp = defineProperty&lt;string | undefined&gt;(
 </ul>
 
 <h2 id="implementation"><span class="num">6</span> Implementation sketch</h2>
-<p>Sequenced as two PRs: <strong>PR 1</strong> = annotation grammar + <code>viewMode</code> + video plugin (+ <code>VisitState</code>); <strong>PR 2</strong> = maximize-pane (pure core, builds on the grammar from PR 1).</p>
+<p>Sequenced as two PRs: <strong>PR 1</strong> = slot-context grammar + <code>viewMode</code> + video plugin (+ <code>VisitState</code>); <strong>PR 2</strong> = maximize-pane (pure core, builds on the grammar from PR 1).</p>
 
 <p><strong>PR 1 — core (small, generic):</strong></p>
 <ul>
-  <li><code>routing.ts</code>: <code>LayoutSlot</code> leaf annotation <code>viewMode?</code>, <code>parseSlot</code>/<code>buildLayoutSlot</code>; grammar comment reserves the <code>max</code> token (the <code>maximized?</code> field itself ships with PR 2 — no dead code ahead of its consumer).</li>
+  <li><code>routing.ts</code>: <code>parseSlot</code>/<code>buildLayoutSlot</code> implement the kv grammar, including unknown-key preservation; <code>LayoutSlot</code> gains <code>viewMode?</code> (from <code>view=</code>). <code>max</code> is recognized in PR 2 — until then it rides the unknown-key preservation path (no dead field, no stripping).</li>
   <li><code>properties.ts</code> (or alongside panel props): <code>panelViewModeProp</code>.</li>
-  <li><code>panelLayoutProjection.ts</code>: <code>layoutSlotsFromRows</code>, <code>sameLayoutSlots</code>, <code>reconcilePanelRows</code> learn the annotation (plan-matching untouched, §4.2).</li>
-  <li><code>panelHistory.ts</code>: <code>navigateInPanel(…, {viewMode})</code> → <code>writePanelContent</code> sets/clears <code>panel:viewMode</code> in the same tx; <code>VisitState.viewMode</code> capture/restore (slot annotation authoritative on URL-driven reconcile, §4.2); <code>viewModeEnter</code> marker on the entry pushed by an enter-with-navigation (close-goes-back checks it, §4.3).</li>
+  <li><code>panelLayoutProjection.ts</code>: <code>layoutSlotsFromRows</code>, <code>sameLayoutSlots</code>, <code>reconcilePanelRows</code> learn the context keys (plan-matching untouched, §4.2).</li>
+  <li><code>panelHistory.ts</code>: <code>navigateInPanel(…, {viewMode})</code> → <code>writePanelContent</code> sets/clears <code>panel:viewMode</code> in the same tx; <code>VisitState.viewMode</code> capture/restore (slot context authoritative on URL-driven reconcile, §4.2); <code>viewModeEnter</code> marker on the entry pushed by an enter-with-navigation (close-goes-back checks it, §4.3).</li>
   <li><code>renderScope.ts</code>: panel-qualified <code>panelRenderScopeId(panelId, blockId)</code>, adopted by <em>all</em> top-level scope producers — <code>PanelRenderer.tsx</code>, <code>panelHistory.ts</code> (focus seeding), <code>panelLayoutProjection.ts</code> (<code>createPanelRowInTx</code>), <code>defaultShortcuts.ts</code>, <code>properties.ts</code> (<code>focusBlock</code> default), <code>selection.ts</code> (§4.3, per-pane player identity); test: focus restoration + scoped video actions with the same video in two panes.</li>
 </ul>
 
@@ -443,30 +444,35 @@ export const panelViewModeProp = defineProperty&lt;string | undefined&gt;(
 
 <p><strong>PR 2 — maximize:</strong></p>
 <ul>
-  <li><code>panelMaximizedProp</code> + <code>LayoutSlot.maximized?</code>; <code>~max</code> projection; single-maximized invariant in the toggle action (sole writer); <code>LayoutRenderer</code> desktop single-pane path + active-panel coercion (§4.4); <code>layout.toggle_maximize_panel</code> action + panel-chrome affordance.</li>
+  <li><code>panelMaximizedProp</code> + <code>LayoutSlot.maximized?</code>; <code>max</code>-key projection; single-maximized invariant in the toggle action (sole writer); <code>LayoutRenderer</code> desktop single-pane path + active-panel coercion (§4.4); <code>layout.toggle_maximize_panel</code> action + panel-chrome affordance.</li>
 </ul>
 
 <p><strong>Tests:</strong></p>
 <ul>
-  <li><code>routing.test</code>: parse/build round-trip of annotated leaves (mode, <code>max</code>, both), incl. inside stacks; ids containing no <code>~</code> unaffected; normalization of malformed/conflicting tokens (<code>b~foo~bar</code> → first non-reserved wins, <code>b~max~max</code> → single flag, <code>b~~</code> → bare id, reserved token never becomes <code>viewMode</code>; parse→build idempotent).</li>
-  <li><code>panelLayoutProjection.test</code>: annotation-only change is a slot change (projection pushes); inbound annotation-only diff updates props on the <strong>same</strong> panel row (id stable); annotations cleared when the hash has none.</li>
-  <li><code>panelHistory.test</code>: mode cleared on in-pane navigation; chevron-back restores it via <code>VisitState</code>; navigate+mode is a single history entry; slot annotation beats a stale <code>VisitState.viewMode</code> on URL-driven reconcile.</li>
+  <li><code>routing.test</code>: parse/build round-trip of kv leaves (<code>view=</code>, <code>max</code>, both), incl. inside stacks; duplicate keys first-wins (<code>b~view=foo~view=bar</code> → mode <code>foo</code>); malformed/empty segments dropped (<code>b~~</code> → bare id); valueless flag keys (<code>b~max~max</code> → maximized once; <code>b~max=true</code> → <code>b~max</code>; <code>b~max=false</code> → bare <code>b</code>); unknown keys preserved verbatim + parse→build idempotent; ids containing no <code>~</code> unaffected.</li>
+  <li><code>panelLayoutProjection.test</code>: context-only change is a slot change (projection pushes); inbound context-only diff updates props on the <strong>same</strong> panel row (id stable); context keys cleared when the hash has none.</li>
+  <li><code>panelHistory.test</code>: mode cleared on in-pane navigation; chevron-back restores it via <code>VisitState</code>; navigate+mode is a single history entry; slot context beats a stale <code>VisitState.viewMode</code> on URL-driven reconcile.</li>
   <li>Video plugin: toggle action writes panel prop; layout gates on it; Stage A restore (seek + resume) on remount; <strong>no document write on a navigation-driven mode arrival</strong> (zero-child video, mode set via reconcile → no child created); per-pane handle resolution with the same video in two panes; <strong>close after URL-arrived mode with an unrelated back stack clears the mode only</strong> (no <code>goBackInPanel</code> without the enter marker).</li>
   <li><code>LayoutRenderer</code>: maximized row renders alone on desktop (first wins when several are flagged); flag ignored on mobile; un-maximize restores siblings; maximized row coerced to active panel.</li>
 </ul>
 
 <h2 id="migration"><span class="num">7</span> Migration / compat</h2>
 <ul>
-  <li>Old URLs (no <code>~</code>) parse unchanged. On an <strong>old client</strong>, a new-grammar URL degrades concretely as: <code>parseSlot</code> reads the whole token as a block id, <code>reconcilePanelRows</code> persists a panel row whose <code>topLevelBlockIdProp</code> is the literal <code>V~video-notes</code>, and the pane renders blank until navigated away — no crash, but a persisted dead pane in that layout session. The realistic "old client" is a lagging PWA install (iOS caches aggressively), not a hypothetical.</li>
+  <li>Old URLs (no <code>~</code>) parse unchanged. On an <strong>old client</strong>, a new-grammar URL degrades concretely as: <code>parseSlot</code> reads the whole token as a block id, <code>reconcilePanelRows</code> persists a panel row whose <code>topLevelBlockIdProp</code> is the literal <code>V~view=video-notes</code>, and the pane renders blank until navigated away — no crash, but a persisted dead pane in that layout session. The realistic "old client" is a lagging PWA install (iOS caches aggressively), not a hypothetical.</li>
   <li><code>video:playerView</code> values left on blocks are ignored dead data (UiState scope; safe to leave, cheap to sweep later).</li>
-  <li>Downstream code that round-trips layouts <strong>as serialized layout strings or <code>LayoutSlot</code> objects</strong> (<code>layoutSlotsFromRows</code> → <code>buildLayoutFromSlots</code> → <code>parseLayout</code> → <code>reconcilePanelRows</code>) carries annotations with no rebuild at all — tokens/slots pass through opaquely. Anything that treats a leaf token as a <em>bare block id</em> does not: raw <code>string[]</code> id paths (<code>buildLayout(workspaceId, blockIds)</code>, id-keyed lookups) and code reconstructing <code>{kind: 'leaf', blockId}</code> literals will read <code>b~video-notes</code> as a literal (nonexistent) block id — such callers must go through <code>parseLayout</code>/<code>parseSlot</code> first, or stay on the slot-shaped APIs.</li>
+  <li>Downstream code that round-trips layouts <strong>as serialized layout strings or <code>LayoutSlot</code> objects</strong> (<code>layoutSlotsFromRows</code> → <code>buildLayoutFromSlots</code> → <code>parseLayout</code> → <code>reconcilePanelRows</code>) carries slot context with no rebuild at all — tokens/slots pass through opaquely. Anything that treats a leaf token as a <em>bare block id</em> does not: raw <code>string[]</code> id paths (<code>buildLayout(workspaceId, blockIds)</code>, id-keyed lookups) and code reconstructing <code>{kind: 'leaf', blockId}</code> literals will read <code>b~view=video-notes</code> as a literal (nonexistent) block id — such callers must go through <code>parseLayout</code>/<code>parseSlot</code> first, or stay on the slot-shaped APIs.</li>
 </ul>
 
 <h2 id="decisions"><span class="num">8</span> Resolved decisions &amp; remaining open questions</h2>
-<p>Resolved in design discussion (2026-07-07) — rationale lives in §4, one line each here:</p>
+<p>Resolved in design discussion (2026-07-07) and the PR <a href="https://github.com/Stvad/knowledge-medium/pull/338">#338</a> review (2026-07-08) — rationale lives in §4, one line each here:</p>
 <table>
   <thead><tr><th>Question</th><th>Decision</th><th>Why</th></tr></thead>
   <tbody>
+    <tr>
+      <td>Q5 · Token shape (2026-07-08, owner-proposed in PR #338)</td>
+      <td>Positional tokens → <strong>key-value slot context</strong> (<code>~key=value</code>)</td>
+      <td>Self-describing and extensible; dissolves the reserved-token set and first-token-wins rules; unknown keys round-trip. The name "slot context" avoids colliding with the block-range annotations design (<a href="https://github.com/Stvad/knowledge-medium/issues/332">#332</a>).</td>
+    </tr>
     <tr>
       <td>Q1 · Mode registry?</td>
       <td>Opaque mode string, no registry</td>
@@ -492,7 +498,7 @@ export const panelViewModeProp = defineProperty&lt;string | undefined&gt;(
 
 <p>Still open for upstream:</p>
 <ol>
-  <li><strong>Grammar sign-off:</strong> the <code>~</code> annotation channel and the reserved <code>max</code> token become permanent URL grammar — needs owner approval.</li>
+  <li><strong>Grammar sign-off:</strong> the kv shape is agreed in the PR #338 discussion; the residual <code>panel:urlContext</code> prop is deferred (§4.2); final ack on the separator char and key/value charsets is pending.</li>
   <li><strong>Maximize binding + chrome:</strong> which keybinding and what panel-header affordance (if any) upstream wants for <code>layout.toggle_maximize_panel</code>.</li>
 </ol>
 
