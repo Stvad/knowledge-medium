@@ -765,6 +765,13 @@ const collectPredicateDeps = (
           channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
           key: typedBlocksReferenceKey(workspaceId, ref.id),
         })
+        if (predicate.scope === 'ancestor') {
+          ctx.depend({
+            kind: 'plugin',
+            channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+            key: typedBlocksStructureKey(workspaceId, ref.id),
+          })
+        }
       }
     }
   }
