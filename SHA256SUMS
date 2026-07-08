@@ -1775,7 +1775,7 @@ b3a1bb44f4836dd3bbcaa27384a758edee528919f09657a12021bcf1d142d882  ./packages/age
 1fb947a799f6ec708cfb146c8ca45a6e2bdb94e4619d22848f6c090ee537f9f2  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-d3268c8cf8e2f5e2b0658aa8034bd950e3fdefc9b07ea4c58e00655f9ba48748  ./src/appVersion.js
+2e61bbb36dcb21dc995ba3333bd9821ba540b265ceade2676b8a180ec2a1d5a4  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 d82fb876b5e2b470c1ee8cf15e17b3f6b8730b52b4802e6e5ab0d9eebc2f7148  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -2887,8 +2887,8 @@ b6e44a3ba9fac331ce44ff5a9053537ccf6ee7806b3e8978f3ed87b7835ea8a4  ./src/plugins/
 0dd79d24c9be1d5b17a6e8ff7759d2cc0efefb9f73b0f2e3cdebedb159997606  ./src/plugins/storage-persistence/persistenceStatus.js.map
 ea7f5fd5cd014aa0ae1077645f48590aba9bcdf859f83684369d9bd9afd7a6e5  ./src/plugins/storage-persistence/requestAction.js
 0f2d270daeb192e031db0b166a55d78c70875c7fdb88605107c3f8a0f6a4f006  ./src/plugins/storage-persistence/requestAction.js.map
-e6c0b52c037ccee1533525b104e37c73d2afadd312aaf4357389269ac80b192c  ./src/plugins/supertags/TypeChipsDecorator.js
-0b24ba2eff97e849fb2d037c53862ec55bfe27fbd12203962f2a7e7cea28f76c  ./src/plugins/supertags/TypeChipsDecorator.js.map
+8a570d7f6afe3d0e607a28fcf4e57a865ea90527a36cc23fdd29311898a510f8  ./src/plugins/supertags/TypeChipsDecorator.js
+0dff33a9756dcba2c61cc3d47727b88e42ee783a2ac7b00851b2015a5e40b7f8  ./src/plugins/supertags/TypeChipsDecorator.js.map
 50e760561ea493cd592b3dd5a7a2cabf55734f9dfe316c74a5bd46a5f52b71be  ./src/plugins/supertags/codeMirrorExtensions.js
 3c686af5aa8e44d53f954047afa2ef2f1ce92211b967101d27810693e41224d3  ./src/plugins/supertags/codeMirrorExtensions.js.map
 9b18d3156ab5d37a49e6387f5d6b0a3a18230f90600c23acebf07f0842de7161  ./src/plugins/supertags/index.js
@@ -3165,8 +3165,8 @@ dd7fcf8357bb4f5fbb7478a7d59216cace479438a5e4d040031b2216cf428170  ./src/utils/to
 e15298832ec4effff04e2f6fafb5db3a8e5c3f4b5767822fccbaf55206b77091  ./src/utils/types.js.map
 ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/viewTransition.js
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
-4e8b28298294bf08c08551ac852ca05e44f6407e2d0135669b1e832199f8bb0e  ./sw.js
-338908621682a492684056ef2df16d5f86d3bccf1759a68b4ebd0893953e8d62  ./version.json
+6f1300928b62c8ae896d1948dbf7fdf5a0e04e876a4a584f4ae6f5be1445a91d  ./sw.js
+9165c67edcc430e6fe1340c8bec20cdc612d094b186719ccdd482a6e4fcebe4b  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
