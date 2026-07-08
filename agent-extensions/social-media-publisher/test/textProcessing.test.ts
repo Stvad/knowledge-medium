@@ -1,6 +1,7 @@
-import {describe, expect, it} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
 
 import {normalizeBlockMarkdownForHtml} from '../src/markdownHtml'
+import {postToTwitter} from '../src/platforms'
 import {processBlockText} from '../src/textProcessing'
 import {withOptionalProxy} from '../src/url'
 
@@ -11,6 +12,10 @@ const repoWithRefs = (refs: Record<string, string>) => ({
       return {content: refs[id]}
     },
   }),
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('social publisher text preprocessing', () => {
@@ -58,5 +63,86 @@ describe('optional CORS proxy URL handling', () => {
     expect(withOptionalProxy('https://api.example/path', 'https://proxy.example/')).toBe(
       'https://proxy.example/https://api.example/path',
     )
+  })
+})
+
+describe('Twitter publishing', () => {
+  it('sends Buffer image assets in the object shape expected by createPost', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      if (String(body.query).includes('account { organizations')) {
+        return Response.json({data: {account: {organizations: [{id: 'org1'}]}}})
+      }
+      if (String(body.query).includes('query GetChannels')) {
+        return Response.json({data: {channels: [{id: 'channel1', name: 'X', service: 'twitter'}]}})
+      }
+      return Response.json({
+        data: {
+          createPost: {
+            post: {
+              id: 'post1',
+              status: 'sent',
+              externalLink: 'https://twitter.test/post1',
+            },
+          },
+        },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    const result = await postToTwitter(
+      [
+        {
+          id: 'first',
+          raw: 'first',
+          text: 'first',
+          mediaUrls: ['https://images.test/first.jpg'],
+        },
+        {
+          id: 'second',
+          raw: 'second',
+          text: 'second',
+          mediaUrls: [],
+        },
+      ],
+      {
+        bufferToken: 'buffer-token-for-assets-test',
+        blueskyHandle: '',
+        blueskyAppPassword: null,
+        lesswrongToken: null,
+        corsProxyUrl: '',
+      },
+    )
+
+    expect(result).toEqual({
+      platform: 'twitter',
+      success: true,
+      url: 'https://twitter.test/post1',
+    })
+
+    const createPostRequest = fetchMock.mock.calls.at(-1)?.[1] as RequestInit
+    const createPostBody = JSON.parse(String(createPostRequest.body))
+    expect(createPostBody.variables.input.assets).toEqual({
+      images: [
+        {
+          url: 'https://images.test/first.jpg',
+          metadata: {altText: 'Image from Knowledge Medium'},
+        },
+      ],
+    })
+    expect(createPostBody.variables.input.metadata.twitter.thread).toEqual([
+      {
+        text: 'first',
+        assets: {
+          images: [
+            {
+              url: 'https://images.test/first.jpg',
+              metadata: {altText: 'Image from Knowledge Medium'},
+            },
+          ],
+        },
+      },
+      {text: 'second'},
+    ])
   })
 })

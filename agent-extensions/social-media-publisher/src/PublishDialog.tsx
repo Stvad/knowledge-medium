@@ -46,6 +46,7 @@ import type {
 } from './types'
 import {
   PLATFORM_LABELS,
+  PLATFORM_ORDER,
   PLATFORM_SHORT_LABELS,
 } from './types'
 
@@ -173,7 +174,7 @@ export const PublishDialog = ({
             <div className='grid gap-2'>
               <div className='text-sm font-medium'>Platforms</div>
               <div className='flex flex-wrap gap-2'>
-                {(['twitter', 'bluesky', 'lesswrong'] as PlatformId[]).map(platform => {
+                {PLATFORM_ORDER.map(platform => {
                   const configured = availablePlatforms.includes(platform)
                   const active = selected.has(platform)
                   return (

@@ -23,6 +23,12 @@ import {withOptionalProxy} from './url'
 
 let cachedBufferChannelId: {token: string; channelId: string} | null = null
 type BlueskyImageEmbed = AppBskyEmbedImages.Main & {$type: 'app.bsky.embed.images'}
+type BufferImageAssets = {
+  images: Array<{
+    url: string
+    metadata: {altText: string}
+  }>
+}
 
 const bufferGraphQL = async (
   apiToken: string,
@@ -82,29 +88,35 @@ export const postToTwitter = async (
 
   try {
     const channelId = await resolveTwitterChannelId(config.bufferToken, config.corsProxyUrl)
-    const buildAssets = (mediaUrls: string[]) =>
-      mediaUrls.slice(0, 4).map(url => ({
-        image: {
+    const buildAssets = (mediaUrls: string[]): BufferImageAssets | undefined => {
+      if (mediaUrls.length === 0) return undefined
+      return {
+        images: mediaUrls.slice(0, 4).map(url => ({
           url,
           metadata: {altText: 'Image from Knowledge Medium'},
-        },
-      }))
+        })),
+      }
+    }
+
+    const firstAssets = buildAssets(postable[0].mediaUrls)
 
     const input: Record<string, unknown> = {
       text: postable[0].text,
       channelId,
       schedulingType: 'automatic',
       mode: 'shareNow',
-      assets: buildAssets(postable[0].mediaUrls),
     }
+    if (firstAssets) input.assets = firstAssets
 
     if (postable.length > 1) {
       input.metadata = {
         twitter: {
-          thread: postable.map(block => ({
-            text: block.text,
-            assets: buildAssets(block.mediaUrls),
-          })),
+          thread: postable.map(block => {
+            const item: Record<string, unknown> = {text: block.text}
+            const assets = buildAssets(block.mediaUrls)
+            if (assets) item.assets = assets
+            return item
+          }),
         },
       }
     }
@@ -140,7 +152,7 @@ const fetchImageAsBlob = async (url: string, corsProxyUrl: string): Promise<Blob
 
 const uploadBlueskyImages = async (
   mediaUrls: string[],
-  agent: any,
+  agent: AtpAgent,
   corsProxyUrl: string,
 ): Promise<BlueskyImageEmbed | null> => {
   if (mediaUrls.length === 0) return null

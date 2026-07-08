@@ -39,3 +39,5 @@ export const PLATFORM_SHORT_LABELS: Record<PlatformId, string> = {
   bluesky: 'Bluesky',
   lesswrong: 'LW',
 }
+
+export const PLATFORM_ORDER: PlatformId[] = ['twitter', 'bluesky', 'lesswrong']
