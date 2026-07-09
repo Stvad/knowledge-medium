@@ -1636,13 +1636,19 @@ sequence, each step gated on the one before:
     and keys a client's registry can't classify (a plugin not installed here may be
     live elsewhere). Practical consequence: opting-in the content-block plugin schemas
     is effectively a prerequisite for this step delivering much.
-    <em>Semantics for rows that stop:</em> the server copy freezes; receivers never
-    merged from it, so nothing changes for current clients — but a fresh device's
-    downloaded hint decays (every post-flip edit is missing until the projection pass
-    sweeps the block). <em>Status:</em> must come after (1)–(3) — a remaining
-    cell-only writer still needs the channel — and it is a <strong>transition, not a
-    stopping point</strong>: it shares step 5's projection-readiness gate
-    (PR-review P2).</li>
+    <em>Semantics for rows that stop:</em> the server copy freezes — and because
+    downloads continue at this step, the <strong>materializer seam change moves up
+    from step 5 to here</strong> (PR-review P2): a remote property edit re-delivers
+    the parent row carrying the frozen stale cell, and the Layout-B materializer
+    writes every downloaded column into <code>blocks</code> before invalidating
+    readers — stomping the receiver's freshly-projected cell, readable as stale until
+    the reconcile restores it, on <em>every</em> remote edit. The materializer must
+    preserve (or re-project before invalidation) the local <code>properties_json</code>
+    for rows whose cell has stopped uploading. A fresh device's downloaded hint also
+    decays (every post-flip edit is missing until the projection pass sweeps the
+    block). <em>Status:</em> must come after (1)–(3) — a remaining cell-only writer
+    still needs the channel — and it is a <strong>transition, not a stopping
+    point</strong>: it shares step 5's projection-readiness gate (PR-review P2).</li>
   <li><strong>Stop downloading it</strong> — same composition rule: rows not yet fully
     child-backed keep the column. Mechanically a stream split in the sync rules —
     which also requires relaxing the Layout-B staging schema (PR-review P2:
@@ -1657,7 +1663,12 @@ sequence, each step gated on the one before:
     rows, any plaintext keys — so eligibility must be a durable client-written marker
     (natural home: maintained by the same projection that stamps the checksum),
     consumed fail-safe: only rows explicitly marked fully-child-backed leave the
-    stream; unmarked rows keep the column. Or keep downloading the column
+    stream; unmarked rows keep the column. And because classification is
+    <em>per-client</em> while the marker is global server state, the marker may only
+    be set where every key belongs to a schema <em>every</em> client can classify —
+    kernel and user schemas (one ships with the app, the other syncs as blocks); rows
+    carrying plugin-backed keys are never marked, whatever the local opt-in state — a
+    plugin-less peer still needs their cell (PR-review P2). Or keep downloading the column
     fleet-wide and consume it only where the composition rule says it is live; the
     download bytes are the smallest of the wins. Fresh
     devices now need the first-sync projection pass (below) before the cells of
@@ -1730,10 +1741,12 @@ staging.
 </p>
 
 <p>
-Implementation note for step 5: the Layout-B materializer applies sync rows with an
-explicit-column <code>INSERT OR REPLACE</code> into <code>blocks</code>; once the cell
-is local-only it must preserve (or immediately re-project) the local
-<code>properties_json</code> instead of wiping it on every arrival. It's the single
+Implementation note for steps 4–5: the Layout-B materializer applies sync rows with an
+explicit-column <code>INSERT OR REPLACE</code> into <code>blocks</code>; for rows
+whose cell has stopped uploading it must preserve (or immediately re-project) the
+local <code>properties_json</code> instead of wiping it on every arrival — needed
+from <em>step 4</em> on, not step 5 (see step 4: the still-downloading frozen cell
+would otherwise stomp the projected cell on every remote edit). It's the single
 seam that applies sync writes — one place to get right. The first-sync projection pass
 reuses the backfill's harness (schema-readiness gating, per-workspace markers, chunked
 transactions, throughput logging), pointed the other direction — with one structural
