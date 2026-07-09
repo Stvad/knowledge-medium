@@ -228,11 +228,13 @@ describe('PowerSync upload compaction', () => {
 // uploadTransactionsWithFallback — rejection-tolerance orchestrator.
 //
 // The handler runs an optimistic batched upload (current fast path); on
-// permanent failure it isolates the bad tx by re-applying each tx
-// individually, recording the rejection to ps_crud_rejected, and
-// continuing past the rejection so the rest of the queue drains. The
-// alternative — the prior `throw` on any failure — jammed the bucket
-// and surfaced as "sync stops working" until manual ps_crud surgery.
+// ANY failure (transient, permanent, or ambiguous) it isolates per tx by
+// re-applying each tx individually — draining the succeeded prefix,
+// recording a permanent rejection to ps_crud_rejected, and re-throwing a
+// transient one so only the failing tx retries. The original alternative —
+// `throw` the whole batch on any failure — jammed the bucket on a permanent
+// error, and (once creates became insert-or-TOUCH) re-touched every
+// already-landed create on every retry of a transient error.
 // ===========================================================================
 
 interface FakeTransaction {
@@ -395,26 +397,35 @@ describe('uploadTransactionsWithFallback', () => {
     expect(tx3.completed).toBe(true)
   })
 
-  it('transient failure on batch: re-throws without completing or recording', async () => {
-    // Transient = network blip, 5xx, etc. PowerSync's contract is
-    // "throw → retry the batch later." We must NOT complete any tx
-    // (would lose data) and must NOT record (it's not a rejection,
-    // it's a temporary failure). Per-tx fallback should NOT run.
+  it('transient failure on batch: drops to per-tx, drains the succeeded prefix, re-throws the rest', async () => {
+    // A transient batch error does NOT re-throw the whole batch. It drops into
+    // the per-tx loop so a succeeded prefix drains and only the still-failing tx
+    // retries. This bounds the insert-or-TOUCH re-touch amplification: without
+    // it, a transient failure on a later op (here tx2) would replay the whole
+    // batch every ~5s, re-running apply_block_creates and re-touching every
+    // already-landed create (tx1) — a real WAL write + fleet echo each — for the
+    // life of the transient. tx1 drains once; tx2 stays queued (not recorded —
+    // transient is not a rejection).
     const tx1 = fakeTx(1, [new CrudEntry(1, UpdateType.PUT, 'blocks', 'block-a', 1, {content: 'A'})])
+    const tx2 = fakeTx(2, [new CrudEntry(2, UpdateType.PATCH, 'blocks', 'block-b', 2, {content: 'B'})])
     const {applyOperations, recordRejection} = collectCalls()
-    applyOperations.mockRejectedValueOnce(networkError())
+    applyOperations
+      .mockRejectedValueOnce(networkError()) // batch fails transiently → per-tx
+      .mockResolvedValueOnce(undefined)      // tx1 (already-landed create) drains
+      .mockRejectedValueOnce(networkError()) // tx2 still transient → re-throw
 
     await expect(
       __uploadTransactionsWithFallbackForTest(
         fakeDb,
-        [tx1] as unknown as CrudTransaction[],
+        [tx1, tx2] as unknown as CrudTransaction[],
         {applyOperations, recordRejection},
       ),
     ).rejects.toThrow('fetch failed')
 
-    expect(applyOperations).toHaveBeenCalledTimes(1)
+    expect(applyOperations).toHaveBeenCalledTimes(3) // batch + tx1 + tx2 (was 1 whole-batch throw)
     expect(recordRejection).not.toHaveBeenCalled()
-    expect(tx1.completed).toBe(false)
+    expect(tx1.completed).toBe(true)  // succeeded prefix drains — no re-touch on retry
+    expect(tx2.completed).toBe(false) // still-failing tx stays queued for retry
   })
 
   it('transient failure during per-tx fallback: re-throws so PowerSync retries the remainder', async () => {

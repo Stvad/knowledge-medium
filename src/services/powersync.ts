@@ -591,18 +591,22 @@ const forgetAmbiguousAttempts = (
  *  the tail tx (which drains every preceding tx from ps_crud). Identical
  *  perf to the original handler.
  *
- *  On batch failure: classify the error (see uploadErrorClassifier).
- *    - transient (5xx / network / auth-token / rate-limit / unknown) →
- *      re-throw so PowerSync retries the whole batch later.
- *    - permanent (FK violation, RLS denial, malformed-request code, …) or
- *      ambiguous (a suspected-permanent 4xx we can't confirm from a code) →
- *      drop into the per-tx fallback.
- *  The per-tx fallback applies each tx individually: complete() on success;
- *  re-throw (retry) on a transient error; record to ps_crud_rejected +
- *  complete() (quarantine) on a permanent error; and on an ambiguous error
- *  retry it across AMBIGUOUS_RETRY_BUDGET upload passes, then quarantine. This
- *  way one bad tx no longer jams the bucket — the rest of the queue drains and
- *  the bad one lands in ps_crud_rejected for inspection.
+ *  On ANY batch failure: drop into the per-tx fallback. We do NOT fast-path a
+ *  transient error back into a whole-batch retry — applyOperations runs creates
+ *  before patches, so a transient failure on a later op can leave the earlier
+ *  creates already landed server-side, and re-throwing the whole batch would
+ *  replay them every retry. Because the create path is now insert-or-TOUCH (ON
+ *  CONFLICT DO UPDATE, not DO NOTHING), each replay is a real WAL write + a
+ *  fleet-wide echo — unbounded amplification for the life of the transient.
+ *  Per-tx draining caps it: the succeeded prefix drains once, only the failing
+ *  tx retries.
+ *  The per-tx fallback applies each tx individually and classifies its error
+ *  (see uploadErrorClassifier): complete() on success; re-throw (retry) on a
+ *  transient error; record to ps_crud_rejected + complete() (quarantine) on a
+ *  permanent error; and on an ambiguous error retry it across
+ *  AMBIGUOUS_RETRY_BUDGET upload passes, then quarantine. This way one bad tx no
+ *  longer jams the bucket — the rest of the queue drains and the bad one lands
+ *  in ps_crud_rejected for inspection.
  *
  *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
  *  workspace whose key is momentarily missing/unreadable makes `encryptOps`
@@ -643,13 +647,18 @@ const uploadTransactionsWithFallback = async (
       }
       return
     } catch (err) {
-      // Transient → retry the whole batch later. Permanent OR ambiguous → drop
-      // into the per-tx loop, where each tx is isolated and an ambiguous one
-      // gets its own retry budget before being quarantined.
-      if (classifyUploadError(err) === 'transient') {
-        console.error('[powersync] upload failed (transient, will retry)', err)
-        throw err
-      }
+      // ANY batch error drops into the per-tx loop. We deliberately do NOT
+      // fast-path a transient error back into a whole-batch retry: apply-
+      // Operations runs creates before patches (applyCompactedBlockOperations),
+      // so a transient failure on a later op can leave the earlier creates
+      // already landed server-side. Re-throwing the whole batch would replay
+      // those creates on every ~5s retry, and since the create path is now
+      // insert-or-TOUCH (ON CONFLICT DO UPDATE, not DO NOTHING) each replay is a
+      // real WAL write + a fleet-wide echo — unbounded amplification for the
+      // life of the transient. The per-tx loop instead drains the succeeded
+      // prefix (each tx completed once) and re-throws only the still-failing tx,
+      // so the retry carries just that tx. The loop classifies each tx itself
+      // (transient → re-throw, ambiguous → retry-budget, permanent → quarantine).
       console.warn(
         `[powersync] batch upload failed — isolating ${transactions.length} tx(s)`,
         err,
