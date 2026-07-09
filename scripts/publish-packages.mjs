@@ -14,10 +14,10 @@
  * Order matters: agent-cli is agent-dispatch's build-time dependency, so it's
  * listed (and thus published) first.
  *
- * Auth: expects a non-interactive npm token in the environment (NODE_AUTH_TOKEN,
- * as written by actions/setup-node's registry-url). An automation token — not a
- * plain publish token — is required so the 2FA-protected account can publish
- * headlessly.
+ * Auth: none in this script. In CI the publish authenticates via npm Trusted
+ * Publishing (OIDC) — GitHub's id-token is exchanged with npm automatically, no
+ * stored token — and provenance is attached automatically, so we don't pass
+ * --provenance (which would also fail a local run outside CI's OIDC env).
  */
 
 import { execFileSync } from 'node:child_process'
@@ -55,9 +55,9 @@ for (const rel of packageDirs) {
   }
 
   console.log(`+ publishing ${name}@${version}`)
-  // publishConfig in each package.json pins public access + the npm registry;
-  // --provenance attaches a signed build attestation (public repo + id-token).
-  execFileSync('npm', ['publish', '--provenance', '--access', 'public'], {
+  // publishConfig in each package.json pins public access + the npm registry.
+  // Under trusted publishing npm attaches provenance on its own — no flag.
+  execFileSync('npm', ['publish', '--access', 'public'], {
     cwd: dir,
     stdio: 'inherit',
   })

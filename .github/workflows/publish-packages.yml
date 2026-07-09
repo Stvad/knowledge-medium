@@ -8,12 +8,17 @@ on:
   workflow_run:
     workflows: ["Run Tests"]
     types: [completed]
-  # Manual re-run (e.g. after adding the NPM_TOKEN secret) against the current master.
+  # Manual re-run against the current master (e.g. to smoke-test the pipeline).
   workflow_dispatch:
 
+# Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN secret. GitHub mints a
+# short-lived id-token this job exchanges with npm; npm checks it against the
+# trusted publisher registered on each package (repo + this workflow filename).
+# id-token: write is what lets that token be requested; it also auto-attaches
+# provenance to the publish.
 permissions:
   contents: read
-  id-token: write # npm provenance attestation
+  id-token: write
 
 jobs:
   publish:
@@ -42,6 +47,11 @@ jobs:
           cache: yarn
           registry-url: 'https://registry.npmjs.org'
 
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1; the version bundled with
+      # node 24.x can be older. Upgrade the global npm the publish step uses.
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@latest
+
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
@@ -53,6 +63,4 @@ jobs:
         run: yarn run compile
 
       - name: Publish changed packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: node scripts/publish-packages.mjs
