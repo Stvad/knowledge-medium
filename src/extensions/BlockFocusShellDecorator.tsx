@@ -19,17 +19,21 @@ const isSurfaceActive = (state: BlockShellState): boolean =>
     ? state.shortcutSurfaceOptions.surfaceActive
     : true
 
-const MIN_VISIBLE_SHELL_VIEWPORT_RATIO = 0.6
+const MIN_VISIBLE_LONG_SHELL_LINE_COUNT = 1
 
-const isLongShellFillingViewport = (element: HTMLElement): boolean => {
+const isLongShellMeaningfullyVisible = (element: HTMLElement): boolean => {
   const rect = element.getBoundingClientRect()
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight
   if (viewportHeight <= 0 || rect.height < viewportHeight) return false
 
+  const computedStyle = window.getComputedStyle(element)
+  const lineHeight = parseFloat(computedStyle.lineHeight) ||
+    parseFloat(computedStyle.fontSize) * 1.2
+
   const visibleTop = Math.max(0, rect.top)
   const visibleBottom = Math.min(viewportHeight, rect.bottom)
   const visibleHeight = Math.max(0, visibleBottom - visibleTop)
-  return visibleHeight / viewportHeight >= MIN_VISIBLE_SHELL_VIEWPORT_RATIO
+  return visibleHeight >= lineHeight * MIN_VISIBLE_LONG_SHELL_LINE_COUNT
 }
 
 export const shouldScrollFocusedBlockIntoView = (
@@ -39,8 +43,9 @@ export const shouldScrollFocusedBlockIntoView = (
   if (!contentElement) return false
   if (isElementProperlyVisible(contentElement)) return false
   // A long block can already fill the viewport while its top content row is
-  // above it; focusing that block should not yank the viewport back to the top.
-  return shellElement ? !isLongShellFillingViewport(shellElement) : true
+  // above it; focusing that block should not yank the viewport back to the top
+  // while the user still has about a line of that block in view.
+  return shellElement ? !isLongShellMeaningfullyVisible(shellElement) : true
 }
 
 export function BlockFocusShellDecorator({
