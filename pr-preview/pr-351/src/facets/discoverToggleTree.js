@@ -1,0 +1,2 @@
+import{walkAppExtension as e}from"./facet.js";import{getBoundary as t}from"./togglable.js";var n={array:(e,n)=>{let r=t(e);if(!r)return n;let i={handle:r,children:[]};return n.push(i),i.children},contribution:(e,t)=>t},r=async(t,r)=>{let i=[];return await e(t,i,n,{context:r}),i};export{r as discoverToggleTree};
+//# sourceMappingURL=discoverToggleTree.js.map
