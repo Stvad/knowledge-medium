@@ -33,6 +33,15 @@ describe('shouldScrollFocusedBlockIntoView', () => {
     expect(shouldScrollFocusedBlockIntoView(shell, content)).toBe(false)
   })
 
+  it('scrolls when only a one-line sliver of a long block shell remains visible', () => {
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    const shellHeight = viewportHeight + 240
+    const shell = elementWithRect(testRect(-(shellHeight - 20), shellHeight))
+    const content = elementWithRect(testRect(-(shellHeight - 20), 24))
+
+    expect(shouldScrollFocusedBlockIntoView(shell, content)).toBe(true)
+  })
+
   it('keeps scrolling when both the content row and block shell are off-screen', () => {
     const shell = elementWithRect(testRect(-240, 120))
     const content = elementWithRect(testRect(-240, 24))
