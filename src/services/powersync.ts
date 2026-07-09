@@ -598,8 +598,12 @@ const forgetAmbiguousAttempts = (
  *  replay them every retry. Because the create path is now insert-or-TOUCH (ON
  *  CONFLICT DO UPDATE, not DO NOTHING), each replay is a real WAL write + a
  *  fleet-wide echo — unbounded amplification for the life of the transient.
- *  Per-tx draining caps it: the succeeded prefix drains once, only the failing
- *  tx retries.
+ *  Per-tx draining bounds it to the succeeded PREFIX: every tx before the first
+ *  failing one drains (one extra per-tx pass — complete() is a prefix
+ *  checkpoint) so those creates stop re-touching. The failing tx and the suffix
+ *  after it still retry — and their creates still re-touch — each pass until the
+ *  transient clears; the win is the prefix, which for the common ordering (a
+ *  create backlog queued ahead of a later edit) is all of it.
  *  The per-tx fallback applies each tx individually and classifies its error
  *  (see uploadErrorClassifier): complete() on success; re-throw (retry) on a
  *  transient error; record to ps_crud_rejected + complete() (quarantine) on a
@@ -647,17 +651,11 @@ const uploadTransactionsWithFallback = async (
       }
       return
     } catch (err) {
-      // ANY batch error drops into the per-tx loop. We deliberately do NOT
-      // fast-path a transient error back into a whole-batch retry: apply-
-      // Operations runs creates before patches (applyCompactedBlockOperations),
-      // so a transient failure on a later op can leave the earlier creates
-      // already landed server-side. Re-throwing the whole batch would replay
-      // those creates on every ~5s retry, and since the create path is now
-      // insert-or-TOUCH (ON CONFLICT DO UPDATE, not DO NOTHING) each replay is a
-      // real WAL write + a fleet-wide echo — unbounded amplification for the
-      // life of the transient. The per-tx loop instead drains the succeeded
-      // prefix (each tx completed once) and re-throws only the still-failing tx,
-      // so the retry carries just that tx. The loop classifies each tx itself
+      // ANY batch error (transient included) drops into the per-tx loop — see
+      // the function doc above for why we don't fast-path a transient back into
+      // a whole-batch retry (it would re-touch every already-landed create each
+      // pass, now that the create path is insert-or-TOUCH). The loop drains the
+      // succeeded prefix and re-throws the still-failing tx, classifying each
       // (transient → re-throw, ambiguous → retry-budget, permanent → quarantine).
       console.warn(
         `[powersync] batch upload failed — isolating ${transactions.length} tx(s)`,

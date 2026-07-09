@@ -400,7 +400,7 @@ describe('uploadTransactionsWithFallback', () => {
   it('transient failure on batch: drops to per-tx, drains the succeeded prefix, re-throws the rest', async () => {
     // A transient batch error does NOT re-throw the whole batch. It drops into
     // the per-tx loop so a succeeded prefix drains and only the still-failing tx
-    // retries. This bounds the insert-or-TOUCH re-touch amplification: without
+    // retries. This bounds the re-touch of the drained prefix (tx1 here): without
     // it, a transient failure on a later op (here tx2) would replay the whole
     // batch every ~5s, re-running apply_block_creates and re-touching every
     // already-landed create (tx1) — a real WAL write + fleet echo each — for the
