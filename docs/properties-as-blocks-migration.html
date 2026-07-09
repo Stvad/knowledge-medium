@@ -1527,7 +1527,10 @@ implementation</strong> and keep it open until its content is fully accounted fo
         drain. Before flipping it on, size it: run
         <code>select count(*) from blocks where properties_json != '{}' and deleted = 0</code>
         (and a key histogram) against production via <code>yarn agent sql</code> /
-        Supabase.
+        Supabase — filtered to plaintext workspaces (PR-review P2: e2ee cells are
+        ciphertext envelopes, never <code>'{}'</code> and unparsable for the
+        histogram; join on the workspace's encryption mode, and remember e2ee
+        workspaces are gated out of the backfill anyway).
       </p>
       <p class="deliv">100% of user-defined property data is child-backed; the cell is
         fully derived for user-defined keys (kernel keys stay cell-primary until the
@@ -1648,7 +1651,13 @@ sequence, each step gated on the one before:
     explicit <code>NULL</code> and fails the insert before the materializer can act.
     Make the column nullable in the same migration, or bind a non-null placeholder in
     the put itself — a column <code>DEFAULT</code> alone does nothing, since SQLite
-    never applies defaults to explicitly-bound NULLs) — or keep downloading the column
+    never applies defaults to explicitly-bound NULLs). The split's predicate must
+    also be <em>server-visible</em> (PR-review P2): sync rules select over
+    <code>public.blocks</code> and can see neither a client's registry nor, for e2ee
+    rows, any plaintext keys — so eligibility must be a durable client-written marker
+    (natural home: maintained by the same projection that stamps the checksum),
+    consumed fail-safe: only rows explicitly marked fully-child-backed leave the
+    stream; unmarked rows keep the column. Or keep downloading the column
     fleet-wide and consume it only where the composition rule says it is live; the
     download bytes are the smallest of the wins. Fresh
     devices now need the first-sync projection pass (below) before the cells of
