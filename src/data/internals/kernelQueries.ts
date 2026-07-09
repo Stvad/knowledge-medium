@@ -29,6 +29,7 @@ import {
   type ResolvedTypedBlockQuery,
   type Schema,
   type SubtreeRow,
+  type TypedBlockQueryReferenceFilter,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
@@ -744,6 +745,34 @@ const collectWhereDeps = (
   }
 }
 
+const collectReferenceFilterDeps = (
+  ref: TypedBlockQueryReferenceFilter,
+  workspaceId: string,
+  ctx: QueryCtx,
+  opts: {includeImplicitAncestorStructure?: boolean} = {},
+): void => {
+  if (ref.sourceField !== undefined) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+      key: typedBlocksReferenceFieldKey(workspaceId, ref.id, ref.sourceField),
+    })
+    return
+  }
+  ctx.depend({
+    kind: 'plugin',
+    channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
+    key: typedBlocksReferenceKey(workspaceId, ref.id),
+  })
+  if (opts.includeImplicitAncestorStructure) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+      key: typedBlocksStructureKey(workspaceId, ref.id),
+    })
+  }
+}
+
 const collectPredicateDeps = (
   predicates: readonly BlockPredicate[],
   workspaceId: string,
@@ -752,27 +781,9 @@ const collectPredicateDeps = (
   for (const predicate of predicates) {
     collectWhereDeps(predicate.where, workspaceId, ctx)
     if (predicate.referencedBy !== undefined) {
-      const ref = predicate.referencedBy
-      if (ref.sourceField !== undefined) {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
-          key: typedBlocksReferenceFieldKey(workspaceId, ref.id, ref.sourceField),
-        })
-      } else {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
-          key: typedBlocksReferenceKey(workspaceId, ref.id),
-        })
-        if (predicate.scope === 'ancestor') {
-          ctx.depend({
-            kind: 'plugin',
-            channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
-            key: typedBlocksStructureKey(workspaceId, ref.id),
-          })
-        }
-      }
+      collectReferenceFilterDeps(predicate.referencedBy, workspaceId, ctx, {
+        includeImplicitAncestorStructure: predicate.scope === 'ancestor',
+      })
     }
   }
 }
@@ -802,19 +813,7 @@ const collectTypedBlockAxisDeps = (
   }
   collectWhereDeps(normalized.where, workspaceId, ctx)
   if (referencedBy !== undefined) {
-    if (referencedBy.sourceField !== undefined) {
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
-        key: typedBlocksReferenceFieldKey(workspaceId, referencedBy.id, referencedBy.sourceField),
-      })
-    } else {
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
-        key: typedBlocksReferenceKey(workspaceId, referencedBy.id),
-      })
-    }
+    collectReferenceFilterDeps(referencedBy, workspaceId, ctx)
   }
   collectPredicateDeps(matchPredicates, workspaceId, ctx)
   collectPredicateDeps(excludePredicates, workspaceId, ctx)
