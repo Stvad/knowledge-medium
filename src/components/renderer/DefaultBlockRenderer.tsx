@@ -616,10 +616,6 @@ export function DefaultBlockRenderer(
         [resolveBlockContentRenderer],
       )
       const decorateContent = runtime.read(blockContentDecoratorsFacet)
-      const ContentRenderer = useMemo(
-        () => decorateContent(resolveContext, baseContentRenderer),
-        [decorateContent, baseContentRenderer],
-      )
       const resolveContentSurfaceProps = runtime.read(blockContentSurfacePropsFacet)
       const contentSurfaceProps = useMemo(
         () => resolveContentSurfaceProps(resolveContext),
@@ -629,6 +625,22 @@ export function DefaultBlockRenderer(
       const lineEndAccessories = useMemo(
         () => resolveLineEndAccessories(resolveContext),
         [resolveLineEndAccessories],
+      )
+      const contentWithLineEndAccessories = useMemo<BlockRenderer>(() => {
+        if (lineEndAccessories.length === 0) return baseContentRenderer
+        const InnerContentRenderer = baseContentRenderer
+        const WithLineEndAccessories: BlockRenderer = ({block}) => (
+          <>
+            <BlockLineEndAccessories block={block} accessories={lineEndAccessories}/>
+            <InnerContentRenderer block={block}/>
+          </>
+        )
+        WithLineEndAccessories.displayName = 'WithBlockLineEndAccessories'
+        return WithLineEndAccessories
+      }, [baseContentRenderer, lineEndAccessories])
+      const ContentRenderer = useMemo(
+        () => decorateContent(resolveContext, contentWithLineEndAccessories),
+        [decorateContent, contentWithLineEndAccessories],
       )
       // Top-of-panel content renders as a title: larger font, less bullet-list
       // weight. The Controls slot already returns null for top-level so there's
@@ -641,7 +653,6 @@ export function DefaultBlockRenderer(
           className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentGestureRef}
         >
-          <BlockLineEndAccessories block={block} accessories={lineEndAccessories}/>
           <ErrorBoundary FallbackComponent={FallbackComponent}>
             <ContentRenderer block={block}/>
           </ErrorBoundary>

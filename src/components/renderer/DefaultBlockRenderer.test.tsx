@@ -19,12 +19,20 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockContextProvider } from '@/context/block'
-import { blockLayoutFacet, blockLineEndAccessoriesFacet, type BlockLayout, type BlockLineEndAccessoryContribution } from '@/extensions/blockInteraction'
+import {
+  blockContentDecoratorsFacet,
+  blockLayoutFacet,
+  blockLineEndAccessoriesFacet,
+  cachedContentDecorator,
+  type BlockContentDecoratorContribution,
+  type BlockLayout,
+  type BlockLineEndAccessoryContribution,
+} from '@/extensions/blockInteraction'
 import { defaultEditorInteractionExtension } from '@/editor/defaultInteractions'
 import { type FacetRuntime } from '@/facets/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
-import type { BlockRendererProps } from '@/types'
+import type { BlockRenderer, BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/paste/operations'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 
@@ -292,6 +300,20 @@ const testLineEndAccessoryContribution: BlockLineEndAccessoryContribution = () =
   render: TestLineEndAccessory,
 })
 
+const testFullWidthFlexDecorator = cachedContentDecorator(
+  ({block, Inner}: {block: Block, Inner: BlockRenderer}) => (
+    <div className="flex w-full" data-testid="full-width-content-decorator">
+      <div className="w-full" data-testid="full-width-content-item">
+        <Inner block={block}/>
+      </div>
+    </div>
+  ),
+  'TestFullWidthFlexDecorator',
+)
+
+const testFullWidthFlexDecoratorContribution: BlockContentDecoratorContribution = () =>
+  testFullWidthFlexDecorator
+
 // A layout that wraps Content in the opt-in Shell and re-renders on a reactive
 // prop (isCollapsed) — i.e. the exact shape the default layout has. Toggling the
 // prop recreates the layout's `<Shell>` render-prop closure; the content must
@@ -391,12 +413,40 @@ describe('DefaultBlockRenderer slot identity', () => {
     )
 
     const accessory = await screen.findByTestId('line-end-accessory')
-    const content = document.querySelector('.counting-content')
-    const rail = accessory.closest('[data-block-line-end-accessories="true"]')
+    const content = document.querySelector<HTMLElement>('.counting-content')
+    const rail = accessory.closest<HTMLElement>('[data-block-line-end-accessories="true"]')
 
     expect(rail).toHaveClass('block-line-end-accessories')
     expect(rail?.parentElement).toHaveClass('block-content')
     expect(content).toBeTruthy()
+    expect(Boolean(rail!.compareDocumentPosition(content!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+  })
+
+  it('keeps line-end accessories inside full-width decorated content', async () => {
+    runtime.setRuntimeContributions(
+      blockContentDecoratorsFacet,
+      'test-full-width-content-decorator',
+      [testFullWidthFlexDecoratorContribution],
+    )
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer block={repo.block('block-1')} ContentRenderer={CountingContentRenderer} />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    const accessory = await screen.findByTestId('line-end-accessory')
+    const decoratorItem = await screen.findByTestId('full-width-content-item')
+    const content = document.querySelector<HTMLElement>('.counting-content')
+    const rail = accessory.closest<HTMLElement>('[data-block-line-end-accessories="true"]')
+
+    expect(rail).toHaveClass('block-line-end-accessories')
+    expect(decoratorItem).toContainElement(rail)
+    expect(decoratorItem).toContainElement(content)
     expect(Boolean(rail!.compareDocumentPosition(content!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
   })
 })
