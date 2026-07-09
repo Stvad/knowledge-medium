@@ -4,8 +4,8 @@
  *  Two cooperating facet contributions, sharing one ephemeral expansion
  *  store (`expansionStore.ts`):
  *
- *    - a `blockContentDecorators` contribution overlays a small count pill
- *      on the block's content line. The pill shows only when the block has
+ *    - a `blockLineEndAccessories` contribution adds a compact count pill
+ *      to the shared line-end rail. The pill shows only when the block has
  *      ≥1 backlink; clicking it toggles the expansion.
  *    - a `blockChildrenFooter` contribution renders the same backlinks-view
  *      section the focal block uses (`BacklinksViewSection`, so the block's
@@ -18,9 +18,8 @@ import type { Block } from '@/data/block'
 import { useRepo } from '@/context/repo.js'
 import { useWorkspaceId } from '@/hooks/block.js'
 import {
-  cachedContentDecorator,
-  type BlockContentDecoratorContribution,
   type BlockChildrenFooterContribution,
+  type BlockLineEndAccessoryContribution,
   type BlockResolveContext,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
@@ -29,52 +28,40 @@ import { inlineBacklinksApplies } from './applies.ts'
 import { useBacklinkCount } from './useBacklinkCount.ts'
 import { toggleBacklinkExpansion, useBacklinkExpansion } from './expansionStore.ts'
 
-// ──── Count pill (content decorator) ────
+// ──── Count pill (line-end accessory) ────
 
-const InlineBacklinkCountBadge = ({
+const InlineBacklinkCountAccessory = ({
   block,
-  Inner,
 }: {
   block: Block
-  Inner: BlockRenderer
 }) => {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
   const count = useBacklinkCount(block, workspaceId)
   const expanded = useBacklinkExpansion(block.id)
 
-  // Reserve a right gutter (flex column) rather than absolutely overlaying
-  // the count, so it never covers text at the end of a long line. With no
-  // badge the content is the sole flex child and stays full width.
+  if (count === 0) return null
+
   return (
-    <div className="flex w-full items-start gap-1">
-      <div className="min-w-0 flex-1">
-        <Inner block={block} />
-      </div>
-      {count > 0 && (
-        <button
-          type="button"
-          onClick={() => toggleBacklinkExpansion(block.id)}
-          aria-expanded={expanded}
-          aria-label={`${count} linked reference${count === 1 ? '' : 's'}`}
-          title={`${count} linked reference${count === 1 ? '' : 's'}`}
-          className={`mt-0.5 inline-flex h-4 min-w-4 shrink-0 select-none items-center justify-center rounded-full px-1 text-xs leading-none tabular-nums transition-colors ${
-            expanded
-              ? 'bg-accent text-accent-foreground'
-              : 'bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-          }`}
-        >
-          {count}
-        </button>
-      )}
-    </div>
+    <button
+      type="button"
+      onClick={() => toggleBacklinkExpansion(block.id)}
+      aria-expanded={expanded}
+      aria-label={`${count} linked reference${count === 1 ? '' : 's'}`}
+      title={`${count} linked reference${count === 1 ? '' : 's'}`}
+      className={`block-line-end-accessory rounded-full px-1 text-xs leading-none tabular-nums transition-colors ${
+        expanded
+          ? 'bg-accent text-accent-foreground'
+          : 'bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+      }`}
+    >
+      {count}
+    </button>
   )
 }
 
-const decorate = cachedContentDecorator(InlineBacklinkCountBadge, 'WithInlineBacklinkCount')
-
-export const inlineBacklinkCountDecoratorContribution: BlockContentDecoratorContribution = (ctx) =>
-  inlineBacklinksApplies(ctx) ? decorate : null
+export const inlineBacklinkCountAccessoryContribution: BlockLineEndAccessoryContribution = (ctx) =>
+  inlineBacklinksApplies(ctx) ? {id: 'backlinks.inline-count', render: InlineBacklinkCountAccessory} : null
 
 // ──── Expanded references (children footer) ────
 

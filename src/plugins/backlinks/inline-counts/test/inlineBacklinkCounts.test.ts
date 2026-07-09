@@ -6,7 +6,7 @@ import { isEnabled } from '@/facets/togglable.js'
 import { backlinksPlugin } from '../../index.ts'
 import { inlineBacklinksApplies } from '../applies.ts'
 import {
-  inlineBacklinkCountDecoratorContribution,
+  inlineBacklinkCountAccessoryContribution,
   inlineBacklinkExpansionFooterContribution,
 } from '../InlineBacklinkCount.tsx'
 
@@ -49,12 +49,12 @@ describe('inlineBacklinksApplies gate', () => {
 })
 
 describe('inline-counts facet contributions', () => {
-  it('decorate + footer attach only where the gate applies', () => {
-    expect(inlineBacklinkCountDecoratorContribution(REGULAR)).toBeTruthy()
+  it('accessory + footer attach only where the gate applies', () => {
+    expect(inlineBacklinkCountAccessoryContribution(REGULAR)).toBeTruthy()
     expect(inlineBacklinkExpansionFooterContribution(REGULAR)).toBeTruthy()
 
     for (const skipped of [FOCAL, NESTED]) {
-      expect(inlineBacklinkCountDecoratorContribution(skipped)).toBeNull()
+      expect(inlineBacklinkCountAccessoryContribution(skipped)).toBeNull()
       expect(inlineBacklinkExpansionFooterContribution(skipped)).toBeNull()
     }
   })
