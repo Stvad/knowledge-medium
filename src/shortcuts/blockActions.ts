@@ -33,10 +33,8 @@ import {
   previousVisibleBlock,
 } from '@/utils/selection'
 import type { RenderVisibilityPolicy } from '@/types.js'
-import {
-  forceOpenScopeRootPolicy,
-  renderVisibilityPolicyFromScopeRoot,
-} from '@/utils/renderVisibility.js'
+import { forceOpenScopeRootPolicy } from '@/utils/renderVisibility.js'
+import { renderVisibilityPolicyForShortcutDeps } from '@/shortcuts/renderVisibilityPolicy.js'
 
 export interface BlockAction {
   id: string
@@ -128,10 +126,6 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
  *  selected do further presses extend to neighbours. */
 const hasActiveSelection = (uiStateBlock: Block): boolean =>
   (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds.length ?? 0) > 0
-
-const visibilityPolicyFromDeps = (deps: BlockShortcutDependencies): RenderVisibilityPolicy =>
-  deps.renderVisibilityPolicy ??
-  renderVisibilityPolicyFromScopeRoot(deps.scopeRootId, deps.scopeRootForcesOpen)
 
 export const extendSelectionDown = async (
   uiStateBlock: Block,
@@ -440,7 +434,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_up',
     description: 'Extend selection up',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, visibilityPolicyFromDeps(deps))
+      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, renderVisibilityPolicyForShortcutDeps(deps))
     },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
@@ -454,7 +448,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_down',
     description: 'Extend selection down',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, visibilityPolicyFromDeps(deps))
+      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, renderVisibilityPolicyForShortcutDeps(deps))
     },
     defaultBinding: {
       keys: 'Shift+ArrowDown',

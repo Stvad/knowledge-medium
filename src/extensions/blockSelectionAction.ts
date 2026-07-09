@@ -2,7 +2,7 @@ import { focusBlock, selectionStateProp } from '@/data/properties.js'
 import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.js'
-import { renderVisibilityPolicyFromScopeRoot } from '@/utils/renderVisibility.js'
+import { renderVisibilityPolicyForShortcutDeps } from '@/shortcuts/renderVisibilityPolicy.js'
 
 export const EXTEND_BLOCK_SELECTION_ACTION_ID = 'extend_block_selection'
 export const TOGGLE_BLOCK_SELECTION_ACTION_ID = 'toggle_block_selection'
@@ -25,13 +25,14 @@ export const extendBlockSelectionAction: ActionConfig<typeof ActionContextTypes.
   description: 'Extend block selection to the clicked block',
   context: ActionContextTypes.BLOCK_POINTER,
   pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
-  handler: async ({block, uiStateBlock, scopeRootId, scopeRootForcesOpen, renderVisibilityPolicy, renderScopeId}) => {
+  handler: async (deps) => {
+    const {block, uiStateBlock, scopeRootId, renderScopeId} = deps
     await extendSelection(
       block.id,
       uiStateBlock,
       uiStateBlock.repo,
       scopeRootId,
-      renderVisibilityPolicy ?? renderVisibilityPolicyFromScopeRoot(scopeRootId, scopeRootForcesOpen),
+      renderVisibilityPolicyForShortcutDeps(deps),
     )
     void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
   },

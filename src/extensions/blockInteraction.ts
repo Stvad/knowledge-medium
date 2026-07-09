@@ -581,9 +581,9 @@ export const isSelectionClick = (event: MouseEvent) =>
  * blocks. Shared by the block shell's click path and the content surface's
  * double-click/tap path so the supplied-deps shape stays in one place.
  */
-export const blockPointerDepsFrom = (
+export const blockPointerDepsForTarget = (
   context: BlockResolveContext,
-  event: PointerGestureEvent,
+  targetElement: HTMLElement,
 ): BlockPointerDependencies => {
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
@@ -598,7 +598,13 @@ export const blockPointerDepsFrom = (
     scopeRootId: context.scopeRootId,
     scopeRootForcesOpen: isBlockForceOpened(renderVisibilityPolicy, context.scopeRootId),
     renderVisibilityPolicy,
-    targetElement: event.currentTarget,
+    targetElement,
     ...(renderScopeId ? {renderScopeId} : {}),
   }
 }
+
+export const blockPointerDepsFrom = (
+  context: BlockResolveContext,
+  event: PointerGestureEvent,
+): BlockPointerDependencies =>
+  blockPointerDepsForTarget(context, event.currentTarget)

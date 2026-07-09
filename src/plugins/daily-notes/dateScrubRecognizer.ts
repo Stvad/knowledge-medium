@@ -29,7 +29,7 @@ import type {
   GestureSession,
 } from '@/extensions/continuousGestures.js'
 import { GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
-import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
+import { blockPointerDepsForTarget, isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
 import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import type { BlockPointerDependencies } from '@/shortcuts/types.js'
@@ -40,10 +40,6 @@ import {
   DATE_SCRUB_COMMIT_GESTURE,
   DATE_SCRUB_GESTURE,
 } from './dateScrubGesture.ts'
-import {
-  isBlockForceOpened,
-  renderVisibilityPolicyForBlockContext,
-} from '@/utils/renderVisibility.js'
 
 /** Arbitration key (also the recognizer id); equals the PROGRESS gesture name. */
 export const DATE_SCRUB_GESTURE_ID = DATE_SCRUB_GESTURE
@@ -117,21 +113,8 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   // `block-pointer` action validates `BlockPointerDependencies`. The actions
   // drive the module-singleton overlay, so they only read `block`, but the full
   // shape keeps the deps valid for dispatch (mirrors the swipe recognizer).
-  const depsFor = (ctx: GestureEventContext): BlockPointerDependencies => {
-    const renderVisibilityPolicy = renderVisibilityPolicyForBlockContext(
-      context.blockContext,
-      context.scopeRootId,
-    )
-    return {
-      block,
-      uiStateBlock,
-      scopeRootId: context.scopeRootId,
-      scopeRootForcesOpen: isBlockForceOpened(renderVisibilityPolicy, context.scopeRootId),
-      renderVisibilityPolicy,
-      targetElement: ctx.element,
-      ...(renderScopeId ? { renderScopeId } : {}),
-    }
-  }
+  const depsFor = (ctx: GestureEventContext): BlockPointerDependencies =>
+    blockPointerDepsForTarget(context, ctx.element)
 
   const progressTick = (
     dx: number,
