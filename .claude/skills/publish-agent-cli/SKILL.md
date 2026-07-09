@@ -5,32 +5,30 @@ description: Build and publish a new version of the @knowledge-medium/agent-cli 
 
 # Publish a new agent-cli version
 
-Releases `@knowledge-medium/agent-cli` (the `kmagent` CLI + bridge) to public npm. Run everything from `packages/agent-cli/`.
+Releases `@knowledge-medium/agent-cli` (the `kmagent` CLI + bridge) to public npm.
 
-## Steps
+## The normal path is now CI — just bump + push
 
-1. **See what's live vs local.**
-   ```bash
-   npm view @knowledge-medium/agent-cli version   # published
-   grep '"version"' packages/agent-cli/package.json
-   git log --oneline <last-release-commit>..HEAD -- packages/agent-cli/src
-   ```
-   Pick the bump from the changes: pre-1.0, new commands/features → **minor** (`0.1.x` → `0.2.0`); fixes only → patch.
+`.github/workflows/publish-packages.yml` auto-publishes on **version change**: after a green `Run Tests` on master, `scripts/publish-packages.mjs` publishes any workspace package (`agent-cli` **and** `agent-dispatch`) whose `package.json` version isn't on npm yet, via npm **Trusted Publishing (OIDC)** — no token, no OTP. So a release is just:
 
-2. **Bump the version — then undo the lockfile damage.** `npm version` runs an install that, in this **yarn** workspace, churns `yarn.lock` and writes a stray `package-lock.json`. Only the `package.json` change should survive.
+1. **Bump the version — then undo the lockfile damage.** `npm version` runs an install that, in this **yarn** workspace, churns `yarn.lock` and writes a stray `package-lock.json`. Only the `package.json` change should survive.
    ```bash
    cd packages/agent-cli && npm version <new> --no-git-tag-version
    cd ../.. && git checkout yarn.lock && rm -f package-lock.json
    ```
+   Pick the bump from the changes (`git log --oneline <last-release>..HEAD -- packages/agent-cli/src`): pre-1.0, new commands/features → **minor**; fixes only → patch.
 
-3. **Commit** just the version bump (per the commit-after-each-change convention). Leave the push to the user unless asked.
+2. **Commit** just the version bump, then **push/merge to master**. CI publishes it. **Verify:** `npm view @knowledge-medium/agent-cli version` shows the new version once the `Publish packages` run goes green.
 
-4. **Publish** (the package's `prepublishOnly` does a clean `build:clean && build` for you, so no need to pre-build):
-   ```bash
-   cd packages/agent-cli && npm publish --otp=<code>
-   ```
+Don't run `npm publish` by hand for a routine release — that double-publishes outside the CI flow (and races its ordering).
 
-5. **Verify:** `npm view @knowledge-medium/agent-cli version` shows the new version.
+## Manual publish (fallback only)
+
+Use this only when CI can't do it — e.g. the very first publish of a brand-new package before its npm trusted publisher is registered, or CI is down. Needs `npm login` + a per-attempt OTP (see the auth gotcha below):
+```bash
+cd packages/agent-cli && npm publish --otp=<code>
+```
+`prepublishOnly` runs a clean `build:clean && build` for you, so no need to pre-build.
 
 ## Gotchas that actually bite
 
