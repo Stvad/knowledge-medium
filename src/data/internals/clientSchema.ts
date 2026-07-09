@@ -368,155 +368,6 @@ export const CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL = `
 `
 
 // ============================================================================
-// pending_restage — durable outbox for the insert-or-skip phantom self-heal
-// (issue #336 / PR #345).
-//
-// THE PHANTOM: a client mints a deterministic id while its already-synced
-// `blocks_synced` row is momentarily un-materialized (the offline-reconnect
-// race between a mutating plugin effect and initial sync). It writes a
-// real-time-stamped local `blocks` row; the CREATE uploads as insert-or-skip
-// (`ON CONFLICT (id) DO NOTHING`), so the server keeps its authoritative row
-// and sends NO echo. Nothing re-triggers reconciliation, and `blocks` sits
-// ahead of an unchanged `blocks_synced` forever.
-//
-// THE HEAL: synthesize the missing echo by enqueuing a `blocks_synced_changes`
-// upsert for the id — the observer wakes, re-reads the staging row, and (now
-// that the upload has drained) applies the server's version over the phantom.
-//
-// WHY A DURABLE TABLE and not an in-connector list: the trigger must fire only
-// once NO same-id op remains pending in `ps_crud` (else the observer skip-
-// stale's the synthetic upsert against the still-pending upload — the very trap
-// that made the phantom). But `ps_crud` drains in capped slices across many
-// `uploadData` invocations, and PowerSync retries spin up fresh invocations
-// with no memory. So the connector RECORDS a phantom-candidate create here on
-// drain (the per-tx fallback in a `finally` so a later re-throw still records it;
-// the batch happy-path right after the drain), and a FLUSH re-stages ids whose
-// queue is clear whenever the upload loop empties (also in a `finally`, so a
-// transient re-throw doesn't starve it) or the app restarts. This carries a
-// create across batch boundaries and the retry boundary — including the case a
-// same-id sibling op is later permanently REJECTED, whose drain leaves the
-// queue clear and lets the flush finally fire.
-//
-// Inherent, non-atomic gap: the drain's `complete()` and this record are SEPARATE
-// write-txns, so a hard crash strictly between them loses the record — that
-// phantom then heals only via a later real echo/edit (or the one-time,
-// marker-gated reconcile-rescan), never the outbox. A narrow tail, not the norm.
-//
-// Local-only; never synced (it references the client's own ps_crud state).
-// Holds at most the small set of in-flight phantom candidates.
-// ============================================================================
-
-export const CREATE_PENDING_RESTAGE_TABLE_SQL = `
-  CREATE TABLE IF NOT EXISTS pending_restage (
-    id TEXT PRIMARY KEY
-  )
-`
-
-/** Correlated predicate: TRUE when NO `blocks` upload for `idExpr` is still
- *  pending anywhere in `ps_crud` (the envelope shape the `blocks_upload_*`
- *  triggers write). Shared by the flush's enqueue + delete gates AND the
- *  clear-on-synced-insert trigger so the json-path can't drift between the three.
- *  `idExpr` is always an internal column reference (`pr.id` /
- *  `pending_restage.id` / `NEW.id`), never user input. A correlated `NOT EXISTS`
- *  (not `NOT IN`) to dodge the NULL-in-subquery landmine. */
-const noPendingBlockCrudSql = (idExpr: string) => `NOT EXISTS (
-      SELECT 1 FROM ps_crud
-       WHERE json_extract(data, '$.type') = 'blocks'
-         AND json_extract(data, '$.id') = ${idExpr}
-    )`
-
-// A REAL staging write for the id supersedes a pending synthetic re-stage:
-//   - INSERT is the server's own echo — but an echo only RECONCILES the id if it
-//     actually applies. While a same-id upload is still pending, the observer
-//     skip-stale's/defers the echo (the pending local write wins), so it did NOT
-//     heal the id. So GATE the clear on "no same-id op pending": drop the outbox
-//     entry only when a real echo could actually have reconciled it. Without the
-//     gate, a bulk `blocks_synced` re-stream landing while a sibling edit is
-//     queued would drop the entry, and if that sibling then REJECTS nothing
-//     re-stages the id → stuck-forever (the exact bug this table fixes). A
-//     create+later-sibling-that-SUCCEEDS still clears correctly: the succeeding
-//     sibling's echo arrives once its `ps_crud` has drained, so the gate passes.
-//   - DELETE fires for BOTH a true stream-exit (revoke) AND the implicit delete
-//     half of an INSERT OR REPLACE — how the raw sync-apply re-delivers an
-//     EXISTING `blocks_synced` row (`BLOCKS_SYNCED_RAW_TABLE.put`; the same DELETE-
-//     then-INSERT the `blocks_synced_changes` triggers are built around). Because a
-//     REPLACE's DELETE fires BEFORE its following INSERT, an UNCONDITIONAL delete-
-//     clear would drop the entry before the gated insert-clear could protect it —
-//     re-opening the stuck-forever on any re-delivery of an existing staged row
-//     while a sibling is pending (e.g. another client edits the block). So gate
-//     the delete-clear the SAME way. A TRUE revoke is still safe: the row is now
-//     gone, so the flush's EXISTS-staging gate emits no synthetic upsert and its
-//     own ps_crud gate deletes the entry once no sibling is pending — a revoked
-//     row is never resurrected, just cleaned a beat later.
-export const CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_INSERT_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS pending_restage_clear_on_synced_insert
-  AFTER INSERT ON blocks_synced
-  BEGIN
-    DELETE FROM pending_restage
-     WHERE id = NEW.id AND ${noPendingBlockCrudSql('NEW.id')};
-  END
-`
-
-export const CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_DELETE_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS pending_restage_clear_on_synced_delete
-  AFTER DELETE ON blocks_synced
-  BEGIN
-    DELETE FROM pending_restage
-     WHERE id = OLD.id AND ${noPendingBlockCrudSql('OLD.id')};
-  END
-`
-
-/** Re-stage every phantom candidate whose upload queue is now clear: enqueue a
- *  `blocks_synced_changes` upsert (the synthetic echo) and drop the outbox row.
- *
- *  GATE (both statements): re-stage an id only when NO same-id `blocks` op is
- *  still pending anywhere in `ps_crud` ({@link noPendingBlockCrudSql}). A pending
- *  op means either the create is still in flight (re-staging now would be
- *  skip-stale'd + consume the synthetic upsert) or a later same-id edit is queued
- *  (let it upload — its own echo, or its rejection draining the queue, resolves
- *  the id). The ENQUEUE additionally requires the staging row to still EXIST — a
- *  revoked id (staging row gone) has nothing to heal, so it is deleted from the
- *  outbox without a synthetic upsert.
- *
- *  Two statements in one write tx: the ENQUEUE inserts synthetic upserts for
- *  queue-clear ids that still have a staging row; the DELETE then removes every
- *  queue-clear id (those just re-staged AND any revoked ones), leaving only ids
- *  with a still-pending op for a later flush. Same `ps_crud` gate on both, in one
- *  tx, so the sets line up (enqueued ⊆ deleted).
- *
- *  Writes only `blocks_synced_changes` (the observer's private detection queue —
- *  local bookkeeping, no upload routing), so it never enqueues a server write. */
-export const FLUSH_PENDING_RESTAGE_ENQUEUE_SQL = `
-  INSERT INTO blocks_synced_changes (id, op)
-    SELECT pr.id, 'upsert' FROM pending_restage AS pr
-     WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = pr.id)
-       AND ${noPendingBlockCrudSql('pr.id')}
-`
-
-export const FLUSH_PENDING_RESTAGE_DELETE_SQL = `
-  DELETE FROM pending_restage
-   WHERE ${noPendingBlockCrudSql('pending_restage.id')}
-`
-
-/** Minimal write surface both {@link PowerSyncDb} (repo startup) and the
- *  connector's `AbstractPowerSyncDatabase` (upload loop) satisfy. */
-interface PendingRestageFlushDb {
-  writeTransaction<R>(
-    fn: (tx: {execute(sql: string, params?: unknown[]): Promise<unknown>}) => Promise<R>,
-  ): Promise<R>
-}
-
-/** Flush the pending_restage outbox — see {@link FLUSH_PENDING_RESTAGE_ENQUEUE_SQL}.
- *  Idempotent + cheap (a PK scan of a tiny table); safe to call after every
- *  upload drain and on startup. */
-export const flushPendingRestage = async (db: PendingRestageFlushDb): Promise<void> => {
-  await db.writeTransaction(async tx => {
-    await tx.execute(FLUSH_PENDING_RESTAGE_ENQUEUE_SQL)
-    await tx.execute(FLUSH_PENDING_RESTAGE_DELETE_SQL)
-  })
-}
-
-// ============================================================================
 // row_events triggers (3) — the per-row audit / change-history log. Fire for
 // BOTH local (`repo.tx`) and sync-applied (observer materialize) writes to
 // `blocks`; the COALESCE-to-'sync' tag distinguishes them. Nothing reads
@@ -1369,7 +1220,6 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,
-  CREATE_PENDING_RESTAGE_TABLE_SQL,
   DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
   // 3 row_events audit/history triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
@@ -1400,9 +1250,6 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = withTriggerRecreate([
   // 2 blocks_synced change-capture triggers (Layout B observer detection)
   CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,
-  // 2 pending_restage clear triggers (phantom self-heal outbox, PR #345)
-  CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_INSERT_TRIGGER_SQL,
-  CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_DELETE_TRIGGER_SQL,
 ])
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
@@ -1427,8 +1274,6 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_fts_delete',
   'blocks_synced_changes_insert',
   'blocks_synced_changes_delete',
-  'pending_restage_clear_on_synced_insert',
-  'pending_restage_clear_on_synced_delete',
 ] as const
 
 interface ClientSchemaBootstrapDb {

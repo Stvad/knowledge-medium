@@ -8,7 +8,6 @@ import {
 import { chunk } from 'lodash-es'
 import { supabase, hasSupabaseAuthConfig, readPersistedSession } from '@/services/supabase.js'
 import { classifyUploadError } from '@/services/uploadErrorClassifier.js'
-import { flushPendingRestage } from '@/data/internals/clientSchema.js'
 import { encryptUploadColumns, type GetCek, type SyncMode } from '@/sync/transform.js'
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
@@ -80,18 +79,6 @@ export interface UploadDeps {
   encryptOps?: (
     operations: readonly CompactedBlockOperation[],
   ) => Promise<readonly CompactedBlockOperation[]>
-  /** Record drained CREATE ids into the durable `pending_restage` outbox so a
-   *  later flush can re-stage any insert-or-skip phantom once its upload queue
-   *  is clear (see {@link recordDrainedCreatesToOutbox} + the pending_restage
-   *  table in clientSchema.ts). Optional so test deps can omit it; absent ⇒ no-op. */
-  recordDrainedCreates?: (
-    database: AbstractPowerSyncDatabase,
-    operations: readonly CompactedBlockOperation[],
-  ) => Promise<void>
-  /** Flush the `pending_restage` outbox: re-stage recorded ids whose upload
-   *  queue is now clear so the observer re-reconciles them against the server
-   *  row. Called after the upload loop drains. Optional; absent ⇒ no-op. */
-  flushPendingRestage?: (database: AbstractPowerSyncDatabase) => Promise<void>
 }
 
 /** Resolve a workspace's sync mode for the encrypt-on-upload decision. The
@@ -454,120 +441,6 @@ const defaultBlockUploadSink: BlockUploadSink = {
   deleteRow: applyBlockDelete,
 }
 
-/** Record drained CREATE ids into the durable `pending_restage` outbox. A later
- *  {@link flushPendingRestage} re-stages them (enqueues a synthetic
- *  `blocks_synced_changes` upsert) once their upload queue is clear, so the
- *  observer re-reconciles an insert-or-skip phantom against the server row. See
- *  the pending_restage table comment in clientSchema.ts for the full mechanism.
- *
- *  STAGING-ROW GATE (`EXISTS blocks_synced`): record only ids that ALREADY have a
- *  server row — a phantom, by definition, has one. A genuinely-new insert has no
- *  staging row yet (its echo hasn't round-tripped) and reconciles via that later
- *  sync-down, so recording it would only bloat the outbox on the bulk-create path
- *  (Roam import ⇒ ~10k creates/batch) for no heal. The gate keeps the outbox to
- *  actual phantom candidates.
- *
- *  SUPERSEDING-SIBLING EXCLUSION: skip a create whose id also carries a SEPARATE
- *  server-changing op — a patch OR a delete — in this drained set (necessarily
- *  cross-tx: a same-tx patch fuses into the create payload, and a same-batch
- *  create+delete cancels in `compactBlockCrudEntries`; only the per-tx fallback,
- *  compacting each tx alone, can surface both). That sibling is a real server
- *  write whose echo re-reconciles the id on its own — a patch's echo restages the
- *  edit, a delete's echo (a `blocks_synced` DELETE) removes the row and fires the
- *  clear-on-synced-delete trigger. Recording the create would risk the flush
- *  reverting the acked-but-not-yet-echoed patch, or RESURRECTING an
- *  acked-but-not-yet-echoed delete, on disk. Both upload paths pass the sibling
- *  here (the batch as one compacted set; the per-tx fallback by collecting all ops
- *  from SUCCEEDED txs), so the exclusion applies uniformly — a REJECTED sibling
- *  isn't collected, so its create IS recorded and later heals. (Hard-delete has no
- *  upload trigger in v1, so a 'delete' op can't reach `ps_crud` today; excluding
- *  it keeps the invariant symmetric and safe if that path is ever added.)
- *  (RESIDUAL: a create whose separate patch is in a LATER, not-yet-collected
- *  batch is recorded here; if that patch then SUCCEEDS, the flush may re-stage
- *  the create in the brief window before the patch's echo lands — a transient,
- *  self-healing on-disk revert. The clear-on-synced trigger removes the id the
- *  moment the echo lands, so this only bites if the flush wins that race.)
- *
- *  NO PENDING GATE here: recording is unconditional on `ps_crud` state — the
- *  flush applies the "queue clear" gate, so a create with a still-pending sibling
- *  is durably carried until its queue drains (the whole point of the outbox).
- *
- *  DATA-LOSS INVARIANT (unenforced): the heal applies the server row over the
- *  local one, so a create that FUSES genuinely-unrecoverable user content on a
- *  DETERMINISTIC id whose server row differs would be reverted with no echo to
- *  reconverge. Every deterministic-id creator today fuses only reconstructible
- *  content (daily-note scaffolds, targets, prefs/ui-state bootstrap) or content
- *  the server already shares (matrix messages), so this can't fire — but a future
- *  deterministic-id creator that fuses unrecoverable content in one tx must not
- *  rely on that content surviving locally. (Can't fix by "exclude creates with
- *  content": matrix message phantoms carry content and ARE the heal target.)
- *
- *  A SECOND, related edge: if the user EDITS a phantom-candidate block after
- *  creation and that edit (a separate PATCH) is PERMANENTLY REJECTED, the rejected
- *  op isn't collected into the drained set, so the create stays recorded and the
- *  flush reverts the block to the server row — discarding the rejected edit
- *  locally, whereas a NON-phantom block keeps a rejected edit forever. This is the
- *  flip side of the deliberate rejected-sibling heal (a pure phantom with a
- *  rejected sibling MUST heal, and we can't tell "pure phantom" from "phantom +
- *  real edit" at the SQL layer). The refused edit still survives in
- *  `ps_crud_rejected` (the quarantine that backs a future "N changes couldn't
- *  sync" surface), so it is recoverable, not destroyed — but it is not preserved
- *  in the live block. Permanent rejection of a user's own edit is itself
- *  pathological (RLS/FK/malformed), so this is a narrow, documented tail. */
-const recordDrainedCreatesToOutbox = async (
-  database: AbstractPowerSyncDatabase,
-  operations: readonly CompactedBlockOperation[],
-): Promise<void> => {
-  const supersededIds = new Set(
-    operations.filter(op => op.kind === 'patch' || op.kind === 'delete').map(op => op.id),
-  )
-  const createdIds = operations
-    .filter(op => op.kind === 'create' && !supersededIds.has(op.id))
-    .map(op => op.id)
-  if (createdIds.length === 0) return
-  await database.writeTransaction(async tx => {
-    await tx.execute(
-      `INSERT OR IGNORE INTO pending_restage (id)
-         SELECT je.value FROM json_each(?) AS je
-          WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = je.value)`,
-      [JSON.stringify(createdIds)],
-    )
-  })
-}
-
-/** Best-effort outbox record after a drained upload. Never lets a failure fail
- *  the upload loop: the server writes already succeeded and `complete()` already
- *  drained `ps_crud`, so a record error only forfeits self-heal for THAT id — its
- *  single-statement `writeTransaction` rolls back, so the id is NOT in the outbox
- *  and the startup flush has nothing to re-stage for it. Recovery then depends on
- *  a later real echo/edit re-triggering reconciliation (the one-time, marker-gated
- *  reconcile-rescan is a best-effort, possibly-spent backstop). Re-throwing would
- *  wrongly signal PowerSync to retry an already-drained batch. */
-const recordDrainedQuietly = async (
-  deps: UploadDeps,
-  database: AbstractPowerSyncDatabase,
-  operations: readonly CompactedBlockOperation[],
-): Promise<void> => {
-  try {
-    await deps.recordDrainedCreates?.(database, operations)
-  } catch (err) {
-    console.warn('[powersync] recording drained creates for self-heal failed — skipped this pass', err)
-  }
-}
-
-/** Best-effort outbox flush after the upload loop drains. Same rationale as
- *  {@link recordDrainedQuietly}: a flush failure only defers the self-heal to the
- *  next drain / startup flush; it must never fail the (already-drained) loop. */
-const flushPendingRestageQuietly = async (
-  deps: UploadDeps,
-  database: AbstractPowerSyncDatabase,
-): Promise<void> => {
-  try {
-    await deps.flushPendingRestage?.(database)
-  } catch (err) {
-    console.warn('[powersync] pending_restage flush failed — self-heal deferred to next drain/startup', err)
-  }
-}
 
 const collectUploadBatch = async (
   database: AbstractPowerSyncDatabase,
@@ -677,8 +550,6 @@ const makeUploadDeps = (
   applyOperations: applyCompactedBlockOperations,
   recordRejection: recordRejectionToTable,
   encryptOps: ops => encryptUploadOps(ops, getWorkspaceMode, getCek),
-  recordDrainedCreates: recordDrainedCreatesToOutbox,
-  flushPendingRestage,
 })
 
 /** How many upload passes an `ambiguous` tx (a suspected-permanent 4xx with no
@@ -765,10 +636,6 @@ const uploadTransactionsWithFallback = async (
     try {
       await deps.applyOperations(database, batchOps)
       await transactions[transactions.length - 1]?.complete()
-      // After the batch drained ps_crud, record its creates as phantom
-      // candidates; the loop's post-drain flush re-stages any whose queue is now
-      // clear so the observer re-reconciles an insert-or-skip phantom.
-      await recordDrainedQuietly(deps, database, batchOps)
       // The whole batch drained — clear any ambiguous retry counters it carried
       // (an earlier pass's transient blip cleared and the batch went through).
       for (const transaction of transactions) {
@@ -794,55 +661,38 @@ const uploadTransactionsWithFallback = async (
   // PUT+PATCH fusion (clientSchema.ts upload triggers + addTypeInTx) is
   // preserved — losing it would clobber properties_json on a server row
   // the deterministic-id bootstrap already created.
-  //
-  // Outbox record is in a `finally` so it still runs when a later tx re-throws
-  // (a transient error, or `encryptOps` throwing before its inner `try`). A
-  // drained create has been complete()d, so PowerSync's retry re-collects only
-  // the UNdrained txs and would never re-record it — the durable outbox is what
-  // carries it forward. Collecting ALL ops from the SUCCEEDED txs (not creates-
-  // only) gives the same-id patch context the patch-exclusion needs; a REJECTED
-  // sibling patch isn't collected, so its create IS recorded and heals.
-  const drainedOps: CompactedBlockOperation[] = []
-  try {
-    for (const transaction of transactions) {
-      const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
-      try {
-        await deps.applyOperations(database, txOps)
-        await transaction.complete()
-        drainedOps.push(...txOps)
-        forgetAmbiguousAttempts(ambiguousAttempts, transaction)
-      } catch (err) {
-        const classification = classifyUploadError(err)
-        if (classification === 'transient') {
-          console.error('[powersync] per-tx upload failed (transient, will retry)', err)
-          throw err
-        }
-        // An ambiguous error (a suspected-permanent 4xx with no confirming code)
-        // is retried across a few upload passes before we give up: re-throw until
-        // the budget is spent, then fall through to quarantine. A genuinely
-        // transient blip clears within the budget; a real permanent error
-        // quarantines instead of jamming the queue forever.
-        if (classification === 'ambiguous' && !ambiguousBudgetExhausted(ambiguousAttempts, transaction)) {
-          console.warn(
-            `[powersync] tx ${transaction.transactionId} ambiguous upload error — retrying`,
-            err,
-          )
-          throw err
-        }
+  for (const transaction of transactions) {
+    const txOps = await encryptOps(compactBlockCrudEntries(transaction.crud))
+    try {
+      await deps.applyOperations(database, txOps)
+      await transaction.complete()
+      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
+    } catch (err) {
+      const classification = classifyUploadError(err)
+      if (classification === 'transient') {
+        console.error('[powersync] per-tx upload failed (transient, will retry)', err)
+        throw err
+      }
+      // An ambiguous error (a suspected-permanent 4xx with no confirming code)
+      // is retried across a few upload passes before we give up: re-throw until
+      // the budget is spent, then fall through to quarantine. A genuinely
+      // transient blip clears within the budget; a real permanent error
+      // quarantines instead of jamming the queue forever.
+      if (classification === 'ambiguous' && !ambiguousBudgetExhausted(ambiguousAttempts, transaction)) {
         console.warn(
-          `[powersync] tx ${transaction.transactionId} rejected — quarantining`,
+          `[powersync] tx ${transaction.transactionId} ambiguous upload error — retrying`,
           err,
         )
-        await deps.recordRejection(database, transaction, err)
-        await transaction.complete()
-        forgetAmbiguousAttempts(ambiguousAttempts, transaction)
+        throw err
       }
+      console.warn(
+        `[powersync] tx ${transaction.transactionId} rejected — quarantining`,
+        err,
+      )
+      await deps.recordRejection(database, transaction, err)
+      await transaction.complete()
+      forgetAmbiguousAttempts(ambiguousAttempts, transaction)
     }
-  } finally {
-    // Record the creates that DRAINED ps_crud into the outbox (see the finally
-    // rationale above). The loop's post-drain flush (or the startup flush, or a
-    // later drain) re-stages them once their queue is clear.
-    await recordDrainedQuietly(deps, database, drainedOps)
   }
 }
 
@@ -851,22 +701,10 @@ const runUploadLoop = async (
   deps: UploadDeps,
   ambiguousAttempts: Map<number, number>,
 ): Promise<void> => {
-  try {
-    while (true) {
-      const transactions = await collectUploadBatch(database)
-      if (transactions.length === 0) break
-      await uploadTransactionsWithFallback(database, transactions, deps, ambiguousAttempts)
-    }
-  } finally {
-    // Flush the outbox so any recorded phantom candidate whose same-id ops are now
-    // all gone from ps_crud gets its synthetic echo — the point at which a create
-    // whose later sibling was REJECTED finally heals (the rejection drained the
-    // queue). In a `finally` so a TRANSIENT re-throw above (a persistently-stuck
-    // UNRELATED tx) doesn't starve healing an unrelated, already-queue-clear
-    // phantom until an app restart: the flush's per-id ps_crud gate re-stages only
-    // the ids that are actually clear and leaves the stuck one. flushPendingRestage-
-    // Quietly swallows its own errors, so it can't mask the original re-throw.
-    await flushPendingRestageQuietly(deps, database)
+  while (true) {
+    const transactions = await collectUploadBatch(database)
+    if (transactions.length === 0) break
+    await uploadTransactionsWithFallback(database, transactions, deps, ambiguousAttempts)
   }
 }
 
@@ -937,4 +775,3 @@ export const __runUploadLoopForTest = runUploadLoop
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations
 export const __applyBlockPatchesRpcForTest = applyBlockPatchesRpc
 export const __recordRejectionToTableForTest = recordRejectionToTable
-export const __recordDrainedCreatesForTest = recordDrainedCreatesToOutbox
