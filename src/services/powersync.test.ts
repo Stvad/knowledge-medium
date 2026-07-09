@@ -1148,28 +1148,31 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
 // ===========================================================================
 // defaultBlockUploadSink.createRows / deleteRow — status threading (#190).
 //
-// The status-threading fix touches all three sinks, but the supabase mock
-// historically stubbed only `.rpc`, so the CREATE (`.from().upsert()`) and
-// DELETE (`.from().delete()`) sinks had no coverage proving they thread the
-// response HTTP status onto the thrown error. Drive them through the real
-// default sink (no stubSink) so a regression to a bare `throw error` — which
-// would re-open the dead-status hole #190 closed — is caught.
+// The status-threading fix touches all three sinks. The CREATE sink ships via
+// the `apply_block_creates` RPC and the DELETE sink via `.from().delete()`, so
+// both need coverage proving they thread the response HTTP status onto the thrown
+// error. Drive them through the real default sink (no stubSink) so a regression
+// to a bare `throw error` — which would re-open the dead-status hole #190 closed
+// — is caught.
 // ===========================================================================
 
 describe('defaultBlockUploadSink create/delete — status threading', () => {
   beforeEach(() => {
     supabaseRef.from.mockReset()
+    supabaseRef.rpc.mockReset()
   })
 
   it('threads the response HTTP status onto a codeless 4xx from the CREATE sink', async () => {
-    const upsert = vi.fn().mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
-    supabaseRef.from.mockReturnValue({upsert})
+    supabaseRef.rpc.mockResolvedValue({data: null, error: {message: 'Bad Request'}, status: 400})
 
     const thrown = await __applyCompactedBlockOperationsForTest(
       fakeDatabase,
       [{kind: 'create', id: 'block-a', payload: {id: 'block-a', content: 'A'}, order: 0}],
     ).catch((err: unknown) => err)
 
+    expect(supabaseRef.rpc).toHaveBeenCalledWith('apply_block_creates', {
+      creates: [{id: 'block-a', content: 'A'}],
+    })
     expect(thrown).toMatchObject({status: 400, message: 'Bad Request'})
     expect(classifyUploadError(thrown)).toBe('ambiguous')
   })

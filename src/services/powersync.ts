@@ -15,7 +15,14 @@ const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
 const MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH = 10_000
 const MAX_TRANSACTIONS_PER_UPLOAD_BATCH = 25
-const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
+
+/** Upper bound on CREATEs shipped in a single `apply_block_creates` RPC — same
+ *  reasoning as {@link MAX_PATCHES_PER_SUPABASE_RPC}: that RPC runs one
+ *  INSERT-or-touch per row inside one statement, so an uncapped batch (a bulk
+ *  import lands as one big repo.tx and `collectUploadBatch` takes the first tx
+ *  whole) would trip Postgres `statement_timeout`, which classifies transient and
+ *  retries the oversized batch forever. */
+const MAX_CREATES_PER_SUPABASE_RPC = 500
 
 /** Upper bound on patches shipped in a single `apply_block_patches` RPC.
  *  That RPC runs one UPDATE per patch (each firing the per-write server
@@ -27,7 +34,7 @@ const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
  *  so PowerSync retries the same oversized batch forever and the queue
  *  stops draining. Chunking keeps each RPC well under the timeout; the
  *  patches are column-narrow and idempotent, so splitting them across
- *  separate RPC transactions is safe. Mirrors `MAX_BLOCKS_PER_SUPABASE_UPSERT`. */
+ *  separate RPC transactions is safe. Mirrors `MAX_CREATES_PER_SUPABASE_RPC`. */
 export const MAX_PATCHES_PER_SUPABASE_RPC = 500
 
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
@@ -372,20 +379,32 @@ const applyBlockDelete = async (id: string) => {
   }
 }
 
-// Insert-or-skip on the id PK. Used for client-originated CREATEs so a
-// deterministic-id collision with an existing server row preserves the
-// server's state — user-prefs, user-page, and ui-state bootstrap on a fresh
-// client all rely on this. Subsequent PATCH ops in the same batch still
-// carry the user's intentional edits.
+// Insert-or-TOUCH on the id PK, via the `apply_block_creates` RPC. Used for
+// client-originated CREATEs so a deterministic-id collision with an existing
+// server row PRESERVES the server's state — user-prefs, user-page, and ui-state
+// bootstrap on a fresh client all rely on this. Subsequent PATCH ops in the same
+// batch still carry the user's intentional edits.
+//
+// Why an RPC and not `.upsert(..., {ignoreDuplicates:true})`: `DO NOTHING`
+// preserves the server row but writes no heap tuple, so a client that raced the
+// create against sync gets NO echo and strands an insert-or-skip phantom
+// (issue #336 / #244). The RPC does `ON CONFLICT DO UPDATE SET updated_at =
+// blocks.updated_at` — a no-op touch that changes no data but emits a WAL change,
+// so PowerSync re-sends the authoritative row down and the observer reconciles
+// the phantom via the normal sync path. This replaces the whole client-side
+// self-heal outbox. See the migration for the full rationale + trigger analysis.
 const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
   if (rows.length === 0) return
   const client = assertSupabase()
 
-  for (const batch of chunk(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
+  // Chunk for the same reason apply_block_patches does (see
+  // MAX_CREATES_PER_SUPABASE_RPC): keep each RPC's per-row INSERT count under the
+  // statement timeout. orderedBlockUpserts keeps a child out of an earlier chunk
+  // (separate RPC = separate tx) than its parent — the parent self-FK is
+  // DEFERRABLE within a tx but not across them.
+  for (const batch of chunk(orderedBlockUpserts(rows), MAX_CREATES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] CREATE batch', batch.length)
-    const {error, status} = await client
-      .from('blocks')
-      .upsert(batch, {onConflict: 'id', ignoreDuplicates: true})
+    const {error, status} = await client.rpc('apply_block_creates', {creates: batch})
 
     if (error) {
       throwWithHttpStatus(error, status)
