@@ -1177,6 +1177,39 @@ describe('invalidation', () => {
     }
   })
 
+  it('typedBlockIds (ancestor filter): restoring an implicit ancestor context invalidates', async () => {
+    await create({id: 'target'})
+    await create({id: 'context'})
+    await create({
+      id: 'src',
+      parentId: 'context',
+      references: [{id: 'target', alias: 'Target'}],
+    })
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+      match: [{scope: 'ancestor', referencedBy: {id: 'context'}}],
+    })
+    expect(asIds(await handle.load())).toEqual(['src'])
+
+    const fired: string[][] = []
+    const unsub = handle.subscribe((value) => { fired.push(value) })
+    try {
+      await env.repo.tx(tx => tx.delete('context'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(asIds(handle.peek())).toEqual([])
+      })
+
+      await env.repo.tx(tx => tx.restore('context'), {scope: ChangeScope.BlockDefault})
+      await vi.waitFor(() => {
+        expect(asIds(handle.peek())).toEqual(['src'])
+      })
+      expect(fired).toContainEqual(['src'])
+    } finally {
+      unsub()
+    }
+  })
+
   it('typedBlockIds (ancestor filter): ancestor content edits do NOT invalidate', async () => {
     await create({id: 'target'})
     await create({id: 'project'})
