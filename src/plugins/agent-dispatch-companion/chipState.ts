@@ -10,6 +10,8 @@ export const AGENT_PROPS = {
   status: 'agent:status',
   executor: 'agent:executor',
   watcher: 'agent:watcher',
+  /** Executor session/thread id. Codex threads are stored as `codex:<id>`. */
+  session: 'agent:session',
   updatedAt: 'agent:updated-at',
   attempts: 'agent:attempts',
   error: 'agent:error',

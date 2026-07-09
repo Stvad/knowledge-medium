@@ -6,7 +6,8 @@
  *
  *  Same gutter pattern as the inline backlink count badge: with no
  *  chip, content renders untouched (no wrapper). */
-import { useEffect, useState, useSyncExternalStore, type MouseEvent } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import { ClipboardCopy, Square } from 'lucide-react'
 import type { Block } from '@/data/block'
 import { useHandle } from '@/hooks/block.js'
 import {
@@ -14,9 +15,16 @@ import {
   type BlockContentDecoratorContribution,
 } from '@/extensions/blockInteraction.js'
 import type { BlockRenderer } from '@/types.js'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { chipStateFor, chipTitle, type ChipState } from './chipState.ts'
 import { clearAskedAgent, isAskedAgent, subscribeAskedAgent } from './askedStore.ts'
 import { cancelAgent } from './cancelAgent.ts'
+import { agentResumeCommandForProperties, copyAgentResumeCommand } from './resumeCommand.ts'
 
 /** Ticks once a second while mounted — only running chips mount it. */
 const useElapsedLabel = (sinceMs: number | null): string | null => {
@@ -31,14 +39,8 @@ const useElapsedLabel = (sinceMs: number | null): string | null => {
   return `${Math.round(seconds / 60)}m`
 }
 
-const RunningChip = ({ chip, block }: { chip: ChipState; block: Block }) => {
+const RunningChip = ({ chip }: { chip: ChipState }) => {
   const elapsed = useElapsedLabel(chip.updatedAtMs)
-  const onStop = (event: MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-    if (chip.cancelling) return
-    void cancelAgent(block)
-  }
   return (
     <>
       <span className="animate-pulse text-amber-600">●</span>
@@ -48,22 +50,13 @@ const RunningChip = ({ chip, block }: { chip: ChipState; block: Block }) => {
         <>
           <span>{chip.executorLabel}{elapsed ? ` · ${elapsed}` : ''}</span>
           {chip.activity && <span className="truncate max-w-40"> · {chip.activity}</span>}
-          <button
-            type="button"
-            title={`Stop the running ${chip.executorLabel} task`}
-            aria-label={`Stop the running ${chip.executorLabel} task`}
-            onClick={onStop}
-            className="hidden shrink-0 rounded-full leading-none text-muted-foreground hover:text-foreground group-hover:inline"
-          >
-            ⏹
-          </button>
         </>
       )}
     </>
   )
 }
 
-const chipBody = (chip: ChipState, block: Block) => {
+const chipBody = (chip: ChipState) => {
   switch (chip.kind) {
     case 'queued':
       return (
@@ -73,7 +66,7 @@ const chipBody = (chip: ChipState, block: Block) => {
         </>
       )
     case 'running':
-      return <RunningChip chip={chip} block={block} />
+      return <RunningChip chip={chip} />
     case 'done':
       return (
         <>
@@ -91,6 +84,62 @@ const chipBody = (chip: ChipState, block: Block) => {
   }
 }
 
+type ChipViewState = ChipState & {
+  resumeCommand: string | null
+}
+
+const AgentStatusChipMenu = ({
+  chip,
+  block,
+}: {
+  chip: ChipViewState
+  block: Block
+}) => {
+  const canStop = chip.kind === 'running' && !chip.cancelling
+  if (!chip.resumeCommand && !canStop) {
+    return (
+      <span
+        title={chipTitle(chip)}
+        data-agent-dispatch-chip={chip.kind}
+        className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground"
+      >
+        {chipBody(chip)}
+      </span>
+    )
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title={chipTitle(chip)}
+          aria-label={`${chip.executorLabel} task actions`}
+          data-agent-dispatch-chip={chip.kind}
+          onClick={event => event.stopPropagation()}
+          className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {chipBody(chip)}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        {chip.resumeCommand && (
+          <DropdownMenuItem onSelect={() => { void copyAgentResumeCommand(block) }}>
+            <ClipboardCopy className="h-4 w-4" />
+            Copy resume command
+          </DropdownMenuItem>
+        )}
+        {canStop && (
+          <DropdownMenuItem onSelect={() => { void cancelAgent(block) }}>
+            <Square className="h-4 w-4" />
+            Stop running task
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 /** Optimistic "queued" shown between the Ask Agent action and the
  *  daemon's claim writing real props. */
 const OPTIMISTIC_QUEUED: ChipState = {kind: 'queued', executor: 'claude', executorLabel: 'Claude', updatedAtMs: null, attempts: 1, errorMessage: '', activity: '', cancelling: false}
@@ -103,7 +152,11 @@ const AgentStatusChipRow = ({
   Inner: BlockRenderer
 }) => {
   const propsChip = useHandle(block, {
-    selector: doc => chipStateFor(doc?.properties as Record<string, unknown> | undefined),
+    selector: doc => {
+      const properties = doc?.properties as Record<string, unknown> | undefined
+      const chip = chipStateFor(properties)
+      return chip ? {...chip, resumeCommand: agentResumeCommandForProperties(properties)} : null
+    },
   })
   const asked = useSyncExternalStore(subscribeAskedAgent, () => isAskedAgent(block.id))
 
@@ -112,7 +165,7 @@ const AgentStatusChipRow = ({
     if (propsChip) clearAskedAgent(block.id)
   }, [propsChip, block.id])
 
-  const chip = propsChip ?? (asked ? OPTIMISTIC_QUEUED : null)
+  const chip: ChipViewState | null = propsChip ?? (asked ? {...OPTIMISTIC_QUEUED, resumeCommand: null} : null)
   if (!chip) return <Inner block={block} />
 
   return (
@@ -120,13 +173,7 @@ const AgentStatusChipRow = ({
       <div className="min-w-0 flex-1">
         <Inner block={block} />
       </div>
-      <span
-        title={chipTitle(chip)}
-        data-agent-dispatch-chip={chip.kind}
-        className="group mt-0.5 inline-flex h-4 shrink-0 select-none items-center gap-1 rounded-full bg-muted px-1.5 text-xs leading-none text-muted-foreground"
-      >
-        {chipBody(chip, block)}
-      </span>
+      <AgentStatusChipMenu chip={chip} block={block} />
     </div>
   )
 }
