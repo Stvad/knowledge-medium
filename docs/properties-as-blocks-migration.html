@@ -309,7 +309,9 @@
   a P2 made the no-cell cold-start projection two-phase (kernel-first schema
   bootstrap). A round-6 P1 extended the §6 carve-out to all non-document scopes
   (UserPrefs and Automation alongside UiState) — §6 had silently decided only two of
-  the codebase's four property-writing scopes.
+  the codebase's four property-writing scopes. Round-7 P2s: e2ee-bound moves
+  de-structure (project-then-hide, same as mode transitions), and the step-3 flip is
+  kernel-only — plugin schemas wait for the durable opt-in.
   <strong>Last verified against code:</strong> 2026-07-01.
 </aside>
 
@@ -1106,11 +1108,16 @@ and would happily accept a plaintext <code>reference_target_id</code>:
     Disabling only the write path while leaving projection live re-creates the stale
     children problem (§11 rollback discussion); the gate means "this workspace has no
     child-backed machinery running, full stop."</li>
-  <li><strong>Cross-workspace moves/copies strip the column.</strong> A field row moved
-    or pasted from a plaintext workspace into an e2ee workspace carries its plaintext
-    <code>reference_target_id</code> with it; the move path must null it (and not
-    re-derive) when the destination is e2ee. (Owner: slice B3's move/merge
-    integration.)</li>
+  <li><strong>Cross-workspace moves/copies de-structure, not just strip.</strong> A
+    field row moved or pasted from a plaintext workspace into an e2ee workspace
+    carries its plaintext <code>reference_target_id</code>; nulling the column is
+    necessary but not sufficient (PR-review P2) — detection is column-based and the
+    machinery is gated off in e2ee, so the <code>[[field]]</code> rows and value
+    children would linger as ordinary visible content while the destination cell is
+    the property store. The move path must run the same de-structure step as the
+    mode-transition flow below: project the subtree's field/value children into the
+    destination cell, then null the column and hide or soft-delete the de-structured
+    rows. (Owner: slice B3's move/merge integration.)</li>
   <li><strong>Mode transitions are migrations.</strong> Flipping a backfilled plaintext
     workspace to e2ee means the column values for its rows were <em>already uploaded</em>
     — the flip must null them server-side (the encryption migration is already a bulk
@@ -1559,7 +1566,11 @@ sequence, each step gated on the one before:
   <li><strong>Backfill completes fleet-wide</strong> (slice C) — every property has
     child rows behind it.</li>
   <li><strong>Kernel-prop flip + test porting</strong>: flip <code>childBacked</code>
-    defaults for kernel/plugin schemas (§6 end state), run the schema-scoped backfill
+    defaults for <em>kernel</em> schemas (§6 end state). Plugin schemas flip
+    separately, each behind the durable persisted opt-in §6 requires (PR-review P2):
+    plugin code varies independently of app version (dynamic/agent extensions), so a
+    code-constant flip is exactly the data fork §6 forbids — until the persistence
+    mechanism lands, plugin schemas stay cell-backed. Run the schema-scoped backfill
     for the newly flipped schemas (markers make this incremental), port the residual
     tree-shape tests as deliberate behavior changes, extend the curated hidden-override
     set to every system schema that should stay out of the outline (§10), ship the
