@@ -293,7 +293,11 @@
   reconciled the revision's edges: the kernel flip reclassified as correctness (not
   optimization), the deletion diff gained its writer-generation discriminator, wire-cost
   claims corrected for the parent metadata PATCH, and §10 re-grounded in the spike's
-  actual curated hidden list (spot-verified against the branch that day).
+  actual curated hidden list (spot-verified against the branch that day). A PR-review
+  P1 (2026-07-05) then reshaped that discriminator: presence markers don't survive an
+  old client's whole-bag read-modify-write, so it is now a content-bound
+  <em>projection checksum</em>; the old-client materialize branch explicitly covers
+  updates (not only sets and clears); and §5 gained the consistency sweep.
   <strong>Last verified against code:</strong> 2026-07-01.
 </aside>
 
@@ -746,14 +750,17 @@ arrived row:
   <li>Arrived <em>field/value rows</em> → walk up to the parent, re-<strong>project</strong>
     its child-backed keys from local children, and dedup duplicate field rows at the
     parent while there.</li>
-  <li>Arrived <em>parent cells</em> → re-project child-backed keys from local children
-    (ignoring the arrived cell's copies); apply the cell only for keys that are
-    <em>not</em> child-backed. Materialize direction survives only for old-client
-    convergence, and only on cells carrying a <em>positive</em> old-client signal (the
-    discriminator in the callout below): the <em>set</em> branch — a cell key with no
-    child rows behind it, <strong>live or soft-deleted</strong> (a soft-deleted child
-    means a current client cleared the key; the cell must not resurrect it) — and the
-    <em>clear</em> branch, the deletion-diff requirement below.</li>
+  <li>Arrived <em>parent cells</em> → classify the cell first (the discriminator in
+    the callout below). A <em>current-client</em> cell (projection checksum matches)
+    is never a merge input: re-project child-backed keys from local children; apply
+    the cell only for keys that are <em>not</em> child-backed. An <em>old-client</em>
+    cell (checksum absent or stale) is the one place the full materialize direction
+    still runs — sets, <strong>updates to keys that already have children</strong>,
+    and clears (the deletion diff below) — because that bag genuinely is its writer's
+    newest truth. Two guards apply even there: a child is overwritten only if its own
+    <code>updated_at</code> predates the arrived bag's (the per-row clock the pipeline
+    already trusts), and a key whose local children are all soft-deleted is not
+    resurrected past a newer deletion.</li>
   <li>Arrived rows whose cell carries a key <em>no registered schema matches</em>, on a
     block whose children carry a known <code>fieldId</code> → re-project the cell from
     those children (the offline-rename race; §7, slice C). Still project-direction:
@@ -774,14 +781,26 @@ arrived row:
       local children for K exist" is also the signature of an innocent current-client
       bag (a writer that never had K, winning column-LWW); soft-deleting on that
       re-opens the clobber for deletes. The diff needs a <strong>positive
-      discriminator</strong>: current clients stamp the cells they project with a
-      writer-generation marker (a reserved key in the bag or a small synced column —
-      slice C picks the mechanism), and <em>both</em> materialize branches (set and
-      clear) run only on unstamped cells. Among current clients the cell is never
-      consulted — deletes travel exclusively as child soft-delete rows. If the
-      discriminator slips out of slice C, ship <em>without</em> the deletion diff and
-      close the old-client-clear gap by coordinated fleet upgrade instead (§12): a
-      wrong-direction soft-delete is worse than a temporarily unconverged clear.</li>
+      discriminator — and a presence marker is not one</strong> (PR-review P1): an old
+      client's <code>setProperty</code> is a read-modify-write of the whole bag, so a
+      reserved marker key written by the last current client survives the old client's
+      edit untouched — and column-narrow upload means a separate stamp column is never
+      touched either. A marker masks exactly the writes it must expose. The
+      discriminator must be <strong>content-bound</strong>: current clients embed a
+      <em>projection checksum</em> (canonical hash over the bag's child-backed keys)
+      when they project; arrival recomputes and compares. Match ⇒ a current client's
+      projection ⇒ never a merge input. Mismatch or absent ⇒ last modified by a
+      non-projecting writer ⇒ the full materialize direction (set / update / clear) is
+      licensed for that row's child-backed keys, clock-guarded per child (previous
+      list). Accepted residual: an old-client bag is a whole-bag write, so accepting
+      it can carry stale copies of <em>other</em> keys on that block — inherent to
+      mixed-version operation (the old client has no per-key channel), bounded by the
+      per-child clock guard and the upgrade window. Among current clients the cell is
+      never consulted — deletes travel exclusively as child soft-delete rows. If the
+      checksum slips out of slice C, ship <em>without</em> the old-client materialize
+      branches and close the whole mixed-version gap by coordinated fleet upgrade
+      instead (§12): a wrong-direction overwrite is worse than a temporarily
+      unconverged edit.</li>
     <li><strong>Duplicate field rows from concurrent backfills persist.</strong> Two
       devices backfilling offline each create their own <code>[[status]]</code> row;
       after sync, the arrived rows are field/value rows whose <em>own</em> cells are
@@ -801,6 +820,21 @@ arrived row:
   deterministic (<code>ORDER BY order_key, id</code>), so all replicas pick the same
   survivor. State both in code comments next to the processors; a refactor that breaks
   either turns the pair into a loop or a divergence engine.
+</div>
+
+<div class="callout good">
+  <strong>Consistency sweep — fsck for the projection.</strong> The design's main
+  standing risk is invariant density: correctness rests on every write path honoring
+  the dual-write and arrival rules, and a future path that doesn't (importer, plugin,
+  server feature) fails <em>silently</em> — the cell and the children just drift.
+  Deterministic projection makes that cheap to police: a background sweep recomputes
+  each block's child-backed cell keys from its children, byte-compares against the
+  stored cell, repairs divergence (children win, per this section), and reports the
+  divergence count as telemetry. Reuse the backfill harness (marker-gated per
+  workspace, chunked transactions, idle scheduling) in verify mode; ship it with
+  slice C. A nonzero counter is the alarm that some write path broke the invariant —
+  it converts "discipline held in code" into "violations are detected and self-heal",
+  which is the difference between an invariant and a hope.
 </div>
 
 <div class="callout good">
@@ -1354,13 +1388,17 @@ implementation</strong> and keep it open until its content is fully accounted fo
         subtle surface worth its own review attention) and the observer
         <code>onRowsAccepted</code> catch-up, scoped to child-backed schemas —
         <strong>rebuilt as the §5 reconcile pass — this slice IS the clobber fix</strong>:
-        arrival re-projects child-backed keys from local children (the arriving cell is
-        never a merge input); materialize direction runs only for genuinely old-client
-        cells, gated on the §5 writer-generation discriminator — which this slice
-        introduces (current clients stamp the cells they project) — never on cell shape
-        (set branch: keys with no child rows, live or soft-deleted; clear branch: the
-        deletion diff, which must not ship without the discriminator); and dedup
-        happens at the <em>parent</em> of arrived field rows. It must also
+        arrival re-projects child-backed keys from local children (a current client's
+        cell is never a merge input); materialize direction runs only for genuinely
+        old-client cells, gated on the §5 projection-checksum discriminator — which
+        this slice introduces (current clients embed a canonical checksum when they
+        project; a mismatched or absent checksum marks an old-client bag) — never on
+        cell shape (mismatched bags get the full set/update/clear materialize,
+        clock-guarded per child; the deletion diff must not ship without the
+        checksum); and dedup happens at the <em>parent</em> of arrived field rows.
+        The §5 consistency sweep ships here too — it reuses this slice's harness in
+        verify mode, and its divergence counter is the acceptance metric for the
+        reconcile pass itself. It must also
         reconcile the <em>rename race</em> B2's one-shot reproject can't reach: a block
         edited offline across a schema rename syncs up with a cell key no registry
         knows; the reconcile recognizes that case from the <em>children's</em> side —
@@ -1569,14 +1607,15 @@ transactions, throughput logging), pointed the other direction.
   </li>
   <li>
     <strong>Old-client interop during rollout.</strong> A device on pre-slice-B code
-    writes cell-only; current devices converge its <em>sets and updates</em> via the
-    reconcile pass's old-client branch (unstamped cells — the §5 writer-generation
-    discriminator — with no child rows behind the key).
-    <em>Clears do not converge</em> until the deletion diff and the discriminator it
-    requires land with slice C (§5) —
-    an old client's property delete leaves stale children on peers, and a later touch
-    of that subtree resurrects the value. Coordinated upgrade (small fleet) shrinks the
-    window; the §5 fix closes it.
+    writes cell-only. Only its <em>new-key sets</em> converge without help (no
+    children exist for the projection to fight with). Its <em>updates to
+    already-backfilled keys</em> and its <em>clears</em> converge only once the §5
+    checksum discriminator and the old-client materialize branches land with slice C —
+    before that, an old client's update to a child-backed key is silently reverted by
+    the next projection, and its deletes resurrect on the next touch (PR-review P1
+    caught the update half of this). Coordinated upgrade (small fleet) is the honest
+    mitigation for the pre-slice-C window, not the reconcile pass; the §5 fix closes
+    it properly.
   </li>
   <li>
     <strong>Stale bootstrap-hint window.</strong> A fresh device reads downloaded cells
