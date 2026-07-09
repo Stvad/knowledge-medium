@@ -300,7 +300,10 @@
   updates (not only sets and clears); and §5 gained the consistency sweep. Two P2s
   from the same review (2026-07-09) constrained the checksum's storage (invisible to
   generic property surfaces) and re-classified end-state step 4 as transitional — it
-  shares step 5's gate, and the measurement-fail fallback is step 3.
+  shares step 5's gate, and the measurement-fail fallback is step 3. A round-4 P1
+  bound the checksum to the block id (wholesale-copied bags can't carry their
+  certification) and made no-children ⇒ pending-materialization a global reconcile
+  rule, never a delete.
   <strong>Last verified against code:</strong> 2026-07-01.
 </aside>
 
@@ -756,7 +759,12 @@ arrived row:
   <li>Arrived <em>parent cells</em> → classify the cell first (the discriminator in
     the callout below). A <em>current-client</em> cell (projection checksum matches)
     is never a merge input: re-project child-backed keys from local children; apply
-    the cell only for keys that are <em>not</em> child-backed. An <em>old-client</em>
+    the cell only for keys that are <em>not</em> child-backed. A child-backed key with
+    <em>no local child rows at all</em> is left untouched as pending materialization —
+    either children-in-flight from the writer's dual-write (they land next drain) or a
+    copied bag awaiting the sweep; <strong>removing a cell key because children are
+    absent is forbidden everywhere</strong> — arrival, projection rebuilds, and the
+    sweep alike. An <em>old-client</em>
     cell (checksum absent or stale) is the one place the full materialize direction
     still runs — sets, <strong>updates to keys that already have children</strong>,
     and clears (the deletion diff below) — because that bag genuinely is its writer's
@@ -790,8 +798,13 @@ arrived row:
       edit untouched — and column-narrow upload means a separate stamp column is never
       touched either. A marker masks exactly the writes it must expose. The
       discriminator must be <strong>content-bound</strong>: current clients embed a
-      <em>projection checksum</em> (canonical hash over the bag's child-backed keys)
-      when they project; arrival recomputes and compares. Match ⇒ a current client's
+      <em>projection checksum</em> — a canonical hash over the <strong>block id plus
+      the bag's child-backed keys</strong> — when they project; arrival recomputes and
+      compares. The id-binding is load-bearing (PR-review P1): a wholesale-copied bag
+      (an old client's copy/import cloning <code>properties_json</code> onto a new
+      block) would otherwise carry a still-valid checksum to a block with no children
+      and be mis-certified as a projection; bound to the id, the copy mismatches, the
+      old-client branch runs, and the copied keys materialize. Match ⇒ a current client's
       projection ⇒ never a merge input. Mismatch or absent ⇒ last modified by a
       non-projecting writer ⇒ the full materialize direction (set / update / clear) is
       licensed for that row's child-backed keys, clock-guarded per child (previous
@@ -1558,9 +1571,11 @@ no infrastructure needed:
 <ol>
   <li><strong>Read-side floor (zero setup, live client):</strong>
     <code>yarn agent sql all</code> timing the aggregate join — field rows
-    (<code>reference_target_id IS NOT NULL</code>) joined to their value children,
-    grouped by parent — over the already-materialized live DB. Real engine, real
-    data, read-only.</li>
+    (<code>reference_target_id</code> restricted to <em>registered schema
+    fieldIds</em>; plain <code>IS NOT NULL</code> also catches ordinary
+    exact-reference rows the derive processor stamps, over-counting the join and
+    skewing the gate) joined to their value children, grouped by parent — over the
+    already-materialized live DB. Real engine, real data, read-only.</li>
   <li><strong>Full pass offline (~40-line Node script):</strong> export the local DB
     (the corruption-recovery backup zip yields the <code>.db</code>), open with
     <code>better-sqlite3</code>, run join → decode (the pure helpers in
