@@ -77,13 +77,21 @@ export interface RendererRegistry {
     [key: string]: BlockRenderer;
 }
 
+export interface RenderVisibilityPolicy {
+    /** Surface-scoped child visibility overrides. These do not mutate
+     *  `system:collapsed`; they describe what this rendered occurrence
+     *  must show so layout and visible-tree navigation agree. */
+    forceOpenBlockIds?: readonly string[]
+    forceClosedBlockIds?: readonly string[]
+}
+
 /** EditorSelectionState now lives at @/data/properties — re-exported
  *  here during the 1.6 migration so call sites that still import from
  *  @/types compile. Once consumers shift onto @/data/properties this
  *  re-export drops. */
 export type { EditorSelectionState } from '@/data/properties'
 
-export interface BlockContextType {
+export interface BlockContextType extends RenderVisibilityPolicy {
     /** Layout-dispatch boundary — gates which top-level renderer fires
      *  (`TopLevelRenderer` / `LayoutRenderer` / `PanelRenderer`). Reset
      *  by every layout boundary as it descends, so by the time

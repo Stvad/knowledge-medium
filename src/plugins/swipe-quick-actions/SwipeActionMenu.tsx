@@ -10,6 +10,7 @@ import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
 import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
+import { forceOpenScopeRootPolicy } from '@/utils/renderVisibility.js'
 import {
   quickActionItemsFacet,
   type QuickActionItem,
@@ -365,6 +366,7 @@ export const SwipeActionMenu = () => {
       uiStateBlock,
       scopeRootId: topLevelBlockId,
       scopeRootForcesOpen: true,
+      renderVisibilityPolicy: forceOpenScopeRootPolicy(topLevelBlockId),
       renderScopeId,
     }
     return dispatchActionWithDeps(actionId, deps, trigger)

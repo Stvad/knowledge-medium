@@ -25,6 +25,11 @@ import {
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import type { RenderVisibilityPolicy } from '@/types.js'
+import {
+  forceOpenScopeRootPolicy,
+  renderVisibilityPolicyFromScopeRoot,
+} from '@/utils/renderVisibility.js'
 
 const JUMP_BLOCK_COUNT = 8
 
@@ -37,14 +42,14 @@ export const jumpVisibleBlocks = async (
   scopeRootId: string,
   count: number,
   direction: 'up' | 'down',
-  scopeRootForcesOpen = true,
+  renderVisibilityPolicy: RenderVisibilityPolicy = forceOpenScopeRootPolicy(scopeRootId),
 ) => {
   let current = startBlock
   let last = startBlock
   for (let i = 0; i < count; i++) {
     const next = direction === 'up'
-      ? await previousVisibleBlock(current, scopeRootId)
-      : await nextVisibleBlock(current, scopeRootId, scopeRootForcesOpen)
+      ? await previousVisibleBlock(current, scopeRootId, renderVisibilityPolicy)
+      : await nextVisibleBlock(current, scopeRootId, renderVisibilityPolicy)
     if (!next) break
     current = next
     last = next
@@ -75,6 +80,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
   }
   const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
+  const visibilityPolicyFromDeps = (deps: BlockShortcutDependencies) =>
+    deps.renderVisibilityPolicy ??
+    renderVisibilityPolicyFromScopeRoot(deps.scopeRootId, deps.scopeRootForcesOpen)
   const extendSelectionUpAction = {
     ...bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUp),
     defaultBinding: {
@@ -101,7 +109,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const {block, uiStateBlock, scopeRootId} = deps
         if (!block || !uiStateBlock || !scopeRootId) return
 
-        const next = await nextVisibleBlock(block, scopeRootId, deps.scopeRootForcesOpen)
+        const next = await nextVisibleBlock(block, scopeRootId, visibilityPolicyFromDeps(deps))
         if (next) void focusBlock(uiStateBlock, next.id, {renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
@@ -115,7 +123,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const {block, uiStateBlock, scopeRootId} = deps
         if (!block || !uiStateBlock || !scopeRootId) return
 
-        const prev = await previousVisibleBlock(block, scopeRootId)
+        const prev = await previousVisibleBlock(block, scopeRootId, visibilityPolicyFromDeps(deps))
         if (prev) void focusBlock(uiStateBlock, prev.id, {renderScopeId: deps.renderScopeId})
       },
       defaultBinding: {
@@ -205,10 +213,14 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_to_last_visible_block',
       description: 'Jump to last visible block',
-      handler: async ({uiStateBlock, scopeRootId, renderScopeId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {uiStateBlock, scopeRootId, renderScopeId} = deps
         if (!scopeRootId) return
 
-        const lastBlock = await getLastVisibleDescendant(repo.block(scopeRootId), scopeRootId, scopeRootForcesOpen)
+        const lastBlock = await getLastVisibleDescendant(
+          repo.block(scopeRootId),
+          visibilityPolicyFromDeps(deps),
+        )
         if (!lastBlock) return
 
         void focusBlock(uiStateBlock, lastBlock.id, {
@@ -222,10 +234,11 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_many_down',
       description: 'Jump down several blocks',
-      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {block, uiStateBlock, renderScopeId, scopeRootId} = deps
         if (!scopeRootId) return
 
-        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'down', scopeRootForcesOpen)
+        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'down', visibilityPolicyFromDeps(deps))
         if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
       },
       defaultBinding: {
@@ -235,10 +248,11 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     bindNormal({
       id: 'jump_many_up',
       description: 'Jump up several blocks',
-      handler: async ({block, uiStateBlock, renderScopeId, scopeRootId, scopeRootForcesOpen}: BlockShortcutDependencies) => {
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {block, uiStateBlock, renderScopeId, scopeRootId} = deps
         if (!scopeRootId) return
 
-        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'up', scopeRootForcesOpen)
+        const target = await jumpVisibleBlocks(block, scopeRootId, JUMP_BLOCK_COUNT, 'up', visibilityPolicyFromDeps(deps))
         if (target) void focusBlock(uiStateBlock, target.id, {renderScopeId})
       },
       defaultBinding: {

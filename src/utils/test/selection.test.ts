@@ -9,6 +9,8 @@ import {
   blockIdsInOrderedSelectionRange,
   findBestSelectionAnchorIndex,
   getLastVisibleDescendant,
+  nextVisibleBlock,
+  previousVisibleBlock,
 } from '@/utils/selection.js'
 
 const WS = 'ws-1'
@@ -194,7 +196,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top')
+    const result = await getLastVisibleDescendant(env.repo.block('top'), {forceOpenBlockIds: ['top']})
     expect(result.id).toBe('b')
   })
 
@@ -208,7 +210,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('top'), 'top', false)
+    const result = await getLastVisibleDescendant(env.repo.block('top'))
     expect(result.id).toBe('top')
   })
 
@@ -221,7 +223,25 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('b'), 'top')
+    const result = await getLastVisibleDescendant(env.repo.block('b'), {forceOpenBlockIds: ['top']})
     expect(result.id).toBe('b')
+  })
+
+  it('descends through a collapsed non-root block when the surface force-opens it', async () => {
+    // Backlink/SRS breadcrumb reveal paths can force-open an ancestor
+    // below the surface root. Visible navigation must treat that
+    // ancestor as open in both directions.
+    await seedOutline(env.repo, [
+      {id: 'top', parentId: null, orderKey: 'a'},
+      {id: 'a', parentId: 'top', orderKey: 'b'},
+      {id: 'a1', parentId: 'a', orderKey: 'c'},
+      {id: 'b', parentId: 'top', orderKey: 'd'},
+    ])
+    await env.repo.mutate.setProperty({id: 'a', schema: isCollapsedProp, value: true})
+
+    const policy = {forceOpenBlockIds: ['top', 'a']}
+    expect((await nextVisibleBlock(env.repo.block('a'), 'top', policy))?.id).toBe('a1')
+    expect((await previousVisibleBlock(env.repo.block('b'), 'top', policy))?.id).toBe('a1')
+    expect((await getLastVisibleDescendant(env.repo.block('top'), policy)).id).toBe('b')
   })
 })

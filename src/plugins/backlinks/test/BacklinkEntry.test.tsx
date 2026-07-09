@@ -22,11 +22,30 @@ vi.mock('@/utils/navigation.ts', () => ({
   useBlockOpener: () => mocks.openBlock,
 }))
 
-vi.mock('@/components/BlockComponent.tsx', () => ({
-  BlockComponent: ({blockId}: {blockId: string}) => (
-    <span data-testid={`block-${blockId}`}>{blockId}</span>
-  ),
+vi.mock('@/hooks/block.js', () => ({
+  useParents: (block: Block) => {
+    if (block.id === 'parent-a') return [mocks.repo.block('root')]
+    if (block.id === 'parent-b') return [mocks.repo.block('root'), mocks.repo.block('parent-a')]
+    return []
+  },
 }))
+
+vi.mock('@/components/BlockComponent.tsx', async () => {
+  const {useBlockContext} = await vi.importActual<typeof import('@/context/block')>('@/context/block')
+  return {
+    BlockComponent: ({blockId}: {blockId: string}) => {
+      const context = useBlockContext()
+      return (
+        <span
+          data-testid={`block-${blockId}`}
+          data-force-open={(context.forceOpenBlockIds ?? []).join(',')}
+        >
+          {blockId}
+        </span>
+      )
+    },
+  }
+})
 
 vi.mock('@/components/util/LazyViewportMount.tsx', () => ({
   LazyViewportMount: ({children}: {children: ReactNode}) => <>{children}</>,
@@ -59,5 +78,29 @@ describe('BacklinkEntry breadcrumbs', () => {
     const [forwardedEvent, ctx] = mocks.openBlock.mock.calls[0]
     expect(forwardedEvent.shiftKey).toBe(true)
     expect(ctx).toEqual({blockId: 'parent-block', workspaceId: 'workspace'})
+  })
+
+  it('force-opens the promoted ancestor path back to the backlink source', () => {
+    const source = {id: 'source-block'} as Block
+    const root = {id: 'root'} as Block
+    const parentA = {id: 'parent-a'} as Block
+    const parentB = {id: 'parent-b'} as Block
+
+    render(
+      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
+        <LazyBacklinkItem
+          block={source}
+          initialParents={[root, parentA, parentB]}
+          scopeId="test:source-block"
+        />
+      </BlockContextProvider>,
+    )
+
+    fireEvent.click(screen.getByTestId('block-parent-a'))
+
+    expect(screen.getByTestId('block-parent-a')).toHaveAttribute(
+      'data-force-open',
+      'parent-a,parent-b',
+    )
   })
 })

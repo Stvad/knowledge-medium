@@ -5,6 +5,7 @@ import { NestedBlockContextProvider } from '@/context/block.js'
 import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import { useMemo } from 'react'
 
 export function TopLevelRenderer({block}: BlockRendererProps) {
   /**
@@ -22,6 +23,12 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
    */
 
   useActionContext(ActionContextTypes.GLOBAL)
+  const blockContextOverrides = useMemo(() => ({
+    layoutBoundary: false,
+    renderScopeId: outlineRenderScopeId(block.id),
+    scopeRootId: block.id,
+    forceOpenBlockIds: [block.id],
+  }), [block.id])
 
   return (
     // paddingTop reserves the iOS status-bar strip. As an installed PWA we run
@@ -44,11 +51,7 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
       <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-0.5 md:px-2">
         <Header/>
         <NestedBlockContextProvider
-          overrides={{
-            layoutBoundary: false,
-            renderScopeId: outlineRenderScopeId(block.id),
-            scopeRootId: block.id,
-          }}
+          overrides={blockContextOverrides}
         >
           <BlockComponent blockId={block.id}/>
         </NestedBlockContextProvider>

@@ -8,6 +8,7 @@ import { Block } from '../data/block';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
 import type { GestureBindingSpec } from './gestureBinding.js'
+import type { RenderVisibilityPolicy } from '@/types.js'
 
 /** Action icon — same SVG-component shape lucide-react emits, so the
  *  default action set can use those directly without an adapter. The
@@ -134,6 +135,11 @@ export interface BaseShortcutDependencies {
    *  primitives use it so they don't descend into a collapsed nested
    *  root whose children aren't rendered. Defaults to true (focal). */
   scopeRootForcesOpen?: boolean;
+  /** Surface-scoped child visibility policy. Supersedes
+   *  `scopeRootForcesOpen` for visible-tree traversal because nested
+   *  surfaces can force-open more than just their root (e.g. a promoted
+   *  backlink/SRS ancestor path). */
+  renderVisibilityPolicy?: RenderVisibilityPolicy;
 }
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {

@@ -28,6 +28,10 @@ import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import type { BlockPointerDependencies } from '@/shortcuts/types.js'
 import { swipeProgressTickEvent } from './events.ts'
+import {
+  isBlockForceOpened,
+  renderVisibilityPolicyForBlockContext,
+} from '@/utils/renderVisibility.js'
 
 /** Arbitration key (also the recognizer id). */
 export const SWIPE_QUICK_ACTIONS_GESTURE_ID = 'swipe-quick-actions'
@@ -79,11 +83,16 @@ const dependenciesFor = (
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
     : undefined
+  const renderVisibilityPolicy = renderVisibilityPolicyForBlockContext(
+    context.blockContext,
+    context.scopeRootId,
+  )
   return {
     block: context.block,
     uiStateBlock: context.uiStateBlock,
     scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
+    scopeRootForcesOpen: isBlockForceOpened(renderVisibilityPolicy, context.scopeRootId),
+    renderVisibilityPolicy,
     targetElement: ctx.element,
     ...(renderScopeId ? {renderScopeId} : {}),
   }

@@ -29,6 +29,10 @@ import {
 import type { ActionContextActivation, BlockPointerDependencies } from '@/shortcuts/types.js'
 import type { PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import type { BlockContextType, BlockRenderer } from '@/types.js'
+import {
+  isBlockForceOpened,
+  renderVisibilityPolicyForBlockContext,
+} from '@/utils/renderVisibility.js'
 
 export interface BlockContentRendererSlot {
   id: string
@@ -584,11 +588,16 @@ export const blockPointerDepsFrom = (
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
     : undefined
+  const renderVisibilityPolicy = renderVisibilityPolicyForBlockContext(
+    context.blockContext,
+    context.scopeRootId,
+  )
   return {
     block: context.block,
     uiStateBlock: context.uiStateBlock,
     scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
+    scopeRootForcesOpen: isBlockForceOpened(renderVisibilityPolicy, context.scopeRootId),
+    renderVisibilityPolicy,
     targetElement: event.currentTarget,
     ...(renderScopeId ? {renderScopeId} : {}),
   }

@@ -20,6 +20,7 @@ import {
 } from '@/data/properties.js'
 import { Button } from './ui/button'
 import { nextVisibleBlock } from '@/utils/selection.js'
+import { renderVisibilityPolicyForBlockContext } from '@/utils/renderVisibility.js'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
@@ -63,7 +64,8 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const updatedByUser = useUserPage(blockData?.updatedBy ?? '')
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
-  const {panelId, scopeRootId, renderScopeId, isNestedSurface} = useBlockContext()
+  const blockContext = useBlockContext()
+  const {panelId, scopeRootId, renderScopeId} = blockContext
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
@@ -154,7 +156,11 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const focusAfterProperties = async () => {
     if (!scopeRootId) return
 
-    const next = await nextVisibleBlock(block, scopeRootId, !isNestedSurface)
+    const next = await nextVisibleBlock(
+      block,
+      scopeRootId,
+      renderVisibilityPolicyForBlockContext(blockContext, scopeRootId),
+    )
     if (!next) return
     await next.load()
     await focusBlockEditor(next, {start: 0})

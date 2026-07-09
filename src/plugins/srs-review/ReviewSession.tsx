@@ -58,6 +58,7 @@ import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
  *  header renderer so the in-review chain renders identically. */
 const BREADCRUMB_OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}
 const EMPTY_PARENTS: readonly Block[] = []
+const EMPTY_BLOCK_IDS: readonly string[] = []
 /** How many cards' ancestors to prefetch per chunk (two chunks are in
  *  flight at once). Bounds the `core.manyAncestors` id count so a large
  *  deck can't exceed SQLite's host-parameter limit. */
@@ -318,6 +319,21 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     const cut = currentParents.findIndex(p => p.id === shownId)
     return cut >= 0 ? currentParents.slice(0, cut) : currentParents
   }, [shownId, currentId, currentParents])
+  const forceOpenBlockIds = useMemo(() => {
+    if (!currentId) return EMPTY_BLOCK_IDS
+    const revealPath = shownId === currentId
+      ? EMPTY_BLOCK_IDS
+      : (() => {
+          const cut = currentParents.findIndex(p => p.id === shownId)
+          return cut >= 0
+            ? currentParents.slice(cut).map(parent => parent.id)
+            : EMPTY_BLOCK_IDS
+        })()
+    return revealed ? [...revealPath, currentId] : revealPath
+  }, [currentId, currentParents, revealed, shownId])
+  const forceClosedBlockIds = useMemo(() =>
+    currentId && !revealed ? [currentId] : EMPTY_BLOCK_IDS,
+  [currentId, revealed])
 
   const grade = useCallback(
     async (signal: SrsSignal) => {
@@ -449,6 +465,18 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   }, [revealed])
 
   const deckLabel = tagName.trim() ? tagName.trim() : 'All due cards'
+  const surfaceId = shownId
+  const reviewContextOverrides = useMemo(() => ({
+    [SRS_REVIEW_CARD_ID]: currentId,
+    [SRS_REVIEW_REVEALED]: revealed,
+    isNestedSurface: true,
+    scopeRootId: surfaceId,
+    renderScopeId: surfaceId === currentId
+      ? `srs-review:${currentId}`
+      : `srs-review:${currentId}:${surfaceId}`,
+    ...(forceOpenBlockIds.length ? {forceOpenBlockIds} : {}),
+    ...(forceClosedBlockIds.length ? {forceClosedBlockIds} : {}),
+  }), [currentId, forceClosedBlockIds, forceOpenBlockIds, revealed, surfaceId])
 
   const header = (
     <div className="mb-4 flex items-center justify-between gap-3">
@@ -514,11 +542,6 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     )
   }
 
-  // currentId is non-null past the guards above, so the shown surface id
-  // is always a concrete block id (the card, or a promoted ancestor).
-  const surfaceId = shownId
-  const showingCard = surfaceId === currentId
-
   return (
     <div
       ref={focusSessionSurface}
@@ -547,20 +570,10 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
 
       <div className="rounded-xl border bg-card p-4 shadow-sm">
         <NestedBlockContextProvider
-          // While the card itself is shown, gate its answer with the review
-          // layout context. A promoted ancestor renders its full subtree
-          // normally (the card sits within it, in context).
-          overrides={showingCard ? {
-            [SRS_REVIEW_CARD_ID]: currentId,
-            [SRS_REVIEW_REVEALED]: revealed,
-            isNestedSurface: true,
-            scopeRootId: currentId,
-            renderScopeId: `srs-review:${currentId}`,
-          } : {
-            isNestedSurface: true,
-            scopeRootId: surfaceId,
-            renderScopeId: `srs-review:${currentId}:${surfaceId}`,
-          }}
+          // Gate the active card's answer wherever it appears in this
+          // review surface. Promoted ancestors force-open the path to the
+          // card, while the card itself is force-open only once revealed.
+          overrides={reviewContextOverrides}
         >
           {/* keyed by the shown id so switching cards (or promoting) remounts
               the subtree rather than diffing one outline into the next */}

@@ -164,6 +164,15 @@ export function PanelRenderer({block}: BlockRendererProps) {
     void deletePanelRow(repo, block.id)
   }
 
+  const panelBodyContextOverrides = useMemo(() => topLevelBlockId
+    ? {
+        layoutBoundary: false,
+        renderScopeId: outlineRenderScopeId(topLevelBlockId),
+        scopeRootId: topLevelBlockId,
+        forceOpenBlockIds: [topLevelBlockId],
+      }
+    : null, [topLevelBlockId])
+
   if (!topLevelBlockId) {
      console.warn(`Panel ${block.id} has no topLevelBlockId, skipping render.`)
      return null
@@ -218,11 +227,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
 
   const panelBody = (
     <NestedBlockContextProvider
-      overrides={{
-        layoutBoundary: false,
-        renderScopeId: outlineRenderScopeId(topLevelBlockId),
-        scopeRootId: topLevelBlockId,
-      }}
+      overrides={panelBodyContextOverrides!}
     >
       <BlockComponent blockId={topLevelBlockId}/>
     </NestedBlockContextProvider>

@@ -23,6 +23,7 @@ const BACKLINK_OVERSCAN_PX = 600
 const BACKLINK_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 
 const EMPTY_PARENTS: readonly Block[] = []
+const EMPTY_BLOCK_IDS: readonly string[] = []
 
 // Roam-style: breadcrumbs are the chain ABOVE the currently-shown block.
 // Click a segment to "unfurl" — promote it to the shown block. The
@@ -46,12 +47,14 @@ const BacklinkItemContent = ({
   onSelect,
   onShowBlock,
   renderScopeId,
+  forceOpenBlockIds,
 }: {
   shownBlock: Block
   parents: readonly Block[]
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
   renderScopeId: string
+  forceOpenBlockIds?: readonly string[]
 }) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
@@ -71,13 +74,14 @@ const BacklinkItemContent = ({
   const bodyOverrides = useMemo(() => ({
     ...NESTED_OVERRIDES,
     renderScopeId,
+    ...(forceOpenBlockIds?.length ? {forceOpenBlockIds} : {}),
     // The shown block is the root of this entry's visible subtree, so
     // structural edits (o / Enter / Tab) and bounded navigation treat
     // it like a panel's top-level block instead of restructuring the
     // real tree around it (which lives outside the entry).
     scopeRootId: shownBlock.id,
     ...backlinkEntryShortcutContextOverrides(shortcutController),
-  }), [renderScopeId, shownBlock.id, shortcutController])
+  }), [forceOpenBlockIds, renderScopeId, shownBlock.id, shortcutController])
 
   return (
     <>
@@ -104,11 +108,13 @@ const BacklinkDynamicContent = ({
   onSelect,
   onShowBlock,
   renderScopeId,
+  forceOpenBlockIds,
 }: {
   shownBlock: Block
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
   renderScopeId: string
+  forceOpenBlockIds?: readonly string[]
 }) => {
   const parents = useParents(shownBlock)
   return (
@@ -118,6 +124,7 @@ const BacklinkDynamicContent = ({
       onSelect={onSelect}
       onShowBlock={onShowBlock}
       renderScopeId={renderScopeId}
+      forceOpenBlockIds={forceOpenBlockIds}
     />
   )
 }
@@ -144,6 +151,13 @@ const BacklinkItem = ({
     () => backlinkRenderScopeId(parentRenderScopeId, scopeId),
     [parentRenderScopeId, scopeId],
   )
+  const forceOpenBlockIds = useMemo(() => {
+    if (shownId === block.id) return EMPTY_BLOCK_IDS
+    const shownIndex = initialParents.findIndex(parent => parent.id === shownId)
+    return shownIndex >= 0
+      ? initialParents.slice(shownIndex).map(parent => parent.id)
+      : EMPTY_BLOCK_IDS
+  }, [block.id, initialParents, shownId])
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
@@ -155,6 +169,7 @@ const BacklinkItem = ({
               onSelect={promote}
               onShowBlock={showBlock}
               renderScopeId={renderScopeId}
+              forceOpenBlockIds={forceOpenBlockIds}
             />
           )
         : (
@@ -163,6 +178,7 @@ const BacklinkItem = ({
               onSelect={promote}
               onShowBlock={showBlock}
               renderScopeId={renderScopeId}
+              forceOpenBlockIds={forceOpenBlockIds}
             />
           )}
     </div>

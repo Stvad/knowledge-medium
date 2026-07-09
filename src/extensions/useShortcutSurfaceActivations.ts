@@ -19,6 +19,10 @@ import {
 } from '@/data/globalState.js'
 import { activePanelIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.js'
 import { usePropertyValue } from '@/hooks/block.js'
+import {
+  isBlockForceOpened,
+  renderVisibilityPolicyForBlockContext,
+} from '@/utils/renderVisibility.js'
 
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &
@@ -74,11 +78,15 @@ export function useShortcutSurfaceActivations(
   // This, not topLevelBlockId, is the boundary structural and navigation
   // handlers operate against.
   const scopeRootId = blockContext.scopeRootId
-  // Focal panel/top-level surfaces force-open their scope root; nested
-  // surfaces (backlink/embed) honour its collapse flag. Navigation uses
-  // this so it won't descend into a collapsed nested root's hidden
-  // children.
-  const scopeRootForcesOpen = !blockContext.isNestedSurface
+  // The surface visibility policy is shared with block rendering. It
+  // replaces the old root-only "top-level forces open" boolean so
+  // shortcut traversal can also respect forced-open reveal paths in
+  // nested surfaces.
+  const renderVisibilityPolicy = useMemo(
+    () => renderVisibilityPolicyForBlockContext(blockContext, scopeRootId),
+    [blockContext, scopeRootId],
+  )
+  const scopeRootForcesOpen = isBlockForceOpened(renderVisibilityPolicy, scopeRootId)
 
   const runtime = useAppRuntime()
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
@@ -104,7 +112,12 @@ export function useShortcutSurfaceActivations(
     // having to forward it by hand.
     }).map(activation => ({
       ...activation,
-      dependencies: {...(activation.dependencies ?? {}), scopeRootId, scopeRootForcesOpen},
+      dependencies: {
+        ...(activation.dependencies ?? {}),
+        scopeRootId,
+        scopeRootForcesOpen,
+        renderVisibilityPolicy,
+      },
     })),
     [
       block,
@@ -114,6 +127,7 @@ export function useShortcutSurfaceActivations(
       topLevelBlockId,
       scopeRootId,
       scopeRootForcesOpen,
+      renderVisibilityPolicy,
       blockContext,
       inFocus,
       inEditMode,
