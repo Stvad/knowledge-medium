@@ -297,7 +297,10 @@
   P1 (2026-07-05) then reshaped that discriminator: presence markers don't survive an
   old client's whole-bag read-modify-write, so it is now a content-bound
   <em>projection checksum</em>; the old-client materialize branch explicitly covers
-  updates (not only sets and clears); and §5 gained the consistency sweep.
+  updates (not only sets and clears); and §5 gained the consistency sweep. Two P2s
+  from the same review (2026-07-09) constrained the checksum's storage (invisible to
+  generic property surfaces) and re-classified end-state step 4 as transitional — it
+  shares step 5's gate, and the measurement-fail fallback is step 3.
   <strong>Last verified against code:</strong> 2026-07-01.
 </aside>
 
@@ -792,7 +795,18 @@ arrived row:
       projection ⇒ never a merge input. Mismatch or absent ⇒ last modified by a
       non-projecting writer ⇒ the full materialize direction (set / update / clear) is
       licensed for that row's child-backed keys, clock-guarded per child (previous
-      list). Accepted residual: an old-client bag is a whole-bag write, so accepting
+      list). Where the checksum lives is constrained, not free (PR-review P2): it must
+      be invisible to every generic property surface — the panel's unregistered-keys
+      section, copy/extract/import paths, key enumeration — or every block grows a
+      visible synthetic property. Two sound homes, slice C picks: a <em>reserved,
+      filtered bag key</em> (atomic with the bag by construction — it rides the same
+      column through LWW and e2ee envelopes — but every enumerator must filter the
+      reserved namespace through one shared helper), or a <em>dedicated synced
+      column</em> (invisible to property consumers by construction; atomicity holds
+      because current clients write bag + checksum in the same patch, so per-column
+      LWW picks both from the same winner, while an old client's bag-only patch leaves
+      the checksum column behind — exactly the mismatch signal; costs a migration and
+      an upload-whitelist entry). Accepted residual: an old-client bag is a whole-bag write, so accepting
       it can carry stale copies of <em>other</em> keys on that block — inherent to
       mixed-version operation (the old client has no per-key channel), bounded by the
       per-child clock guard and the upgrade window. Among current clients the cell is
@@ -1509,10 +1523,14 @@ sequence, each step gated on the one before:
   <li><strong>Stop uploading the cell.</strong> The server copy freezes; receivers
     never merged from it, so nothing changes for current clients. Must come after
     (1)–(3): any remaining cell-only writer's edits would otherwise still need the
-    cell channel.</li>
+    cell channel. For <em>fresh devices</em>, though, the frozen copy decays: every
+    property edit after the flip is missing from the downloaded hint until the
+    projection pass sweeps the block — so this step is a <strong>transition, not a
+    stopping point</strong>, and it shares step 5's projection-readiness gate
+    (PR-review P2).</li>
   <li><strong>Stop downloading it</strong> — fresh devices now need the first-sync
-    projection pass (below) before cells are readable. This is the step the
-    measurements gate.</li>
+    projection pass (below) before cells are readable. The measurements gate
+    steps 4 and 5 <em>together</em>: take both or neither.</li>
   <li><strong>Drop or explicitly deprecate the server column</strong> (it's stale from
     step 4 on; a future server-side feature that wants properties derives them from
     the child rows with a SQL view/aggregate — the data is all there for plaintext
@@ -1559,11 +1577,17 @@ no infrastructure needed:
 
 <p>
 <strong>Decision rule:</strong> if the gated, visible-panel-prioritized projection pass
-(tiers 2–3) lands under ~10–15 seconds, take step 5 — cell fully local, wire cost for
-property updates drops below today's. If it doesn't, stop at step 4 (or even 3) and
-keep the download-side hint: cold start stays at today's speed, receivers still never
-merge from the cell, and the only price is the download bytes. Nothing about
-correctness rides on this choice — that's the point of the staging.
+(tiers 2–3) lands under ~10–15 seconds, take steps 4 <em>and</em> 5 — cell fully
+local, wire cost for property updates drops below today's. If it doesn't,
+<strong>stop at step 3 and keep the cell uploading</strong>: a frozen server cell is
+not a usable long-term hint (it goes stale from the flip moment on — see step 4), so
+step 4 without step 5 is a transition, not a destination. Cold start then stays at
+today's behavior, receivers still never merge from the cell, and the only cost kept is
+the bag upload per property write. (A server-side <em>derived</em> hint — SQL
+aggregation over child rows refreshing the column for plaintext workspaces — could
+reopen step 4 as a stopping point later; that's future server work, outside this
+plan.) Nothing about correctness rides on this choice — that's the point of the
+staging.
 </p>
 
 <p>
@@ -1623,7 +1647,9 @@ transactions, throughput logging), pointed the other direction.
     pass has swept each block; a hint cell can be per-key stale from server column-LWW.
     Bounded and self-healing, but real: prioritize projection for visible blocks, and
     don't treat early query results on a cold device as authoritative. Goes away
-    entirely at sync-off step 5.
+    entirely at sync-off step 5 — and would worsen <em>unboundedly</em> under a
+    step-4-only stop (frozen server cell), which is why step 4 shares step 5's gate
+    (§11).
   </li>
   <li>
     <strong>Fresh-device initial sync moves ~3× the rows.</strong> Materialize-everything
