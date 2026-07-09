@@ -56,20 +56,20 @@ import{ALIAS_COLLISION_RAISE_PREFIX as e,PARENT_DELETED_RAISE_PREFIX as t,RAISE_
     alias_lower  TEXT NOT NULL,
     PRIMARY KEY (block_id, alias)
   )
-`,p=`
+`,ee=`
   CREATE INDEX IF NOT EXISTS idx_block_aliases_ws_alias
   ON block_aliases (workspace_id, alias)
-`,ee=`
+`,te=`
   CREATE TABLE IF NOT EXISTS client_schema_state (
     key           TEXT PRIMARY KEY,
     completed_at  INTEGER NOT NULL
   )
-`,te=`
+`,ne=`
   CREATE INDEX IF NOT EXISTS idx_block_aliases_ws_alias_lower
   ON block_aliases (workspace_id, alias_lower)
-`,ne=`
-  DROP INDEX IF EXISTS idx_blocks_workspace_type
 `,re=`
+  DROP INDEX IF EXISTS idx_blocks_workspace_type
+`,p=`
   CREATE TABLE IF NOT EXISTS block_types (
     block_id     TEXT NOT NULL,
     workspace_id TEXT NOT NULL,
@@ -91,7 +91,7 @@ import{ALIAS_COLLISION_RAISE_PREFIX as e,PARENT_DELETED_RAISE_PREFIX as t,RAISE_
     block_id UNINDEXED,
     tokenize = 'trigram case_sensitive 0'
   )
-`,_=`
+`,ie=`
   CREATE TABLE IF NOT EXISTS ps_crud_rejected (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     original_id   INTEGER NOT NULL,
@@ -101,7 +101,7 @@ import{ALIAS_COLLISION_RAISE_PREFIX as e,PARENT_DELETED_RAISE_PREFIX as t,RAISE_
     error_message TEXT,
     rejected_at   INTEGER NOT NULL
   )
-`,ie=`
+`,_=`
   CREATE INDEX IF NOT EXISTS idx_ps_crud_rejected_rejected_at
   ON ps_crud_rejected (rejected_at DESC)
 `,v=`
@@ -129,37 +129,7 @@ import{ALIAS_COLLISION_RAISE_PREFIX as e,PARENT_DELETED_RAISE_PREFIX as t,RAISE_
   BEGIN
     INSERT INTO blocks_synced_changes (id, op) VALUES (OLD.id, 'delete');
   END
-`,C=`
-  CREATE TABLE IF NOT EXISTS pending_restage (
-    id TEXT PRIMARY KEY
-  )
-`,w=e=>`NOT EXISTS (
-      SELECT 1 FROM ps_crud
-       WHERE json_extract(data, '$.type') = 'blocks'
-         AND json_extract(data, '$.id') = ${e}
-    )`,T=`
-  CREATE TRIGGER IF NOT EXISTS pending_restage_clear_on_synced_insert
-  AFTER INSERT ON blocks_synced
-  BEGIN
-    DELETE FROM pending_restage
-     WHERE id = NEW.id AND ${w(`NEW.id`)};
-  END
-`,E=`
-  CREATE TRIGGER IF NOT EXISTS pending_restage_clear_on_synced_delete
-  AFTER DELETE ON blocks_synced
-  BEGIN
-    DELETE FROM pending_restage
-     WHERE id = OLD.id AND ${w(`OLD.id`)};
-  END
-`,D=`
-  INSERT INTO blocks_synced_changes (id, op)
-    SELECT pr.id, 'upsert' FROM pending_restage AS pr
-     WHERE EXISTS (SELECT 1 FROM blocks_synced WHERE id = pr.id)
-       AND ${w(`pr.id`)}
-`,O=`
-  DELETE FROM pending_restage
-   WHERE ${w(`pending_restage.id`)}
-`,ae=async e=>{await e.writeTransaction(async e=>{await e.execute(D),await e.execute(O)})},k=e=>`
+`,C=e=>`
       json_object(
         'id', ${e}.id,
         'workspaceId', ${e}.workspace_id,
@@ -175,116 +145,116 @@ import{ALIAS_COLLISION_RAISE_PREFIX as e,PARENT_DELETED_RAISE_PREFIX as t,RAISE_
         'updatedBy', ${e}.updated_by,
         'deleted', json(CASE WHEN ${e}.deleted THEN 'true' ELSE 'false' END)
       )
-`.trim(),A=e=>`
+`.trim(),w=e=>`
       CASE
         WHEN (SELECT source FROM tx_context WHERE id = 1) IS NULL
           THEN NULL
         ELSE (SELECT ${e} FROM tx_context WHERE id = 1)
       END
-`.trim(),j=A(`tx_id`),M=`COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`,N=A(`group_id`),P=`
+`.trim(),T=w(`tx_id`),E=`COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`,D=w(`group_id`),O=`
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_insert
   AFTER INSERT ON blocks
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
-      ${j},
+      ${T},
       NEW.id,
       'create',
       NULL,
-      ${k(`NEW`)},
-      ${M},
+      ${C(`NEW`)},
+      ${E},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
-      ${N}
+      ${D}
     );
   END
-`,F=`
+`,k=`
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
-      ${j},
+      ${T},
       NEW.id,
       CASE
         WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'
         ELSE 'update'
       END,
-      ${k(`OLD`)},
-      ${k(`NEW`)},
-      ${M},
+      ${C(`OLD`)},
+      ${C(`NEW`)},
+      ${E},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
-      ${N}
+      ${D}
     );
   END
-`,I=`
+`,A=`
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_delete
   AFTER DELETE ON blocks
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at, group_id
     ) VALUES (
-      ${j},
+      ${T},
       OLD.id,
       'delete',
-      ${k(`OLD`)},
+      ${C(`OLD`)},
       NULL,
-      ${M},
+      ${E},
       CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER),
-      ${N}
+      ${D}
     );
   END
-`,L=[{name:`workspace_id`,jsonValue:e=>`${e}.workspace_id`},{name:`parent_id`,jsonValue:e=>`${e}.parent_id`},{name:`order_key`,jsonValue:e=>`${e}.order_key`},{name:`content`,jsonValue:e=>`${e}.content`},{name:`properties_json`,jsonValue:e=>`${e}.properties_json`},{name:`references_json`,jsonValue:e=>`${e}.references_json`},{name:`created_at`,jsonValue:e=>`${e}.created_at`},{name:`updated_at`,jsonValue:e=>`${e}.updated_at`},{name:`user_updated_at`,jsonValue:e=>`${e}.user_updated_at`},{name:`created_by`,jsonValue:e=>`${e}.created_by`},{name:`updated_by`,jsonValue:e=>`${e}.updated_by`},{name:`deleted`,jsonValue:e=>`json(CASE WHEN ${e}.deleted THEN 'true' ELSE 'false' END)`}],oe=e=>`
+`,j=[{name:`workspace_id`,jsonValue:e=>`${e}.workspace_id`},{name:`parent_id`,jsonValue:e=>`${e}.parent_id`},{name:`order_key`,jsonValue:e=>`${e}.order_key`},{name:`content`,jsonValue:e=>`${e}.content`},{name:`properties_json`,jsonValue:e=>`${e}.properties_json`},{name:`references_json`,jsonValue:e=>`${e}.references_json`},{name:`created_at`,jsonValue:e=>`${e}.created_at`},{name:`updated_at`,jsonValue:e=>`${e}.updated_at`},{name:`user_updated_at`,jsonValue:e=>`${e}.user_updated_at`},{name:`created_by`,jsonValue:e=>`${e}.created_by`},{name:`updated_by`,jsonValue:e=>`${e}.updated_by`},{name:`deleted`,jsonValue:e=>`json(CASE WHEN ${e}.deleted THEN 'true' ELSE 'false' END)`}],ae=e=>`
       json_object(
-${L.map(t=>`        '${t.name}', ${t.jsonValue(e)}`).join(`,
+${j.map(t=>`        '${t.name}', ${t.jsonValue(e)}`).join(`,
 `)}
       )
-`.trim(),se=L.map(e=>`OLD.${e.name} IS NOT NEW.${e.name}`).join(`
-    OR `),ce=()=>`
+`.trim(),oe=j.map(e=>`OLD.${e.name} IS NOT NEW.${e.name}`).join(`
+    OR `),se=()=>`
       json_remove(
         json_set(
           '{}',
           '$.workspace_id', NEW.workspace_id,
-${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name} IS NOT NEW.${e.name} THEN '$.${e.name}' ELSE '$.__noop' END, ${e.jsonValue(`NEW`)}`).join(`,
+${j.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name} IS NOT NEW.${e.name} THEN '$.${e.name}' ELSE '$.__noop' END, ${e.jsonValue(`NEW`)}`).join(`,
 `)}
         ),
         '$.__noop'
       )
-`.trim(),R=`(SELECT tx_seq FROM tx_context WHERE id = 1)`,z=`
+`.trim(),M=`(SELECT tx_seq FROM tx_context WHERE id = 1)`,N=`
   CREATE TRIGGER IF NOT EXISTS blocks_upload_insert
   AFTER INSERT ON blocks
   WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
   BEGIN
     INSERT INTO ps_crud (tx_id, data) VALUES (
-      ${R},
+      ${M},
       json_object(
         'op', 'PUT',
         'type', 'blocks',
         'id', NEW.id,
-        'data', ${oe(`NEW`)}
+        'data', ${ae(`NEW`)}
       )
     );
   END
-`,B=`
+`,P=`
   CREATE TRIGGER IF NOT EXISTS blocks_upload_update
   AFTER UPDATE ON blocks
   WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
     AND (
-    ${se}
+    ${oe}
     )
   BEGIN
     INSERT INTO ps_crud (tx_id, data) VALUES (
-      ${R},
+      ${M},
       json_object(
         'op', 'PATCH',
         'type', 'blocks',
         'id', NEW.id,
-        'data', ${ce()}
+        'data', ${se()}
       )
     );
   END
-`,V=`
+`,F=`
   CREATE TRIGGER IF NOT EXISTS blocks_parent_workspace_check_insert
   BEFORE INSERT ON blocks
   WHEN NEW.parent_id IS NOT NULL
@@ -297,7 +267,7 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
         AND workspace_id = NEW.workspace_id
     );
   END
-`,H=`
+`,I=`
   CREATE TRIGGER IF NOT EXISTS blocks_parent_workspace_check_update
   BEFORE UPDATE OF parent_id, workspace_id ON blocks
   WHEN NEW.parent_id IS NOT NULL
@@ -310,7 +280,7 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
         AND workspace_id = NEW.workspace_id
     );
   END
-`,U=`
+`,L=`
   CREATE TRIGGER IF NOT EXISTS blocks_parent_not_deleted_check_insert
   BEFORE INSERT ON blocks
   WHEN NEW.parent_id IS NOT NULL
@@ -326,7 +296,7 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
         AND deleted = 1
     );
   END
-`,W=`
+`,R=`
   CREATE TRIGGER IF NOT EXISTS blocks_parent_not_deleted_check_update
   BEFORE UPDATE OF parent_id, deleted ON blocks
   WHEN NEW.parent_id IS NOT NULL
@@ -342,7 +312,7 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
         AND deleted = 1
     );
   END
-`,G=`
+`,z=`
   CREATE TRIGGER IF NOT EXISTS blocks_alias_insert
   AFTER INSERT ON blocks
   WHEN NEW.deleted = 0
@@ -354,7 +324,7 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
       WHERE typeof(je.value) = 'text';
 `.trim())(`NEW`)}
   END
-`,K=`
+`,B=`
   CREATE TRIGGER IF NOT EXISTS blocks_alias_update
   AFTER UPDATE OF properties_json, deleted, workspace_id ON blocks
   BEGIN
@@ -364,13 +334,13 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
     FROM json_each(NEW.properties_json, '$.alias') AS je
     WHERE NEW.deleted = 0 AND typeof(je.value) = 'text';
   END
-`,q=`
+`,V=`
   CREATE TRIGGER IF NOT EXISTS blocks_alias_delete
   AFTER DELETE ON blocks
   BEGIN
     DELETE FROM block_aliases WHERE block_id = OLD.id;
   END
-`,J=`
+`,H=`
   CREATE TRIGGER IF NOT EXISTS block_aliases_workspace_alias_unique
   BEFORE INSERT ON block_aliases
   WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
@@ -389,7 +359,7 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
         AND block_id != NEW.block_id
     );
   END
-`,Y=`
+`,U=`
   CREATE TRIGGER IF NOT EXISTS blocks_type_insert
   AFTER INSERT ON blocks
   WHEN NEW.deleted = 0
@@ -401,7 +371,7 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
       WHERE typeof(je.value) = 'text';
 `.trim())(`NEW`)}
   END
-`,le=`
+`,W=`
   CREATE TRIGGER IF NOT EXISTS blocks_type_update
   AFTER UPDATE OF properties_json, deleted, workspace_id ON blocks
   BEGIN
@@ -411,13 +381,13 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
     FROM json_each(NEW.properties_json, '$.types') AS je
     WHERE NEW.deleted = 0 AND typeof(je.value) = 'text';
   END
-`,ue=`
+`,G=`
   CREATE TRIGGER IF NOT EXISTS blocks_type_delete
   AFTER DELETE ON blocks
   BEGIN
     DELETE FROM block_types WHERE block_id = OLD.id;
   END
-`,de=e=>`
+`,K=e=>`
       INSERT INTO blocks_fts_rowids (block_id)
       SELECT ${e}.id
       WHERE NOT EXISTS (
@@ -429,13 +399,13 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
       WHERE block_id = ${e}.id
         AND ${e}.deleted = 0
         AND ${e}.content != '';
-`.trim(),fe=`
+`.trim(),q=`
   CREATE TRIGGER IF NOT EXISTS blocks_fts_insert
   AFTER INSERT ON blocks
   BEGIN
-    ${de(`NEW`)}
+    ${K(`NEW`)}
   END
-`,pe=`
+`,J=`
   CREATE TRIGGER IF NOT EXISTS blocks_fts_update
   AFTER UPDATE OF content, deleted, workspace_id ON blocks
   BEGIN
@@ -443,9 +413,9 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
     WHERE rowid = (
       SELECT fts_rowid FROM blocks_fts_rowids WHERE block_id = OLD.id
     );
-    ${de(`NEW`)}
+    ${K(`NEW`)}
   END
-`,me=`
+`,Y=`
   CREATE TRIGGER IF NOT EXISTS blocks_fts_delete
   AFTER DELETE ON blocks
   BEGIN
@@ -455,37 +425,37 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
     );
     DELETE FROM blocks_fts_rowids WHERE block_id = OLD.id;
   END
-`,X=`block_aliases_backfill_v1`,he=`
+`,X=`block_aliases_backfill_v1`,ce=`
   SELECT 1 FROM client_schema_state WHERE key = '${X}'
-`,ge=`
+`,le=`
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
   VALUES ('${X}', strftime('%s', 'now') * 1000)
-`,_e=`
+`,ue=`
   INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
   SELECT b.id, b.workspace_id, je.value, LOWER(je.value)
   FROM blocks b, json_each(b.properties_json, '$.alias') AS je
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
-`,Z=`block_types_backfill_v1`,ve=`
+`,Z=`block_types_backfill_v1`,de=`
   SELECT 1 FROM client_schema_state WHERE key = '${Z}'
-`,ye=`
+`,fe=`
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
   VALUES ('${Z}', strftime('%s', 'now') * 1000)
-`,be=`
+`,pe=`
   INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
   SELECT b.id, b.workspace_id, je.value
   FROM blocks b, json_each(b.properties_json, '$.types') AS je
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
-`,Q=`blocks_fts_backfill_v1`,xe=`
+`,Q=`blocks_fts_backfill_v1`,me=`
   SELECT 1 FROM client_schema_state WHERE key = '${Q}'
-`,Se=`
+`,he=`
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
   VALUES ('${Q}', strftime('%s', 'now') * 1000)
-`,Ce=`
+`,ge=`
   INSERT OR IGNORE INTO blocks_fts_rowids (block_id)
   SELECT id
   FROM blocks
   WHERE deleted = 0 AND content != ''
-`,we=`
+`,_e=`
   INSERT INTO blocks_fts (rowid, content, workspace_id, block_id)
   SELECT r.fts_rowid, b.content, b.workspace_id, b.id
   FROM blocks b
@@ -495,26 +465,26 @@ ${L.filter(e=>e.name!==`workspace_id`).map(e=>`          CASE WHEN OLD.${e.name}
     AND NOT EXISTS (
       SELECT 1 FROM blocks_fts WHERE rowid = r.fts_rowid
     )
-`,Te=1e3,Ee=4,De=`
+`,ve=1e3,ye=4,be=`
   SELECT MAX(CAST(stat AS INTEGER)) AS rows FROM sqlite_stat1 WHERE tbl = 'blocks'
-`,Oe=`
+`,xe=`
   SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1' LIMIT 1
-`,ke=`SELECT COUNT(*) AS count FROM blocks`,Ae=`reproject_ref:`,je=`
-  SELECT key FROM client_schema_state WHERE key LIKE '${Ae}%'
+`,Se=`SELECT COUNT(*) AS count FROM blocks`,Ce=`reproject_ref:`,we=`
+  SELECT key FROM client_schema_state WHERE key LIKE '${Ce}%'
+`,Te=`
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`,Ee=`
+  DELETE FROM client_schema_state WHERE key = ?
+`,De=`workspace_backfill:`,Oe=`
+  SELECT key FROM client_schema_state WHERE key LIKE '${De}%'
+`,ke=`
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`,Ae=`reconcile_rescan_v1:`,je=`
+  SELECT key FROM client_schema_state WHERE key = ?
 `,Me=`
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
   VALUES (?, strftime('%s', 'now') * 1000)
-`,Ne=`
-  DELETE FROM client_schema_state WHERE key = ?
-`,Pe=`workspace_backfill:`,Fe=`
-  SELECT key FROM client_schema_state WHERE key LIKE '${Pe}%'
-`,Ie=`
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`,Le=`reconcile_rescan_v1:`,Re=`
-  SELECT key FROM client_schema_state WHERE key = ?
-`,ze=`
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES (?, strftime('%s', 'now') * 1000)
-`,Be=/^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)/i,Ve=e=>e.flatMap(e=>{let t=e.match(Be)?.[1];return t?[`DROP TRIGGER IF EXISTS ${t}`,e]:[e]}),He=async(e,t,n,r)=>{await e.execute(`DROP TRIGGER IF EXISTS ${t}`);try{await r()}finally{await e.execute(n)}},Ue=Ve([r,i,a,o,s,c,l,u,d,f,p,te,re,m,h,g,ee,_,ie,v,y,b,C,ne,P,F,I,z,B,V,H,U,W,G,K,q,J,Y,le,ue,fe,pe,me,x,S,T,E]),We=[`blocks_row_event_insert`,`blocks_row_event_update`,`blocks_row_event_delete`,`blocks_upload_insert`,`blocks_upload_update`,`blocks_parent_workspace_check_insert`,`blocks_parent_workspace_check_update`,`blocks_parent_not_deleted_check_insert`,`blocks_parent_not_deleted_check_update`,`blocks_alias_insert`,`blocks_alias_update`,`blocks_alias_delete`,`block_aliases_workspace_alias_unique`,`blocks_type_insert`,`blocks_type_update`,`blocks_type_delete`,`blocks_fts_insert`,`blocks_fts_update`,`blocks_fts_delete`,`blocks_synced_changes_insert`,`blocks_synced_changes_delete`,`pending_restage_clear_on_synced_insert`,`pending_restage_clear_on_synced_delete`],Ge=async e=>{await e.getOptional(he)===null&&(await e.execute(_e),await e.execute(ge))},Ke=async e=>{await e.getOptional(ve)===null&&(await e.execute(be),await e.execute(ye))},qe=async e=>{await e.getOptional(xe)===null&&(await e.execute(Ce),await e.execute(we),await e.execute(Se))},Je=async e=>{let t=!1;for(let n of[`blocks`,`blocks_synced`])(await e.getAll(`PRAGMA table_info(${n})`)).some(e=>e.name===`user_updated_at`)||(await e.execute(`ALTER TABLE ${n} ADD COLUMN user_updated_at INTEGER`),n===`blocks`&&(t=!0));t&&await He(e,`blocks_row_event_update`,F,async()=>{await e.execute(`UPDATE blocks SET user_updated_at = updated_at`)})},Ye=async e=>{for(let t of[`tx_context`,`row_events`]){let n=await e.getAll(`PRAGMA table_info(${t})`);n.length!==0&&(n.some(e=>e.name===`group_id`)||await e.execute(`ALTER TABLE ${t} ADD COLUMN group_id TEXT`))}},Xe=async e=>await e.getOptional(Oe)===null?null:(await e.getOptional(De))?.rows??null,$=async e=>(await e.getOptional(ke))?.count??0,Ze=(e,t,n=Te,r=4)=>t<n?!1:e===null||t>=e*r||e>=t*r,Qe=async(e,t={})=>{let n=t.minBlocks??1e3,r=t.growthFactor??4,i=await Xe(e),a=await $(e);return Ze(i,a,n,r)?(await e.execute(`ANALYZE`),{analyzed:!0,count:a,previousEstimate:i}):{analyzed:!1,count:a,previousEstimate:i}},$e=async e=>{let t=await $(e);return await e.execute(`ANALYZE`),{count:t}};export{X as ALIAS_BACKFILL_MARKER_KEY,Ee as ANALYZE_GROWTH_FACTOR,Te as ANALYZE_MIN_BLOCKS,Ce as BACKFILL_BLOCKS_FTS_ROWIDS_SQL,we as BACKFILL_BLOCKS_FTS_SQL,_e as BACKFILL_BLOCK_ALIASES_SQL,be as BACKFILL_BLOCK_TYPES_SQL,Q as BLOCKS_FTS_BACKFILL_MARKER_KEY,Z as BLOCK_TYPES_BACKFILL_MARKER_KEY,Ne as CLEAR_REPROJECT_REF_MARKER_SQL,Ue as CLIENT_SCHEMA_STATEMENTS,We as CLIENT_SCHEMA_TRIGGER_NAMES,q as CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL,G as CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL,K as CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL,I as CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,me as CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL,fe as CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL,h as CREATE_BLOCKS_FTS_ROWIDS_TABLE_SQL,g as CREATE_BLOCKS_FTS_TABLE_SQL,pe as CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL,P as CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,U as CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL,W as CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL,S as CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,b as CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,x as CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,y as CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,ue as CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL,Y as CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL,le as CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL,F as CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,z as CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,B as CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,V as CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,H as CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,f as CREATE_BLOCK_ALIASES_TABLE_SQL,J as CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL,p as CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL,te as CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL,re as CREATE_BLOCK_TYPES_TABLE_SQL,m as CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL,ee as CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,u as CREATE_COMMAND_EVENTS_CREATED_INDEX_SQL,l as CREATE_COMMAND_EVENTS_TABLE_SQL,d as CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL,E as CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_DELETE_TRIGGER_SQL,T as CREATE_PENDING_RESTAGE_CLEAR_ON_SYNCED_INSERT_TRIGGER_SQL,C as CREATE_PENDING_RESTAGE_TABLE_SQL,ie as CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,_ as CREATE_PS_CRUD_REJECTED_TABLE_SQL,v as CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,s as CREATE_ROW_EVENTS_BLOCK_INDEX_SQL,c as CREATE_ROW_EVENTS_CREATED_INDEX_SQL,a as CREATE_ROW_EVENTS_TABLE_SQL,o as CREATE_ROW_EVENTS_TX_INDEX_SQL,r as CREATE_TX_CONTEXT_TABLE_SQL,ne as DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,O as FLUSH_PENDING_RESTAGE_DELETE_SQL,D as FLUSH_PENDING_RESTAGE_ENQUEUE_SQL,Le as RECONCILE_RESCAN_MARKER_PREFIX,Se as RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL,ge as RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL,ye as RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL,ze as RECORD_RECONCILE_RESCAN_MARKER_SQL,Me as RECORD_REPROJECT_REF_MARKER_SQL,Ie as RECORD_WORKSPACE_BACKFILL_MARKER_SQL,Ae as REPROJECT_REF_MARKER_PREFIX,i as SEED_TX_CONTEXT_ROW_SQL,ke as SELECT_BLOCKS_COUNT_SQL,xe as SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL,De as SELECT_BLOCKS_STAT_ESTIMATE_SQL,he as SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL,ve as SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL,Re as SELECT_RECONCILE_RESCAN_MARKER_SQL,je as SELECT_REPROJECT_REF_MARKERS_SQL,Oe as SELECT_SQLITE_STAT1_EXISTS_SQL,Fe as SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,Pe as WORKSPACE_BACKFILL_MARKER_PREFIX,Ze as analyzeIsWarranted,Ge as backfillBlockAliasesIfEmpty,Ke as backfillBlockTypesIfEmpty,qe as backfillBlocksFtsIfEmpty,Je as ensureBlockUserUpdatedAtColumn,Ye as ensureUndoGroupIdColumns,ae as flushPendingRestage,$ as getBlocksCount,Xe as getBlocksStatEstimate,Qe as runAnalyzeIfStale,$e as runAnalyzeNow};
+`,Ne=/^\s*CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?([A-Za-z0-9_]+)/i,Pe=e=>e.flatMap(e=>{let t=e.match(Ne)?.[1];return t?[`DROP TRIGGER IF EXISTS ${t}`,e]:[e]}),Fe=async(e,t,n,r)=>{await e.execute(`DROP TRIGGER IF EXISTS ${t}`);try{await r()}finally{await e.execute(n)}},Ie=Pe([r,i,a,o,s,c,l,u,d,f,ee,ne,p,m,h,g,te,ie,_,v,y,b,re,O,k,A,N,P,F,I,L,R,z,B,V,H,U,W,G,q,J,Y,x,S]),Le=[`blocks_row_event_insert`,`blocks_row_event_update`,`blocks_row_event_delete`,`blocks_upload_insert`,`blocks_upload_update`,`blocks_parent_workspace_check_insert`,`blocks_parent_workspace_check_update`,`blocks_parent_not_deleted_check_insert`,`blocks_parent_not_deleted_check_update`,`blocks_alias_insert`,`blocks_alias_update`,`blocks_alias_delete`,`block_aliases_workspace_alias_unique`,`blocks_type_insert`,`blocks_type_update`,`blocks_type_delete`,`blocks_fts_insert`,`blocks_fts_update`,`blocks_fts_delete`,`blocks_synced_changes_insert`,`blocks_synced_changes_delete`],Re=async e=>{await e.getOptional(ce)===null&&(await e.execute(ue),await e.execute(le))},ze=async e=>{await e.getOptional(de)===null&&(await e.execute(pe),await e.execute(fe))},Be=async e=>{await e.getOptional(me)===null&&(await e.execute(ge),await e.execute(_e),await e.execute(he))},Ve=async e=>{let t=!1;for(let n of[`blocks`,`blocks_synced`])(await e.getAll(`PRAGMA table_info(${n})`)).some(e=>e.name===`user_updated_at`)||(await e.execute(`ALTER TABLE ${n} ADD COLUMN user_updated_at INTEGER`),n===`blocks`&&(t=!0));t&&await Fe(e,`blocks_row_event_update`,k,async()=>{await e.execute(`UPDATE blocks SET user_updated_at = updated_at`)})},He=async e=>{for(let t of[`tx_context`,`row_events`]){let n=await e.getAll(`PRAGMA table_info(${t})`);n.length!==0&&(n.some(e=>e.name===`group_id`)||await e.execute(`ALTER TABLE ${t} ADD COLUMN group_id TEXT`))}},Ue=async e=>await e.getOptional(xe)===null?null:(await e.getOptional(be))?.rows??null,$=async e=>(await e.getOptional(Se))?.count??0,We=(e,t,n=ve,r=4)=>t<n?!1:e===null||t>=e*r||e>=t*r,Ge=async(e,t={})=>{let n=t.minBlocks??1e3,r=t.growthFactor??4,i=await Ue(e),a=await $(e);return We(i,a,n,r)?(await e.execute(`ANALYZE`),{analyzed:!0,count:a,previousEstimate:i}):{analyzed:!1,count:a,previousEstimate:i}},Ke=async e=>{let t=await $(e);return await e.execute(`ANALYZE`),{count:t}};export{X as ALIAS_BACKFILL_MARKER_KEY,ye as ANALYZE_GROWTH_FACTOR,ve as ANALYZE_MIN_BLOCKS,ge as BACKFILL_BLOCKS_FTS_ROWIDS_SQL,_e as BACKFILL_BLOCKS_FTS_SQL,ue as BACKFILL_BLOCK_ALIASES_SQL,pe as BACKFILL_BLOCK_TYPES_SQL,Q as BLOCKS_FTS_BACKFILL_MARKER_KEY,Z as BLOCK_TYPES_BACKFILL_MARKER_KEY,Ee as CLEAR_REPROJECT_REF_MARKER_SQL,Ie as CLIENT_SCHEMA_STATEMENTS,Le as CLIENT_SCHEMA_TRIGGER_NAMES,V as CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL,z as CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL,B as CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL,A as CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL,Y as CREATE_BLOCKS_FTS_DELETE_TRIGGER_SQL,q as CREATE_BLOCKS_FTS_INSERT_TRIGGER_SQL,h as CREATE_BLOCKS_FTS_ROWIDS_TABLE_SQL,g as CREATE_BLOCKS_FTS_TABLE_SQL,J as CREATE_BLOCKS_FTS_UPDATE_TRIGGER_SQL,O as CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,L as CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL,R as CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL,S as CREATE_BLOCKS_SYNCED_CHANGES_DELETE_TRIGGER_SQL,b as CREATE_BLOCKS_SYNCED_CHANGES_ID_OP_INDEX_SQL,x as CREATE_BLOCKS_SYNCED_CHANGES_INSERT_TRIGGER_SQL,y as CREATE_BLOCKS_SYNCED_CHANGES_TABLE_SQL,G as CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL,U as CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL,W as CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL,k as CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,N as CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL,P as CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL,F as CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,I as CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,f as CREATE_BLOCK_ALIASES_TABLE_SQL,H as CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL,ee as CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL,ne as CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL,p as CREATE_BLOCK_TYPES_TABLE_SQL,m as CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL,te as CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,u as CREATE_COMMAND_EVENTS_CREATED_INDEX_SQL,l as CREATE_COMMAND_EVENTS_TABLE_SQL,d as CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL,_ as CREATE_PS_CRUD_REJECTED_REJECTED_AT_INDEX_SQL,ie as CREATE_PS_CRUD_REJECTED_TABLE_SQL,v as CREATE_PS_CRUD_REJECTED_TX_ID_INDEX_SQL,s as CREATE_ROW_EVENTS_BLOCK_INDEX_SQL,c as CREATE_ROW_EVENTS_CREATED_INDEX_SQL,a as CREATE_ROW_EVENTS_TABLE_SQL,o as CREATE_ROW_EVENTS_TX_INDEX_SQL,r as CREATE_TX_CONTEXT_TABLE_SQL,re as DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,Ae as RECONCILE_RESCAN_MARKER_PREFIX,he as RECORD_BLOCKS_FTS_BACKFILL_DONE_SQL,le as RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL,fe as RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL,Me as RECORD_RECONCILE_RESCAN_MARKER_SQL,Te as RECORD_REPROJECT_REF_MARKER_SQL,ke as RECORD_WORKSPACE_BACKFILL_MARKER_SQL,Ce as REPROJECT_REF_MARKER_PREFIX,i as SEED_TX_CONTEXT_ROW_SQL,Se as SELECT_BLOCKS_COUNT_SQL,me as SELECT_BLOCKS_FTS_BACKFILL_DONE_SQL,be as SELECT_BLOCKS_STAT_ESTIMATE_SQL,ce as SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL,de as SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL,je as SELECT_RECONCILE_RESCAN_MARKER_SQL,we as SELECT_REPROJECT_REF_MARKERS_SQL,xe as SELECT_SQLITE_STAT1_EXISTS_SQL,Oe as SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,De as WORKSPACE_BACKFILL_MARKER_PREFIX,We as analyzeIsWarranted,Re as backfillBlockAliasesIfEmpty,ze as backfillBlockTypesIfEmpty,Be as backfillBlocksFtsIfEmpty,Ve as ensureBlockUserUpdatedAtColumn,He as ensureUndoGroupIdColumns,$ as getBlocksCount,Ue as getBlocksStatEstimate,Ge as runAnalyzeIfStale,Ke as runAnalyzeNow};
 //# sourceMappingURL=clientSchema.js.map
