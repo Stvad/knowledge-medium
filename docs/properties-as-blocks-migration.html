@@ -1644,9 +1644,11 @@ sequence, each step gated on the one before:
     child-backed keep the column. Mechanically a stream split in the sync rules —
     which also requires relaxing the Layout-B staging schema (PR-review P2:
     <code>blocks_synced.properties_json</code> is <code>TEXT NOT NULL</code> and the
-    raw-table put binds every storage column, so a missing stream column fails the
-    insert before the materializer can act; make it nullable or
-    default-<code>'{}'</code> in the same migration) — or keep downloading the column
+    raw-table put binds every storage column, so a missing stream column arrives as an
+    explicit <code>NULL</code> and fails the insert before the materializer can act.
+    Make the column nullable in the same migration, or bind a non-null placeholder in
+    the put itself — a column <code>DEFAULT</code> alone does nothing, since SQLite
+    never applies defaults to explicitly-bound NULLs) — or keep downloading the column
     fleet-wide and consume it only where the composition rule says it is live; the
     download bytes are the smallest of the wins. Fresh
     devices now need the first-sync projection pass (below) before the cells of
