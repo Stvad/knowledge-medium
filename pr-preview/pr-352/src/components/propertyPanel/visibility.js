@@ -1,0 +1,2 @@
+import{ChangeScope as e}from"../../data/api/changeScope.js";import"../../data/api/index.js";var t=(t,n,r)=>{let i=n.get(t);return r.get(t)?.hidden===!0||t.startsWith(`system:`)||i?.changeScope===e.UiState};export{t as isPropertyPanelHiddenProperty};
+//# sourceMappingURL=visibility.js.map
