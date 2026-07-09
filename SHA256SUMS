@@ -1775,7 +1775,7 @@ b3a1bb44f4836dd3bbcaa27384a758edee528919f09657a12021bcf1d142d882  ./packages/age
 1fb947a799f6ec708cfb146c8ca45a6e2bdb94e4619d22848f6c090ee537f9f2  ./src/App.js.map
 0b6cdff83c4e2e654daed8de1db8c4dca693242715e28de06767a51c7c78de15  ./src/appUpdate.js
 90769c02d289c099463e0237f99fa41a7d0faec88ff0ec0c7261af894a4fb1b9  ./src/appUpdate.js.map
-4245775a91377bba9e63c24ae0b08127c649d8b8a3728c76e0cad30520fbdc34  ./src/appVersion.js
+e90d75d40909f0802addc65d11d2ca412dc950e6b7b49dadbb0d8193cca22c0b  ./src/appVersion.js
 76bd53c764d4393e8e6411205df2c6642a2c684e22691666337476b2a22938a5  ./src/appVersion.js.map
 d82fb876b5e2b470c1ee8cf15e17b3f6b8730b52b4802e6e5ab0d9eebc2f7148  ./src/bootstrap/resolveWorkspace.js
 c357de0c880a035b6a5fc81aa7642f7adc3c69f64384e749738c74fb09afa57e  ./src/bootstrap/resolveWorkspace.js.map
@@ -1999,8 +1999,8 @@ b42664500fb6f392aee7675f82b7f37498c153beea18bc6699fd61e63b55ae54  ./src/data/int
 7ef829fd6a5e578a1d66da16e0756f6a3b6478840e5fb6c114d4c7925b5668a5  ./src/data/internals/kernelInvalidation.js.map
 3ce2eb4ba3875922b10e83fe48551d28c311e1cba1b47c467f732abe7567a9c1  ./src/data/internals/kernelProcessors.js
 a987256157f6e1f5aebd74f0c6b518b5a4260f94082ebd5e8d72110283529986  ./src/data/internals/kernelProcessors.js.map
-b8f6a843cd39743d02ac08a6eb2eb48c2a311024d2e860845808b5a69ef3fa81  ./src/data/internals/kernelQueries.js
-80b564211feb21f491d56a7ad6ef2475f945ed8884660579289e0cb6df34958d  ./src/data/internals/kernelQueries.js.map
+14804f4f8f7b9064f2ff3b0645e7505b700d9505b1f75c709307267e7fb7b6e2  ./src/data/internals/kernelQueries.js
+d55bc6d7a958930595da4596e3438cb27ffc8378e862262233992ea89b4787d2  ./src/data/internals/kernelQueries.js.map
 42e130928d83fc7ddd35828f3529e4af1c4da357d1e91fac85b05ccdf19a0b14  ./src/data/internals/normalizeReferencesProcessor.js
 5358b6fc11c395cc7d58b01ea6a4aaf63a1a381e77684bfa320c970bdcb3b3ce  ./src/data/internals/normalizeReferencesProcessor.js.map
 7153449a5ffb1f6b89a6c9d6664f9945c906480dfcf86f14762c65912a06f4c9  ./src/data/internals/processorRunner.js
@@ -2025,8 +2025,8 @@ cf0f7753c353b852b0129f6e3409bc2bd30008bc6f0b50319046291520782552  ./src/data/int
 1c7754b4a071b0f3e658f2994a1fc78d34b8ff3e8388e8f74fb770e058f7b0a5  ./src/data/internals/txEngine.js.map
 10e11a93354d11196dd42955ad4e2048cd7cc36eaaa866c097dcd419e0aea428  ./src/data/internals/txSnapshots.js
 5f10f7263d5024cbfe92e47919033777515fa435ecf3317d5e9d9d8cda3b27a5  ./src/data/internals/txSnapshots.js.map
-5981c1c89c4c65813e5b96d2956b602d78cf0519f4cdade4ae399378aac591b2  ./src/data/internals/typedBlockQuery.js
-5c528fcc4030a247601f630c63eb105abb34083f8a70e423b55343a7ae610b61  ./src/data/internals/typedBlockQuery.js.map
+ceabb3189ccf94b80ac1a0b17dfd1456fc55e44c4b626c82b9ad5ada214ed7e6  ./src/data/internals/typedBlockQuery.js
+f5b877c6ea5fe29fb4a0592a54d0a0ad950264c54f1bdbfbe3bb704eeb7be473  ./src/data/internals/typedBlockQuery.js.map
 0336dda98a4952a6935b3ce61756df7ca55f3e69f0f0ab7f71c9376bca2d98c5  ./src/data/internals/undoManager.js
 8dc72e1e7797038f7fbc7da0a0ea27819e1d6a6341adc8ce319841fa452b0cab  ./src/data/internals/undoManager.js.map
 bdc51e5dfb72551159dc6d3d86c27647a74600dbcdfa3b74850b95fb4f3ebf5d  ./src/data/invalidation.js
@@ -3165,8 +3165,8 @@ dd7fcf8357bb4f5fbb7478a7d59216cace479438a5e4d040031b2216cf428170  ./src/utils/to
 e15298832ec4effff04e2f6fafb5db3a8e5c3f4b5767822fccbaf55206b77091  ./src/utils/types.js.map
 ea7891e59b3608440c35c38901ebf443535471174fcbae950c1c74f2885c571a  ./src/utils/viewTransition.js
 69754adc2a0ce8f9699da30476838e93fd95bd4b61eda37060f239224bc9b656  ./src/utils/viewTransition.js.map
-58590d5d7817aea00f13f24ec0103d2c95028227e1824605586bcd1a5c01b6b6  ./sw.js
-f902ab4ae2efac37e12eff49724325102f618891ee0eca7eca7a1b6f6a68085a  ./version.json
+7836c57d54a585f65c24bd7e804a80ee27874218e9a859001242fd84eb2525f5  ./sw.js
+87750a3e7693587542fadabc423a75d2e87524201a50a0a2e18a2e4b3e74b050  ./version.json
 4a748afd443918bb16591c834c401dae33e87861ab5dbad0811c3a3b4a9214fb  ./vite.svg
 643714fb239b199a921024c34f82d13697a3803c91c97ff8da10455a09249406  ./wa-sqlite-async.wasm
 d167becf5a6949b1f31b1d026dc15e138b2b34b12fc44b71c56164392900b3b8  ./wa-sqlite.wasm
