@@ -315,6 +315,9 @@
   guard moved server-side (the ciphertext trigger must also enforce
   <code>reference_target_id IS NULL</code> for e2ee rows — slice A), and plugin
   schemas now default cell-backed in the §6 flag spec itself, not just the rollout.
+  Round-9: the sync-off composition rule is childBacked-based, not scope-based —
+  cell-backed plugin keys on content rows (and unclassifiable keys) keep the cell
+  channel, making plugin opt-in an effective prerequisite for step 4's savings.
   <strong>Last verified against code:</strong> 2026-07-01.
 </aside>
 
@@ -1594,11 +1597,18 @@ sequence, each step gated on the one before:
     correctness fix — it is sequenced here for rollout pacing (tier-4 measurement
     informs it), but it is required regardless of the step-5 decision.</em></li>
   <li><strong>Stop uploading the cell — for child-backed rows only, never
-    globally</strong> (PR-review P1): the §6 carve-out scopes (UiState, UserPrefs,
-    Automation) stay cell-backed permanently and their rows sync, so they keep the
-    cell channel — the exclusion applies only where the bag holds exclusively
-    child-backed keys (rows carrying any carve-out-scope key keep uploading; pure
-    content rows stop). For the excluded rows the
+    globally</strong> (PR-review P1): the exclusion applies only where the bag holds
+    exclusively keys <em>known to be child-backed</em>. Conservatively, three kinds of
+    key keep a row on the cell channel: §6 carve-out-scope keys (UiState, UserPrefs,
+    Automation — cell-backed permanently), <strong>cell-backed plugin
+    <code>BlockDefault</code> keys</strong> (§6 defaults plugins <code>false</code>
+    until their durable opt-in, and plugin props like todo <code>status</code> live on
+    ordinary content blocks — freezing those rows would orphan the plugin's only
+    synced store), and keys a client's registry can't classify at all (a plugin not
+    installed here may be live elsewhere). Practical consequence: migrating or
+    opting-in the content-block plugin schemas is effectively a prerequisite for this
+    step delivering much — un-flipped plugin keys keep their rows on the cell channel.
+    For the rows that do stop, the
     server copy freezes; receivers never merged from it, so nothing changes for
     current clients. Must come after (1)–(3): any remaining cell-only writer's edits
     would otherwise still need the cell channel. For <em>fresh devices</em>, though,
@@ -1606,9 +1616,9 @@ sequence, each step gated on the one before:
     downloaded hint until the projection pass sweeps the block — so this step is a
     <strong>transition, not a stopping point</strong>, and it shares step 5's
     projection-readiness gate (PR-review P2).</li>
-  <li><strong>Stop downloading it</strong> — scoped the same way: rows carrying
-    carve-out-scope keys keep the column (mechanically a stream split in the sync
-    rules, or keep
+  <li><strong>Stop downloading it</strong> — scoped the same way: rows not yet fully
+    child-backed keep the column, same composition rule as step 4 (mechanically a
+    stream split in the sync rules, or keep
     downloading the column fleet-wide and ignore it for content rows — the download
     bytes are the smallest of the wins). Fresh devices now need the first-sync
     projection pass (below) before content-row cells are readable. The measurements
