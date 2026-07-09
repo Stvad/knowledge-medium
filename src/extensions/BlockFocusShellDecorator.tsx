@@ -19,6 +19,17 @@ const isSurfaceActive = (state: BlockShellState): boolean =>
     ? state.shortcutSurfaceOptions.surfaceActive
     : true
 
+export const shouldScrollFocusedBlockIntoView = (
+  shellElement: HTMLElement | null,
+  contentElement: HTMLElement | null,
+): contentElement is HTMLElement => {
+  if (!contentElement) return false
+  if (isElementProperlyVisible(contentElement)) return false
+  // A long block can already fill the viewport while its top content row is
+  // above it; focusing that block should not yank the viewport back to the top.
+  return shellElement ? !isElementProperlyVisible(shellElement) : true
+}
+
 export function BlockFocusShellDecorator({
   resolveContext,
   shellRef,
@@ -59,14 +70,12 @@ export function BlockFocusShellDecorator({
   useEffect(() => {
     if (!active) return
     const element = contentRef.current
-    if (element && !isElementProperlyVisible(element)) {
-      // `block: 'nearest'` already gates this to boundary-crossings
-      // (in-viewport focus moves are no-ops), so making it smooth costs
-      // nothing for j/k stepping within the visible window but makes
-      // the catch-up at the edge feel less like a hard jump.
+    if (shouldScrollFocusedBlockIntoView(shellRef.current, element)) {
+      // Once the block is genuinely off-screen, keep the existing
+      // top-content-row alignment and smooth catch-up at the viewport edge.
       element.scrollIntoView({behavior: 'smooth', block: 'nearest'})
     }
-  }, [active, contentRef])
+  }, [active, contentRef, shellRef])
 
   const nextState = useMemo<BlockShellState>(() => ({
     shellProps: {
