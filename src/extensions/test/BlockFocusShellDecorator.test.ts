@@ -25,43 +25,55 @@ const elementWithRect = (rect: DOMRect): HTMLElement => {
 }
 
 describe('shouldScrollFocusedBlockIntoView', () => {
-  it('does not scroll to the content row when a long block shell already spans the viewport', () => {
+  it('does not scroll to the content row when a long focused row already spans the viewport', () => {
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    const focusedRow = elementWithRect(testRect(-240, viewportHeight + 600))
+    const content = elementWithRect(testRect(-240, 24))
+
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(false)
+  })
+
+  it('does not scroll when one line of a long focused row remains visible', () => {
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    const focusedRowHeight = viewportHeight + 240
+    const focusedRow = elementWithRect(testRect(-(focusedRowHeight - 20), focusedRowHeight))
+    const content = elementWithRect(testRect(-(focusedRowHeight - 20), 24))
+
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(false)
+  })
+
+  it('scrolls when less than one line of a long focused row remains visible', () => {
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+    const focusedRowHeight = viewportHeight + 240
+    const focusedRow = elementWithRect(testRect(-(focusedRowHeight - 8), focusedRowHeight))
+    const content = elementWithRect(testRect(-(focusedRowHeight - 8), 24))
+
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(true)
+  })
+
+  it('keeps scrolling when both the content and focused row are off-screen', () => {
+    const focusedRow = elementWithRect(testRect(-240, 120))
+    const content = elementWithRect(testRect(-240, 24))
+
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(true)
+  })
+
+  it('scrolls when only descendants inside the block shell are visible', () => {
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight
     const shell = elementWithRect(testRect(-240, viewportHeight + 600))
-    const content = elementWithRect(testRect(-240, 24))
+    const focusedRow = elementWithRect(testRect(-80, 40))
+    const content = elementWithRect(testRect(-80, 24))
+    const visibleChild = elementWithRect(testRect(40, 24))
+    shell.append(focusedRow, visibleChild)
+    focusedRow.append(content)
 
-    expect(shouldScrollFocusedBlockIntoView(shell, content)).toBe(false)
-  })
-
-  it('does not scroll when one line of a long block shell remains visible', () => {
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
-    const shellHeight = viewportHeight + 240
-    const shell = elementWithRect(testRect(-(shellHeight - 20), shellHeight))
-    const content = elementWithRect(testRect(-(shellHeight - 20), 24))
-
-    expect(shouldScrollFocusedBlockIntoView(shell, content)).toBe(false)
-  })
-
-  it('scrolls when less than one line of a long block shell remains visible', () => {
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight
-    const shellHeight = viewportHeight + 240
-    const shell = elementWithRect(testRect(-(shellHeight - 8), shellHeight))
-    const content = elementWithRect(testRect(-(shellHeight - 8), 24))
-
-    expect(shouldScrollFocusedBlockIntoView(shell, content)).toBe(true)
-  })
-
-  it('keeps scrolling when both the content row and block shell are off-screen', () => {
-    const shell = elementWithRect(testRect(-240, 120))
-    const content = elementWithRect(testRect(-240, 24))
-
-    expect(shouldScrollFocusedBlockIntoView(shell, content)).toBe(true)
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(true)
   })
 
   it('does not scroll when the content row itself is visible', () => {
-    const shell = elementWithRect(testRect(40, 120))
+    const focusedRow = elementWithRect(testRect(40, 120))
     const content = elementWithRect(testRect(40, 24))
 
-    expect(shouldScrollFocusedBlockIntoView(shell, content)).toBe(false)
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(false)
   })
 })

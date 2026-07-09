@@ -19,9 +19,9 @@ const isSurfaceActive = (state: BlockShellState): boolean =>
     ? state.shortcutSurfaceOptions.surfaceActive
     : true
 
-const MIN_VISIBLE_LONG_SHELL_LINE_COUNT = 1
+const MIN_VISIBLE_FOCUSED_ROW_LINE_COUNT = 1
 
-const isLongShellMeaningfullyVisible = (element: HTMLElement): boolean => {
+const isLongFocusedRowMeaningfullyVisible = (element: HTMLElement): boolean => {
   const rect = element.getBoundingClientRect()
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight
   if (viewportHeight <= 0 || rect.height < viewportHeight) return false
@@ -33,19 +33,19 @@ const isLongShellMeaningfullyVisible = (element: HTMLElement): boolean => {
   const visibleTop = Math.max(0, rect.top)
   const visibleBottom = Math.min(viewportHeight, rect.bottom)
   const visibleHeight = Math.max(0, visibleBottom - visibleTop)
-  return visibleHeight >= lineHeight * MIN_VISIBLE_LONG_SHELL_LINE_COUNT
+  return visibleHeight >= lineHeight * MIN_VISIBLE_FOCUSED_ROW_LINE_COUNT
 }
 
 export const shouldScrollFocusedBlockIntoView = (
-  shellElement: HTMLElement | null,
+  focusedRowElement: HTMLElement | null,
   contentElement: HTMLElement | null,
 ): contentElement is HTMLElement => {
   if (!contentElement) return false
   if (isElementProperlyVisible(contentElement)) return false
-  // A long block can already fill the viewport while its top content row is
-  // above it; focusing that block should not yank the viewport back to the top
-  // while the user still has about a line of that block in view.
-  return shellElement ? !isLongShellMeaningfullyVisible(shellElement) : true
+  // A focused row can be tall enough that its top content is above the viewport
+  // while the user still has about a line of that same row in view. Descendants
+  // do not count here; visible children should not hide an off-screen focus row.
+  return focusedRowElement ? !isLongFocusedRowMeaningfullyVisible(focusedRowElement) : true
 }
 
 export function BlockFocusShellDecorator({
@@ -88,12 +88,15 @@ export function BlockFocusShellDecorator({
   useEffect(() => {
     if (!active) return
     const element = contentRef.current
-    if (shouldScrollFocusedBlockIntoView(shellRef.current, element)) {
+    const focusedRowElement = element?.parentElement instanceof HTMLElement
+      ? element.parentElement
+      : element
+    if (shouldScrollFocusedBlockIntoView(focusedRowElement, element)) {
       // Once the block is genuinely off-screen, keep the existing
       // top-content-row alignment and smooth catch-up at the viewport edge.
       element.scrollIntoView({behavior: 'smooth', block: 'nearest'})
     }
-  }, [active, contentRef, shellRef])
+  }, [active, contentRef])
 
   const nextState = useMemo<BlockShellState>(() => ({
     shellProps: {
