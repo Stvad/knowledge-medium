@@ -117,6 +117,13 @@ BEGIN
     )
     -- Insert-or-TOUCH: preserve the server row, but emit a WAL change so the
     -- racing client gets an echo. See the header for why this is a no-op write.
+    -- Deliberately a no-op, NOT `updated_at = <new>`: advancing the stamp would
+    -- force every id collision (the common fresh-client bootstrap) to
+    -- re-materialize on every device and would break the reconcile gate's
+    -- "newer stamp <=> changed content" coupling. The residual equal-ms
+    -- collision gap that leaves — and why the fix is systemMint, not a stamp
+    -- bump here — is documented at the I1 gate in
+    -- src/data/internals/syncObserver/reconcile.ts.
     ON CONFLICT (id) DO UPDATE SET updated_at = blocks.updated_at;
   END LOOP;
 END;

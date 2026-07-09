@@ -104,6 +104,21 @@ export const decideStagingRow = (
     // never converge to the server's created_at/created_by/user_updated_at (or
     // even content, if the default template changed between the mints). A
     // 0-stamped local row always yields.
+    //
+    // Residual blind spot (accepted, tracked): I1 assumes equal nonzero stamps
+    // come from the SAME write. Two clients that independently mint the SAME
+    // deterministic id in the SAME millisecond with DIVERGENT content produce
+    // equal nonzero stamps from *different* writes — I1 misreads them as
+    // identical and skips, so the insert-or-touch echo (apply_block_creates) is
+    // consumed and the loser strands. The fix is NOT to advance the touch's
+    // stamp server-side: that would force every id collision (the common
+    // fresh-client bootstrap) to re-materialize + reindex on every device and
+    // break the "newer stamp ⟺ changed content" coupling this whole gate relies
+    // on — re-opening #244 for non-minted creators. The fix is to systemMint
+    // (stamp 0) the deterministic-id creators so both mints yield via I2 above.
+    // Matrix-message ingest (agent-extensions/) is the last nonzero-stamp
+    // deterministic creator; until it mints at 0 this stays a real — but
+    // astronomically rare (same id, same ms, divergent content) — gap.
     return { kind: 'skip-stale' }
   }
 
