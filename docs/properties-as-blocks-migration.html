@@ -311,7 +311,10 @@
   (UserPrefs and Automation alongside UiState) — §6 had silently decided only two of
   the codebase's four property-writing scopes. Round-7 P2s: e2ee-bound moves
   de-structure (project-then-hide, same as mode transitions), and the step-3 flip is
-  kernel-only — plugin schemas wait for the durable opt-in.
+  kernel-only — plugin schemas wait for the durable opt-in. Round-8: the e2ee column
+  guard moved server-side (the ciphertext trigger must also enforce
+  <code>reference_target_id IS NULL</code> for e2ee rows — slice A), and plugin
+  schemas now default cell-backed in the §6 flag spec itself, not just the rollout.
   <strong>Last verified against code:</strong> 2026-07-01.
 </aside>
 
@@ -323,10 +326,10 @@
       children (per-row LWW = per-key merge). The cell survives as local read surface +
       bootstrap hint (<a href="#s5">§5</a>).</li>
     <li><strong>Materialize everything in <code>BlockDefault</code></strong> — kernel,
-      plugin, and user schemas — with system field rows hidden by default; the
-      non-document scopes (UiState, UserPrefs, Automation) stay cell-backed. The
-      per-schema <code>childBacked</code> flag survives as the rollout lever and
-      non-document carve-out (<a href="#s6">§6</a>).</li>
+      plugin (behind the durable opt-in), and user schemas — with system field rows
+      hidden by default; the non-document scopes (UiState, UserPrefs, Automation)
+      stay cell-backed. The per-schema <code>childBacked</code> flag survives as the
+      rollout lever and non-document carve-out (<a href="#s6">§6</a>).</li>
     <li>Field-row shape: <code>[[Schema Name]]</code> content + derived synced
       <code>reference_target_id</code>, as the spike built it (<a href="#s7">§7</a>).</li>
     <li><code>setProperty</code> dual-writes children and cell in one tx; the
@@ -915,9 +918,11 @@ including <code>types</code>, <code>system:collapsed</code>, <code>alias</code>,
 the <code>property-schema:*</code> config props on schema blocks themselves. An earlier
 draft of this doc argued for restoring the A+D boundary as a per-schema flag; the §5
 merge-semantics analysis reversed that. <strong>Decision: materialize everything in
-<code>ChangeScope.BlockDefault</code> — kernel, plugin, and user schemas alike — with
-system field rows hidden by default behind the existing per-schema <code>hidden</code>
-override and "Show Hidden Fields" toggle. UiState schemas stay cell-backed.</strong>
+<code>ChangeScope.BlockDefault</code> — kernel, plugin, and user schemas alike
+(plugins per-schema, behind the durable opt-in below) — with system field rows hidden
+by default behind the existing per-schema <code>hidden</code> override and "Show
+Hidden Fields" toggle. The non-document scopes (UiState, UserPrefs, Automation) stay
+cell-backed.</strong>
 </p>
 
 <p>
@@ -985,10 +990,13 @@ sync-off scoping.
   <strong>Mechanism: keep the per-schema <code>childBacked</code> flag — as rollout
   gate and UiState carve-out, not as a kernel/user boundary.</strong> Add
   <code>childBacked: boolean</code> to <code>PropertySchema</code> (alongside
-  <code>fieldId</code>). End-state defaults: <code>true</code> for every
-  <code>BlockDefault</code> schema (kernel, plugin, user); <code>false</code> —
-  permanently — for <code>UiState</code>, <code>UserPrefs</code>, and
-  <code>Automation</code>. During rollout the flag is the
+  <code>fieldId</code>). End-state defaults: <code>true</code> for kernel and user
+  <code>BlockDefault</code> schemas; <em>plugin</em> schemas default
+  <code>false</code> and flip per-schema only once the opt-in is durably persisted
+  (below) — defaulting them true from code would flip before any synced decision
+  exists, which is the data fork this callout forbids (PR-review P2);
+  <code>false</code> — permanently — for <code>UiState</code>,
+  <code>UserPrefs</code>, and <code>Automation</code>. During rollout the flag is the
   staging lever: user schemas flip first, kernel props follow once the §11 measurements
   and test-porting land. All read/write machinery branches on the flag in exactly one
   place each; one write model (<code>setProperty</code>), one detection rule, one
@@ -1097,9 +1105,15 @@ per row: "this row is a field instance", "of this schema", and for exact block-r
 </ol>
 
 <p>
-The gate in option 1 needs its scope stated precisely, because the server cannot
-enforce any of it — the e2ee ciphertext trigger checks only the three envelope columns
-and would happily accept a plaintext <code>reference_target_id</code>:
+The gate in option 1 needs its scope stated precisely — and one piece of it must move
+server-side (PR-review P1). As shipped, the e2ee ciphertext trigger
+(<code>blocks_require_ciphertext_for_e2ee</code>) checks only the three envelope
+columns and would happily accept a plaintext <code>reference_target_id</code> from a
+stale client, a missed hook, or a direct PostgREST write — exactly the untrusted paths
+that trigger exists to stop. Slice A must extend it to also require
+<code>reference_target_id IS NULL</code> for e2ee-workspace rows (same migration as
+the column add; the plaintext→e2ee flip already nulls the column in its bulk rewrite,
+so mode transitions pass the check). The rest of the gate is client-side:
 </p>
 
 <ul>
@@ -1359,7 +1373,9 @@ implementation</strong> and keep it open until its content is fully accounted fo
         <code>BlockData.referenceTargetId</code>; regenerate sync-config),
         <code>referenceBlock.ts</code> grammar, <code>core.deriveReferenceTarget</code>,
         the partial index, and the §8 items: the e2ee gate (derive skips e2ee
-        workspaces, column excluded from their upload) and the
+        workspaces, column excluded from their upload), the server-side trigger
+        extension (<code>reference_target_id IS NULL</code> enforced for e2ee rows —
+        client gates alone are not a guarantee), and the
         <code>apply_block_patches</code> whitelist extension. Two hard-won requirements
         from the spike's own review history: the <strong>existing-install local
         migration must ALTER both <code>blocks</code> and
