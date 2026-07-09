@@ -24,6 +24,12 @@ const elementWithRect = (rect: DOMRect): HTMLElement => {
   return element
 }
 
+const scrollContainerWithRect = (rect: DOMRect): HTMLElement => {
+  const element = elementWithRect(rect)
+  element.style.overflowY = 'auto'
+  return element
+}
+
 describe('shouldScrollFocusedBlockIntoView', () => {
   it('does not scroll to the content row when a long focused row already spans the viewport', () => {
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight
@@ -40,6 +46,40 @@ describe('shouldScrollFocusedBlockIntoView', () => {
     const content = elementWithRect(testRect(-(focusedRowHeight - 20), 24))
 
     expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(false)
+  })
+
+  it('scrolls when less than one line of a long focused row is visible inside the scroll container', () => {
+    const scrollContainer = scrollContainerWithRect(testRect(100, 600))
+    const focusedRowHeight = window.innerHeight + 600
+    const focusedRowTop = 108 - focusedRowHeight
+    const focusedRow = elementWithRect(testRect(focusedRowTop, focusedRowHeight))
+    const content = elementWithRect(testRect(focusedRowTop, 24))
+    scrollContainer.append(focusedRow)
+    focusedRow.append(content)
+
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(true)
+  })
+
+  it('does not scroll when one line of properties remains visible inside the scroll container', () => {
+    const scrollContainer = scrollContainerWithRect(testRect(100, 600))
+    const focusedRowHeight = window.innerHeight + 600
+    const focusedRowTop = 120 - focusedRowHeight
+    const focusedRow = elementWithRect(testRect(focusedRowTop, focusedRowHeight))
+    const content = elementWithRect(testRect(focusedRowTop, 24))
+    scrollContainer.append(focusedRow)
+    focusedRow.append(content)
+
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(false)
+  })
+
+  it('scrolls when content is inside the window but above the scroll container', () => {
+    const scrollContainer = scrollContainerWithRect(testRect(100, 600))
+    const focusedRow = elementWithRect(testRect(60, 24))
+    const content = elementWithRect(testRect(60, 24))
+    scrollContainer.append(focusedRow)
+    focusedRow.append(content)
+
+    expect(shouldScrollFocusedBlockIntoView(focusedRow, content)).toBe(true)
   })
 
   it('scrolls when less than one line of a long focused row remains visible', () => {

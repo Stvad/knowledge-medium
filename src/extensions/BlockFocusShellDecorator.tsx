@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo } from 'react'
 import { useInEditMode, useInFocus, useIsActivePanel, useUIStateBlock } from '@/data/globalState.js'
-import { isElementProperlyVisible } from '@/utils/dom.js'
+import {
+  getElementScrollportBounds,
+  isElementProperlyVisible,
+  type VerticalVisibilityBounds,
+} from '@/utils/dom.js'
 import type {
   BlockShellDecoratorContribution,
   BlockShellDecoratorProps,
@@ -21,17 +25,20 @@ const isSurfaceActive = (state: BlockShellState): boolean =>
 
 const MIN_VISIBLE_FOCUSED_ROW_LINE_COUNT = 1
 
-const isLongFocusedRowMeaningfullyVisible = (element: HTMLElement): boolean => {
+const isLongFocusedRowMeaningfullyVisible = (
+  element: HTMLElement,
+  visibilityBounds: VerticalVisibilityBounds,
+): boolean => {
   const rect = element.getBoundingClientRect()
-  const viewportHeight = window.innerHeight || document.documentElement.clientHeight
+  const viewportHeight = Math.max(0, visibilityBounds.bottom - visibilityBounds.top)
   if (viewportHeight <= 0 || rect.height < viewportHeight) return false
 
   const computedStyle = window.getComputedStyle(element)
   const lineHeight = parseFloat(computedStyle.lineHeight) ||
     parseFloat(computedStyle.fontSize) * 1.2
 
-  const visibleTop = Math.max(0, rect.top)
-  const visibleBottom = Math.min(viewportHeight, rect.bottom)
+  const visibleTop = Math.max(visibilityBounds.top, rect.top)
+  const visibleBottom = Math.min(visibilityBounds.bottom, rect.bottom)
   const visibleHeight = Math.max(0, visibleBottom - visibleTop)
   return visibleHeight >= lineHeight * MIN_VISIBLE_FOCUSED_ROW_LINE_COUNT
 }
@@ -41,11 +48,14 @@ export const shouldScrollFocusedBlockIntoView = (
   contentElement: HTMLElement | null,
 ): contentElement is HTMLElement => {
   if (!contentElement) return false
-  if (isElementProperlyVisible(contentElement)) return false
-  // A focused row can be tall enough that its top content is above the viewport
+  const visibilityBounds = getElementScrollportBounds(contentElement)
+  if (isElementProperlyVisible(contentElement, visibilityBounds)) return false
+  // A focused row can be tall enough that its top content is above the scrollport
   // while the user still has about a line of that same row in view. Descendants
   // do not count here; visible children should not hide an off-screen focus row.
-  return focusedRowElement ? !isLongFocusedRowMeaningfullyVisible(focusedRowElement) : true
+  return focusedRowElement
+    ? !isLongFocusedRowMeaningfullyVisible(focusedRowElement, visibilityBounds)
+    : true
 }
 
 export function BlockFocusShellDecorator({

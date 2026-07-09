@@ -1,6 +1,39 @@
-export const isElementProperlyVisible = (element: HTMLElement): boolean => {
+export type VerticalVisibilityBounds = Readonly<{
+  top: number
+  bottom: number
+}>
+
+const windowVisibilityBounds = (): VerticalVisibilityBounds => ({
+  top: 0,
+  bottom: window.innerHeight || document.documentElement.clientHeight,
+})
+
+export const getElementScrollportBounds = (element: HTMLElement): VerticalVisibilityBounds => {
+  const windowBounds = windowVisibilityBounds()
+  let ancestor = element.parentElement
+
+  while (ancestor) {
+    const {overflowY} = window.getComputedStyle(ancestor)
+    if (overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') {
+      const rect = ancestor.getBoundingClientRect()
+      return {
+        top: Math.max(windowBounds.top, rect.top),
+        bottom: Math.min(windowBounds.bottom, rect.bottom),
+      }
+    }
+    ancestor = ancestor.parentElement
+  }
+
+  return windowBounds
+}
+
+export const isElementProperlyVisible = (
+  element: HTMLElement,
+  visibilityBounds: VerticalVisibilityBounds = windowVisibilityBounds(),
+): boolean => {
   const rect = element.getBoundingClientRect()
-  const windowHeight = window.innerHeight || document.documentElement.clientHeight
+  const viewportHeight = Math.max(0, visibilityBounds.bottom - visibilityBounds.top)
+  if (viewportHeight <= 0) return false
 
   const elementHeight = rect.height
 
@@ -13,18 +46,18 @@ export const isElementProperlyVisible = (element: HTMLElement): boolean => {
   const minVisibleHeight = lineHeight
 
   // Calculate how much of the element is visible vertically
-  const visibleTop = Math.max(0, rect.top)
-  const visibleBottom = Math.min(windowHeight, rect.bottom)
+  const visibleTop = Math.max(visibilityBounds.top, rect.top)
+  const visibleBottom = Math.min(visibilityBounds.bottom, rect.bottom)
   const visibleHeight = Math.max(0, visibleBottom - visibleTop)
 
   // For small elements (shorter than viewport): require at least one line height to be visible
-  if (elementHeight <= windowHeight) {
+  if (elementHeight <= viewportHeight) {
     return visibleHeight >= minVisibleHeight
   }
 
   // For large elements (taller than viewport): check if a reasonable portion is visible
   // and that we're not at an awkward position (like showing just the very top or bottom)
-  const heightRatio = visibleHeight / windowHeight
+  const heightRatio = visibleHeight / viewportHeight
   const elementVisibilityRatio = visibleHeight / elementHeight
 
   // For tall elements, we want either:
