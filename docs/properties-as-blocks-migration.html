@@ -843,10 +843,16 @@ arrived row:
   server feature) fails <em>silently</em> — the cell and the children just drift.
   Deterministic projection makes that cheap to police: a background sweep recomputes
   each block's child-backed cell keys from its children, byte-compares against the
-  stored cell, repairs divergence (children win, per this section), and reports the
-  divergence count as telemetry. Reuse the backfill harness (marker-gated per
-  workspace, chunked transactions, idle scheduling) in verify mode; ship it with
-  slice C. A nonzero counter is the alarm that some write path broke the invariant —
+  stored cell, and repairs divergence — with the <em>same branch rules as the arrival
+  reconcile, not blanket children-win</em> (PR-review P2): keys with live children →
+  project, children win; keys whose children are all soft-deleted → the deletion won,
+  drop the key; cell keys with <strong>no child rows at all</strong> → pending
+  materialization, <em>not</em> divergence — that is exactly the slice-C
+  backfill-failure fallback where the cell stays authoritative for the block, so the
+  sweep materializes them (a free backfill retry) or leaves them untouched and
+  reports, but never deletes. Divergence counts are telemetry. Reuse the backfill
+  harness (marker-gated per workspace, chunked transactions, idle scheduling) in
+  verify mode; ship it with slice C. A nonzero counter is the alarm that some write path broke the invariant —
   it converts "discipline held in code" into "violations are detected and self-heal",
   which is the difference between an invariant and a hope.
 </div>
