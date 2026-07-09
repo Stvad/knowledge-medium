@@ -21,7 +21,7 @@ const MAX_TRANSACTIONS_PER_UPLOAD_BATCH = 25
  *  import lands as one big repo.tx and `collectUploadBatch` takes the first tx
  *  whole) would trip Postgres `statement_timeout`, which classifies transient and
  *  retries the oversized batch forever. */
-const MAX_CREATES_PER_SUPABASE_RPC = 500
+export const MAX_CREATES_PER_SUPABASE_RPC = 500
 
 /** Upper bound on patches shipped in a single `apply_block_patches` RPC.
  *  That RPC runs one UPDATE per patch (each firing the per-write server
@@ -774,4 +774,5 @@ export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFal
 export const __runUploadLoopForTest = runUploadLoop
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations
 export const __applyBlockPatchesRpcForTest = applyBlockPatchesRpc
+export const __applyBlockCreatesForTest = applyBlockCreates
 export const __recordRejectionToTableForTest = recordRejectionToTable

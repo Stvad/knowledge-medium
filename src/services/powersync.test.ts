@@ -14,7 +14,9 @@ vi.mock('@/services/supabase.js', () => ({
 import {
   AMBIGUOUS_RETRY_BUDGET,
   MAX_PATCHES_PER_SUPABASE_RPC,
+  MAX_CREATES_PER_SUPABASE_RPC,
   __applyBlockPatchesRpcForTest,
+  __applyBlockCreatesForTest,
   __applyCompactedBlockOperationsForTest,
   __recordRejectionToTableForTest,
   __compactBlockCrudEntriesForTest,
@@ -899,6 +901,70 @@ describe('defaultBlockUploadSink.applyPatches — RPC contract', () => {
     // the empty-patches case, but the sink itself must also skip the
     // round trip when handed an empty array (e.g. a future caller).
     await __applyBlockPatchesRpcForTest([])
+    expect(supabaseRef.rpc).not.toHaveBeenCalled()
+  })
+})
+
+// ===========================================================================
+// applyBlockCreates — insert-or-touch RPC wire shape + chunking.
+//
+// CREATEs ship via `apply_block_creates` (ON CONFLICT DO UPDATE SET updated_at =
+// blocks.updated_at — a no-op touch that echoes the server row to heal an
+// insert-or-skip phantom). Same statement-timeout guard as apply_block_patches:
+// a bulk import / schema reprojection lands as one big tx, so the per-RPC row
+// count is capped. The cross-chunk ordering guarantee is load-bearing.
+// ===========================================================================
+
+describe('applyBlockCreates — RPC wire + chunking', () => {
+  beforeEach(() => {
+    supabaseRef.rpc.mockReset()
+  })
+
+  it('ships a batch as one rpc("apply_block_creates", {creates}) call', async () => {
+    supabaseRef.rpc.mockResolvedValueOnce({data: null, error: null})
+
+    await __applyBlockCreatesForTest([
+      {id: 'block-a', workspace_id: 'w', content: 'A'},
+      {id: 'block-b', workspace_id: 'w', content: 'B'},
+    ])
+
+    expect(supabaseRef.rpc).toHaveBeenCalledTimes(1)
+    expect(supabaseRef.rpc).toHaveBeenCalledWith('apply_block_creates', {
+      creates: [
+        {id: 'block-a', workspace_id: 'w', content: 'A'},
+        {id: 'block-b', workspace_id: 'w', content: 'B'},
+      ],
+    })
+  })
+
+  it('chunks an oversized create batch into capped RPC calls, order preserved across chunks', async () => {
+    // orderedBlockUpserts runs before chunk(), so a parent never lands in a later
+    // chunk than its child — each chunk is a separate RPC = separate transaction,
+    // and the parent self-FK is only DEFERRABLE within one transaction.
+    supabaseRef.rpc.mockResolvedValue({data: null, error: null})
+    const total = MAX_CREATES_PER_SUPABASE_RPC * 2 + 1
+    const rows = Array.from({length: total}, (_, i) => ({
+      id: `block-${i}`, workspace_id: 'w', parent_id: null, content: `c${i}`,
+    }))
+
+    await __applyBlockCreatesForTest(rows)
+
+    // ceil(total / cap) calls, none exceeding the cap, every create shipped once
+    // in the original (topologically-stable) order.
+    expect(supabaseRef.rpc).toHaveBeenCalledTimes(3)
+    const shipped = supabaseRef.rpc.mock.calls.flatMap(
+      call => (call[1] as {creates: Array<{id: string}>}).creates,
+    )
+    expect(shipped).toHaveLength(total)
+    expect(shipped.map(r => r.id)).toEqual(rows.map(r => r.id))
+    for (const call of supabaseRef.rpc.mock.calls) {
+      expect((call[1] as {creates: unknown[]}).creates.length)
+        .toBeLessThanOrEqual(MAX_CREATES_PER_SUPABASE_RPC)
+    }
+  })
+
+  it('is a no-op when given an empty create array', async () => {
+    await __applyBlockCreatesForTest([])
     expect(supabaseRef.rpc).not.toHaveBeenCalled()
   })
 })

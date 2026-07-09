@@ -32,15 +32,41 @@
 --     local stamp is not equal to it, so it is not skip-staled).
 --   * `blocks_prevent_workspace_change` (BEFORE UPDATE): the touch never changes
 --     `workspace_id`, so it passes.
---   * `blocks_record_history_trg` (AFTER UPDATE): its identical-row guard
---     (`changed_columns IS NULL`) fires, so a touch records NO history row.
+--   * `blocks_record_history_trg` (AFTER UPDATE): when the touch is a true no-op
+--     (NEW == OLD for every column) its identical-row guard (`changed_columns IS
+--     NULL`) fires, so it records NO history row.
+--
+--   TWO NARROW CAVEATS to "true no-op" (both leave the touch SAFE — no clobber —
+--   but would make it a real 1-row write + a stray history row):
+--     - Unlike `updated_at`, `created_at` and `user_updated_at` have NO restoring
+--       floor in the clamp — only a future-clamp. So a BACKWARD server-clock step
+--       between the row's last write and this touch would shave them down. This
+--       needs actual server-clock non-monotonicity (an infra anomaly, not anything
+--       a client can trigger), so it's a documented tail, not an operational risk.
+--     - The no-op assumes `user_updated_at` is already populated; the clamp does
+--       `least(coalesce(NEW.user_updated_at, NEW.updated_at), now)`, so a row still
+--       carrying NULL here would get it set (a one-time real change). The
+--       20260612000000 backfill populated every existing row, and every write
+--       since sets it, so no live row should be NULL — but it's why the pgTAP test
+--       seeds `user_updated_at`.
 --
 -- RLS: `SECURITY INVOKER`, so the caller's policies apply. `blocks_write` is
 -- `FOR ALL` gated on `is_workspace_writer(workspace_id)` for BOTH `USING` and
--- `WITH CHECK`, so a caller who may INSERT a row into a workspace may also touch
--- it on conflict — there is no INSERT-allowed-but-UPDATE-denied asymmetry. A
--- deterministic-id collision against a row the caller cannot write (a foreign
--- workspace) is denied, exactly as a plain INSERT there would be.
+-- `WITH CHECK`. For a SAME-workspace collision (the only reachable case — every
+-- deterministic id is uuidv5-hashed WITH its workspace_id, so a real collision is
+-- always within one workspace) INSERT and the ON-CONFLICT UPDATE resolve to the
+-- SAME `is_workspace_writer` check on the SAME value: no asymmetry. (A purely
+-- hypothetical CROSS-workspace id collision — the PK is on `id` alone — where the
+-- caller can write their workspace but not the existing row's would THROW on the
+-- UPDATE's USING check, where `DO NOTHING` silently no-op'd; it degrades safely to
+-- a permanent quarantine (42501), and is unreachable via any current id scheme.)
+--
+-- DELIVERY ORDERING: the touch's echo carries a FLAT (non-advancing) `updated_at`,
+-- so it is the first echo type that doesn't self-order by stamp. Its safety (a
+-- stale touch echo can't leapfrog a later real edit) rests on `blocks_synced`
+-- being ONE ordered bucket per workspace (sync-config.yaml), so PowerSync delivers
+-- a row's changes to every client in commit order. If that ever fragments across
+-- buckets, re-examine this + the reconcile gate's stamp-monotonicity assumption.
 --
 -- ORDERING: the `blocks_workspace_id_parent_id_fkey` self-FK is DEFERRABLE
 -- INITIALLY DEFERRED, so parent-before-child ordering inside this function's
