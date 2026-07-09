@@ -1,7 +1,7 @@
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { actionsFacet } from '@/extensions/core.js'
-import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
+import { blockLineEndAccessoriesFacet } from '@/extensions/blockInteraction.js'
 import { agentStatusChipContribution } from './AgentStatusChip.tsx'
 import { askAgentActions } from './askAgent.ts'
 import { cancelAgentActions } from './cancelAgent.ts'
@@ -21,7 +21,7 @@ export const agentDispatchCompanionPlugin: AppExtension = systemToggle({
   description:
     'Status chips + Ask Agent action for blocks the agent-dispatch daemon processes.',
 }).of([
-  blockContentDecoratorsFacet.of(agentStatusChipContribution, { source: SOURCE }),
+  blockLineEndAccessoriesFacet.of(agentStatusChipContribution, { source: SOURCE }),
   ...askAgentActions.map(action => actionsFacet.of(action, { source: SOURCE })),
   ...cancelAgentActions.map(action => actionsFacet.of(action, { source: SOURCE })),
   ...copyAgentResumeCommandActions.map(action => actionsFacet.of(action, { source: SOURCE })),

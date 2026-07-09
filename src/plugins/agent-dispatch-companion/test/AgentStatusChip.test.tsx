@@ -2,7 +2,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
-import type { BlockRenderer } from '@/types'
 import { agentStatusChipContribution } from '../AgentStatusChip.tsx'
 
 vi.mock('@/hooks/block.js', () => ({
@@ -21,16 +20,14 @@ afterEach(() => {
 })
 
 describe('AgentStatusChip', () => {
-  it('overlays the status chip without shrinking the content column', () => {
-    const Inner: BlockRenderer = () => <div data-testid="block-text">Block text</div>
-    const decorate = agentStatusChipContribution({} as never)
-    if (!decorate) throw new Error('expected agent status chip decorator')
-    const Decorated = decorate(Inner)
+  it('renders as a compact line-end accessory', () => {
+    const accessory = agentStatusChipContribution({} as never)
+    if (!accessory || Array.isArray(accessory)) throw new Error('expected agent status accessory')
+    const Accessory = (accessory as Exclude<typeof accessory, readonly unknown[]>).render
 
-    render(<Decorated block={{id: 'block-1'} as Block}/>)
+    render(<Accessory block={{id: 'block-1'} as Block}/>)
 
-    expect(screen.getByTestId('block-text').parentElement).toHaveClass('w-full')
-    expect(screen.getByTestId('block-text').parentElement?.parentElement).toHaveClass('relative', 'w-full')
-    expect(document.querySelector('[data-agent-dispatch-chip="running"]')).toHaveClass('absolute', 'right-0')
+    expect(screen.getByTitle(/Codex is working/)).toHaveClass('block-line-end-accessory')
+    expect(document.querySelector('[data-agent-dispatch-chip="running"]')).not.toHaveClass('absolute', 'right-0')
   })
 })

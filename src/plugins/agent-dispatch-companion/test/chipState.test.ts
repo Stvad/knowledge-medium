@@ -89,7 +89,7 @@ describe('agentStatusChipContribution gate', () => {
   const withContext = (over: Record<string, unknown>) =>
     ctx({blockContext: over as BlockResolveContext['blockContext']})
 
-  it('attaches where the block renders as a full row — outline, backlinks, embeds', () => {
+  it('contributes an accessory where the block renders as a full row — outline, backlinks, embeds', () => {
     expect(agentStatusChipContribution(ctx({}))).toBeTruthy()
     expect(agentStatusChipContribution(ctx({isTopLevel: true}))).toBeTruthy()
     // A backlink-entry body / embed sets isNestedSurface but still renders
@@ -99,7 +99,7 @@ describe('agentStatusChipContribution gate', () => {
     expect(agentStatusChipContribution(withContext({isNestedSurface: true, isEmbedded: true}))).toBeTruthy()
   })
 
-  it('suppresses only inline references and breadcrumb segments (a gutter pill cannot lay out inline)', () => {
+  it('suppresses only inline references and breadcrumb segments (a line-end accessory cannot lay out inline)', () => {
     expect(agentStatusChipContribution(withContext({isNestedSurface: true, isReference: true}))).toBeNull()
     expect(agentStatusChipContribution(withContext({isNestedSurface: true, isBreadcrumb: true}))).toBeNull()
   })

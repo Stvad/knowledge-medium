@@ -19,7 +19,7 @@ import {
 } from '@/data/properties.js'
 import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { Repo } from '../data/repo'
-import { combineLastContributionResult, defineFacet, isFunction } from '@/facets/facet.js'
+import { combineLastContributionResult, dedupById, defineFacet, isFunction } from '@/facets/facet.js'
 import {
   defineVariantFacet,
   type Variant,
@@ -148,6 +148,25 @@ export type BlockContentSurfaceContribution =
 
 export type BlockContentSurfaceResolver =
   (context: BlockResolveContext) => BlockContentSurfaceProps
+
+export interface BlockLineEndAccessory {
+  /** Stable key for this accessory within the shared line-end rail. */
+  id: string
+  /** Rendered inside the shared line-end rail. Keep this compact: it floats
+   *  beside the block's first line(s), so wide controls directly reduce text
+   *  measure on narrow screens. */
+  render: BlockRenderer
+}
+
+export type BlockLineEndAccessoryContribution =
+  (context: BlockResolveContext) => BlockLineEndAccessory | readonly BlockLineEndAccessory[] | null | undefined | false
+
+export type BlockLineEndAccessoryResolver =
+  (context: BlockResolveContext) => readonly BlockLineEndAccessory[]
+
+const isBlockLineEndAccessoryArray = (
+  value: BlockLineEndAccessory | readonly BlockLineEndAccessory[],
+): value is readonly BlockLineEndAccessory[] => Array.isArray(value)
 
 // Slot for sections rendered above a block's body — navigation chrome
 // such as top-level breadcrumbs lives here. Mirrors
@@ -453,6 +472,25 @@ export const blockContentSurfacePropsFacet = defineFacet<
   combine: contributions => context => mergeBlockContentSurfaceProps(contributions, context),
   empty: () => () => ({}),
   validate: isFunction<BlockContentSurfaceContribution>,
+})
+
+export const blockLineEndAccessoriesFacet = defineFacet<
+  BlockLineEndAccessoryContribution,
+  BlockLineEndAccessoryResolver
+>({
+  id: 'core.block-line-end-accessories',
+  combine: contributions => context => {
+    const accessories: BlockLineEndAccessory[] = []
+    for (const contribution of contributions) {
+      const result = contribution(context)
+      if (!result) continue
+      if (isBlockLineEndAccessoryArray(result)) accessories.push(...result)
+      else accessories.push(result)
+    }
+    return dedupById<BlockLineEndAccessory>('core.block-line-end-accessories')(accessories)
+  },
+  empty: () => () => [],
+  validate: isFunction<BlockLineEndAccessoryContribution>,
 })
 
 export const resolveShortcutActivations = (

@@ -8,6 +8,8 @@ import {
   blockContentDecoratorsFacet,
   BlockContentDecoratorContribution,
   BlockInteractionContext,
+  blockLineEndAccessoriesFacet,
+  BlockLineEndAccessoryContribution,
   BlockResolveContext,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
@@ -159,6 +161,25 @@ describe('block interaction facets', () => {
     runtime.read(blockContentDecoratorsFacet)(context, inner)
 
     expect(seen).toEqual([context])
+  })
+
+  it('collects line-end accessories, deduping by id with later contributions winning', () => {
+    const firstRender: BlockRenderer = () => null
+    const secondRender: BlockRenderer = () => null
+    const duplicateRender: BlockRenderer = () => null
+    const first: BlockLineEndAccessoryContribution = () => ({id: 'first', render: firstRender})
+    const second: BlockLineEndAccessoryContribution = () => ({id: 'second', render: secondRender})
+    const duplicate: BlockLineEndAccessoryContribution = () => ({id: 'first', render: duplicateRender})
+    const runtime = resolveFacetRuntimeSync([
+      blockLineEndAccessoriesFacet.of(first),
+      blockLineEndAccessoriesFacet.of(second),
+      blockLineEndAccessoriesFacet.of(duplicate),
+    ])
+
+    const accessories = runtime.read(blockLineEndAccessoriesFacet)(context)
+
+    expect(accessories.map(accessory => accessory.id)).toEqual(['first', 'second'])
+    expect(accessories[0].render).toBe(duplicateRender)
   })
 
   it('allows a contribution to introduce an application-specific mode', () => {
