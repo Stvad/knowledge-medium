@@ -36,15 +36,22 @@ function publishedVersion(name, version) {
     return execFileSync('npm', ['view', `${name}@${version}`, 'version'], {
       encoding: 'utf8',
     }).trim()
-  } catch {
-    // `npm view` exits non-zero when the package name doesn't exist yet (E404);
-    // an existing name with a missing version instead returns '' at exit 0.
-    // Both mean "not published".
-    return ''
+  } catch (err) {
+    // `npm view <name>@<version>` exits with an E404 both when the package
+    // doesn't exist yet AND when the name exists but this version was never
+    // published — that's the genuine "not published" signal, so return ''.
+    // Any OTHER failure (network blip, registry 5xx, auth) must NOT be mistaken
+    // for "unpublished": doing so would re-attempt publishing an existing
+    // version and fail the job on a 403. Rethrow those so we fail loudly at the
+    // cheap check instead of at a doomed `npm publish`.
+    const detail = `${err.stdout ?? ''}${err.stderr ?? ''}` || err.message
+    if (/E404/.test(detail)) return ''
+    throw new Error(`npm view ${name}@${version} failed (not an E404):\n${detail}`)
   }
 }
 
 let publishedCount = 0
+const failures = []
 for (const rel of packageDirs) {
   const dir = join(repoRoot, rel)
   const { name, version } = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
@@ -55,17 +62,25 @@ for (const rel of packageDirs) {
   }
 
   console.log(`+ publishing ${name}@${version}`)
-  // publishConfig in each package.json pins public access + the npm registry.
-  // Under trusted publishing npm attaches provenance on its own — no flag.
-  execFileSync('npm', ['publish', '--access', 'public'], {
-    cwd: dir,
-    stdio: 'inherit',
-  })
-  publishedCount++
+  // publishConfig in each package.json pins public access + the npm registry;
+  // under trusted publishing npm attaches provenance on its own — no flags.
+  // Isolate per package so one failure doesn't skip the rest of the list.
+  try {
+    execFileSync('npm', ['publish'], { cwd: dir, stdio: 'inherit' })
+    publishedCount++
+  } catch (err) {
+    console.error(`✗ failed to publish ${name}@${version}: ${err.message}`)
+    failures.push(`${name}@${version}`)
+  }
 }
 
 console.log(
-  publishedCount === 0
+  publishedCount === 0 && failures.length === 0
     ? 'Nothing to publish — all package versions already on npm.'
     : `Published ${publishedCount} package(s).`,
 )
+
+if (failures.length > 0) {
+  console.error(`Failed to publish: ${failures.join(', ')}`)
+  process.exitCode = 1
+}

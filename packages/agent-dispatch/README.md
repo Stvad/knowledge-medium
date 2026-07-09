@@ -145,7 +145,7 @@ That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
    tail -f ~/Library/Logs/km-agent-dispatch.log
    ```
 
-   (`npx @knowledge-medium/agent-dispatch --once` works for a one-off run, but launchd needs a stable installed path — global install is the right call for the always-on daemon.)
+   (`npx -p @knowledge-medium/agent-dispatch km-agent-dispatch --once` works for a one-off run — the package ships two bins so plain `npx @knowledge-medium/agent-dispatch` can't pick one — but launchd needs a stable installed path, so global install is the right call for the always-on daemon.)
 
 ## Setup (from a repo checkout)
 

@@ -20,13 +20,24 @@ permissions:
   contents: read
   id-token: write
 
+# Serialize publish runs: the version check (npm view) and the publish are not
+# atomic, so two overlapping runs on the same version would race and the loser
+# would 403. Queue instead of cancel — never kill an in-flight npm publish.
+concurrency:
+  group: publish-packages
+  cancel-in-progress: false
+
 jobs:
   publish:
-    # Only after Run Tests *succeeded*, and only for a push to master — not PRs
-    # or the workflow_dispatch on Run Tests. workflow_dispatch here bypasses the
-    # gate (there's no workflow_run payload) and runs against the default branch.
+    # Two ways in, both restricted to master:
+    #  - workflow_run: only after Run Tests *succeeded* for a push to master
+    #    (a fork PR runs Run Tests as event 'pull_request', never 'push', so it
+    #    can't reach this job / the OIDC token).
+    #  - workflow_dispatch: a manual master-only re-run (there's no workflow_run
+    #    payload, so it bypasses the success gate — hence the explicit ref check,
+    #    or a dispatch against any other branch could publish untested code).
     if: >
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
       (github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.head_branch == 'master' &&
        github.event.workflow_run.conclusion == 'success')
@@ -47,20 +58,21 @@ jobs:
           cache: yarn
           registry-url: 'https://registry.npmjs.org'
 
-      # Trusted Publishing (OIDC) needs npm >= 11.5.1; the version bundled with
-      # node 24.x can be older. Upgrade the global npm the publish step uses.
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1; node 24.x bundles an older
+      # npm. Pin to a specific 11.x rather than @latest: @latest currently
+      # resolves to npm 12.0.0, which crashes provenance generation with
+      # "Cannot find module 'sigstore'" (npm/cli#9722) and broke the first real
+      # run of this workflow. Bump deliberately once that's fixed and released.
       - name: Ensure npm supports trusted publishing
-        run: npm install -g npm@latest
+        run: npm install -g npm@11.18.0
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      # Build both packages (incl. agent-cli's generated kernel-types) up front,
-      # so agent-dispatch's tsc -b has agent-cli's dist even when only one of the
-      # two is being republished. Each package's own prepublishOnly rebuild then
-      # runs incrementally.
-      - name: Build packages
-        run: yarn run compile
-
+      # No separate build step: each package's prepublishOnly builds it during
+      # `npm publish` (agent-dispatch's `tsc -b` builds agent-cli first via its
+      # project reference; agent-cli's own prepublishOnly does its full build).
+      # A whole-app `yarn run compile` here was redundant and coupled publishing
+      # to unrelated src/ breakage.
       - name: Publish changed packages
         run: node scripts/publish-packages.mjs
