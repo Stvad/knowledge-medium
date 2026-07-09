@@ -1,0 +1,58 @@
+name: Publish packages
+
+# Publish-on-version-change: after a green "Run Tests" on master, publish any
+# workspace package whose package.json version isn't on npm yet. Bump a
+# package's version in your PR and the merge releases it; leave it and this is a
+# no-op. See scripts/publish-packages.mjs for the per-package logic.
+on:
+  workflow_run:
+    workflows: ["Run Tests"]
+    types: [completed]
+  # Manual re-run (e.g. after adding the NPM_TOKEN secret) against the current master.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # npm provenance attestation
+
+jobs:
+  publish:
+    # Only after Run Tests *succeeded*, and only for a push to master — not PRs
+    # or the workflow_dispatch on Run Tests. workflow_dispatch here bypasses the
+    # gate (there's no workflow_run payload) and runs against the default branch.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'master' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # Build/publish the exact commit Run Tests validated (falls back to
+          # the ref that triggered a manual dispatch).
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          cache: yarn
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Build both packages (incl. agent-cli's generated kernel-types) up front,
+      # so agent-dispatch's tsc -b has agent-cli's dist even when only one of the
+      # two is being republished. Each package's own prepublishOnly rebuild then
+      # runs incrementally.
+      - name: Build packages
+        run: yarn run compile
+
+      - name: Publish changed packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/publish-packages.mjs
