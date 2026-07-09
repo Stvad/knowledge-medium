@@ -1641,9 +1641,14 @@ sequence, each step gated on the one before:
     stopping point</strong>: it shares step 5's projection-readiness gate
     (PR-review P2).</li>
   <li><strong>Stop downloading it</strong> — same composition rule: rows not yet fully
-    child-backed keep the column. Mechanically a stream split in the sync rules, or
-    keep downloading the column fleet-wide and consume it only where the composition
-    rule says it is live — the download bytes are the smallest of the wins. Fresh
+    child-backed keep the column. Mechanically a stream split in the sync rules —
+    which also requires relaxing the Layout-B staging schema (PR-review P2:
+    <code>blocks_synced.properties_json</code> is <code>TEXT NOT NULL</code> and the
+    raw-table put binds every storage column, so a missing stream column fails the
+    insert before the materializer can act; make it nullable or
+    default-<code>'{}'</code> in the same migration) — or keep downloading the column
+    fleet-wide and consume it only where the composition rule says it is live; the
+    download bytes are the smallest of the wins. Fresh
     devices now need the first-sync projection pass (below) before the cells of
     fully-child-backed rows are readable. The measurements gate steps 4 and 5
     <em>together</em>: take both or neither.</li>
@@ -1731,7 +1736,15 @@ config props, recognizable by their code-known synthetic fieldIds) from field ro
 which repopulates <code>types</code>/<code>block_types</code> and lets the projector
 register user schemas; phase 2 then projects user-schema keys. A single
 schema-readiness-gated pass would deadlock — waiting on schemas only the pass itself
-can surface — or complete early with user schemas unregistered.
+can surface — or complete early with user schemas unregistered. And the pass's cell
+writes must not ride <code>repo.tx</code> (PR-review P2): <code>txEngine</code>
+advances <code>updated_at</code> even under <code>skipMetadata</code> — that's the
+LWW clock, and advancing it locally can leave the cached row "newer" than genuine
+later server snapshots, which the acceptance path would then reject — and its upload
+triggers would re-ship the very cell channel step 4 removed. The projection rewrites
+<code>properties_json</code> through the same sanctioned raw path the sync
+materializer uses (source-null, no upload enqueue, metadata untouched); it borrows
+the backfill's harness for gating and chunking, not its write path.
 </p>
 
 <h2 id="s12">12. Risks to monitor</h2>
