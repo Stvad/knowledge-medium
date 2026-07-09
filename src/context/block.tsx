@@ -3,6 +3,22 @@ import { BlockContextType } from '@/types.js'
 
 export const BlockContext = createContext<BlockContextType>({})
 
+const EMPTY_VISIBILITY_IDS: readonly string[] = Object.freeze([])
+
+const withNestedSurfaceVisibilityBoundary = (
+  overrides: Partial<BlockContextType>,
+): Partial<BlockContextType> => {
+  if (!overrides.isNestedSurface) return overrides
+  return {
+    // Render visibility policy is scoped to a rendered surface occurrence.
+    // A backlink/SRS reveal path must not leak into an embedded/ref/breadcrumb
+    // surface that happens to be mounted inside it.
+    forceOpenBlockIds: EMPTY_VISIBILITY_IDS,
+    forceClosedBlockIds: EMPTY_VISIBILITY_IDS,
+    ...overrides,
+  }
+}
+
 const shallowEqual = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
   if (Object.is(a, b)) return true
   const ka = Object.keys(a)
@@ -48,10 +64,11 @@ export const NestedBlockContextProvider = (
   {children, overrides}: { children: ReactNode, overrides: Partial<BlockContextType> },
 ) => {
   const context = useContext(BlockContext)
+  const normalizedOverrides = withNestedSurfaceVisibilityBoundary(overrides)
   // Stabilize overrides via shallow compare so call sites can pass
   // inline `{layoutBoundary: false, ...}` literals without
   // re-rendering every BlockComponent on every parent render.
-  const stableOverrides = useStableShallow(overrides)
+  const stableOverrides = useStableShallow(normalizedOverrides)
   const value = useMemo(() =>
     ({...context, ...stableOverrides}), [context, stableOverrides])
 
