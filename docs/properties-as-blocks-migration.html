@@ -283,42 +283,33 @@
   Rev 1 (PR #55, May 29) targeted a pre-Layout-B data layer and is superseded by this
   document; §3 lists every rev-1 claim that no longer holds. Mechanism descriptions in
   §5 describe code that exists <em>on the spike branch</em>, not on master.
-  A four-lens adversarial review (2026-07-01) is folded in: §5 "deletion convergence",
-  the §6 durability/collision requirements, and the §11 slice contents carry its
-  findings. <strong>Revised same day after design discussion:</strong> §5 gained the
-  merge-semantics core (children-authoritative arrival — the review had missed that the
-  spike's cell-authoritative catch-up re-creates the per-key clobber between current
-  clients), §6's scope decision inverted to materialize-everything, and §11 gained the
-  measurement-gated cell sync-off staging. A coherence pass (2026-07-04) then
-  reconciled the revision's edges: the kernel flip reclassified as correctness (not
-  optimization), the deletion diff gained its writer-generation discriminator, wire-cost
-  claims corrected for the parent metadata PATCH, and §10 re-grounded in the spike's
-  actual curated hidden list (spot-verified against the branch that day). A PR-review
-  P1 (2026-07-05) then reshaped that discriminator: presence markers don't survive an
-  old client's whole-bag read-modify-write, so it is now a content-bound
-  <em>projection checksum</em>; the old-client materialize branch explicitly covers
-  updates (not only sets and clears); and §5 gained the consistency sweep. Two P2s
-  from the same review (2026-07-09) constrained the checksum's storage (invisible to
-  generic property surfaces) and re-classified end-state step 4 as transitional — it
-  shares step 5's gate, and the measurement-fail fallback is step 3. A round-4 P1
-  bound the checksum to the block id (wholesale-copied bags can't carry their
-  certification) and made no-children ⇒ pending-materialization a global reconcile
-  rule, never a delete. Round-5 P1s re-scoped the rollout (the first user-schema flip
-  rides with slice C's arrival reconcile, not slice B) and the sync-off (upload/download
-  stops apply to child-backed rows only — the column survives as the UiState carrier);
-  a P2 made the no-cell cold-start projection two-phase (kernel-first schema
-  bootstrap). A round-6 P1 extended the §6 carve-out to all non-document scopes
-  (UserPrefs and Automation alongside UiState) — §6 had silently decided only two of
-  the codebase's four property-writing scopes. Round-7 P2s: e2ee-bound moves
-  de-structure (project-then-hide, same as mode transitions), and the step-3 flip is
-  kernel-only — plugin schemas wait for the durable opt-in. Round-8: the e2ee column
-  guard moved server-side (the ciphertext trigger must also enforce
-  <code>reference_target_id IS NULL</code> for e2ee rows — slice A), and plugin
-  schemas now default cell-backed in the §6 flag spec itself, not just the rollout.
-  Round-9: the sync-off composition rule is childBacked-based, not scope-based —
-  cell-backed plugin keys on content rows (and unclassifiable keys) keep the cell
-  channel, making plugin opt-in an effective prerequisite for step 4's savings.
-  <strong>Last verified against code:</strong> 2026-07-01.
+  <strong>Hardened through an adversarial review loop</strong> (2026-07-01 → 07-09: a
+  four-lens session review, a design discussion, a coherence pass, and ten rounds of
+  PR review — the loop's findings are folded in where they land, tagged
+  "PR-review P1/P2"). The load-bearing corrections, stated as final positions:
+  <ul>
+    <li><strong>Children-authoritative arrival</strong> — the spike's
+      cell-authoritative catch-up re-creates the per-key clobber between current
+      clients; arrival is a reconcile pass and the cell is never a merge input for
+      child-backed keys (§5).</li>
+    <li><strong>The old-client discriminator is a self-describing, id-bound projection
+      checksum</strong> — presence markers fail because an old client's whole-bag
+      read-modify-write <em>preserves</em> them; no-children keys are pending
+      materialization, never deleted (§5).</li>
+    <li><strong>Materialize everything in <code>BlockDefault</code></strong>: kernel
+      and user schemas default child-backed; plugin schemas default cell-backed until
+      a durable per-schema opt-in; UiState/UserPrefs/Automation are permanent
+      cell-backed carve-outs (§6).</li>
+    <li><strong>Rollout:</strong> slice B lands dormant, the first flip rides with
+      slice C's reconcile, and the kernel flip (end-state step 3) is required
+      correctness, not optimization (§11).</li>
+    <li><strong>The cell sync-off is measurement-gated and composition-scoped</strong>:
+      a row leaves the cell channel only when every key on it is known child-backed;
+      steps 4+5 go together, the fallback is step 3, and the column survives as the
+      carrier for carve-out, un-flipped-plugin, and unclassifiable keys (§11).</li>
+  </ul>
+  <strong>Last verified against code:</strong> 2026-07-01 (spot-verifications through
+  2026-07-09).
 </aside>
 
 <div class="callout">
@@ -326,8 +317,8 @@
   <ul>
     <li><strong>Children are the only property truth that crosses sync.</strong> The
       cell is never a merge input for child-backed keys; arrival re-projects from
-      children (per-row LWW = per-key merge). The cell survives as local read surface +
-      bootstrap hint (<a href="#s5">§5</a>).</li>
+      children (per-row LWW = per-key merge). The cell survives as local read surface,
+      bootstrap hint, and carrier for non-child-backed keys (<a href="#s5">§5</a>).</li>
     <li><strong>Materialize everything in <code>BlockDefault</code></strong> — kernel,
       plugin (behind the durable opt-in), and user schemas — with system field rows
       hidden by default; the non-document scopes (UiState, UserPrefs, Automation)
@@ -498,9 +489,10 @@ slice and never read rev 1? Skip this section — the as-built spec starts at
         <code>blocks</code> uploads, and raw non-tx writes to synced tables are actively
         guarded against (<code>syncedTableWriteGuard</code>).</td>
       <td><strong>Retracted.</strong> With the dual-write model (§5) the derived cell is
-        part of the user's transaction and <em>must</em> upload — peers read the cell.
-        Wire redundancy (~2× for property data) is the accepted cost, same shape as
-        content + <code>references_json</code> today.</td>
+        part of the user's transaction and <em>must</em> upload — it stays the
+        bootstrap hint and the carrier for non-child-backed keys (never a merge
+        input, §5). Wire redundancy (~2× for property data) is the accepted cost, same
+        shape as content + <code>references_json</code> today.</td>
     </tr>
     <tr>
       <td>"Sync conflict story: LWW on whole cell"</td>
@@ -545,8 +537,9 @@ slice and never read rev 1? Skip this section — the as-built spec starts at
         "hidden fields" UI filter are all fallout of that flip.</td>
       <td>Decided the other way after the §5 merge analysis: §6 adopts
         materialize-everything for <code>BlockDefault</code> (system rows hidden by
-        default), because cell-only keys stay clobberable; UiState is the one
-        carve-out. The per-schema flag survives as the rollout lever.</td>
+        default), because cell-only keys stay clobberable; the non-document scopes
+        (UiState, UserPrefs, Automation) are the carve-out. The per-schema flag
+        survives as the rollout lever.</td>
     </tr>
     <tr>
       <td>No E2EE constraints considered</td>
@@ -730,9 +723,11 @@ which converge per-row. The cell's roles shrink to exactly three, none of them m
     Bounded, self-healing — and it applies to <code>json_extract</code> queries on a
     fresh device too, not just reads.</li>
   <li><strong>Carrier for non-child-backed keys</strong> — any schema left cell-backed
-    (per §6: UiState / UserPrefs / Automation props) keeps today's cell-LWW semantics,
-    acceptable exactly because those keys are per-user or machine-authored —
-    effectively uncontended.</li>
+    keeps today's cell-LWW semantics. Per §6 that means the three non-document scopes
+    (UiState / UserPrefs / Automation — per-user or machine-authored, effectively
+    uncontended) and plugin <code>BlockDefault</code> schemas that haven't yet made
+    their durable opt-in, for which cell-LWW is simply today's semantics retained
+    until the flip.</li>
 </ul>
 
 <p>
@@ -776,11 +771,12 @@ arrived row:
     is never a merge input: re-project child-backed keys from local children; apply
     the cell only for keys that are <em>not</em> child-backed. A child-backed key with
     <em>no local child rows at all</em> is left untouched as pending materialization —
-    either children-in-flight from the writer's dual-write (they land next drain) or a
-    copied bag awaiting the sweep; <strong>removing a cell key because children are
+    children-in-flight from the writer's dual-write, landing next drain (under the
+    id-bound checksum a copied bag can't reach this branch: it mismatches and
+    materializes); <strong>removing a cell key because children are
     absent is forbidden everywhere</strong> — arrival, projection rebuilds, and the
     sweep alike. An <em>old-client</em>
-    cell (checksum absent or stale) is the one place the full materialize direction
+    cell (checksum mismatched or absent) is the one place the full materialize direction
     still runs — sets, <strong>updates to keys that already have children</strong>,
     and clears (the deletion diff below) — because that bag genuinely is its writer's
     newest truth. Two guards apply even there: a child is overwritten only if its own
@@ -797,52 +793,58 @@ arrived row:
   <strong>Two gaps the spike's catch-up leaves open</strong> (folded into the reconcile
   pass above; stated separately because each has a concrete failure):
   <ul>
-    <li><strong>Old-client clears resurrect.</strong> A pre-migration client (cell-only
-      writer) removes key <code>status</code>; the PATCH arrives at client B, whose
-      <code>[[status]]</code> field row is untouched — the spike's set-only catch-up
-      sees no present key to process. B's tree still shows the value, and the next
-      touch of that subtree re-projects it into the cell and re-uploads. The delete is
-      undone fleet-wide. The reconcile pass closes this with the deletion diff — but
-      the diff must never fire on cell shape alone. "Arrived cell omits key K while
-      local children for K exist" is also the signature of an innocent current-client
-      bag (a writer that never had K, winning column-LWW); soft-deleting on that
-      re-opens the clobber for deletes. The diff needs a <strong>positive
-      discriminator — and a presence marker is not one</strong> (PR-review P1): an old
-      client's <code>setProperty</code> is a read-modify-write of the whole bag, so a
-      reserved marker key written by the last current client survives the old client's
-      edit untouched — and column-narrow upload means a separate stamp column is never
-      touched either. A marker masks exactly the writes it must expose. The
-      discriminator must be <strong>content-bound</strong>: current clients embed a
-      <em>projection checksum</em> — a canonical hash over the <strong>block id plus
-      the bag's child-backed keys</strong> — when they project; arrival recomputes and
-      compares. The id-binding is load-bearing (PR-review P1): a wholesale-copied bag
-      (an old client's copy/import cloning <code>properties_json</code> onto a new
-      block) would otherwise carry a still-valid checksum to a block with no children
-      and be mis-certified as a projection; bound to the id, the copy mismatches, the
-      old-client branch runs, and the copied keys materialize. Match ⇒ a current client's
-      projection ⇒ never a merge input. Mismatch or absent ⇒ last modified by a
-      non-projecting writer ⇒ the full materialize direction (set / update / clear) is
-      licensed for that row's child-backed keys, clock-guarded per child (previous
-      list). Where the checksum lives is constrained, not free (PR-review P2): it must
-      be invisible to every generic property surface — the panel's unregistered-keys
-      section, copy/extract/import paths, key enumeration — or every block grows a
-      visible synthetic property. Two sound homes, slice C picks: a <em>reserved,
-      filtered bag key</em> (atomic with the bag by construction — it rides the same
-      column through LWW and e2ee envelopes — but every enumerator must filter the
-      reserved namespace through one shared helper), or a <em>dedicated synced
-      column</em> (invisible to property consumers by construction; atomicity holds
-      because current clients write bag + checksum in the same patch, so per-column
-      LWW picks both from the same winner, while an old client's bag-only patch leaves
-      the checksum column behind — exactly the mismatch signal; costs a migration and
-      an upload-whitelist entry). Accepted residual: an old-client bag is a whole-bag write, so accepting
-      it can carry stale copies of <em>other</em> keys on that block — inherent to
-      mixed-version operation (the old client has no per-key channel), bounded by the
-      per-child clock guard and the upgrade window. Among current clients the cell is
-      never consulted — deletes travel exclusively as child soft-delete rows. If the
-      checksum slips out of slice C, ship <em>without</em> the old-client materialize
-      branches and close the whole mixed-version gap by coordinated fleet upgrade
-      instead (§12): a wrong-direction overwrite is worse than a temporarily
-      unconverged edit.</li>
+    <li><strong>Old-client clears resurrect — and the discriminator that closes
+      them.</strong>
+      <p><em>The failure:</em> a pre-migration client (cell-only writer) removes key
+      <code>status</code>; the PATCH arrives at client B, whose <code>[[status]]</code>
+      field row is untouched — the spike's set-only catch-up sees no present key to
+      process. B's tree still shows the value, and the next touch of that subtree
+      re-projects it into the cell and re-uploads: the delete is undone fleet-wide.
+      The reconcile's deletion diff closes this — but it must never fire on cell shape
+      alone. "Arrived cell omits key K while local children for K exist" is also the
+      signature of an innocent current-client bag (a writer that never had K, winning
+      column-LWW); soft-deleting on that re-opens the clobber for deletes.</p>
+      <p><em>The discriminator</em> (shaped by three review rounds): a presence marker
+      fails — an old client's <code>setProperty</code> is a read-modify-write of the
+      whole bag, so a reserved marker key written by the last current client
+      <em>survives</em> the old client's edit untouched, and column-narrow upload
+      means a separate stamp column is never touched either; a marker masks exactly
+      the writes it must expose. The discriminator is therefore a
+      <strong>projection checksum</strong> with three properties.
+      <em>Content-bound:</em> a canonical hash over the covered keys' values, so any
+      non-projecting edit breaks it. <em>Id-bound:</em> the block id is hashed in, so
+      a wholesale-copied bag mismatches on the new block and takes the old-client
+      branch instead of being mis-certified. <em>Self-describing:</em> the stored
+      record is <code>{hash, coveredKeys}</code>, and verification recomputes over
+      exactly the listed keys — never over "what this client's registry considers
+      child-backed", which varies with plugin/version skew and would let a client
+      missing a plugin mis-classify a peer's fresh projection as an old-client bag
+      (PR-review P1). The registry decides what to <em>re-project</em>; it plays no
+      part in classification. Match ⇒ a current client's projection ⇒ never a merge
+      input. Mismatch or absent ⇒ last modified by a non-projecting writer ⇒ the full
+      materialize direction (set / update / clear) is licensed for that row's
+      child-backed keys, clock-guarded per child (previous list).</p>
+      <p><em>Storage</em> (PR-review P2): the record must be invisible to every
+      generic property surface — the panel's unregistered-keys section,
+      copy/extract/import paths, key enumeration — or every block grows a visible
+      synthetic property. Two sound homes, slice C picks: a <em>reserved, filtered
+      bag key</em> (atomic with the bag by construction — it rides the same column
+      through LWW and e2ee envelopes — but every enumerator must filter the reserved
+      namespace through one shared helper), or a <em>dedicated synced column</em>
+      (invisible to property consumers by construction; atomicity holds because
+      current clients write bag + checksum in the same patch, so per-column LWW picks
+      both from the same winner, while an old client's bag-only patch leaves the
+      checksum column behind — exactly the mismatch signal; costs a migration and an
+      upload-whitelist entry).</p>
+      <p><em>Residual and fallback:</em> an old-client bag is a whole-bag write, so
+      accepting it can carry stale copies of <em>other</em> keys on that block —
+      inherent to mixed-version operation (the old client has no per-key channel),
+      bounded by the per-child clock guard and the upgrade window. Among current
+      clients the cell is never consulted — deletes travel exclusively as child
+      soft-delete rows. If the checksum slips out of slice C, ship <em>without</em>
+      the old-client materialize branches and close the whole mixed-version gap by
+      coordinated fleet upgrade instead (§12): a wrong-direction overwrite is worse
+      than a temporarily unconverged edit.</p></li>
     <li><strong>Duplicate field rows from concurrent backfills persist.</strong> Two
       devices backfilling offline each create their own <code>[[status]]</code> row;
       after sync, the arrived rows are field/value rows whose <em>own</em> cells are
@@ -871,8 +873,10 @@ arrived row:
   server feature) fails <em>silently</em> — the cell and the children just drift.
   Deterministic projection makes that cheap to police: a background sweep recomputes
   each block's child-backed cell keys from its children, byte-compares against the
-  stored cell, and repairs divergence — with the <em>same branch rules as the arrival
-  reconcile, not blanket children-win</em> (PR-review P2): keys with live children →
+  stored cell, and repairs divergence — with the <em>arrival reconcile's
+  projection-side branch rules, not blanket children-win</em> (PR-review P2; checksum
+  classification is arrival-only — the sweep repairs local projection state and never
+  consumes a remote bag): keys with live children →
   project, children win; keys whose children are all soft-deleted → the deletion won,
   drop the key; cell keys with <strong>no child rows at all</strong> → pending
   materialization, <em>not</em> divergence — that is exactly the slice-C
@@ -902,8 +906,10 @@ arrived row:
   (bootstrap hint). Budget roughly 2 extra rows per (block, property) pair on first
   materialization plus one cell-column PATCH per property write; the backfill of a
   large workspace is a real upload burst (§11, slice C). The end state goes further:
-  once children are the fleet-wide source, the cell can stop syncing entirely and
-  become a locally-derived column — at which point a property update is a small
+  once children are the fleet-wide source, the cell can stop syncing <em>for fully
+  child-backed rows</em> and become a locally-derived column there (the §11
+  composition rule — rows carrying carve-out, un-flipped-plugin, or unclassifiable
+  keys keep the channel) — at which point a property update is a small
   value-child PATCH plus the parent's metadata PATCH (<code>setProperty</code> bumps
   <code>updated_at</code>/<code>updated_by</code> on the parent, and those columns
   sync), still well under re-shipping the whole bag, i.e. <em>cheaper on the wire than
@@ -939,10 +945,11 @@ contended kernel prop (<code>collapsed</code>) is precisely the one that most ne
 row-granular merge. Child-backing it also clears the path on wire cost — though only
 at the end state: while the cell still syncs, each toggle ships the value-child PATCH
 <em>plus</em> the re-projected whole bag (more wire than today, not less); once the
-cell stops uploading (§11, step 4), a toggle is the value-child PATCH plus the parent's
-metadata bump — cheaper than re-shipping the bag. The wire argument is a consequence of
-the sync-off (which only works if every contended key is child-backed), not an
-immediate saving; the merge argument above is what decides the flip.
+cell stops uploading for a row (§11, step 4 — the row must pass the composition test:
+<em>every</em> key on it known child-backed), a toggle is the value-child PATCH plus
+the parent's metadata bump — cheaper than re-shipping the bag. The wire argument is a
+consequence of the sync-off, not an immediate saving; the merge argument above is what
+decides the flip.
 </p>
 
 <p>
@@ -1000,8 +1007,9 @@ sync-off scoping.
   exists, which is the data fork this callout forbids (PR-review P2);
   <code>false</code> — permanently — for <code>UiState</code>,
   <code>UserPrefs</code>, and <code>Automation</code>. During rollout the flag is the
-  staging lever: user schemas flip first, kernel props follow once the §11 measurements
-  and test-porting land. All read/write machinery branches on the flag in exactly one
+  staging lever: user schemas flip first, kernel props follow at the §11 kernel flip
+  (tier-4-informed and test-ported, but required regardless of the sync-off
+  decision). All read/write machinery branches on the flag in exactly one
   place each; one write model (<code>setProperty</code>), one detection rule, one
   projection. (Sourcing the flag <em>durably</em> where it can vary, and migrating data
   when it flips, is separate plumbing — the requirements below.)
@@ -1152,9 +1160,10 @@ so mode transitions pass the check). The rest of the gate is client-side:
 A side benefit of the §11 cell end-state — for e2ee workspaces, sequenced behind
 option 2: under the option-1 gate the cell is an e2ee workspace's <em>only</em>
 property store, so step 4 cannot apply to it. Once derive-locally child-backing
-(option 2) replaces the gate, stopping the cell upload removes one of the three
-envelope columns from the wire entirely — property data then travels only as ordinary
-encrypted child-row content.
+(option 2) replaces the gate, stopping the cell upload removes the envelope column
+from the wire for fully-child-backed rows (the §11 composition rule applies in e2ee
+too — carve-out and un-flipped-plugin rows keep their encrypted cells); property data
+for those rows then travels only as ordinary encrypted child-row content.
 </p>
 
 <p>
@@ -1164,7 +1173,12 @@ the RPC silently drops unknown keys, so while a fresh field row propagates fine 
 go through the PUT/upsert path, which carries all columns), any <em>later</em> change to
 <code>reference_target_id</code> on an existing row ships as a PATCH and is dropped
 server-side, with no client-side re-derive on arrival to compensate; the synced
-detection column would be insert-only over sync. And <strong>re-timestamp every
+detection column would be insert-only over sync. The extension must also be
+<strong>null-aware</strong> (PR-review P2): the column must be <em>clearable</em> —
+a row edited back to ordinary content, or stripped by the e2ee/move paths, must stop
+being a field row on peers — so the RPC needs the presence-based handling used for
+nullable <code>parent_id</code>, not the <code>COALESCE(patch, col)</code> pattern
+that silently ignores JSON <code>null</code>. And <strong>re-timestamp every
 spike-introduced Supabase migration</strong> — both <code>20260527123000</code>
 (reference_target_id) and <code>20260530143000</code> (recent-content index) sort
 <em>before</em> already-applied master migrations (<code>20260612…</code>,
@@ -1184,7 +1198,9 @@ skill while at it.
   <dt><strong>Value decoding.</strong></dt>
   <dd>Spike: first parseable value child wins (order-key order); unparseable children are
     skipped. If <em>no</em> child parses, the projection <em>removes</em> the key from
-    the cell. Rev 1 said "log + omit, keep data visible" — the spike keeps the rows (data
+    the cell. (This rule — and default-vs-unset below — presupposes a <em>live field
+    row</em>; a cell key with no child rows at all is pending materialization and is
+    never removed, per the §5 global rule.) Rev 1 said "log + omit, keep data visible" — the spike keeps the rows (data
     is never destroyed) but the cell-side key vanishes, which downstream readers see as
     "unset". Acceptable; document that "field with only-invalid values" reads as unset
     while remaining visible/fixable in the tree.</dd>
@@ -1212,8 +1228,9 @@ skill while at it.
     reserved shape, not a user affordance.</dd>
 
   <dt><strong>Default-value vs. unset.</strong></dt>
-  <dd>Unchanged from rev 1: zero value children ⇒ key omitted from the cell ⇒
-    <code>block.get</code> falls back to <code>defaultValue</code>. No reader change.</dd>
+  <dd>Unchanged from rev 1: zero value children <em>under a live field row</em> ⇒ key
+    omitted from the cell ⇒ <code>block.get</code> falls back to
+    <code>defaultValue</code>. No reader change.</dd>
 
   <dt><strong>Codec / preset changes are migrations, not edits.</strong></dt>
   <dd>§9's "only-invalid values reads as unset" is fine for one malformed child; it is
@@ -1264,7 +1281,11 @@ skill while at it.
   <dd>Implemented in the spike: <code>mergeBlocksInTx</code> reparents only non-field
     children, subtree-deletes <code>from</code>'s field children (fixed at
     <code>f4d0b447</code> — a bare delete had orphaned value rows), and re-materializes
-    the merged bag; orphan-alias cleanup deletes generated field rows under alias
+    the merged bag — but slice B3 must add the same preservation rule as the dedup
+    above (PR-review P2): before the subtree-delete, relocate user-authored
+    descendants of the source's value children (comments, elaboration) under the
+    merged result's corresponding value children — a bare subtree-delete silently
+    tombstones them; orphan-alias cleanup deletes generated field rows under alias
     seats; panel-layout projection ignores field rows; and <code>tx.childrenOf</code>
     now <em>excludes</em> field rows by default (structural callers must see only
     visible siblings — the machinery opts in with
@@ -1379,7 +1400,9 @@ implementation</strong> and keep it open until its content is fully accounted fo
         workspaces, column excluded from their upload), the server-side trigger
         extension (<code>reference_target_id IS NULL</code> enforced for e2ee rows —
         client gates alone are not a guarantee), and the
-        <code>apply_block_patches</code> whitelist extension. Two hard-won requirements
+        <code>apply_block_patches</code> whitelist extension — null-aware, per §8:
+        clears must propagate (presence-based handling, as for nullable
+        <code>parent_id</code>). Two hard-won requirements
         from the spike's own review history: the <strong>existing-install local
         migration must ALTER both <code>blocks</code> and
         <code>blocks_synced</code></strong> (copy the spike's
@@ -1477,11 +1500,14 @@ implementation</strong> and keep it open until its content is fully accounted fo
         arrival re-projects child-backed keys from local children (a current client's
         cell is never a merge input); materialize direction runs only for genuinely
         old-client cells, gated on the §5 projection-checksum discriminator — which
-        this slice introduces (current clients embed a canonical checksum when they
-        project; a mismatched or absent checksum marks an old-client bag) — never on
-        cell shape (mismatched bags get the full set/update/clear materialize,
-        clock-guarded per child; the deletion diff must not ship without the
-        checksum); and dedup happens at the <em>parent</em> of arrived field rows.
+        this slice introduces (current clients embed the self-describing
+        <code>{hash, coveredKeys}</code> record when they project; a mismatched or
+        absent checksum marks an old-client bag) — never on cell shape (mismatched
+        bags get the full set/update/clear materialize, clock-guarded per child and
+        soft-delete-aware — no resurrection past a newer deletion; the deletion diff
+        must not ship without the checksum); child-backed keys with <em>no child rows
+        at all</em> are pending materialization, never deleted; and dedup happens at
+        the <em>parent</em> of arrived field rows.
         The §5 consistency sweep ships here too — it reuses this slice's harness in
         verify mode, and its divergence counter is the acceptance metric for the
         reconcile pass itself. It must also
@@ -1596,40 +1622,39 @@ sequence, each step gated on the one before:
     references-projection guard for synthetic fieldIds. <em>This step completes the §6
     correctness fix — it is sequenced here for rollout pacing (tier-4 measurement
     informs it), but it is required regardless of the step-5 decision.</em></li>
-  <li><strong>Stop uploading the cell — for child-backed rows only, never
-    globally</strong> (PR-review P1): the exclusion applies only where the bag holds
-    exclusively keys <em>known to be child-backed</em>. Conservatively, three kinds of
-    key keep a row on the cell channel: §6 carve-out-scope keys (UiState, UserPrefs,
-    Automation — cell-backed permanently), <strong>cell-backed plugin
-    <code>BlockDefault</code> keys</strong> (§6 defaults plugins <code>false</code>
-    until their durable opt-in, and plugin props like todo <code>status</code> live on
-    ordinary content blocks — freezing those rows would orphan the plugin's only
-    synced store), and keys a client's registry can't classify at all (a plugin not
-    installed here may be live elsewhere). Practical consequence: migrating or
-    opting-in the content-block plugin schemas is effectively a prerequisite for this
-    step delivering much — un-flipped plugin keys keep their rows on the cell channel.
-    For the rows that do stop, the
-    server copy freezes; receivers never merged from it, so nothing changes for
-    current clients. Must come after (1)–(3): any remaining cell-only writer's edits
-    would otherwise still need the cell channel. For <em>fresh devices</em>, though,
-    the frozen copy decays: every property edit after the flip is missing from the
-    downloaded hint until the projection pass sweeps the block — so this step is a
-    <strong>transition, not a stopping point</strong>, and it shares step 5's
-    projection-readiness gate (PR-review P2).</li>
-  <li><strong>Stop downloading it</strong> — scoped the same way: rows not yet fully
-    child-backed keep the column, same composition rule as step 4 (mechanically a
-    stream split in the sync rules, or keep
-    downloading the column fleet-wide and ignore it for content rows — the download
-    bytes are the smallest of the wins). Fresh devices now need the first-sync
-    projection pass (below) before content-row cells are readable. The measurements
-    gate steps 4 and 5 <em>together</em>: take both or neither.</li>
-  <li><strong>Deprecate the server column for content rows</strong> (stale from
-    step 4 on; a future server-side feature that wants properties derives them from
-    the child rows with a SQL view/aggregate — the data is all there for plaintext
-    workspaces, which is the only case server features could read anyway). It cannot
-    be <em>dropped</em> while the §6 carve-out scopes stay cell-backed: the column
-    survives as the UiState/UserPrefs/Automation carrier unless those scopes are
-    someday migrated off <code>blocks</code>.</li>
+  <li><strong>Stop uploading the cell — per row, by key composition, never
+    globally.</strong> <em>The rule</em> (PR-review P1): a row's cell stops uploading
+    only when every key in its bag is <em>known to be child-backed</em>. Three kinds
+    of key therefore keep a row on the channel: §6 carve-out-scope keys (UiState,
+    UserPrefs, Automation — cell-backed permanently); cell-backed plugin
+    <code>BlockDefault</code> keys (§6 defaults plugins <code>false</code> until their
+    durable opt-in, and plugin props like todo <code>status</code> live on ordinary
+    content blocks — freezing those rows would orphan the plugin's only synced store);
+    and keys a client's registry can't classify (a plugin not installed here may be
+    live elsewhere). Practical consequence: opting-in the content-block plugin schemas
+    is effectively a prerequisite for this step delivering much.
+    <em>Semantics for rows that stop:</em> the server copy freezes; receivers never
+    merged from it, so nothing changes for current clients — but a fresh device's
+    downloaded hint decays (every post-flip edit is missing until the projection pass
+    sweeps the block). <em>Status:</em> must come after (1)–(3) — a remaining
+    cell-only writer still needs the channel — and it is a <strong>transition, not a
+    stopping point</strong>: it shares step 5's projection-readiness gate
+    (PR-review P2).</li>
+  <li><strong>Stop downloading it</strong> — same composition rule: rows not yet fully
+    child-backed keep the column. Mechanically a stream split in the sync rules, or
+    keep downloading the column fleet-wide and consume it only where the composition
+    rule says it is live — the download bytes are the smallest of the wins. Fresh
+    devices now need the first-sync projection pass (below) before the cells of
+    fully-child-backed rows are readable. The measurements gate steps 4 and 5
+    <em>together</em>: take both or neither.</li>
+  <li><strong>Deprecate the server column for fully-child-backed rows</strong> (stale
+    from step 4 on <em>for the rows that stopped uploading</em>; a future server-side
+    feature that wants properties derives them from the child rows with a SQL
+    view/aggregate — the data is all there for plaintext workspaces, which is the
+    only case server features could read anyway). It cannot be <em>dropped</em>: the
+    column survives as the carrier for carve-out-scope, un-flipped-plugin, and
+    unclassifiable keys unless those are someday migrated off
+    <code>blocks</code>.</li>
 </ol>
 
 <p>
@@ -1674,8 +1699,9 @@ no infrastructure needed:
 
 <p>
 <strong>Decision rule:</strong> if the gated, visible-panel-prioritized projection pass
-(tiers 2–3) lands under ~10–15 seconds, take steps 4 <em>and</em> 5 — cell fully
-local, wire cost for property updates drops below today's. If it doesn't,
+(tiers 2–3) lands under ~10–15 seconds, take steps 4 <em>and</em> 5 — the cell
+becomes fully local for fully-child-backed rows, and wire cost for property updates
+on those rows drops below today's. If it doesn't,
 <strong>stop at step 3 and keep the cell uploading</strong>: a frozen server cell is
 not a usable long-term hint (it goes stale from the flip moment on — see step 4), so
 step 4 without step 5 is a transition, not a destination. Cold start then stays at
@@ -1777,8 +1803,9 @@ can surface — or complete early with user schemas unregistered.
   <li>
     <strong>Doc drift.</strong> <code>properties-model-evolution.md</code>'s Thread-2
     decision section is superseded by §6 here (this doc lands on the spike's "A only"
-    for <code>BlockDefault</code> — for merge reasons, with the UiState carve-out and a
-    staged rollout the spike lacked). Re-stamp it when slices land.
+    for <code>BlockDefault</code> — for merge reasons, with the non-document carve-out
+    (UiState/UserPrefs/Automation) and a staged rollout the spike lacked). Re-stamp it
+    when slices land.
     (<code>field-level-sync-merge.md</code>'s stale pointer to the never-merged
     <code>properties-as-children.html</code> was fixed alongside this doc.)
   </li>
