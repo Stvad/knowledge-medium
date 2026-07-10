@@ -47,7 +47,7 @@ const Placeholder = ({
     data-testid={testid}
     role="img"
     aria-label={label}
-    className="flex items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground"
+    className="inline-flex items-center gap-2 rounded border border-border bg-muted/40 px-3 py-2 align-top text-sm text-muted-foreground"
   >
     <span className={spin ? 'animate-spin' : undefined}>{icon}</span>
     <span>{label}</span>
@@ -79,7 +79,10 @@ const ImageViewer = ({ state, reportDecodeFailure, filename }: MediaViewerProps)
       <MarkdownImage
         src={state.url}
         alt={filename || 'Attachment image'}
-        className="max-w-full rounded"
+        // A `((id))` reference renders the image inside ReferenceLink's inline
+        // anchor. Tailwind's reset makes images block-level, so restore an
+        // inline-level box and top-align it like the PDF/audio widgets.
+        className="inline-block max-w-full rounded align-top"
         onError={() => reportDecodeFailure(state.url)}
       />
     )
