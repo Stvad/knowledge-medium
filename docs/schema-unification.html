@@ -310,7 +310,7 @@ export const isCollapsedProp = seedProperty&lt;boolean&gt;({
   <thead><tr><th>Definition's preset</th><th>Without the owning plugin</th></tr></thead>
   <tbody>
     <tr><td>Kernel preset (<code>string</code>, <code>number</code>, <code>boolean</code>, <code>enum</code>, <code>date</code>, <code>ref</code>, <code>refList</code>, <code>list</code>, <code>url</code> + the new hidden ones, &sect;10)</td><td><strong>Fully functional.</strong> Kernel preset codec cores ship with the app (data layer, post-&sect;3-split; today the whole set rides the <code>system:kernel-value-presets</code> UI toggle), not with the plugin — <code>tryBuildSchema</code> succeeds, codec/editor/queries/backlinks all work. After &sect;10's audit-driven preset work this covers <strong>36 of 44</strong> plugin schemas.</td></tr>
-    <tr><td>Plugin-owned preset (the 6 custom codecs, &sect;10)</td><td><strong>Declaration-only entry:</strong> name, fieldId, changeScope, childBacked, hidden, origin are all readable off the block — classification works (#288's requirement 2) — but there is no codec, so no decode/edit/query. The existing skip-with-warning path (<code>tryBuildSchema</code>) becomes "publish a declaration" instead of "drop the row".</td></tr>
+    <tr><td>Plugin-owned preset (the 7 custom codecs, &sect;10)</td><td><strong>Declaration-only entry:</strong> name, fieldId, changeScope, childBacked, hidden, origin are all readable off the block — classification works (#288's requirement 2) — but there is no codec, so no decode/edit/query. The existing skip-with-warning path (<code>tryBuildSchema</code>) becomes "publish a declaration" instead of "drop the row".</td></tr>
   </tbody>
 </table></div>
 
