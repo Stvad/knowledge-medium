@@ -338,6 +338,9 @@ describe('MediaContentRenderer — PDF branch', () => {
     expect(object?.getAttribute('data')).toContain('navpanes=0')
     // Pinned to application/pdf so the browser hands it to its PDF viewer, never HTML-sniffs it.
     expect(object).toHaveAttribute('type', 'application/pdf')
+    // Rendered as an inline ((id)) reference, the object must opt out of ReferenceLink navigation
+    // (whose rich-content selector covers <iframe> but not <object>) so clicks reach the PDF viewer.
+    expect(object).toHaveAttribute('data-block-interaction', 'ignore')
   })
 
   it('collapses the preview back to the poster, and re-expands instantly (armed — no refetch)', () => {

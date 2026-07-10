@@ -418,6 +418,12 @@ const PdfViewer = ({ state, resolveBytes, requestResolve, armed, filename, size 
             data={`${state.url}${PDF_VIEWER_HASH}`}
             type={PDF_MIME}
             aria-label={label}
+            // When this widget is an inline `((id))` reference, ReferenceLink wraps it in a navigating
+            // <a> that suppresses navigation only for a rich-content selector — which lists <iframe>
+            // but NOT <object>. Without this opt-out, a click on the PDF would follow the reference
+            // instead of interacting with the native viewer. (The toggle/download <button>s are already
+            // covered by the selector; this marks the object itself.)
+            data-block-interaction="ignore"
             className="block h-[60vh] max-h-[800px] w-[min(44rem,86vw)] max-w-full border-t border-border bg-background"
           >
             <div className="px-3 py-8 text-center text-muted-foreground">
