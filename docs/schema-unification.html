@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Schema Unification — definitions are blocks, behavior is presets, code seeds</title>
+<style>
+  :root {
+    --bg: #fdfdfc;
+    --surface: #ffffff;
+    --surface-2: #f5f6f8;
+    --ink: #1c2024;
+    --ink-2: #5a6572;
+    --ink-3: #8a95a1;
+    --line: #e6e9ed;
+    --line-2: #d3d9e0;
+    --accent: #2563eb;
+    --accent-bg: #eff4fe;
+    --good: #15803d;
+    --good-bg: #ecf8f0;
+    --warn: #9a6700;
+    --warn-bg: #fdf6e3;
+    --bad: #cf222e;
+    --bad-bg: #fdefef;
+    --decide: #7c3aed;
+    --decide-bg: #f4effd;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101418; --surface: #161b22; --surface-2: #1d242d;
+      --ink: #e7edf3; --ink-2: #9aa7b4; --ink-3: #707c89;
+      --line: #29313b; --line-2: #39434f;
+      --accent: #6ea8fe; --accent-bg: #17233a;
+      --good: #4ac26b; --good-bg: #12271a;
+      --warn: #d4a72c; --warn-bg: #2a2310;
+      --bad: #ff7b72; --bad-bg: #2d1618;
+      --decide: #b794f6; --decide-bg: #241a3a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 0 24px 120px; }
+  header.hero { border-bottom: 1px solid var(--line); padding: 40px 24px 28px; background: var(--surface); }
+  header.hero .inner { max-width: 860px; margin: 0 auto; }
+  .eyebrow { font-size: 12px; letter-spacing: .13em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  h1 { font-size: 33px; line-height: 1.15; margin: 8px 0 8px; letter-spacing: -0.02em; }
+  .subtitle { font-size: 17px; color: var(--ink-2); margin: 0; max-width: 66ch; }
+  nav.toc {
+    position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--line);
+    background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: blur(8px);
+    margin: 0 -24px 10px; padding: 8px 24px;
+  }
+  nav.toc ol { list-style: none; display: flex; flex-wrap: wrap; gap: 2px 16px; margin: 0 auto; padding: 0; max-width: 860px; font-size: 13px; }
+  nav.toc a { color: var(--ink-2); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+  h2 { font-size: 24px; margin: 54px 0 8px; letter-spacing: -0.015em; }
+  h2 .num, h3 .num { color: var(--ink-3); font-weight: 600; margin-right: 9px; }
+  h3 { font-size: 18px; margin: 30px 0 4px; }
+  h4 { font-size: 15px; margin: 22px 0 2px; }
+  p { margin: 12px 0; }
+  ul, ol { padding-left: 26px; }
+  li { margin: 5px 0; }
+  a { color: var(--accent); }
+  code { font-family: var(--mono); font-size: .855em; background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+  pre { background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; padding: 13px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; }
+  pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+  strong { font-weight: 650; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 11px; border-bottom: 1px solid var(--line); }
+  thead th { background: var(--surface-2); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); border-bottom: 1px solid var(--line-2); }
+  .aside { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--surface); border-radius: 9px; padding: 12px 17px; margin: 18px 0; }
+  .aside h5 { margin: 0 0 5px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-2); }
+  .aside.decision { border-left-color: var(--decide); background: var(--decide-bg); }
+  .aside.decision h5 { color: var(--decide); }
+  .aside.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+  .aside.warn h5 { color: var(--warn); }
+  .aside.win { border-left-color: var(--good); background: var(--good-bg); }
+  .aside.win h5 { color: var(--good); }
+  .kv { color: var(--ink-3); font-size: 13px; }
+  .pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; vertical-align: 1px; }
+  .pill.new { background: var(--accent-bg); color: var(--accent); }
+  .pill.dies { background: var(--bad-bg); color: var(--bad); }
+  .pill.keeps { background: var(--good-bg); color: var(--good); }
+  .tablewrap { overflow-x: auto; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 40px 0; }
+  .foot { color: var(--ink-3); font-size: 13px; }
+</style>
+</head>
+<body>
+
+<aside class="doc-status" style="margin:0 0 0;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:0;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
+<strong>Status: proposed design (rev 1)</strong> &middot; nothing implemented. Grounded against master <code>8f957555</code>: <code>src/data/properties.ts</code>, <code>userSchemasService.ts</code>, <code>userTypesService.ts</code>, <code>projectorRuntime.ts</code>, <code>facetBridge.ts</code>, <code>internals/refProjection.ts</code>, <code>kernelDataExtension.ts</code>, <code>blockTypes.ts</code>, <code>stateBlocks.ts</code>, <code>typeTagger.ts</code>, <code>components/propertyEditors/kernelValuePresets.ts</code>, plus a full registration-site inventory (&sect;2, &sect;10). Companion docs: <a href="https://github.com/Stvad/knowledge-medium/blob/claude/properties-as-blocks-migration-4b60xg/docs/properties-as-blocks-migration.html">properties-as-blocks migration (PR #288)</a> and <a href="https://github.com/Stvad/knowledge-medium/blob/claude/plugin-materialization-design-2t71dk/docs/plugin-materialization.md">plugin materialization (PR #289)</a>. <strong>Last verified against code:</strong> 2026-07-10.
+</aside>
+
+<header class="hero">
+  <div class="inner">
+    <div class="eyebrow">Design &middot; knowledge-medium</div>
+    <h1>Schema unification: definitions are blocks, behavior is presets, code seeds</h1>
+    <p class="subtitle">Collapse the two property-schema (and block-type) worlds — inline code objects merged by name vs. definition blocks projected by id — into one: every definition is a synced block with a block-id identity; code registers behavior (ValuePresets) and <em>seeds</em> definitions instead of registering them.</p>
+  </div>
+</header>
+
+<nav class="toc"><ol>
+  <li><a href="#s1">1 Why now</a></li>
+  <li><a href="#s2">2 Ground truth</a></li>
+  <li><a href="#s3">3 Target model</a></li>
+  <li><a href="#s4">4 Seeding</a></li>
+  <li><a href="#s5">5 Registry</a></li>
+  <li><a href="#s6">6 Upgrades &amp; write policy</a></li>
+  <li><a href="#s7">7 Names</a></li>
+  <li><a href="#s8">8 Overrides</a></li>
+  <li><a href="#s9">9 Types</a></li>
+  <li><a href="#s10">10 Preset audit</a></li>
+  <li><a href="#s11">11 Downstream wins</a></li>
+  <li><a href="#s12">12 Edge cases</a></li>
+  <li><a href="#s13">13 Rollout</a></li>
+  <li><a href="#s14">14 Rejected</a></li>
+  <li><a href="#s15">15 Open questions</a></li>
+</ol></nav>
+
+<main>
+
+<div class="aside win">
+<h5>TL;DR</h5>
+<p style="margin:6px 0">Today kernel/plugin schemas are inline <code>PropertySchema</code> objects merged by <em>name</em> (<code>mergeLiftedSchemas</code>, <code>refProjection.ts:29</code>) while user schemas are <code>property-schema</code> <em>blocks</em> projected by block id — two identity spaces, two registration paths, and a set of workarounds the properties-as-blocks migration (PR #288 &sect;6) can no longer absorb: synthetic <code>property:&lt;name&gt;</code> fieldIds leaking into the reference index, a <code>childBacked</code> flag with no durable home for plugins, cross-source name collisions, and a two-phase cold-start bootstrap.</p>
+<p style="margin:6px 0">The end state: <strong>one source of definitions (blocks), one identity (block id), one registry path (the projector)</strong>. Kernel and plugin schemas become <em>seeded</em> definition blocks with deterministic per-workspace ids (<code>uuidv5</code>, the <code>stateBlocks.ts</code> pattern); their codecs are rebuilt from code-registered <code>ValuePreset</code>s exactly the way user schemas already are (<code>tryBuildSchema</code>, <code>userSchemasService.ts:52</code>). A code-resident <em>synthesis layer</em> makes kernel definitions available synchronously before any block exists, so cold start needs no two-phase bootstrap. Types get the same move (&sect;9). The audit gate passes: all 9 existing presets are kernel-owned, 36 of 44 plugin schemas already build from kernel codecs, and the remaining 7 custom codecs wrap into hidden presets one-liner-style (&sect;10).</p>
+</div>
+
+<h2 id="s1"><span class="num">1</span>Why now — the consumers</h2>
+
+<p>Two in-flight designs consume this one:</p>
+
+<p><strong>Properties as blocks (PR #288).</strong> That migration makes every property value a child block whose field row carries <code>reference_target_id = fieldId</code>. Its &sect;6 states hard requirements the current kernel/plugin-vs-DB schema split cannot meet, and its &sect;11 rollout bends around them. This project is the fix it names. Specifically, the migration needs:</p>
+<ol>
+  <li><strong><code>fieldId</code> = definition block id, for every schema, kernel included.</strong> The spike's synthetic ids (<code>fieldIdForPropertyName</code> → <code>property:&lt;name&gt;</code>, <code>src/data/api/propertySchema.ts:90</code> on <code>origin/props-as-childrent-spike-merge</code>) put non-block ids into the synced <code>reference_target_id</code> column and the backlink index (#288 &sect;6, residual 2). After this project, that helper and its reference-projection special-case never ship.</li>
+  <li><strong><code>childBacked</code> (and <code>hidden</code>) as synced fields on the definition</strong>, classifiable without the owning plugin installed. #288 &sect;6 calls a plugin flag expressed as a code constant "a data fork waiting to happen" and requires durable persistence — this design is that persistence mechanism.</li>
+  <li><strong>Kernel definitions available at cold start before first sync.</strong> #288 &sect;11 step 5 needs a two-phase first-sync projection because schema discovery reads the cell; deterministic seeded ids dissolve phase 1 into a pure computation (&sect;11.2 below).</li>
+  <li><strong>Fleet-wide classifiability.</strong> #288 &sect;11 step 5 can only mark rows fully-child-backed when every key belongs to a schema <em>every</em> client can classify — which today excludes plugin keys. Definitions-as-blocks makes plugin schemas classifiable everywhere (&sect;11.1).</li>
+</ol>
+
+<p><strong>Plugin materialization (PR #289).</strong> Its parallel track ("declaration materialization", &sect;8 there) is this project sketched in one paragraph: seed <code>block-type</code>/<code>property-schema</code> blocks from system definitions through the existing definition-block projector. This doc designs that stage in full and reuses #289's structure where it fits: the <em>kernel → materialize → assemble</em> boot staging (&sect;4.4), the provenance/base-version thinking for seed upgrades (&sect;6), and the toggle-id-as-stable-API decision for seed keys (&sect;4.2). Where #289 materializes <em>code</em> on demand behind an approval gate, definitions are pure <em>data</em> — no approval, no compile pipeline, seeded eagerly rather than ejected on demand. Per the project brief: we account for future plugin materialization but do not gate on it; nothing here depends on #289 landing.</p>
+
+<h2 id="s2"><span class="num">2</span>Ground truth — the two worlds today</h2>
+<p class="kv">Verified against master <code>8f957555</code>, 2026-07-10. Counts exclude tests.</p>
+
+<h3><span class="num">2.1</span>Code world: kernel + plugins, name-keyed, merged</h3>
+<ul>
+  <li><code>PropertySchema&lt;T&gt;</code> = <code>{name, codec, defaultValue, changeScope}</code> (<code>src/data/api/propertySchema.ts:12</code>). Identity is <code>name</code>; the codec is live code; <code>defineProperty</code> (<code>:87</code>) is the authoring helper.</li>
+  <li><strong>27 kernel schemas</strong> in <code>src/data/properties.ts</code> (<code>KERNEL_PROPERTY_SCHEMAS</code>, <code>:453</code>), registered by <code>kernelDataExtension.ts:61</code>; <strong>10 kernel types</strong> in <code>src/data/blockTypes.ts:44</code>, registered at <code>:62</code>.</li>
+  <li><strong>44 plugin schemas</strong> across <strong>17</strong> <code>propertySchemasFacet.of</code> sites; <strong>18 plugin types</strong> across <strong>11</strong> <code>typesFacet.of</code> sites (six prefs-container types and one ui-state container type register through the <code>pluginPrefsExtension</code>/<code>pluginUIStateExtension</code> helpers, <code>src/data/pluginStateExtensions.ts:58,:70</code>, which inject <code>hideFromCompletion</code> at registration).</li>
+  <li>Two plugin schemas are <strong>lift-only</strong> — registered nowhere directly, entering the registry solely through <code>TypeContribution.properties</code>: <code>status</code> (todo) and <code>daily-note:date</code> (daily-notes).</li>
+  <li>The merged registry is built by <code>mergeLiftedSchemas</code> (<code>src/data/internals/refProjection.ts:29</code>): type-lifted schemas first, then direct registrations, <strong>last-wins by name</strong> with a <code>console.warn</code>. Wired as the <code>propertySchemas</code> rebuild step in <code>facetBridge.ts:239</code>, which re-runs on any change to <code>typesFacet</code> or <code>propertySchemasFacet</code>.</li>
+  <li><code>Repo</code> pre-seeds its registries with the kernel maps at construction (<code>repo.ts:183-184, :309-310</code>) — kernel schemas are available before any <code>setFacetRuntime</code>. Every consumer is name-keyed or whole-map: the typed-query compiler (<code>typedBlockQuery.ts:155</code>), reference projection (<code>plugins/references/referenceProjection.ts:32</code>), the property panel (<code>propertyPanel/model.ts</code>, <code>visibility.ts:19</code>), <code>TypeTagger</code> initial values (<code>typeTagger.ts:85</code>), <code>resolvePropertyDisplay</code> (<code>propertyEditors/defaults.tsx:438</code>). There is no id-keyed lookup anywhere.</li>
+</ul>
+
+<h3><span class="num">2.2</span>Block world: user definitions, id-keyed, projected</h3>
+<ul>
+  <li><code>property-schema</code> blocks store <code>{propertyName, presetId, presetConfig}</code> (<code>src/data/properties.ts:170-192</code>); the codec is <strong>rebuilt from the code-registered preset</strong>: <code>tryBuildSchema</code> validates config through <code>preset.configCodec</code> and calls <code>preset.build(config)</code> (<code>userSchemasService.ts:52-94</code>).</li>
+  <li><code>ValuePreset</code> (<code>src/data/api/valuePresets.ts:13</code>) is already the behavior-as-code contract: <code>id</code>, <code>build(config) → codec</code>, <code>defaultValue</code>, <code>configCodec</code>, <code>Editor</code>, <code>Glyph</code>, <code>ConfigEditor</code>, <code>hideFromPicker</code>. All <strong>9 existing presets are kernel-owned</strong> (<code>kernelValuePresets.ts:72-161</code>), registered under the <code>system:kernel-value-presets</code> toggle — no plugin defines a preset today.</li>
+  <li><strong>Forward-compat is already built:</strong> a schema block referencing an unknown <code>presetId</code> is skipped with a warning and re-resolves when the preset's plugin loads (<code>tryBuildSchema</code> skip path + <code>secondarySignal: onValuePresetsChange</code>, <code>userSchemasService.ts:107</code>).</li>
+  <li>User types follow the same pattern: <code>block-type</code> blocks, <strong>block id = type id</strong>, <code>block-type:properties</code> refList resolved through the schema projector's handle (<code>userTypesService.ts:60-91</code>).</li>
+  <li>The shared lifecycle is <code>ProjectorRuntime</code> (<code>src/data/projectorRuntime.ts</code>): subscribe to <code>{workspaceId, types:[metaType]}</code>, project per row with per-row failure isolation, publish into the facet's durable <code>'user-data'</code> runtime bucket. Projectors start in an <code>AppRuntimeProvider</code> effect — <em>after</em> first paint (<code>AppRuntimeProvider.tsx:239-243</code>), so user definitions are not available to workspace bootstrap today.</li>
+  <li>Deterministic per-workspace block ids via <code>uuidv5</code> have precedent in <code>stateBlocks.ts:54-58</code> (user page, state children) and the kernel pages (<code>propertiesPage.ts:13</code>).</li>
+</ul>
+
+<p>The two worlds already agree on the important shape — definitions reduce to <em>(name, preset, config, scope)</em> and behavior lives in presets. What differs is identity (name vs block id), availability (always vs after projector prime), and who owns registration (merge step vs projector). Unification keeps the block world's shape and gives it the code world's availability.</p>
+
+<h2 id="s3"><span class="num">3</span>Target model — the definition/behavior split</h2>
+
+<p>Split today's <code>PropertySchema</code> into a <strong>definition</strong> (data, on a <code>property-schema</code> block) and <strong>behavior</strong> (code, a <code>ValuePreset</code> keyed by <code>presetId</code>). The definition is the user-defined shape that already exists, extended with the fields the migration needs:</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Property on the <code>property-schema</code> block</th><th>Status</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>property-schema:name</code></td><td><span class="pill keeps">exists</span></td><td>Display name and (for now) the cell key. Not identity.</td></tr>
+    <tr><td><code>property-schema:preset</code></td><td><span class="pill keeps">exists</span></td><td><code>ValuePreset.id</code> the codec is rebuilt from.</td></tr>
+    <tr><td><code>property-schema:config</code></td><td><span class="pill keeps">exists</span></td><td>Preset-specific config, validated by <code>preset.configCodec</code>.</td></tr>
+    <tr><td><code>property-schema:change-scope</code></td><td><span class="pill new">new</span></td><td>One of the five <code>ChangeScope</code> values (<code>changeScope.ts:5</code>). Absent → <code>block-default</code>, which keeps every existing user schema block valid unchanged (<code>tryBuildSchema</code> hardcodes BlockDefault today, <code>userSchemasService.ts:92</code>).</td></tr>
+    <tr><td><code>property-schema:child-backed</code></td><td><span class="pill new">new</span></td><td>The #288 &sect;6 flag, durable and synced. Absent → false during rollout; seeds and the migration's flips stamp it explicitly.</td></tr>
+    <tr><td><code>property-schema:hidden</code></td><td><span class="pill new">new</span></td><td>Hide from the property panel / outline by default (today only expressible as a code-side <code>PropertyEditorOverride.hidden</code>, <code>propertySchema.ts:41</code>, or the <code>system:</code> name-prefix convention, <code>propertyPanel/visibility.ts:21</code>). Readable without the owning plugin.</td></tr>
+    <tr><td><code>seed:key</code></td><td><span class="pill new">new</span></td><td>Seed provenance (&sect;4.2). Absent → user-authored. Shared vocabulary with <code>block-type</code> seeds and future declaration kinds.</td></tr>
+    <tr><td><code>seed:revision</code></td><td><span class="pill new">new</span></td><td>Monotonic integer, bumped when the code seed changes (&sect;6).</td></tr>
+  </tbody>
+</table></div>
+
+<p>The runtime registry entry — what consumers get from <code>repo.propertySchemas</code> — becomes:</p>
+
+<pre><code>interface PropertySchema&lt;T&gt; {
+  readonly name: string
+  readonly fieldId: string        // the definition block id — THE identity
+  readonly codec: Codec&lt;T&gt;        // preset.build(config)
+  readonly defaultValue: T        // preset.defaultValue
+  readonly changeScope: ChangeScope
+  readonly childBacked: boolean
+  readonly hidden: boolean
+  readonly origin: 'kernel' | `plugin:${string}` | 'user'  // derived from seed:key
+}</code></pre>
+
+<p>Two things deliberately do <em>not</em> change:</p>
+<ul>
+  <li><strong>Typed code handles survive.</strong> <code>typesProp</code>, <code>isCollapsedProp</code>, <code>srsNextReviewDateProp</code>, … remain exported consts that call sites pass to <code>block.get</code>/<code>tx.setProperty</code> for compile-time typing. What changes is how they're <em>constructed</em>: <code>defineProperty(name, {codec, …})</code> becomes a seed declaration whose codec comes from <code>preset.build(config)</code> — the same construction path the projector uses, so the code handle and the block-fed registry entry are behaviorally identical by construction (&sect;4.1).</li>
+  <li><strong><code>ValuePreset</code>'s contract is unchanged</strong> — it already carries everything behavior needs — but it splits along the same data/presentation line the schema types already draw (<code>propertySchema.ts:5-11</code>): a <em>codec core</em> (<code>id</code>, <code>build</code>, <code>configCodec</code>, <code>defaultValue</code>, <code>defaultConfig</code>) that lives in the data layer, and a <em>presentation half</em> (<code>Editor</code>, <code>Glyph</code>, <code>ConfigEditor</code>, <code>label</code>, <code>hideFromPicker</code>) joined by preset id in the UI layer. Today the whole preset — codec factory included — lives in <code>src/components/propertyEditors/kernelValuePresets.ts</code> behind a UI toggle, which the data layer cannot import; seed declarations (&sect;4.1) and headless surfaces (CLI, agent bridge) need the codec cores below React. The work beyond the split is registering presets for the codecs that don't have one yet (&sect;10).</li>
+</ul>
+
+<div class="aside decision">
+<h5>Decision</h5>
+<p style="margin:6px 0">Definition fields live as ordinary block properties (not new columns): they ride <code>properties_json</code>, sync per the existing column-narrow pipeline, work in E2EE workspaces, and are editable through the existing property-schema block renderer. The one identity-adjacent thing that stays derived is <code>origin</code> — computed from <code>seed:key</code>, never stored separately.</p>
+</div>
+
+<h2 id="s4"><span class="num">4</span>Seeding — code declares, the workspace materializes</h2>
+
+<h3><span class="num">4.1</span>Seed declarations replace registrations</h3>
+
+<p>Kernel and plugin code stops registering schema <em>objects</em> and starts declaring <em>seeds</em>. The authoring surface keeps <code>defineProperty</code>'s ergonomics and returns the typed handle call sites already use:</p>
+
+<pre><code>// before (properties.ts today)
+export const isCollapsedProp = defineProperty&lt;boolean&gt;('system:collapsed', {
+  codec: codecs.boolean, defaultValue: false, changeScope: ChangeScope.BlockDefault,
+})
+
+// after — a seed declaration; the handle is still a PropertySchema&lt;boolean&gt;
+export const isCollapsedProp = seedProperty&lt;boolean&gt;({
+  seedKey: 'system:kernel-data/property/system:collapsed',
+  name: 'system:collapsed',
+  preset: 'boolean',            // ValuePreset id; config omitted for void-config presets
+  changeScope: ChangeScope.BlockDefault,
+  childBacked: true,            // stamped per #288 §6 defaults at the kernel flip
+  hidden: true,
+})</code></pre>
+
+<p><code>seedProperty</code> resolves the preset's <em>codec core</em> at module init (a data-layer static import once the &sect;3 preset split lands), calls <code>preset.build(config)</code> for the handle's codec, and records the declaration in the module-level seed table its extension contributes via a new <code>definitionSeedsFacet</code>. For value types the preset can't express in TS (e.g. <code>optionalIdentity&lt;FocusedBlockLocation&gt;</code> building an untyped <code>object</code> codec), the helper takes the type parameter on faith — runtime behavior is identical; the compile-time type is an assertion, exactly as <code>unsafeIdentity&lt;T&gt;</code> is today.</p>
+
+<div class="aside warn">
+<h5>Why one construction path matters</h5>
+<p style="margin:6px 0">The registry entry is built by the projector from the block (<code>preset.build(config)</code>); the code handle is built by <code>seedProperty</code> from the same <code>(preset, config)</code>. Because <code>build</code> must be deterministic in <code>config</code> (already a documented preset contract, <code>valuePresets.ts:19-22</code>), the two produce behaviorally identical codecs even though they are distinct objects. Consumers must not rely on schema-object identity across the two — today they don't: the projector already produces fresh objects per rebuild and every consumer joins by name.</p>
+</div>
+
+<h3><span class="num">4.2</span>Identity: deterministic per-workspace ids</h3>
+
+<div class="aside decision">
+<h5>Decision</h5>
+<p style="margin:6px 0"><code>fieldId</code> is the definition block id for <em>every</em> schema. Seeded definitions get deterministic per-workspace ids: <code>uuidv5(`${workspaceId}:${seedKey}`, DEFINITION_SEED_NS)</code> — the <code>stateBlocks.ts:54</code> pattern, so two offline clients (and the local synthesis layer, &sect;5.1) converge on the same row. Ids are per-workspace; cross-workspace copy/paste resolves by <em>name</em>, consistent with #288 &sect;9.</p>
+</div>
+
+<p><strong>Seed keys</strong> are stable strings, never derived from the current display name at runtime: <code>&lt;ownerToggleId&gt;/property/&lt;key&gt;</code> and <code>&lt;ownerToggleId&gt;/type/&lt;key&gt;</code>, e.g. <code>system:kernel-data/property/types</code>, <code>system:srs-rescheduling/property/next-review-date</code>. The owner segment reuses the togglable-boundary ids (<code>src/facets/togglable.ts</code>) that #289 &sect;12 commits to as a public compatibility surface — one stable-id vocabulary across both designs. The trailing key is frozen at introduction; renaming a schema's display name later changes <code>property-schema:name</code>, never the seed key or the block id.</p>
+
+<h3><span class="num">4.3</span>The seed pass</h3>
+
+<p>At workspace open — in <code>bootstrapWorkspace</code>, right after <code>ensureSystemPages</code> (<code>src/bootstrap/workspaceBootstrap.ts:210</code>), which guarantees the Properties/Types pages exist — a single idempotent pass:</p>
+
+<ol>
+  <li><strong>Probe:</strong> one batched read of all seed ids (<code>SELECT id, properties_json, deleted FROM blocks WHERE id IN (…)</code> — on the order of 100 rows).</li>
+  <li><strong>Diff:</strong> for each declaration, compare the stored <code>seed:revision</code> and the seed-owned fields against the code seed (&sect;6 rules).</li>
+  <li><strong>Write:</strong> one tx (chunked if large) that creates missing definition blocks (children of the Properties/Types pages, <code>systemMint</code> ids), restores soft-deleted ones, and rewrites stale ones. Steady state is zero writes — the pass is a read-only probe, same cost profile as <code>ensureStateChild</code>'s fast path (<code>stateBlocks.ts:100-109</code>).</li>
+</ol>
+
+<ul>
+  <li><strong>Scope:</strong> <code>ChangeScope.Automation</code> — machine-authored, durable, synced, <em>not undoable</em> (<code>changeScope.ts:24</code>). A user must not be able to ctrl-Z the kernel's schema definitions out of existence, and seed writes must not pollute the document undo stack.</li>
+  <li><strong>Read-only workspaces:</strong> skipped entirely (same gate as <code>scheduleWorkspaceBackfills</code>, <code>repo.ts:1862</code>). The synthesis layer (&sect;5.1) serves the registry regardless.</li>
+  <li><strong>Fresh-workspace cost:</strong> ~100 definition blocks created once, uploaded once. Existing-workspace upgrade cost: only the definitions whose seeds changed.</li>
+  <li><strong>Plugin scope:</strong> a plugin's seeds run only where its code is loaded (its data extension contributes them). A workspace synced to a client without the plugin keeps the definition blocks — that's the point (&sect;5.3) — it just never seeds or upgrades them there.</li>
+</ul>
+
+<h3><span class="num">4.4</span>Boot ordering — the #289 staging, instantiated</h3>
+
+<p>This is #289's <em>kernel → materialize → assemble</em> ordering applied to declarations (its stage-1/stage-2 boot restage for <em>code</em> is not a prerequisite — this works with today's boot):</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Stage</th><th>What happens</th><th>Registry state</th></tr></thead>
+  <tbody>
+    <tr><td><strong>0 — kernel</strong></td><td>Repo construction. Kernel seed declarations exist as code; no workspace yet.</td><td>Name-keyed kernel entries synthesized from declarations (as today via the constructor default maps, <code>repo.ts:183-184</code>) — <code>fieldId</code>s not yet computable (no workspace), and nothing that consumes a fieldId can run yet either (field rows are workspace data).</td></tr>
+    <tr><td><strong>1 — materialize</strong></td><td>Workspace pinned (<code>setActiveWorkspaceId</code>, <code>App.tsx:73</code>). The <em>synthesis layer</em> (&sect;5.1) publishes full entries — fieldIds are now a pure function of <code>(workspaceId, seedKey)</code>. The seed pass (&sect;4.3) runs in workspace bootstrap; the projectors start.</td><td>Complete for kernel + loaded plugins <em>synchronously at pin time</em>, before any bootstrap write, before first sync, on a completely empty local DB.</td></tr>
+    <tr><td><strong>2 — assemble</strong></td><td>Projector primes over <code>property-schema</code>/<code>block-type</code> blocks; block-fed entries supersede synthesized ones (same ids, same content; &sect;5.2). Late-loading plugin presets re-resolve pending definitions via the existing <code>onValuePresetsChange</code> signal.</td><td>Block-fed, authoritative. User definitions appear here (as today).</td></tr>
+  </tbody>
+</table></div>
+
+<p>This dissolves #288 &sect;11-12's two-phase kernel-first bootstrap concern: phase 1 ("project code-defined schemas' keys, recognizable by code-known fieldIds") stops needing any DB state at all — kernel/plugin fieldIds are computable from <code>(workspaceId, seedKey)</code> with zero rows synced. If #289's boot restage later moves projector start pre-mount, stage 2 just happens earlier; nothing here depends on it.</p>
+
+<h2 id="s5"><span class="num">5</span>The unified registry</h2>
+
+<h3><span class="num">5.1</span>One projector, two layers</h3>
+
+<p>The registry keeps its existing plumbing — facet runtime buckets feeding the <code>propertySchemas</code> rebuild step (<code>facetBridge.ts:239</code>) — but the inputs change from three sources (kernel registrations, plugin registrations + type-lift, projector bucket) to two <em>layers</em>:</p>
+
+<ul>
+  <li><strong>Synthesis layer</strong> (<code>'seed-synth'</code> runtime bucket): entries computed directly from the in-memory seed declarations the moment a workspace is pinned. Pure function of <code>(declarations, workspaceId)</code> — no DB read, no async. This is what makes kernel definitions available "before first sync" (requirement 3): on a fresh device with an empty DB the registry is complete for kernel + loaded plugins from stage 1.</li>
+  <li><strong>Block layer</strong> (<code>'user-data'</code> bucket, the existing projector): authoritative once primed. The projector generalizes from "user schemas" to "all definitions": it publishes an entry for <em>every</em> <code>property-schema</code> block, seeded or user-authored.</li>
+</ul>
+
+<p>Runtime buckets append after static contributions and keyed-map facets are last-wins (<code>facet.ts:242-249, :102-123</code> — the shadowing order #289 &sect;2.4 verified), so publishing <code>seed-synth</code> before <code>user-data</code> gives block-fed entries precedence by construction. One guard runs projector-side: a seeded block whose <code>seed:revision</code> is <em>older</em> than the loaded code's revision projects the <strong>code synthesis instead of the stale block</strong> (the seed pass will upgrade the block shortly; until it syncs, the newer app version's behavior should not regress to the older payload). The registry map gains an id-keyed index alongside the name-keyed one — <code>findSchemaByFieldId</code> being O(schemas) is already flagged as a risk in #288 &sect;12.</p>
+
+<h3><span class="num">5.2</span>What dies</h3>
+<ul>
+  <li><span class="pill dies">dies</span> <code>mergeLiftedSchemas</code>'s name-merge and the <code>TypeContribution.properties</code> type-lift (<code>refProjection.ts:29-57</code>): the rebuild step reads one merged map from the buckets. (<code>changedRefSchemaNames</code> and the reprojection scheduling survive unchanged — they compare any two maps.)</li>
+  <li><span class="pill dies">dies</span> direct <code>propertySchemasFacet.of</code> registrations — all 17 sites (and, in the types slice, all 11 <code>typesFacet.of</code> sites). The facets themselves survive as the internal transport between buckets and the bridge.</li>
+  <li><span class="pill dies">dies</span> the "kernel/plugin schemas have no backing block" asymmetry: <code>UserSchemasService.getSchemaBlockId</code>'s "returns undefined for kernel/plugin schemas" caveat (<code>userSchemasService.ts:144-147</code>), and eventually the service's "user" prefix.</li>
+</ul>
+
+<h3><span class="num">5.3</span>Missing-plugin degradation — the declaration tier</h3>
+
+<p>A client without plugin X still syncs X's definition blocks. What it can do with them:</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Definition's preset</th><th>Without the owning plugin</th></tr></thead>
+  <tbody>
+    <tr><td>Kernel preset (<code>string</code>, <code>number</code>, <code>boolean</code>, <code>enum</code>, <code>date</code>, <code>ref</code>, <code>refList</code>, <code>list</code>, <code>url</code> + the new hidden ones, &sect;10)</td><td><strong>Fully functional.</strong> Kernel preset codec cores ship with the app (data layer, post-&sect;3-split; today the whole set rides the <code>system:kernel-value-presets</code> UI toggle), not with the plugin — <code>tryBuildSchema</code> succeeds, codec/editor/queries/backlinks all work. After &sect;10's audit-driven preset work this covers <strong>36 of 44</strong> plugin schemas.</td></tr>
+    <tr><td>Plugin-owned preset (the 6 custom codecs, &sect;10)</td><td><strong>Declaration-only entry:</strong> name, fieldId, changeScope, childBacked, hidden, origin are all readable off the block — classification works (#288's requirement 2) — but there is no codec, so no decode/edit/query. The existing skip-with-warning path (<code>tryBuildSchema</code>) becomes "publish a declaration" instead of "drop the row".</td></tr>
+  </tbody>
+</table></div>
+
+<p>Declaration-only entries live in a <em>separate</em> map (<code>repo.propertyDeclarations</code>, keyed by both name and fieldId), not in <code>repo.propertySchemas</code> — every existing consumer of the schema map dereferences <code>schema.codec</code> unconditionally (typed queries <code>typedBlockQuery.ts:110-124</code>, reference projection, the panel's decode), so a codec-less entry in that map would be a footgun. Consumers that need classification (the #288 machinery, panel row rendering, field-row recognition) read declarations ∪ schemas.</p>
+
+<p>Degraded UX for a declaration-only property: the panel shows the row with its display name and raw value, read-only, attributed via <code>seed:key</code> ("provided by <em>srs-rescheduling</em> — not installed/disabled"). The value is never decoded, never edited, never dropped.</p>
+
+<div class="aside win">
+<h5>This fixes a standing hazard class</h5>
+<p style="margin:6px 0">Today, toggling a plugin off makes its schemas vanish from the registry entirely — the silent-deletion vector that once wiped ~10k <code>next-review-date</code> backlinks on SRS toggle-off and forced the defensive <code>latestRefProjectionSchema</code> machinery (<code>refProjection.ts:121-151</code>). After unification the definition persists as a block: for kernel-preset schemas ref-ness stays fully known (the <code>ref</code>/<code>refList</code> preset id is on the block), and even declaration-only entries prove the name is still a schema. "Absent from the registry" stops being ambiguous between "toggled off" and "deleted".</p>
+</div>
+
+<h2 id="s6"><span class="num">6</span>Seed upgrades &amp; write policy</h2>
+
+<h3><span class="num">6.1</span>Reconciliation rules</h3>
+
+<p>The genuinely new problem class: app v(N+1) changes a kernel schema's seed while the block may have been touched by an older client or a user. Following #289 &sect;9's provenance approach, adapted from hashes to revisions (declarations are small structured data; an explicit monotonic <code>seed:revision</code> per definition gives <em>ordering</em>, which a hash cannot):</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Seed pass observes</th><th>Action</th></tr></thead>
+  <tbody>
+    <tr><td>Block missing / soft-deleted</td><td>Create / restore with current seed payload, stamp <code>seed:revision</code>.</td></tr>
+    <tr><td><code>seed:revision</code> &lt; code revision</td><td>Upgrade: rewrite all seed-owned fields to the current seed, stamp the new revision. One tx, one column-narrow PATCH — per-column LWW takes the whole write from one winner, so mixed-version clients can't interleave field-level.</td></tr>
+    <tr><td><code>seed:revision</code> = code revision, fields differ</td><td>Drift (a user edit through the panel, an agent-bridge write, an import): repair seed-owned fields back to the seed. Self-healing, same philosophy as #288 &sect;5's consistency sweep.</td></tr>
+    <tr><td><code>seed:revision</code> &gt; code revision</td><td>Leave untouched — a newer client owns this definition. The registry's projector-side guard (&sect;5.1) does <em>not</em> apply (the block is newer, not staler); the local, older app runs against the newer definition, which is exactly the forward-compat the preset system already handles (unknown preset → declaration tier; known preset, newer config → <code>configCodec</code> validates or the row degrades).</td></tr>
+  </tbody>
+</table></div>
+
+<p>The seed source of truth stays in code; blocks are its materialization. A seed change is a code change (revision bump in the declaration) that materializes per-workspace on next open — there is no fleet data-migration step, and unedited workspaces converge via ordinary sync of the one upgraded row.</p>
+
+<h3><span class="num">6.2</span>Field ownership &amp; write policy by origin</h3>
+
+<div class="aside decision">
+<h5>Decision (v1)</h5>
+<p style="margin:6px 0">For seeded definitions, <strong>every definition field is seed-owned</strong>: name, preset, config, changeScope, childBacked, hidden. The UI renders seeded definition blocks read-only (delete/rename/config affordances disabled, attributed to their origin); the seed pass repairs out-of-band edits. Per-field user ownership (e.g. letting a user override <code>hidden</code>, or recolor a plugin type) is a deliberate v2: it needs a per-field ownership vocabulary and merge rules — &sect;15. User-authored definitions keep today's full editability.</p>
+</div>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Operation</th><th>kernel</th><th>plugin</th><th>user</th></tr></thead>
+  <tbody>
+    <tr><td>Delete definition</td><td>No (seed pass restores)</td><td>No while plugin installed (restored); definition <em>persists</em> after uninstall — data outlives code, an explicit "clean up unused definitions" affordance can come later</td><td>Yes (existing behavior)</td></tr>
+    <tr><td>Rename (display name)</td><td colspan="2">No in v1 (name is seed-owned; the cell key depends on it until #288's end state, and #288's rename-reproject machinery — its slice B2 — is the prerequisite for unlocking renames generally)</td><td>Yes, gated on #288 B2 landing (already that doc's rule)</td></tr>
+    <tr><td>Edit preset / config</td><td colspan="2">No in v1</td><td>Yes (with #288 &sect;9's codec-change re-encode pass once child-backed)</td></tr>
+    <tr><td>Flip <code>childBacked</code></td><td colspan="2">Seed revision bump = the durable, synced flip #288 &sect;6 requires; the flip's data migration (materialize/drain) rides the seed upgrade</td><td>Stamped by the #288 rollout tooling</td></tr>
+  </tbody>
+</table></div>
+
+<h2 id="s7"><span class="num">7</span>Name resolution &amp; collisions</h2>
+
+<p>Ids cannot collide; display names can. Names are load-bearing in three places: the <code>properties_json</code> cell key, alias-entry (<code>[[status]]</code> typed by hand — #288 &sect;7's field-row grammar resolves the schema-name map first), and every name-keyed consumer in &sect;2.1. Today <code>mergeLiftedSchemas</code> resolves collisions last-wins-by-load-order with a warning — nondeterministic across clients with different plugin sets, which #288 &sect;6 flags as a hard error under child-backing (the cell key is the name while child identity is the fieldId; a per-client winner strands the loser's field rows).</p>
+
+<div class="aside decision">
+<h5>Decision</h5>
+<p style="margin:6px 0">Because every definition is now a synced block, collision resolution can finally be deterministic fleet-wide: <strong>the name winner is the earliest definition</strong> — ordered by <code>(created_at, id)</code> over definition blocks, an order every client computes identically regardless of installed plugins. Losers stay registered by <code>fieldId</code> (child rows keep classifying, backlinks keep resolving) but are excluded from the name map and the cell projection, and surface in the Properties page UI as <em>shadowed — rename to activate</em>. Earliest-wins protects existing user data from newly-arriving plugin seeds: a user's long-standing <code>status</code> schema is not hijacked when a plugin introducing <code>status</code> is installed; in a fresh workspace, seeds run first and win.</p>
+</div>
+
+<ul>
+  <li><strong>Prevention first:</strong> <code>addSchema</code> and the rename flow reject a name already present in declarations ∪ schemas (exact match; case-insensitivity is an open question, &sect;15). The collision rule is for the unpreventable case: two definitions created concurrently offline, or a plugin seed arriving into a workspace that already used the name.</li>
+  <li><strong>The audit says this is real:</strong> srs-rescheduling seeds bare, generic names — <code>interval</code>, <code>factor</code>, <code>grade</code>, <code>archived</code>, <code>next-review-date</code>, <code>review-count</code>, <code>snapshot-history</code> (<code>srs-rescheduling/schema.ts:19-55</code>) — exactly the names users would pick. New plugin schemas should namespace (<code>srs:interval</code>) as most already do; renaming <em>existing</em> plugin names is a data migration (the cell key changes) and is explicitly not attempted here — earliest-wins keeps the status quo working either way.</li>
+</ul>
+
+<h2 id="s8"><span class="num">8</span>Editor overrides &amp; presentation joins</h2>
+
+<p><code>PropertyEditorOverride</code> joins schemas by <code>name</code> today (<code>propertySchema.ts:32</code>; consumed via <code>uis.get(name)</code> in <code>resolvePropertyDisplay</code>, <code>defaults.tsx:440</code>). The inventory: 20 overrides — 13 kernel <code>hidden:true</code> markers, the <code>types</code> autocomplete editor, and 6 plugin config-property editors.</p>
+
+<div class="aside decision">
+<h5>Decision</h5>
+<p style="margin:6px 0">Two moves. <strong>(1)</strong> The 13 kernel <code>hidden:true</code> overrides dissolve into the definitions themselves — <code>hidden</code> is now a definition field (&sect;3), synced and classifiable, which #288's hidden-field-row filtering needs anyway (its &sect;10 notes the curated hidden list must grow at the kernel flip; a definition field replaces the curated list wholesale). <strong>(2)</strong> The remaining <em>editor</em> overrides join by <code>fieldId</code> instead of name: code-declared overrides reference the seed handle (<code>overrideFor(typesProp, {Editor: …})</code>), which resolves to the per-workspace definition id — immune to display-name changes once renames unlock. The name join dies with the cutover slice.</p>
+</div>
+
+<p><code>resolvePropertyDisplay</code>'s preset join (<code>presets.get(codec.type)</code>) is untouched — editor resolution stays keyed by the codec's <code>type</code> discriminator, which is orthogonal to definition identity.</p>
+
+<h2 id="s9"><span class="num">9</span>Types get the same move</h2>
+
+<p>Everything above applies to block types with one extra wrinkle: <strong>type ids are stored data</strong>. Every block's <code>types</code> property and the <code>block_types</code> index hold strings like <code>'page'</code>, <code>'todo'</code>, <code>'daily-note'</code> — for user types the string is the definition block id; for kernel/plugin types it's a legacy constant. Rewriting those strings across every workspace would be a huge, risky data migration for zero user-visible gain, so:</p>
+
+<div class="aside decision">
+<h5>Decision</h5>
+<p style="margin:6px 0"><code>block-type</code> definition blocks gain <code>block-type:type-id</code> — the string written into <code>typesProp</code>. Absent (every existing user type) → the block id, preserving the block-id = type-id rule. Seeded kernel/plugin types set it to their legacy constant (<code>'page'</code>, <code>'todo'</code>, …). The type registry stays keyed by type id; <code>getTypeBlockId</code> becomes total (every registered type has a backing block). Whether <code>typesProp</code> values should become refs to definition blocks is out of scope — flagged as future work, unchanged from the project brief.</p>
+</div>
+
+<p>The rest is mechanical application of &sect;3–&sect;6:</p>
+<ul>
+  <li><strong>New definition fields on <code>block-type</code> blocks:</strong> <code>block-type:type-id</code>, <code>block-type:hide-from-completion</code> (today code-only, <code>blockType.ts:26</code>), plus <code>seed:key</code>/<code>seed:revision</code>. Existing fields (label, description, color, hide-from-block-display, properties refList) already cover the rest of <code>TypeContribution</code>.</li>
+  <li><strong><code>TypeContribution.properties</code> → <code>block-type:properties</code> refList</strong> of definition-block ids. Seed declarations reference the property seed <em>handles</em>; the seeder resolves them to per-workspace ids. The two lift-only schemas the audit found (<code>status</code>, <code>daily-note:date</code>) get their own property seeds, which their type seeds reference — the lift path they currently ride dies.</li>
+  <li><strong>The prefs/ui-state container types</strong> (<code>pluginPrefsExtension</code>/<code>pluginUIStateExtension</code>, 7 call sites) seed the <em>merged</em> shape — the helper-injected <code>hideFromCompletion: true</code> is part of the seed payload, not re-injected at registration.</li>
+  <li><strong><code>addTypeInTx</code> keeps working unmodified:</strong> it validates against <code>types.get(typeId)</code> and encodes caller-supplied initial values by schema <em>name</em> (<code>typeTagger.ts:56, :85</code>) — both maps still exist, just block-fed. <code>snapshotTypeRegistries</code> (<code>repo.ts:1579</code>) is shape-unchanged.</li>
+  <li><strong>Sequencing:</strong> types cut over <em>after</em> property schemas (their own slice, &sect;13) — the type projector already depends on the schema projector (<code>userTypesService.ts:132</code>), and seeded type declarations need property seeds to exist first.</li>
+</ul>
+
+<h2 id="s10"><span class="num">10</span>The preset-expressibility audit — the feasibility gate</h2>
+
+<p>The design requires every kernel/plugin schema to be expressible as <code>(presetId, config)</code>. Full inventory (44 plugin + 27 kernel schemas, 9 presets), verified 2026-07-10:</p>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Codec family</th><th>Schemas using it</th><th>Preset today</th><th>Gap → action</th></tr></thead>
+  <tbody>
+    <tr><td><code>string</code>, <code>number</code>, <code>boolean</code>, <code>date</code>, <code>url</code></td><td>18 (kernel + plugin)</td><td><code>string</code>/<code>number</code>/<code>boolean</code>/<code>date</code>/<code>url</code> ✓</td><td>None.</td></tr>
+    <tr><td><code>optionalString</code>, <code>optionalNumber</code></td><td>17</td><td>—</td><td><span class="pill new">new</span> hidden kernel presets <code>optional-string</code>, <code>optional-number</code>. Note preset <em>id</em> need not equal codec <code>type</code> (the optional codecs deliberately reuse <code>'string'</code>/<code>'number'</code>, <code>codecs.ts:329, :347</code>): the preset id is the <em>build</em> key on the definition; editor lookup stays by <code>codec.type</code> and picks up the existing string/number editors for free.</td></tr>
+    <tr><td><code>enum([...])</code></td><td>4 (<code>status</code>, <code>roam:todo-state</code>, <code>char:scope</code>, <code>video:playerView</code>)</td><td><code>enum</code> preset exists but builds a placeholder <code>codecs.enum([])</code> (<code>kernelValuePresets.ts:123-137</code>, <code>hideFromPicker</code>)</td><td><span class="pill new">extend</span> the enum preset with a real <code>configCodec</code> (<code>{options: EnumOption[]}</code> → <code>codecs.enum(options)</code>; options already ride the codec for the editor, <code>codecs.ts:222</code>). Doubles as the user-facing select type the picker currently can't offer.</td></tr>
+    <tr><td><code>list(string)</code></td><td>3 (<code>types</code>, <code>alias</code>, <code>place:categories</code>, + <code>recentBlockIds</code>)</td><td>generic <code>list</code> preset builds <code>list(unsafeIdentity)</code></td><td><span class="pill new">new</span> hidden <code>string-list</code> preset (or an element-type config on <code>list</code>).</td></tr>
+    <tr><td><code>ref</code> / <code>refList</code> (incl. <code>targetTypes</code>)</td><td>3 (<code>block-type:properties</code>, <code>next-review-date</code>, <code>groupWith</code>)</td><td><code>ref</code>/<code>refList</code> with <code>refConfigCodec</code> ✓</td><td>None — config already expresses <code>targetTypes</code>.</td></tr>
+    <tr><td><code>unsafeIdentity&lt;T&gt;</code> / <code>optionalIdentity&lt;T&gt;</code> (type <code>'object'</code>)</td><td>10 (kernel UI-state objects, <code>presetConfig</code>, <code>startupRecord</code>, <code>srs-review:progress</code>, <code>snapshot-history</code> elements)</td><td>—</td><td><span class="pill new">new</span> hidden <code>json</code> + <code>optional-json</code> presets (identity codecs; the TS type parameter is a compile-time assertion on the handle, &sect;4.1).</td></tr>
+    <tr><td>Custom plugin codecs: <code>location</code> (optional ref, geo), <code>extensions:overrides</code>, <code>keybindings:overrides</code>, <code>backlinks:predicates</code> (shared by 2 schemas), <code>blockTagging:tagsConfig</code>, <code>groupedBacklinks:config</code>, <code>groupedBacklinks:overrides</code></td><td>8 schemas / 7 codecs / 6 plugins</td><td>—</td><td><span class="pill new">new</span> one hidden <em>plugin-registered</em> preset per codec (<code>definePreset({id: codec.type, build: () =&gt; codec, hideFromPicker: true, …})</code> — a one-liner each; ids must be unique, so geo's optional-ref codec — which reuses codec type <code>'ref'</code> — takes a distinct preset id like <code>'geo:location'</code> while still picking up the kernel ref editor via <code>codec.type</code>). These are the only schemas that degrade to declaration-only without their plugin (&sect;5.3).</td></tr>
+  </tbody>
+</table></div>
+
+<p><strong>Gate result: pass.</strong> ~5 new hidden kernel presets + 1 preset extension + 7 one-liner plugin presets cover all 71 schemas. No schema needs the definition shape itself extended.</p>
+
+<h2 id="s11"><span class="num">11</span>What this buys downstream</h2>
+
+<h3><span class="num">11.1</span>For the properties-as-blocks migration (#288)</h3>
+<ul>
+  <li><strong>Synthetic-id leak: deleted.</strong> No <code>property:&lt;name&gt;</code> ids exist; the reference-projection special-case #288 slice B planned for non-block fieldIds is unnecessary. Every <code>reference_target_id</code> is a real block id, and field rows on schema definitions give "where is this field used?" backlinks for kernel/plugin fields too.</li>
+  <li><strong><code>childBacked</code> durability: solved</strong> — it's a synced definition field; a plugin's flip is a seed-revision bump (&sect;6.2), not a code constant.</li>
+  <li><strong>The fully-child-backed eligibility marker widens.</strong> #288 &sect;11 step 5 restricts marking to rows whose keys are kernel/user-classifiable, because "a plugin not installed here may be live elsewhere". With definitions as synced blocks, plugin keys are classifiable on every client (&sect;5.3) — rows carrying plugin-backed keys become markable, which step 4-5's own analysis says is "effectively a prerequisite for this step delivering much". (Floor: clients older than the cutover slice can't classify; the marker work is post-cutover anyway.)</li>
+  <li><strong>Cold-start two-phase projection: dissolved</strong> into &sect;4.4's staging — phase 1 is a pure computation, not a cell-dependent discovery pass.</li>
+  <li><strong>Name-collision hard error: implemented</strong> as &sect;7's deterministic rule rather than a per-client warning.</li>
+</ul>
+<p class="kv">Follow-up (coordinate, don't edit as part of this work): once this design is accepted, #288's doc trims &sect;6's synthetic-id residuals, the &sect;11 step-5 marker restriction, and the &sect;11/&sect;12 two-phase bootstrap discussion against it.</p>
+
+<h3><span class="num">11.2</span>For plugin materialization (#289)</h3>
+<ul>
+  <li>Its "declaration materialization" parallel track is fully designed (this doc); its &sect;8 "edit this type" affordance becomes: flip the seeded definition's fields from seed-owned to user-owned — the v2 per-field ownership work (&sect;15), with the block already in place.</li>
+  <li>Seed keys reuse toggle ids (&sect;4.2), reinforcing its &sect;12 commitment to toggle-id stability.</li>
+  <li>A replaced (ejected) plugin's seeds come from the replacement's code at the same manifest position — declaration seeding composes with ejection without new machinery.</li>
+</ul>
+
+<h3><span class="num">11.3</span>Housekeeping wins</h3>
+<ul>
+  <li>The registry-vanishes-on-toggle hazard class closes (&sect;5.3 callout).</li>
+  <li>The 13-entry curated hidden list (<code>typesPropertyUi.ts:31-50</code>) and #288 &sect;10's "extend it to every system schema" deliverable collapse into a definition field.</li>
+  <li><code>describe-runtime</code>/agent-bridge introspection (<code>plugins/agent-runtime/dataModelGuide.ts:154</code>) reads one coherent surface; the authoring catalog's schema-registration templates update to seed declarations.</li>
+</ul>
+
+<h2 id="s12"><span class="num">12</span>Edge cases &amp; carve-outs</h2>
+
+<ul>
+  <li><strong>Non-document scopes seed too.</strong> UiState / UserPrefs / Automation schemas (9 kernel + 12 plugin) become seeded definitions like everything else — definitions are ordinary BlockDefault data even where the <em>values</em> they describe are per-user; #288 &sect;6's permanent <code>childBacked: false</code> carve-out is stamped in their seeds. No circularity: reads and writes of scoped values go through code handles (<code>block.set(schema, …)</code>), which never consult the registry; the seed pass itself writes definition blocks using kernel property handles, not registry lookups.</li>
+  <li><strong>E2EE workspaces: no new constraints.</strong> Definition blocks are ordinary blocks; their properties ride the encrypted <code>properties_json</code> envelope; the projector reads locally-materialized plaintext. (Contrast with #288's <code>reference_target_id</code> gate — nothing here adds a synced plaintext column.)</li>
+  <li><strong>Read-only workspaces:</strong> seed pass skipped; synthesis layer serves kernel/plugin entries; user definitions arrive as synced blocks. A viewer client never writes definitions.</li>
+  <li><strong>Safe mode / plugin toggled off:</strong> the plugin's seeds and presets don't load; its definition blocks persist and project as kernel-preset entries or declarations (&sect;5.3). Nothing is deleted by absence — matching the projector's existing "absence is not deletion" stance.</li>
+  <li><strong>Old clients during rollout:</strong> pre-cutover clients ignore the new definition fields (unknown cell keys in the bag are preserved by column-narrow upload) and keep their code registries; seeded blocks are inert extra rows on the Properties/Types pages (visible, harmless — the pages already host user definitions). A pre-cutover client that deletes a seeded block loses nothing: the next current client's seed pass restores it.</li>
+  <li><strong>Cross-workspace copy/paste of a definition block:</strong> the pasted block carries <code>seed:key</code> for a seed the destination already has → it's a duplicate <em>name</em> at a wrong id; the collision rule (&sect;7) shadows it and the UI surfaces it. Paste of field rows across workspaces resolves by name per #288 &sect;9. A paste-time strip of <code>seed:*</code> props keeps the common case clean.</li>
+  <li><strong>Workspace deletion/reset:</strong> nothing special — seeds re-materialize on next open, same as kernel pages.</li>
+</ul>
+
+<h2 id="s13"><span class="num">13</span>Rollout — five slices, each lands green</h2>
+
+<div class="tablewrap"><table>
+  <thead><tr><th>Slice</th><th>Contents</th><th>Behavior change</th></tr></thead>
+  <tbody>
+    <tr><td><strong>A — split &amp; presets</strong></td><td>Extend <code>PropertySchema</code> with optional <code>fieldId</code>/<code>childBacked</code>/<code>hidden</code>/<code>origin</code>; split <code>ValuePreset</code> into data-layer codec cores + UI presentation joined by preset id (&sect;3); add the &sect;10 presets (5 kernel hidden + enum config + 7 plugin one-liners); registry untouched.</td><td>None. Unblocks #288 B1's type-level needs immediately.</td></tr>
+    <tr><td><strong>B — seeds, dormant</strong></td><td><code>seedProperty</code>/<code>seedType</code> + <code>definitionSeedsFacet</code>; convert all 27 kernel + 44 plugin schemas and 28 types to declarations (handles unchanged for call sites); <code>DEFINITION_SEED_NS</code>; the seed pass in <code>bootstrapWorkspace</code>. Blocks materialize and sync; <strong>the registry still reads the code path</strong>.</td><td>New rows on Properties/Types pages (~100/workspace, one-time). Convergence, revision-upgrade, restore-on-delete, read-only-skip all testable here.</td></tr>
+    <tr><td><strong>C — registry cutover (flagged)</strong></td><td>Synthesis layer + generalized projector + revision guard + declaration tier + &sect;7 collision rule + &sect;8 override join + degraded-row UI. Flag flips the registry source; direct schema registrations and the schema half of <code>mergeLiftedSchemas</code> are deleted when the flag defaults on.</td><td><code>fieldId</code> becomes real block ids fleet-wide — the #288 handoff point (its B1+ consumes ids from here).</td></tr>
+    <tr><td><strong>D — types cutover</strong></td><td>&sect;9: <code>block-type:type-id</code> + <code>hide-from-completion</code> fields, type seeds (incl. prefs containers, lift-only schemas), type registry from blocks, type-lift deleted.</td><td><code>getTypeBlockId</code> total; <code>typesFacet.of</code> registration path retired.</td></tr>
+    <tr><td><strong>E — cleanup</strong></td><td>Delete dead paths (<code>mergeLiftedSchemas</code> remainder, name-join overrides, curated hidden list); re-stamp <code>properties-model-evolution.md</code>; file the #288 doc-trim follow-up (&sect;11.1); update agent-runtime authoring templates.</td><td>None.</td></tr>
+  </tbody>
+</table></div>
+
+<ul>
+  <li><strong>Verification per slice:</strong> <code>yarn run check</code> green before each merge; the seed pass gets the kernel-test treatment (shared test DB, <code>vi.waitFor</code>, the invalidation-counter idiom for proving the steady-state probe writes nothing).</li>
+  <li><strong>Coordination with #288:</strong> its slice A (<code>reference_target_id</code> column) is id-kind agnostic and lands independently. Its B1 (<code>fieldId</code>+<code>childBacked</code> on <code>PropertySchema</code>) should consume this project's slice A types and, ideally, wait for slice C ids — if it ships earlier, the spike's synthetic-id fallback is the bridge and gets deleted at C.</li>
+  <li><strong>Risks to watch:</strong> the one-time seed upload burst per existing workspace (small: ~100 rows, vs the migration backfill's ~650k); Properties/Types page visual noise from ~70 seeded rows (mitigation: <code>hidden</code> definitions get the same filtered rendering user schemas will need under #288 anyway); projector rebuild frequency with ~100 definition rows (the projector already handles this shape; <code>dedup</code> hooks exist if churn shows up).</li>
+</ul>
+
+<h2 id="s14"><span class="num">14</span>Rejected alternatives</h2>
+<ul>
+  <li><strong>Name-based identity everywhere</strong> (keep merging by name, add childBacked to code): fails #288's requirements 1-2 outright — names collide across sources per-client, and code constants fork data across plugin versions. This is the status quo the migration doc already rejected.</li>
+  <li><strong>Global (cross-workspace) definition ids:</strong> a block id is unique per row; the same definition in two workspaces would collide in one local DB. Per-workspace ids + name-based cross-workspace resolution match #288 &sect;9 and the existing state-block precedent.</li>
+  <li><strong>Registry entries synthesized from code only, blocks as passive mirrors</strong> (seed pass writes blocks but registry never reads them): loses the entire point — user edits of plugin definitions (v2), missing-plugin classification, and #288's durable childBacked all need the block to be authoritative.</li>
+  <li><strong>Columns instead of properties for the new definition fields:</strong> schema migration + sync-rule deploy + e2ee surface for data that has no query-path need; properties ride existing machinery.</li>
+  <li><strong>Hash-based seed provenance (#289's <code>base-hash</code>) instead of revisions:</strong> hashes detect <em>difference</em> but not <em>direction</em> — an old client couldn't tell "my seed is stale" from "the block is newer than my seed" and would fight newer clients. Revisions give ordering; drift detection falls out of the revision-equal + fields-differ case (&sect;6.1). (#289's hash approach remains right for <em>code</em>, where there is no total order on user edits.)</li>
+  <li><strong>Seeding lazily on first use</strong> (definition materialized when a value is first written): leaves the registry incomplete for pickers/panel, makes fieldIds appear at unpredictable times mid-#288-migration, and saves ~100 rows once. Not worth the nondeterminism.</li>
+  <li><strong>Migrating kernel/plugin type-id strings to block ids:</strong> a fleet-wide rewrite of every <code>types</code> array and the <code>block_types</code> index for cosmetic uniformity; <code>block-type:type-id</code> costs one property (&sect;9).</li>
+</ul>
+
+<h2 id="s15"><span class="num">15</span>Open questions</h2>
+<ol>
+  <li><strong>Per-field user ownership (v2):</strong> which seeded fields become user-editable first (likely <code>hidden</code>, type <code>color</code>/<code>label</code>), and how ownership is recorded (per-field marker vs an "edited fields" set) so the seed pass stops repairing them. #289 &sect;8's "edit this type" affordance lands here.</li>
+  <li><strong>Case sensitivity of name collision/prevention</strong> — exact match (status quo of the alias map) or case-insensitive? Affects &sect;7's prevention check only; the deterministic rule works either way.</li>
+  <li><strong><code>seed:hash</code> alongside <code>seed:revision</code>:</strong> field-compare at revision-equal is cheap at this scale; a stored payload hash would make drift detection O(1) and align vocabulary with #289. Decide in slice B implementation.</li>
+  <li><strong>Picker exposure of declarations:</strong> should <code>AddPropertyForm</code>'s picker offer schemas whose plugin is disabled (they're fully functional if kernel-preset-built, &sect;5.3)? Leaning yes for kernel-preset ones, no for declaration-only.</li>
+  <li><strong>New-plugin type ids:</strong> should plugins introduced <em>after</em> slice D use block ids as type ids (no legacy constant)? Leaning yes — <code>block-type:type-id</code> then exists only for grandfathered types.</li>
+  <li><strong>Definition cleanup affordance:</strong> UX for definitions whose plugin is gone for good (bulk archive from the Properties page?). Deliberately post-v1; nothing breaks meanwhile.</li>
+</ol>
+
+<hr />
+
+<p class="foot"><strong>References.</strong> PR #288 — <a href="https://github.com/Stvad/knowledge-medium/blob/claude/properties-as-blocks-migration-4b60xg/docs/properties-as-blocks-migration.html">properties-as-blocks migration doc</a> (&sect;2 fieldId, &sect;6 scope decision + hard requirements, &sect;9 cross-workspace, &sect;11 rollout/end-state, &sect;12 risks). PR #289 — <a href="https://github.com/Stvad/knowledge-medium/blob/claude/plugin-materialization-design-2t71dk/docs/plugin-materialization.md">plugin materialization</a> (&sect;2.4 projector shadowing, &sect;5.1 boot staging, &sect;8 declaration track, &sect;9 provenance, &sect;12 toggle-id stability). Spike: <code>origin/props-as-childrent-spike-merge</code> (<code>fieldIdForPropertyName</code>, the thing slice C retires). Prior art: <code>docs/user-defined-properties.md</code>, <code>docs/properties-model-evolution.md</code> (Thread 2 — superseded in part by #288 &sect;6; re-stamp at slice E), issue #90 (definition-block projectors).</p>
+
+
+
+</main>
+</body>
+</html>
