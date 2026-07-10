@@ -14,7 +14,14 @@ const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
 const MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH = 10_000
 const MAX_TRANSACTIONS_PER_UPLOAD_BATCH = 25
-const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
+
+/** Upper bound on CREATEs shipped in a single `apply_block_creates` RPC — same
+ *  reasoning as {@link MAX_PATCHES_PER_SUPABASE_RPC}: that RPC runs one
+ *  INSERT-or-touch per row inside one statement, so an uncapped batch (a bulk
+ *  import lands as one big repo.tx and `collectUploadBatch` takes the first tx
+ *  whole) would trip Postgres `statement_timeout`, which classifies transient and
+ *  retries the oversized batch forever. */
+export const MAX_CREATES_PER_SUPABASE_RPC = 500
 
 /** Upper bound on patches shipped in a single `apply_block_patches` RPC.
  *  That RPC runs one UPDATE per patch (each firing the per-write server
@@ -26,7 +33,7 @@ const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
  *  so PowerSync retries the same oversized batch forever and the queue
  *  stops draining. Chunking keeps each RPC well under the timeout; the
  *  patches are column-narrow and idempotent, so splitting them across
- *  separate RPC transactions is safe. Mirrors `MAX_BLOCKS_PER_SUPABASE_UPSERT`. */
+ *  separate RPC transactions is safe. Mirrors `MAX_CREATES_PER_SUPABASE_RPC`. */
 export const MAX_PATCHES_PER_SUPABASE_RPC = 500
 
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
@@ -359,20 +366,32 @@ const applyBlockDelete = async (id: string) => {
   }
 }
 
-// Insert-or-skip on the id PK. Used for client-originated CREATEs so a
-// deterministic-id collision with an existing server row preserves the
-// server's state — user-prefs, user-page, and ui-state bootstrap on a fresh
-// client all rely on this. Subsequent PATCH ops in the same batch still
-// carry the user's intentional edits.
+// Insert-or-TOUCH on the id PK, via the `apply_block_creates` RPC. Used for
+// client-originated CREATEs so a deterministic-id collision with an existing
+// server row PRESERVES the server's state — user-prefs, user-page, and ui-state
+// bootstrap on a fresh client all rely on this. Subsequent PATCH ops in the same
+// batch still carry the user's intentional edits.
+//
+// Why an RPC and not `.upsert(..., {ignoreDuplicates:true})`: `DO NOTHING`
+// preserves the server row but writes no heap tuple, so a client that raced the
+// create against sync gets NO echo and strands an insert-or-skip phantom
+// (issue #336 / #244). The RPC does `ON CONFLICT DO UPDATE SET updated_at =
+// blocks.updated_at` — a no-op touch that changes no data but emits a WAL change,
+// so PowerSync re-sends the authoritative row down and the observer reconciles
+// the phantom via the normal sync path. This replaces the whole client-side
+// self-heal outbox. See the migration for the full rationale + trigger analysis.
 const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
   if (rows.length === 0) return
   const client = assertSupabase()
 
-  for (const batch of chunk(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
+  // Chunk for the same reason apply_block_patches does (see
+  // MAX_CREATES_PER_SUPABASE_RPC): keep each RPC's per-row INSERT count under the
+  // statement timeout. orderedBlockUpserts keeps a child out of an earlier chunk
+  // (separate RPC = separate tx) than its parent — the parent self-FK is
+  // DEFERRABLE within a tx but not across them.
+  for (const batch of chunk(orderedBlockUpserts(rows), MAX_CREATES_PER_SUPABASE_RPC)) {
     console.debug('[powersync] CREATE batch', batch.length)
-    const {error, status} = await client
-      .from('blocks')
-      .upsert(batch, {onConflict: 'id', ignoreDuplicates: true})
+    const {error, status} = await client.rpc('apply_block_creates', {creates: batch})
 
     if (error) {
       throwWithHttpStatus(error, status)
@@ -421,6 +440,7 @@ const defaultBlockUploadSink: BlockUploadSink = {
   applyPatches: applyBlockPatchesRpc,
   deleteRow: applyBlockDelete,
 }
+
 
 const collectUploadBatch = async (
   database: AbstractPowerSyncDatabase,
@@ -571,18 +591,26 @@ const forgetAmbiguousAttempts = (
  *  the tail tx (which drains every preceding tx from ps_crud). Identical
  *  perf to the original handler.
  *
- *  On batch failure: classify the error (see uploadErrorClassifier).
- *    - transient (5xx / network / auth-token / rate-limit / unknown) →
- *      re-throw so PowerSync retries the whole batch later.
- *    - permanent (FK violation, RLS denial, malformed-request code, …) or
- *      ambiguous (a suspected-permanent 4xx we can't confirm from a code) →
- *      drop into the per-tx fallback.
- *  The per-tx fallback applies each tx individually: complete() on success;
- *  re-throw (retry) on a transient error; record to ps_crud_rejected +
- *  complete() (quarantine) on a permanent error; and on an ambiguous error
- *  retry it across AMBIGUOUS_RETRY_BUDGET upload passes, then quarantine. This
- *  way one bad tx no longer jams the bucket — the rest of the queue drains and
- *  the bad one lands in ps_crud_rejected for inspection.
+ *  On ANY batch failure: drop into the per-tx fallback. We do NOT fast-path a
+ *  transient error back into a whole-batch retry — applyOperations runs creates
+ *  before patches, so a transient failure on a later op can leave the earlier
+ *  creates already landed server-side, and re-throwing the whole batch would
+ *  replay them every retry. Because the create path is now insert-or-TOUCH (ON
+ *  CONFLICT DO UPDATE, not DO NOTHING), each replay is a real WAL write + a
+ *  fleet-wide echo — unbounded amplification for the life of the transient.
+ *  Per-tx draining bounds it to the succeeded PREFIX: every tx before the first
+ *  failing one drains (one extra per-tx pass — complete() is a prefix
+ *  checkpoint) so those creates stop re-touching. The failing tx and the suffix
+ *  after it still retry — and their creates still re-touch — each pass until the
+ *  transient clears; the win is the prefix, which for the common ordering (a
+ *  create backlog queued ahead of a later edit) is all of it.
+ *  The per-tx fallback applies each tx individually and classifies its error
+ *  (see uploadErrorClassifier): complete() on success; re-throw (retry) on a
+ *  transient error; record to ps_crud_rejected + complete() (quarantine) on a
+ *  permanent error; and on an ambiguous error retry it across
+ *  AMBIGUOUS_RETRY_BUDGET upload passes, then quarantine. This way one bad tx no
+ *  longer jams the bucket — the rest of the queue drains and the bad one lands
+ *  in ps_crud_rejected for inspection.
  *
  *  Encrypt-on-upload (§9.2) is part of that isolation: a tx for an e2ee
  *  workspace whose key is momentarily missing/unreadable makes `encryptOps`
@@ -623,13 +651,12 @@ const uploadTransactionsWithFallback = async (
       }
       return
     } catch (err) {
-      // Transient → retry the whole batch later. Permanent OR ambiguous → drop
-      // into the per-tx loop, where each tx is isolated and an ambiguous one
-      // gets its own retry budget before being quarantined.
-      if (classifyUploadError(err) === 'transient') {
-        console.error('[powersync] upload failed (transient, will retry)', err)
-        throw err
-      }
+      // ANY batch error (transient included) drops into the per-tx loop — see
+      // the function doc above for why we don't fast-path a transient back into
+      // a whole-batch retry (it would re-touch every already-landed create each
+      // pass, now that the create path is insert-or-TOUCH). The loop drains the
+      // succeeded prefix and re-throws the still-failing tx, classifying each
+      // (transient → re-throw, ambiguous → retry-budget, permanent → quarantine).
       console.warn(
         `[powersync] batch upload failed — isolating ${transactions.length} tx(s)`,
         err,
@@ -683,7 +710,7 @@ const runUploadLoop = async (
 ): Promise<void> => {
   while (true) {
     const transactions = await collectUploadBatch(database)
-    if (transactions.length === 0) return
+    if (transactions.length === 0) break
     await uploadTransactionsWithFallback(database, transactions, deps, ambiguousAttempts)
   }
 }
@@ -751,6 +778,8 @@ export const __encryptUploadOpsForTest = encryptUploadOps
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
 export const __uploadTransactionsWithFallbackForTest = uploadTransactionsWithFallback
+export const __runUploadLoopForTest = runUploadLoop
 export const __applyCompactedBlockOperationsForTest = applyCompactedBlockOperations
 export const __applyBlockPatchesRpcForTest = applyBlockPatchesRpc
+export const __applyBlockCreatesForTest = applyBlockCreates
 export const __recordRejectionToTableForTest = recordRejectionToTable

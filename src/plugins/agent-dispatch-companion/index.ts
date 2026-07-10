@@ -5,6 +5,7 @@ import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.js'
 import { agentStatusChipContribution } from './AgentStatusChip.tsx'
 import { askAgentActions } from './askAgent.ts'
 import { cancelAgentActions } from './cancelAgent.ts'
+import { copyAgentResumeCommandActions } from './resumeCommand.ts'
 
 const SOURCE = 'agent-dispatch-companion'
 
@@ -23,4 +24,5 @@ export const agentDispatchCompanionPlugin: AppExtension = systemToggle({
   blockContentDecoratorsFacet.of(agentStatusChipContribution, { source: SOURCE }),
   ...askAgentActions.map(action => actionsFacet.of(action, { source: SOURCE })),
   ...cancelAgentActions.map(action => actionsFacet.of(action, { source: SOURCE })),
+  ...copyAgentResumeCommandActions.map(action => actionsFacet.of(action, { source: SOURCE })),
 ])

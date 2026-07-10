@@ -1,0 +1,142 @@
+name: Publish packages
+
+# Publish-on-version-change: after a green "Run Tests" on master, publish any
+# workspace package whose package.json version isn't on npm yet. Bump a
+# package's version in your PR and the merge releases it; leave it and this is a
+# no-op. See scripts/publish-packages.mjs for the per-package logic.
+#
+# Two jobs, on purpose (OIDC supply-chain isolation): `build` installs the whole
+# workspace and compiles the packages — i.e. runs third-party install/build code
+# — but holds NO id-token. `publish` holds `id-token: write` (the OIDC publish
+# capability) but runs NO third-party code: it only downloads the prebuilt dist
+# and `npm publish --ignore-scripts`. So a malicious transitive postinstall in
+# the build can't reach the token that mints npm releases.
+on:
+  workflow_run:
+    workflows: ["Run Tests"]
+    types: [completed]
+  # Manual re-run against the current master (e.g. to smoke-test the pipeline).
+  workflow_dispatch:
+
+# Serialize publish runs: the version check (npm view) and the publish are not
+# atomic, so two overlapping runs on the same version would race and the loser
+# would 403. Queue instead of cancel — never kill an in-flight npm publish.
+concurrency:
+  group: publish-packages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # The whole pipeline is gated here; `publish` inherits it via `needs: build`
+    # (a skipped or failed build skips publish). Both entry paths are
+    # master-only:
+    #  - workflow_run: only after Run Tests *succeeded* for a push to master
+    #    (a fork PR runs Run Tests as event 'pull_request', never 'push', so it
+    #    can't reach the pipeline / the OIDC token).
+    #  - workflow_dispatch: a manual master-only re-run (no workflow_run payload,
+    #    so it bypasses the success gate — hence the explicit ref check, or a
+    #    dispatch against any other branch could build+publish untested code).
+    if: >
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'master' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          # Build the exact commit Run Tests validated (falls back to the ref a
+          # manual dispatch selected).
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Produce the publish-ready dist for both packages: tsc -b scoped to just
+      # the two packages (not the whole app — agent-dispatch pulls agent-cli via
+      # its project reference) plus agent-cli's generated kernel-types (which
+      # still walk the app's @/ source, so the app types shipped to consumers
+      # stay correct). Same dist each package's prepublishOnly would build; the
+      # publish job never has to build. compile:packages shares its build-
+      # kernel-types + chmod tail with `compile` (compile:post), so it can't
+      # drift from the full build.
+      - name: Build packages
+        run: yarn run compile:packages
+
+      # upload-artifact's if-no-files-found checks the *combined* count across
+      # both paths, so it wouldn't catch one package's dist being empty while
+      # the other has files. Assert each package's entry point exists before we
+      # hand a possibly-partial artifact to the publish job.
+      - name: Verify build output
+        run: |
+          test -s packages/agent-cli/dist/cli.js
+          test -s packages/agent-dispatch/dist/daemon.js
+
+      - name: Upload built package dists
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-dists
+          # Least-common-ancestor of these two paths is `packages/`, so the
+          # artifact holds agent-cli/dist + agent-dispatch/dist; the publish job
+          # downloads it back under `packages/`.
+          path: |
+            packages/agent-cli/dist
+            packages/agent-dispatch/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    # Inherits the master-only gate from `build` via needs. The explicit
+    # success() guard is defense-in-depth: this is the one condition the whole
+    # publish invariant hangs on, so state it rather than lean on the default —
+    # a future edit that copies an always()/!cancelled() pattern can't silently
+    # reopen the gate without a visible diff to this line.
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC trusted publishing; auto-attaches provenance
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1; node 24.x bundles an older
+      # npm. Pin to a specific 11.x rather than @latest: @latest currently
+      # resolves to npm 12.0.0, which crashes provenance generation with
+      # "Cannot find module 'sigstore'" (npm/cli#9722). Bump deliberately once
+      # that's fixed and released. --ignore-scripts keeps this token-bearing job
+      # script-free by construction (npm@11.18.0 ships none today, but a future
+      # pin bump shouldn't be able to silently run install code beside the OIDC
+      # token).
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@11.18.0 --ignore-scripts
+
+      # Bring in the dist built by the token-less build job. This job runs no
+      # yarn install and publishes with --ignore-scripts, so no third-party code
+      # executes alongside the id-token.
+      - name: Download built package dists
+        uses: actions/download-artifact@v4
+        with:
+          name: package-dists
+          path: packages
+
+      - name: Publish changed packages
+        run: node scripts/publish-packages.mjs

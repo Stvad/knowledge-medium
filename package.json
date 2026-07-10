@@ -12,7 +12,9 @@
   ],
   "scripts": {
     "dev": "vite",
-    "compile": "tsc -b && node packages/agent-cli/scripts/build-kernel-types.mjs && chmod +x packages/agent-cli/dist/cli.js packages/agent-cli/dist/server.js packages/agent-cli/dist/mcp.js packages/agent-dispatch/dist/daemon.js packages/agent-dispatch/dist/mcp.js",
+    "compile": "tsc -b && yarn run compile:post",
+    "compile:packages": "tsc -b packages/agent-cli packages/agent-dispatch && yarn run compile:post",
+    "compile:post": "node packages/agent-cli/scripts/build-kernel-types.mjs && chmod +x packages/agent-cli/dist/cli.js packages/agent-cli/dist/server.js packages/agent-cli/dist/mcp.js packages/agent-dispatch/dist/daemon.js packages/agent-dispatch/dist/mcp.js",
     "build": "yarn run compile && vite build && vite build --config vite.sw.config.ts && vite-node scripts/inject-sw-build-id.ts",
     "lint": "eslint . --cache --cache-location node_modules/.cache/eslint/ --cache-strategy content",
     "preview": "vite preview",

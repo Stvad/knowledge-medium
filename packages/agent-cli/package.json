@@ -1,6 +1,6 @@
 {
   "name": "@knowledge-medium/agent-cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "CLI, local HTTP bridge, and graph MCP server for driving the Knowledge Medium app from local agents.",
   "keywords": [
     "cli",
@@ -13,12 +13,12 @@
   "author": "Vlad Sitalo",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stvad/knowledge-medium.git",
+    "url": "git+https://github.com/Stvad/knowledge-medium.git",
     "directory": "packages/agent-cli"
   },
-  "homepage": "https://github.com/stvad/knowledge-medium/tree/master/packages/agent-cli#readme",
+  "homepage": "https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-cli#readme",
   "bugs": {
-    "url": "https://github.com/stvad/knowledge-medium/issues"
+    "url": "https://github.com/Stvad/knowledge-medium/issues"
   },
   "publishConfig": {
     "access": "public",

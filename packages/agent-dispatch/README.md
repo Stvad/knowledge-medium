@@ -107,7 +107,47 @@ This rename intentionally does **not** carry a permanent `claude:*` compatibilit
    return {scanned: rows.length, updated}
    ```
 
-## Setup
+## Install from npm
+
+If you only want to *run* the daemon (not hack on the repo), install the published packages instead of cloning. You need **both**: `agent-dispatch` (the daemon) and `agent-cli` (the `kmagent` bridge it reaches the live app through).
+
+```bash
+npm i -g @knowledge-medium/agent-dispatch @knowledge-medium/agent-cli
+```
+
+That puts `km-agent-dispatch` and `kmagent` on your PATH. Then:
+
+1. **Pair a bridge profile** with the global `kmagent` (same as step 1 of Setup below):
+
+   ```bash
+   kmagent --profile agent-dispatch connect
+   ```
+
+2. **Create the config** at `~/.config/knowledge-medium/agent-dispatch.json` — see step 2 of **Setup** below for the full schema and watcher examples.
+
+3. **Run once by hand** to check it:
+
+   ```bash
+   km-agent-dispatch --once
+   ```
+
+4. **Install under launchd.** The plist template ships inside the package; re-point it at the globally-installed daemon (the template's path is repo-shaped, so the specific `daemon.js` substitution must come before the generic `__REPO__` → `$HOME`):
+
+   ```bash
+   PKG="$(npm root -g)/@knowledge-medium/agent-dispatch"
+   sed -e "s|__NODE__|$(command -v node)|g" \
+       -e "s|__REPO__/packages/agent-dispatch/dist/daemon.js|$PKG/dist/daemon.js|g" \
+       -e "s|__REPO__|$HOME|g" \
+       -e "s|__HOME__|$HOME|g" \
+       "$PKG/launchd/org.knowledge-medium.agent-dispatch.plist" \
+       > ~/Library/LaunchAgents/org.knowledge-medium.agent-dispatch.plist
+   launchctl load ~/Library/LaunchAgents/org.knowledge-medium.agent-dispatch.plist
+   tail -f ~/Library/Logs/km-agent-dispatch.log
+   ```
+
+   (`npx -p @knowledge-medium/agent-dispatch km-agent-dispatch --once` works for a one-off run — the package ships two bins so plain `npx @knowledge-medium/agent-dispatch` can't pick one — but launchd needs a stable installed path, so global install is the right call for the always-on daemon.)
+
+## Setup (from a repo checkout)
 
 1. **Pair a dedicated bridge profile** (revocable independently of your interactive one) with a **read-write** token:
 

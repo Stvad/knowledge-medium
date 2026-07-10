@@ -1,18 +1,46 @@
 {
   "name": "@knowledge-medium/agent-dispatch",
-  "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dispatch note-graph triggers to local agent CLIs: backlink mentions, query-change watchers, durable graph lifecycle state, and optional channel delivery.",
+  "keywords": [
+    "agent",
+    "claude",
+    "codex",
+    "knowledge-medium",
+    "automation",
+    "daemon"
+  ],
+  "license": "MIT",
+  "author": "Vlad Sitalo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Stvad/knowledge-medium.git",
+    "directory": "packages/agent-dispatch"
+  },
+  "homepage": "https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-dispatch#readme",
+  "bugs": {
+    "url": "https://github.com/Stvad/knowledge-medium/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
   },
   "bin": {
-    "km-agent-dispatch": "./dist/daemon.js",
-    "km-agent-dispatch-channel-mcp": "./dist/mcp.js"
+    "km-agent-dispatch": "dist/daemon.js",
+    "km-agent-dispatch-channel-mcp": "dist/mcp.js"
   },
+  "files": [
+    "dist",
+    "launchd",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc -b && chmod +x ./dist/daemon.js ./dist/mcp.js"
+    "build": "tsc -b && chmod +x ./dist/daemon.js ./dist/mcp.js",
+    "prepublishOnly": "yarn run build"
   },
   "dependencies": {
     "@knowledge-medium/agent-cli": "^0.3.0",

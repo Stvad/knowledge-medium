@@ -21,6 +21,8 @@ export const PROPS = {
   status: 'agent:status',
   /** Executor session/thread id (enables resume where supported). */
   session: 'agent:session',
+  /** Structured runner options needed to reconstruct an interactive resume command. */
+  resumeOptions: 'agent:resume-options',
   /** Watcher name that claimed the block. */
   watcher: 'agent:watcher',
   /** Executor that claimed the block, used by synced UI chips. */
