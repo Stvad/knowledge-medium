@@ -1,6 +1,7 @@
 import {actionsFacet} from '@/extensions/core.js'
 import {blockContentDecoratorsFacet} from '@/extensions/blockInteraction.js'
 import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
+import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
 import {
   propertyEditorOverridesFacet,
   propertySchemasFacet,
@@ -35,7 +36,7 @@ import {
 export default [
   dialogAppMountExtension,
 
-  typesFacet.of(publisherPrefsType, {source}),
+  ...pluginPrefsExtension(publisherPrefsType, source),
   ...commandTypes.map(command => typesFacet.of(command.type, {source})),
 
   propertySchemasFacet.of(blueskyHandleProp, {source}),
