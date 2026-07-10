@@ -11,7 +11,6 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { ChangeScope, defineBlockType } from '@/data/api'
 import { typesFacet } from '@/data/facets'
-import { editorContentFlushFacet } from '@/editor/contentFlush'
 import { getBlockTypes } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
@@ -58,28 +57,10 @@ const makeBlock = async (repo: Repo, content: string): Promise<string> => {
   return id
 }
 
-/** A view wired the way BlockEditor wires production editors: it
- *  publishes the content-flush facet, so `flushEditorContent` at
- *  accept time persists the (optimistically stripped) view into the
- *  row. This is what makes the tag tx read a clean row — production
- *  never runs this source outside such an editor. */
-const viewWithFlush = (repo: Repo, blockId: string, doc: string): EditorView => {
-  const holder: {view?: EditorView} = {}
-  const view = new EditorView({
-    state: EditorState.create({
-      doc,
-      extensions: [editorContentFlushFacet.of(() => {
-        void repo.mutate.setContent({id: blockId, content: holder.view!.state.doc.toString()})
-      })],
-    }),
-    parent: document.body,
-  })
-  holder.view = view
-  return view
-}
-
 /** Drive the source at end-of-doc and apply the option with the given
- *  label; waits for the block to end up tagged before returning. */
+ *  label; waits for the block to end up tagged before returning.
+ *  `applyTag` persists the stripped view content itself (in the tag's
+ *  undo group), so a plain view is enough — no editor flush needed. */
 const pickAt = async (
   repo: Repo,
   blockId: string,
@@ -89,7 +70,7 @@ const pickAt = async (
   const block = repo.block(blockId)
   await block.load()
   const source = buildTypeTagSource({repo, block})
-  const view = viewWithFlush(repo, blockId, doc)
+  const view = new EditorView({state: EditorState.create({doc}), parent: document.body})
   try {
     const result = await source(new CompletionContext(view.state, doc.length, false))
     expect(result).not.toBeNull()
@@ -158,48 +139,38 @@ describe('supertags pick integration', () => {
     expect(data!.content).toBe('see #ta note')
   })
 
-  it('the tag tx is content-neutral: without an editor flush it never writes content', async () => {
+  it('folds the strip and the tag into one undo entry (single cmd-Z reverts both)', async () => {
     env = await setup()
     const blockId = await makeBlock(env.repo, 'call mom #ta')
-    const block = env.repo.block(blockId)
-    await block.load()
-    const source = buildTypeTagSource({repo: env.repo, block})
-    // A bare view (no flush facet) — the tag write must not touch
-    // content at all: the editor owns content (view strip + flush /
-    // debounce), and the tag tx only tags. So a row that drifted from a
-    // concurrent writer is left exactly as-is; reconciling it is the
-    // editor's adoption path, not the tag path.
-    const view = new EditorView({state: EditorState.create({doc: 'call mom #ta'}), parent: document.body})
-    try {
-      const result = await source(new CompletionContext(view.state, 12, false))
-      const option = result!.options.find(o => o.label === 'Task')!
-      await env.repo.mutate.setContent({id: blockId, content: 'call mom #ta EDITED'})
-      const apply = option.apply as (v: EditorView, c: unknown, from: number, to: number) => void
-      apply(view, option, result!.from, 12)
-      await vi.waitFor(async () => {
-        const data = await env.repo.load(blockId)
-        expect(getBlockTypes(data!)).toEqual(['task'])
-      }, {timeout: TIMEOUT_MS})
-      expect((await env.repo.load(blockId))!.content).toBe('call mom #ta EDITED')
-    } finally {
-      view.destroy()
-    }
+    await pickAt(env.repo, blockId, 'call mom #ta', 'Task')
+    // Accepted: command span stripped from stored content + tagged.
+    let data = await env.repo.load(blockId)
+    expect(data!.content).toBe('call mom')
+    expect(getBlockTypes(data!)).toEqual(['task'])
+    // ONE undo reverts the WHOLE acceptance — the tag is removed AND the
+    // `#ta` command text comes back. The strip and the tag are separate
+    // txs folded into one undo group; without the group this undo would
+    // revert only the tag and leave content at the stripped 'call mom'.
+    expect(await env.repo.undo()).toBe(true)
+    data = await env.repo.load(blockId)
+    expect(getBlockTypes(data!)).toEqual([])
+    expect(data!.content).toBe('call mom #ta')
   })
 
-  it('flushes the editor before the pick, so a lagging stored row does not corrupt the type name', async () => {
+  it('persists the stripped view content so a lagging stored row does not corrupt the type name', async () => {
     env = await setup()
     // Stored content lags the view mid-trigger (the 300ms persistence
-    // debounce hasn't caught up to the final "e"): a naive pick would
-    // read "Book #typ" and register a type named "Book #typ".
+    // debounce hasn't caught up to the final "e"): a naive pick reading
+    // stored content would register a type named "Book #typ". `applyTag`
+    // instead persists the view's stripped content (`docAfter`, "Book")
+    // in the tag's undo group before the typeify processor reads it.
     const blockId = await makeBlock(env.repo, 'Book #typ')
     const block = env.repo.block(blockId)
     await block.load()
     const source = buildTypeTagSource({repo: env.repo, block})
 
-    // The view shows the full trigger; wire the flush facet the way
-    // BlockEditor does. The pick calls it after stripping the trigger,
-    // so the row is clean ("Book") before typeify reads it.
-    const view = viewWithFlush(env.repo, blockId, 'Book #type')
+    // The view shows the full trigger (what the user actually typed).
+    const view = new EditorView({state: EditorState.create({doc: 'Book #type'}), parent: document.body})
     try {
       const result = await source(new CompletionContext(view.state, 10, false))
       const option = result!.options.find(o => o.label === 'Type')!

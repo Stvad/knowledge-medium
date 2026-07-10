@@ -1,8 +1,14 @@
 /**
- * Same-tx processor: when a block gains the `block-type` meta-type — by
- * ANY path (the `#type` gesture, the property-panel picker, programmatic
- * tagging, an import) — complete it into a fully-formed user-defined type
- * in the SAME tx:
+ * Same-tx processor: when a block gains the `block-type` meta-type via a
+ * local `repo.tx` — the `#type` gesture, programmatic tagging, or an
+ * import that creates the row through `repo.tx` — complete it into a
+ * fully-formed user-defined type in the SAME tx:
+ *
+ * (Sync-applied writes do NOT run this — they bypass `repo.tx` and the
+ * same-tx pass entirely; the invariant still holds for a synced type
+ * because the originating device already completed it and the finished
+ * `properties` replicate as data. The property-panel picker also never
+ * reaches here: it filters `block-type` out of its options.)
  *
  *   - **adopt content as the label** if it has none — an empty
  *     `block-type:label` makes `UserTypesService.tryBuildType` drop the

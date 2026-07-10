@@ -6,6 +6,7 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension'
 import {
   aliasesProp,
   blockTypeLabelProp,
@@ -42,6 +43,10 @@ const setup = async (): Promise<Harness> => {
     extensions: [
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
+      // Load the alias plugin so the typeify processor's alias writes are
+      // exercised against the REAL content<->alias sync (kernel processor
+      // first, then aliasSync) — not in isolation.
+      aliasDataExtension,
     ],
   })
   repo.setActiveWorkspaceId(WS)
@@ -314,9 +319,9 @@ describe('block-type typeify processor', () => {
 
   it('never overwrites an explicitly-set label/alias (createTypeBlock-style)', async () => {
     env = await setup()
-    // Label already set to something other than content; alias already
-    // claimed. The processor must leave both untouched.
-    const id = await tagBlockType(env, 'Book', {
+    // A createTypeBlock-style row: content == label == alias, all set
+    // explicitly. The processor must leave label and alias untouched.
+    const id = await tagBlockType(env, 'Custom', {
       [blockTypeLabelProp.name]: 'Custom',
       [aliasesProp.name]: ['Custom'],
     })
@@ -324,6 +329,22 @@ describe('block-type typeify processor', () => {
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Custom')
     expect(row!.properties[aliasesProp.name]).toEqual(['Custom'])
+  })
+
+  it('does not grow the alias set on a later label-only edit (fires only on the type-add)', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    // Edit the label WITHOUT touching content — this is not a type-add,
+    // so the `addedTypes` transition-guard must keep the processor from
+    // firing again. If it fired (guard regressed to fire-on-present),
+    // ensure-present would append 'Novel' → alias grows. aliasSync stays
+    // out of it (content unchanged), so this isolates the guard.
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, blockTypeLabelProp, 'Novel')
+    }, {scope: ChangeScope.BlockDefault})
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
   })
 
   it('leaves a blank block unnamed (no label/alias) but still a page', async () => {

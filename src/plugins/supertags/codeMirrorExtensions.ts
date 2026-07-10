@@ -9,17 +9,16 @@
  *
  *  Pick semantics: the source deletes the `#query` command span from
  *  the view optimistically (including start/end separator whitespace
- *  when safe) and then flushes the editor (`flushEditorContent`, in the
- *  pick `apply`) so the stored row carries the deletion BEFORE `pickType`
- *  here tags the block. Flush-before-tag is load-bearing: a types change
- *  remounts the per-block editor (types participate in
- *  `DefaultBlockRenderer`'s slot identity), and the fresh editor seeds
- *  from the cache — if the cached content still held the command span
- *  (the editor's own persistence is otherwise a 300ms-debounced
- *  `setContent`), the deleted text would resurrect under the user's
- *  cursor and could permanently fork from what they type next. Because
- *  the flush lands the clean content first, `pickType` never writes
- *  content — the editor owns it.
+ *  when safe), then `pickType` → `applyTag` persists that deletion
+ *  (`ctx.docAfter`) and adds the type as two `repo.undoGroup`-folded txs
+ *  (one undo entry — see `applyTag`). Persisting the stripped content
+ *  before the type-add is load-bearing: a types change remounts the
+ *  per-block editor (types participate in `DefaultBlockRenderer`'s slot
+ *  identity) and the fresh editor seeds from the cache — if the cached
+ *  content still held the command span (the editor's own persistence is
+ *  otherwise a 300ms-debounced `setContent`), the deleted text would
+ *  resurrect under the user's cursor and could permanently fork from what
+ *  they type next.
  *
  *  Picking the `Create type "…"` sentinel re-checks the registry for a
  *  same-named type first (an earlier create may not have published
@@ -69,25 +68,44 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
    *  already stripped the command span from the view and flushed it to
    *  the row (see module doc), so `data.content` is the clean title by
    *  the time this tx opens. When `typeId` is `block-type`, the kernel
-   *  `blockTypeTypeify` same-tx processor completes the type in this same
-   *  tx (adopt content→label, add PAGE_TYPE, claim the label alias) — it
-   *  fires for every block-type tag, so `#type` needs no special work
-   *  here. */
-  const applyTag = async (typeId: string): Promise<void> => {
-    await repo.tx(async tx => {
-      const data = await tx.get(block.id)
-      if (!data || data.deleted) return
-      await repo.addTypeInTx(tx, block.id, typeId, {}, repo.snapshotTypeRegistries())
-    }, {scope: ChangeScope.BlockDefault, description: `tag type ${typeId}`})
+   *  `blockTypeTypeify` same-tx processor completes the type (adopt
+   *  content→label, add PAGE_TYPE, claim the label alias) — it fires for
+   *  every block-type tag, so `#type` needs no special work here.
+   *
+   *  Two grouped txs, folded into ONE undo entry via `repo.undoGroup`:
+   *   1. persist the view's stripped content (`ctx.docAfter`) so the
+   *      type-add remount reseeds from a clean cache;
+   *   2. add the type.
+   *  Grouped so a single cmd-Z reverts the whole acceptance (strip +
+   *  tag). Kept as SEPARATE txs (not one) so the tag tx stays
+   *  content-neutral — a content change in the same tx as the tag would
+   *  make `aliasSyncProcessor` append a drift-heal alias; isolating the
+   *  content write in tx 1 (where the block has no alias yet) avoids that
+   *  entirely. Non-atomic is fine: if the tag tx fails, tx 1's clean
+   *  content is exactly what the failure-restore path expects. */
+  const applyTag = async (typeId: string, ctx: TypeTagPickContext): Promise<void> => {
+    await repo.undoGroup(async grouped => {
+      await grouped.tx(async tx => {
+        const data = await tx.get(block.id)
+        if (data && !data.deleted && data.content !== ctx.docAfter) {
+          await tx.update(block.id, {content: ctx.docAfter})
+        }
+      }, {scope: ChangeScope.BlockDefault, description: 'strip type-tag command'})
+      await grouped.tx(async tx => {
+        const data = await tx.get(block.id)
+        if (!data || data.deleted) return
+        await repo.addTypeInTx(tx, block.id, typeId, {}, repo.snapshotTypeRegistries())
+      }, {scope: ChangeScope.BlockDefault, description: `tag type ${typeId}`})
+    })
   }
 
-  // ctx (docBefore/docAfter) is only for the failure-restore path, owned
-  // by the completion `apply`; the tag itself never touches content, so
-  // pickType takes just the candidate (still satisfies the option type).
-  const pickType = async (candidate: TypeTagCandidate): Promise<void> => {
+  const pickType = async (
+    candidate: TypeTagCandidate,
+    ctx: TypeTagPickContext,
+  ): Promise<void> => {
     try {
       if (candidate.kind === 'existing') {
-        await applyTag(candidate.id)
+        await applyTag(candidate.id, ctx)
         return
       }
       // Create flow — reuse a same-named type that published since the
@@ -105,7 +123,7 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
           propertySchemaIds: [],
         })
       }
-      await applyTag(typeId)
+      await applyTag(typeId, ctx)
     } catch (err) {
       // Structured rejections (e.g. a name that collides with an
       // existing alias) already surface their own specific toast via

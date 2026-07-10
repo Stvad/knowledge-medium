@@ -32,7 +32,6 @@ import type {
 } from '@codemirror/autocomplete'
 import type { TypeContribution } from '@/data/api'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
-import { flushEditorContent } from '@/editor/contentFlush'
 import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
 
 /** Whether the `#` autocomplete offers this type — everything except
@@ -302,12 +301,6 @@ const candidateToOption = (
       changes: {from: deletion.from, to: deletion.to, insert: ''},
       selection: EditorSelection.cursor(deletion.from),
     })
-    // Persist the strip NOW so the stored row matches the view before
-    // the async pick reads it — the type-add remounts this editor and
-    // the fresh view reseeds from the cached row, so a still-unflushed
-    // command span would otherwise resurrect (or be adopted as the type
-    // name). Ordered ahead of pickType's tx on the FIFO write lock.
-    flushEditorContent(view)
     const ctx: TypeTagPickContext = {
       triggerText,
       at: applyFrom,
