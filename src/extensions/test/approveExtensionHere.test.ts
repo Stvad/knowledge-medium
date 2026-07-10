@@ -3,7 +3,8 @@ import {approveExtensionHere} from '@/extensions/approveExtensionHere.js'
 import type {Repo} from '@/data/repo'
 
 const approveExtension = vi.hoisted(() => vi.fn())
-vi.mock('@/extensions/compileExtensionModule.js', () => ({approveExtension}))
+const lookupApproval = vi.hoisted(() => vi.fn())
+vi.mock('@/extensions/compileExtensionModule.js', () => ({approveExtension, lookupApproval}))
 
 const showError = vi.hoisted(() => vi.fn())
 vi.mock('@/utils/toast.js', () => ({showError}))
@@ -11,7 +12,24 @@ vi.mock('@/utils/toast.js', () => ({showError}))
 const makeRepo = (load: Repo['load']): Repo => ({load}) as unknown as Repo
 
 describe('approveExtensionHere', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Default: the approval store is readable (no existing pin to protect).
+    lookupApproval.mockResolvedValue({status: 'unapproved'})
+  })
+
+  it('fails closed (no load, no approve) when the approval store is unreadable', async () => {
+    // A transient approval-read failure surfaces as needs-approval; approving
+    // now could clobber an existing trusted pin, so bail out (#67).
+    lookupApproval.mockResolvedValue({status: 'unreadable'})
+    const load = vi.fn()
+    const repo = makeRepo(load)
+
+    await expect(approveExtensionHere(repo, 'ext', 'Ext')).resolves.toBe(false)
+    expect(load).not.toHaveBeenCalled()
+    expect(approveExtension).not.toHaveBeenCalled()
+    expect(showError).toHaveBeenCalledWith(expect.stringContaining('approval state'))
+  })
 
   it('approves the block and returns true on success', async () => {
     const repo = makeRepo(vi.fn().mockResolvedValue({content: 'SRC'}))

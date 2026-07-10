@@ -10,12 +10,23 @@
  * one extension can never touch another's trust state — the guarantee the
  * global surface needs to avoid the mis-keyed-dismissal bug.
  *
- * Returns whether trust was established. Surfaces a toast on failure (block
- * missing / approval write failed) so callers can avoid setting "enabled"
- * intent against a non-existent approval (which would silently loop on
- * needs-approval — #67 review).
+ * Returns whether trust was established. Surfaces a toast on failure (store
+ * unreadable / block missing / approval write failed) so callers can avoid
+ * setting "enabled" intent against a non-existent approval (which would
+ * silently loop on needs-approval — #67 review).
+ *
+ * Fails closed when the device-local approval store is UNREADABLE. The loader
+ * reports `needs-approval` on a transient approval-read failure too
+ * (`readApproval` can't tell "no approval" from "couldn't read"), so the
+ * prompt that led here may be masking an EXISTING trusted pin — blindly
+ * approving would overwrite it with the (possibly drifted) live source.
+ * `lookupApproval` distinguishes the cases; we only pin when the store is
+ * genuinely readable. This matches the settings checkbox enable path.
  */
-import {approveExtension} from '@/extensions/compileExtensionModule.js'
+import {
+  approveExtension,
+  lookupApproval,
+} from '@/extensions/compileExtensionModule.js'
 import type {Repo} from '@/data/repo'
 import {showError} from '@/utils/toast.js'
 
@@ -25,6 +36,14 @@ export const approveExtensionHere = async (
   name: string,
 ): Promise<boolean> => {
   try {
+    // Fail closed on an unreadable approval store (see the header) — before
+    // loading or writing anything.
+    if ((await lookupApproval(blockId)).status === 'unreadable') {
+      showError(
+        `Couldn't enable "${name}" — couldn't read its approval state. Try again.`,
+      )
+      return false
+    }
     // The block load is inside the try too: a transient DB read failure must
     // resolve to `false` + a toast like every other failure, not reject —
     // callers only handle the resolved-false path (the global prompt's
