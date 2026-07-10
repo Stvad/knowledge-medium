@@ -20,10 +20,13 @@
 /**
  * Canonical modifier names a descriptor can carry. `$mod` is the
  * platform-primary modifier (Cmd on macOS, Ctrl elsewhere); the rest are
- * literal. `cmd`/`meta`/`os` all alias-fold to `$mod`, so `Meta` never
- * survives canonicalisation.
+ * literal. `cmd`/`meta`/`os` fold to `$mod` ONLY on macOS, where the Meta
+ * key IS the primary. Off-Mac the Meta/Super key is a distinct modifier
+ * that tinykeys dispatches as `Meta` (Ctrl is `$mod` there), so it survives
+ * canonicalisation as a literal `Meta` — folding it into `$mod` would make
+ * conflict detection treat Super+K and Ctrl+K as the same chord.
  */
-export type Modifier = '$mod' | 'Control' | 'Alt' | 'Shift'
+export type Modifier = '$mod' | 'Control' | 'Meta' | 'Alt' | 'Shift'
 
 /** When in the key lifecycle a press resolves. Mirrors the binding
  *  `phase` field in `types.ts`. */
@@ -74,21 +77,41 @@ export interface TouchChordDescriptor {
   readonly phase: TouchPhase
 }
 
-/** Stable modifier order, so the same physical chord always serialises
- *  identically. `$mod` first, then the literal modifiers. */
-const MODIFIER_ORDER: readonly Modifier[] = ['$mod', 'Control', 'Alt', 'Shift']
+/** Platform-primary detection for `$mod` (Cmd on Apple, Ctrl elsewhere),
+ *  mirroring tinykeys so keyboard and pointer agree on what `$mod` means. */
+const platformPrimaryIsMeta = (): boolean =>
+  typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || '')
 
-/** Fold the assorted spellings of each modifier onto one canonical name. */
-const MODIFIER_ALIASES: Record<string, Modifier> = {
-  cmd: '$mod',
-  meta: '$mod',
-  os: '$mod',
-  '$mod': '$mod',
-  ctrl: 'Control',
-  control: 'Control',
-  option: 'Alt',
-  alt: 'Alt',
-  shift: 'Shift',
+/** Stable modifier order, so the same physical chord always serialises
+ *  identically. `$mod` first, then the literal modifiers (`Meta` in the
+ *  secondary slot, mirroring how chordFromEvent orders the captured chord). */
+const MODIFIER_ORDER: readonly Modifier[] = ['$mod', 'Control', 'Meta', 'Alt', 'Shift']
+
+/** Fold one modifier spelling onto its canonical name, or null if the token
+ *  isn't a modifier. `meta`/`os` (the Meta/Super key) are platform-aware: on
+ *  a Mac they ARE the primary and fold to `$mod`; off-Mac they're the
+ *  distinct Super/Windows key that tinykeys dispatches as `Meta`, so folding
+ *  them into `$mod` (= Ctrl there) would collapse two different chords. */
+const resolveModifier = (token: string): Modifier | null => {
+  switch (token.toLowerCase()) {
+    case '$mod':
+    case 'cmd':
+      return '$mod'
+    case 'meta':
+    case 'os':
+      return platformPrimaryIsMeta() ? '$mod' : 'Meta'
+    case 'ctrl':
+    case 'control':
+      return 'Control'
+    case 'option':
+    case 'alt':
+      return 'Alt'
+    case 'shift':
+      return 'Shift'
+    default:
+      return null
+  }
 }
 
 interface ParsedPress {
@@ -104,9 +127,9 @@ const parsePress = (press: string): ParsedPress => {
   const mods: Modifier[] = []
   let key = ''
   for (const token of tokens) {
-    const alias = MODIFIER_ALIASES[token.toLowerCase()]
-    if (alias) {
-      mods.push(alias)
+    const mod = resolveModifier(token)
+    if (mod) {
+      mods.push(mod)
     } else {
       key = token
     }
@@ -167,12 +190,6 @@ export const canonicalizeChord = (raw: string, phase?: ChordPhase): string => {
 // chord-STRING canonicalisation plus the pointer/touch descriptors, which
 // have no tinykeys equivalent.
 
-/** Platform-primary detection for `$mod` (Cmd on Apple, Ctrl elsewhere),
- *  mirroring tinykeys so keyboard and pointer agree on what `$mod` means. */
-const platformPrimaryIsMeta = (): boolean =>
-  typeof navigator !== 'undefined' &&
-  /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent || '')
-
 /** The four physical modifier flags a pointer event carries. */
 export interface PointerModifierState {
   readonly shiftKey: boolean
@@ -191,6 +208,7 @@ const requiredModifierFlags = (mods: readonly Modifier[]): PointerModifierState 
     if (mod === 'Shift') shiftKey = true
     else if (mod === 'Alt') altKey = true
     else if (mod === 'Control') ctrlKey = true
+    else if (mod === 'Meta') metaKey = true
     else if (mod === '$mod') {
       if (primaryIsMeta) metaKey = true
       else ctrlKey = true

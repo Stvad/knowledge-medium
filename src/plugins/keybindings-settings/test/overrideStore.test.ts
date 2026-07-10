@@ -92,4 +92,14 @@ describe('previewOverrideConflicts', () => {
     const conflicts = previewOverrideConflicts(base, existing, stored('b', 'g g'))
     expect(conflicts).toEqual([])
   })
+
+  it('does not report a Super+K rebind as conflicting with a Ctrl+K binding off-Mac', () => {
+    // The node test env is non-Mac, where $mod is Ctrl and Meta is the Super
+    // key — distinct chords in tinykeys. Rebinding one action to Meta+k must
+    // NOT warn about another action's $mod+k (that was the over-warning the
+    // unconditional Meta→$mod fold produced).
+    const base = [action('palette', '$mod+k'), action('other', 'g')]
+    const conflicts = previewOverrideConflicts(base, [], stored('other', 'Meta+k'))
+    expect(conflicts).toEqual([])
+  })
 })
