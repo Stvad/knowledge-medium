@@ -6,7 +6,6 @@ import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer.j
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.js'
 import { PropertySchemaBlockRenderer } from '@/components/renderer/PropertySchemaBlockRenderer.js'
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.js'
-import { TypesPageBlockRenderer } from '@/components/renderer/TypesPageBlockRenderer.js'
 import { blockRenderersFacet, createRendererRegistry, RendererContribution } from '@/extensions/core.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
@@ -17,7 +16,6 @@ export const defaultRendererContributions: RendererContribution[] = [
   {id: 'extension', renderer: CodeMirrorExtensionBlockRenderer},
   {id: 'propertySchema', renderer: PropertySchemaBlockRenderer},
   {id: 'blockType', renderer: BlockTypeBlockRenderer},
-  {id: 'typesPage', renderer: TypesPageBlockRenderer},
   {id: 'topLevel', renderer: TopLevelRenderer},
   {id: 'layout', renderer: LayoutRenderer},
   {id: 'panel', renderer: PanelRenderer},

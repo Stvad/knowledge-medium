@@ -58,7 +58,9 @@ const makeBlock = async (repo: Repo, content: string): Promise<string> => {
 }
 
 /** Drive the source at end-of-doc and apply the option with the given
- *  label; waits for the block to end up tagged before returning. */
+ *  label; waits for the block to end up tagged before returning.
+ *  `applyTag` persists the stripped view content itself (in the tag's
+ *  undo group), so a plain view is enough — no editor flush needed. */
 const pickAt = async (
   repo: Repo,
   blockId: string,
@@ -86,13 +88,31 @@ const pickAt = async (
 }
 
 describe('supertags pick integration', () => {
-  it('tags the block and strips the command span from stored content in the same committed state', async () => {
+  it('tags the block and (via the editor flush) strips the command span from stored content', async () => {
     env = await setup()
     const blockId = await makeBlock(env.repo, 'call mom #ta')
     await pickAt(env.repo, blockId, 'call mom #ta', 'Task')
     const data = await env.repo.load(blockId)
     expect(getBlockTypes(data!)).toEqual(['task'])
     expect(data!.content).toBe('call mom')
+  })
+
+  it('#type turns the block ITSELF into a type named after its content', async () => {
+    env = await setup()
+    const blockId = await makeBlock(env.repo, 'Book #type')
+    // "Type" is the built-in block-type meta-type, now offered in `#`.
+    await pickAt(env.repo, blockId, 'Book #type', 'Type')
+
+    const data = await env.repo.load(blockId)
+    const types = getBlockTypes(data!)
+    expect(types).toContain('block-type')
+    expect(types).toContain('page')
+    expect(data!.content).toBe('Book')
+    expect(data!.properties['block-type:label']).toBe('Book')
+    expect(data!.properties.alias).toEqual(['Book'])
+    // The type doubles as its `[[Book]]` page — resolves to itself.
+    const resolved = await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()
+    expect(resolved?.id).toBe(blockId)
   })
 
   it('create pick mints a registered type, tags the block, and strips the trigger', async () => {
@@ -119,28 +139,49 @@ describe('supertags pick integration', () => {
     expect(data!.content).toBe('see #ta note')
   })
 
-  it('leaves DRIFTED stored content alone: tag applies, no content edit', async () => {
+  it('folds the strip and the tag into one undo entry (single cmd-Z reverts both)', async () => {
     env = await setup()
     const blockId = await makeBlock(env.repo, 'call mom #ta')
+    await pickAt(env.repo, blockId, 'call mom #ta', 'Task')
+    // Accepted: command span stripped from stored content + tagged.
+    let data = await env.repo.load(blockId)
+    expect(data!.content).toBe('call mom')
+    expect(getBlockTypes(data!)).toEqual(['task'])
+    // ONE undo reverts the WHOLE acceptance — the tag is removed AND the
+    // `#ta` command text comes back. The strip and the tag are separate
+    // txs folded into one undo group; without the group this undo would
+    // revert only the tag and leave content at the stripped 'call mom'.
+    expect(await env.repo.undo()).toBe(true)
+    data = await env.repo.load(blockId)
+    expect(getBlockTypes(data!)).toEqual([])
+    expect(data!.content).toBe('call mom #ta')
+  })
+
+  it('persists the stripped view content so a lagging stored row does not corrupt the type name', async () => {
+    env = await setup()
+    // Stored content lags the view mid-trigger (the 300ms persistence
+    // debounce hasn't caught up to the final "e"): a naive pick reading
+    // stored content would register a type named "Book #typ". `applyTag`
+    // instead persists the view's stripped content (`docAfter`, "Book")
+    // in the tag's undo group before the typeify processor reads it.
+    const blockId = await makeBlock(env.repo, 'Book #typ')
     const block = env.repo.block(blockId)
     await block.load()
     const source = buildTypeTagSource({repo: env.repo, block})
-    const view = new EditorView({state: EditorState.create({doc: 'call mom #ta'}), parent: document.body})
+
+    // The view shows the full trigger (what the user actually typed).
+    const view = new EditorView({state: EditorState.create({doc: 'Book #type'}), parent: document.body})
     try {
-      const result = await source(new CompletionContext(view.state, 12, false))
-      const option = result!.options.find(o => o.label === 'Task')!
-      // Stored content drifts between candidate build and pick (an
-      // unflushed edit persisting, a concurrent device) — the strict
-      // snapshot equality must refuse to touch it. An unconditional
-      // strip (the round-2 bug class) would corrupt it.
-      await env.repo.mutate.setContent({id: blockId, content: 'call mom #ta EDITED'})
+      const result = await source(new CompletionContext(view.state, 10, false))
+      const option = result!.options.find(o => o.label === 'Type')!
       const apply = option.apply as (v: EditorView, c: unknown, from: number, to: number) => void
-      apply(view, option, result!.from, 12)
+      apply(view, option, result!.from, 10)
       await vi.waitFor(async () => {
         const data = await env.repo.load(blockId)
-        expect(getBlockTypes(data!)).toEqual(['task'])
+        expect(getBlockTypes(data!)).toContain('block-type')
+        expect(data!.properties['block-type:label']).toBe('Book')
+        expect(data!.properties.alias).toEqual(['Book'])
       }, {timeout: TIMEOUT_MS})
-      expect((await env.repo.load(blockId))!.content).toBe('call mom #ta EDITED')
     } finally {
       view.destroy()
     }

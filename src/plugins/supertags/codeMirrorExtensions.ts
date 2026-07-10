@@ -9,14 +9,16 @@
  *
  *  Pick semantics: the source deletes the `#query` command span from
  *  the view optimistically (including start/end separator whitespace
- *  when safe); `pickType` here commits the tag AND the matching content
- *  deletion in ONE tx. The single tx is load-bearing: a types change
- *  remounts the per-block editor (types participate in
- *  `DefaultBlockRenderer`'s slot identity), and the fresh editor seeds
- *  from the cache — if the cached content still held the command span
- *  (the editor's own persistence is a 300ms-debounced `setContent`),
- *  the deleted text would resurrect under the user's cursor and could
- *  permanently fork from what they type next.
+ *  when safe), then `pickType` → `applyTag` persists that deletion
+ *  (`ctx.docAfter`) and adds the type as two `repo.undoGroup`-folded txs
+ *  (one undo entry — see `applyTag`). Persisting the stripped content
+ *  before the type-add is load-bearing: a types change remounts the
+ *  per-block editor (types participate in `DefaultBlockRenderer`'s slot
+ *  identity) and the fresh editor seeds from the cache — if the cached
+ *  content still held the command span (the editor's own persistence is
+ *  otherwise a 300ms-debounced `setContent`), the deleted text would
+ *  resurrect under the user's cursor and could permanently fork from what
+ *  they type next.
  *
  *  Picking the `Create type "…"` sentinel re-checks the registry for a
  *  same-named type first (an earlier create may not have published
@@ -34,7 +36,7 @@ import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { getBlockTypes } from '@/data/properties'
 import { createTypeBlock } from '@/data/typeExtraction'
 import { showError } from '@/utils/toast'
@@ -42,7 +44,6 @@ import {
   buildTypeTagCandidates,
   findCompletableTypeByName,
   planTriggerRestore,
-  planTriggerStrip,
   typeTagCompletionSource,
   type TypeTagCandidate,
   type TypeTagPickContext,
@@ -63,23 +64,39 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
     })
   }
 
-  /** Tag + command-span removal in one tx (see module doc for why the
-   *  atomicity matters). The content edit mirrors what the view
-   *  already did, gated on strict snapshot equality
-   *  (`planTriggerStrip`): when the stored content has moved on —
-   *  unflushed keystrokes, a debounce flush that already carries the
-   *  deletion — we write nothing and let the editor's own persistence
-   *  own the content. */
+  /** Tag the block. Content is NOT touched here: the pick `apply`
+   *  already stripped the command span from the view and flushed it to
+   *  the row (see module doc), so `data.content` is the clean title by
+   *  the time this tx opens. When `typeId` is `block-type`, the kernel
+   *  `blockTypeTypeify` same-tx processor completes the type (adopt
+   *  content→label, add PAGE_TYPE, claim the label alias) — it fires for
+   *  every block-type tag, so `#type` needs no special work here.
+   *
+   *  Two grouped txs, folded into ONE undo entry via `repo.undoGroup`:
+   *   1. persist the view's stripped content (`ctx.docAfter`) so the
+   *      type-add remount reseeds from a clean cache;
+   *   2. add the type.
+   *  Grouped so a single cmd-Z reverts the whole acceptance (strip +
+   *  tag). Kept as SEPARATE txs (not one) so the tag tx stays
+   *  content-neutral — a content change in the same tx as the tag would
+   *  make `aliasSyncProcessor` append a drift-heal alias; isolating the
+   *  content write in tx 1 (where the block has no alias yet) avoids that
+   *  entirely. Non-atomic is fine: if the tag tx fails, tx 1's clean
+   *  content is exactly what the failure-restore path expects. */
   const applyTag = async (typeId: string, ctx: TypeTagPickContext): Promise<void> => {
-    await repo.tx(async tx => {
-      const data = await tx.get(block.id)
-      if (!data || data.deleted) return
-      await repo.addTypeInTx(tx, block.id, typeId)
-      const stripped = planTriggerStrip(data.content, ctx)
-      if (stripped !== null) {
-        await tx.update(block.id, {content: stripped})
-      }
-    }, {scope: ChangeScope.BlockDefault, description: `tag type ${typeId}`})
+    await repo.undoGroup(async grouped => {
+      await grouped.tx(async tx => {
+        const data = await tx.get(block.id)
+        if (data && !data.deleted && data.content !== ctx.docAfter) {
+          await tx.update(block.id, {content: ctx.docAfter})
+        }
+      }, {scope: ChangeScope.BlockDefault, description: 'strip type-tag command'})
+      await grouped.tx(async tx => {
+        const data = await tx.get(block.id)
+        if (!data || data.deleted) return
+        await repo.addTypeInTx(tx, block.id, typeId, {}, repo.snapshotTypeRegistries())
+      }, {scope: ChangeScope.BlockDefault, description: `tag type ${typeId}`})
+    })
   }
 
   const pickType = async (
@@ -108,13 +125,19 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
       }
       await applyTag(typeId, ctx)
     } catch (err) {
-      // "Couldn't finish": the create flow can fail AFTER the
-      // definition block committed (registration timeout) — the type
-      // may still appear moments later, and re-picking then reuses it
-      // via the registry re-check above.
-      showError(candidate.kind === 'create'
-        ? `Couldn't finish creating type "${candidate.label}"`
-        : `Couldn't tag with "${candidate.label}"`)
+      // Structured rejections (e.g. a name that collides with an
+      // existing alias) already surface their own specific toast via
+      // `repo.tx`'s userErrorListeners — a generic "couldn't finish" on
+      // top would double up and bury the real reason. Only the
+      // unexpected failures (e.g. the create flow failing AFTER the
+      // definition block committed on a registration timeout — the type
+      // may still appear moments later, re-picking reuses it) get the
+      // generic toast.
+      if (!(err instanceof ProcessorRejection)) {
+        showError(candidate.kind === 'create'
+          ? `Couldn't finish creating type "${candidate.label}"`
+          : `Couldn't tag with "${candidate.label}"`)
+      }
       throw err
     }
   }

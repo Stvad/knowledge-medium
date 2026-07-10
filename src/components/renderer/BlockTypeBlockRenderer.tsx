@@ -11,9 +11,11 @@ import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { ChangeScope, type AnyPropertySchema } from '@/data/api'
 import {
+  aliasesProp,
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
+  getAliases,
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
 import type { Block } from '@/data/block.js'
@@ -42,6 +44,36 @@ export const writeBlockTypeLabel = async (
     }
     if (next !== currentContent) {
       await tx.update(block.id, {content: next})
+    }
+    // A defined type doubles as its `[[label]]` page. A block-type block
+    // created blank (a bare `#type` with no content) is left unnamed and
+    // alias-less by the typeify processor, and `aliasSyncProcessor` only
+    // reconciles content→alias for blocks that ALREADY claim one — so
+    // seed the alias here the first time the label becomes non-empty.
+    // Once seeded, later renames keep it in lockstep via that processor;
+    // a colliding label is rejected by the alias-uniqueness trigger.
+    if (next !== '') {
+      const row = await tx.get(block.id)
+      if (row && getAliases(row).length === 0) {
+        await tx.setProperty(block.id, aliasesProp, [next])
+      }
+    } else {
+      // Blanking the label un-names the type (an empty label makes
+      // `tryBuildType` drop it). Release the alias it claimed for its old
+      // name — `aliasSyncProcessor`'s blank-content guard won't, so
+      // `[[oldName]]` would otherwise keep resolving to this now-typeless
+      // block and block re-creating a type with that name
+      // (`alias.collision`). Only the old name is dropped; user-added
+      // aliases stay.
+      const row = await tx.get(block.id)
+      if (row) {
+        const stale = new Set([currentLabel, currentContent])
+        const aliases = getAliases(row)
+        const remaining = aliases.filter(alias => !stale.has(alias))
+        if (remaining.length !== aliases.length) {
+          await tx.setProperty(block.id, aliasesProp, remaining)
+        }
+      }
     }
   }, {scope: ChangeScope.BlockDefault, description: 'edit block-type label'})
 }

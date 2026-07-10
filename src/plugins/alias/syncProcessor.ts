@@ -36,12 +36,11 @@ import {
   ProcessorRejection,
   defineSameTxProcessor,
   type AnySameTxProcessor,
-  type BlockData,
   type ChangedRow,
   type SameTxCtx,
   type SameTxEvent,
 } from '@/data/api'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, getAliases } from '@/data/properties'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
@@ -55,15 +54,6 @@ interface SyncPlan {
   dropSourceAliasesOnCollision: readonly string[]
 }
 
-const decodeAliases = (block: BlockData): readonly string[] => {
-  const encoded = block.properties[aliasesProp.name]
-  if (encoded === undefined) return []
-  try {
-    return aliasesProp.codec.decode(encoded)
-  } catch {
-    return []
-  }
-}
 
 const arraysEqual = (a: readonly string[], b: readonly string[]): boolean => {
   if (a.length !== b.length) return false
@@ -94,8 +84,8 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
 
   const before = row.before
   const after = row.after
-  const beforeAliases = decodeAliases(before)
-  const afterAliases = decodeAliases(after)
+  const beforeAliases = getAliases(before)
+  const afterAliases = getAliases(after)
   // Sync only reconciles blocks that ARE aliased.
   if (afterAliases.length === 0) return null
   const contentChanged = before.content !== after.content

@@ -6,7 +6,9 @@ import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension'
 import {
+  aliasesProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
   getBlockTypes,
@@ -41,6 +43,10 @@ const setup = async (): Promise<Harness> => {
     extensions: [
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
+      // Load the alias plugin so the typeify processor's alias writes are
+      // exercised against the REAL content<->alias sync (kernel processor
+      // first, then aliasSync) — not in isolation.
+      aliasDataExtension,
     ],
   })
   repo.setActiveWorkspaceId(WS)
@@ -131,6 +137,43 @@ describe('createTypeBlock', () => {
     expect(row!.properties[blockTypePropertiesProp.name]).toEqual([schemaBlockId])
     expect(row!.parentId).toBe(env.repo.typesPageId)
     expect(row!.content).toBe('Task')
+    // The type doubles as its `[[Task]]` page — it claims the label as
+    // an alias.
+    expect(row!.properties[aliasesProp.name]).toEqual(['Task'])
+  })
+
+  it('claims the label as an alias so [[label]] resolves to the type block', async () => {
+    env = await setup()
+    const typeId = await createTypeBlock(env.repo, {
+      workspaceId: WS,
+      label: 'Task',
+      propertySchemaIds: [],
+    })
+
+    // The alias index is trigger-maintained; `[[Task]]` resolution
+    // (aliasLookup) must land on the type-definition block rather than
+    // minting a separate alias-seat page.
+    const resolved = await env.repo.query
+      .aliasLookup({workspaceId: WS, alias: 'Task'})
+      .load()
+    expect(resolved?.id).toBe(typeId)
+  })
+
+  it('rejects when the label collides with an existing page alias', async () => {
+    env = await setup()
+    // A prior `[[Task]]` reference (or create-page UI) already left a
+    // live block claiming the alias in this workspace.
+    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await env.repo.tx(async tx => {
+      await tx.update(pageId, {content: 'Task'})
+      await tx.setProperty(pageId, aliasesProp, ['Task'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(createTypeBlock(env.repo, {
+      workspaceId: WS,
+      label: 'Task',
+      propertySchemaIds: [],
+    })).rejects.toMatchObject({code: 'alias.collision'})
   })
 
   it('returns a typeId that is registered in repo.types by the time the promise resolves', async () => {
@@ -146,8 +189,12 @@ describe('createTypeBlock', () => {
 
   it('returns distinct ids on repeat calls (no in-place collision)', async () => {
     env = await setup()
+    // Distinct labels: each type claims its label as a workspace-unique
+    // alias, so two same-named types can't coexist (covered separately).
+    // The property under test is that repeat calls mint fresh block ids
+    // rather than reusing a deterministic one.
     const a = await createTypeBlock(env.repo, {workspaceId: WS, label: 'Task', propertySchemaIds: []})
-    const b = await createTypeBlock(env.repo, {workspaceId: WS, label: 'Task', propertySchemaIds: []})
+    const b = await createTypeBlock(env.repo, {workspaceId: WS, label: 'Project', propertySchemaIds: []})
     expect(a).not.toBe(b)
     expect(env.repo.types.has(a)).toBe(true)
     expect(env.repo.types.has(b)).toBe(true)
@@ -208,6 +255,140 @@ describe('createTypeBlock', () => {
       label: 'Task',
       propertySchemaIds: [],
     })).rejects.toThrow(/no Types page for workspace ws-other-no-bootstrap/)
+  })
+})
+
+// ──── block-type typeify processor ──────────────────────────────────
+
+/** Tag a fresh block `block-type` — the state EVERY tagging path lands
+ *  in (`#type`, the picker, programmatic, import). The kernel
+ *  `blockTypeTypeify` same-tx processor completes it in this same tx:
+ *  adopt content→label, add PAGE_TYPE, claim the label alias. */
+const tagBlockType = async (
+  env: Harness,
+  content: string,
+  extraProps: Record<string, unknown> = {},
+): Promise<string> => {
+  const id = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+  await env.repo.tx(async tx => {
+    await tx.update(id, {content, properties: extraProps})
+    await env.repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}, env.repo.snapshotTypeRegistries())
+  }, {scope: ChangeScope.BlockDefault})
+  return id
+}
+
+describe('block-type typeify processor', () => {
+  it('adopts content as the label, tags PAGE_TYPE, and claims the alias', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect(getBlockTypes(row!)).toContain(PAGE_TYPE)
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+    // `[[Book]]` resolves to this block, not a duplicate seat.
+    const resolved = await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()
+    expect(resolved?.id).toBe(id)
+  })
+
+  it('trims whitespace-padded adopted content so a later rename replaces the alias', async () => {
+    env = await setup()
+    // `#type` on '  Book  ' adopts the name 'Book' but must also trim the
+    // stored content — otherwise content ('  Book  ') and alias ('Book')
+    // diverge, and aliasSync (which matches aliases by content) can't
+    // replace the alias on rename, stranding the old name.
+    const id = await tagBlockType(env, '  Book  ')
+    let row = await env.repo.load(id)
+    expect(row!.content).toBe('Book')
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+
+    // Rename to 'Novel' — aliasSync replaces the old-content alias in
+    // place; without the content trim above it would append and strand
+    // 'Book'.
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, blockTypeLabelProp, 'Novel')
+      await tx.update(id, {content: 'Novel'})
+    }, {scope: ChangeScope.BlockDefault})
+    row = await env.repo.load(id)
+    expect(row!.properties[aliasesProp.name]).toEqual(['Novel'])
+  })
+
+  it('claims the type name even when the block already carries another alias', async () => {
+    // Regression: an only-if-empty gate left the type name unclaimed when
+    // the block held any other alias, so `[[Book]]` minted a duplicate
+    // seat. Ensure-present appends the name to the existing set instead.
+    env = await setup()
+    const id = await tagBlockType(env, 'Book', {[aliasesProp.name]: ['MyNote']})
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[aliasesProp.name]).toEqual(['MyNote', 'Book'])
+    const resolved = await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()
+    expect(resolved?.id).toBe(id)
+  })
+
+  it('is idempotent — re-tagging block-type does not clobber or duplicate', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await env.repo.tx(async tx => {
+      await env.repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}, env.repo.snapshotTypeRegistries())
+    }, {scope: ChangeScope.BlockDefault})
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+    expect(getBlockTypes(row!).filter(t => t === PAGE_TYPE)).toHaveLength(1)
+  })
+
+  it('never overwrites an explicitly-set label/alias (createTypeBlock-style)', async () => {
+    env = await setup()
+    // A createTypeBlock-style row: content == label == alias, all set
+    // explicitly. The processor must leave label and alias untouched.
+    const id = await tagBlockType(env, 'Custom', {
+      [blockTypeLabelProp.name]: 'Custom',
+      [aliasesProp.name]: ['Custom'],
+    })
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Custom')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Custom'])
+  })
+
+  it('does not grow the alias set on a later label-only edit (fires only on the type-add)', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    // Edit the label WITHOUT touching content — this is not a type-add,
+    // so the `addedTypes` transition-guard must keep the processor from
+    // firing again. If it fired (guard regressed to fire-on-present),
+    // ensure-present would append 'Novel' → alias grows. aliasSync stays
+    // out of it (content unchanged), so this isolates the guard.
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, blockTypeLabelProp, 'Novel')
+    }, {scope: ChangeScope.BlockDefault})
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+  })
+
+  it('leaves a blank block unnamed (no label/alias) but still a page', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, '   ')
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
+    expect(row!.properties[aliasesProp.name]).toBeUndefined()
+    expect(getBlockTypes(row!)).toContain(PAGE_TYPE)
+  })
+
+  it('rejects when the adopted name collides with an existing page alias', async () => {
+    env = await setup()
+    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await env.repo.tx(async tx => {
+      await tx.update(pageId, {content: 'Book'})
+      await tx.setProperty(pageId, aliasesProp, ['Book'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(tagBlockType(env, 'Book')).rejects.toMatchObject({code: 'alias.collision'})
   })
 })
 
