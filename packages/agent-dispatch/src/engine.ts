@@ -11,6 +11,7 @@ import type { BacklinksWatcher, DaemonConfig, QueryWatcher, Watcher } from './co
 import { PROPS } from './config.js'
 import type { Graph } from './graph.js'
 import type { AgentRunOptions, AgentRunResult, RunEvent } from './runner.js'
+import { resumeOptionsForRun } from './resumeCommand.js'
 import type { StateStore } from './state.js'
 import { decidePending, diffQueryRows, findThreadSession, MAX_ATTEMPTS, MAX_CURSOR_IDS, taskAttempts } from './watchers.js'
 import { DEFAULT_MENTION_CHANNEL_PROMPT, renderMentionPrompt, renderQueryPrompt } from './prompt.js'
@@ -412,6 +413,10 @@ export const createEngine = (deps: EngineDeps) => {
       let lastActivity: string | null = null
       let lastTextWriteMs = 0
       let sessionRecorded = false
+      const resumeOptionsForSession = (sessionId: string | null) =>
+        sessionId
+          ? resumeOptionsForRun(runOptionsFor(watcher, prompt, sessionId, undefined, abortController.signal))
+          : null
       const onEvent = (event: RunEvent) => {
         if (event.kind === 'activity') {
           if (event.label === lastActivity) return
@@ -435,6 +440,7 @@ export const createEngine = (deps: EngineDeps) => {
           sessionRecorded = true
           const stored = storedSessionFor(runner.executor, event.sessionId)
           if (!stored) return
+          const resumeOptions = resumeOptionsForSession(event.sessionId)
           // Claim a dedup key for the now-live session BEFORE exposing it
           // on the block (the register is synchronous; the block write is
           // only queued), so a follow-up can never observe the session
@@ -449,11 +455,12 @@ export const createEngine = (deps: EngineDeps) => {
             running.set(liveKey, Promise.resolve())
           }
           log(`[${watcher.name}] session ${stored} for ${sourceId}`)
-          queueWrite(() => graph.setSession(sourceId, stored))
+          queueWrite(() => graph.setSession(sourceId, stored, resumeOptions))
         }
       }
 
-      const result = await runTask(runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal))
+      const runOptions = runOptionsFor(watcher, prompt, session ?? undefined, onEvent, abortController.signal)
+      const result = await runTask(runOptions)
       await writes // ordering guarantee: no progress write races the final one below
 
       if (result.ok) {
@@ -465,7 +472,14 @@ export const createEngine = (deps: EngineDeps) => {
         const finalText = result.resultText.trim() || `(${runner.executor} returned an empty reply)`
         await deliverReply(finalText)
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {status: 'done', session: storedSessionFor(runner.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
+        await graph.setTaskProps(sourceId, {
+          status: 'done',
+          session: storedSessionFor(runner.executor, result.sessionId),
+          resumeOptions: resumeOptionsForSession(result.sessionId),
+          activity: null,
+          cancel: null,
+          nowMs: now(),
+        })
         log(`[${watcher.name}] done ${sourceId}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       } else {
         // A user Stop aborts the run — signal.aborted distinguishes it from
@@ -486,7 +500,15 @@ export const createEngine = (deps: EngineDeps) => {
         const partial = lastStreamedText.trim()
         await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
         terminalReplyDelivered = true
-        await graph.setTaskProps(sourceId, {status: 'error', error: reason, session: storedSessionFor(runner.executor, result.sessionId), activity: null, cancel: null, nowMs: now()})
+        await graph.setTaskProps(sourceId, {
+          status: 'error',
+          error: reason,
+          session: storedSessionFor(runner.executor, result.sessionId),
+          resumeOptions: resumeOptionsForSession(result.sessionId),
+          activity: null,
+          cancel: null,
+          nowMs: now(),
+        })
         log(`[${watcher.name}] ${cancelled ? 'CANCELLED' : 'FAILED'} ${sourceId}: ${reason}${result.sessionId ? ` (session ${result.sessionId})` : ''}`)
       }
     } catch (error) {

@@ -46,7 +46,37 @@ describe('agentResumeCommandForProperties', () => {
     expect(agentResumeCommandForProperties({[AGENT_PROPS.session]: 'sess_123-abc'}))
       .toBe('claude --resume sess_123-abc')
     expect(agentResumeCommandForProperties({[AGENT_PROPS.session]: 'codex:thread_123-abc'}))
-      .toBe('codex resume thread_123-abc')
+      .toBe('codex resume --include-non-interactive \\\n  thread_123-abc')
+  })
+
+  it('adds the persisted Codex runner context when available', () => {
+    expect(agentResumeCommandForProperties({
+      [AGENT_PROPS.session]: 'codex:thread_123-abc',
+      [AGENT_PROPS.resumeOptions]: {
+        version: 1,
+        executor: 'codex',
+        cwd: '/Users/vlad/project with spaces',
+        model: 'gpt-5-codex',
+        codex: {
+          sandbox: 'workspace-write',
+          addDirs: ['/private/tmp', '/Users/vlad/.codex/worktrees'],
+          networkAccess: true,
+          approvalPolicy: 'on-request',
+          approvalsReviewer: 'auto_review',
+        },
+      },
+    })).toBe([
+      'codex resume --include-non-interactive',
+      "  -C '/Users/vlad/project with spaces'",
+      '  -s workspace-write',
+      '  --add-dir /private/tmp',
+      '  --add-dir /Users/vlad/.codex/worktrees',
+      '  -c sandbox_workspace_write.network_access=true',
+      '  -c \'approval_policy="on-request"\'',
+      '  -c \'approvals_reviewer="auto_review"\'',
+      '  -m gpt-5-codex',
+      '  thread_123-abc',
+    ].join(' \\\n'))
   })
 
   it('rejects malformed session ids instead of copying option-shaped argv', () => {
@@ -65,7 +95,7 @@ describe('copyAgentResumeCommand', () => {
 
     await copyAgentResumeCommand(block)
 
-    expect(writeText).toHaveBeenCalledWith('codex resume thread-1')
+    expect(writeText).toHaveBeenCalledWith('codex resume --include-non-interactive \\\n  thread-1')
     expect(toast.showSuccess).toHaveBeenCalledWith('Agent resume command copied.')
     expect(toast.showError).not.toHaveBeenCalled()
   })

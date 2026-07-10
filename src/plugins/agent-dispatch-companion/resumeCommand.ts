@@ -16,6 +16,8 @@ export const COPY_AGENT_RESUME_COMMAND_ACTION_ID = 'agent-dispatch.copy-resume-c
 export const EDIT_MODE_COPY_AGENT_RESUME_COMMAND_ACTION_ID = 'edit.cm.agent-dispatch.copy-resume-command'
 
 const CODEX_SESSION_PREFIX = 'codex:'
+const CODEX_SANDBOXES = new Set(['read-only', 'workspace-write', 'danger-full-access'])
+const CODEX_APPROVAL_POLICIES = new Set(['on-request', 'never'])
 
 /** Keep in sync with packages/agent-dispatch/src/engine.ts. The session is
  * copied into a shell command as an argv token, so reject anything that could
@@ -23,17 +25,107 @@ const CODEX_SESSION_PREFIX = 'codex:'
 const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/
 
 type Properties = Record<string, unknown> | undefined
+type ResumeExecutor = 'claude' | 'codex'
 
-export const agentResumeCommandForProperties = (properties: Properties): string | null => {
-  const stored = properties?.[AGENT_PROPS.session]
+interface ParsedResumeSession {
+  executor: ResumeExecutor
+  id: string
+}
+
+interface CodexResumeOptions {
+  sandbox?: string
+  addDirs: string[]
+  networkAccess: boolean
+  approvalPolicy?: string
+  approvalsReviewer?: string
+}
+
+interface ResumeOptions {
+  executor: ResumeExecutor
+  cwd?: string
+  model?: string
+  codex?: CodexResumeOptions
+}
+
+const shellQuote = (value: string): string => {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+const codexConfigArg = (value: string): string => `-c ${shellQuote(value)}`
+
+const formatCodexCommand = (lines: string[]): string =>
+  lines.length === 1 ? lines[0]! : lines.join(' \\\n')
+
+const parseSession = (stored: unknown): ParsedResumeSession | null => {
   if (typeof stored !== 'string' || stored.length === 0) return null
-
   if (stored.startsWith(CODEX_SESSION_PREFIX)) {
     const threadId = stored.slice(CODEX_SESSION_PREFIX.length)
-    return SESSION_ID_SHAPE.test(threadId) ? `codex resume ${threadId}` : null
+    return SESSION_ID_SHAPE.test(threadId) ? {executor: 'codex', id: threadId} : null
   }
+  return SESSION_ID_SHAPE.test(stored) ? {executor: 'claude', id: stored} : null
+}
 
-  return SESSION_ID_SHAPE.test(stored) ? `claude --resume ${stored}` : null
+const stringValue = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.length > 0 ? value : undefined
+
+const parseResumeOptions = (raw: unknown, executor: ResumeExecutor): ResumeOptions | null => {
+  if (typeof raw !== 'object' || raw === null) return null
+  const record = raw as Record<string, unknown>
+  if (record.version !== 1 || record.executor !== executor) return null
+  const cwd = stringValue(record.cwd)
+  const model = stringValue(record.model)
+  const base: ResumeOptions = {executor, ...(cwd ? {cwd} : {}), ...(model ? {model} : {})}
+  if (executor !== 'codex') return base
+
+  const codexRaw = record.codex
+  if (typeof codexRaw !== 'object' || codexRaw === null) return base
+  const codexRecord = codexRaw as Record<string, unknown>
+  const sandbox = stringValue(codexRecord.sandbox)
+  const approvalPolicy = stringValue(codexRecord.approvalPolicy)
+  const approvalsReviewer = stringValue(codexRecord.approvalsReviewer)
+  return {
+    ...base,
+    codex: {
+      ...(sandbox && CODEX_SANDBOXES.has(sandbox) ? {sandbox} : {}),
+      addDirs: Array.isArray(codexRecord.addDirs)
+        ? codexRecord.addDirs.filter((dir): dir is string => typeof dir === 'string' && dir.length > 0)
+        : [],
+      networkAccess: codexRecord.networkAccess === true,
+      ...(approvalPolicy && CODEX_APPROVAL_POLICIES.has(approvalPolicy) ? {approvalPolicy} : {}),
+      ...(approvalsReviewer === 'auto_review' ? {approvalsReviewer} : {}),
+    },
+  }
+}
+
+const buildCodexResumeCommand = (threadId: string, options: ResumeOptions | null): string => {
+  const lines = ['codex resume --include-non-interactive']
+  if (options?.cwd) lines.push(`  -C ${shellQuote(options.cwd)}`)
+  const codex = options?.codex
+  if (codex?.sandbox) lines.push(`  -s ${shellQuote(codex.sandbox)}`)
+  for (const dir of codex?.addDirs ?? []) lines.push(`  --add-dir ${shellQuote(dir)}`)
+  if (codex?.networkAccess) lines.push(`  ${codexConfigArg('sandbox_workspace_write.network_access=true')}`)
+  if (codex?.approvalPolicy === 'on-request') {
+    lines.push(`  ${codexConfigArg('approval_policy="on-request"')}`)
+    if (codex.approvalsReviewer === 'auto_review') {
+      lines.push(`  ${codexConfigArg('approvals_reviewer="auto_review"')}`)
+    }
+  }
+  if (options?.model) lines.push(`  -m ${shellQuote(options.model)}`)
+  lines.push(`  ${shellQuote(threadId)}`)
+  return formatCodexCommand(lines)
+}
+
+export const agentResumeCommandForProperties = (properties: Properties): string | null => {
+  const session = parseSession(properties?.[AGENT_PROPS.session])
+  if (!session) return null
+
+  const options = parseResumeOptions(properties?.[AGENT_PROPS.resumeOptions], session.executor)
+  if (session.executor === 'codex') return buildCodexResumeCommand(session.id, options)
+
+  const parts = ['claude', '--resume', shellQuote(session.id)]
+  if (options?.model) parts.push('--model', shellQuote(options.model))
+  return parts.join(' ')
 }
 
 export const copyAgentResumeCommand = async (block: Block): Promise<void> => {
