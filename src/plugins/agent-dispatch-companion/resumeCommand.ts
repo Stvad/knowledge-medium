@@ -32,7 +32,6 @@ interface ParsedResumeSession {
 
 interface ResumeOptions {
   executor: ResumeExecutor
-  cwd?: string
   model?: string
 }
 
@@ -60,14 +59,12 @@ const parseResumeOptions = (raw: unknown, executor: ResumeExecutor): ResumeOptio
   if (typeof raw !== 'object' || raw === null) return null
   const record = raw as Record<string, unknown>
   if (record.version !== 1 || record.executor !== executor) return null
-  const cwd = stringValue(record.cwd)
   const model = stringValue(record.model)
-  return {executor, ...(cwd ? {cwd} : {}), ...(model ? {model} : {})}
+  return {executor, ...(model ? {model} : {})}
 }
 
 const buildCodexResumeCommand = (threadId: string, options: ResumeOptions | null): string => {
   const lines = ['codex resume --include-non-interactive']
-  if (options?.cwd) lines.push(`  -C ${shellQuote(options.cwd)}`)
   if (options?.model) lines.push(`  -m ${shellQuote(options.model)}`)
   lines.push(`  ${shellQuote(threadId)}`)
   return formatCodexCommand(lines)

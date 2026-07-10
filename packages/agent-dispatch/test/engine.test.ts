@@ -1064,7 +1064,6 @@ describe('mention lifecycle', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.resumeOptions]).toEqual({
       version: 1,
       executor: 'codex',
-      cwd: '/Users/vlad/project',
       model: 'gpt-5-codex',
     })
   })

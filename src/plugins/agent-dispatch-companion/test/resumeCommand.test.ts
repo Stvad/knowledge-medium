@@ -49,7 +49,7 @@ describe('agentResumeCommandForProperties', () => {
       .toBe('codex resume --include-non-interactive \\\n  thread_123-abc')
   })
 
-  it('adds the persisted non-authority Codex runner context when available', () => {
+  it('adds persisted non-authority Codex runner context when available', () => {
     expect(agentResumeCommandForProperties({
       [AGENT_PROPS.session]: 'codex:thread_123-abc',
       [AGENT_PROPS.resumeOptions]: {
@@ -60,7 +60,6 @@ describe('agentResumeCommandForProperties', () => {
       },
     })).toBe([
       'codex resume --include-non-interactive',
-      "  -C '/Users/vlad/project with spaces'",
       '  -m gpt-5-codex',
       '  thread_123-abc',
     ].join(' \\\n'))
@@ -72,7 +71,7 @@ describe('agentResumeCommandForProperties', () => {
       [AGENT_PROPS.resumeOptions]: {
         version: 1,
         executor: 'codex',
-        cwd: '/safe/repo',
+        cwd: '/',
         codex: {
           sandbox: 'danger-full-access',
           addDirs: ['/'],
@@ -83,7 +82,6 @@ describe('agentResumeCommandForProperties', () => {
       },
     })).toBe([
       'codex resume --include-non-interactive',
-      '  -C /safe/repo',
       '  thread_123-abc',
     ].join(' \\\n'))
   })
