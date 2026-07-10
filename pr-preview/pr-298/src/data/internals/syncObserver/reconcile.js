@@ -1,2 +1,0 @@
-var e=(e,t,n)=>e===`defer`?{kind:`defer`}:n.hasPendingUpload||n.localUpdatedAt!==null&&n.localUpdatedAt===t&&n.localUpdatedAt!==0?{kind:`skip-stale`}:{kind:`apply`,decrypt:e===`decrypt`};export{e as decideStagingRow};
-//# sourceMappingURL=reconcile.js.map
