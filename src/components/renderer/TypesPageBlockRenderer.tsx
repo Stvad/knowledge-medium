@@ -8,6 +8,7 @@ import { Plus } from 'lucide-react'
 import { ChangeScope } from '@/data/api'
 import {
   BLOCK_TYPE_TYPE,
+  PAGE_TYPE,
   TYPES_PAGE_TYPE,
 } from '@/data/blockTypes'
 import { blockTypeLabelProp } from '@/data/properties'
@@ -31,6 +32,13 @@ const TypesPageContentRenderer: BlockRenderer = (props: BlockRendererProps) => {
       })
       await block.repo.tx(async tx => {
         await block.repo.addTypeInTx(tx, childId, BLOCK_TYPE_TYPE, {})
+        // PAGE_TYPE so the new type doubles as a navigable `[[label]]`
+        // page — matches createTypeBlock's "type flow" pattern. Without
+        // it, once the type claims its label as an alias (on first
+        // naming, via writeBlockTypeLabel), `[[label]]` would resolve to
+        // a non-page block and page-only code (`hasBlockType(PAGE_TYPE)`)
+        // would treat it differently from a real page.
+        await block.repo.addTypeInTx(tx, childId, PAGE_TYPE, {})
         // Seed an empty label so tryBuildType has something to report
         // and the BlockTypeBlockRenderer's input focuses on a defined
         // string. The type won't register with the runtime until the
