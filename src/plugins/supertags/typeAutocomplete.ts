@@ -10,12 +10,12 @@
  *  that only existed to attach it to surrounding text) is deleted from
  *  the doc immediately — the tag lives in the block's `types` property
  *  and is rendered as a trailing chip by `TypeChipsDecorator`, not as
- *  text — and the (async) type write is fired through `pickType`,
- *  which also mirrors the deletion into the block's stored content
- *  (same tx as the tag) so the editor remount that a types change
- *  triggers seeds from a cache row without the command span. A failed
- *  pick restores the deleted text (view first, stored content as
- *  fallback).
+ *  text — and the (async) type write is fired through `pickType`, which
+ *  persists that deletion (`ctx.docAfter`) and adds the type as two
+ *  `repo.undoGroup`-folded txs (one undo entry — see `applyTag` in the
+ *  codeMirror wiring) so the editor remount that a types change triggers
+ *  seeds from a cache row without the command span. A failed pick
+ *  restores the deleted text (view first, stored content as fallback).
  *
  *  The source is pure w.r.t. data access: it takes already-resolved
  *  candidates and a `pickType` callback. Wiring to the repo (the live
@@ -242,14 +242,14 @@ export interface TypeTagAutocompleteOptions {
   /** Candidates for the current query, in display order. */
   getCandidates: (query: string) => TypeTagCandidate[] | Promise<TypeTagCandidate[]>
   /** Called when the user picks a candidate, after the command span has
-   *  been deleted from the view AND `flushEditorContent` has persisted
-   *  that deletion to the row (both done by the pick `apply`). So the
-   *  stored content is already clean when this runs — the tag write must
-   *  NOT re-touch content. Flush-before-tag matters because adding a type
-   *  remounts the per-block editor (types participate in the renderer's
-   *  slot identity) and the remounted editor seeds from the cache; a
-   *  cache row still holding the trigger command would resurrect it under
-   *  the user's cursor. */
+   *  been deleted from the VIEW (in the pick `apply`). The implementation
+   *  persists that deletion (`ctx.docAfter`) to the stored row and adds
+   *  the type, folded into one undo entry (see `applyTag` in the codeMirror
+   *  wiring). Persisting the deletion before the type-add matters because
+   *  adding a type remounts the per-block editor (types participate in the
+   *  renderer's slot identity) and the remounted editor seeds from the
+   *  cache; a cache row still holding the trigger command would resurrect
+   *  it under the user's cursor. */
   pickType: (candidate: TypeTagCandidate, ctx: TypeTagPickContext) => Promise<void>
   /** Persistence fallback for a FAILED pick: re-insert the command span
    *  into the block's stored content (via `planTriggerRestore`) when
