@@ -26,12 +26,17 @@ layout-session block in place**. `applyPerspective`
 two things happens, and both destroy the mounted content:
 
 1. **Row reused, content rewritten** (equal pane counts — the common case):
-   the panel row id — the React `key` at
-   `src/components/renderer/LayoutRenderer.tsx:92` — stays stable, but
-   `topLevelBlockIdProp` flips, so `PanelRenderer`'s inner
-   `<BlockComponent blockId={topLevelBlockId}/>`
-   (`src/components/renderer/PanelRenderer.tsx:192`, no key) reconciles to a
-   different block and the whole content subtree unmounts.
+   the panel row id — the React `key` on the top-level slot list
+   (`src/components/renderer/LayoutRenderer.tsx:193`, `slotsToRender.map`)
+   and on `PanelSlotView`'s context provider (`LayoutRenderer.tsx:92`) —
+   stays stable. `LayoutRenderer` mounts the row's
+   `<BlockComponent blockId={slot.id}/>` (`LayoutRenderer.tsx:100`), which
+   resolves to `PanelRenderer`; that reads `topLevelBlockIdProp`
+   (`src/components/renderer/PanelRenderer.tsx:62`) and renders
+   `<BlockComponent blockId={topLevelBlockId}/>` (`PanelRenderer.tsx:192`,
+   no key). When the perspective switch rewrites `topLevelBlockIdProp`,
+   that inner element reconciles to a different block and the whole content
+   subtree unmounts.
 2. **Row deleted/created** (pane counts differ): `tx.delete` /
    `createPanelRowInTx` → new row id → new `key` → the entire
    `PanelSlotView` unmounts.
@@ -51,11 +56,16 @@ data model instead of being retrofitted.
 
 ### Core half — `LayoutSessionHost`
 
-- **Switchable active session id.** `src/utils/layoutSessionId.ts` currently
-  yields one per-device id (sessionStorage in a tab, localStorage installed).
-  Add a runtime-switchable *active session id* (module store à la
-  `createToggleStore`, persisted per-device), defaulting to today's single
-  id — zero behavior change when nothing drives it.
+- **Two ids, kept distinct.** `getLayoutSessionId()`
+  (`src/utils/layoutSessionId.ts:54`) today yields the one live per-device id
+  (sessionStorage in a tab, localStorage installed). That id becomes the
+  stable per-device **base id** — it never changes, and its storage key stays
+  where it is. Alongside it, add a runtime-switchable **active session id**
+  (module store à la `createToggleStore`, persisted per-device separately),
+  defaulting to the base id — zero behavior change when nothing drives it.
+  Slot session ids are always derived from the *base* id
+  (`uuidv5(baseId + ':' + slot)`), never from the currently active id —
+  deriving from the active id would make slot identity drift as you switch.
 - **Warm-set host.** `src/App.tsx:306` mounts exactly one
   `<BlockComponent blockId={layoutSessionBlock.id}/>`. Replace with a
   `LayoutSessionHost` that keeps an LRU set of recently-active session blocks
@@ -68,14 +78,34 @@ data model instead of being retrofitted.
   layout change. Hidden sessions must not push; on switch, rebind (or select
   among per-session instances) and push the new session's layout hash once.
   Keeps the maximize/restore `history.back()` leg working.
-- **Input isolation** — the subtle correctness area. Keybind dispatch and
-  "active panel" resolution must resolve through the active *session*; hidden
-  sessions' shortcut surfaces must be gated off (e.g. a `sessionHidden`
-  context flag checked by dispatch/activations). Each session carries its own
-  `activePanelIdProp`, so without gating, two sessions both believe they have
-  an active panel. On reveal, re-assert DOM focus from the session's persisted
-  focus state (the focus *class* survives — it's prop-driven; only DOM focus
-  needs a nudge).
+- **Input isolation** — the subtle correctness area, and it is wider than
+  shortcut surfaces. Each session carries its own `activePanelIdProp`, so
+  with N sessions mounted, N panels all believe they are active. Everything
+  downstream of that belief must be gated on *session visibility*:
+  - **Shortcut surfaces**: keybind dispatch and "active panel" resolution go
+    through the active session only (e.g. a `sessionHidden` context flag
+    checked by dispatch/activations).
+  - **Action contexts**: `PanelRenderer` registers `MULTI_SELECT_MODE` for
+    its active panel via `useActionContext`
+    (`src/components/renderer/PanelRenderer.tsx:203`,
+    `PanelMultiSelectActionContext`) — hidden sessions' active panels would
+    each register it too. All `useActionContext` registrations under a
+    hidden session must be suppressed (the same visibility flag, threaded
+    through block context so it reaches every registration site).
+  - **DOM selectors**: spatial navigation
+    (`src/plugins/spatial-navigation/actions.ts:270`, `crossPanelFocus`) and
+    window-management (`agent-extensions/window-management/index.tsx:236`,
+    `panelElements`) locate the layout via
+    `document.querySelector('[data-layout-session-id]')` — first match wins,
+    which becomes ambiguous with several sessions mounted. The host must make
+    the active session unambiguously addressable (e.g. only the visible
+    wrapper carries a `data-layout-session-active` marker, plus `inert` on
+    hidden wrappers as focus/click belt-and-braces), and a core helper
+    (`activeLayoutSessionElement()`) replaces raw first-match queries at
+    every call site.
+  - On reveal, re-assert DOM focus from the session's persisted focus state
+    (the focus *class* survives — it's prop-driven; only DOM focus needs a
+    nudge).
 
 ### Extension half — window-management shrinks
 
