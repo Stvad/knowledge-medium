@@ -305,7 +305,11 @@ const NoticeBanner = ({notice, onReset, onOpenSettings, onDismiss}: {
       {peers.length > 0 && (
         <div className="mt-2 flex items-start gap-1.5 text-xs text-amber-600">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0"/>
-          <span>Also fires {peers.join(', ')} — both handlers run on this chord.</span>
+          {/* The coordinator runs ordered candidates and stops at the first
+              that doesn't decline (runOrderedCandidates), so a shared chord
+              means one action wins and the rest are shadowed — NOT "both
+              run". */}
+          <span>Also claimed by {peers.join(', ')} — only one action runs per chord, so the other is shadowed. Manage in keyboard settings.</span>
         </div>
       )}
       {notice.kind === 'bound' && (

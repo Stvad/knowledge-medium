@@ -328,7 +328,7 @@ const ActionRow = ({
             {conflictChords && conflictChords.size > 0 && (
               <span
                 className="inline-flex items-center text-amber-600"
-                title={`Shadows in ${[...conflictChords].map(formatChord).join(', ')} — both will run`}
+                title={`Conflicts in ${[...conflictChords].map(formatChord).join(', ')} — only one action runs per chord; the other is shadowed`}
               >
                 <AlertTriangle className="h-3.5 w-3.5"/>
               </span>
