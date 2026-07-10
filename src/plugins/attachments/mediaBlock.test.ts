@@ -5,6 +5,7 @@ import {
   MEDIA_TYPE_CONTRIBUTION,
   isAudioMime,
   isImageMime,
+  isPdfMime,
   mediaHashProp,
   resolveCaptureMime,
   sniffImageMime,
@@ -55,6 +56,17 @@ describe('isAudioMime', () => {
   })
 })
 
+describe('isPdfMime', () => {
+  it('is true only for application/pdf, case-insensitively', () => {
+    expect(isPdfMime('application/pdf')).toBe(true)
+    expect(isPdfMime('APPLICATION/PDF')).toBe(true)
+    expect(isPdfMime('image/png')).toBe(false)
+    expect(isPdfMime('application/x-pdf')).toBe(false) // not the registered type
+    expect(isPdfMime('')).toBe(false)
+    expect(isPdfMime(undefined)).toBe(false)
+  })
+})
+
 describe('sniffImageMime', () => {
   it('recognizes common raster image magic, null otherwise', () => {
     expect(sniffImageMime(png())).toBe('image/png')
@@ -79,10 +91,22 @@ describe('resolveCaptureMime', () => {
     expect(resolveCaptureMime('application/pdf', jpeg())).toBe('image/jpeg')
   })
 
-  it('trusts a specific declared type when the bytes are not a recognizable image', () => {
-    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46])
-    expect(resolveCaptureMime('application/pdf', pdf)).toBe('application/pdf')
-    expect(resolveCaptureMime(undefined, pdf)).toBe(GENERIC_MIME)
+  it('sniffs %PDF- magic so a typeless / generic / mislabeled PDF still stores application/pdf', () => {
+    // A dropped/pasted PDF often arrives with an empty or octet-stream File.type; without the
+    // sniff it would store a generic MIME and never reach the inline PDF viewer (isPdfMime).
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]) // %PDF-1.4
+    expect(resolveCaptureMime(undefined, pdf)).toBe('application/pdf')
+    expect(resolveCaptureMime('', pdf)).toBe('application/pdf')
+    expect(resolveCaptureMime(GENERIC_MIME, pdf)).toBe('application/pdf')
+    expect(resolveCaptureMime('text/plain', pdf)).toBe('application/pdf') // bytes win over a mislabel
+  })
+
+  it('trusts a specific declared type when the bytes are neither image nor PDF, else generic', () => {
+    const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04]) // "PK.." (zip) — not sniffed
+    expect(resolveCaptureMime('application/zip', zip)).toBe('application/zip')
+    expect(resolveCaptureMime(undefined, zip)).toBe(GENERIC_MIME)
+    // A bare `%PDF` without the version dash is not the full signature → not sniffed.
+    expect(resolveCaptureMime(undefined, new Uint8Array([0x25, 0x50, 0x44, 0x46]))).toBe(GENERIC_MIME)
   })
 })
 

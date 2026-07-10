@@ -105,6 +105,40 @@ describe('useAssetObjectUrl', () => {
     expect(resolver.resolve).toHaveBeenCalledTimes(2)
   })
 
+  it('does NOT re-arm onto a revoked URL after a content A→B→A undo (stale ready is cleared on disarm)', async () => {
+    // A lazy-inline viewer (audio/PDF): preview content A (armed) → content changes to B (the viewer
+    // disarms, the URL is revoked) → undo restores A while still disarmed → re-arm. The settled cache
+    // is keyed by inputs, so restoring A re-matches the OLD ready entry — whose blob URL was revoked.
+    const resolver = okResolver()
+    const { result, rerender } = renderHook(
+      (p: { hash: string; enabled: boolean }) =>
+        useAssetObjectUrl({ ...args, contentHash: p.hash }, resolver, { enabled: p.enabled }),
+      { initialProps: { hash: 'sha256:aa', enabled: true } },
+    )
+    await flush()
+    const firstUrl = result.current[0].status === 'ready' ? result.current[0].url : ''
+    expect(firstUrl).toMatch(/^blob:/)
+
+    // Content A→B + disarm: the object URL is revoked and the stale `ready` entry must be dropped.
+    rerender({ hash: 'sha256:bb', enabled: false })
+    await flush()
+    expect(revokeObjectURL).toHaveBeenCalledWith(firstUrl)
+
+    // Undo B→A while still disarmed — `key` re-matches the (now-revoked) old entry.
+    rerender({ hash: 'sha256:aa', enabled: false })
+    await flush()
+
+    // Re-arm (Play/Preview clicked): the derived state must be `loading`, NOT the revoked ready URL.
+    rerender({ hash: 'sha256:aa', enabled: true })
+    expect(result.current[0].status).toBe('loading')
+
+    // …then a FRESH resolve lands with a new URL (never the revoked one).
+    await flush()
+    expect(result.current[0]).toEqual({ status: 'ready', url: expect.stringMatching(/^blob:/) })
+    const finalUrl = result.current[0].status === 'ready' ? result.current[0].url : ''
+    expect(finalUrl).not.toBe(firstUrl)
+  })
+
   it('drops a resolve that lands after unmount — no URL created, no setState', async () => {
     let settle!: (r: AssetResolveResult) => void
     const resolver: Pick<AssetResolver, 'resolve'> = { resolve: () => new Promise((r) => (settle = r)) }

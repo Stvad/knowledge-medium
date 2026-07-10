@@ -82,8 +82,21 @@ export function useAssetObjectUrl(
   // Bumped on a reconnect/refocus while in a transient-error state to re-resolve.
   const [retryTick, setRetryTick] = useState(0)
 
+  // A DISARMED lazy viewer (audio/PDF poster) must not hold a settled `ready` entry: the effect
+  // cleanup revoked that object URL on disarm, but the settled cache is keyed by INPUTS, so after a
+  // content A→B→A undo `key` returns to a previously-resolved value and re-matches the OLD entry —
+  // whose blob: URL is now REVOKED. Re-arming (a fresh Play/Preview) would then render a DEAD url
+  // until a new resolve lands (never, offline) — a broken player/preview. Clearing it here makes the
+  // derived state `loading`, forcing a real re-resolve on re-arm. (Eager viewers never disable and
+  // already re-resolve on every input change, so this only bites the lazy-inline path.)
+  //
+  // Done as a render-phase reset (React's blessed "adjust state on a changed input" idiom, like the
+  // renderer's armed latch) rather than inside the effect — a `setState` in the effect body trips
+  // `react-hooks/set-state-in-effect`. Guarded on `ready` so it runs once, not every render.
+  if (!enabled && settled?.state.status === 'ready') setSettled(null)
+
   useEffect(() => {
-    if (!enabled) return // lazy viewer — the eager resolve/object-URL is skipped
+    if (!enabled) return
     let cancelled = false
     let objectUrl: string | null = null
 
