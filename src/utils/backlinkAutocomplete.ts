@@ -7,6 +7,7 @@ import { Extension, EditorSelection } from '@codemirror/state'
 import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { keymap } from '@codemirror/view'
 import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.js'
+import { flushEditorContent } from '@/editor/contentFlush.js'
 
 export interface BacklinkCompletionCandidate {
   label: string
@@ -96,6 +97,11 @@ export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
               // Place cursor two characters past the insertion start (after ']]')
               selection: EditorSelection.cursor(from + applyText.length + 2)
             });
+            // Persist the insert now (completion accept = sync point), so
+            // the reference is durable for the resolution processors that
+            // key off committed content rather than waiting on the 300ms
+            // debounce.
+            flushEditorContent(view)
           },
           type,
         }

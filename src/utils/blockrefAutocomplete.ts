@@ -9,6 +9,7 @@
 
 import { EditorSelection } from '@codemirror/state'
 import { CompletionContext, CompletionResult } from '@codemirror/autocomplete'
+import { flushEditorContent } from '@/editor/contentFlush.js'
 
 export interface BlockSearchHit {
   id: string
@@ -63,6 +64,10 @@ export function blockrefCompletionSource(options: BlockrefAutocompleteOptions) {
               changes: {from, to, insert: closingExists ? hit.id : `${hit.id}))`},
               selection: EditorSelection.cursor(from + hit.id.length + 2),
             })
+            // Persist the insert now (completion accept = sync point), so
+            // the block ref is durable for the resolution processors
+            // rather than waiting on the 300ms debounce.
+            flushEditorContent(view)
           },
           type: 'variable',
         }

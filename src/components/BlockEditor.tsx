@@ -20,6 +20,7 @@ import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceAc
 import { useBlockContext } from '@/context/block.js'
 import { resolveEditModeKeepalive } from '@/components/editModeKeepalive.js'
 import { notifyBlockEditResumed, notifyBlockEditSettled } from '@/editor/editSettleSignal.js'
+import { editorContentFlushFacet } from '@/editor/contentFlush.js'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
@@ -246,8 +247,16 @@ export const BlockEditor = ({
   // a caller-supplied extension can still override anything if it needs to.
   const {extensions: providedExtensions, ...restCodeMirrorProps} = codeMirrorProps
   const mergedExtensions = useMemo<Extension[]>(
-    () => [keyboardAwareScroll(), ...(providedExtensions ?? [])],
-    [providedExtensions],
+    // Publish this editor's content flush into the view so completion
+    // sources can persist pending keystrokes at accept time (see
+    // contentFlush.ts). `flushDebouncers` is a stable ref-backed
+    // callback, so this doesn't churn the config.
+    () => [
+      keyboardAwareScroll(),
+      editorContentFlushFacet.of(flushDebouncers),
+      ...(providedExtensions ?? []),
+    ],
+    [providedExtensions, flushDebouncers],
   )
 
   if (!blockEditData) return null

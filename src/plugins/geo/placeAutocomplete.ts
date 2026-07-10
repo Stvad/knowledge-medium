@@ -31,6 +31,7 @@
 import { EditorSelection } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { isInsideLiteralMarkdown } from '@/editor/syntaxContext'
+import { flushEditorContent } from '@/editor/contentFlush'
 import { matchCharTrigger, type TriggerMatch } from '@/editor/triggerMatch'
 import type {
   Completion,
@@ -184,7 +185,14 @@ const candidateToOption = (
       const delivered = applyInsertToView(
         view, {from: applyFrom, to: applyTo}, triggerText, insert,
       )
-      if (!delivered) await options.persistInsert?.({triggerText, insert})
+      if (delivered) {
+        // Persist the wikilink insert now so it's durable for the
+        // reference-resolution processors instead of waiting on the
+        // 300ms debounce. The unmounted-view path persists directly.
+        flushEditorContent(view)
+      } else {
+        await options.persistInsert?.({triggerText, insert})
+      }
     })()
   },
 })

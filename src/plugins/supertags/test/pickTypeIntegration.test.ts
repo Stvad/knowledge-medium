@@ -11,6 +11,7 @@ import { EditorState } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { ChangeScope, defineBlockType } from '@/data/api'
 import { typesFacet } from '@/data/facets'
+import { editorContentFlushFacet } from '@/editor/contentFlush'
 import { getBlockTypes } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
@@ -159,6 +160,46 @@ describe('supertags pick integration', () => {
         expect(getBlockTypes(data!)).toEqual(['task'])
       }, {timeout: TIMEOUT_MS})
       expect((await env.repo.load(blockId))!.content).toBe('call mom #ta EDITED')
+    } finally {
+      view.destroy()
+    }
+  })
+
+  it('flushes the editor before the pick, so a lagging stored row does not corrupt the type name', async () => {
+    env = await setup()
+    // Stored content lags the view mid-trigger (the 300ms persistence
+    // debounce hasn't caught up to the final "e"): a naive pick would
+    // read "Book #typ" and register a type named "Book #typ".
+    const blockId = await makeBlock(env.repo, 'Book #typ')
+    const block = env.repo.block(blockId)
+    await block.load()
+    const source = buildTypeTagSource({repo: env.repo, block})
+
+    // Wire the flush facet the way BlockEditor does: persist the live
+    // view into the row. The pick calls it after stripping the trigger,
+    // so the row is clean ("Book") before typeify reads it.
+    const holder: {view?: EditorView} = {}
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'Book #type',
+        extensions: [editorContentFlushFacet.of(() => {
+          void env.repo.mutate.setContent({id: blockId, content: holder.view!.state.doc.toString()})
+        })],
+      }),
+      parent: document.body,
+    })
+    holder.view = view
+    try {
+      const result = await source(new CompletionContext(view.state, 10, false))
+      const option = result!.options.find(o => o.label === 'Type')!
+      const apply = option.apply as (v: EditorView, c: unknown, from: number, to: number) => void
+      apply(view, option, result!.from, 10)
+      await vi.waitFor(async () => {
+        const data = await env.repo.load(blockId)
+        expect(getBlockTypes(data!)).toContain('block-type')
+        expect(data!.properties['block-type:label']).toBe('Book')
+        expect(data!.properties.alias).toEqual(['Book'])
+      }, {timeout: TIMEOUT_MS})
     } finally {
       view.destroy()
     }
