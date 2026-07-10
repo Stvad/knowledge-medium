@@ -1,9 +1,4 @@
-import type {
-  CodexApprovalPolicy,
-  CodexApprovalsReviewer,
-  CodexSandbox,
-  Executor,
-} from './config.js'
+import type { Executor } from './config.js'
 import type { AgentRunOptions } from './runner.js'
 
 export interface AgentResumeOptions {
@@ -11,13 +6,6 @@ export interface AgentResumeOptions {
   executor: Executor
   cwd: string
   model?: string
-  codex?: {
-    sandbox: CodexSandbox
-    addDirs: string[]
-    networkAccess: boolean
-    approvalPolicy: CodexApprovalPolicy
-    approvalsReviewer?: CodexApprovalsReviewer
-  }
 }
 
 export const resumeOptionsForRun = (options: AgentRunOptions): AgentResumeOptions => ({
@@ -25,15 +13,4 @@ export const resumeOptionsForRun = (options: AgentRunOptions): AgentResumeOption
   executor: options.executor ?? 'claude',
   cwd: options.cwd ?? '',
   ...(options.model ? {model: options.model} : {}),
-  ...(options.executor === 'codex'
-    ? {
-        codex: {
-          sandbox: options.codexSandbox ?? 'read-only',
-          addDirs: options.codexAddDirs ?? [],
-          networkAccess: Boolean(options.codexNetworkAccess),
-          approvalPolicy: options.codexApprovalPolicy ?? 'never',
-          ...(options.codexApprovalsReviewer ? {approvalsReviewer: options.codexApprovalsReviewer} : {}),
-        },
-      }
-    : {}),
 })

@@ -12,7 +12,7 @@ const baseOptions: AgentRunOptions = {
 }
 
 describe('resumeOptionsForRun', () => {
-  it('captures codex runner settings needed to rebuild an interactive resume command', () => {
+  it('captures non-authority context needed to rebuild an interactive resume command', () => {
     expect(resumeOptionsForRun({
       ...baseOptions,
       executor: 'codex',
@@ -27,13 +27,6 @@ describe('resumeOptionsForRun', () => {
       executor: 'codex',
       cwd: '/Users/vlad/project',
       model: 'gpt-5-codex',
-      codex: {
-        sandbox: 'workspace-write',
-        addDirs: ['/private/tmp', '/Users/vlad/.codex/worktrees'],
-        networkAccess: true,
-        approvalPolicy: 'on-request',
-        approvalsReviewer: 'auto_review',
-      },
     })
   })
 })

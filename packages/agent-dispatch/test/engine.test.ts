@@ -1066,13 +1066,6 @@ describe('mention lifecycle', () => {
       executor: 'codex',
       cwd: '/Users/vlad/project',
       model: 'gpt-5-codex',
-      codex: {
-        sandbox: 'workspace-write',
-        addDirs: ['/private/tmp'],
-        networkAccess: true,
-        approvalPolicy: 'on-request',
-        approvalsReviewer: 'auto_review',
-      },
     })
   })
 })

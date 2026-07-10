@@ -49,7 +49,7 @@ describe('agentResumeCommandForProperties', () => {
       .toBe('codex resume --include-non-interactive \\\n  thread_123-abc')
   })
 
-  it('adds the persisted Codex runner context when available', () => {
+  it('adds the persisted non-authority Codex runner context when available', () => {
     expect(agentResumeCommandForProperties({
       [AGENT_PROPS.session]: 'codex:thread_123-abc',
       [AGENT_PROPS.resumeOptions]: {
@@ -57,9 +57,25 @@ describe('agentResumeCommandForProperties', () => {
         executor: 'codex',
         cwd: '/Users/vlad/project with spaces',
         model: 'gpt-5-codex',
+      },
+    })).toBe([
+      'codex resume --include-non-interactive',
+      "  -C '/Users/vlad/project with spaces'",
+      '  -m gpt-5-codex',
+      '  thread_123-abc',
+    ].join(' \\\n'))
+  })
+
+  it('ignores graph-stored Codex authority flags when building the copied command', () => {
+    expect(agentResumeCommandForProperties({
+      [AGENT_PROPS.session]: 'codex:thread_123-abc',
+      [AGENT_PROPS.resumeOptions]: {
+        version: 1,
+        executor: 'codex',
+        cwd: '/safe/repo',
         codex: {
-          sandbox: 'workspace-write',
-          addDirs: ['/private/tmp', '/Users/vlad/.codex/worktrees'],
+          sandbox: 'danger-full-access',
+          addDirs: ['/'],
           networkAccess: true,
           approvalPolicy: 'on-request',
           approvalsReviewer: 'auto_review',
@@ -67,14 +83,7 @@ describe('agentResumeCommandForProperties', () => {
       },
     })).toBe([
       'codex resume --include-non-interactive',
-      "  -C '/Users/vlad/project with spaces'",
-      '  -s workspace-write',
-      '  --add-dir /private/tmp',
-      '  --add-dir /Users/vlad/.codex/worktrees',
-      '  -c sandbox_workspace_write.network_access=true',
-      '  -c \'approval_policy="on-request"\'',
-      '  -c \'approvals_reviewer="auto_review"\'',
-      '  -m gpt-5-codex',
+      '  -C /safe/repo',
       '  thread_123-abc',
     ].join(' \\\n'))
   })
