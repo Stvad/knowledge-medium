@@ -1,2 +1,0 @@
-import{renderVisibilityPolicyFromScopeRoot as e}from"../utils/renderVisibility.js";var t=t=>t.renderVisibilityPolicy??e(t.scopeRootId,t.scopeRootForcesOpen);export{t as renderVisibilityPolicyForShortcutDeps};
-//# sourceMappingURL=renderVisibilityPolicy.js.map
