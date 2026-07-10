@@ -12,7 +12,6 @@ import {
   matchHashTrigger,
   planTriggerDeletion,
   planTriggerRestore,
-  planTriggerStrip,
   restoreDeletedTextToView,
   typeTagCompletionSource,
   visibleTagTypeIds,
@@ -262,8 +261,8 @@ describe('typeTagCompletionSource', () => {
       expect(view.state.doc.toString()).toBe('call mom')
       expect(view.state.selection.main.head).toBe(8)
       expect(picked).toEqual([candidate()])
-      // The snapshots are the strip/restore contract — position, not
-      // text search (see planTriggerStrip).
+      // The snapshots are the restore contract — position, not text
+      // search (see planTriggerRestore).
       expect(contexts).toEqual([{
         triggerText: '#ta',
         at: 9,
@@ -540,30 +539,6 @@ describe('restoreDeletedTextToView', () => {
       docBefore: '#taab',
       docAfter: 'ab',
     })).toBe(false)
-  })
-})
-
-describe('planTriggerStrip', () => {
-  const ctx = {
-    triggerText: '#re',
-    at: 18,
-    deletedText: ' #re',
-    deletionFrom: 17,
-    docBefore: 'see #recipe notes #re',
-    docAfter: 'see #recipe notes',
-  }
-
-  it('strips exactly the picked span when the stored content matches the pick-time doc', () => {
-    expect(planTriggerStrip('see #recipe notes #re', ctx)).toBe('see #recipe notes')
-  })
-
-  it('never strips by text search — drifted content is left alone', () => {
-    // The round-2 corruption case: the debounce already persisted the
-    // view deletion; an indexOf-based strip would eat the `#re` inside
-    // `#recipe`. Strict snapshot equality must refuse instead.
-    expect(planTriggerStrip('see #recipe notes', ctx)).toBeNull()
-    // Unflushed keystrokes elsewhere → refuse too.
-    expect(planTriggerStrip('see #recipe notes #re!', ctx)).toBeNull()
   })
 })
 

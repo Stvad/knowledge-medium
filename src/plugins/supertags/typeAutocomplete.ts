@@ -212,20 +212,6 @@ export const planTriggerDeletion = (
   return {from: applyFrom, to: applyTo}
 }
 
-/** How `pickType` should mirror the view's trigger deletion into the
- *  block's stored content. Strict snapshot equality — anything else
- *  (unflushed keystrokes, concurrent edits) returns null and the
- *  caller skips the content edit: the editor's own debounced
- *  `setContent` carries the deletion in those cases, and a wrong guess
- *  here would destroy user text. Pure; exported for direct testing. */
-export const planTriggerStrip = (
-  storedContent: string,
-  ctx: TypeTagPickContext,
-): string | null => {
-  if (storedContent === ctx.docBefore) return ctx.docAfter
-  return null
-}
-
 /** How a FAILED pick's fallback should put the deleted command span back into
  *  stored content (the view path is preferred; this runs only when the
  *  view is unmounted). Exact inverse when the stored content matches
@@ -257,13 +243,14 @@ export interface TypeTagAutocompleteOptions {
   /** Candidates for the current query, in display order. */
   getCandidates: (query: string) => TypeTagCandidate[] | Promise<TypeTagCandidate[]>
   /** Called when the user picks a candidate, after the command span has
-   *  been deleted from the view. Implementations MUST also remove it
-   *  from the block's stored content in the SAME tx as the tag write
-   *  (via `planTriggerStrip`): adding a type remounts the per-block
-   *  editor (types participate in the renderer's slot identity), and
-   *  the remounted editor seeds from the cache, so a cache row that
-   *  still holds the trigger command resurrects it under the user's
-   *  cursor. */
+   *  been deleted from the view AND `flushEditorContent` has persisted
+   *  that deletion to the row (both done by the pick `apply`). So the
+   *  stored content is already clean when this runs — the tag write must
+   *  NOT re-touch content. Flush-before-tag matters because adding a type
+   *  remounts the per-block editor (types participate in the renderer's
+   *  slot identity) and the remounted editor seeds from the cache; a
+   *  cache row still holding the trigger command would resurrect it under
+   *  the user's cursor. */
   pickType: (candidate: TypeTagCandidate, ctx: TypeTagPickContext) => Promise<void>
   /** Persistence fallback for a FAILED pick: re-insert the command span
    *  into the block's stored content (via `planTriggerRestore`) when

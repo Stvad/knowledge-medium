@@ -9,14 +9,17 @@
  *
  *  Pick semantics: the source deletes the `#query` command span from
  *  the view optimistically (including start/end separator whitespace
- *  when safe); `pickType` here commits the tag AND the matching content
- *  deletion in ONE tx. The single tx is load-bearing: a types change
+ *  when safe) and then flushes the editor (`flushEditorContent`, in the
+ *  pick `apply`) so the stored row carries the deletion BEFORE `pickType`
+ *  here tags the block. Flush-before-tag is load-bearing: a types change
  *  remounts the per-block editor (types participate in
  *  `DefaultBlockRenderer`'s slot identity), and the fresh editor seeds
  *  from the cache — if the cached content still held the command span
- *  (the editor's own persistence is a 300ms-debounced `setContent`),
- *  the deleted text would resurrect under the user's cursor and could
- *  permanently fork from what they type next.
+ *  (the editor's own persistence is otherwise a 300ms-debounced
+ *  `setContent`), the deleted text would resurrect under the user's
+ *  cursor and could permanently fork from what they type next. Because
+ *  the flush lands the clean content first, `pickType` never writes
+ *  content — the editor owns it.
  *
  *  Picking the `Create type "…"` sentinel re-checks the registry for a
  *  same-named type first (an earlier create may not have published
@@ -43,7 +46,6 @@ import {
   buildTypeTagCandidates,
   findCompletableTypeByName,
   planTriggerRestore,
-  planTriggerStrip,
   typeTagCompletionSource,
   type TypeTagCandidate,
   type TypeTagPickContext,
@@ -64,28 +66,20 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
     })
   }
 
-  /** Tag + command-span removal in one tx (see module doc for why the
-   *  atomicity matters). The content edit mirrors what the view
-   *  already did, gated on strict snapshot equality
-   *  (`planTriggerStrip`): when the stored content has moved on —
-   *  unflushed keystrokes, a debounce flush that already carries the
-   *  deletion — we write nothing and let the editor's own persistence
-   *  own the content. */
-  const applyTag = async (typeId: string, ctx: TypeTagPickContext): Promise<void> => {
+  /** Tag the block. Content is NOT touched here: the pick `apply`
+   *  already stripped the command span from the view and flushed it to
+   *  the row (see module doc), so `data.content` is the clean title by
+   *  the time this tx opens. */
+  const applyTag = async (typeId: string): Promise<void> => {
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
       if (!data || data.deleted) return
       const snapshot = repo.snapshotTypeRegistries()
       await repo.addTypeInTx(tx, block.id, typeId, {}, snapshot)
-      const stripped = planTriggerStrip(data.content, ctx)
-      if (stripped !== null) {
-        await tx.update(block.id, {content: stripped})
-      }
       // `#type` turns the block ITSELF into a user-defined type: adopt
-      // its (command-stripped) content as the type's name, tag it as a
-      // page, and claim the alias — so `book #type` yields a type named
-      // "book" that `[[book]]` resolves to. Runs after the strip so the
-      // name is the clean title, not "book #type".
+      // its content as the type's name, tag it as a page, and claim the
+      // alias — so `book #type` yields a type named "book" that
+      // `[[book]]` resolves to.
       if (typeId === BLOCK_TYPE_TYPE) {
         await typeifyBlockInTx(repo, tx, block.id, snapshot)
       }
@@ -94,11 +88,14 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
 
   const pickType = async (
     candidate: TypeTagCandidate,
-    ctx: TypeTagPickContext,
+    // ctx (docBefore/docAfter) is only for the failure-restore path,
+    // owned by the completion `apply`; the tag itself never touches
+    // content, so pickType doesn't need it.
+    _ctx: TypeTagPickContext,
   ): Promise<void> => {
     try {
       if (candidate.kind === 'existing') {
-        await applyTag(candidate.id, ctx)
+        await applyTag(candidate.id)
         return
       }
       // Create flow — reuse a same-named type that published since the
@@ -116,7 +113,7 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
           propertySchemaIds: [],
         })
       }
-      await applyTag(typeId, ctx)
+      await applyTag(typeId)
     } catch (err) {
       // "Couldn't finish": the create flow can fail AFTER the
       // definition block committed (registration timeout) — the type

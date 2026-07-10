@@ -58,6 +58,26 @@ const makeBlock = async (repo: Repo, content: string): Promise<string> => {
   return id
 }
 
+/** A view wired the way BlockEditor wires production editors: it
+ *  publishes the content-flush facet, so `flushEditorContent` at
+ *  accept time persists the (optimistically stripped) view into the
+ *  row. This is what makes the tag tx read a clean row — production
+ *  never runs this source outside such an editor. */
+const viewWithFlush = (repo: Repo, blockId: string, doc: string): EditorView => {
+  const holder: {view?: EditorView} = {}
+  const view = new EditorView({
+    state: EditorState.create({
+      doc,
+      extensions: [editorContentFlushFacet.of(() => {
+        void repo.mutate.setContent({id: blockId, content: holder.view!.state.doc.toString()})
+      })],
+    }),
+    parent: document.body,
+  })
+  holder.view = view
+  return view
+}
+
 /** Drive the source at end-of-doc and apply the option with the given
  *  label; waits for the block to end up tagged before returning. */
 const pickAt = async (
@@ -69,7 +89,7 @@ const pickAt = async (
   const block = repo.block(blockId)
   await block.load()
   const source = buildTypeTagSource({repo, block})
-  const view = new EditorView({state: EditorState.create({doc}), parent: document.body})
+  const view = viewWithFlush(repo, blockId, doc)
   try {
     const result = await source(new CompletionContext(view.state, doc.length, false))
     expect(result).not.toBeNull()
@@ -87,7 +107,7 @@ const pickAt = async (
 }
 
 describe('supertags pick integration', () => {
-  it('tags the block and strips the command span from stored content in the same committed state', async () => {
+  it('tags the block and (via the editor flush) strips the command span from stored content', async () => {
     env = await setup()
     const blockId = await makeBlock(env.repo, 'call mom #ta')
     await pickAt(env.repo, blockId, 'call mom #ta', 'Task')
@@ -138,20 +158,21 @@ describe('supertags pick integration', () => {
     expect(data!.content).toBe('see #ta note')
   })
 
-  it('leaves DRIFTED stored content alone: tag applies, no content edit', async () => {
+  it('the tag tx is content-neutral: without an editor flush it never writes content', async () => {
     env = await setup()
     const blockId = await makeBlock(env.repo, 'call mom #ta')
     const block = env.repo.block(blockId)
     await block.load()
     const source = buildTypeTagSource({repo: env.repo, block})
+    // A bare view (no flush facet) — the tag write must not touch
+    // content at all: the editor owns content (view strip + flush /
+    // debounce), and the tag tx only tags. So a row that drifted from a
+    // concurrent writer is left exactly as-is; reconciling it is the
+    // editor's adoption path, not the tag path.
     const view = new EditorView({state: EditorState.create({doc: 'call mom #ta'}), parent: document.body})
     try {
       const result = await source(new CompletionContext(view.state, 12, false))
       const option = result!.options.find(o => o.label === 'Task')!
-      // Stored content drifts between candidate build and pick (an
-      // unflushed edit persisting, a concurrent device) — the strict
-      // snapshot equality must refuse to touch it. An unconditional
-      // strip (the round-2 bug class) would corrupt it.
       await env.repo.mutate.setContent({id: blockId, content: 'call mom #ta EDITED'})
       const apply = option.apply as (v: EditorView, c: unknown, from: number, to: number) => void
       apply(view, option, result!.from, 12)
@@ -175,20 +196,10 @@ describe('supertags pick integration', () => {
     await block.load()
     const source = buildTypeTagSource({repo: env.repo, block})
 
-    // Wire the flush facet the way BlockEditor does: persist the live
-    // view into the row. The pick calls it after stripping the trigger,
+    // The view shows the full trigger; wire the flush facet the way
+    // BlockEditor does. The pick calls it after stripping the trigger,
     // so the row is clean ("Book") before typeify reads it.
-    const holder: {view?: EditorView} = {}
-    const view = new EditorView({
-      state: EditorState.create({
-        doc: 'Book #type',
-        extensions: [editorContentFlushFacet.of(() => {
-          void env.repo.mutate.setContent({id: blockId, content: holder.view!.state.doc.toString()})
-        })],
-      }),
-      parent: document.body,
-    })
-    holder.view = view
+    const view = viewWithFlush(env.repo, blockId, 'Book #type')
     try {
       const result = await source(new CompletionContext(view.state, 10, false))
       const option = result!.options.find(o => o.label === 'Type')!
