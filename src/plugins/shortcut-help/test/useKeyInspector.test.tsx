@@ -133,11 +133,11 @@ describe('useKeyInspector', () => {
     expect(result.current.state.pendingMatches).toBeNull()
   })
 
-  it('retries the newest press alone when it breaks a pending sequence', () => {
-    // The dispatcher keeps per-binding matcher state: `g` then Ctrl+K fires
-    // the palette binding even though it breaks the `g g` sequence. The
-    // inspector's shared buffer must fall back the same way instead of
-    // flashing "nothing bound".
+  it('fires a fresh binding when a press breaks a pending sequence', () => {
+    // Per-binding matchers, same as dispatch: `g` then Ctrl+K opens the
+    // palette even though it breaks the `g g` sequence — the `g g` matcher
+    // resets while the palette matcher matches fresh, instead of the whole
+    // thing flashing "nothing bound".
     const {result} = renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
     act(() => {
       press({key: 'g'})

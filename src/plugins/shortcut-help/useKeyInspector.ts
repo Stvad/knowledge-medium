@@ -17,13 +17,17 @@
  * never see, so opening also cancels them explicitly via the reconciler's
  * hold registry.
  *
- * Pressed events accumulate into a sequence buffer matched via
- * `matchPressedSequence` (tinykeys' own matcher, for dispatch parity):
- * exact completions surface as `matches`, live prefixes narrow the overlay
- * to `pendingMatches` (which-key), and a chord bound to nothing flashes as
- * `unmatched`. Escape clears any of that first, then closes. The buffer is
- * held indefinitely (no 1s dispatch-style timeout) — the popup exists to
- * let you read the continuations.
+ * Each binding gets its OWN `createSequenceMatcher` — the same per-binding
+ * sequence matcher the dispatcher installs, so a verdict here is the verdict
+ * dispatch would reach. Every inspected keydown is fed to all matchers:
+ * completions surface as `matches`, matchers left mid-sequence narrow the
+ * overlay to `pendingMatches` (which-key), and a chord bound to nothing
+ * flashes as `unmatched`. Per-binding state is what lets `g` then `$mod+k`
+ * open the palette (the `g g` matcher resets while the palette matches fresh)
+ * without the old drop-oldest buffer retry. Escape clears any of that first,
+ * then closes. The matchers use an infinite timeout — the popup holds a
+ * sequence prefix so you can read its continuations, where the dispatcher
+ * would time out after ~1s.
  *
  * One escape hatch from the swallow: the platform copy chord with a live
  * text selection keeps its native default, so the handler-source panel is
@@ -37,8 +41,9 @@ import {
   modifierPreview,
 } from '@/plugins/keybindings-settings/keyCapture.ts'
 import { cancelArmedHolds } from '@/shortcuts/holdRegistry.js'
+import { createSequenceMatcher, type SequenceMatcher } from '@/shortcuts/sequenceMatcher.js'
 import { withRecoveredLetterKey } from '@/shortcuts/utils.js'
-import { matchPressedSequence, type HelpBinding } from './model.ts'
+import type { HelpBinding } from './model.ts'
 
 /** One captured press: the (recovered) event for matching, and its
  *  canonical chord string for display. */
@@ -187,9 +192,28 @@ export const useKeyInspector = (
     stateRef.current = state
   }, [state])
 
+  // Read `onClose` through a ref so the keydown effect below depends only on
+  // the binding set, not on the callback's identity. Callers routinely pass a
+  // fresh closure each render; keeping it out of the effect deps stops the
+  // per-binding matchers from being torn down and rebuilt mid-sequence (which
+  // would drop a live `g g` prefix).
+  const onCloseRef = useRef(onClose)
+  useLayoutEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
   // Keys pressed while the overlay is open, so keyups can be swallowed
   // selectively (see module header). Cleared on each open.
   const downWhileOpenRef = useRef<Set<string>>(new Set())
+
+  // One stateful sequence matcher per binding, rebuilt when the binding set
+  // changes (the keydown effect below owns the build). Held in a ref so
+  // `selectBinding` and the Escape-clear can abandon in-flight sequences
+  // without the display buffer and matcher state drifting apart.
+  const matchersRef = useRef<Map<HelpBinding, SequenceMatcher>>(new Map())
+  const resetMatchers = useCallback(() => {
+    for (const matcher of matchersRef.current.values()) matcher.reset()
+  }, [])
 
   // Reset synchronously during render when the overlay opens/closes or the
   // binding set is rebuilt (active contexts / runtime changed) — pending
@@ -216,6 +240,13 @@ export const useKeyInspector = (
 
   useEffect(() => {
     if (!open) return
+
+    // One matcher per binding for this binding set. Infinite timeout so the
+    // popup holds a sequence prefix indefinitely (see module header).
+    const matchers = new Map<HelpBinding, SequenceMatcher>(
+      bindings.map(b => [b, createSequenceMatcher(b.chord, {timeoutMs: Infinity})]),
+    )
+    matchersRef.current = matchers
 
     const clearPartial = (): void => {
       setState(s => (s.partial ? {...s, partial: null} : s))
@@ -287,33 +318,39 @@ export const useKeyInspector = (
       if (event.key === 'Escape') {
         const s = stateRef.current
         const dirty = s.pressed.length > 0 || s.matches || s.pendingMatches || s.unmatched || s.partial
-        if (dirty) setState(EMPTY)
-        else onClose()
+        if (dirty) {
+          resetMatchers()
+          setState(EMPTY)
+        } else {
+          onCloseRef.current()
+        }
         return
       }
 
       const display = chordFromEvent(event)
       if (!display) return
+      // Feed the press to every binding's own matcher. Per-binding sequence
+      // state is what lets a press that breaks one binding's sequence fire
+      // another fresh (press `g`, then `$mod+k` — the palette opens): the
+      // `g g` matcher resets while the palette matcher matches from scratch.
       const nextPressed = [...stateRef.current.pressed, {event, display}]
-      // The dispatcher keeps PER-BINDING sequence state: a press that breaks
-      // one binding's pending sequence can still fire another binding fresh
-      // (press `g`, then `$mod+k` — the palette opens). Approximate that by
-      // retrying progressively shorter suffixes of the buffer (drop-oldest)
-      // before declaring the press unbound.
-      let attempt = nextPressed
-      let lookup = matchPressedSequence(bindings, attempt.map(p => p.event))
-      while (lookup.exact.length === 0 && lookup.pending.length === 0 && attempt.length > 1) {
-        attempt = attempt.slice(1)
-        lookup = matchPressedSequence(bindings, attempt.map(p => p.event))
+      const matches: HelpBinding[] = []
+      const pending: HelpBinding[] = []
+      for (const binding of bindings) {
+        const verdict = matchers.get(binding)?.next(event)
+        if (!verdict) continue
+        if (verdict.completed) matches.push(binding)
+        if (verdict.pending) pending.push(binding)
       }
-      const {exact, pending} = lookup
-      if (exact.length === 0 && pending.length === 0) {
+      if (matches.length === 0 && pending.length === 0) {
+        // Nothing live — surface the dead buffer. Every matcher missed and
+        // reset itself, so no state lingers to desync from the cleared buffer.
         setState({...EMPTY, unmatched: nextPressed.map(p => p.display)})
         return
       }
       setState({
-        pressed: pending.length > 0 ? attempt : [],
-        matches: exact.length > 0 ? exact : null,
+        pressed: pending.length > 0 ? nextPressed : [],
+        matches: matches.length > 0 ? matches : null,
         pendingMatches: pending.length > 0 ? pending : null,
         unmatched: null,
         partial: null,
@@ -343,11 +380,14 @@ export const useKeyInspector = (
       window.removeEventListener('keyup', onKeyup, {capture: true})
       window.removeEventListener('blur', onBlur)
     }
-  }, [open, bindings, onClose])
+  }, [open, bindings, resetMatchers])
 
   const selectBinding = useCallback((binding: HelpBinding) => {
+    // A pointer pick abandons any in-flight sequence, so clear matcher state
+    // too or a stale prefix could complete on the next keypress.
+    resetMatchers()
     setState({...EMPTY, matches: [binding]})
-  }, [])
+  }, [resetMatchers])
 
   return {state, selectBinding}
 }

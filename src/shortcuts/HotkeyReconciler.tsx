@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  createKeybindingsHandler,
   matchKeybindingPress,
   parseKeybinding,
   type KeybindingPress,
 } from 'tinykeys'
+import { createSequenceMatcher } from './sequenceMatcher.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   useActiveContextsDispatch,
@@ -840,30 +840,29 @@ const applyEventOptions = (
 }
 
 /**
- * Build a candidate's tinykeys matcher. Every key in the binding maps to the
- * same callback, which records the candidate in `completedRef` for the event
- * in flight instead of running the handler — the coordinator orders the
- * recorded candidates and runs the winner.
+ * Build a candidate's per-binding sequence matcher. On a completed chord it
+ * records the candidate in `completedRef` for the event in flight instead of
+ * running the handler — the coordinator orders the recorded candidates and
+ * runs the winner.
  *
- * `createKeybindingsHandler` (rather than `tinykeys()` directly) lets the
- * coordinator preprocess each event with `withRecoveredLetterKey` before the
- * matcher sees it: tinykeys reads event.key, which Mac option-transforms
- * (Alt+y → '¥') and Linux compose setups corrupt for letter chords; the
- * wrapper restores the logical letter from event.keyCode, and works on
- * Colemak/Dvorak where event.code lies about layout. `ignore: () => false`
- * disables tinykeys' built-in editable-target filter — the coordinator runs
- * the context-aware cascade (`shouldHandleEvent`) itself, so contexts like
- * property-editing can opt into events tinykeys would otherwise drop.
+ * The matcher (`createSequenceMatcher`) is the shared port of tinykeys'
+ * sequence loop, so the inspector's which-key display and this dispatch path
+ * agree by construction. The coordinator preprocesses each event with
+ * `withRecoveredLetterKey` before the matcher sees it: tinykeys' matching
+ * reads event.key, which Mac option-transforms (Alt+y → '¥') and Linux
+ * compose setups corrupt for letter chords; the wrapper restores the logical
+ * letter from event.keyCode, and works on Colemak/Dvorak where event.code
+ * lies about layout. The matcher carries no editable-target filter — the
+ * coordinator runs the context-aware cascade (`shouldHandleEvent`) itself, so
+ * contexts like property-editing can opt into events tinykeys would drop.
  */
 const makeMatcher = (
   action: ActionConfig,
   binding: ShortcutBindingDefaults,
   completedRef: { current: CompletedBinding[] },
 ): ((event: KeyboardEvent) => void) => {
-  const record = () => {
-    completedRef.current.push({action, binding})
+  const matcher = createSequenceMatcher(binding.keys)
+  return (event: KeyboardEvent) => {
+    if (matcher.next(event).completed) completedRef.current.push({action, binding})
   }
-  const bindingMap: Record<string, (event: KeyboardEvent) => void> = {}
-  for (const key of normalizeKeys(binding.keys)) bindingMap[key] = record
-  return createKeybindingsHandler(bindingMap, {ignore: () => false})
 }
