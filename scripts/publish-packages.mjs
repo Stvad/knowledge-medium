@@ -18,6 +18,11 @@
  * Publishing (OIDC) — GitHub's id-token is exchanged with npm automatically, no
  * stored token — and provenance is attached automatically, so we don't pass
  * --provenance (which would also fail a local run outside CI's OIDC env).
+ *
+ * Prebuilt: the workflow's build job compiles each package's dist and this
+ * (token-bearing) publish job downloads it, so we publish with --ignore-scripts
+ * — that both skips prepublishOnly (there's no toolchain here to rebuild) and
+ * keeps any third-party lifecycle script away from the OIDC token.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -64,9 +69,10 @@ for (const rel of packageDirs) {
   console.log(`+ publishing ${name}@${version}`)
   // publishConfig in each package.json pins public access + the npm registry;
   // under trusted publishing npm attaches provenance on its own — no flags.
+  // --ignore-scripts: dist is prebuilt (see the module comment above).
   // Isolate per package so one failure doesn't skip the rest of the list.
   try {
-    execFileSync('npm', ['publish'], { cwd: dir, stdio: 'inherit' })
+    execFileSync('npm', ['publish', '--ignore-scripts'], { cwd: dir, stdio: 'inherit' })
     publishedCount++
   } catch (err) {
     console.error(`✗ failed to publish ${name}@${version}: ${err.message}`)
