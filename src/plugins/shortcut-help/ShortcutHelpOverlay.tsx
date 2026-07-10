@@ -497,6 +497,15 @@ export function ShortcutHelpOverlay() {
   )
   const {state, selectBinding} = useKeyInspector(open, bindings, shortcutHelpToggle.close, capture)
 
+  // Clicking a shortcut row inspects it — but if a rebind is being recorded,
+  // abandon the recording first. Otherwise the panel would switch to the
+  // clicked action while the pending keypress still persists to the original
+  // capture target (capturingRef), silently binding the wrong action.
+  const handleSelect = useCallback((binding: HelpBinding) => {
+    setCapturing(null)
+    selectBinding(binding)
+  }, [selectBinding])
+
   // Which-key narrowing: while a sequence prefix is pending, the list
   // collapses to its continuations.
   const visibleGroups = useMemo(() => {
@@ -549,7 +558,7 @@ export function ShortcutHelpOverlay() {
         )}
         <div className="min-w-0 max-h-[60vh] overflow-y-auto sm:columns-2 sm:gap-6">
           {visibleGroups.map(group => (
-            <ContextGroupSection key={group.config.type} group={group} onSelect={selectBinding}/>
+            <ContextGroupSection key={group.config.type} group={group} onSelect={handleSelect}/>
           ))}
         </div>
       </DialogContent>
