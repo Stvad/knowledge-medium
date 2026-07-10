@@ -103,18 +103,27 @@ export const sniffImageMime = (b: Uint8Array): string | null => {
   return null
 }
 
+/** `%PDF-` — the PDF magic (WHATWG sniff signature). A dropped/pasted PDF very often
+ *  arrives with an empty or `octet-stream` `File.type`, which would store a generic MIME
+ *  and never reach the inline PDF viewer ({@link isPdfMime}); sniffing the bytes keeps such
+ *  typeless captures previewable. */
+export const isPdfBytes = (b: Uint8Array): boolean =>
+  b.length >= 5 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 && b[4] === 0x2d
+
 /** The MIME to STORE for a captured file. `File.type` is unreliable — a pasted or
- *  dropped image often arrives with an empty, generic (`octet-stream`), or even wrong
+ *  dropped file often arrives with an empty, generic (`octet-stream`), or even wrong
  *  type, and because captures are content-addressed + DEDUP'd, the FIRST capture's
  *  MIME sticks for every later embed of the same bytes. So the BYTES are authoritative:
- *  if they're a recognizable image, store that (the stored MIME is then a function of
- *  the bytes, like the content key — a typeless/mislabeled image still renders inline,
- *  and no re-paste can disagree with the dedup'd row). Otherwise trust a specific
- *  declared type, else fall back to generic. A false-positive sniff is harmless — the
- *  renderer's hash-verified `<img>` falls to the placeholder on a decode failure. */
+ *  if they're a recognizable image ({@link sniffImageMime}) or PDF ({@link isPdfBytes}),
+ *  store that (the stored MIME is then a function of the bytes, like the content key — a
+ *  typeless/mislabeled image or PDF still renders inline, and no re-paste can disagree with
+ *  the dedup'd row). Otherwise trust a specific declared type, else fall back to generic. A
+ *  false-positive sniff is harmless — the renderer's hash-verified viewer falls to the
+ *  placeholder / broken preview on a decode failure. */
 export const resolveCaptureMime = (declared: string | undefined, bytes: Uint8Array): string => {
   const sniffed = sniffImageMime(bytes)
   if (sniffed) return sniffed
+  if (isPdfBytes(bytes)) return PDF_MIME
   const d = declared?.trim()
   return d && d.toLowerCase() !== GENERIC_MIME ? d : GENERIC_MIME
 }
