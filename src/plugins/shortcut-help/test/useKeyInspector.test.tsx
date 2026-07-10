@@ -265,32 +265,70 @@ describe('useKeyInspector', () => {
       return event
     }
 
-    it('lets Tab traverse focus instead of swallowing it', () => {
-      renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
+    const mountDialog = (...children: HTMLElement[]) => {
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      dialog.append(...children)
+      document.body.appendChild(dialog)
+      return dialog
+    }
+
+    it('Tab moves focus among the dialog controls without reaching the coordinator', () => {
+      // The app coordinator listens on the window bubble; a swallowed key must
+      // not reach it (else Tab=indent runs behind the dialog). We also wrap
+      // focus ourselves, since swallowing bypasses Radix's trap.
+      const coordinator = vi.fn()
+      window.addEventListener('keydown', coordinator)
+      const first = document.createElement('button')
+      const second = document.createElement('button')
+      const dialog = mountDialog(first, second)
+      first.focus()
+
+      const {result} = renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
       let event!: KeyboardEvent
       act(() => {
-        event = press({key: 'Tab'})
+        event = dispatchOn(first, {key: 'Tab'})
       })
-      expect(event.defaultPrevented).toBe(false)
+      expect(event.defaultPrevented).toBe(true)
+      expect(coordinator).not.toHaveBeenCalled()
+      expect(document.activeElement).toBe(second)
+      expect(result.current.state.matches).toBeNull()
+
+      window.removeEventListener('keydown', coordinator)
+      dialog.remove()
     })
 
-    it('lets Enter/Space activate a focused control', () => {
-      const button = document.createElement('button')
-      document.body.appendChild(button)
-      button.focus()
+    it('Shift+Tab wraps backwards to the last control', () => {
+      const first = document.createElement('button')
+      const second = document.createElement('button')
+      const dialog = mountDialog(first, second)
+      first.focus()
       renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
-      let enter!: KeyboardEvent
-      let space!: KeyboardEvent
       act(() => {
-        enter = dispatchOn(button, {key: 'Enter'})
-        space = dispatchOn(button, {key: ' '})
+        dispatchOn(first, {key: 'Tab', shiftKey: true})
       })
-      expect(enter.defaultPrevented).toBe(false)
-      expect(space.defaultPrevented).toBe(false)
-      button.remove()
+      expect(document.activeElement).toBe(second)
+      dialog.remove()
     })
 
-    it('still swallows Enter as a chord when focus is not on a control', () => {
+    it('Enter activates the focused control (via click) and does not inspect', () => {
+      const button = document.createElement('button')
+      const onClick = vi.fn()
+      button.addEventListener('click', onClick)
+      const dialog = mountDialog(button)
+      button.focus()
+      const {result} = renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
+      let event!: KeyboardEvent
+      act(() => {
+        event = dispatchOn(button, {key: 'Enter'})
+      })
+      expect(onClick).toHaveBeenCalledTimes(1)
+      expect(event.defaultPrevented).toBe(true)
+      expect(result.current.state.matches).toBeNull()
+      dialog.remove()
+    })
+
+    it('still inspects Enter as a chord when focus is not on a control', () => {
       const {result} = renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
       let event!: KeyboardEvent
       act(() => {
@@ -300,17 +338,18 @@ describe('useKeyInspector', () => {
       expect(result.current.state.unmatched).toEqual(['Enter'])
     })
 
-    it('does not exempt a modified Enter (still inspectable on a control)', () => {
+    it('does not treat a modified Enter as a control key (stays inspectable)', () => {
       const button = document.createElement('button')
-      document.body.appendChild(button)
+      const onClick = vi.fn()
+      button.addEventListener('click', onClick)
+      const dialog = mountDialog(button)
       button.focus()
       renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
-      let event!: KeyboardEvent
       act(() => {
-        event = dispatchOn(button, {key: 'Enter', ctrlKey: true})
+        dispatchOn(button, {key: 'Enter', ctrlKey: true})
       })
-      expect(event.defaultPrevented).toBe(true)
-      button.remove()
+      expect(onClick).not.toHaveBeenCalled()
+      dialog.remove()
     })
   })
 })

@@ -104,14 +104,19 @@ const physicalKeyId = (event: KeyboardEvent): string => event.code || event.key
 const OVERLAY_CONTROL_SELECTOR =
   'button, [role="button"], a[href], summary, input, select, textarea'
 
+const DIALOG_FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
+  'textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])'
+
 /** Keys that operate the dialog's OWN focus/controls rather than naming a
- *  shortcut: unmodified Tab/Shift+Tab (focus traversal, trapped within the
- *  modal) always, and unmodified Enter/Space when a focusable control holds
- *  focus. Left un-swallowed (default preserved) so the Rebind/Reset/Cancel
- *  buttons and the handler-source `<summary>` aren't mouse-only for keyboard
- *  users. Modified variants ($mod+Enter, Ctrl+Tab, …) fall through to normal
- *  inspection — they don't activate a control anyway. Not consulted in
- *  capture mode: there every key is a candidate chord. */
+ *  shortcut: unmodified Tab/Shift+Tab (focus traversal within the modal)
+ *  always, and unmodified Enter/Space when a focusable control holds focus.
+ *  These are handled explicitly (not passed through) so the Rebind/Reset/
+ *  Cancel buttons and the handler-source `<summary>` are keyboard-operable
+ *  WITHOUT the still-live app coordinator also seeing them. Modified variants
+ *  ($mod+Enter, Ctrl+Tab, …) fall through to normal inspection — they don't
+ *  activate a control anyway. Not consulted in capture mode: there every key
+ *  is a candidate chord. */
 const isOverlayControlKey = (event: KeyboardEvent): boolean => {
   if (event.ctrlKey || event.metaKey || event.altKey) return false
   if (event.key === 'Tab') return true
@@ -119,6 +124,42 @@ const isOverlayControlKey = (event: KeyboardEvent): boolean => {
   if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return false
   const target = event.target
   return target instanceof HTMLElement && target.closest(OVERLAY_CONTROL_SELECTOR) !== null
+}
+
+/** The open dialog containing the event target (falls back to the first
+ *  dialog on the page when focus sits on a non-dialog node). */
+const dialogRootOf = (event: KeyboardEvent): HTMLElement | null => {
+  const target = event.target
+  const fromTarget = target instanceof Element ? target.closest('[role="dialog"]') : null
+  const root = fromTarget ?? document.querySelector('[role="dialog"]')
+  return root instanceof HTMLElement ? root : null
+}
+
+/** Roving focus within the open dialog. We swallow Tab to keep it away from
+ *  the app coordinator, which also bypasses Radix's own focus trap — so wrap
+ *  focus across the dialog's focusables here (Shift+Tab reverses). */
+const moveDialogFocus = (event: KeyboardEvent): void => {
+  const root = dialogRootOf(event)
+  if (!root) return
+  const items = Array.from(root.querySelectorAll<HTMLElement>(DIALOG_FOCUSABLE))
+  if (items.length === 0) return
+  const dir = event.shiftKey ? -1 : 1
+  const active = document.activeElement
+  const at = active instanceof HTMLElement ? items.indexOf(active) : -1
+  const next = at === -1
+    ? (dir === 1 ? 0 : items.length - 1)
+    : (at + dir + items.length) % items.length
+  items[next]?.focus()
+}
+
+/** Activate the focused control (button click / `<summary>` toggle) — the
+ *  native default we suppressed by swallowing the key. */
+const clickFocusedControl = (event: KeyboardEvent): void => {
+  const target = event.target
+  const control = target instanceof Element
+    ? target.closest<HTMLElement>(OVERLAY_CONTROL_SELECTOR)
+    : null
+  control?.click()
 }
 
 export const useKeyInspector = (
@@ -181,17 +222,7 @@ export const useKeyInspector = (
     }
 
     const onKeydown = (rawEvent: KeyboardEvent): void => {
-      // Accessibility: the overlay's own controls must stay keyboard-operable.
-      // Tab focus-traversal and Enter/Space activation have to reach BOTH the
-      // browser (native default) AND Radix's focus-trap listener on the dialog
-      // content — so we can't stopPropagation or preventDefault them. Bail out
-      // entirely BEFORE the swallow below (and don't ledger them, so their
-      // keyup flows too). In capture mode every key is a candidate chord, so
-      // the exemption is off. The app coordinator gates on editor focus, which
-      // is inside the dialog here, so it won't act on these.
-      if (!captureRef.current && isOverlayControlKey(rawEvent)) return
-
-      // Always keep the app's handlers out; inspection replaces dispatch.
+      // Always keep the app coordinator out; inspection replaces dispatch.
       rawEvent.stopPropagation()
       // Ledger every fresh press BEFORE any early-return below, so the
       // matching keyup is swallowed no matter how the keydown was handled.
@@ -200,12 +231,29 @@ export const useKeyInspector = (
       // propagates (see keyup below).
       if (!rawEvent.repeat) downWhileOpenRef.current.add(physicalKeyId(rawEvent))
 
+      const capturing = captureRef.current
+
+      // Accessibility: operate the overlay's OWN focus/controls. The swallow
+      // (stopPropagation above + preventDefault here) is what keeps a chord
+      // from firing the action it names — but it also blocks the app
+      // coordinator, which the edit-mode keepalive keeps live with
+      // Enter=create-block / Tab=indent bindings, AND Radix's focus trap. So
+      // rather than let these through (which would create/indent a block
+      // behind the dialog), drive focus traversal + activation ourselves.
+      // Off in capture mode (every key is a candidate chord) and for modified
+      // variants (they don't operate a control and stay inspectable).
+      if (!capturing && isOverlayControlKey(rawEvent)) {
+        rawEvent.preventDefault()
+        if (rawEvent.key === 'Tab') moveDialogFocus(rawEvent)
+        else clickFocusedControl(rawEvent)
+        return
+      }
+
       // Rebind capture: the next resolved chord is bound, not inspected.
       // Mirrors KeyCaptureInput — build the chord from the raw event (its
       // own keyCode recovery handles Alt-transforms), Escape cancels,
       // modifiers alone show the "⌘…" preview. No copy escape-hatch here:
       // while recording, ⌘C is a bindable chord, not a copy.
-      const capturing = captureRef.current
       if (capturing) {
         rawEvent.preventDefault()
         if (rawEvent.repeat) return
