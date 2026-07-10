@@ -101,6 +101,26 @@ const hasTextSelection = (): boolean => {
  *  is unavailable (some test environments). */
 const physicalKeyId = (event: KeyboardEvent): string => event.code || event.key
 
+const OVERLAY_CONTROL_SELECTOR =
+  'button, [role="button"], a[href], summary, input, select, textarea'
+
+/** Keys that operate the dialog's OWN focus/controls rather than naming a
+ *  shortcut: unmodified Tab/Shift+Tab (focus traversal, trapped within the
+ *  modal) always, and unmodified Enter/Space when a focusable control holds
+ *  focus. Left un-swallowed (default preserved) so the Rebind/Reset/Cancel
+ *  buttons and the handler-source `<summary>` aren't mouse-only for keyboard
+ *  users. Modified variants ($mod+Enter, Ctrl+Tab, …) fall through to normal
+ *  inspection — they don't activate a control anyway. Not consulted in
+ *  capture mode: there every key is a candidate chord. */
+const isOverlayControlKey = (event: KeyboardEvent): boolean => {
+  if (event.ctrlKey || event.metaKey || event.altKey) return false
+  if (event.key === 'Tab') return true
+  if (event.shiftKey) return false
+  if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return false
+  const target = event.target
+  return target instanceof HTMLElement && target.closest(OVERLAY_CONTROL_SELECTOR) !== null
+}
+
 export const useKeyInspector = (
   open: boolean,
   bindings: readonly HelpBinding[],
@@ -161,6 +181,16 @@ export const useKeyInspector = (
     }
 
     const onKeydown = (rawEvent: KeyboardEvent): void => {
+      // Accessibility: the overlay's own controls must stay keyboard-operable.
+      // Tab focus-traversal and Enter/Space activation have to reach BOTH the
+      // browser (native default) AND Radix's focus-trap listener on the dialog
+      // content — so we can't stopPropagation or preventDefault them. Bail out
+      // entirely BEFORE the swallow below (and don't ledger them, so their
+      // keyup flows too). In capture mode every key is a candidate chord, so
+      // the exemption is off. The app coordinator gates on editor focus, which
+      // is inside the dialog here, so it won't act on these.
+      if (!captureRef.current && isOverlayControlKey(rawEvent)) return
+
       // Always keep the app's handlers out; inspection replaces dispatch.
       rawEvent.stopPropagation()
       // Ledger every fresh press BEFORE any early-return below, so the

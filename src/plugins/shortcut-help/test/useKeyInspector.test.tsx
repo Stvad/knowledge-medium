@@ -257,4 +257,60 @@ describe('useKeyInspector', () => {
       expect(onClose).not.toHaveBeenCalled()
     })
   })
+
+  describe('keeps its own controls keyboard-operable', () => {
+    const dispatchOn = (el: EventTarget, init: KeyboardEventInit): KeyboardEvent => {
+      const event = new KeyboardEvent('keydown', {bubbles: true, cancelable: true, ...init})
+      el.dispatchEvent(event)
+      return event
+    }
+
+    it('lets Tab traverse focus instead of swallowing it', () => {
+      renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
+      let event!: KeyboardEvent
+      act(() => {
+        event = press({key: 'Tab'})
+      })
+      expect(event.defaultPrevented).toBe(false)
+    })
+
+    it('lets Enter/Space activate a focused control', () => {
+      const button = document.createElement('button')
+      document.body.appendChild(button)
+      button.focus()
+      renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
+      let enter!: KeyboardEvent
+      let space!: KeyboardEvent
+      act(() => {
+        enter = dispatchOn(button, {key: 'Enter'})
+        space = dispatchOn(button, {key: ' '})
+      })
+      expect(enter.defaultPrevented).toBe(false)
+      expect(space.defaultPrevented).toBe(false)
+      button.remove()
+    })
+
+    it('still swallows Enter as a chord when focus is not on a control', () => {
+      const {result} = renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
+      let event!: KeyboardEvent
+      act(() => {
+        event = press({key: 'Enter'})
+      })
+      expect(event.defaultPrevented).toBe(true)
+      expect(result.current.state.unmatched).toEqual(['Enter'])
+    })
+
+    it('does not exempt a modified Enter (still inspectable on a control)', () => {
+      const button = document.createElement('button')
+      document.body.appendChild(button)
+      button.focus()
+      renderHook(() => useKeyInspector(true, model.bindings, vi.fn()))
+      let event!: KeyboardEvent
+      act(() => {
+        event = dispatchOn(button, {key: 'Enter', ctrlKey: true})
+      })
+      expect(event.defaultPrevented).toBe(true)
+      button.remove()
+    })
+  })
 })
