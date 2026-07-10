@@ -61,11 +61,16 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      # Produce the publish-ready dist for both packages (tsc -b for both, plus
-      # agent-cli's generated kernel-types) — the same output each package's
-      # prepublishOnly would build, so the publish job never has to build.
+      # Produce the publish-ready dist for both packages: tsc -b scoped to just
+      # the two packages (not the whole app — agent-dispatch pulls agent-cli via
+      # its project reference) plus agent-cli's generated kernel-types (which
+      # still walk the app's @/ source, so the app types shipped to consumers
+      # stay correct). Same dist each package's prepublishOnly would build; the
+      # publish job never has to build. compile:packages shares its build-
+      # kernel-types + chmod tail with `compile` (compile:post), so it can't
+      # drift from the full build.
       - name: Build packages
-        run: yarn run compile
+        run: yarn run compile:packages
 
       # upload-artifact's if-no-files-found checks the *combined* count across
       # both paths, so it wouldn't catch one package's dist being empty while
