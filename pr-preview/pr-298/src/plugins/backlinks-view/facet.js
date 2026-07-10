@@ -1,7 +1,2 @@
-import { defineVariantFacet } from "../../facets/variantFacet.js";
-//#region src/plugins/backlinks-view/facet.ts
-var backlinksViewFacet = defineVariantFacet({ id: "backlinks-view.variants" });
-//#endregion
-export { backlinksViewFacet };
-
+import{defineVariantFacet as e}from"../../facets/variantFacet.js";var t=e({id:`backlinks-view.variants`});export{t as backlinksViewFacet};
 //# sourceMappingURL=facet.js.map

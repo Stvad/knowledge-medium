@@ -1,14 +1,2 @@
-import { propertySchemasFacet, typesFacet } from "../../data/facets.js";
-import { reviewDeckStartedProp, reviewDeckTagProp, reviewProgressProp, srsReviewDeckType, srsReviewProgressType } from "./schema.js";
-//#region src/plugins/srs-review/dataExtension.ts
-var srsReviewDataExtension = [
-	propertySchemasFacet.of(reviewDeckTagProp, { source: "srs-review" }),
-	propertySchemasFacet.of(reviewDeckStartedProp, { source: "srs-review" }),
-	propertySchemasFacet.of(reviewProgressProp, { source: "srs-review" }),
-	typesFacet.of(srsReviewDeckType, { source: "srs-review" }),
-	typesFacet.of(srsReviewProgressType, { source: "srs-review" })
-];
-//#endregion
-export { srsReviewDataExtension };
-
+import{propertySchemasFacet as e,typesFacet as t}from"../../data/facets.js";import{reviewDeckStartedProp as n,reviewDeckTagProp as r,reviewProgressProp as i,srsReviewDeckType as a,srsReviewProgressType as o}from"./schema.js";var s=[e.of(r,{source:`srs-review`}),e.of(n,{source:`srs-review`}),e.of(i,{source:`srs-review`}),t.of(a,{source:`srs-review`}),t.of(o,{source:`srs-review`})];export{s as srsReviewDataExtension};
 //# sourceMappingURL=dataExtension.js.map

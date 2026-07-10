@@ -1,15 +1,2 @@
-//#region src/plugins/roam-import/types.ts
-var getExtraRoamProps = (raw) => {
-	if (!raw || typeof raw !== "object") return {};
-	const out = {};
-	for (const [key, value] of Object.entries(raw)) {
-		if (!key.startsWith(":")) continue;
-		if (key === ":block/props" || key === ":block/refs" || key === ":create/user" || key === ":edit/user" || key === ":block/uid" || key === ":log/id" || key === ":children/view-type") continue;
-		out[key] = value;
-	}
-	return out;
-};
-//#endregion
-export { getExtraRoamProps };
-
+var e=e=>{if(!e||typeof e!=`object`)return{};let t={};for(let[n,r]of Object.entries(e))n.startsWith(`:`)&&(n===`:block/props`||n===`:block/refs`||n===`:create/user`||n===`:edit/user`||n===`:block/uid`||n===`:log/id`||n===`:children/view-type`||(t[n]=r));return t};export{e as getExtraRoamProps};
 //# sourceMappingURL=types.js.map

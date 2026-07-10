@@ -1,23 +1,2 @@
-import { localSchemaFacet, refTargetFilterDefaultsFacet, systemPagesFacet, typesFacet, workspaceBackfillsFacet } from "../../data/facets.js";
-import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from "./schema.js";
-import { getOrCreateJournalBlock } from "./dailyNotes.js";
-import { dailyNoteDateBackfill } from "./backfill.js";
-import { dailyNotesLocalSchema } from "./localSchema.js";
-//#region src/plugins/daily-notes/dataExtension.ts
-var dailyNotesDataExtension = [
-	typesFacet.of(dailyNoteType, { source: "daily-notes" }),
-	localSchemaFacet.of(dailyNotesLocalSchema, { source: "daily-notes" }),
-	workspaceBackfillsFacet.of(dailyNoteDateBackfill, { source: "daily-notes" }),
-	systemPagesFacet.of({
-		id: "daily-notes:journal",
-		ensure: getOrCreateJournalBlock
-	}, { source: "daily-notes" }),
-	refTargetFilterDefaultsFacet.of({
-		targetType: DAILY_NOTE_TYPE,
-		property: dailyNoteDateProp.name
-	}, { source: "daily-notes" })
-];
-//#endregion
-export { dailyNotesDataExtension };
-
+import{localSchemaFacet as e,refTargetFilterDefaultsFacet as t,systemPagesFacet as n,typesFacet as r,workspaceBackfillsFacet as i}from"../../data/facets.js";import{DAILY_NOTE_TYPE as a,dailyNoteDateProp as o,dailyNoteType as s}from"./schema.js";import{getOrCreateJournalBlock as c}from"./dailyNotes.js";import{dailyNoteDateBackfill as l}from"./backfill.js";import{dailyNotesLocalSchema as u}from"./localSchema.js";var d=[r.of(s,{source:`daily-notes`}),e.of(u,{source:`daily-notes`}),i.of(l,{source:`daily-notes`}),n.of({id:`daily-notes:journal`,ensure:c},{source:`daily-notes`}),t.of({targetType:a,property:o.name},{source:`daily-notes`})];export{d as dailyNotesDataExtension};
 //# sourceMappingURL=dataExtension.js.map

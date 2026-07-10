@@ -1,9 +1,2 @@
-import { mutatorsFacet, sameTxProcessorsFacet } from "../../data/facets.js";
-import { aliasCollisionMutators } from "./collisionMerge.js";
-import { aliasSameTxProcessors } from "./syncProcessor.js";
-//#region src/plugins/alias/dataExtension.ts
-var aliasDataExtension = [aliasSameTxProcessors.map((processor) => sameTxProcessorsFacet.of(processor, { source: "alias" })), aliasCollisionMutators.map((mutator) => mutatorsFacet.of(mutator, { source: "alias" }))];
-//#endregion
-export { aliasDataExtension };
-
+import{mutatorsFacet as e,sameTxProcessorsFacet as t}from"../../data/facets.js";import{aliasCollisionMutators as n}from"./collisionMerge.js";import{aliasSameTxProcessors as r}from"./syncProcessor.js";var i=[r.map(e=>t.of(e,{source:`alias`})),n.map(t=>e.of(t,{source:`alias`}))];export{i as aliasDataExtension};
 //# sourceMappingURL=dataExtension.js.map

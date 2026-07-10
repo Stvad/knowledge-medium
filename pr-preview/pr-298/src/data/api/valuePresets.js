@@ -1,8 +1,2 @@
-//#region src/data/api/valuePresets.ts
-/** Helper for plugin authors to define a preset with full type
-*  inference on the value/config slots. */
-var definePreset = (preset) => preset;
-//#endregion
-export { definePreset };
-
+var e=e=>e;export{e as definePreset};
 //# sourceMappingURL=valuePresets.js.map
