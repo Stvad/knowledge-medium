@@ -23,7 +23,7 @@ describe('defineBlocksAction', () => {
 
     const block = fakeBlock('a')
     await pair.block.handler(
-      {block, uiStateBlock: block},
+      {block, uiStateBlock: block, renderVisibilityPolicy: {}},
       new CustomEvent('test'),
     )
     expect(flow).toHaveBeenCalledTimes(1)
@@ -82,20 +82,20 @@ describe('defineBlocksAction', () => {
     const no = fakeBlock('no')
 
     // NORMAL_MODE — predicate runs against the focused block.
-    expect(pair.block.isVisible!({block: yes, uiStateBlock: yes})).toBe(true)
-    expect(pair.block.isVisible!({block: no, uiStateBlock: no})).toBe(false)
+    expect(pair.block.isVisible!({block: yes, uiStateBlock: yes, renderVisibilityPolicy: {}})).toBe(true)
+    expect(pair.block.isVisible!({block: no, uiStateBlock: no, renderVisibilityPolicy: {}})).toBe(false)
 
     // MULTI_SELECT_MODE — true when at least one selected block
     // applies; false for empty selections; false when nothing in
     // the selection applies.
     expect(
-      pair.blocks.isVisible!({selectedBlocks: [yes, no], anchorBlock: null, uiStateBlock: yes}),
+      pair.blocks.isVisible!({selectedBlocks: [yes, no], anchorBlock: null, uiStateBlock: yes, renderVisibilityPolicy: {}}),
     ).toBe(true)
     expect(
-      pair.blocks.isVisible!({selectedBlocks: [no, no], anchorBlock: null, uiStateBlock: no}),
+      pair.blocks.isVisible!({selectedBlocks: [no, no], anchorBlock: null, uiStateBlock: no, renderVisibilityPolicy: {}}),
     ).toBe(false)
     expect(
-      pair.blocks.isVisible!({selectedBlocks: [], anchorBlock: null, uiStateBlock: no}),
+      pair.blocks.isVisible!({selectedBlocks: [], anchorBlock: null, uiStateBlock: no, renderVisibilityPolicy: {}}),
     ).toBe(false)
   })
 
@@ -111,6 +111,7 @@ describe('defineBlocksAction', () => {
         selectedBlocks: [],
         anchorBlock: null,
         uiStateBlock: fakeBlock('ui'),
+        renderVisibilityPolicy: {},
       }),
     ).toBe(false)
     expect(
@@ -118,6 +119,7 @@ describe('defineBlocksAction', () => {
         selectedBlocks: [fakeBlock('a')],
         anchorBlock: null,
         uiStateBlock: fakeBlock('ui'),
+        renderVisibilityPolicy: {},
       }),
     ).toBe(true)
   })

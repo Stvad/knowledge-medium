@@ -29,10 +29,6 @@ import {
 import type { ActionContextActivation, BlockPointerDependencies } from '@/shortcuts/types.js'
 import type { PointerGestureEvent } from '@/shortcuts/pointerAction.js'
 import type { BlockContextType, BlockRenderer } from '@/types.js'
-import {
-  isBlockForceOpened,
-  renderVisibilityPolicyForBlockContext,
-} from '@/utils/renderVisibility.js'
 
 export interface BlockContentRendererSlot {
   id: string
@@ -588,15 +584,14 @@ export const blockPointerDepsForTarget = (
   const renderScopeId = typeof context.blockContext?.renderScopeId === 'string'
     ? context.blockContext.renderScopeId
     : undefined
-  const renderVisibilityPolicy = renderVisibilityPolicyForBlockContext(
-    context.blockContext,
-    context.scopeRootId,
-  )
+  const renderVisibilityPolicy = context.blockContext?.renderVisibilityPolicy
+  if (!renderVisibilityPolicy) {
+    throw new Error('Block pointer actions require a render visibility policy')
+  }
   return {
     block: context.block,
     uiStateBlock: context.uiStateBlock,
     scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: isBlockForceOpened(renderVisibilityPolicy, context.scopeRootId),
     renderVisibilityPolicy,
     targetElement,
     ...(renderScopeId ? {renderScopeId} : {}),

@@ -73,12 +73,12 @@ const enterDateScrubAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> 
   description: 'Enter date scrub mode (hold)',
   context: ActionContextTypes.NORMAL_MODE,
   defaultBinding: {keys: 's', phase: 'hold', holdMs: HOLD_THRESHOLD_MS},
-  handler: ({block, uiStateBlock}, _trigger, dispatch) => {
+  handler: ({block, uiStateBlock, renderVisibilityPolicy}, _trigger, dispatch) => {
     // Overlay refuses if the block has no date-shiftable adapter — no
     // scrub started, no context activation. Silent UX-wise (no overlay
     // flash) which is what we want on non-dated blocks.
     if (!startKeyboardScrubForTarget({block})) return
-    const dependencies: BlockShortcutDependencies = {block, uiStateBlock}
+    const dependencies: BlockShortcutDependencies = {block, uiStateBlock, renderVisibilityPolicy}
     dispatch?.activate(DATE_SCRUB_CONTEXT, dependencies)
   },
 }

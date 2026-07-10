@@ -38,6 +38,10 @@ import { resolveAppRuntime } from '@/facets/resolveAppRuntime.js'
 import { applyToggle } from '@/facets/togglable.js'
 import { userExtensionToggle } from '@/extensions/extensionToggles.js'
 import {
+  EMPTY_RENDER_VISIBILITY_POLICY,
+  forceOpenScopeRootPolicy,
+} from '@/utils/renderVisibility.js'
+import {
   approveExtension,
   createCompileCache,
   revokeExtensionApproval,
@@ -692,6 +696,9 @@ const runRuntimeAction = async (
     selectedBlocks,
     anchorBlock,
     scopeRootId,
+    renderVisibilityPolicy: scopeRootId
+      ? forceOpenScopeRootPolicy(scopeRootId)
+      : EMPTY_RENDER_VISIBILITY_POLICY,
   } as BaseShortcutDependencies
   const trigger = new CustomEvent('agent-runtime:run-action', {detail: {actionId}})
   let returned: unknown

@@ -5,46 +5,36 @@ import { describe, expect, it } from 'vitest'
 import {
   BlockContextProvider,
   NestedBlockContextProvider,
+  RenderSurfaceProvider,
   useBlockContext,
 } from '@/context/block.js'
 import {
   getEffectiveChildrenVisibility,
-  renderVisibilityPolicyForBlockContext,
 } from '@/utils/renderVisibility.js'
 
 const VisibilityProbe = ({blockId}: {blockId: string}) => {
   const context = useBlockContext()
-  const policy = renderVisibilityPolicyForBlockContext(context, context.scopeRootId)
-  const visibility = getEffectiveChildrenVisibility(policy, blockId, true)
+  const visibility = getEffectiveChildrenVisibility(
+    context.renderVisibilityPolicy,
+    blockId,
+    true,
+  )
   return (
     <div
       data-testid="visibility-probe"
       data-open={String(visibility.open)}
       data-reason={visibility.reason}
-      data-force-open={(context.forceOpenBlockIds ?? []).join(',')}
-      data-force-closed={(context.forceClosedBlockIds ?? []).join(',')}
+      data-force-open={(context.renderVisibilityPolicy.forceOpenBlockIds ?? []).join(',')}
+      data-force-closed={(context.renderVisibilityPolicy.forceClosedBlockIds ?? []).join(',')}
     />
   )
 }
 
-describe('NestedBlockContextProvider render visibility boundary', () => {
-  it('clears inherited render visibility policy for a new nested surface', () => {
+describe('RenderSurfaceProvider', () => {
+  it('normalizes non-surface root context to the empty policy', () => {
     render(
-      <BlockContextProvider
-        initialValue={{
-          scopeRootId: 'root',
-          forceOpenBlockIds: ['root'],
-          forceClosedBlockIds: ['hidden'],
-        }}
-      >
-        <NestedBlockContextProvider
-          overrides={{
-            isNestedSurface: true,
-            scopeRootId: 'root',
-          }}
-        >
-          <VisibilityProbe blockId="root" />
-        </NestedBlockContextProvider>
+      <BlockContextProvider initialValue={{layoutBoundary: true}}>
+        <VisibilityProbe blockId="root" />
       </BlockContextProvider>,
     )
 
@@ -55,23 +45,57 @@ describe('NestedBlockContextProvider render visibility boundary', () => {
     expect(probe).toHaveAttribute('data-force-closed', '')
   })
 
-  it('keeps explicit render visibility policy on a nested surface', () => {
+  it('replaces inherited render visibility policy for a new surface', () => {
     render(
       <BlockContextProvider
         initialValue={{
           scopeRootId: 'root',
-          forceOpenBlockIds: ['root'],
+          renderVisibilityPolicy: {
+            forceOpenBlockIds: ['root'],
+            forceClosedBlockIds: ['hidden'],
+          },
         }}
       >
-        <NestedBlockContextProvider
+        <RenderSurfaceProvider
           overrides={{
             isNestedSurface: true,
             scopeRootId: 'target',
-            forceOpenBlockIds: ['target'],
+            renderScopeId: 'nested:target',
+            renderVisibilityPolicy: {},
           }}
         >
           <VisibilityProbe blockId="target" />
-        </NestedBlockContextProvider>
+        </RenderSurfaceProvider>
+      </BlockContextProvider>,
+    )
+
+    const probe = screen.getByTestId('visibility-probe')
+    expect(probe).toHaveAttribute('data-open', 'false')
+    expect(probe).toHaveAttribute('data-reason', 'stored')
+    expect(probe).toHaveAttribute('data-force-open', '')
+    expect(probe).toHaveAttribute('data-force-closed', '')
+  })
+
+  it('keeps the same surface policy through ordinary nested context', () => {
+    render(
+      <BlockContextProvider
+        initialValue={{
+          scopeRootId: 'root',
+          renderVisibilityPolicy: {},
+        }}
+      >
+        <RenderSurfaceProvider
+          overrides={{
+            isNestedSurface: true,
+            scopeRootId: 'target',
+            renderScopeId: 'nested:target',
+            renderVisibilityPolicy: {forceOpenBlockIds: ['target']},
+          }}
+        >
+          <NestedBlockContextProvider overrides={{safeMode: true}}>
+            <VisibilityProbe blockId="target" />
+          </NestedBlockContextProvider>
+        </RenderSurfaceProvider>
       </BlockContextProvider>,
     )
 

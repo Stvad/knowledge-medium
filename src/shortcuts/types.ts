@@ -129,21 +129,14 @@ export interface BaseShortcutDependencies {
    *  surfaces by `useShortcutSurfaceActivations`; defaults to the
    *  panel's zoom root for the main outline. */
   scopeRootId?: string;
-  /** Whether the surface force-opens its scope root regardless of the
-   *  root's own collapse flag (true for focal panel/top-level roots,
-   *  false for nested surface roots that honour collapse). Navigation
-   *  primitives use it so they don't descend into a collapsed nested
-   *  root whose children aren't rendered. Defaults to true (focal). */
-  scopeRootForcesOpen?: boolean;
-  /** Surface-scoped child visibility policy. Supersedes
-   *  `scopeRootForcesOpen` for visible-tree traversal because nested
-   *  surfaces can force-open more than just their root (e.g. a promoted
-   *  backlink/SRS ancestor path). */
+  /** Surface-scoped child visibility policy. Block-surface activations supply
+   *  this explicitly so traversal follows the same rendered tree as layout. */
   renderVisibilityPolicy?: RenderVisibilityPolicy;
 }
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
   block: Block;
+  renderVisibilityPolicy: RenderVisibilityPolicy;
   renderScopeId?: string;
 }
 

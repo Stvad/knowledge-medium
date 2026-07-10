@@ -1,9 +1,10 @@
 import { ReactNode } from 'react'
 import { BlockComponent } from '@/components/BlockComponent'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block'
+import { RenderSurfaceProvider, useBlockContext } from '@/context/block'
 import { useRepo } from '@/context/repo'
 import { useBlockExists } from '@/hooks/block'
 import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js'
+import { EMPTY_RENDER_VISIBILITY_POLICY } from '@/utils/renderVisibility.js'
 import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
 import { ReferenceLink } from './ReferenceLink'
@@ -78,9 +79,16 @@ export function BlockRef({
 
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
-      <NestedBlockContextProvider overrides={{...REFERENCE_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
+      <RenderSurfaceProvider
+        overrides={{
+          ...REFERENCE_CONTEXT_OVERRIDES,
+          renderScopeId,
+          scopeRootId: blockId,
+          renderVisibilityPolicy: EMPTY_RENDER_VISIBILITY_POLICY,
+        }}
+      >
         <BlockComponent blockId={blockId}/>
-      </NestedBlockContextProvider>
+      </RenderSurfaceProvider>
     </BlockRefAncestorsProvider>
   )
 }

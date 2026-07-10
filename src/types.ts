@@ -91,7 +91,12 @@ export interface RenderVisibilityPolicy {
  *  re-export drops. */
 export type { EditorSelectionState } from '@/data/properties'
 
-export interface BlockContextType extends RenderVisibilityPolicy {
+export interface BlockContextType {
+    /** The complete visibility policy for this rendered surface occurrence.
+     *  `RenderSurfaceProvider` requires and replaces this object. It remains
+     *  optional on the broad context type because non-render services also use
+     *  `BlockContextType`; React block context normalizes it to an empty policy. */
+    renderVisibilityPolicy?: RenderVisibilityPolicy
     /** Layout-dispatch boundary — gates which top-level renderer fires
      *  (`TopLevelRenderer` / `LayoutRenderer` / `PanelRenderer`). Reset
      *  by every layout boundary as it descends, so by the time

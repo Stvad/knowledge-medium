@@ -1,6 +1,6 @@
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { BlockRendererProps } from '@/types.js'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { RenderSurfaceProvider, useBlockContext } from '@/context/block.js'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
@@ -25,6 +25,7 @@ import {
 } from '@/utils/panelHistory.js'
 import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import { forceOpenScopeRootPolicy } from '@/utils/renderVisibility.js'
 import type { MouseEvent, PointerEvent } from 'react'
 
 const SCROLL_WRITE_DELAY_MS = 200
@@ -169,7 +170,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
         layoutBoundary: false,
         renderScopeId: outlineRenderScopeId(topLevelBlockId),
         scopeRootId: topLevelBlockId,
-        forceOpenBlockIds: [topLevelBlockId],
+        renderVisibilityPolicy: forceOpenScopeRootPolicy(topLevelBlockId),
       }
     : null, [topLevelBlockId])
 
@@ -226,11 +227,11 @@ export function PanelRenderer({block}: BlockRendererProps) {
   )
 
   const panelBody = (
-    <NestedBlockContextProvider
+    <RenderSurfaceProvider
       overrides={panelBodyContextOverrides!}
     >
       <BlockComponent blockId={topLevelBlockId}/>
-    </NestedBlockContextProvider>
+    </RenderSurfaceProvider>
   )
 
   return (

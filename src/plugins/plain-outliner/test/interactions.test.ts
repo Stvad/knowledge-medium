@@ -86,6 +86,7 @@ describe('plain outliner click-to-edit action', () => {
     block: {id: 'block-1'} as Block,
     uiStateBlock: {id: 'panel', repo: {isReadOnly}} as unknown as Block,
     targetElement: document.createElement('div'),
+    renderVisibilityPolicy: {},
     renderScopeId: 'scope-a',
   })
 

@@ -89,7 +89,7 @@ describe('cycleTodoState', () => {
     expect(action?.context).toBe(ActionContextTypes.NORMAL_MODE)
 
     const block = repo.block('block-1')
-    await action?.handler({block, uiStateBlock: block}, {} as CustomEvent)
+    await action?.handler({block, uiStateBlock: block, renderVisibilityPolicy: {}}, {} as CustomEvent)
 
     expect(block.types).toContain(TODO_TYPE)
     expect(block.get(statusProp)).toBe('open')

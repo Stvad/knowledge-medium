@@ -22,11 +22,12 @@ import {
 } from 'lucide-react'
 import type { Block } from '@/data/block'
 import type { BlockData } from '@/data/api'
+import type { RenderVisibilityPolicy } from '@/types.js'
 import { useRepo } from '@/context/repo.js'
 import { useManyParents, useProperty } from '@/hooks/block.js'
 import { usePluginUIStateChildBlock } from '@/data/globalState.js'
 import { getBlockTypes } from '@/data/properties.js'
-import { NestedBlockContextProvider } from '@/context/block.js'
+import { RenderSurfaceProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
@@ -53,12 +54,12 @@ import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from
 import { localDayKey, reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
 import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
+import { promotedRevealPathIds } from '@/plugins/breadcrumbs/promotionPath.js'
 
 /** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own
  *  header renderer so the in-review chain renders identically. */
 const BREADCRUMB_OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}
 const EMPTY_PARENTS: readonly Block[] = []
-const EMPTY_BLOCK_IDS: readonly string[] = []
 /** How many cards' ancestors to prefetch per chunk (two chunks are in
  *  flight at once). Bounds the `core.manyAncestors` id count so a large
  *  deck can't exceed SQLite's host-parameter limit. */
@@ -319,21 +320,17 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     const cut = currentParents.findIndex(p => p.id === shownId)
     return cut >= 0 ? currentParents.slice(0, cut) : currentParents
   }, [shownId, currentId, currentParents])
-  const forceOpenBlockIds = useMemo(() => {
-    if (!currentId) return EMPTY_BLOCK_IDS
-    const revealPath = shownId === currentId
-      ? EMPTY_BLOCK_IDS
-      : (() => {
-          const cut = currentParents.findIndex(p => p.id === shownId)
-          return cut >= 0
-            ? currentParents.slice(cut).map(parent => parent.id)
-            : EMPTY_BLOCK_IDS
-        })()
-    return revealed ? [...revealPath, currentId] : revealPath
+  const renderVisibilityPolicy = useMemo<RenderVisibilityPolicy>(() => {
+    const revealPath = currentId
+      ? promotedRevealPathIds(currentParents, shownId, currentId)
+      : []
+    return {
+      forceOpenBlockIds: revealed && currentId
+        ? [...revealPath, currentId]
+        : revealPath,
+      forceClosedBlockIds: currentId && !revealed ? [currentId] : [],
+    }
   }, [currentId, currentParents, revealed, shownId])
-  const forceClosedBlockIds = useMemo(() =>
-    currentId && !revealed ? [currentId] : EMPTY_BLOCK_IDS,
-  [currentId, revealed])
 
   const grade = useCallback(
     async (signal: SrsSignal) => {
@@ -474,9 +471,8 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     renderScopeId: surfaceId === currentId
       ? `srs-review:${currentId}`
       : `srs-review:${currentId}:${surfaceId}`,
-    ...(forceOpenBlockIds.length ? {forceOpenBlockIds} : {}),
-    ...(forceClosedBlockIds.length ? {forceClosedBlockIds} : {}),
-  }), [currentId, forceClosedBlockIds, forceOpenBlockIds, revealed, surfaceId])
+    renderVisibilityPolicy,
+  }), [currentId, revealed, renderVisibilityPolicy, surfaceId])
 
   const header = (
     <div className="mb-4 flex items-center justify-between gap-3">
@@ -569,7 +565,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       )}
 
       <div className="rounded-xl border bg-card p-4 shadow-sm">
-        <NestedBlockContextProvider
+        <RenderSurfaceProvider
           // Gate the active card's answer wherever it appears in this
           // review surface. Promoted ancestors force-open the path to the
           // card, while the card itself is force-open only once revealed.
@@ -578,7 +574,7 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
           {/* keyed by the shown id so switching cards (or promoting) remounts
               the subtree rather than diffing one outline into the next */}
           <BlockComponent key={surfaceId} blockId={surfaceId} />
-        </NestedBlockContextProvider>
+        </RenderSurfaceProvider>
       </div>
 
       <div className="mt-4">

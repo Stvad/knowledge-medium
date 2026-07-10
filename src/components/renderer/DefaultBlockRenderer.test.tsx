@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
   codecs,
@@ -117,10 +117,27 @@ describe('DefaultBlockRenderer paste handling', () => {
   let h: TestDb
   let repo: Repo
   let runtime: FacetRuntime
+  let originalMatchMedia: typeof window.matchMedia
 
-  beforeAll(async () => { sharedDb = await createTestDb() })
-  afterAll(async () => { await sharedDb.cleanup() })
+  beforeAll(async () => {
+    originalMatchMedia = window.matchMedia
+    sharedDb = await createTestDb()
+  })
+  afterAll(async () => {
+    window.matchMedia = originalMatchMedia
+    await sharedDb.cleanup()
+  })
   beforeEach(async () => {
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia
     vi.mocked(pasteMultilineText).mockClear()
 
     await resetTestDb(sharedDb.db)
@@ -193,7 +210,10 @@ describe('DefaultBlockRenderer paste handling', () => {
         {/* The scope root is normally set by the panel/top-level surface
             that mounts the block; provide it here so the paste path
             resolves the same scopeRootId production would. */}
-        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+        <BlockContextProvider initialValue={{
+          scopeRootId: 'root',
+          renderVisibilityPolicy: {forceOpenBlockIds: ['root']},
+        }}>
           <ActiveContextsProvider>
             <DefaultBlockRenderer
               block={repo.block('block-1')}
@@ -245,6 +265,54 @@ describe('DefaultBlockRenderer paste handling', () => {
 
     const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
     expect(shell?.className).toContain('bg-accent/40')
+  })
+
+  it('does not mutate stored collapse through a surface visibility override', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'ui-state-override',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a2',
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root'),
+        },
+      })
+      await tx.setProperty('block-1', isCollapsedProp, true)
+    }, {scope: ChangeScope.BlockDefault, description: 'force-open control fixture'})
+
+    const plainRepo = createTestRepo({
+      db: h.db,
+      user: {id: 'user-1'},
+      newId: () => crypto.randomUUID(),
+      extensions: [defaultEditorInteractionExtension],
+    }).repo
+    plainRepo.setActiveWorkspaceId('ws-1')
+    await plainRepo.block('block-1').load()
+    repoRef.current = plainRepo
+    uiStateBlockRef.current = plainRepo.block('ui-state-override')
+
+    render(
+      <AppRuntimeContextProvider value={plainRepo.facetRuntime!}>
+        <BlockContextProvider initialValue={{
+          scopeRootId: 'root',
+          renderScopeId: outlineRenderScopeId('root'),
+          renderVisibilityPolicy: {forceOpenBlockIds: ['block-1']},
+        }}>
+          <ActiveContextsProvider>
+            <DefaultBlockRenderer
+              block={plainRepo.block('block-1')}
+              ContentRenderer={TestContentRenderer}
+            />
+          </ActiveContextsProvider>
+        </BlockContextProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    const disclosure = await screen.findByRole('button', {name: '▾'})
+    expect(disclosure).toBeDisabled()
+    fireEvent.click(disclosure)
+    expect(plainRepo.block('block-1').peekProperty(isCollapsedProp)).toBe(true)
   })
 
   it('restores DOM focus to a focused normal-mode block shell after remount', async () => {
@@ -346,7 +414,10 @@ describe('DefaultBlockRenderer slot identity', () => {
   it('does not remount the content subtree when a collapse toggle re-renders the layout', async () => {
     render(
       <AppRuntimeContextProvider value={runtime}>
-        <BlockContextProvider initialValue={{scopeRootId: 'root'}}>
+        <BlockContextProvider initialValue={{
+          scopeRootId: 'root',
+          renderVisibilityPolicy: {forceOpenBlockIds: ['root']},
+        }}>
           <ActiveContextsProvider>
             <DefaultBlockRenderer block={repo.block('block-1')} ContentRenderer={CountingContentRenderer} />
           </ActiveContextsProvider>

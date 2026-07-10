@@ -2,7 +2,6 @@ import { focusBlock, selectionStateProp } from '@/data/properties.js'
 import { getSelectionStateSnapshot } from '@/data/stateBlocks.js'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.js'
 import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.js'
-import { renderVisibilityPolicyForShortcutDeps } from '@/shortcuts/renderVisibilityPolicy.js'
 
 export const EXTEND_BLOCK_SELECTION_ACTION_ID = 'extend_block_selection'
 export const TOGGLE_BLOCK_SELECTION_ACTION_ID = 'toggle_block_selection'
@@ -32,7 +31,7 @@ export const extendBlockSelectionAction: ActionConfig<typeof ActionContextTypes.
       uiStateBlock,
       uiStateBlock.repo,
       scopeRootId,
-      renderVisibilityPolicyForShortcutDeps(deps),
+      deps.renderVisibilityPolicy,
     )
     void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
   },

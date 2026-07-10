@@ -167,7 +167,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'd'},
       {id: 'b2', parentId: 'b', orderKey: 'e'},
     ])
-    const result = await getLastVisibleDescendant(env.repo.block('top'))
+    const result = await getLastVisibleDescendant(env.repo.block('top'), {})
     expect(result.id).toBe('b2')
   })
 
@@ -180,7 +180,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b1', parentId: 'b', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'b', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('b'))
+    const result = await getLastVisibleDescendant(env.repo.block('b'), {})
     expect(result.id).toBe('b')
   })
 
@@ -210,7 +210,7 @@ describe('getLastVisibleDescendant', () => {
       {id: 'b', parentId: 'top', orderKey: 'c'},
     ])
     await env.repo.mutate.setProperty({id: 'top', schema: isCollapsedProp, value: true})
-    const result = await getLastVisibleDescendant(env.repo.block('top'))
+    const result = await getLastVisibleDescendant(env.repo.block('top'), {})
     expect(result.id).toBe('top')
   })
 

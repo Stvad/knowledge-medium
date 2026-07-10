@@ -1,10 +1,11 @@
 import { useCallback, useMemo } from 'react'
 import { Block } from '@/data/block'
+import type { RenderVisibilityPolicy } from '@/types.js'
 import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { PromotableBreadcrumbList } from '@/plugins/breadcrumbs/PromotableBreadcrumbList.js'
 import { usePromotableBreadcrumb } from '@/plugins/breadcrumbs/usePromotableBreadcrumb.js'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { RenderSurfaceProvider, useBlockContext } from '@/context/block.js'
 import { LazyViewportMount } from '@/components/util/LazyViewportMount.js'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.js'
 import { useParents } from '@/hooks/block.js'
@@ -15,6 +16,7 @@ import {
   type BacklinkEntryShortcutController,
 } from './backlinkBreadcrumbShortcuts.ts'
 import { backlinkRenderScopeId } from '@/utils/renderScope.js'
+import { promotedRevealPathIds } from '@/plugins/breadcrumbs/promotionPath.js'
 
 const NESTED_OVERRIDES = {layoutBoundary: false, isNestedSurface: true, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
@@ -23,8 +25,6 @@ const BACKLINK_OVERSCAN_PX = 600
 const BACKLINK_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 
 const EMPTY_PARENTS: readonly Block[] = []
-const EMPTY_BLOCK_IDS: readonly string[] = []
-
 // Roam-style: breadcrumbs are the chain ABOVE the currently-shown block.
 // Click a segment to "unfurl" — promote it to the shown block. The
 // breadcrumb chain truncates accordingly and the body re-renders the
@@ -47,14 +47,14 @@ const BacklinkItemContent = ({
   onSelect,
   onShowBlock,
   renderScopeId,
-  forceOpenBlockIds,
+  renderVisibilityPolicy,
 }: {
   shownBlock: Block
   parents: readonly Block[]
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
   renderScopeId: string
-  forceOpenBlockIds?: readonly string[]
+  renderVisibilityPolicy: RenderVisibilityPolicy
 }) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
@@ -74,14 +74,14 @@ const BacklinkItemContent = ({
   const bodyOverrides = useMemo(() => ({
     ...NESTED_OVERRIDES,
     renderScopeId,
-    ...(forceOpenBlockIds?.length ? {forceOpenBlockIds} : {}),
+    renderVisibilityPolicy,
     // The shown block is the root of this entry's visible subtree, so
     // structural edits (o / Enter / Tab) and bounded navigation treat
     // it like a panel's top-level block instead of restructuring the
     // real tree around it (which lives outside the entry).
     scopeRootId: shownBlock.id,
     ...backlinkEntryShortcutContextOverrides(shortcutController),
-  }), [forceOpenBlockIds, renderScopeId, shownBlock.id, shortcutController])
+  }), [renderScopeId, renderVisibilityPolicy, shownBlock.id, shortcutController])
 
   return (
     <>
@@ -96,9 +96,9 @@ const BacklinkItemContent = ({
           separatorClassName="mx-1 text-muted-foreground/40"
         />
       )}
-      <NestedBlockContextProvider overrides={bodyOverrides}>
+      <RenderSurfaceProvider overrides={bodyOverrides}>
         <BlockComponent blockId={shownBlock.id}/>
-      </NestedBlockContextProvider>
+      </RenderSurfaceProvider>
     </>
   )
 }
@@ -108,13 +108,13 @@ const BacklinkDynamicContent = ({
   onSelect,
   onShowBlock,
   renderScopeId,
-  forceOpenBlockIds,
+  renderVisibilityPolicy,
 }: {
   shownBlock: Block
   onSelect: (parent: Block) => void
   onShowBlock: (blockId: string) => void
   renderScopeId: string
-  forceOpenBlockIds?: readonly string[]
+  renderVisibilityPolicy: RenderVisibilityPolicy
 }) => {
   const parents = useParents(shownBlock)
   return (
@@ -124,7 +124,7 @@ const BacklinkDynamicContent = ({
       onSelect={onSelect}
       onShowBlock={onShowBlock}
       renderScopeId={renderScopeId}
-      forceOpenBlockIds={forceOpenBlockIds}
+      renderVisibilityPolicy={renderVisibilityPolicy}
     />
   )
 }
@@ -151,13 +151,9 @@ const BacklinkItem = ({
     () => backlinkRenderScopeId(parentRenderScopeId, scopeId),
     [parentRenderScopeId, scopeId],
   )
-  const forceOpenBlockIds = useMemo(() => {
-    if (shownId === block.id) return EMPTY_BLOCK_IDS
-    const shownIndex = initialParents.findIndex(parent => parent.id === shownId)
-    return shownIndex >= 0
-      ? initialParents.slice(shownIndex).map(parent => parent.id)
-      : EMPTY_BLOCK_IDS
-  }, [block.id, initialParents, shownId])
+  const renderVisibilityPolicy = useMemo<RenderVisibilityPolicy>(() => ({
+    forceOpenBlockIds: promotedRevealPathIds(initialParents, shownId, block.id),
+  }), [block.id, initialParents, shownId])
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
@@ -169,7 +165,7 @@ const BacklinkItem = ({
               onSelect={promote}
               onShowBlock={showBlock}
               renderScopeId={renderScopeId}
-              forceOpenBlockIds={forceOpenBlockIds}
+              renderVisibilityPolicy={renderVisibilityPolicy}
             />
           )
         : (
@@ -178,7 +174,7 @@ const BacklinkItem = ({
               onSelect={promote}
               onShowBlock={showBlock}
               renderScopeId={renderScopeId}
-              forceOpenBlockIds={forceOpenBlockIds}
+              renderVisibilityPolicy={renderVisibilityPolicy}
             />
           )}
     </div>

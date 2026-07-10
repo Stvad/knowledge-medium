@@ -12,10 +12,7 @@ import {
 import { outlineRenderScopeId } from '@/utils/renderScope'
 import { ChangeScope } from '@/data/api'
 import type { RenderVisibilityPolicy } from '@/types.js'
-import {
-  areChildrenEffectivelyOpen,
-  forceOpenScopeRootPolicy,
-} from '@/utils/renderVisibility.js'
+import { areChildrenEffectivelyOpen } from '@/utils/renderVisibility.js'
 
 /** Reads the effective rendered child visibility from the same policy
  *  `DefaultBlockLayout` consumes. This keeps keyboard traversal aligned
@@ -46,7 +43,7 @@ const isExpanded = (
 export const nextVisibleBlock = async (
   current: Block,
   scopeRootId: string,
-  renderVisibilityPolicy: RenderVisibilityPolicy = forceOpenScopeRootPolicy(scopeRootId),
+  renderVisibilityPolicy: RenderVisibilityPolicy,
 ): Promise<Block | null> => {
   const repo = current.repo
   await current.load()
@@ -83,7 +80,7 @@ export const nextVisibleBlock = async (
 export const previousVisibleBlock = async (
   current: Block,
   scopeRootId: string,
-  renderVisibilityPolicy: RenderVisibilityPolicy = forceOpenScopeRootPolicy(scopeRootId),
+  renderVisibilityPolicy: RenderVisibilityPolicy,
 ): Promise<Block | null> => {
   if (current.id === scopeRootId) return null
   const repo = current.repo
@@ -162,7 +159,7 @@ export const blockAfterSubtreeRemoval = async (
  *  them. */
 export const getLastVisibleDescendant = async (
   block: Block,
-  renderVisibilityPolicy: RenderVisibilityPolicy = {},
+  renderVisibilityPolicy: RenderVisibilityPolicy,
 ): Promise<Block> => {
   const repo = block.repo
   await block.load()
@@ -362,7 +359,7 @@ export async function getBlocksInRange(
   endBlockId: string,
   scopeRootId: string,
   repo: Repo,
-  renderVisibilityPolicy: RenderVisibilityPolicy = forceOpenScopeRootPolicy(scopeRootId),
+  renderVisibilityPolicy: RenderVisibilityPolicy,
 ): Promise<string[]> {
   if (startBlockId === endBlockId) {
     return validateSelectionHierarchy([startBlockId], repo)
@@ -422,7 +419,7 @@ export async function extendSelection(
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
-  renderVisibilityPolicy?: RenderVisibilityPolicy,
+  renderVisibilityPolicy: RenderVisibilityPolicy,
   clearEditing = false,
 ): Promise<boolean> {
   const currentState = uiStateBlock.peekProperty(selectionStateProp)
@@ -438,7 +435,7 @@ export async function extendSelection(
     targetBlockId,
     scopeRootId,
     repo,
-    renderVisibilityPolicy ?? forceOpenScopeRootPolicy(scopeRootId),
+    renderVisibilityPolicy,
   )
 
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)

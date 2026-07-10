@@ -20,7 +20,6 @@ import {
 } from '@/data/properties.js'
 import { Button } from './ui/button'
 import { nextVisibleBlock } from '@/utils/selection.js'
-import { renderVisibilityPolicyForBlockContext } from '@/utils/renderVisibility.js'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.js'
 import { useNavigate } from '@/utils/navigation.js'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
@@ -159,7 +158,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     const next = await nextVisibleBlock(
       block,
       scopeRootId,
-      renderVisibilityPolicyForBlockContext(blockContext, scopeRootId),
+      blockContext.renderVisibilityPolicy,
     )
     if (!next) return
     await next.load()

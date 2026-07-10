@@ -1,5 +1,6 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.js'
+import { EMPTY_RENDER_VISIBILITY_POLICY } from '@/utils/renderVisibility.js'
 import { use, useCallback, useEffect, useState } from 'react'
 import { useQuery } from '@powersync/react'
 import type { Block } from './data/block'
@@ -304,7 +305,11 @@ const App = () => {
   }
 
   return (
-    <BlockContextProvider initialValue={{layoutBoundary: true, safeMode}}>
+    <BlockContextProvider initialValue={{
+      layoutBoundary: true,
+      safeMode,
+      renderVisibilityPolicy: EMPTY_RENDER_VISIBILITY_POLICY,
+    }}>
       <AppRuntimeProvider safeMode={safeMode}>
         <BlockComponent blockId={initial.layoutSessionBlock.id}/>
       </AppRuntimeProvider>

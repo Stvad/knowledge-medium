@@ -19,10 +19,6 @@ import {
 } from '@/data/globalState.js'
 import { activePanelIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.js'
 import { usePropertyValue } from '@/hooks/block.js'
-import {
-  isBlockForceOpened,
-  renderVisibilityPolicyForBlockContext,
-} from '@/utils/renderVisibility.js'
 
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &
@@ -82,11 +78,7 @@ export function useShortcutSurfaceActivations(
   // replaces the old root-only "top-level forces open" boolean so
   // shortcut traversal can also respect forced-open reveal paths in
   // nested surfaces.
-  const renderVisibilityPolicy = useMemo(
-    () => renderVisibilityPolicyForBlockContext(blockContext, scopeRootId),
-    [blockContext, scopeRootId],
-  )
-  const scopeRootForcesOpen = isBlockForceOpened(renderVisibilityPolicy, scopeRootId)
+  const {renderVisibilityPolicy} = blockContext
 
   const runtime = useAppRuntime()
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
@@ -115,7 +107,6 @@ export function useShortcutSurfaceActivations(
       dependencies: {
         ...(activation.dependencies ?? {}),
         scopeRootId,
-        scopeRootForcesOpen,
         renderVisibilityPolicy,
       },
     })),
@@ -126,7 +117,6 @@ export function useShortcutSurfaceActivations(
       types,
       topLevelBlockId,
       scopeRootId,
-      scopeRootForcesOpen,
       renderVisibilityPolicy,
       blockContext,
       inFocus,

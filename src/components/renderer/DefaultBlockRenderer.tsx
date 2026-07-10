@@ -64,7 +64,6 @@ import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceAc
 import { useContinuousGestures } from '@/extensions/continuousGestures.js'
 import {
   getEffectiveChildrenVisibility,
-  renderVisibilityPolicyForBlockContext,
 } from '@/utils/renderVisibility.js'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
@@ -121,12 +120,8 @@ const BlockBullet = ({block}: { block: Block }) => {
   const {panelId} = blockContext
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
-  const renderVisibilityPolicy = renderVisibilityPolicyForBlockContext(
-    blockContext,
-    blockContext.scopeRootId,
-  )
   const effectiveVisibility = getEffectiveChildrenVisibility(
-    renderVisibilityPolicy,
+    blockContext.renderVisibilityPolicy,
     block.id,
     Boolean(isCollapsed),
   )
@@ -201,12 +196,8 @@ const ExpandButton = ({block}: { block: Block }) => {
   const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
   const isMobile = useIsMobile()
   const hasChildren = useHasChildren(block)
-  const renderVisibilityPolicy = renderVisibilityPolicyForBlockContext(
-    blockContext,
-    blockContext.scopeRootId,
-  )
   const effectiveVisibility = getEffectiveChildrenVisibility(
-    renderVisibilityPolicy,
+    blockContext.renderVisibilityPolicy,
     block.id,
     Boolean(isCollapsed),
   )
@@ -230,6 +221,7 @@ const ExpandButton = ({block}: { block: Block }) => {
   // is registered, before the synthetic click bubbles. The redundant
   // `onClick.stopPropagation` covers the desktop mouse path.
   const toggle = () => {
+    if (effectiveVisibility.reason !== 'stored') return
     void withMoveTransition(async () => {
       await setIsCollapsed(!isCollapsed)
     })
@@ -240,6 +232,10 @@ const ExpandButton = ({block}: { block: Block }) => {
       variant="ghost"
       size="sm"
       type="button"
+      disabled={effectiveVisibility.reason !== 'stored'}
+      title={effectiveVisibility.reason === 'stored'
+        ? undefined
+        : 'Visibility is controlled by this view'}
       data-block-interaction="ignore"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {
@@ -277,12 +273,8 @@ export const DefaultBlockLayout: BlockLayout = ({
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
   const blockContext = useBlockContext()
-  const renderVisibilityPolicy = renderVisibilityPolicyForBlockContext(
-    blockContext,
-    blockContext.scopeRootId,
-  )
   const effectiveVisibility = getEffectiveChildrenVisibility(
-    renderVisibilityPolicy,
+    blockContext.renderVisibilityPolicy,
     block.id,
     Boolean(isCollapsed),
   )
@@ -431,9 +423,9 @@ function BlockShell({
 }) {
   const runtime = useAppRuntime()
   const {block} = resolveContext
-  // Always defined in practice (the parent passes `useBlockContext()`); the
-  // `?? {}` keeps the type honest and returns the same stable object.
-  const blockContext = resolveContext.blockContext ?? {}
+  const renderScopeId = typeof resolveContext.blockContext?.renderScopeId === 'string'
+    ? resolveContext.blockContext.renderScopeId
+    : undefined
   const inEditMode = useInEditMode(block.id)
 
   const resolveBlockClickHandler = runtime.read(blockClickHandlersFacet)
@@ -448,16 +440,14 @@ function BlockShell({
   // rather than being hardcoded on the wrapper.
   const shellProps = useMemo<BlockShellProps>(() => ({
     'data-block-id': block.id,
-    'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
-      ? blockContext.renderScopeId
-      : undefined,
+    'data-render-scope-id': renderScopeId,
     'data-editing': inEditMode ? 'true' : 'false',
     tabIndex: 0,
     ref: shellRef,
     onClick: handleBlockClick
       ? (event) => { void handleBlockClick(event) }
       : undefined,
-  }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, shellRef])
+  }), [block.id, renderScopeId, inEditMode, handleBlockClick, shellRef])
 
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(

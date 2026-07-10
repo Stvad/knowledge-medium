@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
 import { BlockContextProvider } from '@/context/block'
+import { EMPTY_RENDER_VISIBILITY_POLICY } from '@/utils/renderVisibility'
 import { LazyBacklinkItem } from '../BacklinkEntry.tsx'
 
 const mocks = vi.hoisted(() => ({
@@ -38,7 +39,7 @@ vi.mock('@/components/BlockComponent.tsx', async () => {
       return (
         <span
           data-testid={`block-${blockId}`}
-          data-force-open={(context.forceOpenBlockIds ?? []).join(',')}
+          data-force-open={(context.renderVisibilityPolicy.forceOpenBlockIds ?? []).join(',')}
         >
           {blockId}
         </span>
@@ -63,7 +64,10 @@ describe('BacklinkEntry breadcrumbs', () => {
     const parent = {id: 'parent-block'} as Block
 
     render(
-      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
+      <BlockContextProvider initialValue={{
+        panelId: 'panel-a',
+        renderVisibilityPolicy: EMPTY_RENDER_VISIBILITY_POLICY,
+      }}>
         <LazyBacklinkItem block={source} initialParents={[parent]} scopeId="test:source-block" />
       </BlockContextProvider>,
     )
@@ -87,7 +91,10 @@ describe('BacklinkEntry breadcrumbs', () => {
     const parentB = {id: 'parent-b'} as Block
 
     render(
-      <BlockContextProvider initialValue={{panelId: 'panel-a'}}>
+      <BlockContextProvider initialValue={{
+        panelId: 'panel-a',
+        renderVisibilityPolicy: EMPTY_RENDER_VISIBILITY_POLICY,
+      }}>
         <LazyBacklinkItem
           block={source}
           initialParents={[root, parentA, parentB]}

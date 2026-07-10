@@ -262,9 +262,13 @@ describe('resolveDeps', () => {
     // supplied set must win wholesale: the embed's scope must not leak in, or
     // the swiped action would focus/open as if from that unrelated instance.
     const active = new Map([
-      [NM, {renderScopeId: 'embed-scope', scopeRootForcesOpen: false} as unknown as BaseShortcutDependencies],
+      [NM, {renderScopeId: 'embed-scope', renderVisibilityPolicy: {}} as unknown as BaseShortcutDependencies],
     ]) as ActiveContextsMap
-    const supplied = {block: {id: 'b'}, uiStateBlock: {id: 'p'}} as unknown as BaseShortcutDependencies
+    const supplied = {
+      block: {id: 'b'},
+      uiStateBlock: {id: 'p'},
+      renderVisibilityPolicy: {},
+    } as unknown as BaseShortcutDependencies
     const resolved = resolveDeps(action('block.swipe-right', NM), active, configs, supplied)
     expect(resolved).toBe(supplied)
     expect(resolved && 'renderScopeId' in resolved).toBe(false)

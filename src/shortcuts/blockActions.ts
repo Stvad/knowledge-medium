@@ -33,8 +33,6 @@ import {
   previousVisibleBlock,
 } from '@/utils/selection'
 import type { RenderVisibilityPolicy } from '@/types.js'
-import { forceOpenScopeRootPolicy } from '@/utils/renderVisibility.js'
-import { renderVisibilityPolicyForShortcutDeps } from '@/shortcuts/renderVisibilityPolicy.js'
 
 export interface BlockAction {
   id: string
@@ -131,11 +129,10 @@ export const extendSelectionDown = async (
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
-  renderVisibilityPolicy?: RenderVisibilityPolicy,
+  renderVisibilityPolicy: RenderVisibilityPolicy,
   clearEditing = false,
 ): Promise<boolean> => {
   if (!scopeRootId) return false
-  const policy = renderVisibilityPolicy ?? forceOpenScopeRootPolicy(scopeRootId)
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return false
@@ -146,13 +143,13 @@ export const extendSelectionDown = async (
   // meaningless, so leave the keystroke native (matches the old no-op there).
   if (!hasActiveSelection(uiStateBlock)) {
     if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, policy, clearEditing)
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, renderVisibilityPolicy, clearEditing)
   }
 
-  const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, policy)
+  const nextBlock = await nextVisibleBlock(repo.block(focusedId), scopeRootId, renderVisibilityPolicy)
   if (!nextBlock) return false
 
-  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, policy, clearEditing)
+  return extendSelection(nextBlock.id, uiStateBlock, repo, scopeRootId, renderVisibilityPolicy, clearEditing)
 }
 
 /** Mirror of {@link extendSelectionDown} for the previous visible block.
@@ -162,11 +159,10 @@ export const extendSelectionUp = async (
   uiStateBlock: Block,
   repo: Repo,
   scopeRootId: string | undefined,
-  renderVisibilityPolicy?: RenderVisibilityPolicy,
+  renderVisibilityPolicy: RenderVisibilityPolicy,
   clearEditing = false,
 ): Promise<boolean> => {
   if (!scopeRootId) return false
-  const policy = renderVisibilityPolicy ?? forceOpenScopeRootPolicy(scopeRootId)
 
   const focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId
   if (!focusedId) return false
@@ -174,13 +170,13 @@ export const extendSelectionUp = async (
   // Roam-style first press — see extendSelectionDown.
   if (!hasActiveSelection(uiStateBlock)) {
     if (focusedId === scopeRootId) return false
-    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, policy, clearEditing)
+    return extendSelection(focusedId, uiStateBlock, repo, scopeRootId, renderVisibilityPolicy, clearEditing)
   }
 
-  const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId, policy)
+  const prevBlock = await previousVisibleBlock(repo.block(focusedId), scopeRootId, renderVisibilityPolicy)
   if (!prevBlock) return false
 
-  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, policy, clearEditing)
+  return extendSelection(prevBlock.id, uiStateBlock, repo, scopeRootId, renderVisibilityPolicy, clearEditing)
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
@@ -434,7 +430,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_up',
     description: 'Extend selection up',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, renderVisibilityPolicyForShortcutDeps(deps))
+      await extendSelectionUp(deps.uiStateBlock, repo, deps.scopeRootId, deps.renderVisibilityPolicy)
     },
     defaultBinding: {
       keys: 'Shift+ArrowUp',
@@ -448,7 +444,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'extend_selection_down',
     description: 'Extend selection down',
     handler: async (deps: BlockShortcutDependencies) => {
-      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, renderVisibilityPolicyForShortcutDeps(deps))
+      await extendSelectionDown(deps.uiStateBlock, repo, deps.scopeRootId, deps.renderVisibilityPolicy)
     },
     defaultBinding: {
       keys: 'Shift+ArrowDown',

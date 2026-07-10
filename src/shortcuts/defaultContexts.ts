@@ -15,11 +15,29 @@ import { EditorView } from '@codemirror/view'
 const isBaseShortcutDependencies = (deps: unknown): deps is BaseShortcutDependencies =>
   typeof deps === 'object' && deps !== null && 'uiStateBlock' in deps && deps.uiStateBlock instanceof Block
 
+const hasRenderVisibilityPolicy = (
+  deps: unknown,
+): deps is {renderVisibilityPolicy: object} =>
+  typeof deps === 'object' &&
+  deps !== null &&
+  'renderVisibilityPolicy' in deps &&
+  typeof deps.renderVisibilityPolicy === 'object' &&
+  deps.renderVisibilityPolicy !== null
+
 const isBlockShortcutDependencies = (deps: unknown): deps is BlockShortcutDependencies =>
-  isBaseShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'block' in deps && deps.block instanceof Block
+  isBaseShortcutDependencies(deps) &&
+  hasRenderVisibilityPolicy(deps) &&
+  typeof deps === 'object' &&
+  deps !== null &&
+  'block' in deps &&
+  deps.block instanceof Block
 
 const isCodeMirrorEditModeDependencies = (deps: unknown): deps is CodeMirrorEditModeDependencies =>
-  isBaseShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'block' in deps && deps.block instanceof Block && 'editorView' in deps && deps.editorView instanceof EditorView
+  isBlockShortcutDependencies(deps) &&
+  typeof deps === 'object' &&
+  deps !== null &&
+  'editorView' in deps &&
+  deps.editorView instanceof EditorView
 
 const isPropertyEditingDependencies = (deps: unknown): deps is PropertyEditingDependencies =>
   isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'input' in deps && deps.input instanceof HTMLInputElement

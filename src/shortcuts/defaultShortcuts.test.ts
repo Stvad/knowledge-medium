@@ -225,6 +225,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current text', 4), // caret mid-text
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies
 
     const upTrigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
@@ -260,6 +261,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current', 0), // caret at block start
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies
 
     const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
@@ -301,6 +303,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('only'),
       editorView: codeMirrorEditorView('only', 0), // caret at start
       uiStateBlock,
+      renderVisibilityPolicy: {},
       scopeRootId: 'only', // focused block IS the surface root → no previous visible block
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
@@ -334,6 +337,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('last', 'last'.length), // caret at end
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -367,6 +371,7 @@ describe('default CodeMirror shortcuts', () => {
     await action.handler({
       block,
       uiStateBlock,
+      renderVisibilityPolicy: {},
     } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
@@ -380,6 +385,7 @@ describe('default CodeMirror shortcuts', () => {
       block,
       editorView: emptyEditorView(),
       uiStateBlock,
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(await isBlockDeleted(env.repo, 'panel')).toBe(true)
@@ -481,6 +487,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current', 'current'.length),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -511,6 +518,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -541,6 +549,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: emptyEditorView(),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -574,6 +583,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -611,6 +621,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current', 0),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).not.toHaveBeenCalled()
@@ -641,6 +652,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView,
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -679,6 +691,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current', 'current'.length),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -708,6 +721,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('parent ', 'parent '.length),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -748,6 +762,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('a', 'a'.length),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).not.toHaveBeenCalled()
@@ -776,6 +791,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current', 'current'.length),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).not.toHaveBeenCalled()
@@ -805,6 +821,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('current', 3),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).not.toHaveBeenCalled()
@@ -838,6 +855,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView,
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).not.toHaveBeenCalled()
@@ -867,6 +885,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('', 0),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).not.toHaveBeenCalled()
@@ -897,6 +916,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('', 0),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -927,6 +947,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView: codeMirrorEditorView('parent ', 'parent '.length),
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, trigger)
 
     expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
@@ -957,6 +978,7 @@ describe('default CodeMirror shortcuts', () => {
       editorView,
       uiStateBlock,
       scopeRootId: 'root',
+      renderVisibilityPolicy: {},
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     const rootChildren = await childIds('root')
@@ -998,6 +1020,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('shown'),
       editorView: codeMirrorEditorView('shown', 'shown'.length),
       uiStateBlock,
+      renderVisibilityPolicy: {},
       // The shown block is its own scope root (no children yet).
       scopeRootId: 'shown',
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
@@ -1028,6 +1051,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('shown'),
       editorView: codeMirrorEditorView('shown', 'shown'.length),
       uiStateBlock,
+      renderVisibilityPolicy: {},
       scopeRootId: 'shown',
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
@@ -1058,6 +1082,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('shown'),
       editorView,
       uiStateBlock,
+      renderVisibilityPolicy: {},
       scopeRootId: 'shown',
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
@@ -1091,6 +1116,7 @@ describe('default CodeMirror shortcuts', () => {
       block: env.repo.block('shown'),
       editorView: codeMirrorEditorView('shown', 0),
       uiStateBlock,
+      renderVisibilityPolicy: {},
       // 'shown' is the scope root even though it has a previous sibling
       // ('first') in the real tree — indenting would escape the surface.
       scopeRootId: 'shown',
@@ -1113,7 +1139,11 @@ describe('default CodeMirror shortcuts', () => {
 
     const {deleteBlock} = createSharedBlockActions({repo: env.repo})
     await deleteBlock.handler(
-      {block: env.repo.block('victim'), uiStateBlock: env.repo.block('ui')},
+      {
+        block: env.repo.block('victim'),
+        uiStateBlock: env.repo.block('ui'),
+        renderVisibilityPolicy: {},
+      },
       {preventDefault: vi.fn()} as unknown as ActionTrigger,
     )
 

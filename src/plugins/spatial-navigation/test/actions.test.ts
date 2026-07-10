@@ -144,13 +144,14 @@ describe('spatial navigation selection actions', () => {
       context: ActionContextTypes.NORMAL_MODE,
       handler: async deps => {
         fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId, {})
       },
     })
 
     await action.handler({
       block: env.repo.block('A'),
       uiStateBlock: panel,
+      renderVisibilityPolicy: {},
       renderScopeId: 'panel:A',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
 
@@ -178,13 +179,14 @@ describe('spatial navigation selection actions', () => {
       description: 'Extend selection down',
       context: ActionContextTypes.NORMAL_MODE,
       handler: async deps => {
-        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId, {})
       },
     })
 
     await action.handler({
       block: env.repo.block('A'),
       uiStateBlock: panel,
+      renderVisibilityPolicy: {},
       renderScopeId: 'panel:A',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
 
@@ -209,7 +211,7 @@ describe('spatial navigation selection actions', () => {
       context: ActionContextTypes.MULTI_SELECT_MODE,
       handler: async deps => {
         fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId, {})
       },
     })
 
@@ -245,7 +247,7 @@ describe('spatial navigation selection actions', () => {
       context: ActionContextTypes.MULTI_SELECT_MODE,
       handler: async deps => {
         fallback()
-        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId)
+        await extendSelectionDown(deps.uiStateBlock, env.repo, deps.scopeRootId, {})
       },
     })
 
@@ -341,6 +343,7 @@ describe('spatial navigation shift-click selection', () => {
     await action.handler({
       block: env.repo.block('A'),
       uiStateBlock: panel,
+      renderVisibilityPolicy: {},
       targetElement: otherItem,
     } as BlockPointerDependencies, {} as ActionTrigger)
 
@@ -368,6 +371,7 @@ describe('spatial navigation jump-to-edge actions', () => {
     await action.handler({
       block: env.repo.block('B'),
       uiStateBlock: panel,
+      renderVisibilityPolicy: {},
       renderScopeId: 'panel:B',
       scopeRootId: 'top',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
@@ -398,6 +402,7 @@ describe('spatial navigation jump-to-edge actions', () => {
     await action.handler({
       block: env.repo.block('A'),
       uiStateBlock: panel,
+      renderVisibilityPolicy: {},
       renderScopeId: 'panel:A',
       scopeRootId: 'top',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
@@ -425,6 +430,7 @@ describe('spatial navigation jump-to-edge actions', () => {
     await action.handler({
       block: env.repo.block('A'),
       uiStateBlock: panel,
+      renderVisibilityPolicy: {},
       renderScopeId: 'panel:A',
       scopeRootId: 'top',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
@@ -451,6 +457,7 @@ describe('spatial navigation vertical actions', () => {
     await action.handler({
       block: env.repo.block('X'),
       uiStateBlock: panel,
+      renderVisibilityPolicy: {},
       renderScopeId: 'panel:missing:X',
     } satisfies BlockShortcutDependencies, {} as ActionTrigger)
 
