@@ -14,12 +14,12 @@
   "author": "Vlad Sitalo",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stvad/knowledge-medium.git",
+    "url": "git+https://github.com/Stvad/knowledge-medium.git",
     "directory": "packages/agent-dispatch"
   },
-  "homepage": "https://github.com/stvad/knowledge-medium/tree/master/packages/agent-dispatch#readme",
+  "homepage": "https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-dispatch#readme",
   "bugs": {
-    "url": "https://github.com/stvad/knowledge-medium/issues"
+    "url": "https://github.com/Stvad/knowledge-medium/issues"
   },
   "publishConfig": {
     "access": "public",

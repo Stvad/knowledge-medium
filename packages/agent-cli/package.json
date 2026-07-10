@@ -13,12 +13,12 @@
   "author": "Vlad Sitalo",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/stvad/knowledge-medium.git",
+    "url": "git+https://github.com/Stvad/knowledge-medium.git",
     "directory": "packages/agent-cli"
   },
-  "homepage": "https://github.com/stvad/knowledge-medium/tree/master/packages/agent-cli#readme",
+  "homepage": "https://github.com/Stvad/knowledge-medium/tree/master/packages/agent-cli#readme",
   "bugs": {
-    "url": "https://github.com/stvad/knowledge-medium/issues"
+    "url": "https://github.com/Stvad/knowledge-medium/issues"
   },
   "publishConfig": {
     "access": "public",
