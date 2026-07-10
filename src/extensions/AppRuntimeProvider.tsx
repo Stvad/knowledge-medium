@@ -186,13 +186,19 @@ export function AppRuntimeProvider({
         // workspace, so a switch can't leak a stale buffer.)
       } catch (error) {
         console.error('Failed to resolve app runtime', error)
-        // A throw is NOT guaranteed to be followed by another resolve (unlike
-        // cancel), so close the batches explicitly — otherwise they'd stay
-        // open and every later report/clear would silently buffer into a dead
-        // map with no notify. abandonBatch leaves the last-known map intact
-        // (stale-on-error, which is better than blanking every prompt).
-        errorStore.abandonBatch()
-        approvalStore.abandonBatch()
+        // Close our batches on error so they don't stay open (a stuck batch
+        // would silently swallow every later report). BUT only when this is
+        // still the active resolve — same `!cancelled` guard as the commit
+        // path above. If we were superseded, a newer resolve has already
+        // opened its OWN batch on these shared stores; abandoning here would
+        // clobber it, dropping its buffered reports and no-op'ing its commit.
+        // (A cancelled resolve needn't clean up anyway: the newer resolve's
+        // beginBatch already replaced our buffer.) abandonBatch leaves the
+        // last-known map intact — stale-on-error beats blanking every prompt.
+        if (!cancelled) {
+          errorStore.abandonBatch()
+          approvalStore.abandonBatch()
+        }
       }
     })()
 
