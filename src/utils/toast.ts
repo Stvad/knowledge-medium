@@ -20,9 +20,21 @@
 import type React from 'react'
 import { toast as sonnerToast } from 'sonner'
 
+/** The click event handed to a toast action's `onClick`. On the primary
+ *  `action` button, call `preventDefault()` to KEEP the toast open after the
+ *  action fires — sonner otherwise dismisses the toast on the click. NOTE:
+ *  the `cancel` (secondary) button always dismisses; sonner ignores
+ *  `preventDefault` there. Handlers that don't need this can ignore the arg. */
+export interface ToastActionEvent {
+  preventDefault: () => void
+}
+
 export interface ToastAction {
   label: string
-  onClick: () => void
+  /** `event` is present when the toast lib invokes the handler on a real
+   *  click (optional so call sites/tests can invoke without one). Call
+   *  `event?.preventDefault()` to keep the toast open. */
+  onClick: (event?: ToastActionEvent) => void
 }
 
 export interface ToastOptions {
@@ -32,19 +44,27 @@ export interface ToastOptions {
    *  button inside the toast — used for "Open conflicting block",
    *  "Retry", etc. */
   action?: ToastAction
+  /** Optional secondary button, rendered alongside `action` (sonner's
+   *  `cancel` slot). Use for a "Dismiss"/"Not now" affordance next to a
+   *  primary action — e.g. the extension prompt's Enable + Dismiss pair. */
+  cancel?: ToastAction
   /** Stable id — passing the same id reuses the same toast slot
    *  (replaces existing content with the new message). Used by
    *  `showProgress` for in-place updates. */
   id?: string | number
 }
 
+// Pass `action` straight through (label + the handler, which receives the
+// toast lib's click event verbatim so it can preventDefault). Absent → no
+// button.
 const buildAction = (action: ToastAction | undefined) =>
-  action ? {label: action.label, onClick: () => action.onClick()} : undefined
+  action ? {label: action.label, onClick: action.onClick} : undefined
 
 export const showError = (message: string, opts: ToastOptions = {}): string | number =>
   sonnerToast.error(message, {
     duration: opts.duration ?? 6000,
     action: buildAction(opts.action),
+    cancel: buildAction(opts.cancel),
     id: opts.id,
   })
 
@@ -52,6 +72,7 @@ export const showInfo = (message: string, opts: ToastOptions = {}): string | num
   sonnerToast(message, {
     duration: opts.duration ?? 4000,
     action: buildAction(opts.action),
+    cancel: buildAction(opts.cancel),
     id: opts.id,
   })
 
@@ -59,6 +80,7 @@ export const showSuccess = (message: string, opts: ToastOptions = {}): string | 
   sonnerToast.success(message, {
     duration: opts.duration ?? 4000,
     action: buildAction(opts.action),
+    cancel: buildAction(opts.cancel),
     id: opts.id,
   })
 

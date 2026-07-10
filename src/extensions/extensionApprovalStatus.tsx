@@ -5,7 +5,7 @@ import {
   useMemo,
   useSyncExternalStore,
 } from 'react'
-import { CallbackSet } from '@/utils/callbackSet'
+import { BatchableKeyedStore } from '@/extensions/batchableKeyedStore.js'
 import type { ExtensionApprovalStatus } from '@/extensions/dynamicExtensions.js'
 
 export type { ExtensionApprovalStatus }
@@ -26,34 +26,15 @@ export type ExtensionApprovalStatusMap = ReadonlyMap<string, ExtensionApprovalSt
  * Mirrors `extensionLoadErrors.tsx`: the React provider is a thin wrapper
  * so the state machine is unit-testable without mounting a tree.
  */
-export class ExtensionApprovalStatusStore {
-  private statuses: ReadonlyMap<string, ExtensionApprovalStatus> = new Map()
-  private readonly listeners = new CallbackSet<[]>('ExtensionApprovalStatus')
-
-  getSnapshot = (): ExtensionApprovalStatusMap => this.statuses
-
-  subscribe = (listener: () => void): (() => void) => this.listeners.add(listener)
-
-  report = (blockId: string, status: ExtensionApprovalStatus): void => {
-    const next = new Map(this.statuses)
-    next.set(blockId, status)
-    this.statuses = next
-    this.listeners.notify()
+export class ExtensionApprovalStatusStore extends BatchableKeyedStore<ExtensionApprovalStatus> {
+  constructor() {
+    super('ExtensionApprovalStatus')
   }
 
-  clear = (blockId: string): void => {
-    if (!this.statuses.has(blockId)) return
-    const next = new Map(this.statuses)
-    next.delete(blockId)
-    this.statuses = next
-    this.listeners.notify()
-  }
+  report = (blockId: string, status: ExtensionApprovalStatus): void =>
+    this.set(blockId, status)
 
-  reset = (): void => {
-    if (this.statuses.size === 0) return
-    this.statuses = new Map()
-    this.listeners.notify()
-  }
+  clear = (blockId: string): void => this.delete(blockId)
 }
 
 interface ExtensionApprovalStatusContextValue {
@@ -99,4 +80,13 @@ export const useExtensionApprovalStatus = (
     () => store.getSnapshot().get(blockId),
     () => store.getSnapshot().get(blockId),
   )
+}
+
+/** Subscribe to the whole trust-status map (blockId → status). Used by the
+ *  global prompt surface, which needs every pending extension at once rather
+ *  than a single row. The store returns a referentially-stable Map between
+ *  changes, so this is safe to drive a `useMemo`/`useSyncExternalStore`. */
+export const useExtensionApprovalStatuses = (): ExtensionApprovalStatusMap => {
+  const store = useStore()
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
 }

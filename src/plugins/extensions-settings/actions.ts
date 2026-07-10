@@ -18,10 +18,15 @@ import {navigate} from '@/utils/navigation.js'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.js'
 import {extensionsPrefsType} from './config.ts'
 
+/** Stable id for the "Manage extensions" action. Exported so other surfaces
+ *  (the global extension-prompt indicator) can route to settings via
+ *  `runActionById` without hardcoding the string. */
+export const OPEN_EXTENSIONS_SETTINGS_ACTION_ID = 'open_extensions_settings'
+
 export const openExtensionsSettingsAction: ActionConfig<
   typeof ActionContextTypes.GLOBAL
 > = {
-  id: 'open_extensions_settings',
+  id: OPEN_EXTENSIONS_SETTINGS_ACTION_ID,
   description: 'Manage extensions',
   context: ActionContextTypes.GLOBAL,
   handler: async ({uiStateBlock}) => {

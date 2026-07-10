@@ -19,6 +19,7 @@ import {
   type Overrides,
 } from '@/facets/togglable.js'
 import {
+  extensionDisplayName,
   userExtensionShellToggle,
   userExtensionToggle,
 } from '@/extensions/extensionToggles.js'
@@ -31,16 +32,21 @@ export interface ExtensionLoadErrorReporter {
 
 /** Device-local trust status for a block the user has enabled (intent =
  *  true) whose code is NOT currently running as-authored. Surfaced to the
- *  settings UI so the user can act:
+ *  settings UI AND the global prompt surface (toast + status chip) so the
+ *  user can act:
  *    - `needs-approval`: enabled (here or on another device) but never
  *      approved on THIS device → "Enable here" reviews + approves the live
  *      source. Nothing runs until then.
  *    - `update-available`: approved, but the live source has drifted from
  *      the approved pin → the pinned version keeps running; "Update"
- *      re-approves the live source. */
+ *      re-approves the live source.
+ *
+ *  `name` is the block's display label (from block properties, no compile) —
+ *  carried on the status so a surface that only has the blockId (the global
+ *  toast) can name the extension without re-walking the toggle tree. */
 export type ExtensionApprovalStatus =
-  | {kind: 'needs-approval'; liveHash: string}
-  | {kind: 'update-available'; liveHash: string; approvedHash: string}
+  | {kind: 'needs-approval'; name: string; liveHash: string}
+  | {kind: 'update-available'; name: string; liveHash: string; approvedHash: string}
 
 export interface ExtensionApprovalStatusReporter {
   (blockId: string, status: ExtensionApprovalStatus): void
@@ -153,6 +159,7 @@ export const dynamicExtensionsExtension = (
     if (!approval) {
       approvalStatusReporter?.(block.id, {
         kind: 'needs-approval',
+        name: extensionDisplayName(block),
         liveHash: await hashExtensionSource(block.content),
       })
       return null
@@ -161,6 +168,7 @@ export const dynamicExtensionsExtension = (
     if (liveHash !== approval.sourceHash) {
       approvalStatusReporter?.(block.id, {
         kind: 'update-available',
+        name: extensionDisplayName(block),
         liveHash,
         approvedHash: approval.sourceHash,
       })

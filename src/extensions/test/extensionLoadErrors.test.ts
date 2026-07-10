@@ -91,6 +91,10 @@ describe('ExtensionLoadErrorStore', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 
+  // Batch mode (beginBatch/commitBatch/abandonBatch) is the shared base's;
+  // its mechanics are covered once in batchableKeyedStore.test.ts. The tests
+  // above exercise this subclass's reportError/clearError/reset aliases.
+
   it('subscribe returns an unsubscribe that stops further notifications', () => {
     const store = new ExtensionLoadErrorStore()
     const listener = vi.fn()
