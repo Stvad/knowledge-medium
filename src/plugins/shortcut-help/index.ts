@@ -20,30 +20,42 @@ export const shortcutHelpMount: AppMountContribution = {
   component: ShortcutHelpOverlay,
 }
 
-/** `?` opens the overlay. Both spellings are bound because tinykeys
+/** `?` opens the overlay. Three spellings are bound because tinykeys
  *  modifier-matching is exact-set: `Shift+?` is what a US-style layout
  *  produces (Shift+/ reports key '?'), while layouts with an unshifted
- *  `?` deliver it bare.
+ *  `?` deliver it bare. `$mod+/` is the edit-mode-friendly variant — the
+ *  two bare spellings are declined inside a text field (see below), so a
+ *  primary-modifier chord is the only way to reach the overlay without
+ *  first leaving the note you're editing.
  *
- *  The handler DECLINES (sync `false`) when the chord arrives from an
- *  editable target. The coordinator's default typing filter alone does
- *  not cover this: an active context's `eventFilter` (EDIT_MODE_CM opts
- *  in every keydown inside `.cm-editor`) green-lights the WHOLE dispatch,
- *  so without the decline, typing `?` in a note would open the overlay
- *  and eat the character. Declining falls through to no candidate, the
- *  event keeps its default, and the `?` is typed. From edit mode the
- *  overlay is reached via the command palette. */
+ *  The handler DECLINES (sync `false`) when a BARE `?` (no primary
+ *  modifier) arrives from an editable target. The coordinator's default
+ *  typing filter alone does not cover this: an active context's
+ *  `eventFilter` (EDIT_MODE_CM opts in every keydown inside `.cm-editor`)
+ *  green-lights the WHOLE dispatch, so without the decline, typing `?` in
+ *  a note would open the overlay and eat the character. Declining falls
+ *  through to no candidate, the event keeps its default, and the `?` is
+ *  typed. `$mod+/` holds a primary modifier, so it is a deliberate
+ *  command rather than typed text — it opens the overlay from edit mode
+ *  too. */
 export const shortcutHelpAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   id: SHORTCUT_HELP_ACTION_ID,
   description: 'Show keyboard shortcuts',
   context: ActionContextTypes.GLOBAL,
   icon: Keyboard,
   handler: (_deps, trigger) => {
-    if (trigger instanceof KeyboardEvent && hasEditableTarget(trigger)) return false
+    if (
+      trigger instanceof KeyboardEvent &&
+      hasEditableTarget(trigger) &&
+      !trigger.ctrlKey &&
+      !trigger.metaKey
+    ) {
+      return false
+    }
     shortcutHelpToggle.toggle()
   },
   defaultBinding: {
-    keys: ['Shift+?', '?'],
+    keys: ['Shift+?', '?', '$mod+/'],
   },
 }
 

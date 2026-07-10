@@ -11,18 +11,14 @@ import { Button } from '@/components/ui/button.js'
 import { Kbd } from '@/components/ui/kbd'
 import { useEditModeYieldKeepalive } from '@/components/useEditModeYieldKeepalive.js'
 import { useRepo } from '@/context/repo.js'
-import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.js'
-import {
-  getActionsBeforeKeybindingOverrides,
-  getEffectiveActions,
-} from '@/shortcuts/effectiveActions.js'
+import { getActionsBeforeKeybindingOverrides } from '@/shortcuts/effectiveActions.js'
 import type { KeybindingConflict } from '@/shortcuts/keybindingConflicts.js'
 import {
   KEYBINDING_OVERRIDE_USER_SOURCE,
   keybindingOverridesFacet,
 } from '@/shortcuts/keybindingOverrides.js'
-import { contextConfigsByTypeFrom, runActionById } from '@/shortcuts/runAction.js'
+import { runActionById } from '@/shortcuts/runAction.js'
+import { useActionDiscovery } from '@/shortcuts/useActionDiscovery.js'
 import type { ActionConfig, ActionContextType } from '@/shortcuts/types.js'
 import { openKeybindingsSettingsAction } from '@/plugins/keybindings-settings/actions.ts'
 import { overrideEntryKey, type StoredKeybindingOverride } from '@/plugins/keybindings-settings/config.ts'
@@ -336,9 +332,12 @@ export function ShortcutHelpOverlay() {
     shortcutHelpToggle.isOpen,
     shortcutHelpToggle.isOpen,
   )
-  const runtime = useAppRuntime()
+  // The palette and this overlay share one action-discovery pass
+  // (effective actions + active contexts + effective bindings). It is
+  // override-reactive, so `actions` re-resolves after an in-place remap and
+  // the model below rebuilds with it.
+  const {runtime, active, actions, contextConfigsByType} = useActionDiscovery()
   const repo = useRepo()
-  const active = useActiveContextsState()
 
   // Same edit-mode keepalive dance as the command palette: without it,
   // opening from edit mode would exit edit mode and deactivate
@@ -346,10 +345,11 @@ export function ShortcutHelpOverlay() {
   // can I press right now".
   useEditModeYieldKeepalive(open)
 
-  // Keybinding overrides are pushed in place via setRuntimeContributions
-  // (no runtime identity change), so subscribe to the facet's change
-  // listener — same reason HotkeyReconciler does — or the overlay would
-  // keep listing/matching stale chords after a mid-open remap.
+  // `useActionDiscovery` handles override-reactivity for the action list;
+  // this subscription drives ONLY `overriddenKeys` below, which reads the
+  // raw override facet directly to find the user-source rows (overrides are
+  // pushed in place via setRuntimeContributions, so a memo keyed on `runtime`
+  // alone would miss a mid-open remap).
   const [overridesGeneration, setOverridesGeneration] = useState(0)
   useEffect(() => {
     return runtime.onFacetChange(keybindingOverridesFacet.id, () => {
@@ -360,13 +360,11 @@ export function ShortcutHelpOverlay() {
   const model = useMemo(() => {
     if (!open) return null
     return buildShortcutHelpModel(
-      getEffectiveActions(runtime),
-      {active, contextConfigsByType: contextConfigsByTypeFrom(runtime)},
+      actions,
+      {active, contextConfigsByType},
       actionSourcesFromRuntime(runtime),
     )
-    // overridesGeneration re-runs the memo on in-place override updates.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, runtime, active, overridesGeneration])
+  }, [open, runtime, active, actions, contextConfigsByType])
 
   // Which (context, actionId) rows carry a user override — drives the
   // "Reset to default" affordance. Only user-source overrides count; a

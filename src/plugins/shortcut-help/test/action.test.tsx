@@ -32,6 +32,22 @@ describe('shortcutHelpAction', () => {
     expect(shortcutHelpToggle.isOpen()).toBe(false)
   })
 
+  it('opens from an editable target when a primary modifier is held ($mod+/)', () => {
+    // The edit-mode-friendly chord holds Ctrl/Meta, so it is a deliberate
+    // command rather than a typed character — it must open the overlay even
+    // inside a text field, unlike the bare `?` declined above.
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    const ctrl = keydownOn(input, {key: '/', ctrlKey: true})
+    expect(shortcutHelpAction.handler({} as never, ctrl)).not.toBe(false)
+    expect(shortcutHelpToggle.isOpen()).toBe(true)
+
+    shortcutHelpToggle.close()
+    const meta = keydownOn(input, {key: '/', metaKey: true})
+    expect(shortcutHelpAction.handler({} as never, meta)).not.toBe(false)
+    expect(shortcutHelpToggle.isOpen()).toBe(true)
+  })
+
   it('toggles from non-editable keyboard targets and imperative triggers', () => {
     const event = keydownOn(document.body, {key: '?', shiftKey: true})
     shortcutHelpAction.handler({} as never, event)
