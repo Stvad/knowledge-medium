@@ -8,7 +8,7 @@ import {
   primeLocalWorkspaceAndMember,
 } from '@/data/workspaces.js'
 import { recallRememberedWorkspace } from '@/utils/lastWorkspace.js'
-import { setModePin } from '@/sync/keys/modePin.js'
+import { confirmPlaintextForSession, setModePin } from '@/sync/keys/modePin.js'
 
 // Resolved-workspace bundle. `freshlyCreated` is true only when this run
 // inserted a brand-new personal workspace via ensure_personal_workspace;
@@ -28,7 +28,11 @@ const pinPlaintextBestEffort = (userId: string, workspaceId: string): void => {
   try {
     setModePin(userId, workspaceId, 'plaintext')
   } catch (err) {
-    console.warn(`[App] plaintext pin failed for ${workspaceId} (will quarantine on next load)`, err)
+    console.warn(
+      `[App] plaintext pin failed for ${workspaceId}; confirming plaintext for this session`,
+      err,
+    )
+    confirmPlaintextForSession(userId, workspaceId)
   }
 }
 
