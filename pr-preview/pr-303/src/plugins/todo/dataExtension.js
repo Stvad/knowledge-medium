@@ -1,8 +1,2 @@
-import { propertySchemasFacet, typesFacet } from "../../data/facets.js";
-import { roamTodoStateProp, todoType } from "./schema.js";
-//#region src/plugins/todo/dataExtension.ts
-var todoDataExtension = [propertySchemasFacet.of(roamTodoStateProp, { source: "todo" }), typesFacet.of(todoType, { source: "todo" })];
-//#endregion
-export { todoDataExtension };
-
+import{propertySchemasFacet as e,typesFacet as t}from"../../data/facets.js";import{roamTodoStateProp as n,todoType as r}from"./schema.js";var i=[e.of(n,{source:`todo`}),t.of(r,{source:`todo`})];export{i as todoDataExtension};
 //# sourceMappingURL=dataExtension.js.map

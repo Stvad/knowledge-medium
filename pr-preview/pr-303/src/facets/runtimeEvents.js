@@ -1,9 +1,2 @@
-//#region src/facets/runtimeEvents.ts
-var appRuntimeUpdateEvent = "app-runtime-update";
-var refreshAppRuntime = () => {
-	window.dispatchEvent(new CustomEvent(appRuntimeUpdateEvent, { detail: (/* @__PURE__ */ new Date()).toISOString() }));
-};
-//#endregion
-export { appRuntimeUpdateEvent, refreshAppRuntime };
-
+var e=`app-runtime-update`,t=()=>{window.dispatchEvent(new CustomEvent(e,{detail:new Date().toISOString()}))};export{e as appRuntimeUpdateEvent,t as refreshAppRuntime};
 //# sourceMappingURL=runtimeEvents.js.map

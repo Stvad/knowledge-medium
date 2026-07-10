@@ -1,11 +1,2 @@
-import { createToggleStore } from "../../utils/toggleStore.js";
-//#region src/plugins/command-palette/toggleStore.ts
-/** Open/closed state for the command palette. The mounted
-*  `CommandPalette` surface reads it via `useSyncExternalStore`; the
-*  actions and header button flip it. External callers reach it through
-*  `runActionById(COMMAND_PALETTE_ACTION_ID)`. */
-var commandPaletteToggle = createToggleStore("command-palette");
-//#endregion
-export { commandPaletteToggle };
-
+import{createToggleStore as e}from"../../utils/toggleStore.js";var t=e(`command-palette`);export{t as commandPaletteToggle};
 //# sourceMappingURL=toggleStore.js.map

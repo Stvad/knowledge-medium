@@ -1,15 +1,2 @@
-import { propertySchemasFacet } from "../../data/facets.js";
-import { systemToggle } from "../../facets/togglable.js";
-import { blockChildrenFooterFacet } from "../../extensions/blockInteraction.js";
-import { backlinksViewProp } from "./prop.js";
-import { backlinksViewFooterContribution } from "./BacklinksViewSection.js";
-//#region src/plugins/backlinks-view/index.ts
-var backlinksViewPlugin = systemToggle({
-	id: "system:backlinks-view",
-	name: "Backlinks view",
-	description: "Picker that switches each block between the flat and grouped backlinks renderings."
-}).of([propertySchemasFacet.of(backlinksViewProp, { source: "backlinks-view" }), blockChildrenFooterFacet.of(backlinksViewFooterContribution, { source: "backlinks-view" })]);
-//#endregion
-export { backlinksViewPlugin };
-
+import{propertySchemasFacet as e}from"../../data/facets.js";import{systemToggle as t}from"../../facets/togglable.js";import{blockChildrenFooterFacet as n}from"../../extensions/blockInteraction.js";import{backlinksViewProp as r}from"./prop.js";import{backlinksViewFooterContribution as i}from"./BacklinksViewSection.js";var a=t({id:`system:backlinks-view`,name:`Backlinks view`,description:`Picker that switches each block between the flat and grouped backlinks renderings.`}).of([e.of(r,{source:`backlinks-view`}),n.of(i,{source:`backlinks-view`})]);export{a as backlinksViewPlugin};
 //# sourceMappingURL=index.js.map

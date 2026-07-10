@@ -1,12 +1,2 @@
-import { defineFacet, isFunction } from "../facets/facet.js";
-//#region src/editor/codeMirrorExtensions.ts
-var codeMirrorExtensionsFacet = defineFacet({
-	id: "core.codemirror-extensions",
-	combine: (contributions) => (context) => contributions.flatMap((contribution) => contribution(context)),
-	empty: () => () => [],
-	validate: isFunction
-});
-//#endregion
-export { codeMirrorExtensionsFacet };
-
+import{defineFacet as e,isFunction as t}from"../facets/facet.js";var n=e({id:`core.codemirror-extensions`,combine:e=>t=>e.flatMap(e=>e(t)),empty:()=>()=>[],validate:t});export{n as codeMirrorExtensionsFacet};
 //# sourceMappingURL=codeMirrorExtensions.js.map

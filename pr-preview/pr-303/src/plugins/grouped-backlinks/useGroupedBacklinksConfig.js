@@ -1,27 +1,2 @@
-import { groupedBacklinksDefaultsProp, groupedBacklinksPrefsType, mergeGroupedBacklinksConfig, selectGroupedBacklinksOverrides } from "./config.js";
-import { useHandle } from "../../hooks/block.js";
-import { usePluginPrefsProperty } from "../../data/globalState.js";
-import { c } from "react/compiler-runtime";
-//#region src/plugins/grouped-backlinks/useGroupedBacklinksConfig.ts
-var useGroupedBacklinksConfig = (block) => {
-	const $ = c(4);
-	const [defaults] = usePluginPrefsProperty(groupedBacklinksPrefsType, groupedBacklinksDefaultsProp);
-	let t0;
-	if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
-		t0 = { selector: selectGroupedBacklinksOverrides };
-		$[0] = t0;
-	} else t0 = $[0];
-	const overrides = useHandle(block, t0);
-	let t1;
-	if ($[1] !== defaults || $[2] !== overrides) {
-		t1 = mergeGroupedBacklinksConfig(defaults, overrides);
-		$[1] = defaults;
-		$[2] = overrides;
-		$[3] = t1;
-	} else t1 = $[3];
-	return t1;
-};
-//#endregion
-export { useGroupedBacklinksConfig };
-
+import{groupedBacklinksDefaultsProp as e,groupedBacklinksPrefsType as t,mergeGroupedBacklinksConfig as n,selectGroupedBacklinksOverrides as r}from"./config.js";import{useHandle as i}from"../../hooks/block.js";import{usePluginPrefsProperty as a}from"../../data/globalState.js";import{c as o}from"react/compiler-runtime";var s=s=>{let c=o(4),[l]=a(t,e),u;c[0]===Symbol.for(`react.memo_cache_sentinel`)?(u={selector:r},c[0]=u):u=c[0];let d=i(s,u),f;return c[1]!==l||c[2]!==d?(f=n(l,d),c[1]=l,c[2]=d,c[3]=f):f=c[3],f};export{s as useGroupedBacklinksConfig};
 //# sourceMappingURL=useGroupedBacklinksConfig.js.map

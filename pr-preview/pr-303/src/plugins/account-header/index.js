@@ -1,21 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { headerItemsFacet } from "../../extensions/core.js";
-import { AccountHeaderItem } from "./AccountHeaderItem.js";
-//#region src/plugins/account-header/index.ts
-var accountHeaderItem = {
-	id: "account-header.user-menu",
-	region: "end",
-	component: AccountHeaderItem
-};
-var accountHeaderPlugin = systemToggle({
-	id: "system:account-header",
-	name: "Account header",
-	description: "User identity badge and logout entry in the header."
-}).of([headerItemsFacet.of(accountHeaderItem, {
-	source: "account-header",
-	precedence: 50
-})]);
-//#endregion
-export { AccountHeaderItem, accountHeaderItem, accountHeaderPlugin };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{headerItemsFacet as t}from"../../extensions/core.js";import{AccountHeaderItem as n}from"./AccountHeaderItem.js";var r={id:`account-header.user-menu`,region:`end`,component:n},i=e({id:`system:account-header`,name:`Account header`,description:`User identity badge and logout entry in the header.`}).of([t.of(r,{source:`account-header`,precedence:50})]);export{n as AccountHeaderItem,r as accountHeaderItem,i as accountHeaderPlugin};
 //# sourceMappingURL=index.js.map

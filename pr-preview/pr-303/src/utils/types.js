@@ -1,8 +1,2 @@
-//#region src/utils/types.ts
-function isNotNullish(value) {
-	return value !== null && value !== void 0;
-}
-//#endregion
-export { isNotNullish };
-
+function e(e){return e!=null}export{e as isNotNullish};
 //# sourceMappingURL=types.js.map

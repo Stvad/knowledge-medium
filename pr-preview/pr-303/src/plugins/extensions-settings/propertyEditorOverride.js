@@ -1,16 +1,2 @@
-import { definePropertyEditorOverride } from "../../data/api/propertySchema.js";
-import "../../data/api/index.js";
-import { extensionsOverridesProp } from "./config.js";
-import { ExtensionsOverridesEditor } from "./ExtensionsOverridesEditor.js";
-import { createElement } from "react";
-//#region src/plugins/extensions-settings/propertyEditorOverride.ts
-var ExtensionsOverridesEditorEntry = (props) => createElement(ExtensionsOverridesEditor, props);
-var extensionsOverridesUi = definePropertyEditorOverride({
-	name: extensionsOverridesProp.name,
-	label: "Extensions",
-	Editor: ExtensionsOverridesEditorEntry
-});
-//#endregion
-export { extensionsOverridesUi };
-
+import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{extensionsOverridesProp as t}from"./config.js";import{ExtensionsOverridesEditor as n}from"./ExtensionsOverridesEditor.js";import{createElement as r}from"react";var i=e({name:t.name,label:`Extensions`,Editor:e=>r(n,e)});export{i as extensionsOverridesUi};
 //# sourceMappingURL=propertyEditorOverride.js.map

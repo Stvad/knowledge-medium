@@ -1,6 +1,2 @@
-//#region src/plugins/breadcrumbs/breadcrumbPreview.ts
-var getBreadcrumbContentPreview = (content) => content.match(/^[^\r\n]*/)?.[0] ?? "";
-//#endregion
-export { getBreadcrumbContentPreview };
-
+var e=e=>e.match(/^[^\r\n]*/)?.[0]??``;export{e as getBreadcrumbContentPreview};
 //# sourceMappingURL=breadcrumbPreview.js.map

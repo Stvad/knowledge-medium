@@ -1,53 +1,5 @@
-import { actionsFacet } from "../../extensions/core.js";
-import { ActionContextTypes } from "../../shortcuts/types.js";
-import { FALLBACK_THEME, applyTheme, setThemeRegistry, themesFacet } from "./theme.js";
-//#region src/plugins/theme-toggle/effect.ts
-var STYLE_ELEMENT_ATTR = "data-theme-plugin-managed";
-/** Runtime source key for the per-theme apply actions. Held in a
-*  dedicated bucket so push-and-replace keeps the action list in sync
-*  with the facet rather than appending duplicates. */
-var APPLY_ACTIONS_SOURCE = "theme-toggle.apply-actions";
-var toDefinition = (c) => ({
-	id: c.id,
-	label: c.label,
-	mode: c.mode
-});
-var buildThemeRule = (c) => {
-	const lines = Object.entries(c.tokens).map(([k, v]) => `  --${k}: ${v};`).join("\n");
-	return `[data-theme="${c.id}"] {\n${lines}\n}`;
-};
-var buildThemeStylesheet = (contributions) => contributions.map(buildThemeRule).join("\n\n");
-var buildApplyThemeAction = (theme) => ({
-	id: `theme-toggle.apply.${theme.id}`,
-	description: `Theme: ${theme.label}`,
-	context: ActionContextTypes.GLOBAL,
-	handler: () => {
-		applyTheme(theme.id);
-	}
-});
-var themeStyleSyncEffect = {
-	id: "theme-toggle.style-sync",
-	start: ({ runtime }) => {
-		const styleEl = document.createElement("style");
-		styleEl.setAttribute(STYLE_ELEMENT_ATTR, "");
-		document.head.appendChild(styleEl);
-		const apply = () => {
-			const contributions = runtime.read(themesFacet);
-			styleEl.textContent = buildThemeStylesheet(contributions);
-			setThemeRegistry(contributions.length === 0 ? [FALLBACK_THEME] : contributions.map(toDefinition));
-			runtime.setRuntimeContributions(actionsFacet, APPLY_ACTIONS_SOURCE, contributions.map(buildApplyThemeAction));
-		};
-		apply();
-		const unsubscribe = runtime.onFacetChange(themesFacet.id, apply);
-		return () => {
-			unsubscribe();
-			styleEl.remove();
-			setThemeRegistry([FALLBACK_THEME]);
-			runtime.setRuntimeContributions(actionsFacet, APPLY_ACTIONS_SOURCE, []);
-		};
-	}
-};
-//#endregion
-export { buildApplyThemeAction, buildThemeRule, buildThemeStylesheet, themeStyleSyncEffect };
+import{actionsFacet as e}from"../../extensions/core.js";import{ActionContextTypes as t}from"../../shortcuts/types.js";import{FALLBACK_THEME as n,applyTheme as r,setThemeRegistry as i,themesFacet as a}from"./theme.js";var o=`data-theme-plugin-managed`,s=`theme-toggle.apply-actions`,c=e=>({id:e.id,label:e.label,mode:e.mode}),l=e=>{let t=Object.entries(e.tokens).map(([e,t])=>`  --${e}: ${t};`).join(`
+`);return`[data-theme="${e.id}"] {\n${t}\n}`},u=e=>e.map(l).join(`
 
+`),d=e=>({id:`theme-toggle.apply.${e.id}`,description:`Theme: ${e.label}`,context:t.GLOBAL,handler:()=>{r(e.id)}}),f={id:`theme-toggle.style-sync`,start:({runtime:t})=>{let r=document.createElement(`style`);r.setAttribute(o,``),document.head.appendChild(r);let l=()=>{let o=t.read(a);r.textContent=u(o),i(o.length===0?[n]:o.map(c)),t.setRuntimeContributions(e,s,o.map(d))};l();let f=t.onFacetChange(a.id,l);return()=>{f(),r.remove(),i([n]),t.setRuntimeContributions(e,s,[])}}};export{d as buildApplyThemeAction,l as buildThemeRule,u as buildThemeStylesheet,f as themeStyleSyncEffect};
 //# sourceMappingURL=effect.js.map

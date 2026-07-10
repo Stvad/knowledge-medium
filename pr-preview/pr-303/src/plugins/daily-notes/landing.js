@@ -1,9 +1,2 @@
-import { getOrCreateDailyNote, todayIso } from "./dailyNotes.js";
-//#region src/plugins/daily-notes/landing.ts
-var todayDailyNoteLanding = async ({ repo, workspaceId }) => {
-	return (await getOrCreateDailyNote(repo, workspaceId, todayIso())).id;
-};
-//#endregion
-export { todayDailyNoteLanding };
-
+import{getOrCreateDailyNote as e,todayIso as t}from"./dailyNotes.js";var n=async({repo:n,workspaceId:r})=>(await e(n,r,t())).id;export{n as todayDailyNoteLanding};
 //# sourceMappingURL=landing.js.map
