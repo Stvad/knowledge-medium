@@ -46,7 +46,44 @@ describe('agentResumeCommandForProperties', () => {
     expect(agentResumeCommandForProperties({[AGENT_PROPS.session]: 'sess_123-abc'}))
       .toBe('claude --resume sess_123-abc')
     expect(agentResumeCommandForProperties({[AGENT_PROPS.session]: 'codex:thread_123-abc'}))
-      .toBe('codex resume thread_123-abc')
+      .toBe('codex resume --include-non-interactive \\\n  thread_123-abc')
+  })
+
+  it('adds persisted non-authority Codex runner context when available', () => {
+    expect(agentResumeCommandForProperties({
+      [AGENT_PROPS.session]: 'codex:thread_123-abc',
+      [AGENT_PROPS.resumeOptions]: {
+        version: 1,
+        executor: 'codex',
+        cwd: '/Users/vlad/project with spaces',
+        model: 'gpt-5-codex',
+      },
+    })).toBe([
+      'codex resume --include-non-interactive',
+      '  -m gpt-5-codex',
+      '  thread_123-abc',
+    ].join(' \\\n'))
+  })
+
+  it('ignores graph-stored Codex authority flags when building the copied command', () => {
+    expect(agentResumeCommandForProperties({
+      [AGENT_PROPS.session]: 'codex:thread_123-abc',
+      [AGENT_PROPS.resumeOptions]: {
+        version: 1,
+        executor: 'codex',
+        cwd: '/',
+        codex: {
+          sandbox: 'danger-full-access',
+          addDirs: ['/'],
+          networkAccess: true,
+          approvalPolicy: 'on-request',
+          approvalsReviewer: 'auto_review',
+        },
+      },
+    })).toBe([
+      'codex resume --include-non-interactive',
+      '  thread_123-abc',
+    ].join(' \\\n'))
   })
 
   it('rejects malformed session ids instead of copying option-shaped argv', () => {
@@ -65,7 +102,7 @@ describe('copyAgentResumeCommand', () => {
 
     await copyAgentResumeCommand(block)
 
-    expect(writeText).toHaveBeenCalledWith('codex resume thread-1')
+    expect(writeText).toHaveBeenCalledWith('codex resume --include-non-interactive \\\n  thread-1')
     expect(toast.showSuccess).toHaveBeenCalledWith('Agent resume command copied.')
     expect(toast.showError).not.toHaveBeenCalled()
   })

@@ -23,17 +23,63 @@ const CODEX_SESSION_PREFIX = 'codex:'
 const SESSION_ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/
 
 type Properties = Record<string, unknown> | undefined
+type ResumeExecutor = 'claude' | 'codex'
 
-export const agentResumeCommandForProperties = (properties: Properties): string | null => {
-  const stored = properties?.[AGENT_PROPS.session]
+interface ParsedResumeSession {
+  executor: ResumeExecutor
+  id: string
+}
+
+interface ResumeOptions {
+  executor: ResumeExecutor
+  model?: string
+}
+
+const shellQuote = (value: string): string => {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value
+  return `'${value.replace(/'/g, "'\\''")}'`
+}
+
+const formatCodexCommand = (lines: string[]): string =>
+  lines.length === 1 ? lines[0]! : lines.join(' \\\n')
+
+const parseSession = (stored: unknown): ParsedResumeSession | null => {
   if (typeof stored !== 'string' || stored.length === 0) return null
-
   if (stored.startsWith(CODEX_SESSION_PREFIX)) {
     const threadId = stored.slice(CODEX_SESSION_PREFIX.length)
-    return SESSION_ID_SHAPE.test(threadId) ? `codex resume ${threadId}` : null
+    return SESSION_ID_SHAPE.test(threadId) ? {executor: 'codex', id: threadId} : null
   }
+  return SESSION_ID_SHAPE.test(stored) ? {executor: 'claude', id: stored} : null
+}
 
-  return SESSION_ID_SHAPE.test(stored) ? `claude --resume ${stored}` : null
+const stringValue = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.length > 0 ? value : undefined
+
+const parseResumeOptions = (raw: unknown, executor: ResumeExecutor): ResumeOptions | null => {
+  if (typeof raw !== 'object' || raw === null) return null
+  const record = raw as Record<string, unknown>
+  if (record.version !== 1 || record.executor !== executor) return null
+  const model = stringValue(record.model)
+  return {executor, ...(model ? {model} : {})}
+}
+
+const buildCodexResumeCommand = (threadId: string, options: ResumeOptions | null): string => {
+  const lines = ['codex resume --include-non-interactive']
+  if (options?.model) lines.push(`  -m ${shellQuote(options.model)}`)
+  lines.push(`  ${shellQuote(threadId)}`)
+  return formatCodexCommand(lines)
+}
+
+export const agentResumeCommandForProperties = (properties: Properties): string | null => {
+  const session = parseSession(properties?.[AGENT_PROPS.session])
+  if (!session) return null
+
+  const options = parseResumeOptions(properties?.[AGENT_PROPS.resumeOptions], session.executor)
+  if (session.executor === 'codex') return buildCodexResumeCommand(session.id, options)
+
+  const parts = ['claude', '--resume', shellQuote(session.id)]
+  if (options?.model) parts.push('--model', shellQuote(options.model))
+  return parts.join(' ')
 }
 
 export const copyAgentResumeCommand = async (block: Block): Promise<void> => {

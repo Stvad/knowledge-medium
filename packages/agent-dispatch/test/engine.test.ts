@@ -58,6 +58,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
         ...(args.watcher !== undefined ? {[PROPS.watcher]: args.watcher} : {}),
         ...(args.executor !== undefined ? {[PROPS.executor]: args.executor} : {}),
         ...(args.session ? {[PROPS.session]: args.session} : {}),
+        ...(args.resumeOptions ? {[PROPS.resumeOptions]: args.resumeOptions} : {}),
         ...(args.attempts !== undefined ? {[PROPS.attempts]: args.attempts} : {}),
         ...(args.error !== undefined ? {[PROPS.error]: args.error ?? ''} : {}),
         ...(args.activity !== undefined ? {[PROPS.activity]: args.activity ?? ''} : {}),
@@ -78,9 +79,13 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(id, target)
       activityWrites.push({id, label})
     },
-    setSession: async (id, session) => {
+    setSession: async (id, session, resumeOptions) => {
       const target = blocks.get(id) ?? {id, properties: {}}
-      target.properties = {...target.properties, [PROPS.session]: session}
+      target.properties = {
+        ...target.properties,
+        [PROPS.session]: session,
+        ...(resumeOptions ? {[PROPS.resumeOptions]: resumeOptions} : {}),
+      }
       blocks.set(id, target)
       sessionWrites.push({id, session})
     },
@@ -1020,6 +1025,46 @@ describe('mention lifecycle', () => {
       codexNetworkAccess: true,
       codexApprovalPolicy: 'on-request',
       codexApprovalsReviewer: 'auto_review',
+    })
+  })
+
+  it('persists codex resume options next to the executor-scoped session id', async () => {
+    const {graph, blocks} = fakeGraph({
+      backlinks: [{id: 'b-1'}],
+      blocks: {'b-1': {content: '[[claude]] via codex'}},
+    })
+    const runTask = vi.fn(async () => okRun({sessionId: 'thread-1'}))
+    const engine = engineWith({
+      graph,
+      runTask,
+      config: parseConfig({
+        watchers: [{
+          kind: 'backlinks',
+          name: 'mentions',
+          target: 'claude',
+          quietMs: 0,
+          runner: {
+            executor: 'codex',
+            cwd: '/Users/vlad/project',
+            model: 'gpt-5-codex',
+            sandbox: 'workspace-write',
+            addDirs: ['/private/tmp'],
+            networkAccess: true,
+            approvalPolicy: 'on-request',
+            approvalsReviewer: 'auto_review',
+          },
+        }],
+      }),
+    })
+
+    await engine.tick()
+    await engine.drain()
+
+    expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('codex:thread-1')
+    expect(blocks.get('b-1')?.properties?.[PROPS.resumeOptions]).toEqual({
+      version: 1,
+      executor: 'codex',
+      model: 'gpt-5-codex',
     })
   })
 })

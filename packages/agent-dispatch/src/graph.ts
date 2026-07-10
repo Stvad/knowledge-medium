@@ -6,6 +6,7 @@
 import type { BridgeClient } from '@knowledge-medium/agent-cli/client'
 import { createBridgeGraph, type BacklinkSource, type BlockData, type BlockView, type BridgeGraph, type HydratedRef } from '@knowledge-medium/agent-cli/graph'
 import { PROPS, type Executor, type TaskStatus } from './config.js'
+import type { AgentResumeOptions } from './resumeCommand.js'
 
 export type { BacklinkSource, BlockData, BlockView, HydratedRef }
 
@@ -22,6 +23,7 @@ export const createGraph = (client: BridgeClient) => {
     id: string,
     args: {
       status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
+      resumeOptions?: AgentResumeOptions | null,
       attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
     },
   ): Promise<void> => {
@@ -32,6 +34,7 @@ export const createGraph = (client: BridgeClient) => {
     if (args.watcher !== undefined) properties[PROPS.watcher] = args.watcher
     if (args.executor !== undefined) properties[PROPS.executor] = args.executor
     if (args.session !== undefined && args.session !== null) properties[PROPS.session] = args.session
+    if (args.resumeOptions !== undefined && args.resumeOptions !== null) properties[PROPS.resumeOptions] = args.resumeOptions
     if (args.error !== undefined) properties[PROPS.error] = args.error ?? ''
     if (args.attempts !== undefined) properties[PROPS.attempts] = args.attempts
     if (args.activity !== undefined) properties[PROPS.activity] = args.activity ?? ''
@@ -53,8 +56,13 @@ export const createGraph = (client: BridgeClient) => {
 
   /** Persist the run's session id the instant it's known (mid-run),
    *  merged so it never clobbers concurrent dispatch state. */
-  const setSession = async (id: string, session: string): Promise<void> => {
-    await bridgeGraph.updateBlock(id, {properties: {[PROPS.session]: session}})
+  const setSession = async (id: string, session: string, resumeOptions?: AgentResumeOptions | null): Promise<void> => {
+    await bridgeGraph.updateBlock(id, {
+      properties: {
+        [PROPS.session]: session,
+        ...(resumeOptions ? {[PROPS.resumeOptions]: resumeOptions} : {}),
+      },
+    })
   }
 
   /** Clear ONLY the cancel request (merged single-key write, like
@@ -91,11 +99,12 @@ export type Graph = DispatchBridgeGraph & {
     id: string,
     args: {
       status: TaskStatus, watcher?: string, executor?: Executor, session?: string | null, error?: string | null,
+      resumeOptions?: AgentResumeOptions | null,
       attempts?: number, activity?: string | null, cancel?: string | null, nowMs: number,
     },
   ) => Promise<void>
   createReply: (parentId: string, content: string) => Promise<BlockData>
   setActivity: (id: string, label: string) => Promise<void>
-  setSession: (id: string, session: string) => Promise<void>
+  setSession: (id: string, session: string, resumeOptions?: AgentResumeOptions | null) => Promise<void>
   clearCancel: (id: string) => Promise<void>
 }
