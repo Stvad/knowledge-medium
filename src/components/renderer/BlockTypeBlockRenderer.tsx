@@ -57,6 +57,23 @@ export const writeBlockTypeLabel = async (
       if (row && getAliases(row).length === 0) {
         await tx.setProperty(block.id, aliasesProp, [next])
       }
+    } else {
+      // Blanking the label un-names the type (an empty label makes
+      // `tryBuildType` drop it). Release the alias it claimed for its old
+      // name — `aliasSyncProcessor`'s blank-content guard won't, so
+      // `[[oldName]]` would otherwise keep resolving to this now-typeless
+      // block and block re-creating a type with that name
+      // (`alias.collision`). Only the old name is dropped; user-added
+      // aliases stay.
+      const row = await tx.get(block.id)
+      if (row) {
+        const stale = new Set([currentLabel, currentContent])
+        const aliases = getAliases(row)
+        const remaining = aliases.filter(alias => !stale.has(alias))
+        if (remaining.length !== aliases.length) {
+          await tx.setProperty(block.id, aliasesProp, remaining)
+        }
+      }
     }
   }, {scope: ChangeScope.BlockDefault, description: 'edit block-type label'})
 }

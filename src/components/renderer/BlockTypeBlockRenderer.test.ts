@@ -84,4 +84,24 @@ describe('writeBlockTypeLabel', () => {
     expect(block.peekProperty(blockTypeLabelProp)).toBe('Writer')
     expect(block.peekProperty(aliasesProp)).toEqual(['Author'])
   })
+
+  it('releases the name alias when the label is blanked (so the name can be re-created)', async () => {
+    // Blanking un-names the type; aliasSyncProcessor's blank-content guard
+    // won't release the alias, so writeBlockTypeLabel must — else [[Author]]
+    // keeps resolving to a now-typeless block and re-creating "Author"
+    // collides. User-added aliases (`Scribe`) survive.
+    const repo = await setupTypeBlock({ label: 'Author', content: 'Author', alias: 'Author' })
+    const block = repo.block('type-1')
+    await repo.tx(async tx => {
+      await tx.setProperty('type-1', aliasesProp, ['Author', 'Scribe'])
+    }, { scope: ChangeScope.BlockDefault, description: 'add user alias' })
+
+    await writeBlockTypeLabel(block, 'Author', 'Author', '')
+
+    expect(block.peekProperty(aliasesProp)).toEqual(['Scribe'])
+    const resolved = await repo.query
+      .aliasLookup({ workspaceId: 'ws-1', alias: 'Author' })
+      .load()
+    expect(resolved).toBeNull()
+  })
 })
