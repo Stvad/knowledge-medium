@@ -1,14 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { actionsFacet, appEffectsFacet } from "../../extensions/core.js";
-import { importRoamAction } from "./action.js";
-import { roamImportWindowHookEffect } from "./effect.js";
-//#region src/plugins/roam-import/plugin.ts
-var roamImportPlugin = ({ repo }) => systemToggle({
-	id: "system:roam-import",
-	name: "Roam import",
-	description: "Import a Roam .json export into the current workspace."
-}).of([actionsFacet.of(importRoamAction({ repo }), { source: "roam-import" }), appEffectsFacet.of(roamImportWindowHookEffect, { source: "roam-import" })]);
-//#endregion
-export { roamImportPlugin };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{actionsFacet as t,appEffectsFacet as n}from"../../extensions/core.js";import{importRoamAction as r}from"./action.js";import{roamImportWindowHookEffect as i}from"./effect.js";var a=({repo:a})=>e({id:`system:roam-import`,name:`Roam import`,description:`Import a Roam .json export into the current workspace.`}).of([t.of(r({repo:a}),{source:`roam-import`}),n.of(i,{source:`roam-import`})]);export{a as roamImportPlugin};
 //# sourceMappingURL=plugin.js.map

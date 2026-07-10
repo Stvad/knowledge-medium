@@ -1,6 +1,2 @@
-//#region src/data/api/query.ts
-var defineQuery = (query) => query;
-//#endregion
-export { defineQuery };
-
+var e=e=>e;export{e as defineQuery};
 //# sourceMappingURL=query.js.map

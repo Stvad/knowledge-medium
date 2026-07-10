@@ -1,8 +1,2 @@
-//#region src/data/api/blockType.ts
-/** Identity helper for definition-site inference. Registration still
-*  happens through `typesFacet.of(...)`. */
-var defineBlockType = (def) => def;
-//#endregion
-export { defineBlockType };
-
+var e={hideFromCompletion:!0,hideFromBlockDisplay:!0},t=e=>e;export{e as INFRASTRUCTURE_TYPE_DISPLAY,t as defineBlockType};
 //# sourceMappingURL=blockType.js.map

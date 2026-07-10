@@ -1,9 +1,2 @@
-import { propertySchemasFacet } from "../../data/facets.js";
-import { pluginPrefsExtension } from "../../data/pluginStateExtensions.js";
-import { blockTaggingPrefsType, blockTagsConfigProp } from "./config.js";
-//#region src/plugins/block-tagging/dataExtension.ts
-var blockTaggingDataExtension = [propertySchemasFacet.of(blockTagsConfigProp, { source: "block-tagging" }), ...pluginPrefsExtension(blockTaggingPrefsType, "block-tagging")];
-//#endregion
-export { blockTaggingDataExtension };
-
+import{propertySchemasFacet as e}from"../../data/facets.js";import{pluginPrefsExtension as t}from"../../data/pluginStateExtensions.js";import{blockTaggingPrefsType as n,blockTagsConfigProp as r}from"./config.js";var i=[e.of(r,{source:`block-tagging`}),...t(n,`block-tagging`)];export{i as blockTaggingDataExtension};
 //# sourceMappingURL=dataExtension.js.map

@@ -1,12 +1,8 @@
-//#region src/plugins/references/localSchema.ts
-var CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL = `
+var e=`
   CREATE INDEX IF NOT EXISTS idx_blocks_workspace_with_references
   ON blocks (workspace_id)
   WHERE deleted = 0 AND references_json != '[]'
-`;
-/** Trigger-maintained directed-edge index over `blocks.references_json`,
-*  one row per `(source, target, alias, source_field)` tuple. */
-var CREATE_BLOCK_REFERENCES_TABLE_SQL = `
+`,t=`
   CREATE TABLE IF NOT EXISTS block_references (
     source_id    TEXT NOT NULL,
     target_id    TEXT NOT NULL,
@@ -15,36 +11,32 @@ var CREATE_BLOCK_REFERENCES_TABLE_SQL = `
     source_field TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (source_id, target_id, alias, source_field)
   )
-`;
-var CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL = `
+`,n=`
   CREATE INDEX IF NOT EXISTS idx_block_references_target
   ON block_references (target_id, workspace_id)
-`;
-var referencesInsertSelectSql = (rowRef) => `
+`,r=`
+  CREATE TRIGGER IF NOT EXISTS blocks_references_insert
+  AFTER INSERT ON blocks
+  WHEN NEW.deleted = 0
+  BEGIN
+    ${(e=>`
       INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias, source_field)
       SELECT
-        ${rowRef}.id,
+        ${e}.id,
         json_extract(je.value, '$.id'),
-        ${rowRef}.workspace_id,
+        ${e}.workspace_id,
         json_extract(je.value, '$.alias'),
         COALESCE(json_extract(je.value, '$.sourceField'), '')
-      FROM json_each(${rowRef}.references_json) AS je
+      FROM json_each(${e}.references_json) AS je
       WHERE typeof(json_extract(je.value, '$.id')) = 'text'
         AND typeof(json_extract(je.value, '$.alias')) = 'text'
         AND (
           json_type(je.value, '$.sourceField') IS NULL
           OR typeof(json_extract(je.value, '$.sourceField')) = 'text'
         );
-`.trim();
-var CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS blocks_references_insert
-  AFTER INSERT ON blocks
-  WHEN NEW.deleted = 0
-  BEGIN
-    ${referencesInsertSelectSql("NEW")}
+`.trim())(`NEW`)}
   END
-`;
-var CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL = `
+`,i=`
   CREATE TRIGGER IF NOT EXISTS blocks_references_update
   AFTER UPDATE OF references_json, deleted, workspace_id ON blocks
   BEGIN
@@ -65,31 +57,23 @@ var CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL = `
         OR typeof(json_extract(je.value, '$.sourceField')) = 'text'
       );
   END
-`;
-var CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL = `
+`,a=`
   CREATE TRIGGER IF NOT EXISTS blocks_references_delete
   AFTER DELETE ON blocks
   BEGIN
     DELETE FROM block_references WHERE source_id = OLD.id;
   END
-`;
-var BLOCK_REFERENCES_BACKFILL_MARKER_KEY = "block_references_backfill_v1";
-var BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY = "block_references_source_field_v1";
-var SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}'
-`;
-var RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL = `
+`,o=`block_references_backfill_v1`,s=`block_references_source_field_v1`,c=`
+  SELECT 1 FROM client_schema_state WHERE key = '${o}'
+`,l=`
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`;
-var SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY}'
-`;
-var RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL = `
+  VALUES ('${o}', strftime('%s', 'now') * 1000)
+`,u=`
+  SELECT 1 FROM client_schema_state WHERE key = '${s}'
+`,d=`
   INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`;
-var BACKFILL_BLOCK_REFERENCES_SQL = `
+  VALUES ('${s}', strftime('%s', 'now') * 1000)
+`,f=`
   INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias, source_field)
   SELECT
     b.id,
@@ -105,49 +89,5 @@ var BACKFILL_BLOCK_REFERENCES_SQL = `
       json_type(je.value, '$.sourceField') IS NULL
       OR typeof(json_extract(je.value, '$.sourceField')) = 'text'
     )
-`;
-var backfillBlockReferencesIfEmpty = async (db) => {
-	if (await db.getOptional(SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL) !== null) return;
-	await db.execute(BACKFILL_BLOCK_REFERENCES_SQL);
-	await db.execute(RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL);
-};
-var BLOCK_REFERENCES_TRIGGER_NAMES = [
-	"blocks_references_insert",
-	"blocks_references_update",
-	"blocks_references_delete"
-];
-var backfillBlockReferencesSourceFieldIfNeeded = async (db) => {
-	if (await db.getOptional(SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL) !== null) return;
-	for (const triggerName of BLOCK_REFERENCES_TRIGGER_NAMES) await db.execute(`DROP TRIGGER IF EXISTS ${triggerName}`);
-	await db.execute("DROP TABLE IF EXISTS block_references");
-	await db.execute(CREATE_BLOCK_REFERENCES_TABLE_SQL);
-	await db.execute(CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL);
-	await db.execute(CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL);
-	await db.execute(CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL);
-	await db.execute(CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL);
-	await db.execute(BACKFILL_BLOCK_REFERENCES_SQL);
-	await db.execute(RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL);
-};
-var referencesLocalSchema = {
-	id: "references.local-schema",
-	statements: [
-		CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
-		CREATE_BLOCK_REFERENCES_TABLE_SQL,
-		CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
-		CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,
-		CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,
-		CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL
-	],
-	triggerNames: BLOCK_REFERENCES_TRIGGER_NAMES,
-	backfills: [{
-		id: "references.block-references-source-field",
-		run: backfillBlockReferencesSourceFieldIfNeeded
-	}, {
-		id: "references.block-references-backfill",
-		run: backfillBlockReferencesIfEmpty
-	}]
-};
-//#endregion
-export { BACKFILL_BLOCK_REFERENCES_SQL, BLOCK_REFERENCES_BACKFILL_MARKER_KEY, BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY, BLOCK_REFERENCES_TRIGGER_NAMES, CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL, CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL, CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL, CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL, CREATE_BLOCK_REFERENCES_TABLE_SQL, CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL, RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL, RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL, SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL, SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL, backfillBlockReferencesIfEmpty, backfillBlockReferencesSourceFieldIfNeeded, referencesLocalSchema };
-
+`,p=async e=>{await e.getOptional(c)===null&&(await e.execute(f),await e.execute(l))},m=[`blocks_references_insert`,`blocks_references_update`,`blocks_references_delete`],h=async e=>{if(await e.getOptional(u)===null){for(let t of m)await e.execute(`DROP TRIGGER IF EXISTS ${t}`);await e.execute(`DROP TABLE IF EXISTS block_references`),await e.execute(t),await e.execute(n),await e.execute(r),await e.execute(i),await e.execute(a),await e.execute(f),await e.execute(d)}},g={id:`references.local-schema`,statements:[e,t,n,r,i,a],triggerNames:m,backfills:[{id:`references.block-references-source-field`,run:h},{id:`references.block-references-backfill`,run:p}]};export{f as BACKFILL_BLOCK_REFERENCES_SQL,o as BLOCK_REFERENCES_BACKFILL_MARKER_KEY,s as BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY,m as BLOCK_REFERENCES_TRIGGER_NAMES,a as CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,r as CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,i as CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,e as CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,t as CREATE_BLOCK_REFERENCES_TABLE_SQL,n as CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,l as RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL,d as RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL,c as SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL,u as SELECT_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL,p as backfillBlockReferencesIfEmpty,h as backfillBlockReferencesSourceFieldIfNeeded,g as referencesLocalSchema};
 //# sourceMappingURL=localSchema.js.map

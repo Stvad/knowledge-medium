@@ -1,16 +1,2 @@
-import { Block } from "../../data/block.js";
-//#region src/plugins/command-palette/context.ts
-var COMMAND_PALETTE_CONTEXT = "command-palette";
-var COMMAND_PALETTE_ACTION_ID = "command_palette";
-var COMMAND_PALETTE_FOR_BLOCK_ACTION_ID = "command_palette_for_block";
-var isCommandPaletteDependencies = (deps) => typeof deps === "object" && deps !== null && "uiStateBlock" in deps && deps.uiStateBlock instanceof Block;
-var commandPaletteActionContext = {
-	type: COMMAND_PALETTE_CONTEXT,
-	displayName: "Command Palette",
-	modal: true,
-	validateDependencies: isCommandPaletteDependencies
-};
-//#endregion
-export { COMMAND_PALETTE_ACTION_ID, COMMAND_PALETTE_CONTEXT, COMMAND_PALETTE_FOR_BLOCK_ACTION_ID, commandPaletteActionContext };
-
+import{Block as e}from"../../data/block.js";var t=`command-palette`,n=`command_palette`,r=`command_palette_for_block`,i={type:t,displayName:`Command Palette`,modal:!0,validateDependencies:t=>typeof t==`object`&&!!t&&`uiStateBlock`in t&&t.uiStateBlock instanceof e};export{n as COMMAND_PALETTE_ACTION_ID,t as COMMAND_PALETTE_CONTEXT,r as COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,i as commandPaletteActionContext};
 //# sourceMappingURL=context.js.map

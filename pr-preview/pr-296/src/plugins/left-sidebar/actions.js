@@ -1,19 +1,2 @@
-import { Menu } from "../../../node_modules/lucide-react/dist/esm/icons/menu.js";
-import { ActionContextTypes } from "../../shortcuts/types.js";
-import { leftSidebarToggle } from "./toggleStore.js";
-//#region src/plugins/left-sidebar/actions.ts
-var OPEN_LEFT_SIDEBAR_ACTION_ID = "open_left_sidebar";
-var openLeftSidebarAction = {
-	id: OPEN_LEFT_SIDEBAR_ACTION_ID,
-	description: "Open sidebar",
-	context: ActionContextTypes.GLOBAL,
-	icon: Menu,
-	handler: () => {
-		leftSidebarToggle.open();
-	}
-};
-var leftSidebarActions = [openLeftSidebarAction];
-//#endregion
-export { OPEN_LEFT_SIDEBAR_ACTION_ID, leftSidebarActions, openLeftSidebarAction };
-
+import{Menu as e}from"../../../node_modules/lucide-react/dist/esm/icons/menu.js";import{ActionContextTypes as t}from"../../shortcuts/types.js";import{leftSidebarToggle as n}from"./toggleStore.js";var r=`open_left_sidebar`,i={id:r,description:`Open sidebar`,context:t.GLOBAL,icon:e,handler:()=>{n.open()}},a=[i];export{r as OPEN_LEFT_SIDEBAR_ACTION_ID,a as leftSidebarActions,i as openLeftSidebarAction};
 //# sourceMappingURL=actions.js.map

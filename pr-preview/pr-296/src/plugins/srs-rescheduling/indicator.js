@@ -1,28 +1,2 @@
-//#region src/plugins/srs-rescheduling/indicator.ts
-var BAR_BASE = "srs-review-block border-l-2 pl-1";
-var srsBarClass = (state) => {
-	if (state.archived) return `${BAR_BASE} srs-review-block--archived border-muted-foreground/40 border-dashed`;
-	if (state.reviewCount === 0) return `${BAR_BASE} border-sky-500/40 border-dashed`;
-	const i = state.interval;
-	if (i <= 3) return `${BAR_BASE} border-sky-500`;
-	if (i <= 10) return `${BAR_BASE} border-sky-500/75`;
-	if (i <= 30) return `${BAR_BASE} border-sky-500/50`;
-	if (i <= 90) return `${BAR_BASE} border-sky-500/30`;
-	return `${BAR_BASE} border-sky-500/15`;
-};
-var formatInterval = (interval) => {
-	return (Math.round(interval * 10) / 10).toString();
-};
-var formatFactor = (factor) => {
-	return (Math.round(factor * 100) / 100).toString();
-};
-var srsIndicatorTitle = (state) => {
-	if (state.archived) return "SRS · archived";
-	if (state.reviewCount === 0) return "SRS · new (not yet reviewed)";
-	const reviews = `${state.reviewCount} review${state.reviewCount === 1 ? "" : "s"}`;
-	return `SRS · ${formatInterval(state.interval)}d interval · ${formatFactor(state.factor)} factor · ${reviews}`;
-};
-//#endregion
-export { srsBarClass, srsIndicatorTitle };
-
+var e=`srs-review-block border-l-2 pl-1`,t=t=>{if(t.archived)return`${e} srs-review-block--archived border-muted-foreground/40 border-dashed`;if(t.reviewCount===0)return`${e} border-sky-500/40 border-dashed`;let n=t.interval;return n<=3?`${e} border-sky-500`:n<=10?`${e} border-sky-500/75`:n<=30?`${e} border-sky-500/50`:n<=90?`${e} border-sky-500/30`:`${e} border-sky-500/15`},n=e=>(Math.round(e*10)/10).toString(),r=e=>(Math.round(e*100)/100).toString(),i=e=>{if(e.archived)return`SRS · archived`;if(e.reviewCount===0)return`SRS · new (not yet reviewed)`;let t=`${e.reviewCount} review${e.reviewCount===1?``:`s`}`;return`SRS · ${n(e.interval)}d interval · ${r(e.factor)} factor · ${t}`};export{t as srsBarClass,i as srsIndicatorTitle};
 //# sourceMappingURL=indicator.js.map

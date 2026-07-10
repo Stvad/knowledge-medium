@@ -1,7 +1,2 @@
-import { SpatialNavigationShellDecorator } from "./ShellDecorator.js";
-//#region src/plugins/spatial-navigation/shell.ts
-var spatialNavigationShellDecorator = () => SpatialNavigationShellDecorator;
-//#endregion
-export { spatialNavigationShellDecorator };
-
+import{SpatialNavigationShellDecorator as e}from"./ShellDecorator.js";var t=()=>e;export{t as spatialNavigationShellDecorator};
 //# sourceMappingURL=shell.js.map
