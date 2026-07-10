@@ -56,6 +56,15 @@ describe('chordFromEvent', () => {
     expect(chordFromEvent(mk({key: 'd', ctrlKey: true}))).toBe('Control+d')
   })
 
+  it('keeps the Super/Meta key literal off-Mac (a captured chord must not fold it)', () => {
+    // On Windows/Linux the Meta/Super key is the NON-primary modifier, so it
+    // captures as a literal `Meta+…`. Callers must persist this verbatim —
+    // running it through normalizeChord would fold Meta→$mod and store Ctrl+K
+    // instead, so the rebind would fire from the wrong combo.
+    stubPlatform('Win32')
+    expect(chordFromEvent(mk({key: 'k', metaKey: true}))).toBe('Meta+k')
+  })
+
   it('aliases arrow keys and Escape to tinykeys canonical names', () => {
     expect(chordFromEvent(mk({key: 'ArrowLeft', ctrlKey: true}))).toBe('Control+ArrowLeft')
     expect(chordFromEvent(mk({key: ' ', metaKey: true}))).toBe('$mod+Space')

@@ -26,7 +26,7 @@ import { contextConfigsByTypeFrom, runActionById } from '@/shortcuts/runAction.j
 import type { ActionConfig, ActionContextType } from '@/shortcuts/types.js'
 import { openKeybindingsSettingsAction } from '@/plugins/keybindings-settings/actions.ts'
 import { overrideEntryKey, type StoredKeybindingOverride } from '@/plugins/keybindings-settings/config.ts'
-import { formatChord, normalizeChord } from '@/plugins/keybindings-settings/keyCapture.ts'
+import { formatChord } from '@/plugins/keybindings-settings/keyCapture.ts'
 import {
   previewOverrideConflicts,
   readStoredOverrides,
@@ -422,11 +422,15 @@ export function ShortcutHelpOverlay() {
     const target = capturingRef.current
     if (!target) return
     setCapturing(null)
-    const normalized = normalizeChord(chord)
+    // `chord` is already a canonical tinykeys chord from chordFromEvent
+    // ($mod for the platform primary, literal Control/Meta for the
+    // secondary). Do NOT run it through normalizeChord: that folds
+    // Meta→$mod, so a Win/Linux Super+K rebind would persist as Ctrl+K and
+    // fire from the wrong combo (and could shadow a real Ctrl shortcut).
     const entry: StoredKeybindingOverride = {
       actionId: target.actionId,
       context: target.context,
-      binding: {keys: normalized},
+      binding: {keys: chord},
     }
     void (async () => {
       try {
@@ -442,7 +446,7 @@ export function ShortcutHelpOverlay() {
           actionId: target.actionId,
           context: target.context,
           description: target.description,
-          chord: normalized,
+          chord,
           conflicts,
         })
       } catch (error) {

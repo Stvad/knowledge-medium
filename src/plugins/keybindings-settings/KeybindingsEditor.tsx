@@ -31,7 +31,7 @@ import type {
   ActionContextType,
 } from '@/shortcuts/types.js'
 import {KeyCaptureInput} from './KeyCaptureInput.tsx'
-import {formatChord, normalizeChord} from './keyCapture.ts'
+import {formatChord} from './keyCapture.ts'
 import {
   overrideEntryKey,
   type StoredKeybindingOverrides,
@@ -152,11 +152,13 @@ export const KeybindingsEditor = ({value, onChange}: PropertyEditorProps<StoredK
   const handleCaptureChord = useCallback(
     (chord: string) => {
       if (!capturing) return
-      const normalized = normalizeChord(chord)
+      // Store the captured chord verbatim. chordFromEvent already emits a
+      // canonical tinykeys chord; running it through normalizeChord folds
+      // Meta→$mod, corrupting a Win/Linux Super+K capture into Ctrl+K.
       onChange(withReplacedOverride(value, {
         actionId: capturing.actionId,
         context: capturing.context,
-        binding: {keys: normalized},
+        binding: {keys: chord},
       }))
       setCapturing(null)
     },
