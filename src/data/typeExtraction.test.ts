@@ -291,6 +291,29 @@ describe('block-type typeify processor', () => {
     expect(resolved?.id).toBe(id)
   })
 
+  it('trims whitespace-padded adopted content so a later rename replaces the alias', async () => {
+    env = await setup()
+    // `#type` on '  Book  ' adopts the name 'Book' but must also trim the
+    // stored content — otherwise content ('  Book  ') and alias ('Book')
+    // diverge, and aliasSync (which matches aliases by content) can't
+    // replace the alias on rename, stranding the old name.
+    const id = await tagBlockType(env, '  Book  ')
+    let row = await env.repo.load(id)
+    expect(row!.content).toBe('Book')
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+
+    // Rename to 'Novel' — aliasSync replaces the old-content alias in
+    // place; without the content trim above it would append and strand
+    // 'Book'.
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, blockTypeLabelProp, 'Novel')
+      await tx.update(id, {content: 'Novel'})
+    }, {scope: ChangeScope.BlockDefault})
+    row = await env.repo.load(id)
+    expect(row!.properties[aliasesProp.name]).toEqual(['Novel'])
+  })
+
   it('claims the type name even when the block already carries another alias', async () => {
     // Regression: an only-if-empty gate left the type name unclaimed when
     // the block held any other alias, so `[[Book]]` minted a duplicate

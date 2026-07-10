@@ -76,6 +76,17 @@ export const BLOCK_TYPE_TYPEIFY_PROCESSOR = defineSameTxProcessor({
       }
       if (currentLabel === '' && name !== '') {
         await ctx.tx.setProperty(row.id, blockTypeLabelProp, name)
+        // Trim the block's own content to the clean name too. `name` was
+        // adopted FROM `content` (`content.trim()`), so this only strips
+        // surrounding whitespace — it never clobbers meaningful text. It
+        // keeps content == label == alias, which matters on a LATER
+        // rename: `aliasSyncProcessor` replaces aliases by matching the
+        // OLD content, so a `content` of "  Book" against an alias of
+        // "Book" would leave the stale alias claimed (and `[[Book]]`
+        // resolving to the renamed type) instead of being replaced.
+        if (after.content !== name) {
+          await ctx.tx.update(row.id, {content: name})
+        }
       }
       if (name !== '') {
         const aliases = getAliases(after)
