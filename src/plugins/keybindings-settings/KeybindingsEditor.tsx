@@ -25,50 +25,22 @@ import {actionContextsFacet} from '@/extensions/core.js'
 import {getActionsBeforeKeybindingOverrides} from '@/shortcuts/effectiveActions.js'
 import {applyKeybindingOverrides} from '@/shortcuts/applyKeybindingOverrides.js'
 import {findKeybindingConflicts} from '@/shortcuts/keybindingConflicts.js'
-import {
-  KEYBINDING_OVERRIDE_USER_SOURCE,
-  type KeybindingOverride,
-} from '@/shortcuts/keybindingOverrides.js'
 import type {
   ActionConfig,
   ActionContextConfig,
   ActionContextType,
 } from '@/shortcuts/types.js'
 import {KeyCaptureInput} from './KeyCaptureInput.tsx'
-import {formatChord, normalizeChord} from './keyCapture.ts'
+import {formatChord} from './keyCapture.ts'
 import {
   overrideEntryKey,
-  type StoredKeybindingOverride,
   type StoredKeybindingOverrides,
 } from './config.ts'
-
-const toFacetEntries = (stored: StoredKeybindingOverrides): readonly KeybindingOverride[] =>
-  stored.map(entry => ({
-    actionId: entry.actionId,
-    context: entry.context,
-    binding: entry.binding,
-    source: KEYBINDING_OVERRIDE_USER_SOURCE,
-  }))
-
-const withReplaced = (
-  stored: StoredKeybindingOverrides,
-  next: StoredKeybindingOverride,
-): StoredKeybindingOverrides => {
-  const key = overrideEntryKey(next.context, next.actionId)
-  const filtered = stored.filter(
-    e => overrideEntryKey(e.context, e.actionId) !== key,
-  )
-  return [...filtered, next]
-}
-
-const withRemoved = (
-  stored: StoredKeybindingOverrides,
-  actionId: string,
-  context: ActionContextType,
-): StoredKeybindingOverrides => {
-  const key = overrideEntryKey(context, actionId)
-  return stored.filter(e => overrideEntryKey(e.context, e.actionId) !== key)
-}
+import {
+  toFacetOverrides,
+  withRemovedOverride,
+  withReplacedOverride,
+} from './overrideStore.ts'
 
 const chordOf = (action: ActionConfig): string | null => {
   const binding = action.defaultBinding
@@ -114,7 +86,7 @@ export const KeybindingsEditor = ({value, onChange}: PropertyEditorProps<StoredK
     return map
   }, [contextConfigs])
 
-  const facetEntries = useMemo(() => toFacetEntries(value), [value])
+  const facetEntries = useMemo(() => toFacetOverrides(value), [value])
   const previewActions = useMemo(
     () => applyKeybindingOverrides(baseActions, facetEntries),
     [baseActions, facetEntries],
@@ -180,11 +152,13 @@ export const KeybindingsEditor = ({value, onChange}: PropertyEditorProps<StoredK
   const handleCaptureChord = useCallback(
     (chord: string) => {
       if (!capturing) return
-      const normalized = normalizeChord(chord)
-      onChange(withReplaced(value, {
+      // Store the captured chord verbatim. chordFromEvent already emits a
+      // canonical tinykeys chord; running it through normalizeChord folds
+      // Meta→$mod, corrupting a Win/Linux Super+K capture into Ctrl+K.
+      onChange(withReplacedOverride(value, {
         actionId: capturing.actionId,
         context: capturing.context,
-        binding: {keys: normalized},
+        binding: {keys: chord},
       }))
       setCapturing(null)
     },
@@ -197,14 +171,14 @@ export const KeybindingsEditor = ({value, onChange}: PropertyEditorProps<StoredK
 
   const handleReset = useCallback(
     (actionId: string, context: ActionContextType) => {
-      onChange(withRemoved(value, actionId, context))
+      onChange(withRemovedOverride(value, actionId, context))
     },
     [onChange, value],
   )
 
   const handleDisable = useCallback(
     (actionId: string, context: ActionContextType) => {
-      onChange(withReplaced(value, {
+      onChange(withReplacedOverride(value, {
         actionId,
         context,
         binding: {unbound: true},
@@ -356,7 +330,7 @@ const ActionRow = ({
             {conflictChords && conflictChords.size > 0 && (
               <span
                 className="inline-flex items-center text-amber-600"
-                title={`Shadows in ${[...conflictChords].map(formatChord).join(', ')} — both will run`}
+                title={`Conflicts in ${[...conflictChords].map(formatChord).join(', ')} — only one action runs per chord; the other is shadowed`}
               >
                 <AlertTriangle className="h-3.5 w-3.5"/>
               </span>

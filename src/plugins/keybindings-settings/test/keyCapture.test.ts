@@ -56,6 +56,15 @@ describe('chordFromEvent', () => {
     expect(chordFromEvent(mk({key: 'd', ctrlKey: true}))).toBe('Control+d')
   })
 
+  it('keeps the Super/Meta key literal off-Mac (a captured chord must not fold it)', () => {
+    // On Windows/Linux the Meta/Super key is the NON-primary modifier, so it
+    // captures as a literal `Meta+…`. Callers must persist this verbatim —
+    // running it through normalizeChord would fold Meta→$mod and store Ctrl+K
+    // instead, so the rebind would fire from the wrong combo.
+    stubPlatform('Win32')
+    expect(chordFromEvent(mk({key: 'k', metaKey: true}))).toBe('Meta+k')
+  })
+
   it('aliases arrow keys and Escape to tinykeys canonical names', () => {
     expect(chordFromEvent(mk({key: 'ArrowLeft', ctrlKey: true}))).toBe('Control+ArrowLeft')
     expect(chordFromEvent(mk({key: ' ', metaKey: true}))).toBe('$mod+Space')
@@ -130,6 +139,19 @@ describe('formatChord', () => {
   it('strips tinykeys code prefixes for display', () => {
     expect(formatChord('Alt+KeyY')).toBe('⌥Y')
     expect(formatChord('Shift+Digit3')).toBe('⇧3')
+  })
+
+  it('maps punctuation code names to their glyphs', () => {
+    stubPlatform('MacIntel')
+    expect(formatChord('Control+Shift+Backquote')).toBe('⌃⇧`')
+    expect(formatChord('Control+Shift+BracketLeft')).toBe('⌃⇧[')
+  })
+
+  it('spells Control out off-Mac, where ⌃ reads as noise', () => {
+    stubPlatform('Win32')
+    expect(formatChord('Control+d')).toBe('CtrlD')
+    stubPlatform('MacIntel')
+    expect(formatChord('Control+d')).toBe('⌃D')
   })
 
   it('preserves multi-char keys with title casing', () => {

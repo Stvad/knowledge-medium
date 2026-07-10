@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  createKeybindingsHandler,
   matchKeybindingPress,
   parseKeybinding,
   type KeybindingPress,
 } from 'tinykeys'
+import { createSequenceMatcher } from './sequenceMatcher.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {
   useActiveContextsDispatch,
@@ -52,6 +52,7 @@ import {
 } from '@/shortcuts/types.js'
 import type { MouseEvent as ReactMouseEvent, TouchEvent as ReactTouchEvent } from 'react'
 import { hasEditableTarget, isTypingKeyEvent, withRecoveredLetterKey } from '@/shortcuts/utils.js'
+import { registerArmedHold } from '@/shortcuts/holdRegistry.js'
 
 /**
  * A non-hold keyboard binding's per-candidate tinykeys matcher. Fed every
@@ -598,11 +599,17 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     timer: ReturnType<typeof setTimeout>
     primaryKey: string
   } | null = null
+  // Armed timers are visible to keyboard-capture surfaces via the hold
+  // registry (see holdRegistry.ts) — they swallow the cancelling keyup, so
+  // they cancel armed holds explicitly instead.
+  let unregisterArmed: (() => void) | null = null
 
   const cancel = (): void => {
     if (!pending) return
     clearTimeout(pending.timer)
     pending = null
+    unregisterArmed?.()
+    unregisterArmed = null
   }
 
   const fire = (originalEvent: KeyboardEvent): void => {
@@ -650,12 +657,15 @@ const installHoldBinding = (config: HoldBindingInstall): (() => void) => {
     applyEventOptions(event, action, binding, contextConfigsByType)
 
     pending = {
+      // `cancel` does the disarm bookkeeping (timer, pending, registry);
+      // the clearTimeout on the just-fired timer is a no-op.
       timer: setTimeout(() => {
-        pending = null
+        cancel()
         fire(event)
       }, holdMs),
       primaryKey: event.key,
     }
+    unregisterArmed = registerArmedHold(cancel)
   }
 
   const onKeyup = (rawEvent: Event): void => {
@@ -830,30 +840,29 @@ const applyEventOptions = (
 }
 
 /**
- * Build a candidate's tinykeys matcher. Every key in the binding maps to the
- * same callback, which records the candidate in `completedRef` for the event
- * in flight instead of running the handler — the coordinator orders the
- * recorded candidates and runs the winner.
+ * Build a candidate's per-binding sequence matcher. On a completed chord it
+ * records the candidate in `completedRef` for the event in flight instead of
+ * running the handler — the coordinator orders the recorded candidates and
+ * runs the winner.
  *
- * `createKeybindingsHandler` (rather than `tinykeys()` directly) lets the
- * coordinator preprocess each event with `withRecoveredLetterKey` before the
- * matcher sees it: tinykeys reads event.key, which Mac option-transforms
- * (Alt+y → '¥') and Linux compose setups corrupt for letter chords; the
- * wrapper restores the logical letter from event.keyCode, and works on
- * Colemak/Dvorak where event.code lies about layout. `ignore: () => false`
- * disables tinykeys' built-in editable-target filter — the coordinator runs
- * the context-aware cascade (`shouldHandleEvent`) itself, so contexts like
- * property-editing can opt into events tinykeys would otherwise drop.
+ * The matcher (`createSequenceMatcher`) is the shared port of tinykeys'
+ * sequence loop, so the inspector's which-key display and this dispatch path
+ * agree by construction. The coordinator preprocesses each event with
+ * `withRecoveredLetterKey` before the matcher sees it: tinykeys' matching
+ * reads event.key, which Mac option-transforms (Alt+y → '¥') and Linux
+ * compose setups corrupt for letter chords; the wrapper restores the logical
+ * letter from event.keyCode, and works on Colemak/Dvorak where event.code
+ * lies about layout. The matcher carries no editable-target filter — the
+ * coordinator runs the context-aware cascade (`shouldHandleEvent`) itself, so
+ * contexts like property-editing can opt into events tinykeys would drop.
  */
 const makeMatcher = (
   action: ActionConfig,
   binding: ShortcutBindingDefaults,
   completedRef: { current: CompletedBinding[] },
 ): ((event: KeyboardEvent) => void) => {
-  const record = () => {
-    completedRef.current.push({action, binding})
+  const matcher = createSequenceMatcher(binding.keys)
+  return (event: KeyboardEvent) => {
+    if (matcher.next(event).completed) completedRef.current.push({action, binding})
   }
-  const bindingMap: Record<string, (event: KeyboardEvent) => void> = {}
-  for (const key of normalizeKeys(binding.keys)) bindingMap[key] = record
-  return createKeybindingsHandler(bindingMap, {ignore: () => false})
 }

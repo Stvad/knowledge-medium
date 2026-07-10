@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import {
   CommandDialog,
   CommandInput,
@@ -9,8 +9,7 @@ import {
 } from '@/components/ui/command'
 import { useActionContext } from '@/shortcuts/useActionContext.js'
 import { useRunAction } from '@/shortcuts/runAction.js'
-import { useActiveContextsState, editorViewFromActiveContexts } from '@/shortcuts/ActiveContexts.js'
-import { acquireEditModeKeepalive } from '@/components/editModeKeepalive.js'
+import { useEditModeYieldKeepalive } from '@/components/useEditModeYieldKeepalive.js'
 import { actionRuntimeKey } from '@/shortcuts/effectiveActions.js'
 import {
   type ActionConfig,
@@ -44,39 +43,9 @@ export function CommandPalette() {
 
   useActionContext(COMMAND_PALETTE_CONTEXT, shortcutDependencies, open)
 
-  // Read the live active-contexts map through a ref so the open effect below
-  // can sample it at open time without re-running on every activation change
-  // (it's keyed on `open` alone).
-  const active = useActiveContextsState()
-  const activeRef = useRef(active)
-  useLayoutEffect(() => {
-    activeRef.current = active
-  }, [active])
-
-  // Keep the underlying editor in edit mode while the palette is open IF it was
-  // opened from edit mode. Opening the palette moves focus into its input,
-  // which would otherwise trip BlockEditor's exit-on-blur and deactivate the
-  // EDIT_MODE_CM context — leaving the palette unable to list or run edit
-  // commands (and, with vim normal mode off, no block context at all). A
-  // 'yield-focus' keepalive holds edit mode without pulling focus back from the
-  // palette; on close we hand focus to the editor we kept alive. Acquired in a
-  // layout effect so it lands before the blur's deferred rAF decision fires.
-  useLayoutEffect(() => {
-    if (!open) return
-    const editorView = editorViewFromActiveContexts(activeRef.current)
-    if (!editorView) return // opened from normal mode / not editing — nothing to keep alive
-    const release = acquireEditModeKeepalive('yield-focus')
-    return () => {
-      // Palette closing: hand focus back to the editor we kept in edit mode —
-      // but only if it's STILL the active edit context and mounted. A command
-      // run from the palette may have moved focus to another block or unmounted
-      // this editor; refocusing a stale view would steal focus from the command,
-      // and focus() on a torn-down view can throw (no `destroyed` guard in CM).
-      const liveView = editorViewFromActiveContexts(activeRef.current)
-      if (liveView === editorView && editorView.dom.isConnected) editorView.focus()
-      release()
-    }
-  }, [open])
+  // Hold edit mode open (and return focus to the editor on close) when the
+  // palette was opened from edit mode — see the hook for the full contract.
+  useEditModeYieldKeepalive(open)
 
   const {actions, activeContexts, bindingsFor} = useCommandPaletteActions()
   const runAction = useRunAction()

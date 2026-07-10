@@ -35,9 +35,7 @@ import {
   type KeybindingOverride,
   type KeyOverrideBound,
 } from './keybindingOverrides.ts'
-
-const toChordArray = (keys: KeyCombination | readonly KeyCombination[]): readonly string[] =>
-  typeof keys === 'string' ? [keys] : keys
+import { toChordArray } from './canonicalizeChord.ts'
 
 const fromChordArray = (chords: readonly string[]): KeyCombination | readonly KeyCombination[] =>
   chords.length === 1 ? chords[0]! : chords
