@@ -83,7 +83,18 @@ export function useAssetObjectUrl(
   const [retryTick, setRetryTick] = useState(0)
 
   useEffect(() => {
-    if (!enabled) return // lazy viewer — the eager resolve/object-URL is skipped
+    if (!enabled) {
+      // A disarmed lazy viewer (audio/PDF poster) shows its metadata, not the URL — and the cleanup
+      // below revoked any object URL when this last ran enabled. DROP a settled `ready` entry so it
+      // can't be re-served after a content A→B→A undo: the settled cache is keyed by inputs, so when
+      // `key` returns to a previously-resolved value it re-matches — and its blob: URL is now REVOKED.
+      // Without this, re-arming (a fresh Play/Preview) would render a DEAD url until a new resolve
+      // lands (never, offline) — a broken player/preview. Cleared → derived state is `loading` → a real
+      // re-resolve. (Eager viewers never disable, and already re-resolve on every input change, so this
+      // only bites the lazy-inline path.)
+      setSettled((prev) => (prev?.state.status === 'ready' ? null : prev))
+      return
+    }
     let cancelled = false
     let objectUrl: string | null = null
 
