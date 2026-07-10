@@ -253,6 +253,10 @@ export const BlockEditor = ({
     // callback, so this doesn't churn the config.
     () => [
       keyboardAwareScroll(),
+      // The facet only STORES the flush callback for completion sources
+      // to invoke later — it isn't called during render. `flushDebouncers`
+      // is a stable ref-backed callback (same identity across renders).
+      // eslint-disable-next-line react-hooks/refs -- facet stores, never calls during render
       editorContentFlushFacet.of(flushDebouncers),
       ...(providedExtensions ?? []),
     ],

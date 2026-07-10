@@ -76,13 +76,14 @@ export function TypesPropertyEditor({
   const [navigated, setNavigated] = useState(false)
   const typesRegistry = useTypes()
   const options = useMemo<TypeOption[]>(() => Array.from(typesRegistry.values())
-    // `block-type` is deliberately not addable here: turning a block
-    // INTO a type is the `#type` gesture, which adopts the block's
-    // content as the type name (typeifyBlockInTx). Offering it in this
-    // generic picker would instead tag the block with no name — an
-    // unregistered, alias-less half-type. Already-typed blocks still
-    // show their `block-type` chip (rendered from the registry, not this
-    // list).
+    // This picker APPLIES existing types to a block; turning a block
+    // INTO a type-definition is a distinct gesture (`#type`, or the
+    // extract-type flow). Tagging `block-type` here would be safe now —
+    // the kernel typeify processor completes any block-type tag — but it
+    // would silently convert the block into a type editor, which isn't
+    // what "add a type to this block" means. So keep it out of the list;
+    // already-typed blocks still show their `block-type` chip (rendered
+    // from the registry, not this list).
     .filter(type => type.id !== BLOCK_TYPE_TYPE)
     .map(type => ({
       id: type.id,

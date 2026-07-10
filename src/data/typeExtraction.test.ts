@@ -22,7 +22,6 @@ import {
   createTypeBlock,
   findCandidatesByPropertyShape,
   retagBlocks,
-  typeifyBlockInTx,
 } from '@/data/typeExtraction'
 
 const WS = 'ws-type-extraction'
@@ -254,12 +253,13 @@ describe('createTypeBlock', () => {
   })
 })
 
-// ──── typeifyBlockInTx ──────────────────────────────────────────────
+// ──── block-type typeify processor ──────────────────────────────────
 
-/** A block tagged `block-type` (via the `#type` path) but not yet
- *  type-ified: has content + the meta-type, but no label / alias /
- *  PAGE_TYPE — the state `typeifyBlockInTx` completes. */
-const createBlockTypeCandidate = async (
+/** Tag a fresh block `block-type` — the state EVERY tagging path lands
+ *  in (`#type`, the picker, programmatic, import). The kernel
+ *  `blockTypeTypeify` same-tx processor completes it in this same tx:
+ *  adopt content→label, add PAGE_TYPE, claim the label alias. */
+const tagBlockType = async (
   env: Harness,
   content: string,
   extraProps: Record<string, unknown> = {},
@@ -272,17 +272,10 @@ const createBlockTypeCandidate = async (
   return id
 }
 
-const runTypeify = async (env: Harness, id: string): Promise<void> => {
-  await env.repo.tx(async tx => {
-    await typeifyBlockInTx(env.repo, tx, id)
-  }, {scope: ChangeScope.BlockDefault})
-}
-
-describe('typeifyBlockInTx', () => {
+describe('block-type typeify processor', () => {
   it('adopts content as the label, tags PAGE_TYPE, and claims the alias', async () => {
     env = await setup()
-    const id = await createBlockTypeCandidate(env, 'Book')
-    await runTypeify(env, id)
+    const id = await tagBlockType(env, 'Book')
 
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
@@ -293,11 +286,25 @@ describe('typeifyBlockInTx', () => {
     expect(resolved?.id).toBe(id)
   })
 
-  it('is idempotent — re-running does not clobber or duplicate', async () => {
+  it('claims the type name even when the block already carries another alias', async () => {
+    // Regression: an only-if-empty gate left the type name unclaimed when
+    // the block held any other alias, so `[[Book]]` minted a duplicate
+    // seat. Ensure-present appends the name to the existing set instead.
     env = await setup()
-    const id = await createBlockTypeCandidate(env, 'Book')
-    await runTypeify(env, id)
-    await runTypeify(env, id)
+    const id = await tagBlockType(env, 'Book', {[aliasesProp.name]: ['MyNote']})
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[aliasesProp.name]).toEqual(['MyNote', 'Book'])
+    const resolved = await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()
+    expect(resolved?.id).toBe(id)
+  })
+
+  it('is idempotent — re-tagging block-type does not clobber or duplicate', async () => {
+    env = await setup()
+    const id = await tagBlockType(env, 'Book')
+    await env.repo.tx(async tx => {
+      await env.repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}, env.repo.snapshotTypeRegistries())
+    }, {scope: ChangeScope.BlockDefault})
 
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
@@ -308,12 +315,11 @@ describe('typeifyBlockInTx', () => {
   it('never overwrites an explicitly-set label/alias (createTypeBlock-style)', async () => {
     env = await setup()
     // Label already set to something other than content; alias already
-    // claimed. typeify must leave both untouched.
-    const id = await createBlockTypeCandidate(env, 'Book', {
+    // claimed. The processor must leave both untouched.
+    const id = await tagBlockType(env, 'Book', {
       [blockTypeLabelProp.name]: 'Custom',
       [aliasesProp.name]: ['Custom'],
     })
-    await runTypeify(env, id)
 
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBe('Custom')
@@ -322,8 +328,7 @@ describe('typeifyBlockInTx', () => {
 
   it('leaves a blank block unnamed (no label/alias) but still a page', async () => {
     env = await setup()
-    const id = await createBlockTypeCandidate(env, '   ')
-    await runTypeify(env, id)
+    const id = await tagBlockType(env, '   ')
 
     const row = await env.repo.load(id)
     expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
@@ -339,8 +344,7 @@ describe('typeifyBlockInTx', () => {
       await tx.setProperty(pageId, aliasesProp, ['Book'])
     }, {scope: ChangeScope.BlockDefault})
 
-    const id = await createBlockTypeCandidate(env, 'Book')
-    await expect(runTypeify(env, id)).rejects.toMatchObject({code: 'alias.collision'})
+    await expect(tagBlockType(env, 'Book')).rejects.toMatchObject({code: 'alias.collision'})
   })
 })
 

@@ -15,6 +15,7 @@ import {
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
+  getAliases,
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
 import type { Block } from '@/data/block.js'
@@ -30,17 +31,6 @@ import {
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
-/** Number of aliases currently on the row, tolerant of an absent /
- *  malformed `$.alias` value (treated as none). */
-const currentAliasCount = (encoded: unknown): number => {
-  if (encoded === undefined) return 0
-  try {
-    return aliasesProp.codec.decode(encoded).length
-  } catch {
-    return 0
-  }
-}
-
 export const writeBlockTypeLabel = async (
   block: Block,
   currentLabel: string,
@@ -55,17 +45,16 @@ export const writeBlockTypeLabel = async (
     if (next !== currentContent) {
       await tx.update(block.id, {content: next})
     }
-    // A defined type doubles as its `[[label]]` page. Types created via
-    // the Types-page "New type" button start alias-less (they're minted
-    // with an empty label, unlike `createTypeBlock`), and
-    // `aliasSyncProcessor` only reconciles content→alias for blocks that
-    // ALREADY claim one — so seed the alias here the first time the label
-    // becomes non-empty. Once seeded, later renames keep it in lockstep
-    // via that processor; a colliding label is rejected by the
-    // alias-uniqueness trigger, same as `createTypeBlock`.
+    // A defined type doubles as its `[[label]]` page. A block-type block
+    // created blank (a bare `#type` with no content) is left unnamed and
+    // alias-less by the typeify processor, and `aliasSyncProcessor` only
+    // reconciles content→alias for blocks that ALREADY claim one — so
+    // seed the alias here the first time the label becomes non-empty.
+    // Once seeded, later renames keep it in lockstep via that processor;
+    // a colliding label is rejected by the alias-uniqueness trigger.
     if (next !== '') {
       const row = await tx.get(block.id)
-      if (row && currentAliasCount(row.properties[aliasesProp.name]) === 0) {
+      if (row && getAliases(row).length === 0) {
         await tx.setProperty(block.id, aliasesProp, [next])
       }
     }

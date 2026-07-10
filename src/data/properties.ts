@@ -275,6 +275,20 @@ export const hasBlockType = (
   typeId: string,
 ): boolean => getBlockTypes(data).includes(typeId)
 
+/** The block's `alias` list, tolerant of an absent / malformed value
+ *  (treated as none). Shared by every reader that only needs "which
+ *  aliases does this row claim" — the alias-sync processor, the
+ *  block-type typeify processor, the type-editor seed. */
+export const getAliases = (data: Pick<BlockData, 'properties'>): readonly string[] => {
+  const raw = data.properties[aliasesProp.name]
+  if (raw === undefined) return []
+  try {
+    return aliasesProp.codec.decode(raw)
+  } catch {
+    return []
+  }
+}
+
 /** Type-membership delta helpers for same-tx processors that watch the
  *  `properties` field. `row.before` is null on insert; `row.after` is
  *  null on hard-delete — both are null-safe here, returning the

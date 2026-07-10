@@ -27,6 +27,7 @@ import {
   normalizeReferences,
   type AnySameTxProcessor,
 } from '@/data/api'
+import { BLOCK_TYPE_KERNEL_PROCESSORS } from './blockTypeTypeifyProcessor'
 
 const referencesEqual = (
   a: ReturnType<typeof normalizeReferences>,
@@ -58,4 +59,8 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
 
 export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
   NORMALIZE_REFERENCES_PROCESSOR,
+  // Runs ahead of the alias plugin's content<->alias sync (kernel
+  // processors precede plugin ones), so a freshly-tagged block-type
+  // block claims its label alias before any reconciliation.
+  ...BLOCK_TYPE_KERNEL_PROCESSORS,
 ]

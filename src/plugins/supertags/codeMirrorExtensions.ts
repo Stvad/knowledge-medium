@@ -37,10 +37,9 @@ import type {
   CodeMirrorExtensionContext,
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
-import { ChangeScope } from '@/data/api'
-import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
+import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { getBlockTypes } from '@/data/properties'
-import { createTypeBlock, typeifyBlockInTx } from '@/data/typeExtraction'
+import { createTypeBlock } from '@/data/typeExtraction'
 import { showError } from '@/utils/toast'
 import {
   buildTypeTagCandidates,
@@ -69,30 +68,23 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
   /** Tag the block. Content is NOT touched here: the pick `apply`
    *  already stripped the command span from the view and flushed it to
    *  the row (see module doc), so `data.content` is the clean title by
-   *  the time this tx opens. */
+   *  the time this tx opens. When `typeId` is `block-type`, the kernel
+   *  `blockTypeTypeify` same-tx processor completes the type in this same
+   *  tx (adopt content→label, add PAGE_TYPE, claim the label alias) — it
+   *  fires for every block-type tag, so `#type` needs no special work
+   *  here. */
   const applyTag = async (typeId: string): Promise<void> => {
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
       if (!data || data.deleted) return
-      const snapshot = repo.snapshotTypeRegistries()
-      await repo.addTypeInTx(tx, block.id, typeId, {}, snapshot)
-      // `#type` turns the block ITSELF into a user-defined type: adopt
-      // its content as the type's name, tag it as a page, and claim the
-      // alias — so `book #type` yields a type named "book" that
-      // `[[book]]` resolves to.
-      if (typeId === BLOCK_TYPE_TYPE) {
-        await typeifyBlockInTx(repo, tx, block.id, snapshot)
-      }
+      await repo.addTypeInTx(tx, block.id, typeId, {}, repo.snapshotTypeRegistries())
     }, {scope: ChangeScope.BlockDefault, description: `tag type ${typeId}`})
   }
 
-  const pickType = async (
-    candidate: TypeTagCandidate,
-    // ctx (docBefore/docAfter) is only for the failure-restore path,
-    // owned by the completion `apply`; the tag itself never touches
-    // content, so pickType doesn't need it.
-    _ctx: TypeTagPickContext,
-  ): Promise<void> => {
+  // ctx (docBefore/docAfter) is only for the failure-restore path, owned
+  // by the completion `apply`; the tag itself never touches content, so
+  // pickType takes just the candidate (still satisfies the option type).
+  const pickType = async (candidate: TypeTagCandidate): Promise<void> => {
     try {
       if (candidate.kind === 'existing') {
         await applyTag(candidate.id)
@@ -115,13 +107,19 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
       }
       await applyTag(typeId)
     } catch (err) {
-      // "Couldn't finish": the create flow can fail AFTER the
-      // definition block committed (registration timeout) — the type
-      // may still appear moments later, and re-picking then reuses it
-      // via the registry re-check above.
-      showError(candidate.kind === 'create'
-        ? `Couldn't finish creating type "${candidate.label}"`
-        : `Couldn't tag with "${candidate.label}"`)
+      // Structured rejections (e.g. a name that collides with an
+      // existing alias) already surface their own specific toast via
+      // `repo.tx`'s userErrorListeners — a generic "couldn't finish" on
+      // top would double up and bury the real reason. Only the
+      // unexpected failures (e.g. the create flow failing AFTER the
+      // definition block committed on a registration timeout — the type
+      // may still appear moments later, re-picking reuses it) get the
+      // generic toast.
+      if (!(err instanceof ProcessorRejection)) {
+        showError(candidate.kind === 'create'
+          ? `Couldn't finish creating type "${candidate.label}"`
+          : `Couldn't tag with "${candidate.label}"`)
+      }
       throw err
     }
   }
