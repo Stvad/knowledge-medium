@@ -67,6 +67,15 @@ jobs:
       - name: Build packages
         run: yarn run compile
 
+      # upload-artifact's if-no-files-found checks the *combined* count across
+      # both paths, so it wouldn't catch one package's dist being empty while
+      # the other has files. Assert each package's entry point exists before we
+      # hand a possibly-partial artifact to the publish job.
+      - name: Verify build output
+        run: |
+          test -s packages/agent-cli/dist/cli.js
+          test -s packages/agent-dispatch/dist/daemon.js
+
       - name: Upload built package dists
         uses: actions/upload-artifact@v4
         with:
@@ -81,9 +90,13 @@ jobs:
           retention-days: 1
 
   publish:
-    # Inherits the master-only gate from `build` (default if: success() skips
-    # this when build is skipped/failed). No third-party code runs here.
+    # Inherits the master-only gate from `build` via needs. The explicit
+    # success() guard is defense-in-depth: this is the one condition the whole
+    # publish invariant hangs on, so state it rather than lean on the default —
+    # a future edit that copies an always()/!cancelled() pattern can't silently
+    # reopen the gate without a visible diff to this line.
     needs: build
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -104,9 +117,12 @@ jobs:
       # npm. Pin to a specific 11.x rather than @latest: @latest currently
       # resolves to npm 12.0.0, which crashes provenance generation with
       # "Cannot find module 'sigstore'" (npm/cli#9722). Bump deliberately once
-      # that's fixed and released.
+      # that's fixed and released. --ignore-scripts keeps this token-bearing job
+      # script-free by construction (npm@11.18.0 ships none today, but a future
+      # pin bump shouldn't be able to silently run install code beside the OIDC
+      # token).
       - name: Ensure npm supports trusted publishing
-        run: npm install -g npm@11.18.0
+        run: npm install -g npm@11.18.0 --ignore-scripts
 
       # Bring in the dist built by the token-less build job. This job runs no
       # yarn install and publishes with --ignore-scripts, so no third-party code
