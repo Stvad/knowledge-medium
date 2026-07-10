@@ -29,7 +29,7 @@
  *  arbiter, so wrapping the three into a single function would force
  *  every caller through the same confirmation shape. */
 
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import {
   BLOCK_TYPE_TYPE,
   PAGE_TYPE,
@@ -264,6 +264,61 @@ export async function createTypeBlock(
   )
 
   return newId
+}
+
+// ──── typeifyBlockInTx ──────────────────────────────────────────────
+
+const decodeAliasList = (encoded: unknown): readonly string[] => {
+  if (encoded === undefined) return []
+  try {
+    return aliasesProp.codec.decode(encoded)
+  } catch {
+    return []
+  }
+}
+
+/** Turn a block that has just become a `block-type` into a fully-formed
+ *  user-defined type, in the SAME tx as the type-add:
+ *
+ *   - **adopt content as the label** if it has none — an empty label
+ *     makes `UserTypesService.tryBuildType` drop the type, so `#type` on
+ *     a "book" block would otherwise register nothing;
+ *   - **tag it PAGE_TYPE** so it doubles as a navigable page (matches
+ *     `createTypeBlock`'s "type flow" pattern);
+ *   - **claim its name as an alias** so `[[name]]` resolves to this
+ *     block instead of minting a duplicate alias-seat page.
+ *
+ *  Every step is init-if-missing, so it's idempotent and never clobbers
+ *  a label / PAGE_TYPE / alias set explicitly upstream (a re-tag, or
+ *  `createTypeBlock` which writes all three itself). A blank block (no
+ *  content) is left unnamed — the user names it via the type editor,
+ *  which seeds the alias then (see `writeBlockTypeLabel`).
+ *
+ *  A name colliding with an existing alias is rejected by the workspace
+ *  alias-uniqueness trigger (`alias.collision`), same as
+ *  `createTypeBlock`; the whole tx rolls back atomically. */
+export async function typeifyBlockInTx(
+  repo: Repo,
+  tx: Tx,
+  blockId: string,
+  snapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
+): Promise<void> {
+  const row = await tx.get(blockId)
+  if (!row || row.deleted) return
+
+  const rawLabel = row.properties[blockTypeLabelProp.name]
+  const currentLabel = (typeof rawLabel === 'string' ? rawLabel : '').trim()
+  const name = currentLabel || row.content.trim()
+
+  if (currentLabel === '' && name !== '') {
+    await tx.setProperty(blockId, blockTypeLabelProp, name)
+  }
+  if (!hasBlockType(row, PAGE_TYPE)) {
+    await repo.addTypeInTx(tx, blockId, PAGE_TYPE, {}, snapshot)
+  }
+  if (name !== '' && decodeAliasList(row.properties[aliasesProp.name]).length === 0) {
+    await tx.setProperty(blockId, aliasesProp, [name])
+  }
 }
 
 // ──── retagBlocks ───────────────────────────────────────────────────

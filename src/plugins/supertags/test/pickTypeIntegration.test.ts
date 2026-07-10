@@ -95,6 +95,24 @@ describe('supertags pick integration', () => {
     expect(data!.content).toBe('call mom')
   })
 
+  it('#type turns the block ITSELF into a type named after its content', async () => {
+    env = await setup()
+    const blockId = await makeBlock(env.repo, 'Book #type')
+    // "Type" is the built-in block-type meta-type, now offered in `#`.
+    await pickAt(env.repo, blockId, 'Book #type', 'Type')
+
+    const data = await env.repo.load(blockId)
+    const types = getBlockTypes(data!)
+    expect(types).toContain('block-type')
+    expect(types).toContain('page')
+    expect(data!.content).toBe('Book')
+    expect(data!.properties['block-type:label']).toBe('Book')
+    expect(data!.properties.alias).toEqual(['Book'])
+    // The type doubles as its `[[Book]]` page — resolves to itself.
+    const resolved = await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()
+    expect(resolved?.id).toBe(blockId)
+  })
+
   it('create pick mints a registered type, tags the block, and strips the trigger', async () => {
     env = await setup()
     const blockId = await makeBlock(env.repo, 'dinner #recipe')

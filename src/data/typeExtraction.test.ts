@@ -22,6 +22,7 @@ import {
   createTypeBlock,
   findCandidatesByPropertyShape,
   retagBlocks,
+  typeifyBlockInTx,
 } from '@/data/typeExtraction'
 
 const WS = 'ws-type-extraction'
@@ -250,6 +251,96 @@ describe('createTypeBlock', () => {
       label: 'Task',
       propertySchemaIds: [],
     })).rejects.toThrow(/no Types page for workspace ws-other-no-bootstrap/)
+  })
+})
+
+// ──── typeifyBlockInTx ──────────────────────────────────────────────
+
+/** A block tagged `block-type` (via the `#type` path) but not yet
+ *  type-ified: has content + the meta-type, but no label / alias /
+ *  PAGE_TYPE — the state `typeifyBlockInTx` completes. */
+const createBlockTypeCandidate = async (
+  env: Harness,
+  content: string,
+  extraProps: Record<string, unknown> = {},
+): Promise<string> => {
+  const id = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+  await env.repo.tx(async tx => {
+    await tx.update(id, {content, properties: extraProps})
+    await env.repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {}, env.repo.snapshotTypeRegistries())
+  }, {scope: ChangeScope.BlockDefault})
+  return id
+}
+
+const runTypeify = async (env: Harness, id: string): Promise<void> => {
+  await env.repo.tx(async tx => {
+    await typeifyBlockInTx(env.repo, tx, id)
+  }, {scope: ChangeScope.BlockDefault})
+}
+
+describe('typeifyBlockInTx', () => {
+  it('adopts content as the label, tags PAGE_TYPE, and claims the alias', async () => {
+    env = await setup()
+    const id = await createBlockTypeCandidate(env, 'Book')
+    await runTypeify(env, id)
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect(getBlockTypes(row!)).toContain(PAGE_TYPE)
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+    // `[[Book]]` resolves to this block, not a duplicate seat.
+    const resolved = await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Book'}).load()
+    expect(resolved?.id).toBe(id)
+  })
+
+  it('is idempotent — re-running does not clobber or duplicate', async () => {
+    env = await setup()
+    const id = await createBlockTypeCandidate(env, 'Book')
+    await runTypeify(env, id)
+    await runTypeify(env, id)
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Book')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Book'])
+    expect(getBlockTypes(row!).filter(t => t === PAGE_TYPE)).toHaveLength(1)
+  })
+
+  it('never overwrites an explicitly-set label/alias (createTypeBlock-style)', async () => {
+    env = await setup()
+    // Label already set to something other than content; alias already
+    // claimed. typeify must leave both untouched.
+    const id = await createBlockTypeCandidate(env, 'Book', {
+      [blockTypeLabelProp.name]: 'Custom',
+      [aliasesProp.name]: ['Custom'],
+    })
+    await runTypeify(env, id)
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBe('Custom')
+    expect(row!.properties[aliasesProp.name]).toEqual(['Custom'])
+  })
+
+  it('leaves a blank block unnamed (no label/alias) but still a page', async () => {
+    env = await setup()
+    const id = await createBlockTypeCandidate(env, '   ')
+    await runTypeify(env, id)
+
+    const row = await env.repo.load(id)
+    expect(row!.properties[blockTypeLabelProp.name]).toBeUndefined()
+    expect(row!.properties[aliasesProp.name]).toBeUndefined()
+    expect(getBlockTypes(row!)).toContain(PAGE_TYPE)
+  })
+
+  it('rejects when the adopted name collides with an existing page alias', async () => {
+    env = await setup()
+    const pageId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+    await env.repo.tx(async tx => {
+      await tx.update(pageId, {content: 'Book'})
+      await tx.setProperty(pageId, aliasesProp, ['Book'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const id = await createBlockTypeCandidate(env, 'Book')
+    await expect(runTypeify(env, id)).rejects.toMatchObject({code: 'alias.collision'})
   })
 })
 

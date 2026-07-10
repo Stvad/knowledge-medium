@@ -70,7 +70,13 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({
     id: BLOCK_TYPE_TYPE,
     label: 'Type',
-    ...INFRASTRUCTURE_TYPE_DISPLAY,
+    // Offered in the `#` menu (Tana-style): `book #type` turns the block
+    // into a user-defined type named after its content (see
+    // `typeifyBlockInTx`). NOT `...INFRASTRUCTURE_TYPE_DISPLAY` — that
+    // would hide it from completion. `hideFromBlockDisplay` because a
+    // block that IS a type renders via BlockTypeBlockRenderer, so a
+    // `#Type` chip would be redundant chrome.
+    hideFromBlockDisplay: true,
     // Lift label / description / properties / tag-display fields so the
     // panel surfaces them through the type-section path when editing a
     // block-type block.

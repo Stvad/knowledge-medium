@@ -2,6 +2,7 @@ import { useId, useMemo, useState, type KeyboardEvent } from 'react'
 import { Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { type PropertyEditorProps } from '@/data/api'
+import { BLOCK_TYPE_TYPE } from '@/data/blockTypes.js'
 import { Block } from '@/data/block'
 import { useTypes } from '@/hooks/typeRegistry.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
@@ -74,12 +75,21 @@ export function TypesPropertyEditor({
   // back to row 0" from "never navigated".
   const [navigated, setNavigated] = useState(false)
   const typesRegistry = useTypes()
-  const options = useMemo<TypeOption[]>(() => Array.from(typesRegistry.values()).map(type => ({
-    id: type.id,
-    label: type.label ?? type.id,
-    description: type.description,
-    hideFromCompletion: type.hideFromCompletion === true,
-  })), [typesRegistry])
+  const options = useMemo<TypeOption[]>(() => Array.from(typesRegistry.values())
+    // `block-type` is deliberately not addable here: turning a block
+    // INTO a type is the `#type` gesture, which adopts the block's
+    // content as the type name (typeifyBlockInTx). Offering it in this
+    // generic picker would instead tag the block with no name — an
+    // unregistered, alias-less half-type. Already-typed blocks still
+    // show their `block-type` chip (rendered from the registry, not this
+    // list).
+    .filter(type => type.id !== BLOCK_TYPE_TYPE)
+    .map(type => ({
+      id: type.id,
+      label: type.label ?? type.id,
+      description: type.description,
+      hideFromCompletion: type.hideFromCompletion === true,
+    })), [typesRegistry])
   const queryText = query.trim().toLowerCase()
   const filtered = useMemo(() => options.filter(option => {
     if (selectedSet.has(option.id)) return false

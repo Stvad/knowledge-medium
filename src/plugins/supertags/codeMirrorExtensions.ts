@@ -35,8 +35,9 @@ import type {
   CodeMirrorExtensionContribution,
 } from '@/editor/codeMirrorExtensions.js'
 import { ChangeScope } from '@/data/api'
+import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { getBlockTypes } from '@/data/properties'
-import { createTypeBlock } from '@/data/typeExtraction'
+import { createTypeBlock, typeifyBlockInTx } from '@/data/typeExtraction'
 import { showError } from '@/utils/toast'
 import {
   buildTypeTagCandidates,
@@ -74,10 +75,19 @@ export const buildTypeTagSource = ({repo, block}: CodeMirrorExtensionContext): C
     await repo.tx(async tx => {
       const data = await tx.get(block.id)
       if (!data || data.deleted) return
-      await repo.addTypeInTx(tx, block.id, typeId)
+      const snapshot = repo.snapshotTypeRegistries()
+      await repo.addTypeInTx(tx, block.id, typeId, {}, snapshot)
       const stripped = planTriggerStrip(data.content, ctx)
       if (stripped !== null) {
         await tx.update(block.id, {content: stripped})
+      }
+      // `#type` turns the block ITSELF into a user-defined type: adopt
+      // its (command-stripped) content as the type's name, tag it as a
+      // page, and claim the alias — so `book #type` yields a type named
+      // "book" that `[[book]]` resolves to. Runs after the strip so the
+      // name is the clean title, not "book #type".
+      if (typeId === BLOCK_TYPE_TYPE) {
+        await typeifyBlockInTx(repo, tx, block.id, snapshot)
       }
     }, {scope: ChangeScope.BlockDefault, description: `tag type ${typeId}`})
   }
