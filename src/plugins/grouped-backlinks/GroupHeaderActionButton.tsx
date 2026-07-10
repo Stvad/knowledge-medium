@@ -5,6 +5,7 @@ import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { useUIStateBlock } from '@/data/globalState.js'
 import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import { getEffectiveActions } from '@/shortcuts/effectiveActions.js'
+import { useBlockContext } from '@/context/block.js'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -44,6 +45,7 @@ export const GroupHeaderActionButton = ({
 }: GroupHeaderActionButtonProps) => {
   const runtime = useAppRuntime()
   const uiStateBlock = useUIStateBlock()
+  const {renderVisibilityPolicy} = useBlockContext()
 
   const action = useMemo(
     () => {
@@ -65,6 +67,7 @@ export const GroupHeaderActionButton = ({
     selectedBlocks: sourceBlocks as Block[],
     anchorBlock: null,
     uiStateBlock,
+    renderVisibilityPolicy,
   }
   if (action.isVisible && !action.isVisible(deps)) return null
 

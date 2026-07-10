@@ -128,7 +128,7 @@ describe('copyAgentResumeCommandActions', () => {
     const withSession = await createBlock('with-session', {[AGENT_PROPS.session]: 'sess-1'})
     const withoutSession = await createBlock('without-session')
 
-    expect(action.isVisible!({block: withSession, uiStateBlock: withSession})).toBe(true)
-    expect(action.isVisible!({block: withoutSession, uiStateBlock: withoutSession})).toBe(false)
+    expect(action.isVisible!({block: withSession, uiStateBlock: withSession, renderVisibilityPolicy: {}})).toBe(true)
+    expect(action.isVisible!({block: withoutSession, uiStateBlock: withoutSession, renderVisibilityPolicy: {}})).toBe(false)
   })
 })

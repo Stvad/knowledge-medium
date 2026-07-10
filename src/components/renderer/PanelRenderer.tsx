@@ -26,6 +26,7 @@ import {
 import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
 import { outlineRenderScopeId } from '@/utils/renderScope.js'
 import { forceOpenScopeRootPolicy } from '@/utils/renderVisibility.js'
+import type { RenderVisibilityPolicy } from '@/types.js'
 import type { MouseEvent, PointerEvent } from 'react'
 
 const SCROLL_WRITE_DELAY_MS = 200
@@ -34,7 +35,13 @@ const PANEL_ACTION_BUTTON_CLASS =
 const PANEL_HISTORY_BUTTON_CLASS =
   `${PANEL_ACTION_BUTTON_CLASS} disabled:text-muted-foreground/40 disabled:hover:bg-background/60 disabled:hover:text-muted-foreground/40`
 
-function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
+function PanelMultiSelectActionContext({
+  scopeRootId,
+  renderVisibilityPolicy,
+}: {
+  scopeRootId: string
+  renderVisibilityPolicy: RenderVisibilityPolicy
+}) {
   const [selectionState] = useSelectionState()
   const repo = useRepo()
 
@@ -48,8 +55,9 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
       // root is the panel's zoom root. Forwarded to per-block structural
       // actions (indent/outdent/delete) via applyToAllBlocksInSelection.
       scopeRootId,
+      renderVisibilityPolicy,
     }
-  }, [selectionState, repo, scopeRootId])
+  }, [selectionState, repo, scopeRootId, renderVisibilityPolicy])
 
   useActionContext(
     ActionContextTypes.MULTI_SELECT_MODE,
@@ -165,14 +173,18 @@ export function PanelRenderer({block}: BlockRendererProps) {
     void deletePanelRow(repo, block.id)
   }
 
-  const panelBodyContextOverrides = useMemo(() => topLevelBlockId
+  const panelRenderVisibilityPolicy = useMemo(() => topLevelBlockId
+    ? forceOpenScopeRootPolicy(topLevelBlockId)
+    : null, [topLevelBlockId])
+
+  const panelBodyContextOverrides = useMemo(() => topLevelBlockId && panelRenderVisibilityPolicy
     ? {
         layoutBoundary: false,
         renderScopeId: outlineRenderScopeId(topLevelBlockId),
         scopeRootId: topLevelBlockId,
-        renderVisibilityPolicy: forceOpenScopeRootPolicy(topLevelBlockId),
+        renderVisibilityPolicy: panelRenderVisibilityPolicy,
       }
-    : null, [topLevelBlockId])
+    : null, [topLevelBlockId, panelRenderVisibilityPolicy])
 
   if (!topLevelBlockId) {
      console.warn(`Panel ${block.id} has no topLevelBlockId, skipping render.`)
@@ -242,7 +254,12 @@ export function PanelRenderer({block}: BlockRendererProps) {
       className={`panel min-w-0 max-w-full flex flex-col relative ${
         stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
       } ${isActivePanel ? 'panel-active' : ''}`}>
-      {isActivePanel && <PanelMultiSelectActionContext scopeRootId={topLevelBlockId}/>}
+      {isActivePanel && (
+        <PanelMultiSelectActionContext
+          scopeRootId={topLevelBlockId}
+          renderVisibilityPolicy={panelRenderVisibilityPolicy!}
+        />
+      )}
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
           <div className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5">

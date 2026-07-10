@@ -44,6 +44,7 @@ const isPropertyEditingDependencies = (deps: unknown): deps is PropertyEditingDe
 
 const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDependencies =>
   isBaseShortcutDependencies(deps) &&
+  hasRenderVisibilityPolicy(deps) &&
   typeof deps === 'object' && deps !== null &&
   'selectedBlocks' in deps && Array.isArray(deps.selectedBlocks) && (deps.selectedBlocks as unknown[]).every(b => b instanceof Block) &&
   'anchorBlock' in deps && (deps.anchorBlock === null || deps.anchorBlock instanceof Block)

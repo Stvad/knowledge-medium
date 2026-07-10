@@ -110,7 +110,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   // dropping all but the last block's animation). The per-action
   // wraps inside the inner handlers are reentrancy-suppressed.
   const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
-    const {selectedBlocks, uiStateBlock, scopeRootId} = multiSelectDeps
+    const {selectedBlocks, uiStateBlock, scopeRootId, renderVisibilityPolicy} = multiSelectDeps
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
@@ -132,6 +132,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
           block,
           uiStateBlock,
           scopeRootId,
+          renderVisibilityPolicy,
         } as ShortcutDependenciesMap[T]
 
         await (runtime

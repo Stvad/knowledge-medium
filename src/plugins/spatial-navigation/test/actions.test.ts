@@ -219,6 +219,7 @@ describe('spatial navigation selection actions', () => {
       uiStateBlock: panel,
       selectedBlocks: [env.repo.block('A')],
       anchorBlock: env.repo.block('A'),
+      renderVisibilityPolicy: {},
     } satisfies MultiSelectModeDependencies, {} as ActionTrigger)
 
     expect(fallback).not.toHaveBeenCalled()
@@ -255,6 +256,7 @@ describe('spatial navigation selection actions', () => {
       uiStateBlock: panel,
       selectedBlocks: [env.repo.block('A')],
       anchorBlock: env.repo.block('A'),
+      renderVisibilityPolicy: {},
     } satisfies MultiSelectModeDependencies, {} as ActionTrigger)
 
     expect(fallback).not.toHaveBeenCalled()

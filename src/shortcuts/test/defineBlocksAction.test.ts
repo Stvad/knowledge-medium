@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
-import { defineBlocksAction, multiSelectActionId } from '../utils.ts'
+import { applyToAllBlocksInSelection, defineBlocksAction, multiSelectActionId } from '../utils.ts'
 import { ActionContextTypes } from '../types.ts'
 
 const fakeBlock = (id: string): Block => ({id} as unknown as Block)
@@ -51,7 +51,7 @@ describe('defineBlocksAction', () => {
     const selectedBlocks = [fakeBlock('a'), fakeBlock('b')]
     const uiStateBlock = fakeBlock('ui')
     await pair.blocks.handler(
-      {selectedBlocks, anchorBlock: null, uiStateBlock},
+      {selectedBlocks, anchorBlock: null, uiStateBlock, renderVisibilityPolicy: {}},
       new CustomEvent('test'),
     )
     expect(flow).toHaveBeenCalledTimes(1)
@@ -122,5 +122,45 @@ describe('defineBlocksAction', () => {
         renderVisibilityPolicy: {},
       }),
     ).toBe(true)
+  })
+})
+
+describe('applyToAllBlocksInSelection', () => {
+  it('forwards the surface visibility policy to every block action', async () => {
+    const handler = vi.fn(async () => undefined)
+    const action = applyToAllBlocksInSelection({
+      id: 'test.op',
+      context: ActionContextTypes.NORMAL_MODE,
+      description: 'do the thing',
+      handler,
+    })
+    const selectedBlocks = [fakeBlock('a'), fakeBlock('b')]
+    const renderVisibilityPolicy = {forceOpenBlockIds: ['ancestor']}
+    const uiStateBlock = {
+      id: 'ui',
+      repo: {facetRuntime: undefined},
+    } as unknown as Block
+
+    await action.handler({
+      selectedBlocks,
+      anchorBlock: selectedBlocks[0],
+      uiStateBlock,
+      scopeRootId: 'root',
+      renderVisibilityPolicy,
+    }, new CustomEvent('test'))
+
+    expect(handler).toHaveBeenCalledTimes(2)
+    expect(handler).toHaveBeenNthCalledWith(1, {
+      block: selectedBlocks[0],
+      uiStateBlock,
+      scopeRootId: 'root',
+      renderVisibilityPolicy,
+    }, expect.any(CustomEvent))
+    expect(handler).toHaveBeenNthCalledWith(2, {
+      block: selectedBlocks[1],
+      uiStateBlock,
+      scopeRootId: 'root',
+      renderVisibilityPolicy,
+    }, expect.any(CustomEvent))
   })
 })

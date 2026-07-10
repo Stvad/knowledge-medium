@@ -151,6 +151,7 @@ export interface PropertyEditingDependencies extends BlockShortcutDependencies {
 export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
   selectedBlocks: Block[];
   anchorBlock: Block | null; // The block that started a shift-selection range
+  renderVisibilityPolicy: RenderVisibilityPolicy;
 }
 
 /**
