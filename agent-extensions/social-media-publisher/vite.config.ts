@@ -26,7 +26,7 @@ export default defineConfig({
     lib: {
       entry: resolve(configDir, 'src/index.ts'),
       formats: ['es'],
-      fileName: () => 'index.js',
+      fileName: () => 'Social Media Publisher.js',
     },
     rollupOptions: {
       external: isExtensionRuntimeExternal,

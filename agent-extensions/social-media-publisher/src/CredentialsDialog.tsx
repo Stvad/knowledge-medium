@@ -2,6 +2,7 @@ import {
   definePropertyEditorOverride,
   type PropertyEditorProps,
 } from '@/extensions/api.js'
+import type {Block} from '@/data/block.js'
 import {openDialog, type DialogContextProps} from '@/utils/dialogs.js'
 import {showInfo, showSuccess} from '@/utils/toast.js'
 import {Button} from '@/components/ui/button.js'
@@ -15,7 +16,7 @@ import {
 } from '@/components/ui/dialog.js'
 import {Input} from '@/components/ui/input.js'
 import {Label} from '@/components/ui/label.js'
-import {useEffect, useState} from 'react'
+import {useEffect, useState, useSyncExternalStore} from 'react'
 
 import {
   AlertCircleIcon,
@@ -27,11 +28,15 @@ import {
   clearBufferToken,
   clearLessWrongToken,
   loadConfig,
+  loadBlueskyAppPassword,
+  loadBufferToken,
+  loadLessWrongToken,
+  getCredentialSnapshot,
   prefsBlock,
   saveBlueskyAppPassword,
   saveBufferToken,
   saveLessWrongToken,
-  updateCredentialHints,
+  subscribeCredentialState,
 } from './credentials'
 import {
   blueskyConnectedHintProp,
@@ -40,6 +45,7 @@ import {
   lesswrongConnectedHintProp,
   twitterConnectedHintProp,
 } from './properties'
+import type {PlatformId} from './types'
 
 interface CredentialsDialogProps {
   repo: any
@@ -88,7 +94,6 @@ export const CredentialsDialog = ({
       if (bufferToken.trim()) saveBufferToken(bufferToken.trim())
       if (blueskyPassword.trim()) saveBlueskyAppPassword(blueskyPassword.trim())
       if (lesswrongToken.trim()) saveLessWrongToken(lesswrongToken.trim())
-      await updateCredentialHints(repo)
       showSuccess('Saved social publisher credentials')
       resolve(true)
     } finally {
@@ -100,7 +105,6 @@ export const CredentialsDialog = ({
     clearBufferToken()
     clearBlueskyAppPassword()
     clearLessWrongToken()
-    await updateCredentialHints(repo)
     setBufferToken('')
     setBlueskyPassword('')
     setLesswrongToken('')
@@ -190,19 +194,59 @@ export const CredentialsDialog = ({
   )
 }
 
-const ConnectedHintEditor = ({value}: PropertyEditorProps<boolean>) => (
-  <span
-    style={{
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6,
-      fontSize: 12,
-      color: value ? 'var(--foreground)' : 'var(--muted-foreground)',
-    }}
-  >
-    {value ? <CheckCircleIcon style={{width: 14, height: 14}} /> : <AlertCircleIcon style={{width: 14, height: 14}} />}
-    {value ? 'configured on this device' : 'not configured on this device'}
-  </span>
+const ConnectedHintEditor = ({
+  platform,
+  block,
+}: PropertyEditorProps<boolean> & {platform: PlatformId}) => {
+  useSyncExternalStore(
+    subscribeCredentialState,
+    getCredentialSnapshot,
+    getCredentialSnapshot,
+  )
+  const settingsBlock = block as Block
+  const configured = platform === 'twitter'
+    ? Boolean(loadBufferToken())
+    : platform === 'bluesky'
+      ? Boolean(settingsBlock.peekProperty(blueskyHandleProp) && loadBlueskyAppPassword())
+      : Boolean(loadLessWrongToken())
+  const repo = settingsBlock.repo
+  return (
+    <div className='flex items-center gap-2'>
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 12,
+          color: configured ? 'var(--foreground)' : 'var(--muted-foreground)',
+        }}
+      >
+        {configured ? <CheckCircleIcon style={{width: 14, height: 14}} /> : <AlertCircleIcon style={{width: 14, height: 14}} />}
+        {configured ? 'configured on this device' : 'not configured on this device'}
+      </span>
+      <Button
+        type='button'
+        variant='outline'
+        size='sm'
+        onClick={() => { void openCredentialsDialog(repo) }}
+      >
+        <SettingsIcon className='mr-2 h-4 w-4' />
+        Manage...
+      </Button>
+    </div>
+  )
+}
+
+const TwitterConnectedHintEditor = (props: PropertyEditorProps<boolean>) => (
+  <ConnectedHintEditor {...props} platform='twitter' />
+)
+
+const BlueskyConnectedHintEditor = (props: PropertyEditorProps<boolean>) => (
+  <ConnectedHintEditor {...props} platform='bluesky' />
+)
+
+const LessWrongConnectedHintEditor = (props: PropertyEditorProps<boolean>) => (
+  <ConnectedHintEditor {...props} platform='lesswrong' />
 )
 
 export const blueskyHandleEditor = definePropertyEditorOverride<string>({
@@ -218,19 +262,19 @@ export const corsProxyUrlEditor = definePropertyEditorOverride<string>({
 export const twitterConnectedEditor = definePropertyEditorOverride<boolean>({
   name: twitterConnectedHintProp.name,
   label: 'X / Twitter',
-  Editor: ConnectedHintEditor,
+  Editor: TwitterConnectedHintEditor,
 })
 
 export const blueskyConnectedEditor = definePropertyEditorOverride<boolean>({
   name: blueskyConnectedHintProp.name,
   label: 'Bluesky',
-  Editor: ConnectedHintEditor,
+  Editor: BlueskyConnectedHintEditor,
 })
 
 export const lesswrongConnectedEditor = definePropertyEditorOverride<boolean>({
   name: lesswrongConnectedHintProp.name,
   label: 'LessWrong',
-  Editor: ConnectedHintEditor,
+  Editor: LessWrongConnectedHintEditor,
 })
 
 export const openCredentialsDialog = async (repo: any): Promise<void> => {
