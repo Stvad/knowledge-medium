@@ -5,6 +5,7 @@ import { resetBlockSelection } from '@/data/stateBlocks.js'
 import { copyBlockToClipboard } from '@/utils/copy.js'
 import { absoluteAppUrl, buildAppHash } from '@/utils/routing.js'
 import { withMoveTransition } from '@/utils/viewTransition.js'
+import { withRowSlide } from '@/utils/flipSlide.js'
 import {
   editorSelection,
   isCollapsedProp,
@@ -179,17 +180,17 @@ export const extendSelectionUp = async (
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
-  // In-place structural shifts (indent/outdent/move/swap) deliberately
-  // run WITHOUT `withMoveTransition`. The root-level crossfade ghosts
-  // the shifting content at both old and new positions over the 250ms
-  // transition window — text overlaps itself mid-flight, reading as
-  // blur rather than movement. The atomic DOM update gives a clean
-  // instant shift, which reads correctly as "the block moved" without
-  // overlap. The data-layer `NotifyBatch` fix is what killed the
-  // original flicker; the view-transition wrap was added as polish
-  // and turned out to be net-negative for these specific operations.
-  // A future scoped-VT / per-element setup that doesn't lift everything
-  // into the document-root overlay could re-enable a slide here.
+  // In-place structural shifts deliberately run WITHOUT
+  // `withMoveTransition`: the root-level crossfade ghosts the shifting
+  // content at both old and new positions (text overlaps itself
+  // mid-flight, reading as blur), and the per-block view-transition-name
+  // attempt had its own artifacts (see DefaultBlockRenderer). The atomic
+  // DOM update from the `NotifyBatch` fix stays the substrate; move
+  // up/down now layers `withRowSlide` on top — the per-element setup the
+  // old note here wished for: element-level FLIP with plain transform
+  // transitions, no snapshot overlay, no duplicated text. Indent/outdent
+  // stay instant for now: horizontal reflow changes line wrapping, which
+  // translation-only FLIP can't express cleanly.
   const indentBlock: BlockAction = {
     id: 'indent_block',
     description: 'Indent block',
@@ -241,7 +242,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
-      await reorderBlock(repo, block, -1, scopeRootId)
+      await withRowSlide(() => reorderBlock(repo, block, -1, scopeRootId))
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -259,7 +260,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block) return
-      await reorderBlock(repo, block, 1, scopeRootId)
+      await withRowSlide(() => reorderBlock(repo, block, 1, scopeRootId))
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
