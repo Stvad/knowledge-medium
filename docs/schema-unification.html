@@ -205,8 +205,12 @@
 
 <pre><code>interface PropertySchema&lt;T&gt; {
   readonly name: string
-  readonly fieldId: string        // the definition block id — THE identity (registry entries only, see below)
-  readonly workspaceId: string    // the workspace this entry belongs to (registry entries are per-workspace, §4.4)
+  readonly fieldId?: string       // the definition block id — THE identity. Present iff a workspace is
+  readonly workspaceId?: string   //   pinned; absent in the no-workspace state (§4.4 stage 0 /
+                                  //   setActiveWorkspaceId(null)), where nothing may persist ids.
+                                  //   Identity-persisting writers never read these off an ambient entry —
+                                  //   they resolve through the tx-bound workspace-keyed snapshot (§4.4),
+                                  //   which guarantees presence. Optional typing is what forces that guard.
   readonly codec: Codec&lt;T&gt;        // preset.build(config)
   readonly defaultValue: T        // decoded property-schema:default, else preset.defaultValue
   readonly changeScope: ChangeScope
