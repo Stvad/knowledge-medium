@@ -262,10 +262,15 @@ export const planEditModeMultilinePaste = (
   const prefix = currentContent.slice(0, from)
   const suffix = currentContent.slice(to)
   const createsAdditionalBlocks = parsed.some(block => block.id !== absorbedRoot.id)
-  const contentBeforeStructuralBreak = `${prefix}${editorContentForFirstPastedLine(
-    pastedText,
-    absorbedRoot.content,
-  )}`
+  // A multi-line absorbed root is a fenced code block (the only parse that
+  // yields one block spanning newlines). Its content is atomic — the
+  // "merge only the first source line" rule would drop the code body, so
+  // merge the whole block. Single-line roots keep the first-line merge
+  // (strips the bullet marker, preserves leading whitespace at the cursor).
+  const mergedFirstContent = absorbedRoot.content.includes('\n')
+    ? absorbedRoot.content
+    : editorContentForFirstPastedLine(pastedText, absorbedRoot.content)
+  const contentBeforeStructuralBreak = `${prefix}${mergedFirstContent}`
 
   return {
     parsed,

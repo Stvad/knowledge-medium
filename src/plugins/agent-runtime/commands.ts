@@ -23,7 +23,7 @@ import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
 import { keyAtEnd } from '@/data/orderKey.js'
-import { parseMarkdownToBlocks } from '@/utils/markdownParser.js'
+import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
   appEffectsFacet,
@@ -62,8 +62,8 @@ import type {
   AgentRuntimeContext,
   BlockPosition,
   CreateBlockInput,
-  CreateBlocksFromMarkdownInput,
-  CreateBlocksFromMarkdownResult,
+  ReconcileMarkdownSubtreeInput,
+  ReconcileMarkdownSubtreeResult,
   DeleteBlockInput,
   DeleteBlockResult,
   ExtensionVerificationResult,
@@ -331,108 +331,128 @@ const createRuntimeBlock = async (
   return repo.load(id)
 }
 
-/** Create a whole block subtree from markdown, in ONE transaction, under
- *  `parentId` — appended after any existing children. The markdown is
+/** App-owned property that tags every block of a reconciled subtree with
+ *  its caller-supplied `key`. The reconcile identifies "this subtree" by
+ *  this tag, so it never touches user content interleaved under the same
+ *  parent, and successive reconciles of the same key converge in place. */
+const SUBTREE_KEY_PROP = 'agent:subtreeKey'
+
+/** Reconcile the keyed block subtree under `parentId` to match `markdown`,
+ *  in ONE transaction (atomic — never a partial tree). The markdown is
  *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
- *  split matches "paste as markdown" exactly; `properties` are applied to
- *  every created block (the claude-tasks daemon passes `claude:reply`).
+ *  split matches "paste as markdown" exactly; `shape:'block'` keeps it one
+ *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
+ *  (the daemon passes `claude:reply`).
  *
- *  Atomic by design: the daemon must never leave a PARTIAL reply tree, so
- *  every block lands in the same `repo.tx` or none do. `rootBlockId`, when
- *  present, is REUSED as the first root (its content is overwritten, its
- *  order key left in place) rather than created — so a streamed placeholder
- *  becomes the reply's first block instead of being orphaned. */
-const createBlocksFromMarkdown = async (
+ *  Idempotent by `key`: the tagged subtree is made EQUAL the parsed tree by
+ *  a positional (pre-order) reconcile — update the block at each position,
+ *  re-parent/re-order if the structure drifted, create new tail nodes, and
+ *  (only on `final`) delete trailing tagged blocks with no parsed
+ *  counterpart. So re-sending the same markdown is a no-op and a growing
+ *  markdown (a live stream) just extends the tail — no duplication, safe to
+ *  retry. This unifies "stream the reply" and "split the reply": streaming
+ *  is repeated reconciles with the growing text; the terminal write is the
+ *  last reconcile. */
+const reconcileMarkdownSubtree = async (
   repo: Repo,
-  input: CreateBlocksFromMarkdownInput,
-): Promise<CreateBlocksFromMarkdownResult> => {
-  const parsed = parseMarkdownToBlocks(input.markdown)
-  const {properties, rootBlockId} = input
+  input: ReconcileMarkdownSubtreeInput,
+): Promise<ReconcileMarkdownSubtreeResult> => {
+  const {parentId, key, properties, shape, final} = input
+  // shape 'block' → the whole markdown is ONE root block (newlines kept);
+  // 'outline' (default) → split along the markdown outline.
+  const parsed: ParsedBlock[] = shape === 'block'
+    ? (input.markdown.length === 0
+        ? []
+        : [{id: 'block-root', orderKey: '', content: input.markdown}])
+    : parseMarkdownToBlocks(input.markdown)
 
-  // Nothing parseable (blank/whitespace). If a placeholder is still a live
-  // child of the mention, clear it so it isn't left saying "Claude is
-  // working…"; if the user deleted/moved it, there's nothing to do (don't
-  // resurrect or blank a moved block).
-  if (parsed.length === 0) {
-    if (!rootBlockId) return {ids: [], rootIds: []}
-    let cleared = false
-    await repo.tx(async tx => {
-      const parent = await tx.get(input.parentId)
-      if (!parent) return
-      const child = (await tx.childrenOf(input.parentId, parent.workspaceId)).find(row => row.id === rootBlockId)
-      if (!child) return
-      cleared = true
-      await tx.update(rootBlockId, {
-        content: '',
-        ...(properties ? {properties: {...child.properties, ...properties}} : {}),
-      })
-    }, {scope: ChangeScope.BlockDefault, description: 'agent runtime clear reply placeholder'})
-    return cleared ? {ids: [rootBlockId], rootIds: [rootBlockId]} : {ids: [], rootIds: []}
-  }
-
-  const idMap = new Map<string, string>() // parsed temp id → real block id
-  const rootIds: string[] = []
   const ids: string[] = []
+  const rootIds: string[] = []
 
   await repo.tx(async tx => {
-    const parent = await tx.get(input.parentId)
-    if (!parent) throw new Error(`create-blocks-from-markdown: parent ${input.parentId} not found`)
+    const parent = await tx.get(parentId)
+    if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
     const {workspaceId} = parent
 
-    // Reply roots append AFTER existing children (the mention's own
-    // sub-items, prior replies). Track the last order key per real parent
-    // so siblings created in this pass stay ordered; seed the mention with
-    // its current last child (which already includes a reused placeholder).
-    const existingChildren = await tx.childrenOf(input.parentId, workspaceId)
-    const lastKeyByParent = new Map<string, string | null>([
-      [input.parentId, existingChildren.at(-1)?.orderKey ?? null],
-    ])
-
-    // The placeholder is best-effort: the user may have deleted it (→ not a
-    // live child) or moved it out from under the mention (→ not in this
-    // child list) while the run was still streaming. Reuse it ONLY if it's
-    // still a live child of the mention; otherwise create every root fresh
-    // rather than throw away the (billed) answer or overwrite a moved block.
-    const reusableRoot = rootBlockId
-      ? existingChildren.find(child => child.id === rootBlockId)
-      : undefined
-
-    let firstRootReused = false
-    for (const block of parsed) {
-      const isRoot = !block.parentId
-      const realParentId = isRoot ? input.parentId : idMap.get(block.parentId!)!
-
-      // Reuse the placeholder for the first root: overwrite content, merge
-      // properties, keep its existing order key (it's already a child).
-      if (isRoot && reusableRoot && !firstRootReused) {
-        firstRootReused = true
-        const mergedProperties = properties ? {...reusableRoot.properties, ...properties} : undefined
-        await tx.update(reusableRoot.id, {
-          content: block.content,
-          ...(mergedProperties !== undefined ? {properties: mergedProperties} : {}),
-        })
-        idMap.set(block.id, reusableRoot.id)
-        rootIds.push(reusableRoot.id)
-        ids.push(reusableRoot.id)
-        continue
+    // This subtree's existing blocks, in pre-order (the target we reconcile
+    // onto). Walk children depth-first following ONLY tagged blocks, so user
+    // content interleaved under the parent is skipped and never touched.
+    const existing: BlockData[] = []
+    const collect = async (pid: string): Promise<void> => {
+      for (const child of await tx.childrenOf(pid, workspaceId)) {
+        if (child.properties?.[SUBTREE_KEY_PROP] !== key) continue
+        existing.push(child)
+        await collect(child.id)
       }
+    }
+    await collect(parentId)
 
-      const id = crypto.randomUUID()
+    // Last order key per real parent, for APPENDING new nodes after whatever
+    // is already there (user content + earlier tagged siblings). Seeded
+    // lazily from the live child list so new nodes always land last.
+    const lastKeyByParent = new Map<string, string | null>()
+    const appendKey = async (realParentId: string): Promise<string> => {
+      if (!lastKeyByParent.has(realParentId)) {
+        const children = await tx.childrenOf(realParentId, workspaceId)
+        lastKeyByParent.set(realParentId, children.at(-1)?.orderKey ?? null)
+      }
       const orderKey = keyAtEnd(lastKeyByParent.get(realParentId) ?? null)
       lastKeyByParent.set(realParentId, orderKey)
-      await tx.create({
-        id,
-        workspaceId,
-        parentId: realParentId,
-        orderKey,
-        content: block.content,
-        ...(properties !== undefined ? {properties} : {}),
-      })
-      idMap.set(block.id, id)
-      if (isRoot) rootIds.push(id)
-      ids.push(id)
+      return orderKey
     }
-  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create blocks from markdown'})
+
+    const idMap = new Map<string, string>()          // parsed id → real id
+    const blockProps = {...(properties ?? {}), [SUBTREE_KEY_PROP]: key}
+
+    for (let i = 0; i < parsed.length; i += 1) {
+      const node = parsed[i]
+      const realParentId = node.parentId ? idMap.get(node.parentId)! : parentId
+      const match = i < existing.length ? existing[i] : undefined
+
+      if (match) {
+        // Reconcile the block already at this pre-order position: update its
+        // content, and re-parent/re-order only if the structure drifted
+        // (a no-op on the common append-only stream, where the prefix is
+        // stable and only the tail grows).
+        idMap.set(node.id, match.id)
+        if (match.content !== node.content) {
+          await tx.update(match.id, {content: node.content})
+        }
+        if (match.parentId !== realParentId) {
+          await tx.move(match.id, {parentId: realParentId, orderKey: await appendKey(realParentId)})
+        }
+      } else {
+        const id = crypto.randomUUID()
+        await tx.create({
+          id,
+          workspaceId,
+          parentId: realParentId,
+          orderKey: await appendKey(realParentId),
+          content: node.content,
+          properties: blockProps,
+        })
+        idMap.set(node.id, id)
+      }
+
+      const realId = idMap.get(node.id)!
+      ids.push(realId)
+      if (!node.parentId) rootIds.push(realId)
+    }
+
+    // Trailing extras: tagged blocks past the end of the parsed tree — only
+    // reachable when the final text parses to FEWER nodes than an earlier
+    // streamed tick (e.g. resultText trimmed a trailing bullet, or a failed
+    // run collapses a streamed outline to a single note block). In pre-order
+    // a parent precedes its children, so the trailing slice is closed under
+    // descendants; delete it leaf-first (reverse order) so no parent orphans
+    // a child. Only on `final` — a mid-stream tick must not delete a tail it
+    // simply hasn't re-streamed yet.
+    if (final && existing.length > parsed.length) {
+      for (let i = existing.length - 1; i >= parsed.length; i -= 1) {
+        await tx.delete(existing[i].id)
+      }
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})
 
   return {ids, rootIds}
 }
@@ -1235,7 +1255,7 @@ export const createAgentRuntimeContext = ({
     getBlock: id => repo.load(id),
     getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
-    createBlocksFromMarkdown: input => createBlocksFromMarkdown(repo, input),
+    reconcileMarkdownSubtree: input => reconcileMarkdownSubtree(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
     moveBlock: input => moveRuntimeBlock(repo, input),
     deleteBlock: input => deleteRuntimeBlock(repo, input),
@@ -1310,7 +1330,7 @@ export const executeCommand = async (
         data: getBlockDataInput(command),
       })
 
-    case 'create-blocks-from-markdown': {
+    case 'reconcile-markdown-subtree': {
       const properties = command.properties === undefined
         ? undefined
         : isRecord(command.properties)
@@ -1319,12 +1339,12 @@ export const executeCommand = async (
       if (command.properties !== undefined && !properties) {
         throw new Error('properties must be an object')
       }
-      return context.createBlocksFromMarkdown({
+      return context.reconcileMarkdownSubtree({
         parentId: requireString(command.parentId, 'parentId'),
         markdown: requireString(command.markdown, 'markdown'),
-        rootBlockId: command.rootBlockId === undefined
-          ? undefined
-          : requireString(command.rootBlockId, 'rootBlockId'),
+        key: requireString(command.key, 'key'),
+        shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
+        final: command.final === true,
         properties,
       })
     }

@@ -168,27 +168,29 @@ const backlinksWatcherSchema = z.strictObject({
   quietMs: z.number().int().nonnegative()
     .max(WATCH_EVENTS_MAX_SETTLE_MS, `quietMs above ${WATCH_EVENTS_MAX_SETTLE_MS} (10min) is not supported`)
     .default(15_000),
-  /** Stream the in-progress reply text into the reply block as the run
-   *  goes, instead of posting it only once at the end. Writes are
-   *  throttled to ~1.5s apart — each one is a synced graph mutation, so
-   *  leave this off for watchers where that churn matters. */
+  /** Show the reply being BUILT LIVE as the run streams, instead of posting
+   *  it only once at the end. Orthogonal to `splitReply`: streaming just
+   *  reconciles the reply subtree with the growing text on each tick (a
+   *  block reply grows in place; a split reply threads out as it's written).
+   *  Reconciles are throttled to ~1.5s apart — each is a synced graph
+   *  mutation writing only the diff, so leave this off where that churn
+   *  matters. */
   streamReply: z.boolean().default(false),
-  /** Split the final reply along its markdown outline into a block
-   *  HIERARCHY (nested bullets → child blocks, headings → nesting, code
-   *  fences kept whole) instead of one big block. ON by default — a
-   *  threaded reply reads far better in an outliner. Parsing + insertion
-   *  happen APP-SIDE via the `create-blocks-from-markdown` bridge command
-   *  (the app's own paste parser), so the split matches "paste as markdown"
-   *  and the whole subtree lands in one transaction — a failure never
-   *  leaves a partial reply. That single write is NOT retried on a
-   *  transient bridge blip (a re-send would duplicate the subtree); it
-   *  surfaces as `status=error` instead. Set `false` to keep the
-   *  single-block terminal write, which IS retried. A structureless reply
-   *  (one paragraph) still lands as a single block either way. The spawned
-   *  run is nudged (see prompt.ts) to write a nested outline so the split
-   *  threads naturally. Ignored for `delivery: 'channel'` (the ambient
-   *  session posts its own reply). Requires an app build new enough to
-   *  handle the bridge command. */
+  /** Shape the reply as a block HIERARCHY split along its markdown outline
+   *  (nested bullets → child blocks, headings → nesting, code fences kept
+   *  whole) instead of one big block. ON by default — a threaded reply reads
+   *  far better in an outliner. Parsing + insertion happen APP-SIDE via the
+   *  `reconcile-markdown-subtree` bridge command (the app's own paste
+   *  parser), so the split matches "paste as markdown" and the whole subtree
+   *  lands in one transaction — a failure never leaves a partial reply. The
+   *  write is idempotent (keyed per run), so a transient bridge blip is
+   *  RETRIED in place rather than surfacing as `status=error`. Set `false`
+   *  to keep the reply as a single block. A structureless reply (one
+   *  paragraph) lands as a single block either way. The spawned run is
+   *  nudged (see prompt.ts) to write a nested outline so the split threads
+   *  naturally. Ignored for `delivery: 'channel'` (the ambient session posts
+   *  its own reply). Requires an app build new enough to handle the bridge
+   *  command. */
   splitReply: z.boolean().default(true),
 })
 

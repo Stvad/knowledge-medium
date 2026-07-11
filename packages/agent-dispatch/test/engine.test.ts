@@ -22,7 +22,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     Object.entries(seed.blocks ?? {}).map(([id, data]) => [id, {id, properties: {}, editedAtMs: NOW, ...data}]),
   )
   const replies: Array<{parentId: string, content: string}> = []
-  const replyTrees: Array<{parentId: string, markdown: string, rootBlockId?: string}> = []
+  const reconciles: Array<{parentId: string, markdown: string, replyKey: string, shape: 'outline' | 'block', final: boolean}> = []
   const propWrites: Array<{id: string, status: string, activity?: string | null}> = []
   const activityWrites: Array<{id: string, label: string}> = []
   const sessionWrites: Array<{id: string, session: string}> = []
@@ -74,8 +74,8 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
       blocks.set(reply.id, reply)
       return reply
     },
-    createReplyTree: async (parentId, markdown, rootBlockId) => {
-      replyTrees.push({parentId, markdown, rootBlockId})
+    reconcileReplyTree: async (parentId, markdown, {replyKey, shape, final}) => {
+      reconciles.push({parentId, markdown, replyKey, shape, final: final ?? false})
     },
     setActivity: async (id, label) => {
       const target = blocks.get(id) ?? {id, properties: {}}
@@ -115,7 +115,7 @@ const fakeGraph = (seed: FakeGraphSeed = {}) => {
     ),
   }
 
-  return {graph, blocks, replies, replyTrees, propWrites, activityWrites, sessionWrites, contentUpdates, cancelClears}
+  return {graph, blocks, replies, reconciles, propWrites, activityWrites, sessionWrites, contentUpdates, cancelClears}
 }
 
 const memoryState = (
@@ -166,7 +166,7 @@ const engineWith = (deps: Partial<EngineDeps> & Pick<EngineDeps, 'graph'>) =>
 
 describe('mention lifecycle', () => {
   it('claims, runs, replies, and marks done with the session id', async () => {
-    const {graph, blocks, replies, replyTrees, propWrites} = fakeGraph({
+    const {graph, blocks, replies, reconciles, propWrites} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] summarize inbox'}},
     })
@@ -177,8 +177,11 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(propWrites.map(write => write.status)).toEqual(['running', 'done'])
-    // splitReply defaults on: the reply goes over the app-side split command.
-    expect(replyTrees).toEqual([{parentId: 'b-1', markdown: 'Reply text', rootBlockId: undefined}])
+    // splitReply defaults on: one terminal reconcile of the reply subtree,
+    // split along the outline (shape 'outline'), keyed by attempt.
+    expect(reconciles).toEqual([
+      {parentId: 'b-1', markdown: 'Reply text', replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+    ])
     expect(replies).toEqual([])
     expect(blocks.get('b-1')?.properties?.[PROPS.session]).toBe('sess-1')
     expect(blocks.get('b-1')?.properties?.[PROPS.executor]).toBe('claude')
@@ -297,7 +300,7 @@ describe('mention lifecycle', () => {
   })
 
   it('cancels a running task: aborts the run, parks it error:cancelled, and clears the flag', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] long task'}},
     })
@@ -330,7 +333,10 @@ describe('mention lifecycle', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
     expect(blocks.get('b-1')?.properties?.[PROPS.error]).toBe('cancelled')
     expect(blocks.get('b-1')?.properties?.[PROPS.cancel]).toBe('') // flag cleared, won't re-cancel a rerun
-    expect(replies).toEqual([{parentId: 'b-1', content: '⏹️ agent-dispatch run cancelled'}])
+    // A cancelled run never splits — the note lands as a single block.
+    expect(reconciles).toEqual([
+      {parentId: 'b-1', markdown: '⏹️ agent-dispatch run cancelled', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+    ])
     expect(runTask).toHaveBeenCalledTimes(1) // not re-run
   })
 
@@ -440,7 +446,7 @@ describe('mention lifecycle', () => {
   })
 
   it('is idempotent: a processed mention does not re-run on later ticks', async () => {
-    const {graph, replyTrees} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] hi'}},
     })
@@ -453,7 +459,7 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(runTask).toHaveBeenCalledTimes(1)
-    expect(replyTrees).toHaveLength(1)
+    expect(reconciles).toHaveLength(1)
   })
 
   it('waits for the quiet period before claiming a just-edited mention', async () => {
@@ -474,7 +480,7 @@ describe('mention lifecycle', () => {
   })
 
   it('replies with a failure note and marks error on a failed run', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] break'}},
     })
@@ -487,12 +493,14 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
-    expect(replies[0].content).toContain('run failed')
-    expect(replies[0].content).toContain('credit exhausted')
+    // A failed run never splits — the note lands as a single block.
+    expect(reconciles[0].shape).toBe('block')
+    expect(reconciles[0].markdown).toContain('run failed')
+    expect(reconciles[0].markdown).toContain('credit exhausted')
   })
 
   it('leaves a visible reply even when infrastructure fails mid-task', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] infra'}},
     })
@@ -503,8 +511,8 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
-    expect(replies[0].content).toContain('infrastructure error')
-    expect(replies[0].content).toContain('bridge blipped')
+    expect(reconciles[0].markdown).toContain('infrastructure error')
+    expect(reconciles[0].markdown).toContain('bridge blipped')
   })
 
   it('clears agent:cancel on the infra-error path so a retry is not aborted', async () => {
@@ -780,7 +788,7 @@ describe('mention lifecycle', () => {
   })
 
   it('fires for a follow-up nested under a daemon reply (thread continuation)', async () => {
-    const {graph, replyTrees} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-follow'}],
       blocks: {
         'reply-block': {content: 'earlier answer', properties: {[PROPS.reply]: true}},
@@ -794,7 +802,7 @@ describe('mention lifecycle', () => {
     await engine.drain()
 
     expect(runTask).toHaveBeenCalledTimes(1)
-    expect(replyTrees).toHaveLength(1)
+    expect(reconciles).toHaveLength(1)
   })
 
   it('refunds the budget slot when a same-session duplicate bails without spawning', async () => {
@@ -1101,8 +1109,8 @@ describe('live progress streaming', () => {
     expect(blocks.get('b-1')?.properties?.[PROPS.activity]).toBe('')
   })
 
-  it('streamReply watcher: early reply block, throttled text updates, final text replaces it, no duplicate reply', async () => {
-    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+  it('streamReply: placeholder, throttled text reconciles, then the terminal reconcile — all one keyed subtree', async () => {
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] write something long'}},
     })
@@ -1131,24 +1139,21 @@ describe('live progress streaming', () => {
     await engine.tick()
     await engine.drain()
 
-    // Exactly one reply block — created early, never a second one.
-    expect(replies).toHaveLength(1)
-    expect(replies[0]).toMatchObject({parentId: 'b-1', content: '💭 Claude is working…'})
-
-    // Throttled: only the first and third text events produced a streaming
-    // write; the run's own final write (always unconditional) lands after.
-    expect(contentUpdates.map(update => update.content)).toEqual([
-      'Once up', 'Once upon a time', 'Once upon a time, the end.',
+    // Placeholder, then throttled streamed reconciles (t+500 skipped), then
+    // the terminal reconcile — every one the SAME keyed single-block subtree
+    // (splitReply off → shape 'block'), so the reply grows in place.
+    expect(reconciles.map(r => ({markdown: r.markdown, final: r.final}))).toEqual([
+      {markdown: '💭 Claude is working…', final: false},
+      {markdown: 'Once up', final: false},
+      {markdown: 'Once upon a time', final: false},
+      {markdown: 'Once upon a time, the end.', final: true},
     ])
-    // All writes landed on the SAME early-created reply block.
-    const replyIds = new Set(contentUpdates.map(update => update.id))
-    expect(replyIds.size).toBe(1)
-    const finalReplyId = contentUpdates.at(-1)!.id
-    expect(blocks.get(finalReplyId)?.content).toBe('Once upon a time, the end.')
+    expect(new Set(reconciles.map(r => r.replyKey))).toEqual(new Set(['reply:b-1:1']))
+    expect(reconciles.every(r => r.shape === 'block')).toBe(true)
   })
 
-  it('default (non-stream) watcher: no early reply, a single createReply at the end', async () => {
-    const {graph, replies, contentUpdates} = fakeGraph({
+  it('default (non-stream) watcher: no streamed reconciles, a single terminal reconcile', async () => {
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] quick one'}},
     })
@@ -1164,12 +1169,13 @@ describe('live progress streaming', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(contentUpdates).toHaveLength(0)
-    expect(replies).toEqual([{parentId: 'b-1', content: 'final'}])
+    expect(reconciles).toEqual([
+      {parentId: 'b-1', markdown: 'final', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+    ])
   })
 
-  it('failure with streamReply: the warning text lands in the streamed block, not a new one', async () => {
-    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+  it('failure with streamReply: the note collapses the streamed subtree to a single block', async () => {
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] break'}},
     })
@@ -1184,46 +1190,17 @@ describe('live progress streaming', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(replies).toHaveLength(1) // the early streamed reply — no second block
-    const replyId = contentUpdates.at(-1)!.id
-    expect(blocks.get(replyId)?.content).toContain('run failed')
-    expect(blocks.get(replyId)?.content).toContain('boom')
+    expect(reconciles[0].markdown).toBe('💭 Claude is working…')
+    const terminal = reconciles.at(-1)!
+    expect(terminal.final).toBe(true)
+    expect(terminal.shape).toBe('block') // a failed run never splits
+    expect(terminal.markdown).toContain('run failed')
+    expect(terminal.markdown).toContain('boom')
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
   })
 
-  it('failure with a DELETED streamed placeholder: failure note falls back to a new reply, run reason preserved', async () => {
-    const {graph, blocks, replies} = fakeGraph({
-      backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] break'}},
-    })
-    // The user deleted the placeholder mid-run: content updates to any
-    // reply block fail; createReply still works.
-    graph.updateBlockContent = async id => {
-      throw new Error(`block not found: ${id}`)
-    }
-    const engine = engineWith({
-      graph,
-      runTask: vi.fn(async () => okRun({ok: false, exitCode: 1, stderr: 'boom', resultText: ''})),
-      config: parseConfig({
-        watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true}],
-      }),
-    })
-
-    await engine.tick()
-    await engine.drain()
-
-    // Placeholder + the fallback failure note.
-    expect(replies).toHaveLength(2)
-    expect(replies[1]!.content).toContain('run failed')
-    expect(replies[1]!.content).toContain('boom')
-    // Props record the RUN failure — not an infra error about the
-    // missing reply block.
-    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
-    expect(blocks.get('b-1')?.properties?.[PROPS.error]).toContain('boom')
-  })
-
-  it('failure after streaming: preserves the billed partial and appends the note', async () => {
-    const {graph, blocks, contentUpdates} = fakeGraph({
+  it('failure after streaming: preserves the billed partial and appends the note (single block)', async () => {
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] long task'}},
     })
@@ -1239,44 +1216,21 @@ describe('live progress streaming', () => {
     await engine.tick()
     await engine.drain()
 
-    const finalContent = blocks.get(contentUpdates.at(-1)!.id)?.content ?? ''
-    expect(finalContent).toContain('Here is most of the answer') // partial NOT discarded
-    expect(finalContent).toContain('timed out')                   // note appended
+    const terminal = reconciles.at(-1)!
+    expect(terminal.markdown).toContain('Here is most of the answer') // partial NOT discarded
+    expect(terminal.markdown).toContain('timed out')                   // note appended
+    expect(terminal.shape).toBe('block')
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
   })
 
-  it('transient final-write error does NOT duplicate the reply (only not-found falls back)', async () => {
-    const {graph, blocks, replies} = fakeGraph({
+  it('transient blip on the terminal props-write does NOT post a clobbering infra note', async () => {
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] ok task'}},
     })
-    // A transient bridge blip on the final write — the placeholder still
-    // exists. Must NOT create a second reply block.
-    graph.updateBlockContent = async () => { throw new Error('bridge command timed out') }
-    const engine = engineWith({
-      graph,
-      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
-    })
-
-    await engine.tick()
-    await engine.drain()
-
-    // Only the early placeholder — the failed update rethrew into the
-    // infra catch, which also can't write, so no duplicate reply block.
-    expect(replies).toHaveLength(1)
-    expect(replies[0]!.content).toBe('💭 Claude is working…')
-    // The run still lands in a terminal error state (props stick).
-    expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('error')
-  })
-
-  it('transient blip on the terminal props-write (non-stream) does NOT duplicate the delivered answer', async () => {
-    const {graph, replies} = fakeGraph({
-      backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] ok task'}},
-    })
-    // The reply lands fine; the blip hits the `status:done` props write
-    // that FOLLOWS it — the case the shared deliverReply refactor missed.
+    // The reply reconcile lands fine; the blip hits the `status:done` props
+    // write that FOLLOWS it. The infra-catch must not reconcile again (which
+    // would overwrite the delivered answer with the infra-error note).
     const realSetTaskProps = graph.setTaskProps
     graph.setTaskProps = async (id, args) => {
       if (args.status === 'done') throw new Error('bridge command timed out')
@@ -1291,65 +1245,39 @@ describe('live progress streaming', () => {
     await engine.tick()
     await engine.drain()
 
-    // Exactly one reply — the answer. The infra-catch must not post a
-    // second (infra-error) reply just because the props write blipped.
-    expect(replies).toEqual([{parentId: 'b-1', content: 'the answer'}])
+    // Exactly the one terminal reconcile — no infra-error reconcile after it.
+    expect(reconciles).toEqual([
+      {parentId: 'b-1', markdown: 'the answer', replyKey: 'reply:b-1:1', shape: 'block', final: true},
+    ])
   })
 
-  it('transient blip on the terminal props-write (streamReply) does NOT clobber the delivered answer', async () => {
-    const {graph, blocks, replies, contentUpdates} = fakeGraph({
+  it('transient blip on the terminal reply reconcile is retried and recovers the billed answer', async () => {
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] ok task'}},
     })
-    const realSetTaskProps = graph.setTaskProps
-    graph.setTaskProps = async (id, args) => {
-      if (args.status === 'done') throw new Error('bridge command timed out')
-      return realSetTaskProps(id, args)
+    // Reconcile is idempotent (keyed), so a transient blip on the terminal
+    // write is safe to retry — the answer is recovered, not lost to error.
+    const realReconcile = graph.reconcileReplyTree
+    let calls = 0
+    graph.reconcileReplyTree = async (parentId, markdown, opts) => {
+      calls += 1
+      if (calls === 1) throw new Error('bridge command timed out')
+      return realReconcile(parentId, markdown, opts)
     }
     const engine = engineWith({
       graph,
+      delay: async () => {},
       runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
+      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, splitReply: false}]}),
     })
 
     await engine.tick()
     await engine.drain()
 
-    // The streamed placeholder holds the final answer — the infra-catch
-    // must NOT overwrite it with the infrastructure-error note.
-    expect(replies).toHaveLength(1)
-    const replyId = contentUpdates.at(-1)!.id
-    expect(blocks.get(replyId)?.content).toBe('the answer')
-  })
-
-  it('transient blip on the terminal streamReply write is retried and recovers the billed answer', async () => {
-    const {graph, blocks, replies, contentUpdates} = fakeGraph({
-      backlinks: [{id: 'b-1'}],
-      blocks: {'b-1': {content: '[[claude]] ok task'}},
-    })
-    // The idempotent streamed update is safe to retry: one transient blip,
-    // then it lands. The answer must be recovered, not lost to status:error.
-    const realUpdate = graph.updateBlockContent
-    let updateCalls = 0
-    graph.updateBlockContent = async (id, content) => {
-      updateCalls += 1
-      if (updateCalls === 1) throw new Error('bridge command timed out')
-      return realUpdate(id, content)
-    }
-    const engine = engineWith({
-      graph,
-      runTask: vi.fn(async () => okRun({resultText: 'the answer'})),
-      config: parseConfig({watchers: [{kind: 'backlinks', name: 'mentions', target: 'claude', quietMs: 0, streamReply: true, splitReply: false}]}),
-    })
-
-    await engine.tick()
-    await engine.drain()
-
-    // Retry landed the answer on the existing placeholder — no fallback
-    // createReply (still one reply block), terminal state is done.
-    expect(replies).toHaveLength(1)
-    const replyId = contentUpdates.at(-1)!.id
-    expect(blocks.get(replyId)?.content).toBe('the answer')
+    // First attempt threw; the retry landed the answer; terminal state done.
+    expect(calls).toBeGreaterThanOrEqual(2)
+    expect(reconciles.at(-1)).toMatchObject({markdown: 'the answer', final: true})
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
   })
 })
@@ -1357,8 +1285,8 @@ describe('live progress streaming', () => {
 describe('splitReply (reply as a block hierarchy)', () => {
   const OUTLINE = '- Top A\n  - Child A1\n- Top B'
 
-  it('hands the final reply to the app-side split command (no single reply block)', async () => {
-    const {graph, blocks, replies, replyTrees} = fakeGraph({
+  it('splits the final reply (shape outline) in one terminal reconcile, and nudges the run', async () => {
+    const {graph, blocks, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
@@ -1369,11 +1297,11 @@ describe('splitReply (reply as a block hierarchy)', () => {
     await engine.tick()
     await engine.drain()
 
-    // The whole markdown goes over one create-blocks-from-markdown call —
-    // the app parses + inserts the tree atomically. No single reply block,
-    // no streamed placeholder (streamReply off → no rootBlockId).
-    expect(replyTrees).toEqual([{parentId: 'b-1', markdown: OUTLINE, rootBlockId: undefined}])
-    expect(replies).toEqual([])
+    // One terminal reconcile of the reply subtree, split along the outline
+    // (shape 'outline'). The app parses + reconciles the tree atomically.
+    expect(reconciles).toEqual([
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+    ])
     expect(blocks.get('b-1')?.properties?.[PROPS.status]).toBe('done')
 
     // The run was nudged to author a nested outline (the "prompting" half).
@@ -1381,8 +1309,8 @@ describe('splitReply (reply as a block hierarchy)', () => {
     expect(prompt).toContain('block hierarchy')
   })
 
-  it('splitReply: false keeps the single-block path and drops the nudge', async () => {
-    const {graph, replies, replyTrees} = fakeGraph({
+  it('splitReply: false keeps the single-block shape and drops the nudge', async () => {
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
@@ -1403,14 +1331,15 @@ describe('splitReply (reply as a block hierarchy)', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(replyTrees).toEqual([])
-    expect(replies).toEqual([{parentId: 'b-1', content: OUTLINE}])
+    expect(reconciles).toEqual([
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'block', final: true},
+    ])
     const prompt = (runTask.mock.calls[0][0] as {prompt: string}).prompt
     expect(prompt).not.toContain('block hierarchy')
   })
 
-  it('with streamReply on, passes the streamed placeholder as the split root', async () => {
-    const {graph, replies, replyTrees} = fakeGraph({
+  it('with streamReply + splitReply on: the placeholder is just the first reconcile of the same keyed subtree', async () => {
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
@@ -1431,15 +1360,17 @@ describe('splitReply (reply as a block hierarchy)', () => {
     await engine.tick()
     await engine.drain()
 
-    // The placeholder (reply-1) is created up front, then handed to the
-    // split command as rootBlockId so the app reuses it as the first root
-    // instead of orphaning it.
-    expect(replies).toEqual([{parentId: 'b-1', content: '💭 Claude is working…'}])
-    expect(replyTrees).toEqual([{parentId: 'b-1', markdown: OUTLINE, rootBlockId: 'reply-1'}])
+    // Placeholder then the terminal split reconcile — same key + shape, so
+    // the streamed placeholder block becomes the reply's first block (no
+    // orphaning, no separate rootBlockId dance).
+    expect(reconciles).toEqual([
+      {parentId: 'b-1', markdown: '💭 Claude is working…', replyKey: 'reply:b-1:1', shape: 'outline', final: false},
+      {parentId: 'b-1', markdown: OUTLINE, replyKey: 'reply:b-1:1', shape: 'outline', final: true},
+    ])
   })
 
   it('a failed run does NOT split — the warning goes to a single block', async () => {
-    const {graph, replies, replyTrees} = fakeGraph({
+    const {graph, reconciles} = fakeGraph({
       backlinks: [{id: 'b-1'}],
       blocks: {'b-1': {content: '[[claude]] reflect'}},
     })
@@ -1451,9 +1382,9 @@ describe('splitReply (reply as a block hierarchy)', () => {
     await engine.tick()
     await engine.drain()
 
-    expect(replyTrees).toEqual([])
-    expect(replies).toHaveLength(1)
-    expect(replies[0].content).toContain('⚠️')
+    expect(reconciles).toHaveLength(1)
+    expect(reconciles[0].shape).toBe('block')
+    expect(reconciles[0].markdown).toContain('⚠️')
   })
 })
 

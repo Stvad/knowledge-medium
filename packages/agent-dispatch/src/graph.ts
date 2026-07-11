@@ -47,18 +47,22 @@ export const createGraph = (client: BridgeClient) => {
   const createReply = async (parentId: string, content: string): Promise<BlockData> =>
     bridgeGraph.createBlock(parentId, content, {[PROPS.reply]: true})
 
-  /** Post the reply as a block HIERARCHY parsed from `markdown` with the
-   *  app's own paste parser, created under `parentId` in ONE app-side
-   *  transaction (a failure never leaves a partial tree). Every block is
-   *  tagged the reply marker. `rootBlockId` — a streamed placeholder — is
-   *  reused as the first root instead of being orphaned. Deliberately NOT
-   *  retried: the write is atomic and a re-send would duplicate the whole
-   *  subtree, so a transient failure is left to the caller's infra-catch. */
-  const createReplyTree = async (
-    parentId: string, markdown: string, rootBlockId?: string,
+  /** Reconcile the run's reply subtree (tagged `replyKey`) under `parentId`
+   *  to match `markdown`, app-side in ONE transaction (a failure never
+   *  leaves a partial tree). Every block is tagged the reply marker. This is
+   *  the SINGLE reply-write primitive: `shape:'outline'` splits along the
+   *  markdown outline into a block hierarchy, `'block'` keeps one block, and
+   *  because it's idempotent by `replyKey`, streaming a reply is just
+   *  repeated reconciles with the growing text (the last passes `final`).
+   *  Safe to retry — a re-send converges to the same tree, no duplication. */
+  const reconcileReplyTree = async (
+    parentId: string, markdown: string,
+    opts: {replyKey: string, shape: 'outline' | 'block', final?: boolean},
   ): Promise<void> => {
-    await bridgeGraph.createBlocksFromMarkdown(parentId, markdown, {
-      ...(rootBlockId ? {rootBlockId} : {}),
+    await bridgeGraph.reconcileMarkdownSubtree(parentId, markdown, {
+      key: opts.replyKey,
+      shape: opts.shape,
+      ...(opts.final ? {final: true} : {}),
       properties: {[PROPS.reply]: true},
     })
   }
@@ -92,7 +96,7 @@ export const createGraph = (client: BridgeClient) => {
     ...bridgeGraph,
     setTaskProps,
     createReply,
-    createReplyTree,
+    reconcileReplyTree,
     setActivity,
     setSession,
     clearCancel,
@@ -121,7 +125,10 @@ export type Graph = DispatchBridgeGraph & {
     },
   ) => Promise<void>
   createReply: (parentId: string, content: string) => Promise<BlockData>
-  createReplyTree: (parentId: string, markdown: string, rootBlockId?: string) => Promise<void>
+  reconcileReplyTree: (
+    parentId: string, markdown: string,
+    opts: {replyKey: string, shape: 'outline' | 'block', final?: boolean},
+  ) => Promise<void>
   setActivity: (id: string, label: string) => Promise<void>
   setSession: (id: string, session: string, resumeOptions?: AgentResumeOptions | null) => Promise<void>
   clearCancel: (id: string) => Promise<void>

@@ -34,8 +34,8 @@ export interface EngineDeps {
   mcpConfigPath: string | null
   log: (message: string) => void
   now?: () => number
-  /** Sleep between deliverReply retries — injected so tests run instantly
-   *  (default is a real timer). */
+  /** Sleep between terminal reply-reconcile retries — injected so tests run
+   *  instantly (default is a real timer). */
   delay?: (ms: number) => Promise<void>
 }
 
@@ -67,21 +67,12 @@ const logPreview = (content: string | null | undefined): string => {
 }
 
 /** A deleted block surfaces as an `updateBlock: block <id> not found`
- *  error from the bridge (commands.ts updateBlock; repo.load filters
- *  `deleted = 0`). Used to tell "placeholder was deleted, create a fresh
- *  reply" apart from a transient bridge failure that must NOT spawn a
- *  duplicate reply. Matched tightly (`block … not found`) so an unrelated
- *  "not found" transient (a future "workspace not found" etc.) can't be
- *  misread as a deleted placeholder and trigger a duplicate reply. */
-const isBlockNotFound = (error: unknown): boolean =>
-  /\bblock\b.*\bnot found\b/i.test(errorMessage(error))
-
-/** Backoff schedule for retrying the IDEMPOTENT streamed terminal write
- *  (updateBlockContent) past a transient bridge blip — recovering the
- *  billed answer instead of losing it to `status:error`. Bounded and
- *  short (≈1.7s worst case) so a genuinely-down bridge fails fast. Only
- *  the same-block/same-text update is retried; createReply is NOT (not
- *  idempotent — a half-succeeded create would duplicate the reply). */
+/** Backoff schedule for retrying the IDEMPOTENT terminal reply reconcile
+ *  past a transient bridge blip — recovering the billed answer instead of
+ *  losing it to `status:error`. Bounded and short (≈1.7s worst case) so a
+ *  genuinely-down bridge fails fast. Safe because reconcile is keyed by
+ *  `replyKey`: a re-send converges to the same tree rather than duplicating
+ *  it (unlike the old one-shot subtree create, which could NOT be retried). */
 const DELIVER_RETRY_DELAYS_MS = [200, 500, 1000] as const
 
 /** agent:session values are executor-scoped: codex thread ids are
@@ -286,43 +277,53 @@ export const createEngine = (deps: EngineDeps) => {
     // (and unless) a resumable session shows up.
     let liveSessionKey: string | null = null
 
-    // Hoisted so the infra-catch below can prefer updating an
-    // already-created streamed reply block over posting a new one —
-    // and can drain the progress-write chain first, so a queued
-    // streamed-text write never lands AFTER (and clobbers) the note.
-    let replyId: string | null = null
+    // Progress-write chain — hoisted so the infra-catch below can drain it
+    // first, so a queued streamed reconcile never lands AFTER (and clobbers)
+    // the note.
     let writes: Promise<unknown> = Promise.resolve()
     // Last cumulative text streamed into the reply — kept so a FAILED run
-    // that had already streamed most of its (billed) answer appends the
-    // error note to that partial instead of discarding it.
+    // that had already streamed most of its (billed) answer keeps that
+    // partial (collapsed to a single note block) instead of discarding it.
     let lastStreamedText = ''
-    // Set once a TERMINAL reply (the ok answer, or the failure/partial
-    // note) has been written. The infra-catch checks it so a transient
-    // blip on the *terminal props write* — which lands AFTER a good reply
-    // — can't re-enter deliverReply and clobber the answer (streamReply)
-    // or post a duplicate (fresh reply). See the catch below.
+    // Set once a TERMINAL reply (the ok answer, or the failure/partial note)
+    // has been written. The infra-catch checks it so a transient blip on the
+    // *terminal props write* — which lands AFTER a good reply — can't
+    // re-enter the reply write and clobber the answer. See the catch below.
     let terminalReplyDelivered = false
+    // Per-run reply identity + shape, set once `attempt` is known (below).
+    // Every reconcile of this run tags its blocks with `replyKey`, so it
+    // converges the SAME subtree in place; a rerun uses a fresh key and thus
+    // posts a fresh reply. `replyShape` is the split choice: `'outline'`
+    // splits the reply into a block hierarchy, `'block'` keeps it whole.
+    let replyKey = ''
+    let replyShape: 'outline' | 'block' = 'block'
     // Abort handle for THIS run — a cancel request (agent:cancel, detected
     // in the tick) aborts it, killing the child. `signal.aborted` after the
     // run tells a user cancel apart from a timeout/crash. Registered just
     // before the run launches (below), deleted in finally.
     const abortController = new AbortController()
 
-    // Land `text` on the streamed placeholder if one exists, else create a
-    // fresh reply. The streamed update is idempotent (same block, same
-    // text), so a transient bridge blip on the terminal write is RETRIED
-    // (bounded backoff) to recover the billed answer rather than lose it.
-    // A NOT-FOUND (the user deleted the placeholder mid-run) breaks out to
-    // a single createReply. createReply itself is NOT retried — it isn't
-    // idempotent, so a half-succeeded create would duplicate the reply.
-    const deliverReply = async (text: string): Promise<void> => {
-      if (!replyId) { await graph.createReply(sourceId, text); return }
+    // The reply is a keyed block subtree the app reconciles to match
+    // `markdown` — `shape:'outline'` splits it into a hierarchy, `'block'`
+    // keeps it whole. Streaming is just repeated reconciles with the growing
+    // text (the last passes `final`). Idempotent by `replyKey`, so the
+    // terminal write is RETRIED (bounded backoff) to recover a transient
+    // bridge blip: a re-send converges to the same tree, never duplicating.
+    const reconcileReply = async (
+      markdown: string,
+      {final = false, shape = replyShape}: {final?: boolean, shape?: 'outline' | 'block'} = {},
+    ): Promise<void> => {
+      await graph.reconcileReplyTree(sourceId, markdown, {replyKey, shape, final})
+    }
+    const reconcileReplyWithRetry = async (
+      markdown: string,
+      opts: {final?: boolean, shape?: 'outline' | 'block'} = {},
+    ): Promise<void> => {
       for (let attempt = 0; ; attempt += 1) {
         try {
-          await graph.updateBlockContent(replyId, text)
+          await reconcileReply(markdown, opts)
           return
         } catch (error) {
-          if (isBlockNotFound(error)) { await graph.createReply(sourceId, text); return }
           if (attempt >= DELIVER_RETRY_DELAYS_MS.length) throw error
           log(`[${watcher.name}] retrying reply write for ${sourceId} after a transient error: ${errorMessage(error)}`)
           await delay(DELIVER_RETRY_DELAYS_MS[attempt])
@@ -332,6 +333,11 @@ export const createEngine = (deps: EngineDeps) => {
 
     try {
       const attempt = taskAttempts(block) + 1
+      // Fresh reply subtree per attempt (a rerun posts a new reply, never
+      // mutating the prior attempt's answer); split unless the watcher opted
+      // out. Reconciles within THIS attempt share the key → converge in place.
+      replyKey = `reply:${sourceId}:${attempt}`
+      replyShape = watcher.splitReply ? 'outline' : 'block'
       const claimStamp = now()
       log(`[${watcher.name}] claiming ${sourceId} ${logPreview(block.content)} (${decision.reason}, attempt ${attempt})`)
       await graph.setTaskProps(sourceId, {
@@ -393,11 +399,12 @@ export const createEngine = (deps: EngineDeps) => {
         return
       }
 
-      // streamReply: post the reply block EARLY so its content can be
-      // updated as the run streams, instead of created once at the end.
+      // streamReply: post an immediate placeholder so the reply appears at
+      // once; the first streamed tick reconciles it into real content (the
+      // same keyed write, so the placeholder just becomes the reply's first
+      // block). Best-effort — a cosmetic spinner must not fail the run.
       if (watcher.streamReply) {
-        const streamedReply = await graph.createReply(sourceId, `💭 ${executorLabel(runner.executor)} is working…`)
-        replyId = streamedReply.id
+        await reconcileReply(`💭 ${executorLabel(runner.executor)} is working…`).catch(() => {})
       }
 
       // All progress-driven graph writes funnel through one promise
@@ -426,13 +433,15 @@ export const createEngine = (deps: EngineDeps) => {
           lastActivity = event.label
           queueWrite(() => graph.setActivity(sourceId, event.label))
         } else if (event.kind === 'text') {
-          const streamedReplyId = replyId
-          if (!streamedReplyId) return
+          if (!watcher.streamReply) return
           lastStreamedText = event.text
           const nowMs = now()
           if (nowMs - lastTextWriteMs < 1_500) return
           lastTextWriteMs = nowMs
-          queueWrite(() => graph.updateBlockContent(streamedReplyId, event.text))
+          // Reconcile the growing text into the reply subtree (best-effort,
+          // single attempt — the next tick, or the terminal write, supersedes
+          // a dropped one). Idempotent by replyKey, so ticks never duplicate.
+          queueWrite(() => reconcileReply(event.text))
         } else if (event.kind === 'session') {
           // Persist the session id the moment it arrives (the runner emits
           // it on the first init line), NOT only at the terminal write —
@@ -473,15 +482,12 @@ export const createEngine = (deps: EngineDeps) => {
         // it as `cancelled`. Only a run that ended WITHOUT a result (the
         // error branch below) inspects signal.aborted to label the reason.
         const finalText = result.resultText.trim() || `(${runner.executor} returned an empty reply)`
-        if (watcher.splitReply) {
-          // Split into a block hierarchy app-side (parsed with the app's
-          // paste parser, created in one atomic tx). A streamed placeholder
-          // becomes the first root; without one the subtree is created
-          // fresh. A structureless reply just lands as a single block.
-          await graph.createReplyTree(sourceId, finalText, replyId ?? undefined)
-        } else {
-          await deliverReply(finalText)
-        }
+        // Terminal write = the last reconcile of the run's reply subtree
+        // (shape per splitReply). If the run streamed, this converges the
+        // streamed tree onto the final text in place; if it didn't, it
+        // creates the tree fresh. Retried (idempotent by replyKey) so a
+        // transient bridge blip recovers rather than losing the billed answer.
+        await reconcileReplyWithRetry(finalText, {final: true})
         terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {
           status: 'done',
@@ -505,11 +511,16 @@ export const createEngine = (deps: EngineDeps) => {
         const failureNote = cancelled
           ? '⏹️ agent-dispatch run cancelled'
           : `⚠️ agent-dispatch run failed — ${reason}`
-        // Preserve a streamed partial: a run that timed out (or died)
-        // after streaming most of its billed answer keeps that text with
-        // the note appended, rather than replacing it with the one-liner.
+        // A failed run never splits — collapse to a single block (any
+        // streamed partial + the note), keyed like the success write so a
+        // retry recovers it in place. Preserves a streamed partial: a run
+        // that died after streaming most of its billed answer keeps that
+        // text with the note appended, rather than replacing it.
         const partial = lastStreamedText.trim()
-        await deliverReply(partial ? `${partial}\n\n${failureNote}` : failureNote)
+        await reconcileReplyWithRetry(
+          partial ? `${partial}\n\n${failureNote}` : failureNote,
+          {final: true, shape: 'block'},
+        )
         terminalReplyDelivered = true
         await graph.setTaskProps(sourceId, {
           status: 'error',
@@ -531,11 +542,14 @@ export const createEngine = (deps: EngineDeps) => {
       // landing after the note would silently replace it.
       await writes.catch(() => {})
       // Only post the infra note if no terminal reply landed yet. If the
-      // answer (or failure/partial note) was already delivered and the
-      // error came from the *props* write that follows it, re-delivering
-      // would overwrite the good answer (streamReply) or duplicate it
-      // (fresh reply) — so we leave the reply intact and only flip props.
-      if (!terminalReplyDelivered) await deliverReply(infraNote).catch(() => {})
+      // answer (or failure/partial note) was already delivered and the error
+      // came from the *props* write that follows it, reconciling again would
+      // overwrite the good answer — so we leave the reply intact and only
+      // flip props. Reconciled as a single block (keyed), so any streamed
+      // partial collapses to the note rather than sitting beside it.
+      if (!terminalReplyDelivered) {
+        await reconcileReply(infraNote, {final: true, shape: 'block'}).catch(() => {})
+      }
       // Clear agent:cancel like the done/error terminal writes: a Stop
       // may have set it (this catch can run right after the child was
       // aborted, e.g. the reply write then failed). Left behind, the flag

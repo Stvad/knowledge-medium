@@ -137,19 +137,27 @@ export const createBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
-/** Create a whole block SUBTREE from a markdown string, in one
- *  transaction, under `parentId` (append after existing children). The
- *  markdown is parsed with the app's own paste parser so the split matches
- *  "paste as markdown" exactly. `properties` (looseObject passthrough) is
- *  applied to every created block — the claude-tasks daemon uses it to tag
- *  `claude:reply`. `rootBlockId`, when given, is reused as the first root
- *  (its content is overwritten) instead of created — lets a streamed
- *  placeholder become the reply's first block rather than being orphaned. */
-export const createBlocksFromMarkdownCommandSchema = z.looseObject({
-  type: z.literal('create-blocks-from-markdown'),
+/** Reconcile a keyed block SUBTREE under `parentId` to match `markdown`,
+ *  in one transaction. The markdown is parsed with the app's own paste
+ *  parser so the split matches "paste as markdown" exactly. Every block of
+ *  the subtree is tagged with `key`, and the app makes the tagged subtree
+ *  EQUAL the parsed tree — creating, updating, re-ordering, and (on `final`)
+ *  deleting to converge. Idempotent by that key: re-sending the same
+ *  markdown lands the same tree, no duplication, so a transient failure is
+ *  safe to retry. `shape: 'block'` keeps the whole markdown as ONE block
+ *  (no outline split); `'outline'` (default) splits along the markdown
+ *  outline. `properties` (looseObject passthrough) is applied to every
+ *  block — the dispatch daemon uses it to tag `claude:reply`. Streaming a
+ *  reply calls this repeatedly with the growing text (same key); the last
+ *  call passes `final: true`. Replaces the old one-shot
+ *  `create-blocks-from-markdown`. */
+export const reconcileMarkdownSubtreeCommandSchema = z.looseObject({
+  type: z.literal('reconcile-markdown-subtree'),
   parentId: z.string(),
   markdown: z.string(),
-  rootBlockId: z.string().optional(),
+  key: z.string(),
+  shape: z.enum(['outline', 'block']).optional(),
+  final: z.boolean().optional(),
   ...commandIdField,
 })
 
@@ -450,7 +458,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
-  createBlocksFromMarkdownCommandSchema,
+  reconcileMarkdownSubtreeCommandSchema,
   updateBlockCommandSchema,
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
@@ -490,7 +498,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
-  createBlocksFromMarkdownCommandSchema,
+  reconcileMarkdownSubtreeCommandSchema,
   updateBlockCommandSchema,
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
@@ -595,9 +603,9 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
     description: 'Create a block (body shape per <json>).',
     readOnly: false,
   },
-  'create-blocks-from-markdown': {
-    usage: 'kmagent create-blocks-from-markdown <json:{parentId,markdown,rootBlockId?,properties?}>',
-    description: 'Create a block subtree from a markdown string (parsed with the app paste parser) under parentId, in one transaction. Optional rootBlockId reuses an existing block as the first root; properties are applied to every created block.',
+  'reconcile-markdown-subtree': {
+    usage: 'kmagent reconcile-markdown-subtree <json:{parentId,markdown,key,shape?,final?,properties?}>',
+    description: 'Reconcile a keyed block subtree under parentId to match markdown (parsed with the app paste parser), in one transaction — create/update/reorder/delete to converge. Idempotent by key, so a re-send lands the same tree. shape=block keeps it one block; properties tag every block. Streaming calls this repeatedly with the growing text; the last passes final:true.',
     readOnly: false,
   },
   'update-block': {

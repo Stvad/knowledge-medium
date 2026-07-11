@@ -177,21 +177,26 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'restore-block') as unknown as BlockData
   }
 
-  /** Create a block SUBTREE from a markdown string under `parentId`, in one
-   *  app-side transaction (atomic — a failure never leaves a partial tree).
-   *  `rootBlockId` reuses an existing block as the first root; `properties`
-   *  is applied to every created block. A GENERIC bridge write — callers
-   *  layer their own semantics on top (e.g. the dispatch reply marker). */
-  const createBlocksFromMarkdown = async (
+  /** Reconcile a keyed block SUBTREE under `parentId` to match `markdown`,
+   *  in one app-side transaction (atomic — a failure never leaves a partial
+   *  tree). The tagged subtree is made EQUAL the parsed tree; idempotent by
+   *  `key`, so a re-send lands the same tree (safe to retry). `shape:'block'`
+   *  keeps it one block; `properties` tag every block. A GENERIC bridge write
+   *  — callers layer their own semantics on top (e.g. the dispatch reply
+   *  marker). Streaming calls this repeatedly with the growing text; the last
+   *  passes `final: true` so trailing extras can be pruned. */
+  const reconcileMarkdownSubtree = async (
     parentId: string,
     markdown: string,
-    opts: {rootBlockId?: string, properties?: Record<string, unknown>} = {},
+    opts: {key: string, shape?: 'outline' | 'block', final?: boolean, properties?: Record<string, unknown>},
   ): Promise<unknown> => {
     return client.runCommand({
-      type: 'create-blocks-from-markdown',
+      type: 'reconcile-markdown-subtree',
       parentId,
       markdown,
-      ...(opts.rootBlockId ? {rootBlockId: opts.rootBlockId} : {}),
+      key: opts.key,
+      ...(opts.shape ? {shape: opts.shape} : {}),
+      ...(opts.final ? {final: true} : {}),
       ...(opts.properties ? {properties: opts.properties} : {}),
     })
   }
@@ -240,7 +245,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     moveBlock,
     deleteBlock,
     restoreBlock,
-    createBlocksFromMarkdown,
+    reconcileMarkdownSubtree,
     updateBlockContent,
     sqlAll,
     blockViews,
