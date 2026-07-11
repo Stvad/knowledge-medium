@@ -45,6 +45,7 @@ import {
   lesswrongConnectedHintProp,
   twitterConnectedHintProp,
 } from './properties'
+import type {PlatformId} from './types'
 
 interface CredentialsDialogProps {
   repo: any
@@ -194,15 +195,21 @@ export const CredentialsDialog = ({
 }
 
 const ConnectedHintEditor = ({
-  configured,
+  platform,
   block,
-}: PropertyEditorProps<boolean> & {configured: boolean}) => {
+}: PropertyEditorProps<boolean> & {platform: PlatformId}) => {
   useSyncExternalStore(
     subscribeCredentialState,
     getCredentialSnapshot,
     getCredentialSnapshot,
   )
-  const repo = (block as Block).repo
+  const settingsBlock = block as Block
+  const configured = platform === 'twitter'
+    ? Boolean(loadBufferToken())
+    : platform === 'bluesky'
+      ? Boolean(settingsBlock.peekProperty(blueskyHandleProp) && loadBlueskyAppPassword())
+      : Boolean(loadLessWrongToken())
+  const repo = settingsBlock.repo
   return (
     <div className='flex items-center gap-2'>
       <span
@@ -231,20 +238,15 @@ const ConnectedHintEditor = ({
 }
 
 const TwitterConnectedHintEditor = (props: PropertyEditorProps<boolean>) => (
-  <ConnectedHintEditor {...props} configured={Boolean(loadBufferToken())} />
+  <ConnectedHintEditor {...props} platform='twitter' />
 )
 
 const BlueskyConnectedHintEditor = (props: PropertyEditorProps<boolean>) => (
-  <ConnectedHintEditor
-    {...props}
-    configured={Boolean(
-      (props.block as Block).peekProperty(blueskyHandleProp) && loadBlueskyAppPassword(),
-    )}
-  />
+  <ConnectedHintEditor {...props} platform='bluesky' />
 )
 
 const LessWrongConnectedHintEditor = (props: PropertyEditorProps<boolean>) => (
-  <ConnectedHintEditor {...props} configured={Boolean(loadLessWrongToken())} />
+  <ConnectedHintEditor {...props} platform='lesswrong' />
 )
 
 export const blueskyHandleEditor = definePropertyEditorOverride<string>({
