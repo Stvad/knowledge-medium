@@ -4,7 +4,6 @@ import {showPropertiesProp} from '@/data/properties.js'
 import {navigate} from '@/utils/navigation.js'
 
 import {openCredentialsDialog} from './CredentialsDialog'
-import {updateCredentialHints} from './credentials'
 import {publishFromBlock} from './PublishDialog'
 import {publisherPrefsType} from './properties'
 
@@ -17,7 +16,6 @@ export const openSettingsAction: ActionConfig<typeof ActionContextTypes.GLOBAL> 
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
     const prefs = await getPluginPrefsBlock(repo, workspaceId, repo.user, publisherPrefsType)
-    await updateCredentialHints(repo)
     await prefs.set(showPropertiesProp, true)
     navigate(repo, {target: 'new-panel', blockId: prefs.id, workspaceId})
   },

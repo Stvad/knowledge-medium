@@ -19,6 +19,8 @@ export const corsProxyUrlProp = defineProperty<string>('socialPublisher:corsProx
   changeScope: ChangeScope.UserPrefs,
 })
 
+// Schema-only settings rows. Their editors derive device-local credential
+// status directly and never persist these values to synced user preferences.
 export const twitterConnectedHintProp = defineProperty<boolean>(
   'socialPublisher:twitterConfigured',
   {

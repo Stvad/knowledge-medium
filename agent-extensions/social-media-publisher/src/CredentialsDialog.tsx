@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/dialog.js'
 import {Input} from '@/components/ui/input.js'
 import {Label} from '@/components/ui/label.js'
-import {useEffect, useState} from 'react'
+import {useEffect, useState, useSyncExternalStore} from 'react'
 
 import {
   AlertCircleIcon,
@@ -31,11 +31,12 @@ import {
   loadBlueskyAppPassword,
   loadBufferToken,
   loadLessWrongToken,
+  getCredentialSnapshot,
   prefsBlock,
   saveBlueskyAppPassword,
   saveBufferToken,
   saveLessWrongToken,
-  updateCredentialHints,
+  subscribeCredentialState,
 } from './credentials'
 import {
   blueskyConnectedHintProp,
@@ -92,7 +93,6 @@ export const CredentialsDialog = ({
       if (bufferToken.trim()) saveBufferToken(bufferToken.trim())
       if (blueskyPassword.trim()) saveBlueskyAppPassword(blueskyPassword.trim())
       if (lesswrongToken.trim()) saveLessWrongToken(lesswrongToken.trim())
-      await updateCredentialHints(repo)
       showSuccess('Saved social publisher credentials')
       resolve(true)
     } finally {
@@ -104,7 +104,6 @@ export const CredentialsDialog = ({
     clearBufferToken()
     clearBlueskyAppPassword()
     clearLessWrongToken()
-    await updateCredentialHints(repo)
     setBufferToken('')
     setBlueskyPassword('')
     setLesswrongToken('')
@@ -198,6 +197,11 @@ const ConnectedHintEditor = ({
   configured,
   block,
 }: PropertyEditorProps<boolean> & {configured: boolean}) => {
+  useSyncExternalStore(
+    subscribeCredentialState,
+    getCredentialSnapshot,
+    getCredentialSnapshot,
+  )
   const repo = (block as Block).repo
   return (
     <div className='flex items-center gap-2'>
