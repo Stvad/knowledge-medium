@@ -14,9 +14,9 @@ import {
   propertyEditorOverridesFacet,
   propertySchemasFacet,
   queriesFacet,
-  valuePresetsFacet,
 } from '@/data/facets.js'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { backlinksForBlockQuery } from '@/plugins/backlinks/query.js'
 import { referencesInvalidationRule } from '@/plugins/references/invalidation.js'
 import {
@@ -119,7 +119,7 @@ describe('groupedBacklinksDataExtension query', () => {
       encodedValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
       schemas,
       uis,
-      presets: runtime.read(valuePresetsFacet),
+      presets: readValuePresets(runtime),
     }).Editor).toBe(groupedBacklinksDefaultsUi.Editor)
   })
 

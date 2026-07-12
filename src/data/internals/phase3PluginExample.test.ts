@@ -47,11 +47,11 @@ import {
   mutatorsFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
-  valuePresetsFacet,
 } from '../facets'
 import { DatePropertyEditor, resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { Repo } from '../repo'
 
 // ──── §12.1 plugin contributions ────
@@ -198,7 +198,7 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
       encodedValue: '2026-06-01T00:00:00.000Z',
       schemas,
       uis,
-      presets: runtime.read(valuePresetsFacet),
+      presets: readValuePresets(runtime),
     })
     expect(display.isKnown).toBe(true)
     expect(display.shape).toBe('date')
@@ -223,7 +223,7 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
       encodedValue: '2026-06-01T00:00:00.000Z',
       schemas: runtime.read(propertySchemasFacet),
       uis: runtime.read(propertyEditorOverridesFacet),
-      presets: runtime.read(valuePresetsFacet),
+      presets: readValuePresets(runtime),
     })
     expect(display.isKnown).toBe(true)
     expect(display.shape).toBe('date')

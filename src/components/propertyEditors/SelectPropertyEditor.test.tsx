@@ -3,11 +3,12 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ChangeScope, codecs, defineProperty } from '@/data/api'
-import { valuePresetsFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { SelectPropertyEditor } from './SelectPropertyEditor'
 import { resolvePropertyDisplay } from './defaults'
 import { kernelValuePresetsExtension } from './kernelValuePresets'
+import {readValuePresets} from '@/data/valuePresetRegistry'
+import {kernelDataExtension} from '@/data/kernelDataExtension'
 
 const modeProp = defineProperty<'compact' | 'cozy'>('test:mode', {
   codec: codecs.enum([{value: 'compact', label: 'Compact'}, {value: 'cozy', label: 'Cozy'}]),
@@ -53,8 +54,8 @@ describe('SelectPropertyEditor', () => {
 
 describe('enum preset wiring', () => {
   it('resolves an enum-codec property to the SelectPropertyEditor', () => {
-    const runtime = resolveFacetRuntimeSync(kernelValuePresetsExtension)
-    const presets = runtime.read(valuePresetsFacet)
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension, kernelValuePresetsExtension])
+    const presets = readValuePresets(runtime)
 
     const display = resolvePropertyDisplay({
       name: modeProp.name,

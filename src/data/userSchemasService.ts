@@ -12,7 +12,7 @@
 import {
   ChangeScope,
   type AnyPropertySchema,
-  type AnyValuePreset,
+  type AnyValuePresetCore,
   type BlockData,
   type PropertySchema,
 } from '@/data/api'
@@ -51,7 +51,7 @@ const peekRowProperty = <T>(row: BlockData, schema: PropertySchema<T>): T | unde
  *  loads). */
 const tryBuildSchema = (
   row: BlockData,
-  presets: ReadonlyMap<string, AnyValuePreset>,
+  presets: ReadonlyMap<string, AnyValuePresetCore>,
 ): AnyPropertySchema | null => {
   const presetId = peekRowProperty(row, presetIdProp) ?? ''
   if (!presetId) {
@@ -103,7 +103,7 @@ export const userSchemasProjector: DefinitionBlockProjector<BlockData, AnyProper
   targetFacet: propertySchemasFacet,
   sourceId: USER_DATA_SOURCE_ID,
   keyOf: schema => schema.name,
-  project: (row, ctx) => tryBuildSchema(row, ctx.repo.valuePresets),
+  project: (row, ctx) => tryBuildSchema(row, ctx.repo.valuePresetCores),
   secondarySignal: (repo, rebuild) => repo.onValuePresetsChange(rebuild),
 }
 
@@ -171,7 +171,7 @@ export class UserSchemasService {
     const name = args.name.trim()
     if (!name) throw new Error('[addSchema] name is required')
 
-    const preset = this.repo.valuePresets.get(args.presetId)
+    const preset = this.repo.valuePresetCores.get(args.presetId)
     if (!preset) {
       throw new Error(`[addSchema] no preset registered for id ${JSON.stringify(args.presetId)}`)
     }

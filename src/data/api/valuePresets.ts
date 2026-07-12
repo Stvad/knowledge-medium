@@ -2,38 +2,19 @@
  *  See user-defined-properties.md §1 for the full design. */
 
 import type { ComponentType } from 'react'
-import type { Codec } from './codecs'
 import type { PropertyEditor } from './propertySchema'
+import type { ValuePresetCore } from './valuePresetCore'
 
 export interface ValuePresetConfigEditorProps<TConfig> {
   value: TConfig
   onChange: (next: TConfig) => void
 }
 
-export interface ValuePreset<TValue = unknown, TConfig = void> {
-  /** Stable id; matches the codec's `type` for codecs built by this
-   *  preset. Persisted on user-defined schema blocks. */
+export interface ValuePresetPresentation<TValue = unknown, TConfig = void> {
+  /** Stable join key; must match the corresponding codec core id. */
   readonly id: string
   /** Human label for the picker. */
   readonly label: string
-  /** Build the codec from preset-specific config. Called at schema
-   *  registration time and on runtime rebuild — must be deterministic
-   *  in `config` and only run on validated config (see configCodec). */
-  readonly build: (config: TConfig) => Codec<TValue>
-  /** Default value used when the schema is registered and the property
-   *  is first materialised. Lives on the resulting `PropertySchema`. */
-  readonly defaultValue: TValue
-  /** Default config used when the preset is registered through the
-   *  AddPropertyForm or the optimistic-materialize path without
-   *  user-supplied config. Required when `TConfig` is non-void; void
-   *  presets omit it. */
-  readonly defaultConfig?: TConfig
-  /** Validates and parses raw JSON read from `presetConfigProp` into
-   *  `TConfig`. Required when `TConfig` is non-void. Throws on
-   *  malformed input — `UserSchemasService` catches, logs, and skips
-   *  schemas with invalid config rather than passing untyped JSON to
-   *  `build`. */
-  readonly configCodec?: Codec<TConfig>
   /** Editor used for any property whose codec's `type` matches this
    *  preset's `id`. Required — every preset ships its own editor.
    *  Exact-name `PropertyEditorOverride.Editor` contributions still
@@ -56,10 +37,44 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
   readonly hideFromPicker?: boolean
 }
 
+export interface ValuePreset<TValue = unknown, TConfig = void>
+  extends ValuePresetCore<TValue, TConfig>, ValuePresetPresentation<TValue, TConfig> {}
+
 /** Variance-erased preset type for storage in heterogeneous
  *  collections (`valuePresetsFacet`'s contributions, etc.). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyValuePreset = ValuePreset<any, any>
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyValuePresetPresentation = ValuePresetPresentation<any, any>
+
+export const joinValuePreset = <TValue, TConfig>(
+  core: ValuePresetCore<TValue, TConfig>,
+  presentation: ValuePresetPresentation<NoInfer<TValue>, NoInfer<TConfig>>,
+): ValuePreset<TValue, TConfig> => {
+  if (core.id !== presentation.id) {
+    throw new Error(`ValuePreset id mismatch: core ${JSON.stringify(core.id)} vs presentation ${JSON.stringify(presentation.id)}`)
+  }
+  return {...presentation, ...core}
+}
+
+export interface SplitValuePreset<TValue, TConfig> {
+  readonly core: ValuePresetCore<TValue, TConfig>
+  readonly presentation: ValuePresetPresentation<TValue, TConfig>
+  readonly preset: ValuePreset<TValue, TConfig>
+}
+
+/** Typed authoring path for the split facets. Core inference owns TValue and
+ * TConfig; `NoInfer` prevents an incompatible presentation from widening them
+ * into a union after the two contributions are stored in erased registries. */
+export const defineSplitPreset = <TValue, TConfig = void>(
+  core: ValuePresetCore<TValue, TConfig>,
+  presentation: ValuePresetPresentation<NoInfer<TValue>, NoInfer<TConfig>>,
+): SplitValuePreset<TValue, TConfig> => ({
+  core,
+  presentation,
+  preset: joinValuePreset(core, presentation),
+})
 
 /** Helper for plugin authors to define a preset with full type
  *  inference on the value/config slots. */

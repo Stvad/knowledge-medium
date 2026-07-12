@@ -25,6 +25,7 @@ import type {
   AnyPropertySchema,
   AnyQuery,
   AnyValuePreset,
+  AnyValuePresetCore,
   BlockData,
   Mutator,
   MutatorRegistry,
@@ -309,6 +310,7 @@ export class Repo {
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
   private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
+  private _valuePresetCores: ReadonlyMap<string, AnyValuePresetCore> = new Map()
   private _valuePresets: ReadonlyMap<string, AnyValuePreset> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
   /** Facet→registry bridge (audit D1(c)) — owns the installed
@@ -501,6 +503,10 @@ export class Repo {
     return this._propertyEditorOverrides
   }
 
+  get valuePresetCores(): ReadonlyMap<string, AnyValuePresetCore> {
+    return this._valuePresetCores
+  }
+
   get valuePresets(): ReadonlyMap<string, AnyValuePreset> {
     return this._valuePresets
   }
@@ -660,6 +666,7 @@ export class Repo {
         this._propertySchemas = propertySchemas
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
+      applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
       applyValuePresets: (presets) => { this._valuePresets = presets },
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },

@@ -13,9 +13,9 @@ import {
   propertyEditorOverridesFacet,
   propertySchemasFacet,
   queriesFacet,
-  valuePresetsFacet,
 } from '@/data/facets.js'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import { backlinksPlugin } from '../index.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
@@ -131,7 +131,7 @@ describe('backlinksDataExtension query', () => {
       encodedValue: dailyNoteBacklinksDefaultsProp.defaultValue,
       schemas,
       uis,
-      presets: runtime.read(valuePresetsFacet),
+      presets: readValuePresets(runtime),
     }).Editor).toBe(dailyNoteBacklinksDefaultsUi.Editor)
   })
 

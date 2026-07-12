@@ -12,7 +12,8 @@ import { useChildIds, useHandle } from '@/hooks/block.js'
 import { useUIStateBlock, useUserPage } from '@/data/globalState.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
-import { propertyEditorOverridesFacet, typesFacet, valuePresetsFacet } from '../data/facets.ts'
+import { propertyEditorOverridesFacet, typesFacet } from '../data/facets.ts'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import {
   editorSelection,
   requestEditorFocus,
@@ -89,7 +90,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // across renders for the same runtime.
   const schemas = usePropertySchemas()
   const uis = runtime.read(propertyEditorOverridesFacet)
-  const presets = runtime.read(valuePresetsFacet)
+  const presets = readValuePresets(runtime)
   const typesRegistry = runtime.read(typesFacet)
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly

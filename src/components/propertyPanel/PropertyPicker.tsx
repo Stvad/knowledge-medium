@@ -18,7 +18,8 @@ import {
 } from 'react'
 import { Input } from '@/components/ui/input'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import { propertyEditorOverridesFacet } from '@/data/facets.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import type {
@@ -127,7 +128,7 @@ export function PropertyPicker({
 }: PropertyPickerProps) {
   const propertyEditingFocus = usePropertyEditingActivation(block)
   const runtime = useAppRuntime()
-  const presets = runtime.read(valuePresetsFacet)
+  const presets = readValuePresets(runtime)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const schemas = usePropertySchemas()
 

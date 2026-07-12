@@ -16,6 +16,8 @@ import type {
   AnyPropertySchema,
   AnyQuery,
   AnySameTxProcessor,
+  AnyValuePresetCore,
+  AnyValuePresetPresentation,
   AnyValuePreset,
   ChangeScope,
   Tx,
@@ -141,10 +143,14 @@ export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.i
 
 export const propertyEditorOverridesFacet = keyedMapFacet<AnyPropertyEditorOverride>('data.property-editor-overrides', c => c.name)
 
-/** Open-vocabulary preset registry. Keyed by preset id (matches the
- *  codec `type` for codecs built by the preset). Last-wins on
- *  collision, per facet convention. Plugins register through
- *  `valuePresetsFacet.of(preset, {source: 'plugin'})`. */
+/** Data-only codec factories available to projectors and headless surfaces. */
+export const valuePresetCoresFacet = keyedMapFacet<AnyValuePresetCore>('data.value-preset-cores', p => p.id)
+
+/** React presentation contributions, joined live to cores by id. */
+export const valuePresetPresentationsFacet = keyedMapFacet<AnyValuePresetPresentation>('data.value-preset-presentations', p => p.id)
+
+/** Pre-split compatibility facet for full ValuePreset contributions.
+ * New code contributes a core + presentation separately. */
 export const valuePresetsFacet = keyedMapFacet<AnyValuePreset>('data.valuePresets', p => p.id)
 
 export const postCommitProcessorsFacet = keyedMapFacet<AnyPostCommitProcessor>('data.postCommitProcessors', p => p.name)
