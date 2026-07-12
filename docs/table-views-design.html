@@ -161,7 +161,8 @@
   <li><code>referencedBy: {id, sourceField?}</code> on a predicate compiles to <code>EXISTS(… block_references br WHERE br.source_id = &lt;candidate&gt;.id AND br.target_id = ?)</code> (<code>compileReferencedByExists</code>) — i.e. "the candidate references X (optionally via field F)". <strong>This is both ref-equality and refList-contains</strong>, already production-used (<code>typeExtraction.ts: findCandidatesByPropertyShape</code>). Ref codecs are deliberately not <code>where</code>-comparable; the compiler's own error message routes to <code>referencedBy</code>. Caveat: <code>block_references</code> is a projection maintained for schemas registered as ref/refList at write time — values written while a defining plugin was disabled aren't in it.</li>
   <li><code>match</code> (AND) / <code>exclude</code> (NOR) predicate lists with <code>self</code> / <code>ancestor</code> scope; the ancestor walk is a recursive CTE that is <em>both</em> depth-bounded and gated: <code>assertAncestorWalkBounded</code> <strong>rejects the query unless a candidate-bounding filter exists</strong> (types / referencedBy / selective self-where). A bare "everything under X" is not compilable — the grammar must account for this (§4.3).</li>
   <li>Reactivity: per-dimension deps (type channel, per-property channel, reference channels) for membership, plus per-row deps from hydration — one subscribed handle re-fires on any change to any matched row, <em>including</em> properties and content not mentioned in the query. Honesty note: it also <strong>over-fires</strong> — property channels are keyed by (workspace, property <em>name</em>), so any block writing that property re-resolves the view, and any member-row edit re-runs the query + full rehydrate. Direction is right (no under-fire; a table's cells stay live through one subscription); cost is budgeted in §4.7.</li>
-  <li>Surfaced as <code>repo.queryBlocks / subscribeBlocks</code> (+ active-workspace shorthands). Hydrated rows include <code>content</code> — a free-text term can be an exhaustive JS filter over the already-fetched result. (<code>core.searchByContent</code> is <em>not</em> a substitute: it is a ranked top-N query, default limit 50 — intersecting it with the typed set would silently drop matches past the cap.)</li>
+  <li>Surfaced as <code>repo.queryBlocks / subscribeBlocks</code> (+ active-workspace shorthands); hydrated rows include <code>content</code>.</li>
+  <li><strong>Free-text is SQL-able too</strong>: <code>blocks_fts</code> is a trigger-maintained <em>trigram</em> FTS5 index over live <code>blocks.content</code> (<code>clientSchema.ts</code>) — true case-insensitive substring semantics on an index. A content term compiles as an FTS join intersected with the typed candidates (exhaustive — <code>core.searchByContent</code>'s top-N limit is that query's choice, not the index's), and the narrow <code>KERNEL_CONTENT_CHANNEL</code> dep (<code>searchByContent</code>'s own pattern) provides exactly the invalidation an SQL-pushed content term needs: it fires when a non-member starts matching via a content edit, which per-row deps alone would miss. Residue: sub-trigram-length terms (&lt; 3 chars, <code>isTrigramSearchable</code>) fall back to the JS tail.</li>
 </ul>
 
 <h3 id="engine-lacks">3.2 What it lacks — and what this plugin does about each</h3>
@@ -172,9 +173,8 @@
   <tr><td>ORDER BY property</td><td>JS sort over the filtered set</td><td><code>order: {property, dir}</code> pushdown</td></tr>
   <tr><td>LIMIT</td><td>JS slice after sort</td><td><code>limit</code> arg</td></tr>
   <tr><td>OR across predicates</td><td>JS tail (compile the AND-able intersection, evaluate the disjunction client-side)</td><td>match groups (<code>anyOf</code>)</td></tr>
-  <tr><td>free-text content term</td><td>JS substring over hydrated rows</td><td><code>content LIKE</code> clause</td></tr>
   <tr><td>contains on plain string lists (<code>list</code> codecs carry no <code>where</code>)</td><td>JS tail</td><td><code>json_each</code> membership clause for list codecs</td></tr>
-  <tr><td>title / created / updated terms</td><td>JS tail (they're columns, not properties)</td><td>column pseudo-fields in <code>where</code></td></tr>
+  <tr><td>created / updated terms</td><td>JS tail (they're columns, not properties)</td><td>column pseudo-fields in <code>where</code></td></tr>
 </table>
 </div>
 
@@ -242,7 +242,7 @@
   <tr><td><code>refs=[[Some Page]]</code></td><td>references that page via any field (<code>referencedBy</code> without <code>sourceField</code>)</td><td class="sql">SQL</td></tr>
   <tr><td><code>under=[[Projects]]</code></td><td>ancestor scope. Requires a bounding term in the same query (§3.1's gate); a bare <code>under=</code> is a parse-time error with a fix-it hint ("add a type or property term").</td><td class="sql">SQL</td></tr>
   <tr><td><code>childof=self</code> / <code>childof=[[X]]</code></td><td>direct children (row-source routing, §4.1)</td><td class="sql">childrenOf</td></tr>
-  <tr><td><code>"vendor"</code> &nbsp; <code>title~"vendor"</code></td><td>content contains / title contains (columns, not properties)</td><td class="js">JS tail</td></tr>
+  <tr><td><code>"vendor"</code></td><td>content contains — an FTS join against <code>blocks_fts</code> (trigram = real substring semantics), invalidated via the content channel (§3.1). A block's own content is its title line in KM, so there is no separate title term. Sub-trigram-length terms (&lt; 3 chars) fall back to the JS tail.</td><td class="sql">SQL</td></tr>
   <tr><td><code>created&gt;2026-01-01</code> &nbsp; <code>updated&lt;today-90d</code></td><td>timestamp pseudo-fields (columns)</td><td class="js">JS tail</td></tr>
   <tr><td><code>(status=open | deadline&lt;=today)</code></td><td>or-group across predicates; <code>!</code> prefix negates any term or group</td><td class="js">JS tail</td></tr>
 </table>
@@ -314,7 +314,7 @@
 
 <ul>
   <li><strong>116 live table definitions</strong> (124 at import). <strong>18 of 116 use <code>or:</code> groups across predicates</strong> — or-groups are not a theoretical need; a grammar without an OR surface cannot express ~16% of a real corpus. (Hence §4.3's group syntax, and hence "JS tail" rather than "unsupported".)</li>
-  <li>Constructs in live use that shaped the pseudo-fields: title-contains, mtime/ctime comparisons, string-list contains, and a path-prefix folder test (import-provenance-specific; maps to <code>under=</code> only where vault folders became ancestry — a per-corpus migration judgment, not a grammar rule).</li>
+  <li>Constructs in live use that shaped the grammar beyond types + properties: title-contains (KM's content term, §4.3), mtime/ctime comparisons (the timestamp pseudo-fields), string-list contains, and a path-prefix folder test (import-provenance-specific; maps to <code>under=</code> only where vault folders became ancestry — a per-corpus migration judgment, not a grammar rule).</li>
   <li><strong>Most of that corpus filters on unregistered (import-provenance) props</strong>, which <code>compileWhereClause</code> rejects by design — so migrated-corpus terms evaluate in the JS tail unless schemas are minted for them. The SQL-pushdown win applies fully to <em>typed</em> queries (<code>#task status=open</code>), which are the design center here; the honest statement for legacy corpora is "same evaluation as before, behind a real grammar".</li>
   <li>Operational lessons already folded in above: render caps beat naive full renders (its 100-row cap); one shared query, never per-row subscriptions; edit mode = raw text with error placeholders is a fine authoring UX.</li>
 </ul>
@@ -325,7 +325,7 @@
   <li><strong>OR pushdown</strong>: is the JS tail enough long-term, or should <code>match</code> gain <code>anyOf</code> groups? Proposal: ship with the tail, measure; the grammar doesn't change either way.</li>
   <li><strong>Per-user tweak layer</strong>: worth a real per-user ui-state home for multi-user workspaces, or does the synced tweak layer suffice until multi-user view usage is real?</li>
   <li><strong>Ghost-slot alignment</strong>: default columns for <code>#type</code> should equal the outline's post-#288 ghost-slot set — align the two default computations when that registry shape lands (slice B) rather than guessing now.</li>
-  <li><strong>Timestamp/title pushdown</strong>: pseudo-field terms are JS-tail v1; a <code>where</code>-on-columns engine extension would make several common queries fully SQL. Worth it only with profiling evidence.</li>
+  <li><strong>Timestamp pushdown</strong>: <code>created</code>/<code>updated</code> terms are JS-tail v1; a <code>where</code>-on-columns engine extension would make several common queries fully SQL. Worth it only with profiling evidence.</li>
 </ul>
 
 </main>
