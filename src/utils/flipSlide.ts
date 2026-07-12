@@ -26,13 +26,16 @@
   Two details that took real debugging to learn (this shipped and was
   daily-driven as an extension first):
 
-  - TRANSFORM-COMPENSATED measurement. A row's natural position is
-    rect.top MINUS its current interpolated translateY (DOMMatrix m42,
-    sampled the same frame — the interpolation cancels exactly).
-    Interrupting an in-flight slide with another move otherwise measures
-    mid-animation geometry; and the tempting alternative — reset the
-    transform, then measure — reads a mid-transition lie whenever a
-    transform transition is attached, and under-corrects forever.
+  - TRANSFORM-COMPENSATED measurement — on the POST side only. The
+    inverse transform is relative to a row's layout slot, so the
+    post-mutation measurement subtracts the row's own in-flight
+    translateY (DOMMatrix m42, sampled the same frame — the
+    interpolation cancels exactly). The PRE snapshot deliberately keeps
+    the raw visual top: an interrupted slide must continue from where
+    the row is on screen, not from the layout slot it was animating
+    toward. And never reset-then-measure — with a transform transition
+    attached, the reset itself reads back a mid-transition lie and
+    under-corrects forever.
 
   - OWNERSHIP. Rows animated by this helper are tagged `data-flip-slide`
     while in flight; rows carrying a FOREIGN inline transform (e.g. an
@@ -103,13 +106,16 @@ export const withRowSlide = async (
       duplicates.add(key)
       continue
     }
-    pre.set(key, el.getBoundingClientRect().top - currentTranslateY(el))
+    // Raw VISUAL top, deliberately uncompensated: an interrupted slide
+    // continues from where the row is on screen (see the header note).
+    pre.set(key, el.getBoundingClientRect().top)
   }
 
   // Armed before the mutation: the React commit may happen inside the
   // awaited `run`, and the observer callback (post-DOM-update, pre-paint)
   // plus the microtask continuation below are what let the inverse
   // transforms land before the new layout ever paints.
+  let cancelSettle = () => {}
   const settled = new Promise<void>(resolve => {
     const timeout = window.setTimeout(() => {
       observer.disconnect()
@@ -121,10 +127,20 @@ export const withRowSlide = async (
       resolve()
     })
     observer.observe(document.body, {childList: true, subtree: true})
+    cancelSettle = () => {
+      window.clearTimeout(timeout)
+      observer.disconnect()
+      resolve()
+    }
   })
 
   const outcome = await run()
-  if (outcome === false) return outcome
+  if (outcome === false) {
+    // No DOM change is coming — tear the observer/timeout down now so
+    // key-repeat at a boundary doesn't stack document-wide observers.
+    cancelSettle()
+    return outcome
+  }
   await settled
 
   const post = new Map<string, HTMLElement | null>()
