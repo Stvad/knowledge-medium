@@ -38,6 +38,14 @@
     while in flight; rows carrying a FOREIGN inline transform (e.g. an
     extension nudging margin annotations into a rail) are skipped
     entirely, so two transform writers never fight over one element.
+
+  Snapshots are keyed by the row's stable identity (render scope + block
+  id), not by element: `moveVertical`'s edge-of-sibling-list path changes
+  the block's parentId, so React unmounts the old keyed row and mounts a
+  fresh element under the new parent — an element-keyed snapshot would
+  skip exactly the row being moved. The scope id is per-pane (the
+  outline's top level), so it survives the re-parent; the same block
+  visible in two panes stays two distinct keys.
 */
 
 const FLIP_MS = 180
@@ -60,6 +68,13 @@ const currentTranslateY = (el: Element): number => {
 const ownable = (el: HTMLElement): boolean =>
   !el.style.transform || el.hasAttribute(OWNED_ATTR)
 
+/** Stable row identity across React remounts (see the header note). */
+const rowKey = (el: HTMLElement): string | null => {
+  const blockId = el.getAttribute('data-block-id')
+  if (!blockId) return null
+  return `${el.getAttribute('data-render-scope-id') ?? ''}::${blockId}`
+}
+
 const prefersReducedMotion = (): boolean =>
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -70,10 +85,20 @@ export const withRowSlide = async (run: () => Promise<void>): Promise<void> => {
     return run()
   }
 
-  const pre = new Map<HTMLElement, number>()
+  const pre = new Map<string, number>()
+  const duplicates = new Set<string>()
   for (const el of document.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
     if (!ownable(el)) continue
-    pre.set(el, el.getBoundingClientRect().top - currentTranslateY(el))
+    const key = rowKey(el)
+    if (!key) continue
+    // Two elements with one identity (e.g. a block embedded next to its
+    // own outline row) would fight over a single snapshot — animate
+    // neither rather than slide one to the other's origin.
+    if (pre.has(key)) {
+      duplicates.add(key)
+      continue
+    }
+    pre.set(key, el.getBoundingClientRect().top - currentTranslateY(el))
   }
 
   // Armed before the mutation: the React commit may happen inside the
@@ -96,8 +121,18 @@ export const withRowSlide = async (run: () => Promise<void>): Promise<void> => {
   await run()
   await settled
 
-  for (const [el, preTop] of pre) {
-    if (!el.isConnected || !ownable(el)) continue
+  const post = new Map<string, HTMLElement | null>()
+  for (const el of document.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
+    if (!ownable(el)) continue
+    const key = rowKey(el)
+    if (!key || duplicates.has(key)) continue
+    post.set(key, post.has(key) ? null : el)
+  }
+
+  for (const [key, el] of post) {
+    if (!el) continue
+    const preTop = pre.get(key)
+    if (preTop === undefined) continue
     const naturalTop = el.getBoundingClientRect().top - currentTranslateY(el)
     const delta = preTop - naturalTop
     if (Math.abs(delta) < 2) continue
