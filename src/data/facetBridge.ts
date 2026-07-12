@@ -28,7 +28,7 @@ import type {
   AnyPropertySchema,
   AnyQuery,
   AnySameTxProcessor,
-  AnyJoinedValuePreset,
+  AnyValuePreset,
   AnyValuePresetCore,
   TypeContribution,
 } from '@/data/api'
@@ -81,7 +81,7 @@ export interface FacetBridgeTarget {
   ): void
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
   applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
-  applyValuePresets(presets: ReadonlyMap<string, AnyJoinedValuePreset>): void
+  applyValuePresets(presets: ReadonlyMap<string, AnyValuePreset>): void
   applyQueries(queries: Map<string, AnyQuery>): void
   /** Defer a ref-typed-property reprojection for the names whose ref-ness
    *  changed in this swap (off the cold-start critical path). */
@@ -284,7 +284,7 @@ export class FacetBridge {
         run: (rt) => {
           const presets = readValuePresetRegistry(rt)
           target.applyValuePresetCores(presets.cores)
-          target.applyValuePresets(presets.joined)
+          target.applyValuePresets(rt.read(valuePresetsFacet))
           this.valuePresetsListeners.notify()
         },
       },

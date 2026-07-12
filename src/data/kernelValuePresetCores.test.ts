@@ -6,6 +6,7 @@ import { valuePresetCoresFacet, valuePresetsFacet } from './facets'
 import {definePresetCore} from './api/valuePresetCore'
 import { definePreset, defineSplitPreset, joinValuePreset, type ValuePresetPresentation } from './api/valuePresets'
 import {readValuePresets} from './valuePresetRegistry'
+import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 
 describe('kernel value preset split', () => {
   it('registers codec cores in the data runtime without React presentation', () => {
@@ -46,8 +47,7 @@ describe('kernel value preset split', () => {
     expect(() => enumCore.configCodec!.decode({options: [{value: 1, label: 'Bad'}]})).toThrow()
   })
 
-  it('joins UI presentation onto the same core by preset id', async () => {
-    const {kernelValuePresetsExtension} = await import('@/components/propertyEditors/kernelValuePresets')
+  it('joins UI presentation onto the same core by preset id', () => {
     const runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
       kernelValuePresetsExtension,
@@ -104,8 +104,7 @@ describe('kernel value preset split', () => {
     void assertMismatchRejected
   })
 
-  it('preserves legacy whole-preset overrides until they migrate', async () => {
-    const {kernelValuePresetsExtension} = await import('@/components/propertyEditors/kernelValuePresets')
+  it('preserves legacy whole-preset overrides until they migrate', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension, kernelValuePresetsExtension])
     const legacy = definePreset<string>({
       id: 'string',

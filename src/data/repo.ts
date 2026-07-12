@@ -24,7 +24,7 @@ import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyQuery,
-  AnyJoinedValuePreset,
+  AnyValuePreset,
   AnyValuePresetCore,
   BlockData,
   Mutator,
@@ -311,7 +311,7 @@ export class Repo {
   private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
   private _valuePresetCores: ReadonlyMap<string, AnyValuePresetCore> = new Map()
-  private _valuePresets: ReadonlyMap<string, AnyJoinedValuePreset> = new Map()
+  private _valuePresets: ReadonlyMap<string, AnyValuePreset> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
   /** Facet→registry bridge (audit D1(c)) — owns the installed
    *  FacetRuntime, the rebuild steps, the per-facet change subscriptions,
@@ -507,7 +507,9 @@ export class Repo {
     return this._valuePresetCores
   }
 
-  get valuePresets(): ReadonlyMap<string, AnyJoinedValuePreset> {
+  /** Legacy editorful preset map. Canonical split consumers join cores and
+   * presentations with `readValuePresets(runtime)` instead. */
+  get valuePresets(): ReadonlyMap<string, AnyValuePreset> {
     return this._valuePresets
   }
 
