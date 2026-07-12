@@ -91,9 +91,8 @@ const reorderBlock = async (
   block: Block,
   direction: -1 | 1,
   scopeRootId: string | undefined,
-): Promise<void> => {
-  await repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
-}
+): Promise<boolean> =>
+  repo.mutate.moveVertical({id: block.id, direction, scopeRootId})
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.peekProperty(isEditingProp)) {

@@ -79,8 +79,13 @@ const prefersReducedMotion = (): boolean =>
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-/** Run a structural mutation and FLIP-slide the rows it displaced. */
-export const withRowSlide = async (run: () => Promise<void>): Promise<void> => {
+/** Run a structural mutation and FLIP-slide the rows it displaced.
+ *  A mutation that reports it did nothing (resolves `false`) skips the
+ *  settle wait: no DOM change is coming, so the caller isn't held for
+ *  the observer's timeout. */
+export const withRowSlide = async (
+  run: () => Promise<boolean | void>,
+): Promise<boolean | void> => {
   if (typeof document === 'undefined' || prefersReducedMotion()) {
     return run()
   }
@@ -118,7 +123,8 @@ export const withRowSlide = async (run: () => Promise<void>): Promise<void> => {
     observer.observe(document.body, {childList: true, subtree: true})
   })
 
-  await run()
+  const outcome = await run()
+  if (outcome === false) return outcome
   await settled
 
   const post = new Map<string, HTMLElement | null>()
@@ -129,6 +135,15 @@ export const withRowSlide = async (run: () => Promise<void>): Promise<void> => {
     post.set(key, post.has(key) ? null : el)
   }
 
+  // APPLY-THEN-MEASURE IN DOCUMENT ORDER is load-bearing for nested rows.
+  // A moved block's descendants changed natural position by the same delta
+  // as their ancestor — but ancestors precede descendants here (querySelectorAll
+  // document order, preserved by the map), so by the time a descendant is
+  // measured its ancestor's inverse transform is already applied: the
+  // descendant reads back at its pre-move position, computes delta ≈ 0, and
+  // correctly rides the ancestor's single transform. Batching all
+  // measurements before applying any transforms would double-animate every
+  // descendant.
   for (const [key, el] of post) {
     if (!el) continue
     const preTop = pre.get(key)
@@ -158,4 +173,6 @@ export const withRowSlide = async (run: () => Promise<void>): Promise<void> => {
       }, FLIP_MS + 40),
     )
   }
+
+  return outcome
 }
