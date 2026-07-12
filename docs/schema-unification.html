@@ -201,18 +201,24 @@
   </tbody>
 </table></div>
 
-<p>The runtime types split in two — the design's identity rules are encoded in the type system, not in optional fields. The <strong>static typed handle</strong> is what call sites hold (module-level, workspace-agnostic, no identity); the <strong>workspace-resolved entry</strong> is what identity consumers get, and it is obtainable <em>only</em> from the &sect;7 resolution primitive:</p>
+<p>The runtime types layer in three — the design's identity rules are encoded in the type system, not in optional fields. The <strong>behavioral core</strong> is the ambient registry's value type (and all the projector builds for user rows, which carry no <code>seed:key</code>); the <strong>static typed handle</strong> extends it for code-declared schemas (module-level, workspace-agnostic, no identity); the <strong>workspace-resolved entry</strong> is what identity consumers get, and it is obtainable <em>only</em> from the &sect;7 resolution primitive:</p>
 
-<pre><code>// The static typed handle — what seedProperty returns and call sites pass to
-// block.get / tx.setProperty. Module-level, created before any workspace is
-// pinned, reused across switches: it carries NO identity, so there is nothing
-// to cache stale.
-interface PropertyHandle&lt;T&gt; {
+<pre><code>// The behavioral core — the ambient registry's (repo.propertySchemas) value type.
+// Exactly the shape tryBuildSchema builds for user rows today; user-authored
+// schemas have no seed:key, so the common shape carries none.
+interface PropertySchemaEntry&lt;T&gt; {
   readonly name: string
-  readonly seedKey: string        // stable identity KEY (§4.2) — resolved per-workspace at the boundary
   readonly codec: Codec&lt;T&gt;        // preset.build(config)
-  readonly defaultValue: T        // declaration default, else preset.defaultValue
+  readonly defaultValue: T        // declaration/row default, else preset.defaultValue
   readonly changeScope: ChangeScope
+}
+
+// The static typed handle — what seedProperty returns and call sites pass to
+// block.get / tx.setProperty. Code-declared schemas only. Module-level, created
+// before any workspace is pinned, reused across switches: it carries NO
+// identity, so there is nothing to cache stale.
+interface PropertyHandle&lt;T&gt; extends PropertySchemaEntry&lt;T&gt; {
+  readonly seedKey: string        // stable identity KEY (§4.2) — resolved per-workspace at the boundary
 }
 
 // The workspace-resolved registry entry — what identity consumers (#288 stamping,
@@ -220,7 +226,7 @@ interface PropertyHandle&lt;T&gt; {
 // bound resolution primitive (§7): branded / internally constructed, so holding one
 // PROVES resolution ran against the row's own workspace. Identity fields are
 // required — there is no "entry with missing identity" state to represent; the
-// no-workspace stage-0 registry (§4.4) serves handle-shaped behavioral entries and
+// no-workspace stage-0 registry (§4.4) serves plain PropertySchemaEntry values and
 // simply cannot produce this type.
 interface ResolvedPropertySchema&lt;T&gt; {
   readonly name: string
@@ -237,7 +243,7 @@ interface ResolvedPropertySchema&lt;T&gt; {
 
 <div class="aside warn">
 <h5>fieldId is workspace-scoped — identity is a capability of the resolution path, not a field you might find</h5>
-<p style="margin:6px 0">Seeded fieldIds are a function of <code>(workspaceId, seedKey)</code> (&sect;4.2), but the exported schema consts are module-level values created before any workspace is pinned and reused across workspace switches — so handles carry <code>seedKey</code> and structurally <em>cannot</em> carry a fieldId. The ambient name-keyed registry (<code>repo.propertySchemas</code>) serves behavioral, handle-shaped entries and <em>never</em> carries identity either, even post-pin: anything that needs a concrete fieldId — #288's write path above all — must go through the <strong>&sect;7 resolution primitive</strong>, bound to the transaction and keyed by <em>the row's own <code>workspaceId</code></em>, never the ambient active-workspace pin. Because <code>ResolvedPropertySchema</code> is constructible only there, "resolved against the right workspace" is a compile-time property of holding the type — this is what keeps a write that lands during a workspace switch from stamping the wrong workspace's fieldId into synced data (&sect;4.4), with no optional-field discipline to police.</p>
+<p style="margin:6px 0">Seeded fieldIds are a function of <code>(workspaceId, seedKey)</code> (&sect;4.2), but the exported schema consts are module-level values created before any workspace is pinned and reused across workspace switches — so handles carry <code>seedKey</code> and structurally <em>cannot</em> carry a fieldId. The ambient name-keyed registry (<code>repo.propertySchemas</code>) serves <code>PropertySchemaEntry</code> values — the behavioral core, which is also all the projector builds for user rows — and <em>never</em> carries identity either, even post-pin: anything that needs a concrete fieldId — #288's write path above all — must go through the <strong>&sect;7 resolution primitive</strong>, bound to the transaction and keyed by <em>the row's own <code>workspaceId</code></em>, never the ambient active-workspace pin. Because <code>ResolvedPropertySchema</code> is constructible only there, "resolved against the right workspace" is a compile-time property of holding the type — this is what keeps a write that lands during a workspace switch from stamping the wrong workspace's fieldId into synced data (&sect;4.4), with no optional-field discipline to police.</p>
 </div>
 
 <div class="aside decision">
