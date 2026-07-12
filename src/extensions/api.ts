@@ -222,7 +222,10 @@ export type {
   Codec,
   PropertyEditorOverride,
   PropertyEditorProps,
+  PropertyHandle,
   PropertySchema,
+  PropertySchemaEntry,
+  ResolvedPropertySchema,
   TypeContribution,
 } from '@/data/api'
 export { propertyEditorOverridesFacet, propertySchemasFacet, typesFacet } from '@/data/facets.js'
