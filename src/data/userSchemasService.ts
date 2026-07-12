@@ -42,6 +42,15 @@ const peekRowProperty = <T>(row: BlockData, schema: PropertySchema<T>): T | unde
   return stored === undefined ? undefined : schema.codec.decode(stored)
 }
 
+const rawPresetConfig = (
+  preset: AnyValuePresetCore,
+  stored: unknown,
+): unknown => {
+  if (stored !== undefined) return stored
+  if (preset.defaultConfig === undefined || preset.configCodec === undefined) return {}
+  return preset.configCodec.encode(preset.defaultConfig)
+}
+
 /** Validates a schema block against the current presets and returns the
  *  schema if it parses, or null with a logged diagnostic if not. Three
  *  skip paths: (1) preset not loaded, (2) name empty, (3)
@@ -74,7 +83,7 @@ const tryBuildSchema = (
   let config: unknown
   if (preset.configCodec) {
     try {
-      const raw = peekRowProperty(row, presetConfigProp) ?? {}
+      const raw = rawPresetConfig(preset, peekRowProperty(row, presetConfigProp))
       config = preset.configCodec.decode(raw)
     } catch (err) {
       console.warn(
@@ -181,7 +190,7 @@ export class UserSchemasService {
     // `null` is preserved so configCodec can reject it.
     let parsedConfig: unknown
     if (preset.configCodec) {
-      const raw = args.config === undefined ? preset.defaultConfig ?? {} : args.config
+      const raw = rawPresetConfig(preset, args.config)
       try {
         parsedConfig = preset.configCodec.decode(raw)
       } catch (err) {

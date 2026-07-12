@@ -1,4 +1,5 @@
 import {
+  decodeRefId,
   decodeRefListIds,
   isRefCodec,
   isRefListCodec,
@@ -33,12 +34,8 @@ export const projectPropertyReferences = (
     if (!schema) continue
 
     if (isRefCodec(schema.codec)) {
-      try {
-        appendPropertyRef(refs, seen, name, schema.codec.decode(encodedValue))
-      } catch {
-        // Decode failures are property-local. One malformed typed field
-        // should not block content refs or other well-formed ref fields.
-      }
+      const id = decodeRefId(schema.codec, encodedValue)
+      if (id !== undefined) appendPropertyRef(refs, seen, name, id)
       continue
     }
 

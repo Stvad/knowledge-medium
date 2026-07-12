@@ -24,10 +24,16 @@ import {
   dateValuePresetCore,
   enumValuePresetCore,
   listValuePresetCore,
+  jsonValuePresetCore,
   numberValuePresetCore,
+  optionalJsonValuePresetCore,
+  optionalNumberValuePresetCore,
+  optionalRefValuePresetCore,
+  optionalStringValuePresetCore,
   refListValuePresetCore,
   refValuePresetCore,
   stringValuePresetCore,
+  stringListValuePresetCore,
   urlValuePresetCore,
 } from '@/data/kernelValuePresetCores'
 import {markValuePresetCompatibilityMirror} from '@/data/valuePresetRegistry'
@@ -44,6 +50,7 @@ import {
 import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 import { RefTargetTypePicker } from './RefTargetTypePicker'
 import { SelectPropertyEditor } from './SelectPropertyEditor'
+import {EnumOptionsConfigEditor} from './EnumOptionsConfigEditor'
 
 /** Existing kernel editors are typed `PropertyEditor<unknown>`, which
  *  is invariant against the per-preset `PropertyEditor<TValue>`
@@ -61,9 +68,12 @@ const kernelPresetPair = <TValue, TConfig>(
   presentation: ValuePresetPresentation<NoInfer<TValue>, NoInfer<TConfig>>,
 ) => {
   const split = defineSplitPreset(core, presentation)
+  const compatibility = split.preset.Editor
+    ? markValuePresetCompatibilityMirror(split.preset) as AnyValuePreset
+    : undefined
   return {
     presentation: split.presentation,
-    compatibility: markValuePresetCompatibilityMirror(split.preset),
+    compatibility,
   }
 }
 
@@ -105,15 +115,12 @@ const kernelValuePresetPairs = [
     Editor: asEditor<string>(UrlPropertyEditor),
   }),
   kernelPresetPair(enumValuePresetCore, {
-    // Provides the `<select>` editor for stored enum properties (options
-    // ride on the codec). Hidden from the AddPropertyForm picker — an
-    // ad-hoc enum has no options-config UI, so it's only useful when a
-    // plugin's settings schema supplies the options via `codecs.enum`.
+    // Options ride on the codec and are edited on the schema definition.
     id: 'enum',
     label: 'Choice',
     Glyph: ChevronDownSquare,
     Editor: asEditor<string>(SelectPropertyEditor),
-    hideFromPicker: true,
+    ConfigEditor: EnumOptionsConfigEditor,
   }),
   kernelPresetPair(refValuePresetCore, {
     id: 'ref',
@@ -129,6 +136,45 @@ const kernelValuePresetPairs = [
     Editor: asEditor<readonly string[]>(RefListPropertyEditor),
     ConfigEditor: RefTargetTypePicker,
   }),
+  kernelPresetPair(optionalStringValuePresetCore, {
+    id: 'optional-string',
+    label: 'Optional text',
+    Glyph: TypeIcon,
+    Editor: asEditor<string | undefined>(StringPropertyEditor),
+    hideFromPicker: true,
+  }),
+  kernelPresetPair(optionalNumberValuePresetCore, {
+    id: 'optional-number',
+    label: 'Optional number',
+    Glyph: Hash,
+    Editor: asEditor<number | undefined>(NumberPropertyEditor),
+    hideFromPicker: true,
+  }),
+  kernelPresetPair(stringListValuePresetCore, {
+    id: 'string-list',
+    label: 'Text list',
+    Glyph: List,
+    Editor: asEditor<readonly string[]>(ListPropertyEditor),
+    hideFromPicker: true,
+  }),
+  kernelPresetPair(optionalRefValuePresetCore, {
+    id: 'optional-ref',
+    label: 'Optional reference',
+    Glyph: AtSign,
+    Editor: asEditor<string | undefined>(RefPropertyEditor),
+    ConfigEditor: RefTargetTypePicker,
+    hideFromPicker: true,
+  }),
+  kernelPresetPair(jsonValuePresetCore, {
+    id: 'json',
+    label: 'JSON',
+    hideFromPicker: true,
+  }),
+  kernelPresetPair(optionalJsonValuePresetCore, {
+    id: 'optional-json',
+    label: 'Optional JSON',
+    hideFromPicker: true,
+  }),
 ]
 
 export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation[] =
@@ -137,7 +183,7 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
 /** Compatibility mirror for direct readers of the pre-split full facet.
  * Canonical UI/data consumers use the live core + presentation join. */
 export const kernelValuePresets: readonly AnyValuePreset[] =
-  kernelValuePresetPairs.map(pair => pair.compatibility)
+  kernelValuePresetPairs.flatMap(pair => pair.compatibility ? [pair.compatibility] : [])
 
 export const kernelValuePresetsExtension: AppExtension = systemToggle({
   id: 'system:kernel-value-presets',

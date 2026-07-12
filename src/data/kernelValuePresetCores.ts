@@ -1,4 +1,4 @@
-import {CodecError, codecs, type Codec, type RefCodecOptions} from './api/codecs'
+import {CodecError, codecs, type Codec, type EnumOption, type RefCodecOptions} from './api/codecs'
 import {definePresetCore, type AnyValuePresetCore} from './api/valuePresetCore'
 
 /** Validates ref / refList preset config below the UI layer. */
@@ -22,6 +22,46 @@ export const refConfigCodec: Codec<RefCodecOptions> = {
   },
 }
 
+export interface EnumPresetConfig {readonly options: readonly EnumOption[]}
+
+export const enumConfigCodec: Codec<EnumPresetConfig> = {
+  type: 'enum-config',
+  encode: config => ({options: config.options.map(option => ({...option}))}),
+  decode: json => {
+    if (json === null || typeof json !== 'object' || Array.isArray(json)) {
+      throw new CodecError('enum config object', json)
+    }
+    const options = (json as Record<string, unknown>).options
+    if (options === undefined) return {options: []}
+    if (!Array.isArray(options)) throw new CodecError('enum config options', options)
+    return {options: options.map(option => {
+      if (
+        option === null || typeof option !== 'object' || Array.isArray(option)
+        || typeof (option as Record<string, unknown>).value !== 'string'
+        || typeof (option as Record<string, unknown>).label !== 'string'
+      ) throw new CodecError('enum option {value,label}', option)
+      return {
+        value: (option as {value: string}).value,
+        label: (option as {label: string}).label,
+      }
+    })}
+  },
+}
+
+const enumPresetCodec = (options: readonly EnumOption[]): Codec<string> => {
+  const configured = codecs.enum(options)
+  return {
+    ...configured,
+    // Empty string is the preset's unset/default sentinel. It is deliberately
+    // not exposed as a configured option in the select editor.
+    encode: value => value === '' ? '' : configured.encode(value),
+    decode: json => json === '' ? '' : configured.decode(json),
+    where: {
+      encode: value => value === '' ? '' : configured.where!.encode(value),
+    },
+  }
+}
+
 export const stringValuePresetCore = definePresetCore<string>({
     id: 'string', build: () => codecs.string, defaultValue: '',
   })
@@ -40,8 +80,12 @@ export const dateValuePresetCore = definePresetCore<Date | undefined>({
 export const urlValuePresetCore = definePresetCore<string>({
     id: 'url', build: () => codecs.url, defaultValue: '',
   })
-export const enumValuePresetCore = definePresetCore<string>({
-    id: 'enum', build: () => codecs.enum<string>([]), defaultValue: '',
+export const enumValuePresetCore = definePresetCore<string, EnumPresetConfig>({
+    id: 'enum',
+    build: config => enumPresetCodec(config.options),
+    defaultValue: '',
+    defaultConfig: {options: []},
+    configCodec: enumConfigCodec,
   })
 export const refValuePresetCore = definePresetCore<string, RefCodecOptions>({
     id: 'ref',
@@ -57,6 +101,36 @@ export const refListValuePresetCore = definePresetCore<readonly string[], RefCod
     defaultConfig: {},
     configCodec: refConfigCodec,
   })
+export const optionalStringValuePresetCore = definePresetCore<string | undefined>({
+  id: 'optional-string', build: () => codecs.optionalString, defaultValue: undefined,
+})
+export const optionalNumberValuePresetCore = definePresetCore<number | undefined>({
+  id: 'optional-number', build: () => codecs.optionalNumber, defaultValue: undefined,
+})
+const readonlyStringListCodec: Codec<readonly string[]> = {
+  type: 'list',
+  encode: values => values.map(value => codecs.string.encode(value)),
+  decode: json => {
+    if (!Array.isArray(json)) throw new CodecError('string array', json)
+    return json.map(value => codecs.string.decode(value))
+  },
+}
+export const stringListValuePresetCore = definePresetCore<readonly string[]>({
+  id: 'string-list', build: () => readonlyStringListCodec, defaultValue: [],
+})
+export const optionalRefValuePresetCore = definePresetCore<string | undefined, RefCodecOptions>({
+  id: 'optional-ref',
+  build: config => codecs.optionalRef(config),
+  defaultValue: undefined,
+  defaultConfig: {},
+  configCodec: refConfigCodec,
+})
+export const jsonValuePresetCore = definePresetCore<unknown>({
+  id: 'json', build: () => codecs.unsafeIdentity<unknown>(), defaultValue: null,
+})
+export const optionalJsonValuePresetCore = definePresetCore<unknown | undefined>({
+  id: 'optional-json', build: () => codecs.optionalIdentity<unknown>(), defaultValue: undefined,
+})
 
 export const kernelValuePresetCores: readonly AnyValuePresetCore[] = [
   stringValuePresetCore,
@@ -68,4 +142,10 @@ export const kernelValuePresetCores: readonly AnyValuePresetCore[] = [
   enumValuePresetCore,
   refValuePresetCore,
   refListValuePresetCore,
+  optionalStringValuePresetCore,
+  optionalNumberValuePresetCore,
+  stringListValuePresetCore,
+  optionalRefValuePresetCore,
+  jsonValuePresetCore,
+  optionalJsonValuePresetCore,
 ]

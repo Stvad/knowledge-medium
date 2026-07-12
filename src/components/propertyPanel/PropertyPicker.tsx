@@ -25,7 +25,7 @@ import { usePropertySchemas } from '@/hooks/propertySchemas.js'
 import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
-  AnyValuePreset,
+  AnyJoinedValuePreset,
 } from '@/data/api'
 import { FloatingListbox } from '@/components/ui/floating-listbox.js'
 import { useAutocompleteListbox } from '@/hooks/useAutocompleteListbox.js'
@@ -54,14 +54,14 @@ export interface ConfigureNewSchemaArgs {
 
 interface NameSuggestion {
   schema: AnyPropertySchema
-  preset?: AnyValuePreset
+  preset?: AnyJoinedValuePreset
 }
 
 const filterSuggestions = (
   query: string,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
-  presets: ReadonlyMap<string, AnyValuePreset>,
+  presets: ReadonlyMap<string, AnyJoinedValuePreset>,
   excludedNames: ReadonlySet<string>,
   filterSchema: ((schema: AnyPropertySchema) => boolean) | undefined,
 ): readonly NameSuggestion[] => {

@@ -28,7 +28,7 @@ import type {
   AnyPropertySchema,
   AnyQuery,
   AnySameTxProcessor,
-  AnyValuePreset,
+  AnyJoinedValuePreset,
   AnyValuePresetCore,
   TypeContribution,
 } from '@/data/api'
@@ -81,7 +81,7 @@ export interface FacetBridgeTarget {
   ): void
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
   applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
-  applyValuePresets(presets: ReadonlyMap<string, AnyValuePreset>): void
+  applyValuePresets(presets: ReadonlyMap<string, AnyJoinedValuePreset>): void
   applyQueries(queries: Map<string, AnyQuery>): void
   /** Defer a ref-typed-property reprojection for the names whose ref-ness
    *  changed in this swap (off the cold-start critical path). */

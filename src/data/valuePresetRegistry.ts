@@ -1,4 +1,5 @@
 import type {
+  AnyJoinedValuePreset,
   AnyValuePreset,
   AnyValuePresetCore,
   AnyValuePresetPresentation,
@@ -13,7 +14,7 @@ import {
 
 export interface ValuePresetRegistrySnapshot {
   readonly cores: ReadonlyMap<string, AnyValuePresetCore>
-  readonly joined: ReadonlyMap<string, AnyValuePreset>
+  readonly joined: ReadonlyMap<string, AnyJoinedValuePreset>
 }
 
 const compatibilityMirrors = new WeakSet<object>()
@@ -22,7 +23,7 @@ const compatibilityMirrors = new WeakSet<object>()
  * joined facet. Canonical live joining ignores mirrors in favor of the split
  * core/presentation contributions. Genuine legacy plugin presets are unmarked
  * and retain their previous whole-preset override semantics. */
-export const markValuePresetCompatibilityMirror = <T extends AnyValuePreset>(
+export const markValuePresetCompatibilityMirror = <T extends object>(
   preset: T,
 ): T => {
   compatibilityMirrors.add(preset)
@@ -63,7 +64,7 @@ export const readValuePresetRegistry = (runtime: FacetRuntime): ValuePresetRegis
     if (!compatibilityMirrors.has(preset)) cores.set(id, preset)
   }
 
-  const joined = new Map<string, AnyValuePreset>()
+  const joined = new Map<string, AnyJoinedValuePreset>()
   for (const [id, presentation] of presentations) {
     const core = cores.get(id)
     if (core) joined.set(id, joinValuePreset(core, presentation))
@@ -79,4 +80,4 @@ export const readValuePresetRegistry = (runtime: FacetRuntime): ValuePresetRegis
 
 export const readValuePresets = (
   runtime: FacetRuntime,
-): ReadonlyMap<string, AnyValuePreset> => readValuePresetRegistry(runtime).joined
+): ReadonlyMap<string, AnyJoinedValuePreset> => readValuePresetRegistry(runtime).joined

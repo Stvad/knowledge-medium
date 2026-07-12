@@ -140,6 +140,25 @@ describe('UserSchemasService.addSchema', () => {
     const codec = schema.codec as ReturnType<typeof codecs.ref>
     expect(codec.targetTypes).toEqual(['person'])
   })
+
+  it('uses the enum preset default config when config is omitted', async () => {
+    env = await setup()
+    const schema = await env.service.addSchema({name: 'status', presetId: 'enum'})
+    expect(schema.codec.type).toBe('enum')
+    expect(schema.codec.decode(schema.codec.encode(schema.defaultValue))).toBe(schema.defaultValue)
+    expect(() => schema.codec.encode('open')).toThrow()
+  })
+
+  it('builds enum options from persisted config', async () => {
+    env = await setup()
+    const schema = await env.service.addSchema({
+      name: 'status',
+      presetId: 'enum',
+      config: {options: [{value: 'open', label: 'Open'}]},
+    })
+    expect(schema.codec.encode('open')).toBe('open')
+    expect(() => schema.codec.encode('closed')).toThrow()
+  })
 })
 
 describe('UserSchemasService subscription', () => {

@@ -16,7 +16,7 @@ import {
   presetIdProp,
   propertyNameProp,
 } from '@/data/properties.js'
-import { ChangeScope, type AnyValuePreset } from '@/data/api'
+import { ChangeScope, type AnyJoinedValuePreset } from '@/data/api'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
@@ -24,7 +24,7 @@ import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
 const renderConfigEditor = (
-  preset: AnyValuePreset,
+  preset: AnyJoinedValuePreset,
   value: unknown,
   onChange: (next: unknown) => void,
 ): React.ReactNode => {

@@ -10,16 +10,11 @@ export interface ValuePresetConfigEditorProps<TConfig> {
   onChange: (next: TConfig) => void
 }
 
-export interface ValuePresetPresentation<TValue = unknown, TConfig = void> {
+interface ValuePresetPresentationBase<TConfig = void> {
   /** Stable join key; must match the corresponding codec core id. */
   readonly id: string
   /** Human label for the picker. */
   readonly label: string
-  /** Editor used for any property whose codec's `type` matches this
-   *  preset's `id`. Required — every preset ships its own editor.
-   *  Exact-name `PropertyEditorOverride.Editor` contributions still
-   *  win first. */
-  readonly Editor: PropertyEditor<TValue>
   /** Optional glyph for the property-row button, config sheet, and
    *  picker. Plugins without designed icons can omit; falls back to a
    *  generic icon. */
@@ -28,22 +23,37 @@ export interface ValuePresetPresentation<TValue = unknown, TConfig = void> {
    *  renderer (the side panel users open by clicking the property
    *  glyph). Only meaningful when `TConfig` is non-void. */
   readonly ConfigEditor?: ComponentType<ValuePresetConfigEditorProps<TConfig>>
-  /** When true, this preset supplies an editor/glyph for its codec type
-   *  but is NOT offered as a user-creatable property type in the
-   *  AddPropertyForm picker. Used by presets whose config can't be set
-   *  through the generic picker (e.g. `enum`, whose options must come
-   *  from a plugin's settings schema), so the editor still resolves for
-   *  stored values without surfacing a useless "create" entry. */
+}
+
+/** A picker-visible presentation must provide an editor. Hidden codec-only
+ *  presets may omit it when their values have no generic editing UI. */
+export type ValuePresetPresentation<TValue = unknown, TConfig = void> =
+  ValuePresetPresentationBase<TConfig> & (
+    | {readonly Editor: PropertyEditor<TValue>; readonly hideFromPicker?: boolean}
+    | {readonly Editor?: never; readonly hideFromPicker: true}
+  )
+
+/** Legacy full-preset authoring contract. Kept as an interface so existing
+ *  plugin declarations remain extendable and editorful presets may compute
+ *  `hideFromPicker` dynamically. */
+export interface ValuePreset<TValue = unknown, TConfig = void>
+  extends ValuePresetCore<TValue, TConfig>, ValuePresetPresentationBase<TConfig> {
+  readonly Editor: PropertyEditor<TValue>
   readonly hideFromPicker?: boolean
 }
 
-export interface ValuePreset<TValue = unknown, TConfig = void>
-  extends ValuePresetCore<TValue, TConfig>, ValuePresetPresentation<TValue, TConfig> {}
+export type JoinedValuePreset<TValue = unknown, TConfig = void> =
+  ValuePresetCore<TValue, TConfig> & ValuePresetPresentation<TValue, TConfig>
 
 /** Variance-erased preset type for storage in heterogeneous
- *  collections (`valuePresetsFacet`'s contributions, etc.). */
+ *  legacy `valuePresetsFacet` contributions. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyValuePreset = ValuePreset<any, any>
+
+/** Variance-erased canonical preset assembled from either split or legacy
+ * contributions. Hidden codec-only entries may intentionally lack an editor. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyJoinedValuePreset = JoinedValuePreset<any, any>
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyValuePresetPresentation = ValuePresetPresentation<any, any>
@@ -51,7 +61,7 @@ export type AnyValuePresetPresentation = ValuePresetPresentation<any, any>
 export const joinValuePreset = <TValue, TConfig>(
   core: ValuePresetCore<TValue, TConfig>,
   presentation: ValuePresetPresentation<NoInfer<TValue>, NoInfer<TConfig>>,
-): ValuePreset<TValue, TConfig> => {
+): JoinedValuePreset<TValue, TConfig> => {
   if (core.id !== presentation.id) {
     throw new Error(`ValuePreset id mismatch: core ${JSON.stringify(core.id)} vs presentation ${JSON.stringify(presentation.id)}`)
   }
@@ -61,7 +71,7 @@ export const joinValuePreset = <TValue, TConfig>(
 export interface SplitValuePreset<TValue, TConfig> {
   readonly core: ValuePresetCore<TValue, TConfig>
   readonly presentation: ValuePresetPresentation<TValue, TConfig>
-  readonly preset: ValuePreset<TValue, TConfig>
+  readonly preset: JoinedValuePreset<TValue, TConfig>
 }
 
 /** Typed authoring path for the split facets. Core inference owns TValue and
