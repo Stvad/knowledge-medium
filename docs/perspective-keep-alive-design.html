@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Perspective keep-alive — sessions-per-perspective + a warm session host</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1rem; margin-top: 1.25rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  ul.tight { margin: .4rem 0; }
+  ol li, ul li { margin: .25rem 0; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
+             border-radius: 4px; margin: 1.5rem 0; }
+  small { color: #57606a; }
+  .filepath { color: #57606a; font-size: 11.5px; }
+</style>
+</head>
+<body>
+<aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised after upstream review (PR #357 thread: synced definitions, URL param, status-bar facet, Activity policy). <strong>Last verified against code:</strong> 2026-07-12 (<code>src/</code> + <code>agent-extensions/window-management/</code> @ working tree).
+</aside>
+
+<h1>Perspective keep-alive</h1>
+<small>Sessions-per-perspective + a warm session host — 2026-07-12</small>
+
+<p>Switching perspectives (window-management extension) currently unmounts and remounts every
+pane's React tree — a playing video restarts, editors lose transient state, heavy views (agenda)
+pay full re-mount cost. Goal: switching a perspective keeps every other perspective's views fully
+alive, so coming back finds them exactly as left — playback still running.</p>
+
+<p>Secondary goal: this is a step toward upstreaming the perspectives extension (today it lives in
+spolakh's fork as <code>agent-extensions/window-management/</code> — emacs-style panes, numbered +
+per-item perspectives, a bottom workspace bar). The extension stays an extension; the enabling
+mechanism lands in core as a generic, self-contained feature ("switchable layout sessions with
+keep-alive") that others could build tab-like UX on.</p>
+
+<h2>Why switching remounts today</h2>
+
+<p>A perspective switch never swaps trees — it <strong>rewrites the single live layout-session
+block in place</strong>. <code>applyPerspective</code>
+<span class="filepath">(agent-extensions/window-management/index.tsx)</span> calls
+<code>reconcilePanelRows</code> <span class="filepath">(src/utils/panelLayoutProjection.ts:405)</span>,
+which LCS-diffs panel rows by <code>topLevelBlockId</code>. Across perspectives the block ids are
+disjoint, so one of two things happens, and both destroy the mounted content:</p>
+
+<ol>
+  <li><strong>Row reused, content rewritten</strong> (equal pane counts — the common case): the
+  panel row id — the React <code>key</code> on the top-level slot list
+  <span class="filepath">(src/components/renderer/LayoutRenderer.tsx:193, slotsToRender.map)</span>
+  and on <code>PanelSlotView</code>'s context provider
+  <span class="filepath">(LayoutRenderer.tsx:92)</span> — stays stable. <code>LayoutRenderer</code>
+  mounts the row's <code>&lt;BlockComponent blockId={slot.id}/&gt;</code>
+  <span class="filepath">(LayoutRenderer.tsx:100)</span>, which resolves to
+  <code>PanelRenderer</code>; that reads <code>topLevelBlockIdProp</code>
+  <span class="filepath">(src/components/renderer/PanelRenderer.tsx:62)</span> and renders
+  <code>&lt;BlockComponent blockId={topLevelBlockId}/&gt;</code>
+  <span class="filepath">(PanelRenderer.tsx:192, no key)</span>. When the perspective switch
+  rewrites <code>topLevelBlockIdProp</code>, that inner element reconciles to a different block and
+  the whole content subtree unmounts.</li>
+  <li><strong>Row deleted/created</strong> (pane counts differ): <code>tx.delete</code> /
+  <code>createPanelRowInTx</code> → new row id → new <code>key</code> → the entire
+  <code>PanelSlotView</code> unmounts.</li>
+</ol>
+
+<p>The perspective snapshot <span class="filepath">(storage.ts, per-device localStorage)</span>
+stores only content identity — a serialized layout hash of block ids + tree shape, plus
+<code>activeBlockId</code>. There is no handle to a live view to come back to. Keep-alive cannot be
+bolted onto this model; "one session, rewritten in place" is the specific thing defeating it.</p>
+
+<h2>Design: perspective = its own layout-session block</h2>
+
+<div class="verdict">Flip the model. Each perspective owns a <strong>distinct layout-session
+block</strong>; switching changes <em>which session is visible</em>. The outgoing perspective's
+rows, scroll, focus, and React tree are never touched — keep-alive falls out of the data model
+instead of being retrofitted.</div>
+
+<h3>Data model — synced definitions, per-device live sessions</h3>
+
+<p>Two layers (upstream review outcome — all state in the DB, perspectives available across
+devices):</p>
+
+<ul>
+  <li><strong>Perspective definitions — synced.</strong> A perspective registry of per-workspace
+  UiState blocks: name, slot/order, kind (numbered vs per-item), target block for item
+  perspectives. Defined once, available on every device. This replaces the extension's
+  localStorage snapshot store entirely.</li>
+  <li><strong>Live sessions — per-device.</strong> Each device materializes its own layout-session
+  block per perspective (<code>uuidv5(deviceBaseId + perspectiveId)</code>). Kept per-device
+  deliberately: per-row view state (<code>scrollTopProp</code>,
+  <code>focusedBlockLocationProp</code>, <code>activePanelIdProp</code>) lives on session/row
+  blocks and syncs — two devices sharing one live session would ping-pong scroll and focus at each
+  other. Sharing the <em>definition</em> but not the <em>live session</em> gives cross-device
+  perspectives without that fight. A fully-shared live session ("my workspace follows me") is a
+  possible later evolution, but requires first splitting per-device view state out of the shared
+  layout structure — separable, bigger lift.</li>
+</ul>
+
+<p>Note layout sessions already live in the database (UiState blocks under
+<code>user page → ui-state → layout-sessions/&lt;id&gt;</code>); the only genuinely device-local
+state left is two pointers — the stable base id and the active perspective — and even the active
+pointer can move into a device-scoped DB block if the all-state-in-DB principle is applied
+strictly.</p>
+
+<h3>Core half — <code>LayoutSessionHost</code></h3>
+
+<ul>
+  <li><strong>Two ids, kept distinct.</strong> <code>getLayoutSessionId()</code>
+  <span class="filepath">(src/utils/layoutSessionId.ts:54)</span> today yields the one live
+  per-device id (sessionStorage in a tab, localStorage installed). That id becomes the stable
+  per-device <strong>base id</strong> — it never changes, and its storage key stays where it is.
+  Alongside it, add a runtime-switchable <strong>active session id</strong> (module store à la
+  <code>createToggleStore</code>, persisted per-device separately), defaulting to the base id —
+  zero behavior change when nothing drives it. Per-perspective session ids are always derived from
+  the <em>base</em> id (<code>uuidv5(baseId + ':' + perspectiveId)</code>), never from the
+  currently active id — deriving from the active id would make session identity drift as you
+  switch.</li>
+  <li><strong>Perspective in the URL.</strong> Perspective is workspace-scoped context, not
+  slot-scoped, so it rides as a matrix param on the workspace segment of PR #338's URL grammar:
+  <code>#ws;persp=work/a/b,c</code>. With synced definitions the link is portable across devices
+  (the receiving device materializes its own live session for that definition), and history entries
+  become perspective-qualified — which settles Back-across-a-switch semantics: Back returns to the
+  prior perspective, because that's what the prior history entry encodes.</li>
+  <li><strong>Warm-set host.</strong> <span class="filepath">src/App.tsx:306</span> mounts exactly
+  one <code>&lt;BlockComponent blockId={layoutSessionBlock.id}/&gt;</code>. Replace with a
+  <code>LayoutSessionHost</code> that keeps an LRU set of recently-active session blocks mounted
+  (cap ~3, configurable), each under a stable <code>key={sessionBlockId}</code>, inactive ones
+  wrapped in <code>display:none</code>. Set membership stable → no remount → playback
+  continues.</li>
+  <li><strong>URL projection binds to the active session only.</strong>
+  <code>PanelLayoutProjection</code>
+  <span class="filepath">(src/utils/panelLayoutProjection.ts:584)</span> keeps rows ↔ URL hash in
+  sync bidirectionally and pushes a hash entry on every layout change. Hidden sessions must not
+  push; on switch, rebind (or select among per-session instances) and push the new session's
+  layout hash once. Keeps the maximize/restore <code>history.back()</code> leg working.</li>
+  <li><strong>Input isolation</strong> — the subtle correctness area, and it is wider than shortcut
+  surfaces. Each session carries its own <code>activePanelIdProp</code>, so with N sessions
+  mounted, N panels all believe they are active. Everything downstream of that belief must be
+  gated on <em>session visibility</em>:
+    <ul>
+      <li><strong>Shortcut surfaces</strong>: keybind dispatch and "active panel" resolution go
+      through the active session only (e.g. a <code>sessionHidden</code> context flag checked by
+      dispatch/activations).</li>
+      <li><strong>Action contexts</strong>: <code>PanelRenderer</code> registers
+      <code>MULTI_SELECT_MODE</code> for its active panel via <code>useActionContext</code>
+      <span class="filepath">(src/components/renderer/PanelRenderer.tsx:203,
+      PanelMultiSelectActionContext)</span> — hidden sessions' active panels would each register
+      it too. All <code>useActionContext</code> registrations under a hidden session must be
+      suppressed (the same visibility flag, threaded through block context so it reaches every
+      registration site).</li>
+      <li><strong>DOM selectors</strong>: spatial navigation
+      <span class="filepath">(src/plugins/spatial-navigation/actions.ts:270, crossPanelFocus)</span>
+      and window-management
+      <span class="filepath">(agent-extensions/window-management/index.tsx:236, panelElements)</span>
+      locate the layout via <code>document.querySelector('[data-layout-session-id]')</code> —
+      first match wins, which becomes ambiguous with several sessions mounted. The host must make
+      the active session unambiguously addressable (e.g. only the visible wrapper carries a
+      <code>data-layout-session-active</code> marker, plus <code>inert</code> on hidden wrappers as
+      focus/click belt-and-braces), and a core helper (<code>activeLayoutSessionElement()</code>)
+      replaces raw first-match queries at every call site.</li>
+      <li>On reveal, re-assert DOM focus from the session's persisted focus state (the focus
+      <em>class</em> survives — it's prop-driven; only DOM focus needs a nudge).</li>
+    </ul>
+  </li>
+</ul>
+
+<h3>Extension half — window-management shrinks</h3>
+
+<ul>
+  <li>Slots become <strong>registry entries</strong> (synced perspective-definition blocks, see the
+  data model above), both numbered (<code>'1'..'8'</code>) and item (<code>item:&lt;blockId&gt;</code>).
+  Each maps on a given device to a <strong>deterministic session block id</strong> (uuidv5 of base
+  id + perspective id, same pattern as <span class="filepath">src/data/stateBlocks.ts</span>).</li>
+  <li><strong>Switch = one store write</strong> (set active session id + repaint the bar),
+  replacing the whole capture → <code>reconcilePanelRows</code> → repair-active-panel dance
+  (<code>performSwitch</code>, <span class="filepath">index.tsx:553</span>).</li>
+  <li>The serialized-layout snapshot survives only as: (a) migration from the current localStorage
+  format into the registry, (b) seed when a perspective's session block doesn't exist yet on this
+  device, (c) the item-slot expiry sweep — which now must <strong>also delete the expired
+  perspective's session block subtrees</strong> (sessions are UiState blocks that upload; leaked
+  sessions are synced garbage).</li>
+  <li>The bottom bar moves from imperative <code>document.body</code> DOM to an
+  <strong><code>appMountsFacet</code> contribution</strong>
+  <span class="filepath">(src/extensions/core.ts:218)</span> — React, app scope, outside the layout
+  tree, survives switches; the imperative DOM was expedience, not necessity. If multiple extensions
+  ever compose indicators, a <code>statusBarItemsFacet</code> mirroring
+  <code>headerItemsFacet</code>'s region pattern is the natural core addition (upstream review
+  outcome; a LayoutRenderer override is heavier than the bar needs).</li>
+</ul>
+
+<h2>Hiding policy: <code>display:none</code> by default, <code>&lt;Activity&gt;</code> as per-session optimization</h2>
+
+<p>React 19.2.6 (installed) exports stable <code>&lt;Activity&gt;</code> — the official
+hide-with-state primitive. What it buys over a hand-rolled <code>display:none</code> wrapper:
+hidden subtrees' re-renders are deferred to background priority (they never block the visible
+perspective), state and DOM are preserved with official semantics, and it's where React is
+investing (<code>mode="hidden"</code> pre-rendering could later give "warm up a perspective before
+first visit").</p>
+
+<div class="note"><strong>The crux is effect semantics: hiding runs effect cleanups, revealing
+re-runs them.</strong> Concretely in KM: the video player's <code>registerVideoPlayer</code> handle
+<span class="filepath">(src/plugins/video-player/VideoPlayerRenderer.tsx:101)</span> unregisters in
+its effect cleanup, and react-player tears down its underlying player instance in cleanup (YouTube
+iframes especially) — playback stops, defeating the headline feature. CodeMirror editors are
+created in effects, so hide destroys them and reveal pays re-init plus loses editor-local transient
+state. Plain <code>display:none</code> keeps effects, subscriptions, and playback fully live (a
+hidden <code>&lt;video&gt;</code> keeps playing audio).</div>
+
+<p>So: Activity is the right tool for "cheap warm resume", the wrong one for "keep running".
+Policy (upstream review outcome): <code>display:none</code> wrappers by default;
+<code>&lt;Activity&gt;</code> as a per-session optimization for warm sessions with no live media.
+Both fit the same host — a per-slot policy, not an architecture fork.</p>
+
+<p>Background cost model: per warm session, retained DOM (bounded — see
+<code>LazyViewportMount</code> below) plus live query subscriptions that re-render the hidden tree
+on writes. A quiet workspace costs ≈ zero (handle-level structural-diff dedup); the real cost is
+write bursts (sync storms) re-rendering N hidden trees. Controls, in order: the small LRU cap (2–3;
+eviction fully unmounts and releases everything), item-perspective expiry deleting dead sessions,
+and Activity for media-free warm sessions.</p>
+
+<p><code>LazyViewportMount</code> composes well: it never unmounts once mounted, and while hidden
+its IntersectionObserver sees nothing — not-yet-seen blocks stay unmounted until the perspective is
+revealed. Free partial hydration for warm sessions.</p>
+
+<h2>Alternatives considered</h2>
+
+<ul>
+  <li><strong>Portal-based content cache</strong> — app-level host owns one
+  <code>&lt;BlockComponent&gt;</code> per content block id and portals it into whichever panel
+  shows it; no data-model change. Rejected: portals keep the <em>owner's</em> React context, so
+  panel-scoped context (<code>panelId</code>, <code>renderScopeId</code>, ui-state resolution) must
+  be re-threaded per target, and physically moving a playing <code>&lt;video&gt;</code> between DOM
+  containers pauses/hiccups playback in practice. Fights the framework everywhere the session-swap
+  design goes with the grain.</li>
+  <li><strong>One session, hide rows instead of deleting</strong> — rows tagged per-perspective,
+  <code>LayoutRenderer</code> filters. Pollutes the layout data model: URL projection, subtree
+  queries, active-panel repair, and the layout watchdog all must learn to ignore hidden rows. More
+  invasive than it looks.</li>
+  <li><strong>Media-only persistence</strong> — global media-element registry, or
+  save-position-and-resume. Far less core change, but only fixes video, not the general "my
+  perspective is exactly as I left it" property. Fallback if the core change stalls upstream.</li>
+</ul>
+
+<h2>Open questions (resolve at implementation time)</h2>
+
+<ul>
+  <li>Where exactly keybind dispatch resolves "the active panel" — the hidden-session gating design
+  hangs on it.</li>
+  <li><code>PanelLayoutProjection</code>: one instance rebound on switch vs. one per mounted
+  session (hidden ones muted)?</li>
+  <li>Mobile: <code>LayoutRenderer</code> already renders only the active panel there; keep-alive
+  is likely desktop-only (warm cap = 1 on mobile).</li>
+  <li>CodeMirror revealed from <code>display:none</code> may need a <code>requestMeasure</code>
+  nudge.</li>
+  <li>Warm-set eviction: is plain LRU enough, or should a session with actively playing media be
+  pinned against eviction?</li>
+  <li>Definition ↔ session reconciliation: when a synced perspective definition changes while a
+  device holds a diverged live session for it, what wins on next switch (reconcile rows to the
+  definition vs. keep the local session and offer a reset)? Related: should local layout edits
+  write back to the definition, and when?</li>
+</ul>
+
+<h2>Rollout sketch</h2>
+
+<ol>
+  <li>Core: active-session store + <code>LayoutSessionHost</code> behind a default-off switch;
+  single-session behavior unchanged.</li>
+  <li>Core: projection rebinding + input gating; verify with two hand-made sessions in the sandbox
+  (video playing in one, switch away/back).</li>
+  <li>Extension: synced perspective registry + per-device deterministic session ids, migration from
+  localStorage snapshots into the registry, expiry sweep deletes session subtrees, bar →
+  <code>appMountsFacet</code>.</li>
+  <li>Sandbox-verify the full loop, then promote + upstream.</li>
+</ol>
+
+</body>
+</html>
