@@ -20,11 +20,12 @@
  */
 import {actionsFacet, appEffectsFacet} from '@/extensions/core.js'
 import type {AppExtension} from '@/facets/facet.js'
-import {propertyEditorOverridesFacet, propertySchemasFacet} from '@/data/facets.js'
+import {propertyEditorOverridesFacet, propertySchemasFacet, valuePresetCoresFacet} from '@/data/facets.js'
 import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
 import {openExtensionsSettingsAction} from './actions.ts'
 import {
   extensionsOverridesProp,
+  extensionsOverridesPresetCore,
   extensionsPrefsType,
 } from './config.ts'
 import {extensionsSyncEffect} from './effect.ts'
@@ -32,6 +33,7 @@ import {extensionsOverridesUi} from './propertyEditorOverride.ts'
 
 export const extensionsDataExtension: AppExtension = [
   propertySchemasFacet.of(extensionsOverridesProp, {source: 'extensions-settings'}),
+  valuePresetCoresFacet.of(extensionsOverridesPresetCore, {source: 'extensions-settings'}),
   propertyEditorOverridesFacet.of(extensionsOverridesUi, {source: 'extensions-settings'}),
   ...pluginPrefsExtension(extensionsPrefsType, 'extensions-settings'),
   appEffectsFacet.of(extensionsSyncEffect, {source: 'extensions-settings'}),

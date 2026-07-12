@@ -9,14 +9,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } f
 import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
-import { valuePresetsFacet } from '@/data/facets.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
 } from '@/data/properties.js'
-import { ChangeScope, type AnyValuePreset } from '@/data/api'
+import { ChangeScope, type AnyJoinedValuePreset } from '@/data/api'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
 import type { BlockRenderer, BlockRendererProps } from '@/types.js'
@@ -24,7 +24,7 @@ import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.js'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
 const renderConfigEditor = (
-  preset: AnyValuePreset,
+  preset: AnyJoinedValuePreset,
   value: unknown,
   onChange: (next: unknown) => void,
 ): React.ReactNode => {
@@ -42,7 +42,7 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
     } : undefined,
   })
   const runtime = useAppRuntime()
-  const presets = runtime.read(valuePresetsFacet)
+  const presets = readValuePresets(runtime)
   const readOnly = block.repo.isReadOnly
 
   const presetId = useMemo<string>(() => {

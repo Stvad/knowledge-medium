@@ -24,7 +24,7 @@ import {
   codecs,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyValuePreset,
+  type AnyJoinedValuePreset,
   type PropertyEditor,
   type PropertyEditorProps,
   type PropertySchema,
@@ -433,7 +433,7 @@ export const resolvePropertyDisplay = (args: {
   encodedValue: unknown
   schemas: ReadonlyMap<string, AnyPropertySchema>
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-  presets: ReadonlyMap<string, AnyValuePreset>
+  presets: ReadonlyMap<string, AnyJoinedValuePreset>
 }): PropertyDisplayInfo => {
   const known = args.schemas.get(args.name)
   if (known) {

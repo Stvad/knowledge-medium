@@ -29,6 +29,7 @@ import type {
   AnyQuery,
   AnySameTxProcessor,
   AnyValuePreset,
+  AnyValuePresetCore,
   TypeContribution,
 } from '@/data/api'
 import type { Facet, FacetRuntime } from '@/facets/facet'
@@ -43,11 +44,14 @@ import {
   queriesFacet,
   sameTxProcessorsFacet,
   typesFacet,
+  valuePresetCoresFacet,
+  valuePresetPresentationsFacet,
   valuePresetsFacet,
   workspaceBackfillsFacet,
   type WorkspaceBackfill,
 } from './facets'
 import { changedRefSchemaNames, mergeLiftedSchemas } from './internals/refProjection'
+import {readValuePresetRegistry} from './valuePresetRegistry'
 
 /** A named rebuild step. Declares which facets it reads via `inputs` so
  *  the runtime-contribution path can run only the steps whose inputs
@@ -76,6 +80,7 @@ export interface FacetBridgeTarget {
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   ): void
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
+  applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
   applyValuePresets(presets: ReadonlyMap<string, AnyValuePreset>): void
   applyQueries(queries: Map<string, AnyQuery>): void
   /** Defer a ref-typed-property reprojection for the names whose ref-ness
@@ -271,8 +276,14 @@ export class FacetBridge {
       },
       {
         id: 'valuePresets',
-        inputs: [valuePresetsFacet as Facet<unknown, unknown>],
+        inputs: [
+          valuePresetCoresFacet as Facet<unknown, unknown>,
+          valuePresetPresentationsFacet as Facet<unknown, unknown>,
+          valuePresetsFacet as Facet<unknown, unknown>,
+        ],
         run: (rt) => {
+          const presets = readValuePresetRegistry(rt)
+          target.applyValuePresetCores(presets.cores)
           target.applyValuePresets(rt.read(valuePresetsFacet))
           this.valuePresetsListeners.notify()
         },

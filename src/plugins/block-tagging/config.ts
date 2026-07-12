@@ -1,6 +1,7 @@
 import {
   ChangeScope,
   defineBlockType,
+  definePresetCore,
   defineProperty,
   type Codec,
 } from '@/data/api'
@@ -26,11 +27,17 @@ export const isValidTagName = (name: string): boolean => {
 export const normalizeBlockTagsConfig = (value: unknown): string[] =>
   uniqueStrings(value)
 
-const blockTagsConfigCodec: Codec<string[]> = {
+export const blockTagsConfigCodec: Codec<string[]> = {
   type: 'blockTagging:tagsConfig',
   encode: normalizeBlockTagsConfig,
   decode: normalizeBlockTagsConfig,
 }
+
+export const blockTagsConfigPresetCore = definePresetCore<string[]>({
+  id: blockTagsConfigCodec.type,
+  build: () => blockTagsConfigCodec,
+  defaultValue: [],
+})
 
 /** Per-workspace list of tag names available to the "add tag" group
  *  action. Each entry is a bare page name — the action appends

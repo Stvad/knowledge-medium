@@ -17,7 +17,8 @@ import {
   blockTypePropertiesProp,
   getAliases,
 } from '@/data/properties.js'
-import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import { propertyEditorOverridesFacet } from '@/data/facets.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
 import { Input } from '@/components/ui/input.js'
 import { Button } from '@/components/ui/button.js'
@@ -88,7 +89,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
   })
   const readOnly = block.repo.isReadOnly
   const runtime = useAppRuntime()
-  const presets = runtime.read(valuePresetsFacet)
+  const presets = readValuePresets(runtime)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const userSchemas = block.repo.userSchemas
 

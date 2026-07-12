@@ -28,6 +28,8 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useRepo } from '@/context/repo.js'
+import { useAppRuntime } from '@/extensions/runtimeContext.js'
+import {readValuePresets} from '@/data/valuePresetRegistry'
 import { isRefCodec, isRefListCodec, type BlockData } from '@/data/api'
 import {
   blockTypeLabelProp,
@@ -331,6 +333,7 @@ function TypeInstanceRows({
   disabled: boolean
 }) {
   const repo = useRepo()
+  const presets = readValuePresets(useAppRuntime())
   const ownerBlock = useMemo(() => repo.block(typeBlockId), [repo, typeBlockId])
   return (
     <ul className="max-h-96 min-w-0 space-y-1 overflow-auto rounded-md border p-2">
@@ -340,7 +343,7 @@ function TypeInstanceRows({
           encodedValue: undefined,
           schemas: repo.propertySchemas,
           uis: repo.propertyEditorOverrides,
-          presets: repo.valuePresets,
+          presets,
         })
         const Editor = display.Editor
         const setChoice = (next: Partial<PropertyShapeChoice>) => {

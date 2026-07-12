@@ -11,6 +11,7 @@ import {
   ChangeScope,
   CodecError,
   defineBlockType,
+  definePresetCore,
   defineProperty,
   type Codec,
 } from '@/data/api'
@@ -46,6 +47,12 @@ export const overridesCodec: Codec<Overrides> = {
   decode: decodeOverridesStrict,
   // No `where` capability — we never `json_extract(... overrides ...) = ?`.
 }
+
+export const extensionsOverridesPresetCore = definePresetCore<Overrides>({
+  id: overridesCodec.type,
+  build: () => overridesCodec,
+  defaultValue: new Map<string, boolean>(),
+})
 
 /** The overrides map property on the Extensions block. */
 export const extensionsOverridesProp = defineProperty<Overrides>(

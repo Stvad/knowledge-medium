@@ -1,9 +1,11 @@
-import { propertySchemasFacet, queriesFacet } from '@/data/facets.js'
+import { propertySchemasFacet, queriesFacet, valuePresetCoresFacet } from '@/data/facets.js'
 import { pluginPrefsExtension } from '@/data/pluginStateExtensions.js'
 import type { AppExtension } from '@/facets/facet.js'
 import {
   groupedBacklinksDefaultsProp,
+  groupedBacklinksConfigPresetCore,
   groupedBacklinksOverridesProp,
+  groupedBacklinksOverridesPresetCore,
   groupedBacklinksPrefsType,
   groupWithProp,
 } from './config.ts'
@@ -13,6 +15,8 @@ export const groupedBacklinksDataExtension: AppExtension = [
   propertySchemasFacet.of(groupedBacklinksDefaultsProp, {source: 'grouped-backlinks'}),
   propertySchemasFacet.of(groupedBacklinksOverridesProp, {source: 'grouped-backlinks'}),
   propertySchemasFacet.of(groupWithProp, {source: 'grouped-backlinks'}),
+  valuePresetCoresFacet.of(groupedBacklinksConfigPresetCore, {source: 'grouped-backlinks'}),
+  valuePresetCoresFacet.of(groupedBacklinksOverridesPresetCore, {source: 'grouped-backlinks'}),
   queriesFacet.of(groupedBacklinksForBlockQuery, {source: 'grouped-backlinks'}),
   ...pluginPrefsExtension(groupedBacklinksPrefsType, 'grouped-backlinks'),
 ]

@@ -20,7 +20,7 @@ import type {
   BlockReference,
   TypeContribution,
 } from '@/data/api'
-import { decodeRefListIds, isRefCodec, isRefListCodec } from '@/data/api'
+import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec } from '@/data/api'
 
 /** Build the merged property-schema registry: type-lifted schemas first
  *  (each `TypeContribution.properties`), then direct `propertySchemasFacet`
@@ -101,11 +101,8 @@ export const projectedRefsForField = (
   const refs: BlockReference[] = []
   const seen = new Set<string>()
   if (isRefCodec(schema.codec)) {
-    try {
-      appendRefProjection(refs, seen, sourceField, schema.codec.decode(encodedValue))
-    } catch {
-      return []
-    }
+    const id = decodeRefId(schema.codec, encodedValue)
+    if (id !== undefined) appendRefProjection(refs, seen, sourceField, id)
     return refs
   }
   if (isRefListCodec(schema.codec)) {

@@ -2,6 +2,7 @@ import {
   ChangeScope,
   codecs,
   defineBlockType,
+  definePresetCore,
   defineProperty,
   type BlockData,
   type Codec,
@@ -73,7 +74,9 @@ const optionalStringList = (
   record: Record<string, unknown>,
   key: string,
 ): string[] | undefined =>
-  Object.hasOwn(record, key) ? uniqueStrings(record[key]) : undefined
+  Object.hasOwn(record, key) && record[key] !== undefined
+    ? uniqueStrings(record[key])
+    : undefined
 
 const recordFrom = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value)
@@ -127,17 +130,29 @@ export const selectGroupedBacklinksOverrides = (
     : groupedBacklinksOverridesProp.codec.decode(stored)
 }
 
-const groupedBacklinksConfigCodec: Codec<GroupedBacklinksConfig> = {
+export const groupedBacklinksConfigCodec: Codec<GroupedBacklinksConfig> = {
   type: 'groupedBacklinks:config',
   encode: normalizeGroupedBacklinksConfig,
   decode: normalizeGroupedBacklinksConfig,
 }
 
-const groupedBacklinksOverridesCodec: Codec<GroupedBacklinksOverrides> = {
+export const groupedBacklinksOverridesCodec: Codec<GroupedBacklinksOverrides> = {
   type: 'groupedBacklinks:overrides',
   encode: normalizeGroupedBacklinksOverrides,
   decode: normalizeGroupedBacklinksOverrides,
 }
+
+export const groupedBacklinksConfigPresetCore = definePresetCore<GroupedBacklinksConfig>({
+  id: groupedBacklinksConfigCodec.type,
+  build: () => groupedBacklinksConfigCodec,
+  defaultValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
+})
+
+export const groupedBacklinksOverridesPresetCore = definePresetCore<GroupedBacklinksOverrides>({
+  id: groupedBacklinksOverridesCodec.type,
+  build: () => groupedBacklinksOverridesCodec,
+  defaultValue: EMPTY_GROUPED_BACKLINKS_OVERRIDES,
+})
 
 export const groupedBacklinksDefaultsProp = defineProperty<GroupedBacklinksConfig>(
   'groupedBacklinks:defaults',

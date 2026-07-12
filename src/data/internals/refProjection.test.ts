@@ -29,6 +29,11 @@ const refPropOther = defineProperty<string>('approver', {
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
+const optionalRefProp = defineProperty<string | undefined>('optional-reviewer', {
+  codec: codecs.optionalRef(),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
 const refListProp = defineProperty<readonly string[]>('related', {
   codec: codecs.refList(),
   defaultValue: [],
@@ -65,6 +70,15 @@ describe('projectedRefsForField', () => {
     expect(projectedRefsForField(block({ reviewer: 'target-a' }), refProp, 'reviewer')).toEqual([
       { id: 'target-a', alias: 'target-a', sourceField: 'reviewer' },
     ])
+  })
+
+  it('projects optional refs while treating their absence encodings as empty', () => {
+    expect(projectedRefsForField(block({'optional-reviewer': 'target-a'}), optionalRefProp, 'optional-reviewer'))
+      .toEqual([{id: 'target-a', alias: 'target-a', sourceField: 'optional-reviewer'}])
+    expect(projectedRefsForField(block({'optional-reviewer': null}), optionalRefProp, 'optional-reviewer'))
+      .toEqual([])
+    expect(projectedRefsForField(block({'optional-reviewer': ''}), optionalRefProp, 'optional-reviewer'))
+      .toEqual([])
   })
 
   it('projects every id of a refList value', () => {

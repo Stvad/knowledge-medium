@@ -9,13 +9,61 @@ import type { ChangeScope } from './changeScope'
  *  Per-name *outlier* overrides — type-aware autocompletes, singleton
  *  config editors, hidden kernel-internal state — go on
  *  `PropertyEditorOverride<T>` (joined to schemas by `name`). See spec §5.6. */
-export interface PropertySchema<T> {
+export interface PropertySchemaEntry<T> {
   readonly name: string
   /** Storage codec; runs at the four boundary call sites only. */
   readonly codec: Codec<T>
   readonly defaultValue: T
   readonly changeScope: ChangeScope
 }
+
+/** Static, workspace-agnostic handle returned by seeded code declarations.
+ * The stable seed key can be resolved to a definition id only for a concrete
+ * workspace; handles therefore never carry `fieldId` or `workspaceId`.
+ *
+ * Slice A introduces this type before `seedProperty` starts returning it in
+ * slice B. Existing `defineProperty` declarations remain behavioral entries
+ * until that cutover. */
+export interface PropertyHandle<T> extends PropertySchemaEntry<T> {
+  readonly seedKey: string
+}
+
+/** Nominal marker: a resolved schema may only be obtained through Repo's
+ * workspace-bound resolution primitive. Callers cannot accidentally satisfy
+ * this contract with an ambient registry entry that has no durable identity. */
+declare const resolvedPropertySchemaBrand: unique symbol
+
+export type PropertySchemaOrigin = 'kernel' | `plugin:${string}` | 'user'
+
+export interface ResolvedPropertySchema<T> extends PropertySchemaEntry<T> {
+  readonly fieldId: string
+  readonly workspaceId: string
+  readonly hidden: boolean
+  readonly origin: PropertySchemaOrigin
+  readonly [resolvedPropertySchemaBrand]: true
+}
+
+export type PropertySchemaIdentityUnavailableReason =
+  | 'registry-not-workspace-keyed'
+  | 'definition-unavailable'
+
+/** Slice-A resolver result. Projected user rows already have block ids, but
+ * today's registry cannot prove which workspace its id map is pinned to; code
+ * schemas have no backing identity at all. Resolution therefore stays
+ * unavailable until slice B installs workspace-keyed buckets and deterministic
+ * seeded ids. No synthetic or ambient id fallback is permitted. */
+export type PropertySchemaResolution<T> =
+  | {readonly status: 'resolved'; readonly schema: ResolvedPropertySchema<T>}
+  | {
+      readonly status: 'identity-unavailable'
+      readonly reason: PropertySchemaIdentityUnavailableReason
+    }
+
+/** Compatibility interface for existing call sites and external declaration
+ * merging. Slice B narrows seeded code declarations to `PropertyHandle` while
+ * the ambient registry continues to consume the behavioral entry shape. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface PropertySchema<T> extends PropertySchemaEntry<T> {}
 
 /** Per-name override for the rare property whose presentation can't be
  *  derived from its codec type plus a ValuePreset. Joined to a registered

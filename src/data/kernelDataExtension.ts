@@ -32,6 +32,7 @@ import {
   sameTxProcessorsFacet,
   systemPagesFacet,
   typesFacet,
+  valuePresetCoresFacet,
 } from './facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
@@ -43,6 +44,7 @@ import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
+import { kernelValuePresetCores } from '@/data/kernelValuePresetCores'
 import { userSchemasProjector } from '@/data/userSchemasService'
 import { userTypesProjector } from '@/data/userTypesService'
 import type { AppExtension } from '@/facets/facet'
@@ -60,6 +62,7 @@ export const kernelDataExtension: AppExtension = systemToggle({
   KERNEL_QUERIES.map(q => queriesFacet.of(q, {source: 'kernel'})),
   KERNEL_PROPERTY_SCHEMAS.map(s => propertySchemasFacet.of(s, {source: 'kernel'})),
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'kernel'})),
+  kernelValuePresetCores.map(core => valuePresetCoresFacet.of(core, {source: 'kernel'})),
   invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
   // Kernel singleton pages, materialised eagerly at workspace bootstrap via
   // `Repo.ensureSystemPages` (before the landing/seed) so wiki-links to their

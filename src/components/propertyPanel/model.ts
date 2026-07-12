@@ -2,7 +2,7 @@ import { type ComponentType } from 'react'
 import {
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyValuePreset,
+  type AnyJoinedValuePreset,
   type PropertyEditor,
   type TypeContribution,
 } from '@/data/api'
@@ -109,7 +109,7 @@ const resolveModelRow = (
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-    presets: ReadonlyMap<string, AnyValuePreset>
+    presets: ReadonlyMap<string, AnyJoinedValuePreset>
     hidden: boolean
   },
 ): PropertyPanelModelRow | null => {
@@ -156,7 +156,7 @@ const resolveSection = (
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-    presets: ReadonlyMap<string, AnyValuePreset>
+    presets: ReadonlyMap<string, AnyJoinedValuePreset>
     hidden: boolean
   },
 ): PropertyPanelModelSection | null => {
@@ -183,7 +183,7 @@ export const buildPropertyPanelModel = (args: {
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-  presets: ReadonlyMap<string, AnyValuePreset>
+  presets: ReadonlyMap<string, AnyJoinedValuePreset>
   typesRegistry: ReadonlyMap<string, TypeContribution>
   syntheticRows?: readonly PropertyPanelRow[]
 }): PropertyPanelModel => {

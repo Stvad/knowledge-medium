@@ -1,5 +1,6 @@
 import {
   ChangeScope,
+  definePresetCore,
   defineProperty,
   type BlockPredicate,
   type Codec,
@@ -74,6 +75,12 @@ export const backlinksFilterCodec: Codec<StoredBacklinksFilter> = {
   encode: value => normalizeBacklinksFilter(value),
   decode: value => normalizeBacklinksFilter(parseBacklinksFilter(value)),
 }
+
+export const backlinksFilterPresetCore = definePresetCore<StoredBacklinksFilter>({
+  id: backlinksFilterCodec.type,
+  build: () => backlinksFilterCodec,
+  defaultValue: EMPTY_BACKLINKS_FILTER,
+})
 
 export const backlinksFilterProp = defineProperty<StoredBacklinksFilter>('backlinks:predicates', {
   codec: backlinksFilterCodec,

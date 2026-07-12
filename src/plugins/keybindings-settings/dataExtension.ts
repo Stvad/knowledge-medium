@@ -1,9 +1,9 @@
 import {actionsFacet, appEffectsFacet} from '@/extensions/core.js'
-import {propertyEditorOverridesFacet, propertySchemasFacet} from '@/data/facets.js'
+import {propertyEditorOverridesFacet, propertySchemasFacet, valuePresetCoresFacet} from '@/data/facets.js'
 import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
 import type {AppExtension} from '@/facets/facet.js'
 import {openKeybindingsSettingsAction} from './actions.ts'
-import {keybindingOverridesProp, keybindingsPrefsType} from './config.ts'
+import {keybindingOverridesPresetCore, keybindingOverridesProp, keybindingsPrefsType} from './config.ts'
 import {keybindingsSyncEffect} from './effect.ts'
 import {keybindingsOverridesUi} from './propertyEditorOverride.ts'
 
@@ -16,6 +16,7 @@ import {keybindingsOverridesUi} from './propertyEditorOverride.ts'
 // final merge into the static tree.
 export const keybindingsSettingsDataExtension: AppExtension = [
   propertySchemasFacet.of(keybindingOverridesProp, {source: 'keybindings-settings'}),
+  valuePresetCoresFacet.of(keybindingOverridesPresetCore, {source: 'keybindings-settings'}),
   propertyEditorOverridesFacet.of(keybindingsOverridesUi, {source: 'keybindings-settings'}),
   ...pluginPrefsExtension(keybindingsPrefsType, 'keybindings-settings'),
   appEffectsFacet.of(keybindingsSyncEffect, {source: 'keybindings-settings'}),
