@@ -488,10 +488,26 @@ const reconcileMarkdownSubtree = async (
         // foreign children remain, and a child under a parent that is itself
         // doomed bubbles up again until it lands under a surviving ancestor.
         const target = doomed.parentId ?? parentId
-        for (const child of await tx.childrenOf(doomed.id, workspaceId)) {
-          if (child.properties?.[SUBTREE_KEY_PROP] === key) continue
+        const foreign = (await tx.childrenOf(doomed.id, workspaceId))
+          .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
+        if (foreign.length > 0) {
+          // Land the rescued children in the doomed node's OWN slot (between
+          // it and its next sibling), keeping their relative order, rather
+          // than at the parent's end. Slot-anchoring is what makes order
+          // correct regardless of the reverse (leaf-first) walk: each doomed
+          // sibling's children land at that sibling's position, so notes
+          // under an earlier reply node stay before notes under a later one,
+          // and neither jumps past unrelated content that followed the reply.
           const siblings = await tx.childrenOf(target, workspaceId)
-          await tx.move(child.id, {parentId: target, orderKey: keyAtEnd(siblings.at(-1)?.orderKey ?? null)})
+          const doomedIdx = siblings.findIndex(sibling => sibling.id === doomed.id)
+          const nextKey = doomedIdx >= 0 ? siblings[doomedIdx + 1]?.orderKey ?? null : null
+          let lower: string | null = doomed.orderKey ?? null
+          for (const child of foreign) {
+            const upper = nextKey !== null && (lower === null || nextKey > lower) ? nextKey : null
+            const orderKey = keyBetween(lower, upper)
+            await tx.move(child.id, {parentId: target, orderKey})
+            lower = orderKey
+          }
         }
         await tx.delete(doomed.id)
       }

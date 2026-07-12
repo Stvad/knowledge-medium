@@ -521,6 +521,29 @@ describe('reconcile-markdown-subtree command', () => {
     expect((await replyRoots()).map(r => r.content)).toEqual(['Root A'])
   })
 
+  it('preserves order of salvaged children across multiple pruned reply siblings', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    await reconcile('- A\n- B\n- C', {commandId: 'rms-o1'})
+    const roots = await replyRoots()
+    const b = roots.find(r => r.content === 'B')!
+    const c = roots.find(r => r.content === 'C')!
+    // The user nests a note under B AND under C.
+    const underB = await context.createBlock({parentId: b.id, content: 'note under B'})
+    const underC = await context.createBlock({parentId: c.id, content: 'note under C'})
+
+    // The final text keeps only A → B and C are pruned. Both notes survive AND
+    // keep their order (note-under-B before note-under-C), each landing where
+    // its reply node was — not both flushed to the end in reverse.
+    await reconcile('- A', {commandId: 'rms-o2', final: true})
+
+    const children = (await context.getSubtree(TOPIC_A))
+      .filter(row => row.parentId === TOPIC_A)
+      .sort((x, y) => (x.orderKey! < y.orderKey! ? -1 : 1))
+    expect(children.map(r => r.content)).toEqual(['A', 'note under B', 'note under C'])
+    expect(children.find(r => r.content === 'note under B')!.id).toBe(underB!.id)
+    expect(children.find(r => r.content === 'note under C')!.id).toBe(underC!.id)
+  })
+
   it('shape:block keeps the whole markdown as ONE block (newlines preserved)', async () => {
     await create({id: TOPIC_A, content: 'mention'})
 
