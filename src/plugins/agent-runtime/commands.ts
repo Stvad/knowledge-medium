@@ -477,7 +477,23 @@ const reconcileMarkdownSubtree = async (
     // simply hasn't re-streamed yet.
     if (final && existing.length > parsed.length) {
       for (let i = existing.length - 1; i >= parsed.length; i -= 1) {
-        await tx.delete(existing[i].id)
+        const doomed = existing[i]
+        // Salvage the user's OWN content: a block the user nested under this
+        // reply node isn't tagged with our key, so `collect` never saw it and
+        // it isn't in the doomed set. `tx.delete` is a single-row soft-delete
+        // (no cascade), so leaving it would strand it under a tombstone and it
+        // would vanish from the outline. Reparent any such foreign child up to
+        // the doomed node's parent BEFORE deleting — deleting leaf-first means
+        // the doomed node's own tagged children are already gone, so only
+        // foreign children remain, and a child under a parent that is itself
+        // doomed bubbles up again until it lands under a surviving ancestor.
+        const target = doomed.parentId ?? parentId
+        for (const child of await tx.childrenOf(doomed.id, workspaceId)) {
+          if (child.properties?.[SUBTREE_KEY_PROP] === key) continue
+          const siblings = await tx.childrenOf(target, workspaceId)
+          await tx.move(child.id, {parentId: target, orderKey: keyAtEnd(siblings.at(-1)?.orderKey ?? null)})
+        }
+        await tx.delete(doomed.id)
       }
     }
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})

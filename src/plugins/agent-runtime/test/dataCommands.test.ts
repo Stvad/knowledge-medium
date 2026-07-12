@@ -499,6 +499,28 @@ describe('reconcile-markdown-subtree command', () => {
     expect(children.find(r => r.content === 'user note')!.id).toBe(userBlock!.id)
   })
 
+  it('salvages a user block nested under a pruned reply node instead of orphaning it', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    // Stream an outline: Root A, Root B.
+    await reconcile('- Root A\n- Root B', {commandId: 'rms-s1'})
+    const rootB = (await replyRoots()).find(r => r.content === 'Root B')!
+    // The user nests their OWN note under Root B (untagged — not our reply).
+    const userChild = await context.createBlock({parentId: rootB.id, content: 'user note under B'})
+
+    // The final text is shorter — Root B is pruned. The user's note must
+    // survive (reparented up to a surviving ancestor), not vanish under the
+    // now-deleted Root B.
+    await reconcile('- Root A', {commandId: 'rms-s2', final: true})
+
+    const subtree = await context.getSubtree(TOPIC_A)
+    const salvaged = subtree.find(row => row.id === userChild!.id)
+    expect(salvaged).toBeDefined()
+    expect(salvaged!.content).toBe('user note under B')
+    expect(salvaged!.parentId).toBe(TOPIC_A) // bubbled up to the mention
+    // Root B itself is gone, and the surviving reply is just Root A.
+    expect((await replyRoots()).map(r => r.content)).toEqual(['Root A'])
+  })
+
   it('shape:block keeps the whole markdown as ONE block (newlines preserved)', async () => {
     await create({id: TOPIC_A, content: 'mention'})
 
