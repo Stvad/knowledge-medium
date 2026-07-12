@@ -191,6 +191,54 @@ export const presetConfigProp = defineProperty<Record<string, unknown>>('propert
   changeScope: ChangeScope.BlockDefault,
 })
 
+/** Durable write semantics for a definition. Existing user schemas omit this
+ * field and retain BlockDefault behavior. */
+export const propertyChangeScopeProp = defineProperty<ChangeScope>('property-schema:change-scope', {
+  codec: codecs.enum([
+    {value: ChangeScope.BlockDefault, label: 'Block default'},
+    {value: ChangeScope.UiState, label: 'UI state'},
+    {value: ChangeScope.UserPrefs, label: 'User preferences'},
+    {value: ChangeScope.Automation, label: 'Automation'},
+    {value: ChangeScope.References, label: 'References'},
+  ]),
+  defaultValue: ChangeScope.BlockDefault,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Optional per-definition default, stored through the definition's own
+ * built codec. Absence means the preset default; null can be a real encoded
+ * absence value and is therefore distinct from an omitted key. */
+export const propertyDefaultProp = defineProperty<unknown | undefined>('property-schema:default', {
+  // Raw encoded value, deliberately NOT optionalIdentity: encoded null is a
+  // meaningful explicit default for optional codecs and must remain distinct
+  // from the property key being absent.
+  codec: codecs.unsafeIdentity<unknown>(),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Hide the property from ordinary property-panel presentation. */
+export const propertyHiddenProp = defineProperty<boolean>('property-schema:hidden', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Stable code provenance shared by property and future type seeds. */
+export const seedKeyProp = defineProperty<string>('seed:key', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Monotonic code-owned seed payload revision. Background materialization
+ * reads this for diagnostics only; upgrades remain an operator action. */
+export const seedRevisionProp = defineProperty<number>('seed:revision', {
+  codec: codecs.number,
+  defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 // ──── block-type kernel fields (user-defined-types Phase 1) ────
 
 /** Human-readable label on a `'block-type'` block. Shown in the type
@@ -490,6 +538,11 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   propertyNameProp,
   presetIdProp,
   presetConfigProp,
+  propertyChangeScopeProp,
+  propertyDefaultProp,
+  propertyHiddenProp,
+  seedKeyProp,
+  seedRevisionProp,
   // block-type fields
   blockTypeLabelProp,
   blockTypeDescriptionProp,

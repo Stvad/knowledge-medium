@@ -132,20 +132,25 @@ export const optionalJsonValuePresetCore = definePresetCore<unknown | undefined>
   id: 'optional-json', build: () => codecs.optionalIdentity<unknown>(), defaultValue: undefined,
 })
 
-export const kernelValuePresetCores: readonly AnyValuePresetCore[] = [
-  stringValuePresetCore,
-  numberValuePresetCore,
-  booleanValuePresetCore,
-  listValuePresetCore,
-  dateValuePresetCore,
-  urlValuePresetCore,
-  enumValuePresetCore,
-  refValuePresetCore,
-  refListValuePresetCore,
-  optionalStringValuePresetCore,
-  optionalNumberValuePresetCore,
-  stringListValuePresetCore,
-  optionalRefValuePresetCore,
-  jsonValuePresetCore,
-  optionalJsonValuePresetCore,
-]
+/** Literal-keyed map keeps the value/config type owned by each kernel preset
+ * id available to typed authoring APIs such as seedProperty. */
+export const kernelValuePresetCoresById = {
+  string: stringValuePresetCore,
+  number: numberValuePresetCore,
+  boolean: booleanValuePresetCore,
+  list: listValuePresetCore,
+  date: dateValuePresetCore,
+  url: urlValuePresetCore,
+  enum: enumValuePresetCore,
+  ref: refValuePresetCore,
+  refList: refListValuePresetCore,
+  'optional-string': optionalStringValuePresetCore,
+  'optional-number': optionalNumberValuePresetCore,
+  'string-list': stringListValuePresetCore,
+  'optional-ref': optionalRefValuePresetCore,
+  json: jsonValuePresetCore,
+  'optional-json': optionalJsonValuePresetCore,
+} as const satisfies Readonly<Record<string, AnyValuePresetCore>>
+
+export const kernelValuePresetCores: readonly AnyValuePresetCore[] =
+  Object.values(kernelValuePresetCoresById)
