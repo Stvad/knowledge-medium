@@ -22,7 +22,7 @@ import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
-import { keyAtEnd } from '@/data/orderKey.js'
+import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
 import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
@@ -387,17 +387,34 @@ const reconcileMarkdownSubtree = async (
     }
     await collect(parentId)
 
-    // Last order key per real parent, for APPENDING new nodes after whatever
-    // is already there (user content + earlier tagged siblings). Seeded
-    // lazily from the live child list so new nodes always land last.
-    const lastKeyByParent = new Map<string, string | null>()
+    // Cursor per real parent for APPENDING new nodes. To keep the subtree
+    // CONTIGUOUS, new nodes slot right after the parent's last child ALREADY
+    // TAGGED with this key (a prior reconcile's node) and BEFORE that node's
+    // next sibling — so a block the user inserted after a streamed root
+    // mid-run can't split the reply around unrelated content. When the parent
+    // has no tagged child yet (a fresh reply, or a freshly-created reply
+    // parent), append after its last child so the reply lands after existing
+    // content. `keyBetween` needs a strictly-greater upper bound, so a tie
+    // between the anchor and its next sibling falls back to open-ended append.
+    const cursorByParent = new Map<string, {after: string | null, before: string | null}>()
     const appendKey = async (realParentId: string): Promise<string> => {
-      if (!lastKeyByParent.has(realParentId)) {
+      let cursor = cursorByParent.get(realParentId)
+      if (!cursor) {
         const children = await tx.childrenOf(realParentId, workspaceId)
-        lastKeyByParent.set(realParentId, children.at(-1)?.orderKey ?? null)
+        let anchor = -1
+        for (let j = children.length - 1; j >= 0; j -= 1) {
+          if (children[j].properties?.[SUBTREE_KEY_PROP] === key) { anchor = j; break }
+        }
+        cursor = anchor === -1
+          ? {after: children.at(-1)?.orderKey ?? null, before: null}
+          : {after: children[anchor].orderKey, before: children[anchor + 1]?.orderKey ?? null}
+        cursorByParent.set(realParentId, cursor)
       }
-      const orderKey = keyAtEnd(lastKeyByParent.get(realParentId) ?? null)
-      lastKeyByParent.set(realParentId, orderKey)
+      const upper = cursor.before !== null && (cursor.after === null || cursor.before > cursor.after)
+        ? cursor.before
+        : null
+      const orderKey = keyBetween(cursor.after, upper)
+      cursor.after = orderKey
       return orderKey
     }
 

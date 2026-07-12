@@ -479,6 +479,26 @@ describe('reconcile-markdown-subtree command', () => {
     expect((await replyRoots()).map(r => r.content)).toEqual(['A'])
   })
 
+  it('keeps streamed reply roots contiguous when the user inserts a sibling mid-stream', async () => {
+    await create({id: TOPIC_A, content: 'mention'})
+    // Streaming tick 1: the first reply root lands.
+    await reconcile('- Root A', {commandId: 'rms-c1'})
+    const rootA = (await replyRoots())[0]
+    // The user drops their own block right after the live reply root.
+    const userBlock = await context.createBlock({parentId: TOPIC_A, content: 'user note'})
+
+    // Streaming tick 2 (final): more roots arrive — they must stay contiguous
+    // with Root A, NOT land after the user's block (splitting the reply).
+    await reconcile('- Root A\n- Root B\n- Root C', {commandId: 'rms-c2', final: true})
+
+    const children = (await context.getSubtree(TOPIC_A))
+      .filter(row => row.parentId === TOPIC_A)
+      .sort((a, b) => (a.orderKey! < b.orderKey! ? -1 : 1))
+    expect(children.map(r => r.content)).toEqual(['Root A', 'Root B', 'Root C', 'user note'])
+    expect(children[0].id).toBe(rootA.id) // Root A kept its identity
+    expect(children.find(r => r.content === 'user note')!.id).toBe(userBlock!.id)
+  })
+
   it('shape:block keeps the whole markdown as ONE block (newlines preserved)', async () => {
     await create({id: TOPIC_A, content: 'mention'})
 
