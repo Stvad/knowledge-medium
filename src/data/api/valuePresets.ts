@@ -58,6 +58,17 @@ export type AnyJoinedValuePreset = JoinedValuePreset<any, any>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyValuePresetPresentation = ValuePresetPresentation<any, any>
 
+/** Define the UI metadata for a hidden codec-only core without repeating its
+ * id or accidentally exposing an editorless preset in the picker. */
+export const defineHiddenPresetPresentation = <TValue, TConfig>(
+  core: ValuePresetCore<TValue, TConfig>,
+  label: string,
+): ValuePresetPresentation<TValue, TConfig> => ({
+  id: core.id,
+  label,
+  hideFromPicker: true,
+})
+
 export const joinValuePreset = <TValue, TConfig>(
   core: ValuePresetCore<TValue, TConfig>,
   presentation: ValuePresetPresentation<NoInfer<TValue>, NoInfer<TConfig>>,

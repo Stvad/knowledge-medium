@@ -16,7 +16,10 @@
  */
 import type {AppExtension} from '@/facets/facet.js'
 import {systemToggle} from '@/facets/togglable.js'
+import {valuePresetPresentationsFacet} from '@/data/facets.js'
+import {defineHiddenPresetPresentation} from '@/data/api'
 import {keybindingsSettingsDataExtension} from './dataExtension.ts'
+import {keybindingOverridesPresetCore} from './config.ts'
 
 export const keybindingsSettingsPlugin: AppExtension = systemToggle({
   id: 'system:keybindings-settings',
@@ -25,6 +28,10 @@ export const keybindingsSettingsPlugin: AppExtension = systemToggle({
   essential: true,
 }).of([
   keybindingsSettingsDataExtension,
+  valuePresetPresentationsFacet.of(
+    defineHiddenPresetPresentation(keybindingOverridesPresetCore, 'Keybinding overrides'),
+    {source: 'keybindings-settings'},
+  ),
 ])
 
 export {
