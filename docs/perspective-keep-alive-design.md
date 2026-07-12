@@ -1,7 +1,9 @@
 # Perspective keep-alive — sessions-per-perspective + a warm session host
 
-> **Status:** proposed — design only, nothing built.
-> Last verified against code: 2026-07-10 (src/ + agent-extensions/window-management/ @ working tree).
+> **Status:** proposed — design only, nothing built. Revised after upstream
+> review (PR #357 thread: synced definitions, URL param, status-bar facet,
+> Activity policy).
+> Last verified against code: 2026-07-12 (src/ + agent-extensions/window-management/ @ working tree).
 
 Switching perspectives (window-management extension) currently unmounts and
 remounts every pane's React tree — a playing video restarts, editors lose
@@ -54,6 +56,33 @@ switching changes *which session is visible*. The outgoing perspective's rows,
 scroll, focus, and React tree are never touched — keep-alive falls out of the
 data model instead of being retrofitted.
 
+### Data model — synced definitions, per-device live sessions
+
+Two layers (upstream review outcome — all state in the DB, perspectives
+available across devices):
+
+- **Perspective definitions — synced.** A perspective registry of
+  per-workspace UiState blocks: name, slot/order, kind (numbered vs
+  per-item), target block for item perspectives. Defined once, available on
+  every device. This replaces the extension's localStorage snapshot store
+  entirely.
+- **Live sessions — per-device.** Each device materializes its own
+  layout-session block per perspective (`uuidv5(deviceBaseId +
+  perspectiveId)`). Kept per-device deliberately: per-row view state
+  (`scrollTopProp`, `focusedBlockLocationProp`, `activePanelIdProp`) lives on
+  session/row blocks and syncs — two devices sharing one live session would
+  ping-pong scroll and focus at each other. Sharing the *definition* but not
+  the *live session* gives cross-device perspectives without that fight. A
+  fully-shared live session ("my workspace follows me") is a possible later
+  evolution, but requires first splitting per-device view state out of the
+  shared layout structure — separable, bigger lift.
+
+Note layout sessions already live in the database (UiState blocks under
+`user page → ui-state → layout-sessions/<id>`); the only genuinely
+device-local state left is two pointers — the stable base id and the active
+perspective — and even the active pointer can move into a device-scoped DB
+block if the all-state-in-DB principle is applied strictly.
+
 ### Core half — `LayoutSessionHost`
 
 - **Two ids, kept distinct.** `getLayoutSessionId()`
@@ -63,9 +92,18 @@ data model instead of being retrofitted.
   where it is. Alongside it, add a runtime-switchable **active session id**
   (module store à la `createToggleStore`, persisted per-device separately),
   defaulting to the base id — zero behavior change when nothing drives it.
-  Slot session ids are always derived from the *base* id
-  (`uuidv5(baseId + ':' + slot)`), never from the currently active id —
-  deriving from the active id would make slot identity drift as you switch.
+  Per-perspective session ids are always derived from the *base* id
+  (`uuidv5(baseId + ':' + perspectiveId)`), never from the currently active
+  id — deriving from the active id would make session identity drift as you
+  switch.
+- **Perspective in the URL.** Perspective is workspace-scoped context, not
+  slot-scoped, so it rides as a matrix param on the workspace segment of
+  PR #338's URL grammar: `#ws;persp=work/a/b,c`. With synced definitions the
+  link is portable across devices (the receiving device materializes its own
+  live session for that definition), and history entries become
+  perspective-qualified — which settles Back-across-a-switch semantics:
+  Back returns to the prior perspective, because that's what the prior
+  history entry encodes.
 - **Warm-set host.** `src/App.tsx:306` mounts exactly one
   `<BlockComponent blockId={layoutSessionBlock.id}/>`. Replace with a
   `LayoutSessionHost` that keeps an LRU set of recently-active session blocks
@@ -109,35 +147,60 @@ data model instead of being retrofitted.
 
 ### Extension half — window-management shrinks
 
-- A slot maps to a **deterministic session block id** (uuidv5 of
-  device-session-id + slot, same pattern as `src/data/stateBlocks.ts`), both
-  numbered (`'1'..'8'`) and item (`item:<blockId>`) slots.
+- Slots become **registry entries** (synced perspective-definition blocks,
+  see the data model above), both numbered (`'1'..'8'`) and item
+  (`item:<blockId>`). Each maps on a given device to a **deterministic
+  session block id** (uuidv5 of base id + perspective id, same pattern as
+  `src/data/stateBlocks.ts`).
 - **Switch = one store write** (set active session id + repaint the bar),
   replacing the whole capture → `reconcilePanelRows` → repair-active-panel
   dance (`performSwitch`, `index.tsx:553`).
 - The serialized-layout snapshot survives only as: (a) migration from the
-  current localStorage format, (b) seed when a slot's session block doesn't
-  exist yet, (c) the item-slot expiry sweep — which now must **also delete
-  the expired session's block subtree** (sessions are UiState blocks that
+  current localStorage format into the registry, (b) seed when a
+  perspective's session block doesn't exist yet on this device, (c) the
+  item-slot expiry sweep — which now must **also delete the expired
+  perspective's session block subtrees** (sessions are UiState blocks that
   upload; leaked sessions are synced garbage).
-- The bottom bar needs no changes — it's imperative DOM on `document.body`
-  (`appEffectsFacet`), already outside the layout tree.
+- The bottom bar moves from imperative `document.body` DOM to an
+  **`appMountsFacet` contribution** (`src/extensions/core.ts:218` — React,
+  app scope, outside the layout tree, survives switches; the imperative DOM
+  was expedience, not necessity). If multiple extensions ever compose
+  indicators, a `statusBarItemsFacet` mirroring `headerItemsFacet`'s region
+  pattern is the natural core addition (upstream review outcome; a
+  LayoutRenderer override is heavier than the bar needs).
 
-## Why `display:none`, not React `<Activity>`
+## Hiding policy: `display:none` by default, `<Activity>` as per-session optimization
 
 React 19.2.6 (installed) exports stable `<Activity>` — the official
-hide-with-state primitive — but `mode="hidden"` **runs effect cleanups**.
-That's exactly wrong for the motivating case: the video player's
-`registerVideoPlayer` handle (`src/plugins/video-player/VideoPlayerRenderer.tsx:101`)
-unregisters in its effect cleanup, and any component tearing down resources on
-cleanup degrades while hidden. Plain `display:none` keeps effects,
-subscriptions, and playback fully live (a hidden `<video>` keeps playing
-audio).
+hide-with-state primitive. What it buys over a hand-rolled `display:none`
+wrapper: hidden subtrees' re-renders are deferred to background priority
+(they never block the visible perspective), state and DOM are preserved with
+official semantics, and it's where React is investing (`mode="hidden"`
+pre-rendering could later give "warm up a perspective before first visit").
 
-Cost: hidden trees still re-render on data changes — controlled by the LRU
-cap rather than Activity's render deferral. `<Activity>` remains a later
-optimization for warm-but-media-free sessions if hidden re-render cost shows
-up in practice.
+The crux is effect semantics: **hiding runs effect cleanups, revealing
+re-runs them.** Concretely in KM: the video player's `registerVideoPlayer`
+handle (`src/plugins/video-player/VideoPlayerRenderer.tsx:101`) unregisters
+in its effect cleanup, and react-player tears down its underlying player
+instance in cleanup (YouTube iframes especially) — playback stops, defeating
+the headline feature. CodeMirror editors are created in effects, so hide
+destroys them and reveal pays re-init plus loses editor-local transient
+state. Plain `display:none` keeps effects, subscriptions, and playback fully
+live (a hidden `<video>` keeps playing audio).
+
+So: Activity is the right tool for "cheap warm resume", the wrong one for
+"keep running". Policy (upstream review outcome): `display:none` wrappers by
+default; `<Activity>` as a per-session optimization for warm sessions with
+no live media. Both fit the same host — a per-slot policy, not an
+architecture fork.
+
+Background cost model: per warm session, retained DOM (bounded — see
+`LazyViewportMount` below) plus live query subscriptions that re-render the
+hidden tree on writes. A quiet workspace costs ≈ zero (handle-level
+structural-diff dedup); the real cost is write bursts (sync storms)
+re-rendering N hidden trees. Controls, in order: the small LRU cap (2–3;
+eviction fully unmounts and releases everything), item-perspective expiry
+deleting dead sessions, and Activity for media-free warm sessions.
 
 `LazyViewportMount` composes well: it never unmounts once mounted, and while
 hidden its IntersectionObserver sees nothing — not-yet-seen blocks stay
@@ -174,9 +237,11 @@ sessions.
 - CodeMirror revealed from `display:none` may need a `requestMeasure` nudge.
 - Warm-set eviction: is plain LRU enough, or should a session with actively
   playing media be pinned against eviction?
-- History semantics across switches: what should Back do right after a
-  perspective switch (return to prior perspective vs. prior layout within the
-  current one)?
+- Definition ↔ session reconciliation: when a synced perspective definition
+  changes while a device holds a diverged live session for it, what wins on
+  next switch (reconcile rows to the definition vs. keep the local session
+  and offer a reset)? Related: should local layout edits write back to the
+  definition, and when?
 
 ## Rollout sketch
 
@@ -184,7 +249,8 @@ sessions.
    switch; single-session behavior unchanged.
 2. Core: projection rebinding + input gating; verify with two hand-made
    sessions in the sandbox (video playing in one, switch away/back).
-3. Extension: slot → deterministic session id, migration from localStorage
-   snapshots, expiry sweep deletes session subtrees.
+3. Extension: synced perspective registry + per-device deterministic session
+   ids, migration from localStorage snapshots into the registry, expiry sweep
+   deletes session subtrees, bar → `appMountsFacet`.
 4. Sandbox-verify the full loop (`--profile test`, harness), then user gate,
    then promote + upstream PR via the km-upstream vehicle.
