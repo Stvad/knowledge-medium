@@ -206,4 +206,60 @@ Root
     expect(blocks[0].content).toBe('Single line')
     expect(isRoot(blocks[0])).toBe(true)
   })
+
+  describe('fenced code blocks', () => {
+    it('keeps a fenced code block as ONE block with fences intact', () => {
+      const blocks = parseMarkdownToBlocks('```js\nconst x = 1\n```')
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0].content).toBe('```js\nconst x = 1\n```')
+      expect(isRoot(blocks[0])).toBe(true)
+    })
+
+    it('does not interpret list markers / headers inside a fence', () => {
+      const blocks = parseMarkdownToBlocks('```\n- not a bullet\n# not a header\n```')
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0].content).toBe('```\n- not a bullet\n# not a header\n```')
+    })
+
+    it('surrounding prose stays separate from the fence', () => {
+      const blocks = parseMarkdownToBlocks('Here:\n```\ncode\n```\ndone')
+      expect(blocks.map(b => b.content)).toEqual(['Here:', '```\ncode\n```', 'done'])
+      expect(blocks.every(isRoot)).toBe(true)
+    })
+
+    it('nests an indented fence under a bullet and strips the opening indent', () => {
+      const blocks = parseMarkdownToBlocks('- step\n  ```\n  code\n  ```')
+      const step = findByContent(blocks, 'step')
+      const fence = findByContent(blocks, '```\ncode\n```')
+      expect(isRoot(step)).toBe(true)
+      expect(fence.parentId).toBe(step.id)
+    })
+
+    it('closes an unclosed fence at EOF', () => {
+      const blocks = parseMarkdownToBlocks('intro\n```\ncode here')
+      expect(blocks.map(b => b.content)).toEqual(['intro', '```\ncode here'])
+    })
+
+    it('a longer ```` fence wraps inner ``` and closes only on a matching-length fence', () => {
+      // 4-backtick fence around content that itself contains a 3-backtick
+      // block — the inner ``` must NOT close it.
+      const input = '````\n```\ninner\n```\n````\nafter'
+      const blocks = parseMarkdownToBlocks(input)
+      expect(blocks.map(b => b.content)).toEqual(['````\n```\ninner\n```\n````', 'after'])
+    })
+
+    it('handles ~~~ tilde fences, keeping inner - and # lines whole', () => {
+      const input = '~~~ts\n- not a bullet\n# not a header\n~~~'
+      const blocks = parseMarkdownToBlocks(input)
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0].content).toBe('~~~ts\n- not a bullet\n# not a header\n~~~')
+    })
+
+    it('a ~~~ fence is not closed by a ``` line (different fence char)', () => {
+      const input = '~~~\n```\ninner\n```\n~~~'
+      const blocks = parseMarkdownToBlocks(input)
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0].content).toBe('~~~\n```\ninner\n```\n~~~')
+    })
+  })
 })

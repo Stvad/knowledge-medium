@@ -22,7 +22,8 @@ import { dailyNoteBlockId } from '@/plugins/daily-notes/dailyNotes.js'
 import { DATA_MODEL_GUIDE } from './dataModelGuide.ts'
 import { runHealthCommand } from './healthCommand.ts'
 import { watchEventsRegistry } from './watchEvents.ts'
-import { keyAtEnd } from '@/data/orderKey.js'
+import { keyAtEnd, keyBetween } from '@/data/orderKey.js'
+import { parseMarkdownToBlocks, type ParsedBlock } from '@/utils/markdownParser.js'
 import {
   actionsFacet,
   appEffectsFacet,
@@ -61,6 +62,8 @@ import type {
   AgentRuntimeContext,
   BlockPosition,
   CreateBlockInput,
+  ReconcileMarkdownSubtreeInput,
+  ReconcileMarkdownSubtreeResult,
   DeleteBlockInput,
   DeleteBlockResult,
   ExtensionVerificationResult,
@@ -326,6 +329,192 @@ const createRuntimeBlock = async (
     })
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
   return repo.load(id)
+}
+
+/** App-owned property that tags every block of a reconciled subtree with
+ *  its caller-supplied `key`. The reconcile identifies "this subtree" by
+ *  this tag, so it never touches user content interleaved under the same
+ *  parent, and successive reconciles of the same key converge in place. */
+const SUBTREE_KEY_PROP = 'agent:subtreeKey'
+
+/** Reconcile the keyed block subtree under `parentId` to match `markdown`,
+ *  in ONE transaction (atomic — never a partial tree). The markdown is
+ *  parsed with the app's own paste parser (`parseMarkdownToBlocks`) so the
+ *  split matches "paste as markdown" exactly; `shape:'block'` keeps it one
+ *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
+ *  (the daemon passes `claude:reply`).
+ *
+ *  Idempotent by `key`: the tagged blocks are made to carry the parsed
+ *  tree's content/parentage by a positional (pre-order) reconcile — update
+ *  the block at each position, re-parent it if its parent drifted, create
+ *  new tail nodes (appended contiguously with the reply's existing nodes —
+ *  see `appendKey`), and (only on `final`) delete trailing tagged blocks
+ *  with no parsed counterpart. So re-sending the same markdown is a no-op
+ *  and a growing markdown (a live stream) just extends the tail — no
+ *  duplication, safe to retry. This unifies "stream the reply" and "split
+ *  the reply": streaming is repeated reconciles with the growing text; the
+ *  terminal write is the last reconcile.
+ *
+ *  BOUNDARY: a matched block keeps its own order key, so the reply's nodes
+ *  stay in correct RELATIVE order but aren't forcibly made ADJACENT. If the
+ *  user deliberately drops a block BETWEEN two already-placed reply nodes
+ *  mid-stream, it stays there (the reply reads split around it) rather than
+ *  being evicted — respecting the user's edit over strict contiguity. The
+ *  common case (a block added AFTER the reply) keeps the reply contiguous. */
+const reconcileMarkdownSubtree = async (
+  repo: Repo,
+  input: ReconcileMarkdownSubtreeInput,
+): Promise<ReconcileMarkdownSubtreeResult> => {
+  const {parentId, key, properties, shape, final} = input
+  // shape 'block' → the whole markdown is ONE root block (newlines kept);
+  // 'outline' (default) → split along the markdown outline.
+  const parsed: ParsedBlock[] = shape === 'block'
+    ? (input.markdown.length === 0
+        ? []
+        : [{id: 'block-root', orderKey: '', content: input.markdown}])
+    : parseMarkdownToBlocks(input.markdown)
+
+  const ids: string[] = []
+  const rootIds: string[] = []
+
+  await repo.tx(async tx => {
+    const parent = await tx.get(parentId)
+    if (!parent) throw new Error(`reconcile-markdown-subtree: parent ${parentId} not found`)
+    const {workspaceId} = parent
+
+    // This subtree's existing blocks, in pre-order (the target we reconcile
+    // onto). Walk children depth-first following ONLY tagged blocks, so user
+    // content interleaved under the parent is skipped and never touched.
+    const existing: BlockData[] = []
+    const collect = async (pid: string): Promise<void> => {
+      for (const child of await tx.childrenOf(pid, workspaceId)) {
+        if (child.properties?.[SUBTREE_KEY_PROP] !== key) continue
+        existing.push(child)
+        await collect(child.id)
+      }
+    }
+    await collect(parentId)
+
+    // Cursor per real parent for APPENDING new nodes. To keep the subtree
+    // CONTIGUOUS, new nodes slot right after the parent's last child ALREADY
+    // TAGGED with this key (a prior reconcile's node) and BEFORE that node's
+    // next sibling — so a block the user inserted after a streamed root
+    // mid-run can't split the reply around unrelated content. When the parent
+    // has no tagged child yet (a fresh reply, or a freshly-created reply
+    // parent), append after its last child so the reply lands after existing
+    // content. `keyBetween` needs a strictly-greater upper bound, so a tie
+    // between the anchor and its next sibling falls back to open-ended append.
+    const cursorByParent = new Map<string, {after: string | null, before: string | null}>()
+    const appendKey = async (realParentId: string): Promise<string> => {
+      let cursor = cursorByParent.get(realParentId)
+      if (!cursor) {
+        const children = await tx.childrenOf(realParentId, workspaceId)
+        let anchor = -1
+        for (let j = children.length - 1; j >= 0; j -= 1) {
+          if (children[j].properties?.[SUBTREE_KEY_PROP] === key) { anchor = j; break }
+        }
+        cursor = anchor === -1
+          ? {after: children.at(-1)?.orderKey ?? null, before: null}
+          : {after: children[anchor].orderKey, before: children[anchor + 1]?.orderKey ?? null}
+        cursorByParent.set(realParentId, cursor)
+      }
+      const upper = cursor.before !== null && (cursor.after === null || cursor.before > cursor.after)
+        ? cursor.before
+        : null
+      const orderKey = keyBetween(cursor.after, upper)
+      cursor.after = orderKey
+      return orderKey
+    }
+
+    const idMap = new Map<string, string>()          // parsed id → real id
+    const blockProps = {...(properties ?? {}), [SUBTREE_KEY_PROP]: key}
+
+    for (let i = 0; i < parsed.length; i += 1) {
+      const node = parsed[i]
+      const realParentId = node.parentId ? idMap.get(node.parentId)! : parentId
+      const match = i < existing.length ? existing[i] : undefined
+
+      if (match) {
+        // Reconcile the block already at this pre-order position: update its
+        // content, and re-parent it (to the end of the new parent's run) only
+        // if its PARENT drifted. Its own order key is left alone — a no-op on
+        // the common append-only stream (stable prefix, growing tail); and a
+        // deliberate boundary otherwise, so a user block wedged between two
+        // matched reply nodes isn't evicted just to close the gap (see the
+        // function's BOUNDARY note).
+        idMap.set(node.id, match.id)
+        if (match.content !== node.content) {
+          await tx.update(match.id, {content: node.content})
+        }
+        if (match.parentId !== realParentId) {
+          await tx.move(match.id, {parentId: realParentId, orderKey: await appendKey(realParentId)})
+        }
+      } else {
+        const id = crypto.randomUUID()
+        await tx.create({
+          id,
+          workspaceId,
+          parentId: realParentId,
+          orderKey: await appendKey(realParentId),
+          content: node.content,
+          properties: blockProps,
+        })
+        idMap.set(node.id, id)
+      }
+
+      const realId = idMap.get(node.id)!
+      ids.push(realId)
+      if (!node.parentId) rootIds.push(realId)
+    }
+
+    // Trailing extras: tagged blocks past the end of the parsed tree — only
+    // reachable when the final text parses to FEWER nodes than an earlier
+    // streamed tick (e.g. resultText trimmed a trailing bullet, or a failed
+    // run collapses a streamed outline to a single note block). In pre-order
+    // a parent precedes its children, so the trailing slice is closed under
+    // descendants; delete it leaf-first (reverse order) so no parent orphans
+    // a child. Only on `final` — a mid-stream tick must not delete a tail it
+    // simply hasn't re-streamed yet.
+    if (final && existing.length > parsed.length) {
+      for (let i = existing.length - 1; i >= parsed.length; i -= 1) {
+        const doomed = existing[i]
+        // Salvage the user's OWN content: a block the user nested under this
+        // reply node isn't tagged with our key, so `collect` never saw it and
+        // it isn't in the doomed set. `tx.delete` is a single-row soft-delete
+        // (no cascade), so leaving it would strand it under a tombstone and it
+        // would vanish from the outline. Reparent any such foreign child up to
+        // the doomed node's parent BEFORE deleting — deleting leaf-first means
+        // the doomed node's own tagged children are already gone, so only
+        // foreign children remain, and a child under a parent that is itself
+        // doomed bubbles up again until it lands under a surviving ancestor.
+        const target = doomed.parentId ?? parentId
+        const foreign = (await tx.childrenOf(doomed.id, workspaceId))
+          .filter(child => child.properties?.[SUBTREE_KEY_PROP] !== key)
+        if (foreign.length > 0) {
+          // Land the rescued children in the doomed node's OWN slot (between
+          // it and its next sibling), keeping their relative order, rather
+          // than at the parent's end. Slot-anchoring is what makes order
+          // correct regardless of the reverse (leaf-first) walk: each doomed
+          // sibling's children land at that sibling's position, so notes
+          // under an earlier reply node stay before notes under a later one,
+          // and neither jumps past unrelated content that followed the reply.
+          const siblings = await tx.childrenOf(target, workspaceId)
+          const doomedIdx = siblings.findIndex(sibling => sibling.id === doomed.id)
+          const nextKey = doomedIdx >= 0 ? siblings[doomedIdx + 1]?.orderKey ?? null : null
+          let lower: string | null = doomed.orderKey ?? null
+          for (const child of foreign) {
+            const upper = nextKey !== null && (lower === null || nextKey > lower) ? nextKey : null
+            const orderKey = keyBetween(lower, upper)
+            await tx.move(child.id, {parentId: target, orderKey})
+            lower = orderKey
+          }
+        }
+        await tx.delete(doomed.id)
+      }
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime reconcile markdown subtree'})
+
+  return {ids, rootIds}
 }
 
 const updateRuntimeBlock = async (
@@ -1126,6 +1315,7 @@ export const createAgentRuntimeContext = ({
     getBlock: id => repo.load(id),
     getSubtree: async rootId => await repo.query.subtree({id: rootId}).load() as SubtreeRow[],
     createBlock: input => createRuntimeBlock(repo, input),
+    reconcileMarkdownSubtree: input => reconcileMarkdownSubtree(repo, input),
     updateBlock: input => updateRuntimeBlock(repo, input),
     moveBlock: input => moveRuntimeBlock(repo, input),
     deleteBlock: input => deleteRuntimeBlock(repo, input),
@@ -1199,6 +1389,25 @@ export const executeCommand = async (
         position: getPosition(command.position),
         data: getBlockDataInput(command),
       })
+
+    case 'reconcile-markdown-subtree': {
+      const properties = command.properties === undefined
+        ? undefined
+        : isRecord(command.properties)
+          ? structuredClone(command.properties) as BlockProperties
+          : undefined
+      if (command.properties !== undefined && !properties) {
+        throw new Error('properties must be an object')
+      }
+      return context.reconcileMarkdownSubtree({
+        parentId: requireString(command.parentId, 'parentId'),
+        markdown: requireString(command.markdown, 'markdown'),
+        key: requireString(command.key, 'key'),
+        shape: command.shape === 'block' ? 'block' : command.shape === 'outline' ? 'outline' : undefined,
+        final: command.final === true,
+        properties,
+      })
+    }
 
     case 'update-block': {
       const properties = command.properties === undefined

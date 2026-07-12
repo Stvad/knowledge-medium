@@ -177,6 +177,30 @@ export const createBridgeGraph = (client: BridgeClient) => {
     return asRecord(result, 'restore-block') as unknown as BlockData
   }
 
+  /** Reconcile a keyed block SUBTREE under `parentId` to match `markdown`,
+   *  in one app-side transaction (atomic — a failure never leaves a partial
+   *  tree). The tagged subtree is made EQUAL the parsed tree; idempotent by
+   *  `key`, so a re-send lands the same tree (safe to retry). `shape:'block'`
+   *  keeps it one block; `properties` tag every block. A GENERIC bridge write
+   *  — callers layer their own semantics on top (e.g. the dispatch reply
+   *  marker). Streaming calls this repeatedly with the growing text; the last
+   *  passes `final: true` so trailing extras can be pruned. */
+  const reconcileMarkdownSubtree = async (
+    parentId: string,
+    markdown: string,
+    opts: {key: string, shape?: 'outline' | 'block', final?: boolean, properties?: Record<string, unknown>},
+  ): Promise<unknown> => {
+    return client.runCommand({
+      type: 'reconcile-markdown-subtree',
+      parentId,
+      markdown,
+      key: opts.key,
+      ...(opts.shape ? {shape: opts.shape} : {}),
+      ...(opts.final ? {final: true} : {}),
+      ...(opts.properties ? {properties: opts.properties} : {}),
+    })
+  }
+
   /** Overwrite a block's content — used to stream the in-progress reply
    *  text into an early-created reply block. */
   const updateBlockContent = async (id: string, content: string): Promise<void> => {
@@ -221,6 +245,7 @@ export const createBridgeGraph = (client: BridgeClient) => {
     moveBlock,
     deleteBlock,
     restoreBlock,
+    reconcileMarkdownSubtree,
     updateBlockContent,
     sqlAll,
     blockViews,

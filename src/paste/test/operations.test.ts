@@ -278,6 +278,30 @@ describe('pasteEditModeMultilineText', () => {
     expect(result?.focusOffset).toBe('beta'.length)
   })
 
+  it('preserves a pasted fenced code block body instead of merging only its first line', async () => {
+    // A fenced block parses to ONE multi-line root. The first-line merge
+    // would drop the code body, keeping just the ``` opener — regression fix.
+    await createBlock('root', 'Root', null, 'a0')
+    await createBlock('target', 'note: ', 'root', 'a0')
+
+    const fence = '```js\nconst x = 1\n```'
+    const plan = planEditModeMultilinePaste(fence, 'note: ', {
+      from: 'note: '.length,
+      to: 'note: '.length,
+    })
+    expect(plan?.targetContent).toBe(`note: ${fence}`)
+
+    await pasteEditModeMultilineText(
+      plan!,
+      env.repo.block('target'),
+      env.repo,
+      {scopeRootId: 'root'},
+    )
+    expect(env.repo.block('target').peek()?.content).toBe(`note: ${fence}`)
+    // A single-root fence adds no extra blocks.
+    expect(await childContents('root')).toEqual([`note: ${fence}`])
+  })
+
   it('inserts edit-mode paste siblings between tied neighbours without losing content (#198)', async () => {
     // The edited block ties with its next sibling, so the trailing pasted
     // sibling's order_key bounds are equal — the old keysBetween threw and rolled

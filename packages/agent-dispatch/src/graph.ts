@@ -47,6 +47,26 @@ export const createGraph = (client: BridgeClient) => {
   const createReply = async (parentId: string, content: string): Promise<BlockData> =>
     bridgeGraph.createBlock(parentId, content, {[PROPS.reply]: true})
 
+  /** Reconcile the run's reply subtree (tagged `replyKey`) under `parentId`
+   *  to match `markdown`, app-side in ONE transaction (a failure never
+   *  leaves a partial tree). Every block is tagged the reply marker. This is
+   *  the SINGLE reply-write primitive: `shape:'outline'` splits along the
+   *  markdown outline into a block hierarchy, `'block'` keeps one block, and
+   *  because it's idempotent by `replyKey`, streaming a reply is just
+   *  repeated reconciles with the growing text (the last passes `final`).
+   *  Safe to retry — a re-send converges to the same tree, no duplication. */
+  const reconcileReplyTree = async (
+    parentId: string, markdown: string,
+    opts: {replyKey: string, shape: 'outline' | 'block', final?: boolean},
+  ): Promise<void> => {
+    await bridgeGraph.reconcileMarkdownSubtree(parentId, markdown, {
+      key: opts.replyKey,
+      shape: opts.shape,
+      ...(opts.final ? {final: true} : {}),
+      properties: {[PROPS.reply]: true},
+    })
+  }
+
   /** Transient "what the run is doing now" label — merged
    *  (update-block merges the properties map) so it never clobbers
    *  other dispatch state written concurrently. */
@@ -76,6 +96,7 @@ export const createGraph = (client: BridgeClient) => {
     ...bridgeGraph,
     setTaskProps,
     createReply,
+    reconcileReplyTree,
     setActivity,
     setSession,
     clearCancel,
@@ -104,6 +125,10 @@ export type Graph = DispatchBridgeGraph & {
     },
   ) => Promise<void>
   createReply: (parentId: string, content: string) => Promise<BlockData>
+  reconcileReplyTree: (
+    parentId: string, markdown: string,
+    opts: {replyKey: string, shape: 'outline' | 'block', final?: boolean},
+  ) => Promise<void>
   setActivity: (id: string, label: string) => Promise<void>
   setSession: (id: string, session: string, resumeOptions?: AgentResumeOptions | null) => Promise<void>
   clearCancel: (id: string) => Promise<void>

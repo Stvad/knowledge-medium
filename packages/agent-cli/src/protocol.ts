@@ -137,6 +137,30 @@ export const createBlockCommandSchema = z.looseObject({
   ...commandIdField,
 })
 
+/** Reconcile a keyed block SUBTREE under `parentId` to match `markdown`,
+ *  in one transaction. The markdown is parsed with the app's own paste
+ *  parser so the split matches "paste as markdown" exactly. Every block of
+ *  the subtree is tagged with `key`, and the app makes the tagged subtree
+ *  EQUAL the parsed tree — creating, updating, re-ordering, and (on `final`)
+ *  deleting to converge. Idempotent by that key: re-sending the same
+ *  markdown lands the same tree, no duplication, so a transient failure is
+ *  safe to retry. `shape: 'block'` keeps the whole markdown as ONE block
+ *  (no outline split); `'outline'` (default) splits along the markdown
+ *  outline. `properties` (looseObject passthrough) is applied to every
+ *  block — the dispatch daemon uses it to tag `claude:reply`. Streaming a
+ *  reply calls this repeatedly with the growing text (same key); the last
+ *  call passes `final: true`. Replaces the old one-shot
+ *  `create-blocks-from-markdown`. */
+export const reconcileMarkdownSubtreeCommandSchema = z.looseObject({
+  type: z.literal('reconcile-markdown-subtree'),
+  parentId: z.string(),
+  markdown: z.string(),
+  key: z.string(),
+  shape: z.enum(['outline', 'block']).optional(),
+  final: z.boolean().optional(),
+  ...commandIdField,
+})
+
 export const updateBlockCommandSchema = z.looseObject({
   type: z.literal('update-block'),
   id: z.string().optional(),
@@ -434,6 +458,7 @@ export const knownCommandSchema = z.discriminatedUnion('type', [
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
+  reconcileMarkdownSubtreeCommandSchema,
   updateBlockCommandSchema,
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
@@ -473,6 +498,7 @@ export const knownAgentCommandSchema = z.discriminatedUnion('type', [
   getBlockCommandSchema,
   getSubtreeCommandSchema,
   createBlockCommandSchema,
+  reconcileMarkdownSubtreeCommandSchema,
   updateBlockCommandSchema,
   moveBlockCommandSchema,
   deleteBlockCommandSchema,
@@ -575,6 +601,11 @@ export const knownCommandRegistry: Record<KnownCommandType, KnownCommandMeta> = 
   'create-block': {
     usage: 'kmagent create-block <json>',
     description: 'Create a block (body shape per <json>).',
+    readOnly: false,
+  },
+  'reconcile-markdown-subtree': {
+    usage: 'kmagent reconcile-markdown-subtree <json:{parentId,markdown,key,shape?,final?,properties?}>',
+    description: 'Reconcile a keyed block subtree under parentId to match markdown (parsed with the app paste parser), in one transaction — create/update/reorder/delete to converge. Idempotent by key, so a re-send lands the same tree. shape=block keeps it one block; properties tag every block. Streaming calls this repeatedly with the growing text; the last passes final:true.',
     readOnly: false,
   },
   'update-block': {

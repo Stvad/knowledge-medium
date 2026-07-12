@@ -58,6 +58,33 @@ export interface RestoreBlockInput {
   id: string
 }
 
+export interface ReconcileMarkdownSubtreeInput {
+  /** Parent the reconciled subtree lives under (its tagged children). */
+  parentId: string
+  /** Markdown parsed with the app paste parser into the target tree. */
+  markdown: string
+  /** Per-subtree identity: every block of this subtree is tagged with it,
+   *  and only blocks carrying it are reconciled. Idempotent by this key —
+   *  a re-send with the same markdown lands the same tree. */
+  key: string
+  /** `'block'` keeps the whole markdown as ONE block (no outline split);
+   *  `'outline'` (default) splits along the markdown outline. */
+  shape?: 'outline' | 'block'
+  /** The last reconcile of a stream — lets trailing tagged blocks with no
+   *  parsed counterpart be pruned (a mid-stream tick must not prune the
+   *  not-yet-restreamed tail). */
+  final?: boolean
+  /** Applied (merged) to every created block alongside the subtree key. */
+  properties?: BlockProperties
+}
+
+export interface ReconcileMarkdownSubtreeResult {
+  /** Every created/reused block id, in pre-order. */
+  ids: string[]
+  /** The top-level block ids (direct children of `parentId`). */
+  rootIds: string[]
+}
+
 export interface InstallExtensionInput {
   source: string
   label?: string
@@ -163,6 +190,7 @@ export interface AgentRuntimeContext {
   getBlock: (id: string) => Promise<BlockData | null>
   getSubtree: (rootId: string) => Promise<SubtreeRow[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
+  reconcileMarkdownSubtree: (input: ReconcileMarkdownSubtreeInput) => Promise<ReconcileMarkdownSubtreeResult>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   moveBlock: (input: MoveBlockInput) => Promise<BlockData | null>
   deleteBlock: (input: DeleteBlockInput) => Promise<DeleteBlockResult>

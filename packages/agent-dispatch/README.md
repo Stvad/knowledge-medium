@@ -255,7 +255,19 @@ Failures reply visibly (`⚠️ …`) and set `agent:status=error` + `agent:erro
 
 Spawned executors stream progress where their CLI supports it, so the daemon sees progress as the run goes, not just the final result. While a run is in flight, the source block carries `agent:activity` — a short label for whatever the run is doing right now (a tool name, humanized: `km: search`, `Searching the web`, `Fetching a page`, …). The companion UI's status chip shows the persisted runner label next to elapsed time (`Claude · 12s · Searching the web`, `Codex · 12s · km: search`); the label is cleared the moment the run reaches a terminal state, so it never goes stale.
 
-Set `"streamReply": true` on a backlinks watcher to also stream the in-progress reply text into the reply block as it's written, instead of only posting it once at the end. Each streamed update is a real synced graph mutation (throttled to roughly one write per 1.5s), so leave it off for watchers where that write churn matters — the default (`false`) still posts the full reply in one shot when the run finishes.
+Set `"streamReply": true` on a backlinks watcher to also show the reply being **built live** as the run streams, instead of posting it once at the end. Each tick reconciles the reply to the growing text (throttled to roughly one write per 1.5s, writing only the diff), so leave it off for watchers where that write churn matters — the default (`false`) posts the whole reply in one shot when the run finishes.
+
+## Reply as a block hierarchy
+
+By default (`"splitReply": true`) a reply is shaped as a block hierarchy split along its **markdown outline** under the mention — top-level lines/bullets become sibling blocks, indented bullets become child blocks, headings nest their following content, and fenced code stays whole. Free-form lines stay one-block-per-line and fenced code stays intact, so this fragments *structure*, not code. The spawned run is also nudged to write a nested outline so the split threads naturally (the "prompting" half; the parsing is the "injection" half).
+
+`streamReply` and `splitReply` are **orthogonal and share one mechanism**: the reply is a keyed block subtree the app *reconciles* to match the reply markdown — `splitReply` picks its shape (outline vs one block), `streamReply` picks the cadence (rebuild it live on every tick, or once at the end). Parsing + insertion happen **app-side**: the daemon sends the markdown over the `reconcile-markdown-subtree` bridge command, and the app runs its **own paste parser** (`parseMarkdownToBlocks`) and makes the tagged subtree equal the parsed tree in **one transaction**. So the split matches "paste as markdown" exactly, a failure never leaves a partial reply, and — because the write is idempotent (keyed per run) — a growing stream just extends the tail in place and a transient bridge blip is **retried** rather than surfacing as `status=error`. With `streamReply` also on, the live text builds directly into that same subtree (a split reply threads out as it's written; a single-block reply grows in place), so there's no end-of-run "explosion" and no orphaned placeholder.
+
+Set `"splitReply": false` on a watcher to keep the reply as a single block. Notes:
+- A structureless reply (one paragraph) lands as a single block either way.
+- A **failed** run never splits — any streamed partial collapses to a single block with the error note appended.
+- Ignored for `delivery: "channel"` watchers — the ambient session writes its own reply.
+- Requires an app build new enough to handle the `reconcile-markdown-subtree` command; against an older tab the run errors visibly rather than silently falling back.
 
 ## Push detection (watch-events)
 
