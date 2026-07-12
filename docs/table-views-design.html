@@ -86,7 +86,7 @@
 
 <aside class="doc-status">
   <strong>Status: proposed design — no implementation.</strong><br>
-  Last verified against code: 2026-07-12 (master @ <code>44d8631d</code>; every engine/UI claim below was checked against source at that revision, with <code>file:symbol</code> pointers inline). Written in the context of the properties-as-blocks plan (PR <a href="https://github.com/Stvad/knowledge-medium/pull/288">#288</a>) — nothing here depends on it landing, but the seams are chosen so the same design is correct before and after.
+  Last verified against code: 2026-07-12 (master @ <code>44d8631d</code>; every engine/UI claim below was checked against source at that revision, with <code>file:symbol</code> pointers inline). Written for the properties-as-blocks world (PR <a href="https://github.com/Stvad/knowledge-medium/pull/288">#288</a>, which lands first); the seams chosen here (cell-projection reads, <code>setProperty</code> writes) are correct on both sides of that migration regardless.
 </aside>
 
 <p><strong>Decisions proposed in this doc</strong> (each argued in its section):</p>
@@ -138,17 +138,16 @@
   <li><strong>Field identity is <code>fieldId</code></strong> — the schema block's id for user schemas, <code>property:&lt;name&gt;</code> for kernel/plugin schemas; renames touch <code>name</code> only.</li>
 </ul>
 
-<p>Three caveats the plan itself carries, inherited here rather than dropped:</p>
+<p>Two caveats the plan itself carries, inherited here rather than dropped:</p>
 
 <ul>
   <li><strong>Stale bootstrap-hint window</strong>: on a freshly-synced device the cell can be per-key stale until the projection pass sweeps — a table there can transiently show wrong cell values and wrong row membership. Bounded and self-healing, but an editing surface should not treat cold-device query results as authoritative (#288 §5, §12).</li>
-  <li><strong>E2EE workspaces stay cell-only</strong> until the derive-locally path lands — harmless for this plugin's read/write path (the cell is exactly what it uses), but field-row-derived affordances (backlinks-from-field-rows) don't exist there.</li>
   <li><strong>Plugin schemas default to cell-backed</strong> until their durable opt-in — so field-row-derived affordances apply to user schemas first, not to e.g. a todo-status column.</li>
 </ul>
 
-<aside class="callout warn">
-  <p><strong><code>fieldId</code> does not exist on master today</strong> — it is a #288-branch concept. Since this plugin can ship first, it must mint the identity convention itself (user schema → schema block id; kernel/plugin → <code>property:&lt;name&gt;</code>) and keep it aligned with what #288 lands. That is a small, explicit drift risk, owned here rather than hidden: the convention lives in one module (<code>columnId.ts</code>) so a rename-to-match is one edit.</p>
-</aside>
+<p>(E2EE is <em>not</em> a caveat here: encryption seals content columns at the upload boundary — <code>services/powersync.ts: encryptUploadOps</code> — so cell reads, <code>setProperty</code> writes, and compiled SQL all operate on local plaintext in any workspace mode. The #288 e2ee gate keeps such workspaces cell-only, whose only consequence for this plugin is that the §4.2 schema-block-backlinks nicety doesn't accrue there.)</p>
+
+<p><strong>Column identity rides #288's <code>fieldId</code></strong> (user schema → schema block id; kernel/plugin → <code>property:&lt;name&gt;</code>). #288 lands before this plugin, so columns consume the shipped convention directly — no parallel convention is minted here.</p>
 
 <h2 id="engine">3. Ground truth #2: the query engine, exactly as it is</h2>
 
@@ -174,6 +173,7 @@
   <tr><td>LIMIT</td><td>JS slice after sort</td><td><code>limit</code> arg</td></tr>
   <tr><td>OR across predicates</td><td>JS tail (compile the AND-able intersection, evaluate the disjunction client-side)</td><td>match groups (<code>anyOf</code>)</td></tr>
   <tr><td>free-text content term</td><td>JS substring over hydrated rows</td><td><code>content LIKE</code> clause</td></tr>
+  <tr><td>contains on plain string lists (<code>list</code> codecs carry no <code>where</code>)</td><td>JS tail</td><td><code>json_each</code> membership clause for list codecs</td></tr>
   <tr><td>title / created / updated terms</td><td>JS tail (they're columns, not properties)</td><td>column pseudo-fields in <code>where</code></td></tr>
 </table>
 </div>
@@ -235,8 +235,9 @@
 <table>
   <tr><th>Term</th><th>Meaning</th><th>Evaluates</th></tr>
   <tr><td><code>#task</code> &nbsp; <code>#book|#article</code></td><td>type; <code>|</code> = contains-any (the engine's native type-OR)</td><td class="sql">SQL</td></tr>
-  <tr><td><code>status=open</code> &nbsp; <code>priority&gt;=3</code> &nbsp; <code>deadline&lt;=today+30d</code></td><td>property predicate: <code>= != &lt; &lt;= &gt; &gt;=</code>, date arithmetic on date codecs. <code>=</code> is <strong>codec-aware</strong>: equality on scalars, contains on <code>list</code>/<code>refList</code>.</td><td class="sql">SQL</td></tr>
-  <tr><td><code>assignee=[[Mary]]</code> &nbsp; <code>track=[[Home]]</code></td><td>ref equality / refList contains — compiled via <code>referencedBy {id, sourceField}</code></td><td class="sql">SQL</td></tr>
+  <tr><td><code>status=open</code> &nbsp; <code>priority&gt;=3</code> &nbsp; <code>deadline&lt;=today+30d</code></td><td>property predicate: <code>= != &lt; &lt;= &gt; &gt;=</code>, date arithmetic on date codecs. <code>=</code> is <strong>codec-aware</strong>: equality on scalar codecs; on <code>refList</code>/<code>list</code> it means contains — evaluation site differs, next two rows.</td><td class="sql">SQL</td></tr>
+  <tr><td><code>assignee=[[Mary]]</code> &nbsp; <code>track=[[Home]]</code></td><td>ref equality / refList contains — compiled via <code>referencedBy {id, sourceField}</code>, <em>not</em> a <code>where</code> clause (ref codecs carry no <code>where</code> capability by design)</td><td class="sql">SQL</td></tr>
+  <tr><td><code>tags="daily"</code></td><td>contains on a plain string <code>list</code> — <code>list</code> codecs are not <code>where</code>-queryable (<code>codecs.ts</code>; <code>compileWhereClause</code> rejects them), and there is no reference projection to lean on</td><td class="js">JS tail</td></tr>
   <tr><td><code>snooze</code> &nbsp; <code>!snooze</code></td><td>bare key = exists / not-exists (unambiguous: types are <code>#</code>-prefixed, content terms quoted)</td><td class="sql">SQL</td></tr>
   <tr><td><code>refs=[[Some Page]]</code></td><td>references that page via any field (<code>referencedBy</code> without <code>sourceField</code>)</td><td class="sql">SQL</td></tr>
   <tr><td><code>under=[[Projects]]</code></td><td>ancestor scope. Requires a bounding term in the same query (§3.1's gate); a bare <code>under=</code> is a parse-time error with a fix-it hint ("add a type or property term").</td><td class="sql">SQL</td></tr>
@@ -322,7 +323,6 @@
 
 <ul>
   <li><strong>OR pushdown</strong>: is the JS tail enough long-term, or should <code>match</code> gain <code>anyOf</code> groups? Proposal: ship with the tail, measure; the grammar doesn't change either way.</li>
-  <li><strong>Column-identity convention pre-#288</strong> (§2 callout): confirm the <code>property:&lt;name&gt;</code> / schema-block-id split matches what slice B lands, before phase 2's add-column flow hard-codes it.</li>
   <li><strong>Per-user tweak layer</strong>: worth a real per-user ui-state home for multi-user workspaces, or does the synced tweak layer suffice until multi-user view usage is real?</li>
   <li><strong>Ghost-slot alignment</strong>: default columns for <code>#type</code> should equal the outline's post-#288 ghost-slot set — align the two default computations when that registry shape lands (slice B) rather than guessing now.</li>
   <li><strong>Timestamp/title pushdown</strong>: pseudo-field terms are JS-tail v1; a <code>where</code>-on-columns engine extension would make several common queries fully SQL. Worth it only with profiling evidence.</li>
