@@ -1,2 +1,2 @@
-var e=e=>e;export{e as definePreset};
+var e=(e,t)=>{if(e.id!==t.id)throw Error(`ValuePreset id mismatch: core ${JSON.stringify(e.id)} vs presentation ${JSON.stringify(t.id)}`);return{...t,...e}},t=(t,n)=>({core:t,presentation:n,preset:e(t,n)}),n=e=>e;export{n as definePreset,t as defineSplitPreset,e as joinValuePreset};
 //# sourceMappingURL=valuePresets.js.map
