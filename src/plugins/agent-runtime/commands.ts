@@ -344,15 +344,23 @@ const SUBTREE_KEY_PROP = 'agent:subtreeKey'
  *  block. Every block is tagged `SUBTREE_KEY_PROP=key` plus `properties`
  *  (the daemon passes `claude:reply`).
  *
- *  Idempotent by `key`: the tagged subtree is made EQUAL the parsed tree by
- *  a positional (pre-order) reconcile — update the block at each position,
- *  re-parent/re-order if the structure drifted, create new tail nodes, and
- *  (only on `final`) delete trailing tagged blocks with no parsed
- *  counterpart. So re-sending the same markdown is a no-op and a growing
- *  markdown (a live stream) just extends the tail — no duplication, safe to
- *  retry. This unifies "stream the reply" and "split the reply": streaming
- *  is repeated reconciles with the growing text; the terminal write is the
- *  last reconcile. */
+ *  Idempotent by `key`: the tagged blocks are made to carry the parsed
+ *  tree's content/parentage by a positional (pre-order) reconcile — update
+ *  the block at each position, re-parent it if its parent drifted, create
+ *  new tail nodes (appended contiguously with the reply's existing nodes —
+ *  see `appendKey`), and (only on `final`) delete trailing tagged blocks
+ *  with no parsed counterpart. So re-sending the same markdown is a no-op
+ *  and a growing markdown (a live stream) just extends the tail — no
+ *  duplication, safe to retry. This unifies "stream the reply" and "split
+ *  the reply": streaming is repeated reconciles with the growing text; the
+ *  terminal write is the last reconcile.
+ *
+ *  BOUNDARY: a matched block keeps its own order key, so the reply's nodes
+ *  stay in correct RELATIVE order but aren't forcibly made ADJACENT. If the
+ *  user deliberately drops a block BETWEEN two already-placed reply nodes
+ *  mid-stream, it stays there (the reply reads split around it) rather than
+ *  being evicted — respecting the user's edit over strict contiguity. The
+ *  common case (a block added AFTER the reply) keeps the reply contiguous. */
 const reconcileMarkdownSubtree = async (
   repo: Repo,
   input: ReconcileMarkdownSubtreeInput,
@@ -428,9 +436,12 @@ const reconcileMarkdownSubtree = async (
 
       if (match) {
         // Reconcile the block already at this pre-order position: update its
-        // content, and re-parent/re-order only if the structure drifted
-        // (a no-op on the common append-only stream, where the prefix is
-        // stable and only the tail grows).
+        // content, and re-parent it (to the end of the new parent's run) only
+        // if its PARENT drifted. Its own order key is left alone — a no-op on
+        // the common append-only stream (stable prefix, growing tail); and a
+        // deliberate boundary otherwise, so a user block wedged between two
+        // matched reply nodes isn't evicted just to close the gap (see the
+        // function's BOUNDARY note).
         idMap.set(node.id, match.id)
         if (match.content !== node.content) {
           await tx.update(match.id, {content: node.content})
