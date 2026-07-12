@@ -91,14 +91,14 @@
 
 <p><strong>Decisions proposed in this doc</strong> (each argued in its section):</p>
 <ul class="decision-list">
-  <li><strong>Ship as a core plugin</strong> (<code>src/plugins/tables/</code>): block types <code>table</code> + <code>table-embed</code>, real npm dep on TanStack Table (headless), reusing the property panel's ValuePreset editors for cells (§4.2, §4.6).</li>
+  <li><strong>Ship as a core plugin</strong> (<code>src/plugins/tables/</code>): a <code>table</code> block type plus <code>table:view</code> child blocks, real npm dep on TanStack Table (headless), reusing the property panel's ValuePreset editors for cells (§4.2, §4.6). <strong>No bespoke embed type</strong> — a table is a block; embedding a table (or one specific view) is the generic <code>((id))</code> block-embed affordance, the media model (§4.4).</li>
   <li><strong>One table substrate, two row sources</strong>: a query, or a block's own children ("view any node as a table"). Children-as-rows is a query term (<code>childof=self</code>), not a second mechanism — the compiler routes it to <code>childrenOf</code> (§4.1).</li>
   <li><strong>The query is text, and text is the <em>only</em> stored artifact</strong> — no shadow copy of resolved ids. Names resolve against the schema registry at parse time; a <code>name^fieldId</code> exact form exists for stability-critical terms; schema renames rewrite query texts as part of the rename action; unresolvable names render as visible term errors, never silent empties (§4.3).</li>
   <li><strong>Compile to <code>TypedBlockQuery</code> where the engine can express a term; evaluate the residue in JS</strong> over the pre-filtered set, with client-side terms marked in the UI (§4.3, §4.7).</li>
   <li><strong>Columns are property schemas keyed by stable id, never display name</strong>; header affordances differ by schema class (user schema block vs. kernel/plugin <code>property:&lt;name&gt;</code>) (§4.2).</li>
   <li><strong>Cells read the cell projection and write through <code>tx.setProperty</code></strong> — correct pre- and post-#288. Commit on Enter/blur (never per keystroke); sort/group re-evaluation is held while a cell editor is open; a new row stays pinned until commit, with query-condition back-fill (§4.5).</li>
   <li><strong>Render cap + "show more" first; row virtualization deferred</strong> until it is designed together with the focus model it constrains (§4.6).</li>
-  <li><strong>View config is layered</strong>: a durable view definition (normal props) plus a <code>UiState</code>-scoped tweak layer; casual interactions write the tweak layer, an explicit "save view" promotes. Both layers sync — a true per-user layer is future work, stated honestly (§4.4).</li>
+  <li><strong>View config is layered</strong>: durable view definitions live as props on <code>table:view</code> child blocks, plus a <code>UiState</code>-scoped tweak layer; casual interactions write the tweak layer, an explicit "save view" promotes. Both layers sync — a true per-user layer is future work, stated honestly (§4.4).</li>
 </ul>
 
 <h2 id="why">1. Why: the type system has no collection surface</h2>
@@ -213,7 +213,7 @@
 <figcaption>Fig. 1 — the outliner↔table flip. Field rows (post-#288) are data, not rows: <code>childrenOf</code> excludes them, and each row's fields are read from its cell projection, not by walking its children. Mixed children are legal: an untyped plain-text child is a row with empty property cells.</figcaption>
 </figure>
 
-<p><code>table-embed</code> (a block referencing a table + one named view) pins another table's view elsewhere, read-along-live.</p>
+<p>Embedding follows the media model: a table is a block, so pinning it elsewhere is the generic <code>((id))</code> block embed — of the <code>table</code> block (its default/active view) or of one <code>table:view</code> child block (that view, pinned). No bespoke embed type (§4.4).</p>
 
 <h3 id="columns">4.2 Column model</h3>
 
@@ -263,9 +263,9 @@
 
 <ul>
   <li><strong>Content = the query, in a <code>```table</code> fence</strong> — an unambiguous boundary (the plain-text alternative leaves "is line 2 more query or prose?" undefined), edit-mode-friendly (edit = raw text, parse errors render as an error placeholder, never a crash), and greppable/authorable by agents.</li>
-  <li><strong>Durable view configs = props</strong> on the table block: named views, each with a stable <code>id</code> (not name-keyed — same rename lesson), columns, sort, group, view type, column widths.</li>
-  <li><strong>Tweak layer = <code>UiState</code>-scoped props</strong>: active view, and unsaved sort/filter/column tweaks. Casual interactions (header-click sort) write <em>this</em> layer; an explicit <strong>"save view"</strong> promotes tweaks into the durable config. Honesty required by the code: <code>ChangeScope.UiState</code> <em>uploads and syncs</em> — it is a second synced layer distinguished by undo-exclusion and convention, not a per-user store. In a single-user workspace that behaves exactly like Tana's personal layer; true per-user tweaks need a per-user ui-state home and are future work, not claimed now.</li>
-  <li>Children-as-rows mode stores the same props on the viewed block. The props are block-global: every pane showing that block sees the same table config (per-pane divergence, if ever wanted, belongs to the tweak layer keyed by panel — out of scope).</li>
+  <li><strong>Named views = <code>table:view</code> child blocks</strong> of the table block, each holding its view config in props (columns, sort, group, view type, column widths; the block's content is the view's name). Views thereby have block identity — addressable by <code>((id))</code> (which is how per-view embedding works, no bespoke embed type), referenceable, commentable — and the stable-id-not-name lesson comes free. The table block's own props hold only the default-view ref. View children are typed and <strong>excluded from row sources</strong>: a <code>childof=</code> row set skips <code>table:view</code> blocks, the same exclusion class as #288's field rows — otherwise a node viewed as a table would show its own view-config blocks as rows.</li>
+  <li><strong>Tweak layer = <code>UiState</code>-scoped props</strong>: active view on the table block; unsaved sort/filter/column tweaks on the view block they tweak. Casual interactions (header-click sort) write <em>this</em> layer; an explicit <strong>"save view"</strong> promotes tweaks into the view block's durable props. Honesty required by the code: <code>ChangeScope.UiState</code> <em>uploads and syncs</em> — it is a second synced layer distinguished by undo-exclusion and convention, not a per-user store. In a single-user workspace that behaves exactly like Tana's personal layer; true per-user tweaks need a per-user ui-state home and are future work, not claimed now.</li>
+  <li>Children-as-rows mode works identically: "view as table" gives the viewed block its own <code>table:view</code> child (excluded from its row set, per above). The config is block-anchored: every pane showing that block sees the same table (per-pane divergence, if ever wanted, belongs to the tweak layer keyed by panel — out of scope).</li>
 </ul>
 
 <h3 id="editing">4.5 Editing model</h3>
@@ -302,7 +302,7 @@
 <h2 id="phasing">5. Phasing</h2>
 
 <ol>
-  <li><strong>Read-only substrate.</strong> Fenced query text → parser → <code>TypedBlockQuery</code> compiler + JS-tail evaluator; one subscription; TanStack table with cap+show-more; named views + tweak layer; <code>table-embed</code>. (A tested JS evaluator for filter trees + sort/group/limit exists downstream — §6 — and ports directly.)</li>
+  <li><strong>Read-only substrate.</strong> Fenced query text → parser → <code>TypedBlockQuery</code> compiler + JS-tail evaluator; one subscription; TanStack table with cap+show-more; named views as <code>table:view</code> children + tweak layer; embedding via the generic block-embed affordance. (A tested JS evaluator for filter trees + sort/group/limit exists downstream — §6 — and ports directly.)</li>
   <li><strong>Editing.</strong> ValuePreset cell editors + <code>setProperty</code>; commit/hold/pin semantics (§4.5); add-column flow with the "add to type template" suggestion; new-row back-fill; keyboard nav (cell-focus store + shortcut context).</li>
   <li><strong>Children-as-rows.</strong> <code>childof=self</code> routing, "view as table" affordance, row expansion mounting the nested renderer.</li>
   <li><strong>Depth.</strong> Grouping UI (kanban drag in a cards variant writes the grouped property), query-builder UI emitting the text grammar, engine pushdowns as warranted, virtualization + focus model as one unit, per-type default views only with evidence.</li>
