@@ -38,6 +38,18 @@ export interface PropertySchemaResolver {
   resolveBoundary<T>(schema: PropertySchema<T>): PropertyBoundaryResolution<T>
 }
 
+/** Resolve one projected definition through the workspace's selected name
+ * winner, then prove the winner is the same durable field the caller holds. */
+export const resolveSelectedPropertyDefinition = (
+  metadata: Pick<PropertyDefinitionMetadata, 'fieldId' | 'name'>,
+  resolver: PropertySchemaResolver,
+): AnyPropertySchema | undefined => {
+  const resolution = resolver.resolve(metadata.name)
+  return resolution.status === 'resolved' && resolution.schema.fieldId === metadata.fieldId
+    ? resolution.schema
+    : undefined
+}
+
 class IdentityUnavailablePropertySchemaResolver implements PropertySchemaResolver {
   resolve<T>(handle: PropertyHandle<T>): PropertySchemaResolution<T>
   resolve(name: string): PropertySchemaResolution<unknown>

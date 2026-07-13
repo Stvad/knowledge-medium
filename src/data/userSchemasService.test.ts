@@ -1,11 +1,19 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { ChangeScope, codecs, definePresetCore, defineProperty, type AnyValuePresetCore } from '@/data/api'
+import {
+  ChangeScope,
+  codecs,
+  definePreset,
+  definePresetCore,
+  defineProperty,
+  type AnyValuePreset,
+  type AnyValuePresetCore,
+} from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {materializePropertySeeds, propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
@@ -448,7 +456,10 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
     const schema = await env.service.addSchema({name: 'homepage', presetId: 'url'})
     const blockId = env.service.getSchemaBlockId(schema.name)!
     expect(blockId).toBeDefined()
-    expect(env.service.getSchemaForBlockId(blockId)).toBe(schema)
+    const resolution = env.repo.propertySchemaResolverFor(WS).resolve(schema.name)
+    expect(resolution.status).toBe('resolved')
+    if (resolution.status !== 'resolved') throw new Error('expected homepage to resolve')
+    expect(env.service.getSchemaForBlockId(blockId)).toEqual(resolution.schema)
   })
 
   it('returns the registered schema after an external schema-block creation (subscription rebuild)', async () => {
@@ -469,6 +480,77 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
   it('returns undefined for unknown block ids', async () => {
     env = await setup()
     expect(env.service.getSchemaForBlockId('not-a-real-block-id')).toBeUndefined()
+  })
+
+  it('returns only the selected same-name definition and its canonical behavior', async () => {
+    env = await setup()
+    const winnerId = await createExternalSchemaBlock('collision', 'url')
+    const loserId = await createExternalSchemaBlock('collision', 'number')
+
+    await vi.waitFor(() => {
+      const definitions = env.repo.propertyDefinitions
+      expect(definitions?.definitionsByName.get('collision')?.map(({fieldId}) => fieldId))
+        .toEqual([winnerId, loserId])
+      expect(definitions?.schemasByFieldId.get(winnerId)?.codec.type).toBe('url')
+      expect(definitions?.schemasByFieldId.get(loserId)?.codec.type).toBe('number')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+
+    const resolution = env.repo.propertySchemaResolverFor(WS).resolve('collision')
+    expect(resolution.status).toBe('resolved')
+    if (resolution.status !== 'resolved') throw new Error('expected collision winner to resolve')
+    expect(resolution.schema).toMatchObject({
+      fieldId: winnerId,
+      workspaceId: WS,
+      codec: expect.objectContaining({type: 'url'}),
+    })
+    expect(env.service.getSchemaForBlockId(winnerId)).toEqual(resolution.schema)
+    expect(env.service.getSchemaForBlockId(loserId)).toBeUndefined()
+  })
+
+  it('returns canonical seed behavior for a selected metadata-only seeded definition', async () => {
+    env = await setup()
+    const unregisteredPreset = definePresetCore<string>({
+      id: 'test-get-schema-metadata-only-seed',
+      build: () => codecs.url,
+      defaultValue: '',
+    })
+    const seed = seedProperty({
+      seedKey: 'system:test/property/get-schema-metadata-only-seed',
+      revision: 1,
+      name: 'metadata-only-seed',
+      preset: unregisteredPreset,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const fieldId = propertyDefinitionBlockId(WS, seed.seedKey)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      env.repo.setRuntimeContributions(
+        definitionSeedsFacet,
+        'test-get-schema-metadata-only-seed',
+        [seed],
+      )
+      await materializePropertySeeds(env.repo, WS, [seed])
+      await vi.waitFor(() => {
+        const definitions = env.repo.propertyDefinitions
+        expect(definitions?.definitionsByName.get(seed.name)?.[0]?.fieldId).toBe(fieldId)
+        expect(definitions?.definitionsByFieldId.get(fieldId)?.seedKey).toBe(seed.seedKey)
+        expect(definitions?.schemasByFieldId.has(fieldId)).toBe(false)
+      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+
+      const resolution = env.repo.propertySchemaResolverFor(WS).resolve(seed.name)
+      expect(resolution.status).toBe('resolved')
+      if (resolution.status !== 'resolved') throw new Error('expected seeded definition to resolve')
+      expect(resolution.schema).toMatchObject({
+        fieldId,
+        workspaceId: WS,
+        codec: seed.codec,
+        defaultValue: seed.defaultValue,
+      })
+      expect(env.service.getSchemaForBlockId(fieldId)).toEqual(resolution.schema)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('drops the reverse-map entry when a block stops resolving to a schema', async () => {

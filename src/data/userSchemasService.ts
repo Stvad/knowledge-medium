@@ -24,6 +24,7 @@ import {
   type PropertyDefinitionMetadata,
 } from '@/data/propertyDefinitionMetadata'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
 import {
   presetConfigProp,
   presetIdProp,
@@ -174,13 +175,16 @@ export class UserSchemasService {
     return this.repo.propertyDefinitions?.definitionsByName.get(name)?.[0]?.fieldId
   }
 
-  /** Look up the published user-data schema for a property-schema
-   *  block id. Returns undefined for blocks that aren't currently
-   *  materializing a schema — including blocks pending hydration,
-   *  blocks failing `tryBuildSchema` validation (empty name, unknown
-   *  preset, invalid config), and ids that simply don't exist. */
+  /** Resolve a property-definition block id through the selected workspace
+   * winner. Metadata-only seeded rows use their declaration behavior; unknown,
+   * invalid, and shadowed rows return undefined. */
   getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined {
-    return this.handle?.contributionForBlockId(blockId)?.schema
+    const definition = this.handle?.contributionForBlockId(blockId)
+    if (!definition) return undefined
+    return resolveSelectedPropertyDefinition(
+      definition.metadata,
+      this.repo.propertySchemaResolverFor(definition.metadata.workspaceId),
+    )
   }
 
   /** Synchronously add a projected definition to the runtime bucket. Used

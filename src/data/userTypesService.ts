@@ -39,6 +39,7 @@ import { typesFacet } from '@/data/facets'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
 import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
 import type {PropertySchemaResolver} from '@/data/internals/propertySchemaResolution'
+import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
 
 /** Projector id for the user-defined block-type bridge. */
 export const USER_TYPES_PROJECTOR_ID = 'user-types'
@@ -83,10 +84,8 @@ const tryBuildType = (
   for (const refId of refIds) {
     const definition = schemas?.contributionForBlockId(refId)
     if (!definition) continue
-    const metadata = definition.metadata
-    const resolution = resolver.resolve(metadata.name)
-    if (resolution.status !== 'resolved' || resolution.schema.fieldId !== metadata.fieldId) continue
-    properties.push(resolution.schema)
+    const schema = resolveSelectedPropertyDefinition(definition.metadata, resolver)
+    if (schema) properties.push(schema)
   }
   return {
     id: block.id,
