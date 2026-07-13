@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { resolveFacetRuntimeSync } from '@/facets/facet'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
 import {
   BlockNotFoundForTypeError,
   ChangeScope,
@@ -16,6 +16,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   definitionSeedsFacet,
+  propertySchemasFacet,
   projectedPropertyDefinitionsFacet,
   sameTxProcessorsFacet,
   typesFacet,
@@ -41,6 +42,13 @@ const createBlock = async (id: string, properties: Record<string, unknown> = {})
     })
   }, {scope: ChangeScope.BlockDefault, description: `create ${id}`})
 }
+
+const resolveTypeRuntime = (
+  contributions: readonly AppExtension[],
+) => resolveFacetRuntimeSync([
+  propertySchemasFacet.of(typesProp, {source: 'test-kernel'}),
+  ...contributions,
+])
 
 beforeEach(async () => {
   await resetTestDb(sharedDb.db)
@@ -95,7 +103,7 @@ describe('Repo type membership orchestration', () => {
         }
       },
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(taskType, {source: 'test'}),
       sameTxProcessorsFacet.of(taskAddProcessor, {source: 'test'}),
     ]))
@@ -127,7 +135,7 @@ describe('Repo type membership orchestration', () => {
         }
       },
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'task'}), {source: 'test'}),
       sameTxProcessorsFacet.of(recorder, {source: 'test'}),
     ]))
@@ -156,7 +164,7 @@ describe('Repo type membership orchestration', () => {
       defaultValue: 'open',
       changeScope: ChangeScope.BlockDefault,
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo', properties: [statusProp]}), {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -181,7 +189,7 @@ describe('Repo type membership orchestration', () => {
       defaultValue: 0,
       changeScope: ChangeScope.BlockDefault,
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo', properties: [shadowed]}), {source: 'test'}),
     ]))
     repo.setActiveWorkspaceId('ws-1')
@@ -229,7 +237,7 @@ describe('Repo type membership orchestration', () => {
       defaultValue: 'winner-default',
       changeScope: ChangeScope.BlockDefault,
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
     ]))
     repo.setActiveWorkspaceId('ws-1')
@@ -271,7 +279,7 @@ describe('Repo type membership orchestration', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     const fieldId = propertyDefinitionBlockId('ws-1', declared.seedKey)
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo', properties: [declared]}), {source: 'test'}),
     ]))
     repo.setActiveWorkspaceId('ws-1')
@@ -303,7 +311,7 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('throws for unknown type ids and unknown initial value schemas', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -315,7 +323,7 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('removes, toggles, and sets type membership in one tx per operation', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'a'}), {source: 'test'}),
       typesFacet.of(defineBlockType({id: 'b'}), {source: 'test'}),
     ]))
@@ -339,7 +347,7 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addType throws BlockNotFoundForTypeError when the target block is missing', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
     ]))
 
@@ -355,7 +363,7 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTx (strict default) throws BlockNotFoundForTypeError on a missing block', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()
@@ -378,7 +386,7 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTx (strict default) throws BlockNotFoundForTypeError on a tombstoned block', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -406,7 +414,7 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTxLenient silently no-ops on a missing block (preserves legacy semantics)', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()
@@ -418,7 +426,7 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTxLenient silently no-ops on a tombstoned block', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -433,7 +441,7 @@ describe('Repo type membership orchestration', () => {
   })
 
   it('addTypeInTx (strict default) tags a valid block normally', async () => {
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
     ]))
     await createBlock('b1')
@@ -452,7 +460,7 @@ describe('Repo type membership orchestration', () => {
       defaultValue: 'open',
       changeScope: ChangeScope.BlockDefault,
     })
-    repo.setFacetRuntime(resolveFacetRuntimeSync([
+    repo.setFacetRuntime(resolveTypeRuntime([
       typesFacet.of(defineBlockType({id: 'todo', properties: [statusProp]}), {source: 'test'}),
     ]))
     const snapshot = repo.snapshotTypeRegistries()

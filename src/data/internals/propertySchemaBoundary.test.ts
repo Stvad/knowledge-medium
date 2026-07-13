@@ -84,6 +84,36 @@ const setup = async () => {
 }
 
 describe('typed property identity boundary', () => {
+  it('keeps an unclaimed plain schema writable before a workspace is pinned', async () => {
+    const plain = defineProperty('pre-pin-unclaimed', {
+      codec: codecs.string,
+      defaultValue: 'plain-default',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    await repo.tx(
+      tx => tx.create({
+        id: 'pre-pin-unclaimed-target',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await repo.tx(
+      tx => tx.setProperty('pre-pin-unclaimed-target', plain, 'stored'),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect(repo.block('pre-pin-unclaimed-target').get(plain)).toBe('stored')
+  })
+
   it('rejects a pre-pin legacy lookalike when an unbound seed owns the name', async () => {
     const encode = vi.fn(codecs.string.encode)
     const legacyLookalike = defineProperty(shadowed.name, {
@@ -183,12 +213,141 @@ describe('typed property identity boundary', () => {
     repo.setRuntimeContributions(propertySchemasFacet, 'test-legacy-only', [legacy])
     const ambient = repo.propertySchemas.get(legacy.name)
     if (!ambient) throw new Error('expected transitional legacy schema')
+    expect(ambient).toBe(legacy)
 
     await repo.tx(
-      tx => tx.setProperty('target', ambient, 'legacy-value'),
+      tx => tx.setProperty('target', legacy, 'legacy-value'),
       {scope: ChangeScope.BlockDefault},
     )
-    expect(repo.block('target').get(ambient)).toBe('legacy-value')
+    expect(repo.block('target').get(legacy)).toBe('legacy-value')
+  })
+
+  it('allows an unregistered plain schema for an unclaimed active-workspace name', async () => {
+    const repo = await setup()
+    const unregistered = defineProperty('active-unregistered', {
+      codec: codecs.string,
+      defaultValue: 'unregistered-default',
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    await repo.tx(
+      tx => tx.setProperty('target', unregistered, 'unregistered-value'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(repo.block('target').get(unregistered)).toBe('unregistered-value')
+  })
+
+  it('rejects an exact ambient PropertyHandle without a seed declaration', async () => {
+    const handle = seedProperty({
+      seedKey: 'system:test-plugin/property/ambient-handle-only',
+      revision: 1,
+      name: 'ambient-handle-only',
+      preset: 'string',
+      defaultValue: 'handle-default',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(propertySchemasFacet, 'test-ambient-handle-only', [handle])
+    await repo.tx(
+      tx => tx.create({
+        id: 'ambient-handle-only-target',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {[handle.name]: 'unchanged'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect(repo.propertySchemas.get(handle.name)).toBe(handle)
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(handle)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'definition-unavailable',
+    })
+    await expect(repo.tx(
+      tx => tx.setProperty('ambient-handle-only-target', handle, 'changed'),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'definition-unavailable',
+    })
+    expect(repo.block('ambient-handle-only-target').peek()!.properties[handle.name])
+      .toBe('unchanged')
+  })
+
+  it('rejects a legacy schema at the declaration name after a seed is renamed', async () => {
+    const declared = seedProperty({
+      seedKey: 'system:test-plugin/property/renamed-away',
+      revision: 1,
+      name: 'seed-name-before-rename',
+      preset: 'string',
+      defaultValue: 'seed-default',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const legacy = defineProperty(declared.name, {
+      codec: codecs.string,
+      defaultValue: 'legacy-default',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const renamed = 'seed-name-after-rename'
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(propertySchemasFacet, 'test-renamed-seed-legacy', [legacy])
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-renamed-seed', [declared])
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-renamed-seed-definition',
+      [{
+        metadata: {
+          fieldId: propertyDefinitionBlockId(WS, declared.seedKey),
+          workspaceId: WS,
+          createdAt: 1,
+          name: renamed,
+          changeScope: declared.changeScope,
+          hidden: false,
+          seedKey: declared.seedKey,
+          origin: 'plugin:system:test-plugin',
+        },
+      }],
+      {workspaceId: WS},
+    )
+    await repo.tx(
+      tx => tx.create({
+        id: 'renamed-seed-legacy-target',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {[legacy.name]: 'unchanged'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    expect(repo.propertySchemas.has(legacy.name)).toBe(false)
+    expect(repo.propertySchemas.get(renamed)?.name).toBe(renamed)
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(legacy)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'shadowed',
+    })
+    await expect(repo.tx(
+      tx => tx.setProperty('renamed-seed-legacy-target', legacy, 'changed'),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'shadowed',
+    })
+    expect(repo.block('renamed-seed-legacy-target').peek()!.properties[legacy.name])
+      .toBe('unchanged')
   })
 
   it('accepts a resolved synthesized seed before its definition row exists', async () => {
@@ -359,6 +518,116 @@ describe('typed property identity boundary', () => {
       {scope: ChangeScope.BlockDefault},
     )
     expect(repo.block('fallback-target').peek()!.properties[fallback.name]).toBe(6)
+  })
+
+  it('rejects a retained projected schema after its workspace-scoped bucket is cleared', async () => {
+    const projected = defineProperty('retained-workspace-schema', {
+      codec: codecs.number,
+      defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-retained-workspace-definition',
+      [{
+        metadata: {
+          fieldId: 'field-retained-workspace-schema',
+          workspaceId: WS,
+          createdAt: 1,
+          name: projected.name,
+          changeScope: projected.changeScope,
+          hidden: false,
+          origin: 'user',
+        },
+        schema: projected,
+      }],
+      {workspaceId: WS},
+    )
+    await repo.tx(
+      tx => tx.create({
+        id: 'retained-workspace-target',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {[projected.name]: projected.codec.encode(42)},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const retained = repo.propertySchemas.get(projected.name)
+    if (!retained) throw new Error('expected projected schema in workspace A')
+
+    repo.setActiveWorkspaceId('ws-property-boundary-b')
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-retained-workspace-definition',
+      [],
+      {workspaceId: WS},
+    )
+    expect(repo.propertySchemas.get(projected.name)).toBeUndefined()
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(retained)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'registry-not-workspace-keyed',
+    })
+
+    await expect(repo.tx(
+      tx => tx.setProperty('retained-workspace-target', retained, 7),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'registry-not-workspace-keyed',
+    })
+    expect(repo.block('retained-workspace-target').peek()!.properties[projected.name]).toBe(42)
+  })
+
+  it('rejects a retained plain schema for an inactive workspace without a runtime snapshot', async () => {
+    const retained = defineProperty('retained-without-runtime', {
+      codec: codecs.number,
+      defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setActiveWorkspaceId(WS)
+    await repo.tx(
+      tx => tx.create({
+        id: 'retained-without-runtime-target',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {[retained.name]: retained.codec.encode(42)},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(retained)).toEqual({
+      status: 'available',
+      schema: retained,
+    })
+
+    repo.setActiveWorkspaceId('ws-property-boundary-b')
+
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(retained)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'registry-not-workspace-keyed',
+    })
+    await expect(repo.tx(
+      tx => tx.setProperty('retained-without-runtime-target', retained, 7),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'registry-not-workspace-keyed',
+    })
+    expect(repo.block('retained-without-runtime-target').peek()!.properties[retained.name])
+      .toBe(42)
   })
 
   it('never applies an active-workspace resolver to a row in another workspace', async () => {

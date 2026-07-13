@@ -85,7 +85,6 @@ export interface FacetBridgeTarget {
   applyTypesAndSchemas(
     types: ReadonlyMap<string, TypeContribution>,
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
-    legacyPropertySchemas: ReadonlyMap<string, AnyPropertySchema>,
     propertyDefinitions: PropertyDefinitionRegistrySnapshot | null,
     propertySeedNameCounts: ReadonlyMap<string, number>,
   ): void
@@ -399,7 +398,6 @@ export class FacetBridge {
           target.applyTypesAndSchemas(
             types,
             propertySchemas,
-            legacySchemas,
             propertyDefinitions,
             propertySeedNameCounts,
           )

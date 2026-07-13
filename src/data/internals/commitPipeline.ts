@@ -183,12 +183,9 @@ export interface RunTxParams<R> {
   propertyDefinitionRegistryForWorkspace: (
     workspaceId: string,
   ) => PropertyDefinitionRegistrySnapshot | null
-  /** Active workspace and projected-only plain behavior identities captured at
-   * tx start so a foreign workspace cannot borrow the active projection. */
+  /** Active workspace captured with the registry factory at tx start. */
   propertySchemaWorkspaceId: string | null
-  foreignPlainPropertySchemas: ReadonlySet<AnyPropertySchema>
-  /** Seed-name multiplicity paired with the runtime snapshot for temporary
-   * unbound/mismatched-workspace legacy resolution. */
+  /** Original declaration-name multiplicity paired with the runtime snapshot. */
   propertySeedNameCounts: ReadonlyMap<string, number>
 }
 
@@ -228,7 +225,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     newTxId, newTxSeq, newId, now,
     mutators, processors, sameTxProcessors, propertySchemas,
     propertyDefinitionRegistryForWorkspace,
-    propertySchemaWorkspaceId, foreignPlainPropertySchemas,
+    propertySchemaWorkspaceId,
     propertySeedNameCounts,
     isReplay = false,
   } = params
@@ -278,7 +275,6 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       processors,
       propertyDefinitionRegistryForWorkspace,
       propertySchemaWorkspaceId,
-      foreignPlainPropertySchemas,
       propertySeedNameCounts,
       sameTxEvents,
       now,

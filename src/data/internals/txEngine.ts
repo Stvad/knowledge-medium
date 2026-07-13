@@ -26,7 +26,6 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
-  AnyPropertySchema,
   BlockData,
   BlockDataPatch,
   ChangeScope,
@@ -158,8 +157,7 @@ export interface TxImplContext {
     workspaceId: string,
   ) => PropertyDefinitionRegistrySnapshot | null
   propertySchemaWorkspaceId: string | null
-  foreignPlainPropertySchemas: ReadonlySet<AnyPropertySchema>
-  /** Seed-name multiplicity captured for temporary unbound legacy resolution. */
+  /** Original declaration-name multiplicity captured with the registry. */
   propertySeedNameCounts: ReadonlyMap<string, number>
   /** UUID generator — injected for testability. */
   newId: () => string
@@ -247,14 +245,12 @@ export class TxImpl implements Tx {
 
   private propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
     const snapshot = this.ctx.propertyDefinitionRegistryForWorkspace(workspaceId)
-    const forbidden = workspaceId === this.ctx.propertySchemaWorkspaceId
-      ? new Set<AnyPropertySchema>()
-      : this.ctx.foreignPlainPropertySchemas
     return propertySchemaResolverForWorkspace(
       snapshot,
       workspaceId,
       this.ctx.propertySeedNameCounts,
-      forbidden,
+      this.ctx.propertySchemaWorkspaceId === null ||
+        workspaceId === this.ctx.propertySchemaWorkspaceId,
     )
   }
 

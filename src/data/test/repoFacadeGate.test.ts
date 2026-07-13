@@ -78,7 +78,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   countBlocksUsingProperty: 'read',
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
   propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
-  foreignPlainPropertySchemas: 'read-only helper over captured registry fields',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
 
@@ -150,7 +149,6 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   _activeWorkspaceId: 'data field',
   _propertyDefinitionRegistry: 'data field',
-  _legacyPropertySchemas: 'data field',
   _propertySeedNameCounts: 'data field',
   _propertyEditorOverrides: 'data field',
   _propertySchemas: 'data field',
