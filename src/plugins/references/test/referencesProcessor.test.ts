@@ -1160,7 +1160,7 @@ describe('parseReferences — workspace-switch reprojection', () => {
     env = await setup([propertySchemasFacet.of(reviewerProp, {source: 'test'})])
   })
 
-  it('backfills a newly-pinned workspace sharing a ref-typed name with the prior one', async () => {
+  it('backfills a newly-opened workspace sharing a ref-typed name with the prior one', async () => {
     // `ws-1` (the setup default) is the previously-active workspace. Create a
     // `ws-b` row with a ref value while `ws-b` is inactive, then blank its
     // derived references to model a row synced from another device that never
@@ -1179,9 +1179,11 @@ describe('parseReferences — workspace-switch reprojection', () => {
     await env.h.db.execute(`UPDATE blocks SET references_json = '[]' WHERE id = ?`, ['srcB'])
     expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([])
 
-    // Pin `ws-b`. `reviewer` is ref-typed in both `ws-1` and `ws-b`, so the
-    // prev-vs-new diff is empty — only the activation full-scan reaches srcB.
+    // Open `ws-b`: bootstrap pins it, then schedules the once-per-workspace ref
+    // backfill. `reviewer` is ref-typed in both `ws-1` and `ws-b`, so the
+    // prev-vs-new diff is empty — only this workspace-open scan reaches srcB.
     env.repo.setActiveWorkspaceId('ws-b')
+    env.repo.scheduleWorkspaceRefBackfill('ws-b')
     await flush()
 
     expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([

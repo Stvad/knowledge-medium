@@ -53,6 +53,7 @@ import {
   latestRefProjectionSchema,
   projectedRefsForField,
   refCodecKind,
+  refTypedSchemaNames,
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { devAssertionsEnabled } from './internals/devAssertions'
@@ -1254,6 +1255,8 @@ export class Repo {
     // the dead entry. Never group-bound; delegate.
     const scheduleWorkspaceBackfills: Repo['scheduleWorkspaceBackfills'] = (ws) =>
       this.scheduleWorkspaceBackfills(ws)
+    const scheduleWorkspaceRefBackfill: Repo['scheduleWorkspaceRefBackfill'] = (ws) =>
+      this.scheduleWorkspaceRefBackfill(ws)
     const scheduleReconcileRescan: Repo['scheduleReconcileRescan'] = (ws) =>
       this.scheduleReconcileRescan(ws)
     // Field-assigning members: run with the facade as `this`, the
@@ -1275,7 +1278,7 @@ export class Repo {
     return Object.assign(facade, {
       tx, run, mutate, undoGroup, block, runQuery,
       addType, removeType, toggleType, setBlockTypes,
-      scheduleWorkspaceBackfills, scheduleReconcileRescan,
+      scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill, scheduleReconcileRescan,
       setActiveWorkspaceId, setReadOnly, undo, redo,
       startSyncObserver, stopSyncObserver, resetMetrics,
     })
@@ -1957,6 +1960,21 @@ export class Repo {
     this.reprojectionJobs.schedule(() =>
       this.reprojectRefTypedProperties(names, schemas, workspaceId),
     )
+  }
+
+  /** Schedule a marker-gated reprojection over every ref-typed schema in the
+   *  active workspace. Called once per workspace open from `bootstrapWorkspace`
+   *  (the sibling of `scheduleWorkspaceBackfills`): a freshly-opened workspace
+   *  backfills its existing rows' derived references even when a ref-typed name
+   *  is unchanged from a previously-active workspace — which the facet bridge's
+   *  `changedRefSchemaNames` diff can't see. The reprojection markers are
+   *  `(workspaceId, name)`-keyed, so subsequent opens are a no-op. Scheduling on
+   *  workspace OPEN (not on every raw pin) keeps deferred scans off unrelated
+   *  in-session workspace flips. */
+  scheduleWorkspaceRefBackfill(workspaceId: string): void {
+    if (this.isReadOnly || !workspaceId || workspaceId !== this._activeWorkspaceId) return
+    const refNames = refTypedSchemaNames(this._propertySchemas)
+    if (refNames.length > 0) this.scheduleReprojection(refNames, this._propertySchemas)
   }
 
   /** Test escape hatch — drop the in-memory marker mirror so the next

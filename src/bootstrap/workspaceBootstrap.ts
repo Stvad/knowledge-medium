@@ -133,6 +133,13 @@ export const bootstrapWorkspace = async ({
   // original daily-note:date backfill silently never synced.
   repo.scheduleWorkspaceBackfills(workspaceId)
 
+  // Backfill derived references for this workspace's pre-existing rows. The
+  // facet bridge only reprojects names whose ref-ness CHANGED on a rebuild, so a
+  // workspace sharing a ref-typed name (e.g. a static seed like next-review-date)
+  // with the previously-active one produces an empty diff and never scans its
+  // own rows. Marker-gated once per workspace, deferred off this critical path.
+  repo.scheduleWorkspaceRefBackfill(workspaceId)
+
   // One-time post-upgrade recovery for the deterministic-id shadow: clients that
   // skip-staled the server's authoritative row under the old reconcile gate
   // consumed its change-queue entry, so a normal startup never re-evaluates it.
