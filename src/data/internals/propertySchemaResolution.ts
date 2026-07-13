@@ -86,14 +86,22 @@ class TransitionalLegacyPropertySchemaResolver
       return super.resolveBoundary(schema)
     }
     if (isPropertyHandle(schema)) {
-      // A PropertyHandle is code-owned: its seedKey identity is deterministic
-      // and `addSchema` forbids user definitions from claiming a seed name, so
-      // a seeded handle cannot be shadowed. Its own codec is therefore the
-      // authoritative interpretation even before this workspace's definition
-      // projection has primed — a read during the boot window must return the
-      // stored value, not the schema default. (Revisit once seed-metadata
-      // renames can move the stored key.)
-      return {status: 'available', schema}
+      // Only KERNEL handles are truly unshadowable: they are registered at Repo
+      // construction and never existed as a user schema on any device, so their
+      // own codec is the authoritative interpretation even before this
+      // workspace's definition projection has primed — a boot-window read must
+      // return the stored value, not the schema default (the isCollapsed/types
+      // case the fix targets). A PLUGIN seed name can legitimately collide with
+      // a user definition created while the plugin was absent (or synced from a
+      // device without it); the primed registry models that as a 'shadowed'
+      // winner. Without a snapshot we cannot detect the shadow, so a plugin
+      // handle fails closed here rather than risk decoding a value written
+      // under the shadowing schema with the wrong codec.
+      // (Revisit once seed-metadata renames can move a kernel handle's key.)
+      if (propertySchemaOriginForSeedKey(schema.seedKey) === 'kernel') {
+        return {status: 'available', schema}
+      }
+      return super.resolveBoundary(schema)
     }
     const seedCount = this.seedNameCounts.get(schema.name) ?? 0
     if (seedCount > 0) {

@@ -42,17 +42,38 @@ describe('property schema identity resolution', () => {
     // Fully-unavailable resolver: a foreign/inactive workspace snapshot.
     const foreign = propertySchemaResolverForWorkspace(null, 'ws-1', new Map(), false)
 
-    it('resolves a code-owned handle to itself so boot-window reads see stored values', () => {
-      // A read during the boot window must decode with the handle's own codec,
-      // not fall back to the schema default (the bug that returned defaults for
-      // seeded props like isCollapsed while the projector primed).
-      expect(transitional.resolveBoundary(handle)).toEqual({
+    const kernelHandle: PropertyHandle<string> = {
+      ...entry,
+      seedKey: 'system:kernel-data/property/title',
+    }
+    const pluginHandle: PropertyHandle<string> = {
+      ...entry,
+      seedKey: 'my-plugin/property/title',
+    }
+
+    it('resolves a kernel handle to itself so boot-window reads see stored values', () => {
+      // A kernel handle is unshadowable; a read during the boot window must
+      // decode with its own codec, not fall back to the schema default (the bug
+      // that returned defaults for seeded props like isCollapsed while the
+      // projector primed).
+      expect(transitional.resolveBoundary(kernelHandle)).toEqual({
         status: 'available',
-        schema: handle,
+        schema: kernelHandle,
       })
     })
 
-    it('still rejects a plain schema squatting on a seed name during boot', () => {
+    it('fails a plugin handle closed during boot (it may be shadowed by a user schema)', () => {
+      // A plugin seed name can collide with a pre-existing/synced user
+      // definition; without a snapshot the shadow is undetectable, so decoding
+      // with the plugin codec could throw or miscode. Fail closed to the
+      // default instead until the projection primes.
+      expect(transitional.resolveBoundary(pluginHandle)).toEqual({
+        status: 'identity-unavailable',
+        reason: 'registry-not-workspace-keyed',
+      })
+    })
+
+    it('accepts an unclaimed plain schema but rejects one squatting on a seed name', () => {
       expect(transitional.resolveBoundary(entry)).toEqual({status: 'available', schema: entry})
       const seedShadowed = propertySchemaResolverForWorkspace(
         null,
@@ -66,8 +87,8 @@ describe('property schema identity resolution', () => {
       })
     })
 
-    it('keeps a foreign/inactive workspace fail-closed even for a handle', () => {
-      expect(foreign.resolveBoundary(handle)).toEqual({
+    it('keeps a foreign/inactive workspace fail-closed even for a kernel handle', () => {
+      expect(foreign.resolveBoundary(kernelHandle)).toEqual({
         status: 'identity-unavailable',
         reason: 'registry-not-workspace-keyed',
       })
