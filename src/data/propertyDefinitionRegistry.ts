@@ -71,12 +71,21 @@ export const buildUnboundPropertySchemas = (
 export const buildPropertyDefinitionRegistry = (
   args: BuildPropertyDefinitionRegistryArgs,
 ): PropertyDefinitionRegistrySnapshot => {
+  const {byKey: seedsByKey, byName: seedsByDeclarationName} = indexSeeds(args.seeds)
   const definitionsByFieldId = new Map<string, PropertyDefinitionMetadata>()
   const definitionsByNameMutable = new Map<string, PropertyDefinitionMetadata[]>()
   const schemasByFieldId = new Map<string, AnyPropertySchema>()
   for (const projected of args.projectedDefinitions.values()) {
-    const definition = projected.metadata
-    if (definition.workspaceId !== args.workspaceId) continue
+    const raw = projected.metadata
+    if (raw.workspaceId !== args.workspaceId) continue
+    // Seeds are code-owned and non-renamable (user renames are deferred to
+    // #288): a seed-provenanced row's effective name is always its declared
+    // name. Normalizing here means a stored property-schema:name divergence
+    // (an older client, an import, or a sync from such a device) cannot desync
+    // the structural type/alias membership index or drop the field from a
+    // static type's panel section.
+    const declared = raw.seedKey ? seedsByKey.get(raw.seedKey) : undefined
+    const definition = declared && declared.name !== raw.name ? {...raw, name: declared.name} : raw
     definitionsByFieldId.set(definition.fieldId, definition)
     if (projected.schema) schemasByFieldId.set(definition.fieldId, projected.schema)
     pushGrouped(definitionsByNameMutable, definition.name, definition)
@@ -88,7 +97,6 @@ export const buildPropertyDefinitionRegistry = (
     })
   }
 
-  const {byKey: seedsByKey, byName: seedsByDeclarationName} = indexSeeds(args.seeds)
   const seedsByNameMutable = new Map<string, AnyPropertySeedDeclaration[]>()
   for (const seed of seedsByKey.values()) {
     const fieldId = propertyDefinitionBlockId(args.workspaceId, seed.seedKey)

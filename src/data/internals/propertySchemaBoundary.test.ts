@@ -281,7 +281,7 @@ describe('typed property identity boundary', () => {
       .toBe('unchanged')
   })
 
-  it('rejects a legacy schema at the declaration name after a seed is renamed', async () => {
+  it('pins a seed to its declared name and shadows a legacy schema there', async () => {
     const declared = seedProperty({
       seedKey: 'system:test-plugin/property/renamed-away',
       revision: 1,
@@ -295,7 +295,9 @@ describe('typed property identity boundary', () => {
       defaultValue: 'legacy-default',
       changeScope: ChangeScope.BlockDefault,
     })
-    const renamed = 'seed-name-after-rename'
+    // A stored name divergence (older client / import / sync). Seeds are
+    // non-renamable, so it must be ignored: the seed stays at its declared name.
+    const storedDivergence = 'seed-name-after-rename'
     const {repo} = createTestRepo({
       db: sharedDb.db,
       user: {id: 'user-1'},
@@ -313,7 +315,7 @@ describe('typed property identity boundary', () => {
           fieldId: propertyDefinitionBlockId(WS, declared.seedKey),
           workspaceId: WS,
           createdAt: 1,
-          name: renamed,
+          name: storedDivergence,
           changeScope: declared.changeScope,
           hidden: false,
           seedKey: declared.seedKey,
@@ -333,8 +335,8 @@ describe('typed property identity boundary', () => {
       {scope: ChangeScope.BlockDefault},
     )
 
-    expect(repo.propertySchemas.has(legacy.name)).toBe(false)
-    expect(repo.propertySchemas.get(renamed)?.name).toBe(renamed)
+    expect(repo.propertySchemas.has(storedDivergence)).toBe(false)
+    expect(repo.propertySchemas.get(declared.name)).toBe(declared)
     expect(repo.propertySchemaResolverFor(WS).resolveBoundary(legacy)).toEqual({
       status: 'identity-unavailable',
       reason: 'shadowed',
@@ -438,10 +440,13 @@ describe('typed property identity boundary', () => {
     expect(repo.block('target').peek()!.properties).toMatchObject({status: 42, [renamed]: 10})
   })
 
-  it('accepts the exact ambient entry for a renamed seed', async () => {
+  it('pins a seed to its declared name, ignoring the row stored name', async () => {
     const repo = await setup()
     const fieldId = propertyDefinitionBlockId(WS, shadowed.seedKey)
-    const renamed = 'renamed-seed-status'
+    // A stored name divergence on the seed's own row. Non-renamable seeds keep
+    // their declared name, so the divergent name is invisible and read/write
+    // resolve under the declared name.
+    const storedDivergence = 'renamed-seed-status'
     repo.setRuntimeContributions(
       projectedPropertyDefinitionsFacet,
       'test-winning-definition',
@@ -449,26 +454,24 @@ describe('typed property identity boundary', () => {
         metadata: {
           ...winnerMetadata,
           fieldId,
-          name: renamed,
+          name: storedDivergence,
           seedKey: shadowed.seedKey,
           origin: 'plugin:system:test-plugin',
         },
       }],
       {workspaceId: WS},
     )
-    await repo.tx(
-      tx => tx.update('target', {properties: {[renamed]: 'before'}}),
-      {scope: ChangeScope.BlockDefault},
-    )
-    const ambient = repo.propertySchemas.get(renamed)
-    if (!ambient) throw new Error('expected renamed seed winner')
+    expect(repo.propertySchemas.has(storedDivergence)).toBe(false)
+    const ambient = repo.propertySchemas.get(shadowed.name)
+    if (!ambient) throw new Error('expected seed pinned at its declared name')
 
-    expect(repo.block('target').get(ambient)).toBe('before')
     await repo.tx(
       tx => tx.setProperty('target', ambient, 'after'),
       {scope: ChangeScope.BlockDefault},
     )
-    expect(repo.block('target').peek()!.properties[renamed]).toBe('after')
+    expect(repo.block('target').get(ambient)).toBe('after')
+    expect(repo.block('target').peek()!.properties[shadowed.name]).toBe('after')
+    expect(repo.block('target').peek()!.properties[storedDivergence]).toBeUndefined()
   })
 
   it('accepts the exact ambient fallback when a seed declaration is absent', async () => {

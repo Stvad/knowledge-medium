@@ -323,7 +323,7 @@ describe('UserTypesService subscription', () => {
     }
   })
 
-  it('uses the synced name for a renamed metadata-only seed definition', async () => {
+  it('pins a renamed metadata-only seed definition to its declared name', async () => {
     env = await setup()
     const unregisteredPreset = definePresetCore<string>({
       id: 'test-renamed-metadata-only-seed',
@@ -339,17 +339,20 @@ describe('UserTypesService subscription', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     const fieldId = propertyDefinitionBlockId(WS, seed.seedKey)
-    const renamed = 'metadata-only-after-rename'
+    // A raw name write to the seed's own row, as an older client or a sync from
+    // one could persist. Seeds are non-renamable (rename deferred to #288), so
+    // resolution must ignore the divergence and keep the declared name.
+    const storedDivergence = 'metadata-only-after-rename'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       env.repo.setRuntimeContributions(definitionSeedsFacet, 'test-renamed-metadata-only-seed', [seed])
       await materializePropertySeeds(env.repo, WS, [seed])
       await env.repo.tx(async tx => {
-        await tx.setProperty(fieldId, propertyNameProp, renamed)
+        await tx.setProperty(fieldId, propertyNameProp, storedDivergence)
       }, {scope: ChangeScope.BlockDefault})
       await vi.waitFor(() => {
         const definitions = env.repo.propertyDefinitions
-        expect(definitions?.definitionsByFieldId.get(fieldId)?.name).toBe(renamed)
+        expect(definitions?.definitionsByFieldId.get(fieldId)?.name).toBe(seed.name)
         expect(definitions?.schemasByFieldId.has(fieldId)).toBe(false)
       }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
@@ -362,7 +365,7 @@ describe('UserTypesService subscription', () => {
           expect.objectContaining({
             fieldId,
             workspaceId: WS,
-            name: renamed,
+            name: seed.name,
             codec: seed.codec,
             defaultValue: seed.defaultValue,
             changeScope: seed.changeScope,
@@ -371,10 +374,10 @@ describe('UserTypesService subscription', () => {
       }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
       const targetId = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
-      await env.repo.addType(targetId, typeId, {[renamed]: 'canonical value'})
+      await env.repo.addType(targetId, typeId, {[seed.name]: 'canonical value'})
       const properties = env.repo.block(targetId).peek()!.properties
-      expect(properties[renamed]).toBe('canonical value')
-      expect(properties[seed.name]).toBeUndefined()
+      expect(properties[seed.name]).toBe('canonical value')
+      expect(properties[storedDivergence]).toBeUndefined()
     } finally {
       warn.mockRestore()
     }

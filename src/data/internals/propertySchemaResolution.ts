@@ -35,19 +35,23 @@ const isResolvedPropertySchema = <T>(
 export interface PropertySchemaResolver {
   resolve<T>(handle: PropertyHandle<T>): PropertySchemaResolution<T>
   resolve(name: string): PropertySchemaResolution<unknown>
+  resolveField(fieldId: string): PropertySchemaResolution<unknown>
   resolveBoundary<T>(schema: PropertySchema<T>): PropertyBoundaryResolution<T>
 }
 
-/** Resolve one projected definition through the workspace's selected name
- * winner, then prove the winner is the same durable field the caller holds. */
+/** Resolve one projected definition to the schema the workspace selects for its
+ * durable field id. Resolving by identity (not by the row's stored name) keeps
+ * seed-provenanced definitions resolvable even when a stored property-schema:name
+ * diverges from the code seed's declared name — seeds are non-renamable, so the
+ * registry pins them to the declared name and the raw row name must not be used
+ * as a lookup key. Unknown, shadowed, and cross-workspace fields return
+ * undefined. */
 export const resolveSelectedPropertyDefinition = (
-  metadata: Pick<PropertyDefinitionMetadata, 'fieldId' | 'name'>,
+  metadata: Pick<PropertyDefinitionMetadata, 'fieldId'>,
   resolver: PropertySchemaResolver,
 ): AnyPropertySchema | undefined => {
-  const resolution = resolver.resolve(metadata.name)
-  return resolution.status === 'resolved' && resolution.schema.fieldId === metadata.fieldId
-    ? resolution.schema
-    : undefined
+  const resolution = resolver.resolveField(metadata.fieldId)
+  return resolution.status === 'resolved' ? resolution.schema : undefined
 }
 
 class IdentityUnavailablePropertySchemaResolver implements PropertySchemaResolver {
@@ -59,6 +63,11 @@ class IdentityUnavailablePropertySchemaResolver implements PropertySchemaResolve
       status: 'identity-unavailable',
       reason: 'registry-not-workspace-keyed',
     }
+  }
+
+  resolveField(fieldId: string): PropertySchemaResolution<unknown> {
+    void fieldId
+    return {status: 'identity-unavailable', reason: 'registry-not-workspace-keyed'}
   }
 
   resolveBoundary<T>(schema: PropertySchema<T>): PropertyBoundaryResolution<T> {
@@ -213,7 +222,7 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
     return this.resolve(seeds[0]!)
   }
 
-  private resolveField<T>(fieldId: string): PropertySchemaResolution<T> {
+  resolveField<T>(fieldId: string): PropertySchemaResolution<T> {
     const metadata = this.snapshot.definitionsByFieldId.get(fieldId)
     if (!metadata) {
       const declaration = [...this.snapshot.seedsByKey.values()].find(seed =>

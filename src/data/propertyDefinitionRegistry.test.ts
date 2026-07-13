@@ -74,7 +74,12 @@ describe('property definition registry snapshot', () => {
     })
   })
 
-  it('uses block metadata but keeps locally declared behavior', () => {
+  it('pins a seed to its declared name, ignoring a stored name divergence', () => {
+    // Seeds are non-renamable (user renames deferred to #288): a stored
+    // property-schema:name that diverges from the declaration — from an older
+    // client, an import, or a sync from such a device — must not move the
+    // seed's effective name, or the structural type/alias membership index and
+    // static-type panel sections desync from it.
     const fieldId = propertyDefinitionBlockId(WS, titleSeed.seedKey)
     const definition = metadata(fieldId, 'renamed title', 10, {
       seedKey: titleSeed.seedKey,
@@ -86,30 +91,25 @@ describe('property definition registry snapshot', () => {
       legacySchemas: new Map([[titleSeed.name, titleSeed]]),
       projectedDefinitions: new Map([[fieldId, {metadata: definition}]]),
     })
-    const result = createPropertySchemaResolver(snapshot).resolve(titleSeed)
 
-    expect(snapshot.schemas.has('title')).toBe(false)
-    expect(snapshot.schemas.get('renamed title')).toMatchObject({
-      name: 'renamed title',
-      defaultValue: 'code-default',
-      changeScope: ChangeScope.UserPrefs,
-    })
-    expect(createPropertySchemaResolver(snapshot).resolve(titleSeed.name)).toEqual({
+    expect(snapshot.schemas.has('renamed title')).toBe(false)
+    expect(snapshot.schemas.get('title')).toBe(titleSeed)
+    expect(createPropertySchemaResolver(snapshot).resolve('renamed title')).toEqual({
       status: 'identity-unavailable',
       reason: 'definition-unavailable',
     })
-    expect(createPropertySchemaResolver(snapshot).resolve(definition.name)).toEqual({
+    expect(createPropertySchemaResolver(snapshot).resolve(titleSeed.name)).toEqual({
       status: 'resolved',
-      schema: expect.objectContaining({fieldId, name: definition.name}),
+      schema: expect.objectContaining({fieldId, name: 'title'}),
     })
-    expect(result).toEqual({
+    expect(createPropertySchemaResolver(snapshot).resolve(titleSeed)).toEqual({
       status: 'resolved',
       schema: expect.objectContaining({
-        name: 'renamed title',
+        name: 'title',
         fieldId,
+        // Only the name is pinned to the code seed; hidden still mirrors the row.
         hidden: true,
         defaultValue: 'code-default',
-        // Behavior remains code-owned in v1 even when the mirror differs.
         changeScope: ChangeScope.UserPrefs,
       }),
     })
