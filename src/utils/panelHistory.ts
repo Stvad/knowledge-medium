@@ -25,6 +25,7 @@ import { ChangeScope, type Tx } from '@/data/api'
 import {
   focusedBlockLocationProp,
   type FocusedBlockLocation,
+  panelViewModeProp,
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
@@ -38,11 +39,28 @@ import { withMoveTransition } from '@/utils/viewTransition'
 export interface VisitState {
   focusedLocation?: FocusedBlockLocation
   scrollTop?: number
+  /** The pane's view mode during this visit (`panelViewModeProp` at capture
+   *  time). Applied ONLY on chevron back/forward restore — URL-driven
+   *  restores take the mode from the hash's slot context instead (the URL
+   *  is authoritative there; see `WritePanelContentOptions.viewMode`). */
+  viewMode?: string
 }
 
 export interface HistoryEntry {
   blockId: string
   state?: VisitState
+  /** Present when this entry was pushed by an enter-with-navigation
+   *  (`navigateInPanel` with a `viewMode`): this entry is where the enter
+   *  gesture left FROM — going back restores the pre-enter context. Only
+   *  recorded here; close-goes-back consumes it (slice 5).
+   *
+   *  Invariant: the marker rides the ENTRY PAIR across any number of
+   *  back/forward round trips (chevron or browser-driven) — back() carries
+   *  it onto the forward reconstruction, forward() re-stamps the entry it
+   *  pushes back onto the back stack. Without that, enter → back → forward
+   *  would leave the re-entered visit unmarked and close would strand the
+   *  pane on the entered block instead of going back. */
+  viewModeEnter?: string
 }
 
 interface PanelHistoryState {
@@ -51,6 +69,11 @@ interface PanelHistoryState {
 }
 
 const EMPTY: PanelHistoryState = {back: [], forward: []}
+
+/** Carry the enter marker from the entry being consumed onto the entry
+ *  reconstructed on the opposite stack (the `viewModeEnter` invariant). */
+const withCarriedEnterMark = (entry: HistoryEntry, consumed: HistoryEntry): HistoryEntry =>
+  consumed.viewModeEnter ? {...entry, viewModeEnter: consumed.viewModeEnter} : entry
 
 export class PanelHistoryStore {
   private state = new Map<string, PanelHistoryState>()
@@ -102,7 +125,9 @@ export class PanelHistoryStore {
     const next = current.back[current.back.length - 1]
     this.state.set(panelId, {
       back: current.back.slice(0, -1),
-      forward: [...current.forward, currentEntry],
+      // Carry the enter marker onto the forward reconstruction so the pair
+      // stays stamped across round trips (see HistoryEntry.viewModeEnter).
+      forward: [...current.forward, withCarriedEnterMark(currentEntry, next)],
     })
     this.notify(panelId)
     return next
@@ -113,7 +138,7 @@ export class PanelHistoryStore {
     if (current.forward.length === 0) return null
     const next = current.forward[current.forward.length - 1]
     this.state.set(panelId, {
-      back: [...current.back, currentEntry],
+      back: [...current.back, withCarriedEnterMark(currentEntry, next)],
       forward: current.forward.slice(0, -1),
     })
     this.notify(panelId)
@@ -130,7 +155,9 @@ export class PanelHistoryStore {
     if (backTop?.blockId === targetBlockId) {
       this.state.set(panelId, {
         back: current.back.slice(0, -1),
-        forward: [...current.forward, currentEntry],
+        // Same enter-marker carry as back()/forward(): browser-driven round
+        // trips must not strip the stamp either.
+        forward: [...current.forward, withCarriedEnterMark(currentEntry, backTop)],
       })
       this.notify(panelId)
       return backTop
@@ -139,7 +166,7 @@ export class PanelHistoryStore {
     const forwardTop = current.forward[current.forward.length - 1]
     if (forwardTop?.blockId === targetBlockId) {
       this.state.set(panelId, {
-        back: [...current.back, currentEntry],
+        back: [...current.back, withCarriedEnterMark(currentEntry, forwardTop)],
         forward: current.forward.slice(0, -1),
       })
       this.notify(panelId)
@@ -207,22 +234,42 @@ export class PanelHistoryStore {
 
 export const panelHistory = new PanelHistoryStore()
 
+export interface WritePanelContentOptions {
+  /** The pane's view mode AFTER this write. Defaults to undefined = CLEAR:
+   *  a view mode belongs to the (pane, block) pair, so navigating the pane
+   *  away must not leak the mode onto the next block. Each caller decides
+   *  the source — `navigateInPanel` passes its own option, chevrons pass
+   *  the restored `VisitState.viewMode`, URL reconcile passes the hash's
+   *  slot context (never `VisitState` — the URL is authoritative there). */
+  viewMode?: string
+}
+
 /** Write a panel's content: point `panelId` at `blockId` and set its focus +
- *  scroll. With `state` (a back/forward or URL-reconcile restore) it replays the
- *  captured focus/scroll; without it the view is fresh — focus the new
- *  top-level, scroll to 0. The single choke for content *swaps on an existing
- *  panel row* — in-panel navigate, back/forward, URL reconcile, merge retarget;
- *  a *newly created* row's initial content is set by `createPanelRowInTx`
- *  instead, so a complete "observe every view" seam would hook both. Takes the
- *  caller's `tx`, so it composes inside a batch reconcile as well as a single
- *  interactive swap. */
+ *  scroll + view mode. With `state` (a back/forward or URL-reconcile restore)
+ *  it replays the captured focus/scroll; without it the view is fresh — focus
+ *  the new top-level, scroll to 0. The single choke for content *swaps on an
+ *  existing panel row* — in-panel navigate, back/forward, URL reconcile, merge
+ *  retarget; a *newly created* row's initial content is set by
+ *  `createPanelRowInTx` instead, so a complete "observe every view" seam would
+ *  hook both. Takes the caller's `tx`, so it composes inside a batch reconcile
+ *  as well as a single interactive swap. */
 export const writePanelContent = async (
   tx: Tx,
   panelId: string,
   blockId: string,
   state?: VisitState,
+  options: WritePanelContentOptions = {},
 ): Promise<void> => {
+  // Guard the mode write behind a DECODED compare (absent ≡ null ≡ ''): the
+  // engine's own write dedup compares ENCODED values, where absent ≠ null
+  // (optionalString.encode(undefined) = null) — so an unguarded clear would
+  // materialize panelViewMode:null on every never-moded pane.
+  const currentMode = await tx.getProperty(panelId, panelViewModeProp) || undefined
+  const nextMode = options.viewMode || undefined
   await tx.setProperty(panelId, topLevelBlockIdProp, blockId)
+  if (currentMode !== nextMode) {
+    await tx.setProperty(panelId, panelViewModeProp, nextMode)
+  }
   await tx.setProperty(panelId, focusedBlockLocationProp, state?.focusedLocation ?? {
     blockId,
     renderScopeId: outlineRenderScopeId(blockId),
@@ -240,16 +287,36 @@ const transactPanelContent = (
   blockId: string,
   state: VisitState | undefined,
   description: string,
+  options?: WritePanelContentOptions,
 ): Promise<void> =>
   withMoveTransition(async () => {
     await panelBlock.repo.tx(async tx => {
-      await writePanelContent(tx, panelBlock.id, blockId, state)
+      await writePanelContent(tx, panelBlock.id, blockId, state, options)
     }, {scope: ChangeScope.UiState, description})
   })
 
+export interface NavigateInPanelOptions {
+  /** Enter-with-navigation: land on `blockId` already in this view mode —
+   *  one tx (one projection push) and one history entry, stamped
+   *  `viewModeEnter`. A two-step fallback (navigate, then set the mode)
+   *  would project two nondeterministic hash entries. */
+  viewMode?: string
+}
+
 /** Navigate within a panel: capture the current visit's ephemeral state, push
  *  (block, state) onto back, clear forward, then swap the panel's top-level
- *  block. No-op when `blockId` already equals the current top-level.
+ *  block.
+ *
+ *  Same-block calls are NOT navigations. A plain call (no `viewMode` key)
+ *  is a pure no-op — the mode belongs to the (pane, block) pair, and a
+ *  re-navigation to the same block changes neither, so zoom-in / re-clicking
+ *  the open block must not disturb an active mode. Only when the caller
+ *  EXPLICITLY passes `viewMode` (including `{viewMode: undefined}`, the
+ *  clear-only form) does the call run a MODE-ONLY tx (the primary enter
+ *  gesture — entering notes on the currently-shown block). No history entry
+ *  and no `viewModeEnter` stamp in that case: there is no pre-enter content
+ *  to go back to, so a later close correctly clears the mode instead of
+ *  navigating away.
  *
  *  The panel content fully swaps here — the highest-impact transition in the
  *  app — centralised so every navigation path (zoom shortcuts, wikilink clicks,
@@ -257,16 +324,29 @@ const transactPanelContent = (
 export const navigateInPanel = async (
   panelBlock: Block,
   blockId: string,
+  options: NavigateInPanelOptions = {},
 ): Promise<void> => {
   const prev = panelBlock.peekProperty(topLevelBlockIdProp)
-  if (prev === blockId) return
+  if (prev === blockId) {
+    // Presence-gated: a plain same-block call preserves the mode; only an
+    // explicit viewMode key (set OR undefined-to-clear) touches it.
+    if (!('viewMode' in options)) return
+    const currentMode = panelBlock.peekProperty(panelViewModeProp) || undefined
+    const nextMode = options.viewMode || undefined
+    if (currentMode === nextMode) return
+    await panelBlock.repo.tx(async tx => {
+      await tx.setProperty(panelBlock.id, panelViewModeProp, nextMode)
+    }, {scope: ChangeScope.UiState, description: 'set panel view mode'})
+    return
+  }
   if (prev) {
     panelHistory.push(panelBlock.id, {
       blockId: prev,
       state: panelHistory.snapshot(panelBlock.id),
+      ...(options.viewMode ? {viewModeEnter: options.viewMode} : {}),
     })
   }
-  await transactPanelContent(panelBlock, blockId, undefined, 'navigate in panel')
+  await transactPanelContent(panelBlock, blockId, undefined, 'navigate in panel', {viewMode: options.viewMode})
 }
 
 /** Step the panel one entry back. Captures the current visit's state onto
@@ -280,7 +360,8 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   })
   if (!dest) return false
   panelHistory.enqueueRestore(panelBlock.id, dest.state)
-  await transactPanelContent(panelBlock, dest.blockId, dest.state, 'panel history back')
+  // Chevron restore applies the remembered mode (URL-driven restores don't).
+  await transactPanelContent(panelBlock, dest.blockId, dest.state, 'panel history back', {viewMode: dest.state?.viewMode})
   return true
 }
 
@@ -293,7 +374,7 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   })
   if (!dest) return false
   panelHistory.enqueueRestore(panelBlock.id, dest.state)
-  await transactPanelContent(panelBlock, dest.blockId, dest.state, 'panel history forward')
+  await transactPanelContent(panelBlock, dest.blockId, dest.state, 'panel history forward', {viewMode: dest.state?.viewMode})
   return true
 }
 

@@ -810,10 +810,12 @@ export const reconcilePanelRows = async (
             }, blockId)
             : null
           panelHistory.enqueueRestore(slot.row.id, restored?.state)
-          await writePanelContent(tx, slot.row.id, blockId, restored?.state)
-        }
-        // Sync the slot's view mode onto the reused row (absent = clear).
-        if (panelViewMode(slot.row) !== target.viewMode) {
+          // The URL's slot context is authoritative for the mode here — the
+          // restored VisitState's remembered viewMode is deliberately NOT
+          // applied (that happens only on chevron back/forward).
+          await writePanelContent(tx, slot.row.id, blockId, restored?.state, {viewMode: target.viewMode})
+        } else if (panelViewMode(slot.row) !== target.viewMode) {
+          // Same content, different mode — sync the URL's mode onto the row.
           await tx.setProperty(slot.row.id, panelViewModeProp, target.viewMode)
         }
       }
@@ -874,6 +876,8 @@ export const retargetPanelBlockIds = async (
         state: panelHistory.snapshot(row.id),
       }, toId)
       panelHistory.enqueueRestore(row.id, restored?.state)
+      // No viewMode option: a merge retarget clears the mode (it belonged
+      // to the (pane, source-block) pair, and the source block is gone).
       await writePanelContent(tx, row.id, toId, restored?.state)
     }
   }, {scope: ChangeScope.UiState, description: 'retarget merged panels'})

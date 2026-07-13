@@ -30,7 +30,12 @@ import {
   reconcilePanelRows,
   retargetPanelBlockIds,
 } from '@/utils/panelLayoutProjection'
-import { panelHistory } from '@/utils/panelHistory'
+import {
+  goBackInPanel,
+  goForwardInPanel,
+  navigateInPanel,
+  panelHistory,
+} from '@/utils/panelHistory'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -81,6 +86,40 @@ const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
 
 const rows = async () => layoutSessionBlock().children.load()
 const layoutRows = async () => env.repo.query.subtree({id: env.layoutSessionBlockId}).load()
+
+const startProjection = (initialHash: string) => {
+  let currentHash = initialHash
+  const pushes: string[] = []
+  const replaces: string[] = []
+  const projection = new PanelLayoutProjection({
+    repo: env.repo,
+    workspaceId: WS,
+    layoutSessionBlock: layoutSessionBlock(),
+    getHash: () => currentHash,
+    pushHash: hash => {
+      pushes.push(hash)
+      currentHash = hash
+    },
+    replaceHash: hash => {
+      replaces.push(hash)
+      currentHash = hash
+    },
+    subscribeToUrl: () => () => {},
+  })
+  return {
+    projection,
+    pushes,
+    replaces,
+    hash: () => currentHash,
+    setHash: (hash: string) => { currentHash = hash },
+  }
+}
+
+// Deterministic interleaving needs direct delivery of a rows event —
+// real subscription timing is not controllable from a test.
+const deliverRowsEvent = (projection: PanelLayoutProjection, rows: readonly BlockData[]) => {
+  (projection as unknown as {handleRowsChanged(rows: readonly BlockData[]): void}).handleRowsChanged(rows)
+}
 
 const rowIdsByBlock = async (): Promise<Map<string, string>> =>
   new Map((await layoutRows())
@@ -557,6 +596,196 @@ describe('slot context on rows (slice 2)', () => {
   })
 })
 
+describe('view-mode navigation semantics (slice 3)', () => {
+  const applyUrl = (hash: string) => applyCurrentLayoutUrl({
+    repo: env.repo,
+    workspaceId: WS,
+    layoutSessionBlock: layoutSessionBlock(),
+    hash,
+  })
+  const panelBlock = (rowId: string) => env.repo.block(rowId)
+  const rowFor = async (blockId: string) => {
+    const rowId = (await rowIdsByBlock()).get(blockId)
+    if (!rowId) throw new Error(`missing ${blockId} row`)
+    return rowId
+  }
+  // Mirrors PanelRenderer's snapshotter: capture the live mode at push time.
+  const registerLiveSnapshotter = (rowId: string) =>
+    panelHistory.registerSnapshotter(rowId, () => ({
+      viewMode: env.repo.block(rowId).peekProperty(panelViewModeProp),
+      scrollTop: 7,
+    }))
+
+  it('navigateInPanel with viewMode: one viewModeEnter-stamped entry, ONE push carrying both changes', async () => {
+    await applyUrl('#ws-1/a')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(rowA), 'video-block', {viewMode: 'video-notes'})
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/video-block;view=video-notes']))
+    expect(replaces).toEqual([])
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('video-notes')
+    expect(panelHistory.getSnapshot(rowA).back).toEqual([
+      {blockId: 'a', viewModeEnter: 'video-notes'},
+    ])
+    panelHistory.clear(rowA)
+    projection.dispose()
+  })
+
+  it('plain navigateInPanel away from a moded pane clears the mode: ONE push without ;view, no viewModeEnter', async () => {
+    await applyUrl('#ws-1/a;view=m')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a;view=m')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(rowA), 'b')
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+    expect(replaces).toEqual([])
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBeUndefined()
+    // strict: the entry must not even carry a viewModeEnter KEY
+    expect(panelHistory.getSnapshot(rowA).back).toStrictEqual([
+      {blockId: 'a', state: undefined},
+    ])
+    panelHistory.clear(rowA)
+    projection.dispose()
+  })
+
+  it('same-block enter: mode-only tx, ONE push with ;view, no history entry', async () => {
+    await applyUrl('#ws-1/a')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(rowA), 'a', {viewMode: 'm'})
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m']))
+    expect(replaces).toEqual([])
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('m')
+    expect(env.repo.block(rowA).peekProperty(topLevelBlockIdProp)).toBe('a')
+    // not a navigation: no entry, no viewModeEnter stamp anywhere
+    expect(panelHistory.getSnapshot(rowA)).toStrictEqual({back: [], forward: []})
+    projection.dispose()
+  })
+
+  it('same-block re-enter with the same mode is a true no-op (no push)', async () => {
+    await applyUrl('#ws-1/a;view=m')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a;view=m')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(rowA), 'a', {viewMode: 'm'})
+
+    // fence: a real change must still push, and it must be the ONLY push
+    await navigateInPanel(panelBlock(rowA), 'b')
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+    expect(replaces).toEqual([])
+    panelHistory.clear(rowA)
+    projection.dispose()
+  })
+
+  it('same-block plain navigate preserves the mode; explicit undefined clears it', async () => {
+    await applyUrl('#ws-1/a;view=m')
+    const rowA = await rowFor('a')
+    const {projection, pushes} = startProjection('#ws-1/a;view=m')
+    await projection.start()
+
+    // Plain re-navigation to the open block (zoom-in, re-click) is a pure
+    // no-op: the mode belongs to the (pane, block) pair and neither changed.
+    await navigateInPanel(panelBlock(rowA), 'a')
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('m')
+    expect(pushes).toEqual([])
+
+    // The explicit clear-only form (slice-5 close) removes the mode without
+    // a panelHistory entry; the browser-level entry comes from the push.
+    await navigateInPanel(panelBlock(rowA), 'a', {viewMode: undefined})
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a']))
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(panelHistory.getSnapshot(rowA)).toStrictEqual({back: [], forward: []})
+    projection.dispose()
+  })
+
+  it('chevron forward across the enter boundary re-applies the mode', async () => {
+    await applyUrl('#ws-1/plain')
+    const row = await rowFor('plain')
+    const unregister = registerLiveSnapshotter(row)
+
+    await navigateInPanel(panelBlock(row), 'video', {viewMode: 'm'}) // enter
+    await goBackInPanel(panelBlock(row))
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('plain')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
+
+    await goForwardInPanel(panelBlock(row))
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('video')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBe('m')
+    // the enter marker survived the round trip (back-stack top re-stamped)
+    expect(panelHistory.getSnapshot(row).back.at(-1)?.viewModeEnter).toBe('m')
+
+    unregister()
+    panelHistory.clear(row)
+  })
+
+  it('one URL applies a blockId+mode change to pane 1 and a mode-only change to pane 2', async () => {
+    await applyUrl('#ws-1/a/b')
+    const byBlock = await rowIdsByBlock()
+    const rowA = byBlock.get('a')
+    const rowB = byBlock.get('b')
+    if (!rowA || !rowB) throw new Error('missing rows')
+
+    await applyUrl('#ws-1/x;view=k/b;view=m')
+
+    expect((await rowIdsByBlock()).get('x')).toBe(rowA) // reused across the content swap
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('k')
+    expect(env.repo.block(rowB).peekProperty(panelViewModeProp)).toBe('m')
+  })
+
+  it('chevron back restores the moded visit, forward re-clears — one push per step', async () => {
+    await applyUrl('#ws-1/video;view=m')
+    const row = await rowFor('video')
+    const unregister = registerLiveSnapshotter(row)
+    const {projection, pushes} = startProjection('#ws-1/video;view=m')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(row), 'plain')
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain']))
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
+
+    await goBackInPanel(panelBlock(row))
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('video')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBe('m')
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain', '#ws-1/video;view=m']))
+
+    await goForwardInPanel(panelBlock(row))
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('plain')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain', '#ws-1/video;view=m', '#ws-1/plain']))
+
+    unregister()
+    panelHistory.clear(row)
+    projection.dispose()
+  })
+
+  it('URL-driven back ignores a conflicting VisitState viewMode — the hash is authoritative', async () => {
+    await applyUrl('#ws-1/video;view=m')
+    const row = await rowFor('video')
+    const unregister = registerLiveSnapshotter(row)
+    await navigateInPanel(panelBlock(row), 'plain')
+    // history now holds {video, state:{viewMode:'m'}} — but the browser-Back
+    // hash carries NO mode, and the URL wins over the remembered VisitState.
+    await applyUrl('#ws-1/video')
+
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('video')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
+    // reconciled as a back-step, not a fresh visit:
+    expect(panelHistory.getSnapshot(row).forward.map(entry => entry.blockId)).toEqual(['plain'])
+
+    unregister()
+    panelHistory.clear(row)
+  })
+})
+
 describe('context-only inbound diffs take the targeted pass', () => {
   const applyUrl = (hash: string, replaceHash?: (h: string) => void) => applyCurrentLayoutUrl({
     repo: env.repo,
@@ -933,40 +1162,6 @@ describe('PanelLayoutProjection', () => {
     await vi.waitFor(() => expect(pushed).toBe('#ws-1/a/x,y'))
     projection.dispose()
   })
-
-  const startProjection = (initialHash: string) => {
-    let currentHash = initialHash
-    const pushes: string[] = []
-    const replaces: string[] = []
-    const projection = new PanelLayoutProjection({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      getHash: () => currentHash,
-      pushHash: hash => {
-        pushes.push(hash)
-        currentHash = hash
-      },
-      replaceHash: hash => {
-        replaces.push(hash)
-        currentHash = hash
-      },
-      subscribeToUrl: () => () => {},
-    })
-    return {
-      projection,
-      pushes,
-      replaces,
-      hash: () => currentHash,
-      setHash: (hash: string) => { currentHash = hash },
-    }
-  }
-
-  // Deterministic interleaving needs direct delivery of a rows event —
-  // real subscription timing is not controllable from a test.
-  const deliverRowsEvent = (projection: PanelLayoutProjection, rows: readonly BlockData[]) => {
-    (projection as unknown as {handleRowsChanged(rows: readonly BlockData[]): void}).handleRowsChanged(rows)
-  }
 
   // Await the rows event on OUR OWN subscription to the same handle: the
   // projection subscribed first, so once we observe the intermediate rows

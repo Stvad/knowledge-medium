@@ -90,6 +90,53 @@ describe('PanelHistoryStore', () => {
     })
   })
 
+  describe('viewModeEnter rides the entry pair', () => {
+    it('survives a back/forward round trip (and a second one)', () => {
+      // Enter gesture from A: the entry it left FROM is stamped.
+      store.push('p1', {blockId: 'b-A', viewModeEnter: 'm'})
+
+      // Chevron back (currently on B): the stamp carries onto the entry
+      // pushed to the forward stack…
+      const backDest = store.back('p1', e('b-B'))
+      expect(backDest?.viewModeEnter).toBe('m')
+      expect(store.getSnapshot('p1').forward.at(-1)).toStrictEqual({blockId: 'b-B', viewModeEnter: 'm'})
+
+      // …and chevron forward re-stamps the entry pushed back onto back.
+      const forwardDest = store.forward('p1', e('b-A'))
+      expect(forwardDest?.viewModeEnter).toBe('m')
+      expect(store.getSnapshot('p1').back.at(-1)).toStrictEqual({blockId: 'b-A', viewModeEnter: 'm'})
+
+      // Second round trip: still stamped on both sides.
+      store.back('p1', e('b-B'))
+      expect(store.getSnapshot('p1').forward.at(-1)).toStrictEqual({blockId: 'b-B', viewModeEnter: 'm'})
+      store.forward('p1', e('b-A'))
+      expect(store.getSnapshot('p1').back.at(-1)).toStrictEqual({blockId: 'b-A', viewModeEnter: 'm'})
+    })
+
+    it('unstamped entries stay unstamped through round trips', () => {
+      store.push('p1', e('b-A'))
+      store.back('p1', e('b-B'))
+      expect(store.getSnapshot('p1').forward.at(-1)).toStrictEqual({blockId: 'b-B'})
+      store.forward('p1', e('b-A'))
+      expect(store.getSnapshot('p1').back.at(-1)).toStrictEqual({blockId: 'b-A'})
+    })
+
+    it('survives browser-driven (reconcileUrlNavigation) round trips too', () => {
+      store.push('p1', {blockId: 'b-A', viewModeEnter: 'm'})
+
+      // Browser Back (on B, URL says A): pops the stamped entry, stamp
+      // carries onto the forward reconstruction.
+      const back = store.reconcileUrlNavigation('p1', e('b-B'), 'b-A')
+      expect(back?.viewModeEnter).toBe('m')
+      expect(store.getSnapshot('p1').forward.at(-1)).toStrictEqual({blockId: 'b-B', viewModeEnter: 'm'})
+
+      // Browser Forward (on A, URL says B): re-stamps the back entry.
+      const forward = store.reconcileUrlNavigation('p1', e('b-A'), 'b-B')
+      expect(forward?.viewModeEnter).toBe('m')
+      expect(store.getSnapshot('p1').back.at(-1)).toStrictEqual({blockId: 'b-A', viewModeEnter: 'm'})
+    })
+  })
+
   describe('snapshotter', () => {
     it('snapshot() returns undefined when no snapshotter is registered', () => {
       expect(store.snapshot('p1')).toBeUndefined()

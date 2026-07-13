@@ -41,9 +41,15 @@ describe('navigate explicit panel', () => {
       block: vi.fn(),
       exists: vi.fn(async () => true),
       tx: vi.fn(async (
-        fn: (tx: {setProperty: (blockId: string, schema: {name: string}, value: unknown) => Promise<void>}) => Promise<void>,
+        fn: (tx: {
+          getProperty: (blockId: string, schema: {name: string}) => Promise<undefined>
+          setProperty: (blockId: string, schema: {name: string}, value: unknown) => Promise<void>
+        }) => Promise<void>,
       ) => {
         await fn({
+          // writePanelContent reads the current mode to skip a matching
+          // write; undefined → no mode write lands in `writes` below.
+          getProperty: async () => undefined,
           setProperty: async (blockId, schema, value) => {
             writes.push({blockId, property: schema.name, value})
           },

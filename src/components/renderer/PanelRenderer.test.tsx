@@ -9,6 +9,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   activePanelIdProp,
+  panelViewModeProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
@@ -316,5 +317,16 @@ describe('PanelRenderer', () => {
     await screen.findByTestId('panel-top-level-block')
 
     expect(panelHistory.snapshot(env.panel.id)?.focusedLocation).toBeUndefined()
+  })
+
+  it('captures the panel view mode in history snapshots', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty(env.panel.id, topLevelBlockIdProp, 'page-a')
+      await tx.setProperty(env.panel.id, panelViewModeProp, 'video-notes')
+    }, {scope: ChangeScope.UiState, description: 'seed panel view mode'})
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    expect(panelHistory.snapshot(env.panel.id)?.viewMode).toBe('video-notes')
   })
 })

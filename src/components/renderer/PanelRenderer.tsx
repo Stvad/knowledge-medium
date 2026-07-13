@@ -4,6 +4,7 @@ import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
+  panelViewModeProp,
   peekFocusedBlockLocation,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -118,13 +119,14 @@ export function PanelRenderer({block}: BlockRendererProps) {
   }, [flushScrollTop])
 
   // Register a snapshotter so panelHistory can capture (focused block,
-  // scroll) before any navigation away from the current top-level. The
-  // panel block holds focusedBlockLocationProp; scroll lives in the DOM and
-  // we read it from the ref.
+  // scroll, view mode) before any navigation away from the current
+  // top-level. The panel block holds focusedBlockLocationProp and
+  // panelViewModeProp; scroll lives in the DOM and we read it from the ref.
   useEffect(() => {
     return panelHistory.registerSnapshotter(block.id, () => ({
       focusedLocation: peekFocusedBlockLocation(block),
       scrollTop: scrollRef.current?.scrollTop,
+      viewMode: block.peekProperty(panelViewModeProp),
     }))
   }, [block])
 
