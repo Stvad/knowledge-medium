@@ -111,7 +111,9 @@ describe('dailyNotesActions', () => {
     // parent is a panel-stack row), not via the slot shape.
     expect(layoutSlotsFromRows(layoutSession.id, layoutRows)).toEqual([
       {kind: 'leaf', blockId: 'main-block'},
-      {kind: 'leaf', blockId: newBlockId},
+      // The action activates the new stacked panel (activePanelIdProp is
+      // asserted directly below), so its slot carries the active flag.
+      {kind: 'leaf', blockId: newBlockId, active: true},
     ])
 
     const newPanel = panelRowsInLayoutOrder(layoutSession.id, layoutRows)

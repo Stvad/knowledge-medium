@@ -52,7 +52,7 @@ export const flattenSlots = (slots: readonly LayoutSlot[]): string[] =>
     ? [slot.blockId]
     : flattenSlots(slot.kind === 'stack' ? slot.children : slot.columns))
 
-const splitHashRouteAndParams = (hash: string | undefined | null) => {
+export const splitHashRouteAndParams = (hash: string | undefined | null) => {
   const raw = hash ?? ''
   const trimmed = raw.startsWith('#') ? raw.slice(1) : raw
   const queryIndex = trimmed.indexOf('?')

@@ -70,6 +70,16 @@ export const scrollTopProp = defineProperty<number | undefined>('scrollTop', {
   changeScope: ChangeScope.UiState,
 })
 
+/** Per-panel view mode, persisted on the panel row. The layout URL
+ *  grammar's `view=<value>` slot-context key (`src/utils/routing.ts`)
+ *  maps to this prop. Absent = the default outline view. The value is
+ *  opaque to the kernel; renderers interpret it. */
+export const panelViewModeProp = defineProperty<string | undefined>('panelViewMode', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.UiState,
+})
+
 /** Editor-selection state for the active block. Object-typed; the
  *  `unsafeIdentity` codec is appropriate because the shape is engine-
  *  controlled and not exposed for plugin extension. The optional
@@ -472,6 +482,7 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   focusedBlockLocationProp,
   activePanelIdProp,
   scrollTopProp,
+  panelViewModeProp,
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,
