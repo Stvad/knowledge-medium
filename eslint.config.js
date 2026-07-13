@@ -9,8 +9,9 @@ import preferCallbackSet from './eslint-rules/prefer-callback-set.js'
 export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
   // you opt in (eslint-config-flat-gitignore), so list ephemeral / agent
-  // dirs explicitly. .claude/worktrees/ in particular contains full repo
-  // copies that shouldn't be re-linted. docs/**/*.ts are design-sketch
+  // dirs explicitly. .claude/worktrees/ and .codex/worktrees/ in particular
+  // contain full repo copies (from Claude Code and Codex agent runs) that
+  // shouldn't be re-linted. docs/**/*.ts are design-sketch
   // files (typechecked via docs/tsconfig.json) — they intentionally have
   // unused stub params and let-vs-const looseness so the prose stays
   // readable; ESLint shouldn't gate on them. **/*.eval.js are agent-bridge
@@ -18,7 +19,7 @@ export default tseslint.config(
   // (top-level `await` + `return` to print back to the CLI), so they aren't
   // standalone ES modules — espree rejects the top-level `return`. Same
   // "runtime code, not a module" carve-out as agent-extensions/**.
-  { ignores: ['dist', '**/dist/**', '.claude/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**', '**/*.eval.js'] },
+  { ignores: ['dist', '**/dist/**', '.claude/**', '.codex/**', '.playwright-mcp/**', 'tmp/**', 'docs/**', 'agent-extensions/**', '**/*.eval.js'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
