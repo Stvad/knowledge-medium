@@ -38,6 +38,7 @@ import {
   type MediaSource,
 } from './mediaCapture.js'
 import { drainUploads } from './uploadDrain.js'
+import { recoverFailedUploads } from './uploadRecovery.js'
 import { reconcileUploads } from './uploadReconcile.js'
 import { getByteUploadStore } from './uploadStore.js'
 
@@ -48,13 +49,20 @@ let blobStoreSingleton: BlobStore | null = null
  *  configured Supabase client but must upload NOTHING — capture stays in OPFS and the
  *  lane is a no-op (Codex P1). Re-checked each call (before the singleton) so the gate
  *  is dynamic across an account/mode switch. */
+/** The active Supabase session's access token, or null when there's no live session
+ *  (signed out / offline with an unrefreshable token). Shared by the blob store's
+ *  authenticated PUT and §9 recovery's session gate — recovery must NOT trust a probe's
+ *  404 (an anon/RLS-denied read is existence-hiding) or attempt an upload without one. */
+const getSupabaseAccessToken = async (): Promise<string | null> =>
+  supabase ? ((await supabase.auth.getSession()).data.session?.access_token ?? null) : null
+
 const getBlobStore = (): BlobStore | null => {
   if (!supabase || !isRemoteSyncActive()) return null
   if (!blobStoreSingleton) {
     const client = supabase
     blobStoreSingleton = createSupabaseBlobStore({
       client,
-      getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
+      getAccessToken: getSupabaseAccessToken,
     })
   }
   // Per-call gate (not just the arm-time check above): the drain captures this store
@@ -98,25 +106,40 @@ const drainDepsFor = (blobStore: BlobStore, resolver: SyncResolver | null) => ({
 // a capture racing a reconcile or another capture always converges.
 const laneLockName = (userId: string) => `km-asset-upload-lane:${userId}`
 
+/** The shared background-lane critical section: bind the user's blob store + §6 resolver,
+ *  acquire the per-user lane lock, run an optional `pre` step (recovery's probe pass) inside
+ *  it, then drain `pending` uploads and publish the FAILED count to the status indicator (a
+ *  background upload failure is otherwise silent — it's off the paste hot-path). A no-op
+ *  (resolved) when there's no blob store (Supabase unconfigured / local-only). Everything is
+ *  bound to `userId` (the user the lane was armed for), NOT the active account — the upload
+ *  session still rides the one active Supabase client, so the per-record `isActiveUser` gate
+ *  additionally holds the PUT to only run while `userId` is active (else a 403 under another
+ *  account). Returns the lane promise; fire-and-forget callers `void` it. `label` names the
+ *  warn line. */
+const runLanePass = (
+  userId: string,
+  label: 'drain' | 'recovery',
+  pre?: (deps: {
+    blobStore: BlobStore
+    resolver: SyncResolver | null
+    isActiveUser: () => boolean
+  }) => Promise<void>,
+): Promise<void> => {
+  const blobStore = getBlobStore()
+  if (!blobStore) return Promise.resolve()
+  const resolver = syncResolverForUser(userId)
+  const isActiveUser = () => getActiveUserId() === userId
+  return withLock(laneLockName(userId), async () => {
+    if (pre) await pre({ blobStore, resolver, isActiveUser })
+    await drainUploads(userId, { ...drainDepsFor(blobStore, resolver), isActiveUser })
+    await refreshUploadLaneStatus(getByteUploadStore(), userId)
+  }).catch((err) => console.warn(`[assetUpload] ${label} failed`, err))
+}
+
 /** Fire-and-forget drain of the active user's pending uploads (after a capture).
  *  Single-owner (lane lock); a no-op when Supabase isn't configured. */
 export const armUploadDrain = (userId: string): void => {
-  const blobStore = getBlobStore()
-  if (!blobStore) return
-  // Bind the encode/key deps to `userId` (the user the drain was armed for), not
-  // the active account. The upload SESSION still rides the one active Supabase
-  // client, so the PUT must run only while `userId` is active (else a 403 under
-  // another account) — hence the per-record `isActiveUser` gate as well.
-  const resolver = syncResolverForUser(userId)
-  void withLock(laneLockName(userId), async () => {
-    await drainUploads(userId, {
-      ...drainDepsFor(blobStore, resolver),
-      isActiveUser: () => getActiveUserId() === userId,
-    })
-    // Publish the post-drain FAILED count to the status indicator (a background
-    // upload failure is otherwise silent — it's off the paste hot-path).
-    await refreshUploadLaneStatus(getByteUploadStore(), userId)
-  }).catch((err) => console.warn('[assetUpload] drain failed', err))
+  void runLanePass(userId, 'drain')
 }
 
 /** Boot recovery: promote `staged` records whose block has materialized (a crash
@@ -135,6 +158,29 @@ export const runUploadReconcile = async (userId: string, repo: Repo): Promise<vo
   })
   armUploadDrain(userId)
 }
+
+/** §9 failed-upload recovery — the explicit user "Retry" (the diagnostics warning's
+ *  button). Probes each `failed` record's content path and 3-ways it (requeue a freed path
+ *  → the drain re-uploads; clear an already-uploaded one; keep a poisoned one), then drains
+ *  the requeued records — ALL single-owner under ONE lane-lock acquisition ({@link runLanePass}),
+ *  so recovery + its drain are a single critical section (never a re-entrant lock request,
+ *  which would deadlock). A no-op when Supabase isn't configured / the session is local-only.
+ *  Bound to `userId` (not the active account) end-to-end, like the drain, so an account switch
+ *  mid-recovery can't act under the wrong session/keys. Returns the lane promise so the Retry
+ *  action can debounce overlapping clicks. Queues behind an in-flight lane (does NOT skip): the
+ *  user asked, so this pass must actually run. */
+export const runUploadRecovery = (userId: string): Promise<void> =>
+  runLanePass(userId, 'recovery', async ({ blobStore, resolver, isActiveUser }) => {
+    // The probe pass, then the shared drain picks up whatever it re-queued (a freed path →
+    // pending). Same user-bound deps as every drain, so a mid-recovery switch can't act wrong.
+    await recoverFailedUploads(userId, {
+      store: getByteUploadStore(),
+      blobStore,
+      ...laneKeyDeps(resolver),
+      isActiveUser,
+      getAccessToken: getSupabaseAccessToken,
+    })
+  })
 
 const captureDepsFor = (repo: Repo, ctx: LaneContext): MediaCaptureDeps => ({
   repo,
