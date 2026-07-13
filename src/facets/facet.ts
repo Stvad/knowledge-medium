@@ -248,39 +248,6 @@ const combineFacetContributions = <Input, Output>(
   return facet.combine(values, context)
 }
 
-/** A tx-start-stable view of a runtime's contributions. Reads apply the same
- *  workspace filter as `FacetRuntime.readForWorkspace` but never observe later
- *  live writes — see `FacetRuntime.captureContributions`. */
-export interface CapturedFacetContributions {
-  readForWorkspace<Input, Output>(
-    facet: Facet<Input, Output>,
-    workspaceId: string | null,
-  ): Output
-}
-
-class FrozenFacetContributions implements CapturedFacetContributions {
-  constructor(
-    private readonly context: FacetResolveContext,
-    private readonly staticContributionsByFacet: ReadonlyMap<string, FacetContribution<unknown>[]>,
-    private readonly runtimeContributionsByFacet: ReadonlyMap<string, ReadonlyMap<string, RuntimeBucket>>,
-  ) {}
-
-  readForWorkspace<Input, Output>(
-    facet: Facet<Input, Output>,
-    workspaceId: string | null,
-  ): Output {
-    return combineFacetContributions(
-      facet,
-      collectFilteredContributions(
-        this.staticContributionsByFacet.get(facet.id),
-        this.runtimeContributionsByFacet.get(facet.id),
-        workspaceId,
-      ),
-      this.context,
-    )
-  }
-}
-
 type FacetChangeListener = () => void
 
 /** NOTE: `LiveRuntimeHandle` (src/extensions/liveRuntime.ts) subclasses
@@ -369,38 +336,6 @@ export class FacetRuntime {
     )
     this.cache.set(facet.id, value)
     return value
-  }
-
-  /** Read a facet through an explicit workspace filter without mutating the
-   * runtime's active pin or cache. Used by tx-bound workspace resolution. */
-  readForWorkspace<Input, Output>(
-    facet: Facet<Input, Output>,
-    workspaceId: string | null,
-  ): Output {
-    return combineFacetContributions(
-      facet,
-      this.collectContributions(facet.id, workspaceId),
-      this.context,
-    )
-  }
-
-  /** Capture a tx-start-stable view of the current contributions for deferred,
-   *  workspace-filtered reads that must NOT observe later live writes. Runtime
-   *  buckets are added/removed on the live inner maps by `setRuntimeContributions`,
-   *  so those maps are shallow-copied to isolate the snapshot; the copies still
-   *  share the (immutable, wholesale-replaced) bucket objects. Static
-   *  contributions are written only by the constructor, so the static map is
-   *  shared by reference rather than copied. */
-  captureContributions(): CapturedFacetContributions {
-    const runtimeByFacet = new Map<string, Map<string, RuntimeBucket>>()
-    for (const [facetId, buckets] of this.runtimeContributionsByFacet) {
-      runtimeByFacet.set(facetId, new Map(buckets))
-    }
-    return new FrozenFacetContributions(
-      this.context,
-      this.staticContributionsByFacet,
-      runtimeByFacet,
-    )
   }
 
   /** Replace the runtime contributions bucket for this facet under
