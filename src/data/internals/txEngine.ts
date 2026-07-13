@@ -55,9 +55,11 @@ import {
   ParentNotFoundError,
   ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
+  PropertySchemaScopeMismatchError,
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
   normalizeReferences,
+  policyForScope,
 } from '@/data/api'
 import {
   BLOCK_STORAGE_COLUMNS,
@@ -497,6 +499,26 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
+    // Scope-consistency: the tx was admitted under `this.meta.scope`, chosen from
+    // the CALLER's schema.changeScope. If the definition's change-scope was edited
+    // after the caller captured its schema, the resolved scope can differ — and
+    // admitting the write under the stale scope would bypass the read-only gate
+    // and misroute its undo entry. Compare the resolved and admitted scopes by
+    // POLICY (read-only behavior + undoability), not identity: a same-policy
+    // difference (e.g. the references processor writing a BlockDefault property
+    // under its own `References` bucket) is intentional and harmless, while a
+    // policy difference (a stale UiState schema writing a now-BlockDefault
+    // property) is exactly the bypass/misroute this guards.
+    const resolvedPolicy = policyForScope(resolvedSchema.changeScope)
+    const txPolicy = policyForScope(this.meta.scope)
+    if (
+      resolvedPolicy.readOnly !== txPolicy.readOnly ||
+      resolvedPolicy.undoable !== txPolicy.undoable
+    ) {
+      throw new PropertySchemaScopeMismatchError(
+        resolvedSchema.name, this.meta.scope, resolvedSchema.changeScope,
+      )
+    }
     const stored = before.properties[resolvedSchema.name]
     const value = typeof valueOrUpdater === 'function'
       ? (valueOrUpdater as (current: T | undefined) => T)(

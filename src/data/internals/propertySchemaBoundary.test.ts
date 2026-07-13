@@ -352,6 +352,50 @@ describe('typed property identity boundary', () => {
       .toBe('unchanged')
   })
 
+  it('rejects a write whose resolved change-scope differs from the tx scope', async () => {
+    // A stale-schema caller can open the tx under one scope while the resolved
+    // definition carries another (its change-scope was edited after capture).
+    // Admitting the write under the stale scope would bypass the read-only gate
+    // and misroute undo, so the resolved-vs-admitted mismatch must be rejected.
+    const seed = seedProperty({
+      seedKey: 'system:test-plugin/property/scope-check',
+      revision: 1,
+      name: 'scope-check',
+      preset: 'string',
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-scope-check', [seed])
+    await repo.tx(
+      tx => tx.create({id: 'scope-target', workspaceId: WS, parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await expect(repo.tx(
+      tx => tx.setProperty('scope-target', seed, 'x'),
+      {scope: ChangeScope.UiState},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaScopeMismatchError',
+      txScope: ChangeScope.UiState,
+      resolvedScope: ChangeScope.BlockDefault,
+    })
+    expect(repo.block('scope-target').peek()!.properties['scope-check']).toBeUndefined()
+
+    // The matching-scope write is unaffected.
+    await repo.tx(
+      tx => tx.setProperty('scope-target', seed, 'ok'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(repo.block('scope-target').get(seed)).toBe('ok')
+  })
+
   it('accepts a resolved synthesized seed before its definition row exists', async () => {
     const {repo} = createTestRepo({
       db: sharedDb.db,

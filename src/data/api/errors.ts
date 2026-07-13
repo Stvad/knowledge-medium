@@ -181,6 +181,25 @@ export class PropertySchemaIdentityError extends DataLayerError {
   }
 }
 
+/** A property write whose RESOLVED change-scope differs from the scope the
+ *  transaction was admitted under. The tx scope is chosen from the caller's
+ *  schema; if the backing definition's change-scope was edited after the caller
+ *  captured that schema, admitting the write under the stale scope would let it
+ *  bypass the read-only gate and misroute its undo entry. */
+export class PropertySchemaScopeMismatchError extends DataLayerError {
+  constructor(
+    public readonly schemaName: string,
+    public readonly txScope: string,
+    public readonly resolvedScope: string,
+  ) {
+    super(
+      `cannot write property ${JSON.stringify(schemaName)}: resolved change-scope ` +
+      `${resolvedScope} does not match the transaction scope ${txScope} ` +
+      `(the definition's change-scope changed after the caller captured its schema)`,
+    )
+  }
+}
+
 // ──── Mode / dispatch ────
 
 export class ReadOnlyError extends DataLayerError {
@@ -252,6 +271,7 @@ const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
   ['WorkspaceMismatchError', WorkspaceMismatchError],
   ['WorkspaceNotPinnedError', WorkspaceNotPinnedError],
   ['PropertySchemaIdentityError', PropertySchemaIdentityError],
+  ['PropertySchemaScopeMismatchError', PropertySchemaScopeMismatchError],
   ['ReadOnlyError', ReadOnlyError],
   ['MutatorNotRegisteredError', MutatorNotRegisteredError],
   ['QueryNotRegisteredError', QueryNotRegisteredError],
