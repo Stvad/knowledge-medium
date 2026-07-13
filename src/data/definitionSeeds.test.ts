@@ -3,6 +3,7 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} fr
 import {ChangeScope, seedProperty} from '@/data/api'
 import {
   canonicalPropertySeedProperties,
+  awaitPropertySeedMaterializationAccess,
   isValidSeededDefinition,
   materializePropertySeeds,
   propertyDefinitionBlockId,
@@ -259,5 +260,68 @@ describe('materializePropertySeeds', () => {
     const getAll = vi.spyOn(repo.db, 'getAll')
     await expect(materializePropertySeeds(repo, WS, [seed, seed])).rejects.toThrow('duplicate seed key')
     expect(getAll).not.toHaveBeenCalled()
+  })
+})
+
+describe('property seed materialization access', () => {
+  const insertMembership = async (role: 'owner' | 'editor' | 'viewer'): Promise<void> => {
+    await repo.db.execute(
+      `INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time)
+       VALUES (?, ?, ?, ?, ?)`,
+      [`member-${role}`, WS, repo.user.id, role, 1],
+    )
+  }
+
+  it('allows a fresh writable workspace without waiting for membership', async () => {
+    await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: true}))
+      .resolves.toEqual({allowed: true})
+  })
+
+  it('never authorizes an aborted trigger generation on a fast or ready path', async () => {
+    const fresh = new AbortController()
+    fresh.abort()
+    await expect(awaitPropertySeedMaterializationAccess(repo, WS, {
+      freshlyCreated: true,
+      signal: fresh.signal,
+    })).rejects.toMatchObject({name: 'AbortError'})
+
+    await insertMembership('editor')
+    const ready = new AbortController()
+    const waiting = awaitPropertySeedMaterializationAccess(repo, WS, {
+      freshlyCreated: false,
+      signal: ready.signal,
+    })
+    ready.abort()
+    await expect(waiting).rejects.toMatchObject({name: 'AbortError'})
+  })
+
+  it('awaits existing-workspace membership and distinguishes editor from viewer', async () => {
+    await insertMembership('editor')
+    await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false}))
+      .resolves.toEqual({allowed: true})
+
+    await repo.db.execute('DELETE FROM workspace_members WHERE workspace_id = ?', [WS])
+    await insertMembership('viewer')
+    await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false}))
+      .resolves.toEqual({allowed: false, reason: 'viewer'})
+  })
+
+  it('skips immediately when read-only or no longer on the captured workspace', async () => {
+    repo.setReadOnly(true)
+    await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false}))
+      .resolves.toEqual({allowed: false, reason: 'read-only'})
+
+    repo.setReadOnly(false)
+    repo.setActiveWorkspaceId(OTHER_WS)
+    await expect(awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false}))
+      .resolves.toEqual({allowed: false, reason: 'inactive-workspace'})
+  })
+
+  it('rechecks the workspace after a parked membership wait releases', async () => {
+    const waiting = awaitPropertySeedMaterializationAccess(repo, WS, {freshlyCreated: false})
+    repo.setActiveWorkspaceId(OTHER_WS)
+    await insertMembership('editor')
+
+    await expect(waiting).resolves.toEqual({allowed: false, reason: 'inactive-workspace'})
   })
 })

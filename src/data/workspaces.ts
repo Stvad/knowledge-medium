@@ -422,6 +422,107 @@ export const getLocalMemberRole = async (
   return row ? (row.role as WorkspaceRole) : null
 }
 
+export interface AwaitLocalMemberRoleOptions {
+  readonly signal?: AbortSignal
+}
+
+const memberRoleAbortError = (): DOMException =>
+  new DOMException('Waiting for local workspace membership was aborted', 'AbortError')
+
+/** Wait until the target membership row is present in the local replica.
+ * Subscribing before the second query closes the query-before-listener race;
+ * table notifications are only a wake-up signal, so every one rechecks the
+ * exact workspace/user key. */
+export const awaitLocalMemberRole = async (
+  repo: Repo,
+  workspaceId: string,
+  userId: string,
+  options: AwaitLocalMemberRoleOptions = {},
+): Promise<WorkspaceRole> => {
+  const {signal} = options
+  if (signal?.aborted) throw memberRoleAbortError()
+
+  const immediate = await getLocalMemberRole(repo, workspaceId, userId)
+  if (signal?.aborted) throw memberRoleAbortError()
+  if (immediate !== null) return immediate
+
+  return new Promise<WorkspaceRole>((resolve, reject) => {
+    let settled = false
+    let unsubscribe: (() => void) | null = null
+    let disposeRequested = false
+
+    const dispose = (): unknown | null => {
+      signal?.removeEventListener('abort', onAbort)
+      if (unsubscribe) {
+        const current = unsubscribe
+        unsubscribe = null
+        try {
+          current()
+        } catch (error) {
+          return error
+        }
+      } else {
+        // onError/abort may fire synchronously while onChange is still
+        // constructing its disposer. Honor cleanup as soon as it returns.
+        disposeRequested = true
+      }
+      return null
+    }
+    const succeed = (role: WorkspaceRole) => {
+      if (settled) return
+      settled = true
+      const cleanupError = dispose()
+      if (cleanupError) reject(cleanupError)
+      else resolve(role)
+    }
+    const fail = (error: unknown) => {
+      if (settled) return
+      settled = true
+      dispose()
+      reject(error)
+    }
+    const check = async () => {
+      if (settled) return
+      try {
+        const role = await getLocalMemberRole(repo, workspaceId, userId)
+        if (signal?.aborted) {
+          fail(memberRoleAbortError())
+        } else if (role !== null) {
+          succeed(role)
+        }
+      } catch (error) {
+        fail(error)
+      }
+    }
+    function onAbort() {
+      fail(memberRoleAbortError())
+    }
+
+    try {
+      unsubscribe = repo.db.onChange(
+        {onChange: check, onError: fail},
+        {tables: ['workspace_members']},
+      )
+      if (disposeRequested) {
+        const current = unsubscribe
+        unsubscribe = null
+        current()
+        return
+      }
+      signal?.addEventListener('abort', onAbort, {once: true})
+      if (signal?.aborted) {
+        onAbort()
+        return
+      }
+      // Post-subscription recheck: a row may have arrived after the initial
+      // query but before the listener was installed.
+      void check()
+    } catch (error) {
+      fail(error)
+    }
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Optimistic local seeding (after RPC returns, before sync replicates).
 //

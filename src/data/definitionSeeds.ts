@@ -15,6 +15,7 @@ import {
 import {PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
 import {propertiesPageBlockId} from '@/data/propertiesPage'
 import type {Repo} from '@/data/repo'
+import {awaitLocalMemberRole} from '@/data/workspaces'
 
 /** Namespace for every deterministic code-owned definition block. Identity is
  * always workspace-scoped: uuidv5(`${workspaceId}:${seedKey}`, namespace). */
@@ -78,6 +79,57 @@ export interface PropertySeedMaterializationResult {
   readonly created: number
   readonly restored: number
   readonly skippedReadOnly: boolean
+}
+
+export type PropertySeedMaterializationAccess =
+  | {readonly allowed: true}
+  | {readonly allowed: false; readonly reason: 'inactive-workspace' | 'read-only' | 'viewer'}
+
+export interface AwaitPropertySeedMaterializationAccessOptions {
+  readonly freshlyCreated: boolean
+  readonly signal?: AbortSignal
+}
+
+const propertySeedAccessAbortError = (): DOMException =>
+  new DOMException('Property seed materialization access was aborted', 'AbortError')
+
+const throwIfPropertySeedAccessAborted = (signal?: AbortSignal): void => {
+  if (signal?.aborted) throw propertySeedAccessAbortError()
+}
+
+/** Access/readiness gate for production seed triggers. Fresh workspace RPCs
+ * prime the owner membership locally, so their bootstrap path need not wait.
+ * Existing workspaces await the exact membership row: the App deliberately
+ * defaults a not-yet-synced role to writable, which is safe for ordinary UX
+ * behind server RLS but would otherwise enqueue every seed create as a viewer.
+ *
+ * The captured workspace is rechecked after the wait so a parked task cannot
+ * write after the user switches away. Abort is owned by the trigger generation. */
+export const awaitPropertySeedMaterializationAccess = async (
+  repo: Repo,
+  workspaceId: string,
+  options: AwaitPropertySeedMaterializationAccessOptions,
+): Promise<PropertySeedMaterializationAccess> => {
+  throwIfPropertySeedAccessAborted(options.signal)
+  if (repo.activeWorkspaceId !== workspaceId) {
+    return {allowed: false, reason: 'inactive-workspace'}
+  }
+  if (repo.isReadOnly) return {allowed: false, reason: 'read-only'}
+
+  if (!options.freshlyCreated) {
+    const role = await awaitLocalMemberRole(repo, workspaceId, repo.user.id, {
+      signal: options.signal,
+    })
+    throwIfPropertySeedAccessAborted(options.signal)
+    if (repo.activeWorkspaceId !== workspaceId) {
+      return {allowed: false, reason: 'inactive-workspace'}
+    }
+    if (role === 'viewer') return {allowed: false, reason: 'viewer'}
+    if (repo.isReadOnly) return {allowed: false, reason: 'read-only'}
+  }
+
+  throwIfPropertySeedAccessAborted(options.signal)
+  return {allowed: true}
 }
 
 const revisionFromProperties = (properties: Record<string, unknown>): number | undefined => {
