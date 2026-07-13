@@ -7,13 +7,19 @@ import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
 import { isPropertyPanelHiddenProperty } from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
+import {declarationOnlyDefinitionForName} from './declarationOnly'
 
 export const writeProperty = (
   block: Block,
   schema: AnyPropertySchema,
   decodedValue: unknown,
-): Promise<void> =>
-  block.set(schema, decodedValue)
+): Promise<void> => {
+  if (declarationOnlyDefinitionForName(
+    schema.name,
+    block.repo.propertyDefinitions,
+  )) return Promise.resolve()
+  return block.set(schema, decodedValue)
+}
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a
@@ -29,6 +35,9 @@ export const addProperty = async (
   const name = args.name.trim()
   if (!name) return undefined
   if (isPropertyPanelHiddenProperty(name, schemas, uis, block.repo.propertyDefinitions)) {
+    return undefined
+  }
+  if (declarationOnlyDefinitionForName(name, block.repo.propertyDefinitions)) {
     return undefined
   }
 
@@ -68,6 +77,8 @@ export const renameProperty = async (args: {
   if (args.oldName === typesProp.name || nextName === typesProp.name) return
   if (args.schemas.has(args.oldName) || args.schemas.has(nextName)) return
   const definitions = args.block.repo.propertyDefinitions
+  if (declarationOnlyDefinitionForName(args.oldName, definitions)) return
+  if (declarationOnlyDefinitionForName(nextName, definitions)) return
   if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis, definitions)) return
   if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis, definitions)) return
 
@@ -93,6 +104,10 @@ export const deleteProperty = async (args: {
   name: string
 }) => {
   if (args.name === typesProp.name) return
+  if (declarationOnlyDefinitionForName(
+    args.name,
+    args.block.repo.propertyDefinitions,
+  )) return
   if (isPropertyPanelHiddenProperty(
     args.name,
     args.schemas,

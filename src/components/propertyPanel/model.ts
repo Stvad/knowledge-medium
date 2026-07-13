@@ -15,6 +15,10 @@ import {
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 import { isPropertyPanelHiddenProperty } from './visibility'
+import {
+  declarationOnlyDefinitionForName,
+  declarationOnlyStatusText,
+} from './declarationOnly'
 
 const EMPTY_BLOCK_TYPES: readonly string[] = []
 
@@ -47,6 +51,9 @@ export interface PropertyPanelModelRow {
   readonly canDelete: boolean
   readonly canChangeShape: boolean
   readonly isHidden: boolean
+  /** Row-level lock independent of repository read-only mode. */
+  readonly readOnly: boolean
+  readonly statusText?: string
 }
 
 export interface PropertyPanelModelSection {
@@ -112,6 +119,7 @@ const resolveModelRow = (
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
     presets: ReadonlyMap<string, AnyJoinedValuePreset>
+    definitions: PropertyDefinitionRegistrySnapshot | null
     hidden: boolean
   },
 ): PropertyPanelModelRow | null => {
@@ -122,10 +130,16 @@ const resolveModelRow = (
     uis: args.uis,
     presets: args.presets,
   })
+  const declarationOnly = declarationOnlyDefinitionForName(
+    row.name,
+    args.definitions,
+  )
 
-  if (!row.isSet && !display.isKnown) return null
+  if (!row.isSet && !display.isKnown && declarationOnly === undefined) return null
 
-  const decodedValue = row.isSet
+  const decodedValue = declarationOnly
+    ? row.encodedValue
+    : row.isSet
     ? display.isKnown
       ? safeDecode(display.schema, row.encodedValue)
       : row.encodedValue
@@ -141,15 +155,21 @@ const resolveModelRow = (
     labelText: ui?.label ?? row.name,
     shape: display.shape,
     schema: display.schema,
-    schemaUnknown: !display.isKnown,
+    schemaUnknown: !display.isKnown && declarationOnly === undefined,
     decodeFailed,
     value: decodeFailed ? row.encodedValue : decodedValue,
-    Editor: display.Editor,
+    Editor: declarationOnly ? undefined : display.Editor,
     Glyph: display.Glyph,
-    canRename: !args.hidden && !display.isKnown,
-    canDelete: !args.hidden && row.isSet && !isTypeMembershipRow,
-    canChangeShape: !args.hidden && !display.isKnown,
+    canRename: !args.hidden && !display.isKnown && declarationOnly === undefined,
+    canDelete: !args.hidden && row.isSet && !isTypeMembershipRow && declarationOnly === undefined,
+    canChangeShape: !args.hidden && !display.isKnown && declarationOnly === undefined,
     isHidden: args.hidden,
+    readOnly: declarationOnly !== undefined,
+    ...(declarationOnly
+      ? {
+          statusText: declarationOnlyStatusText(declarationOnly),
+        }
+      : {}),
   }
 }
 
@@ -159,6 +179,7 @@ const resolveSection = (
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
     presets: ReadonlyMap<string, AnyJoinedValuePreset>
+    definitions: PropertyDefinitionRegistrySnapshot | null
     hidden: boolean
   },
 ): PropertyPanelModelSection | null => {
@@ -212,6 +233,7 @@ export const buildPropertyPanelModel = (args: {
       schemas: args.schemas,
       uis: args.uis,
       presets: args.presets,
+      definitions: args.propertyDefinitions,
       hidden: false,
     }))
     .filter((row): row is PropertyPanelModelRow => row !== null)
@@ -237,6 +259,7 @@ export const buildPropertyPanelModel = (args: {
       schemas: args.schemas,
       uis: args.uis,
       presets: args.presets,
+      definitions: args.propertyDefinitions,
       hidden: false,
     }))
     .filter((section): section is PropertyPanelModelSection => section !== null)
@@ -253,6 +276,7 @@ export const buildPropertyPanelModel = (args: {
     schemas: args.schemas,
     uis: args.uis,
     presets: args.presets,
+    definitions: args.propertyDefinitions,
     hidden: true,
   }) ?? {...HIDDEN_SECTION, rows: []}
 

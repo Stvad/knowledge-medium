@@ -244,4 +244,92 @@ describe('buildPropertyPanelModel', () => {
       .not.toContain(hidden.name)
   })
 
+  it('renders a selected metadata-only plugin definition as an attributed read-only row', () => {
+    const metadataOnly: PropertyDefinitionMetadata = {
+      fieldId: 'field-srs-config',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'srs:config',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'plugin:srs-rescheduling',
+      seedKey: 'srs-rescheduling/property/config',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map(),
+      projectedDefinitions: new Map([[
+        metadataOnly.fieldId,
+        {metadata: metadataOnly},
+      ]]),
+      seeds: [],
+    })
+    const encodedValue = {queue: ['block-1'], threshold: 2}
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {[metadataOnly.name]: encodedValue},
+      schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
+      propertyDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const row = model.sections.flatMap(section => section.rows)
+      .find(candidate => candidate.name === metadataOnly.name)
+    expect(row).toMatchObject({
+      name: metadataOnly.name,
+      encodedValue,
+      value: encodedValue,
+      schemaUnknown: false,
+      readOnly: true,
+      statusText: 'Provided by srs-rescheduling — not installed/disabled',
+      canRename: false,
+      canDelete: false,
+      canChangeShape: false,
+      isHidden: false,
+    })
+    expect(row?.Editor).toBeUndefined()
+  })
+
+  it('attributes metadata-only user definitions to the workspace user', () => {
+    const metadataOnly: PropertyDefinitionMetadata = {
+      fieldId: 'field-user-config',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'user:config',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'user',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map(),
+      projectedDefinitions: new Map([[
+        metadataOnly.fieldId,
+        {metadata: metadataOnly},
+      ]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {[metadataOnly.name]: {enabled: true}},
+      schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
+      propertyDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    expect(model.sections.flatMap(section => section.rows)
+      .find(row => row.name === metadataOnly.name)?.statusText)
+      .toBe('User-created definition — behavior unavailable')
+  })
+
 })

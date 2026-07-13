@@ -93,4 +93,66 @@ describe('property panel action visibility guards', () => {
 
     expect(tx).not.toHaveBeenCalled()
   })
+
+  it('refuses rename and delete for a visible declaration-only definition', async () => {
+    const metadataOnly: PropertyDefinitionMetadata = {
+      fieldId: 'field-srs-config',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'srs:config',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'plugin:srs-rescheduling',
+      seedKey: 'srs-rescheduling/property/config',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map(),
+      projectedDefinitions: new Map([[
+        metadataOnly.fieldId,
+        {metadata: metadataOnly},
+      ]]),
+      seeds: [],
+    })
+    const tx = vi.fn()
+    const addSchema = vi.fn()
+    const block = {
+      id: 'block-1',
+      repo: {propertyDefinitions, tx, userSchemas: {addSchema}},
+    } as unknown as Block
+    const properties = {[metadataOnly.name]: {queue: ['block-2']}}
+    // Simulate a stale render/action closure retained from before the atomic
+    // registry snapshot became metadata-only.
+    const staleSchema = defineProperty(metadataOnly.name, {
+      codec: codecs.unsafeIdentity('object'),
+      defaultValue: {},
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const staleSchemas = new Map([[staleSchema.name, staleSchema]])
+
+    await expect(addProperty(block, staleSchemas, new Map(), {
+      adopted: staleSchema,
+      name: staleSchema.name,
+      presetId: staleSchema.codec.type,
+    })).resolves.toBeUndefined()
+
+    await renameProperty({
+      block,
+      properties,
+      schemas: staleSchemas,
+      uis: new Map(),
+      oldName: metadataOnly.name,
+      newName: 'renamed-config',
+    })
+    await deleteProperty({
+      block,
+      properties,
+      schemas: staleSchemas,
+      uis: new Map(),
+      name: metadataOnly.name,
+    })
+
+    expect(tx).not.toHaveBeenCalled()
+    expect(addSchema).not.toHaveBeenCalled()
+  })
 })

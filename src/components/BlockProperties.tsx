@@ -100,14 +100,17 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       .filter(ref =>
         ref.blockId === block.id
         && !Object.hasOwn(properties, ref.name)
-        && schemas.has(ref.name),
+        && (
+          schemas.has(ref.name)
+          || propertyDefinitions?.definitionsByName.has(ref.name) === true
+        ),
       )
       .map(ref => ({
         name: ref.name,
         encodedValue: undefined,
         isSet: false,
       })),
-    [block.id, properties, schemas, syntheticProperties],
+    [block.id, properties, propertyDefinitions, schemas, syntheticProperties],
   )
 
   const model = useMemo(() => blockData
