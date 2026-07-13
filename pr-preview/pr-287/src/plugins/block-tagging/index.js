@@ -1,27 +1,2 @@
-import { propertyEditorOverridesFacet } from "../../data/facets.js";
-import { systemToggle } from "../../facets/togglable.js";
-import { actionsFacet } from "../../extensions/core.js";
-import { dialogAppMountExtension } from "../../extensions/dialogAppMount.js";
-import { groupedBacklinksGroupHeaderActionsFacet } from "../grouped-backlinks/facet.js";
-import { blockTagsConfigProp } from "./config.js";
-import { blockTaggingDataExtension } from "./dataExtension.js";
-import { blockTagsConfigUi } from "./propertyEditorOverride.js";
-import { appendTagToBlocks, appendTagToContent } from "./appendTag.js";
-import { ADD_TAG_ACTION_ID, ADD_TAG_BLOCKS_ACTION_ID, addTagAction, addTagBlockAction, addTagGroupHeaderEntry } from "./addTagAction.js";
-//#region src/plugins/block-tagging/index.ts
-var blockTaggingPlugin = systemToggle({
-	id: "system:block-tagging",
-	name: "Block tagging",
-	description: "Add-tag action and the per-workspace tag-list preference."
-}).of([
-	blockTaggingDataExtension,
-	dialogAppMountExtension,
-	propertyEditorOverridesFacet.of(blockTagsConfigUi, { source: "block-tagging" }),
-	actionsFacet.of(addTagBlockAction, { source: "block-tagging" }),
-	actionsFacet.of(addTagAction, { source: "block-tagging" }),
-	groupedBacklinksGroupHeaderActionsFacet.of(addTagGroupHeaderEntry, { source: "block-tagging" })
-]);
-//#endregion
-export { ADD_TAG_ACTION_ID, ADD_TAG_BLOCKS_ACTION_ID, appendTagToBlocks, appendTagToContent, blockTaggingPlugin, blockTagsConfigProp };
-
+import{defineHiddenPresetPresentation as e}from"../../data/api/valuePresets.js";import"../../data/api/index.js";import{propertyEditorOverridesFacet as t,valuePresetPresentationsFacet as n}from"../../data/facets.js";import{systemToggle as r}from"../../facets/togglable.js";import{actionsFacet as i}from"../../extensions/core.js";import{dialogAppMountExtension as a}from"../../extensions/dialogAppMount.js";import{groupedBacklinksGroupHeaderActionsFacet as o}from"../grouped-backlinks/facet.js";import{blockTagsConfigPresetCore as s,blockTagsConfigProp as c}from"./config.js";import{blockTaggingDataExtension as l}from"./dataExtension.js";import{blockTagsConfigUi as u}from"./propertyEditorOverride.js";import{appendTagToBlocks as d,appendTagToContent as f}from"./appendTag.js";import{ADD_TAG_ACTION_ID as p,ADD_TAG_BLOCKS_ACTION_ID as m,addTagAction as h,addTagBlockAction as g,addTagGroupHeaderEntry as _}from"./addTagAction.js";var v=r({id:`system:block-tagging`,name:`Block tagging`,description:`Add-tag action and the per-workspace tag-list preference.`}).of([l,a,t.of(u,{source:`block-tagging`}),n.of(e(s,`Block-tag configuration`),{source:`block-tagging`}),i.of(g,{source:`block-tagging`}),i.of(h,{source:`block-tagging`}),o.of(_,{source:`block-tagging`})]);export{p as ADD_TAG_ACTION_ID,m as ADD_TAG_BLOCKS_ACTION_ID,d as appendTagToBlocks,f as appendTagToContent,v as blockTaggingPlugin,c as blockTagsConfigProp};
 //# sourceMappingURL=index.js.map

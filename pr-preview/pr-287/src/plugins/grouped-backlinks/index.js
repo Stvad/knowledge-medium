@@ -1,21 +1,2 @@
-import { propertyEditorOverridesFacet } from "../../data/facets.js";
-import { systemToggle } from "../../facets/togglable.js";
-import { groupedBacklinksDataExtension } from "./dataExtension.js";
-import { defineVariant } from "../../facets/variantFacet.js";
-import { backlinksViewFacet } from "../backlinks-view/facet.js";
-import { GroupedLinkedReferences } from "./GroupedLinkedReferences.js";
-import { groupedBacklinksDefaultsUi } from "./propertyEditorOverride.js";
-//#region src/plugins/grouped-backlinks/index.ts
-var groupedBacklinksPlugin = systemToggle({
-	id: "system:grouped-backlinks",
-	name: "Grouped backlinks",
-	description: "Backlinks grouped by a configurable property (defaults to the type of the source block)."
-}).of([
-	groupedBacklinksDataExtension,
-	propertyEditorOverridesFacet.of(groupedBacklinksDefaultsUi, { source: "grouped-backlinks" }),
-	backlinksViewFacet.of(() => defineVariant("grouped", "Grouped", GroupedLinkedReferences), { source: "grouped-backlinks" })
-]);
-//#endregion
-export { groupedBacklinksPlugin };
-
+import{defineHiddenPresetPresentation as e}from"../../data/api/valuePresets.js";import"../../data/api/index.js";import{propertyEditorOverridesFacet as t,valuePresetPresentationsFacet as n}from"../../data/facets.js";import{systemToggle as r}from"../../facets/togglable.js";import{groupedBacklinksConfigPresetCore as i,groupedBacklinksOverridesPresetCore as a}from"./config.js";import{groupedBacklinksDataExtension as o}from"./dataExtension.js";import{defineVariant as s}from"../../facets/variantFacet.js";import{backlinksViewFacet as c}from"../backlinks-view/facet.js";import{GroupedLinkedReferences as l}from"./GroupedLinkedReferences.js";import{groupedBacklinksDefaultsUi as u}from"./propertyEditorOverride.js";var d=r({id:`system:grouped-backlinks`,name:`Grouped backlinks`,description:`Backlinks grouped by a configurable property (defaults to the type of the source block).`}).of([o,t.of(u,{source:`grouped-backlinks`}),n.of(e(i,`Grouped-backlinks configuration`),{source:`grouped-backlinks`}),n.of(e(a,`Grouped-backlinks overrides`),{source:`grouped-backlinks`}),c.of(()=>s(`grouped`,`Grouped`,l),{source:`grouped-backlinks`})]);export{d as groupedBacklinksPlugin};
 //# sourceMappingURL=index.js.map

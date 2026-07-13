@@ -1,27 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { actionsFacet } from "../../extensions/core.js";
-import { dialogAppMountExtension } from "../../extensions/dialogAppMount.js";
-import { MergePicker } from "./MergePicker.js";
-import { MERGE_INTO_ACTION_ID, mergeIntoAction } from "./mergeAction.js";
-//#region src/plugins/merge-blocks/index.ts
-/**
-* merge-blocks plugin — adds a "Merge into…" command-palette action on
-* any focused block. The action opens a picker that searches link
-* targets in the current workspace; on selection, `core.merge` folds
-* the source into the picked target. Content strategy (concat vs.
-* keepTarget) is decided at commit time by `pickMergeContentStrategy`
-* based on the two blocks' types.
-*
-* Composition:
-*   - `MergePicker.tsx`      — modal opened on demand via `openDialog`
-*   - `mergeAction.ts`       — block-context action that opens the picker
-*/
-var mergeBlocksPlugin = systemToggle({
-	id: "system:merge-blocks",
-	name: "Merge blocks",
-	description: "Block-merge actions (Backspace at start of a block merges into the previous one)."
-}).of([dialogAppMountExtension, actionsFacet.of(mergeIntoAction, { source: "merge-blocks" })]);
-//#endregion
-export { MERGE_INTO_ACTION_ID, MergePicker, mergeBlocksPlugin, mergeIntoAction };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{actionsFacet as t}from"../../extensions/core.js";import{dialogAppMountExtension as n}from"../../extensions/dialogAppMount.js";import{MergePicker as r}from"./MergePicker.js";import{MERGE_INTO_ACTION_ID as i,mergeIntoAction as a}from"./mergeAction.js";var o=e({id:`system:merge-blocks`,name:`Merge blocks`,description:`Block-merge actions (Backspace at start of a block merges into the previous one).`}).of([n,t.of(a,{source:`merge-blocks`})]);export{i as MERGE_INTO_ACTION_ID,r as MergePicker,o as mergeBlocksPlugin,a as mergeIntoAction};
 //# sourceMappingURL=index.js.map

@@ -1,14 +1,2 @@
-import { definePropertyEditorOverride } from "../../data/api/propertySchema.js";
-import "../../data/api/index.js";
-import { dailyNoteBacklinksDefaultsProp } from "./dailyNoteDefaults.js";
-import { BacklinksFilterPropertyEditor } from "./BacklinksFilterPropertyEditor.js";
-//#region src/plugins/backlinks/propertyEditorOverride.ts
-var dailyNoteBacklinksDefaultsUi = definePropertyEditorOverride({
-	name: dailyNoteBacklinksDefaultsProp.name,
-	label: "Daily note backlinks defaults",
-	Editor: BacklinksFilterPropertyEditor
-});
-//#endregion
-export { dailyNoteBacklinksDefaultsUi };
-
+import{definePropertyEditorOverride as e}from"../../data/api/propertySchema.js";import"../../data/api/index.js";import{dailyNoteBacklinksDefaultsProp as t}from"./dailyNoteDefaults.js";import{BacklinksFilterPropertyEditor as n}from"./BacklinksFilterPropertyEditor.js";var r=e({name:t.name,label:`Daily note backlinks defaults`,Editor:n});export{r as dailyNoteBacklinksDefaultsUi};
 //# sourceMappingURL=propertyEditorOverride.js.map

@@ -1,21 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { charLimitProp } from "./properties.js";
-import { CHAR_COUNTER_TYPE } from "./blockType.js";
-import { characterCounterDataExtension } from "./dataExtension.js";
-import { blockContentDecoratorsFacet } from "../../extensions/blockInteraction.js";
-import { charCountDisplay } from "./charCount.js";
-import { characterCountDecoratorContribution } from "./CharacterCountDecorator.js";
-//#region src/plugins/character-counter/index.ts
-/** Character-counter plugin — tag a block "Character counter" to show a
-*  live character count below its content, with an optional per-block
-*  limit. The count is purely additive (a decorator over the existing
-*  renderer) and the limit is visual-only; neither ever blocks editing. */
-var characterCounterPlugin = systemToggle({
-	id: "system:character-counter",
-	name: "Character counter",
-	description: "Tag a block \"Character counter\" to show a live character count below it, with an optional limit."
-}).of([characterCounterDataExtension, blockContentDecoratorsFacet.of(characterCountDecoratorContribution, { source: "character-counter" })]);
-//#endregion
-export { CHAR_COUNTER_TYPE, charCountDisplay, charLimitProp, characterCounterPlugin };
-
+import{systemToggle as e}from"../../facets/togglable.js";import{charLimitProp as t,charProfileProp as n,charScopeProp as r}from"./properties.js";import{CHAR_COUNTER_TYPE as i}from"./blockType.js";import{characterCounterDataExtension as a}from"./dataExtension.js";import{blockContentDecoratorsFacet as o}from"../../extensions/blockInteraction.js";import{charCountDisplay as s}from"./charCount.js";import{RAW_CHARACTER_COUNT_PROFILE_ID as c,characterCountProfilesFacet as l}from"./profiles.js";import{characterCountDecoratorContribution as u}from"./CharacterCountDecorator.js";var d=e({id:`system:character-counter`,name:`Character counter`,description:`Tag a block "Character counter" to show a live character count below it or its direct children, with an optional limit.`}).of([a,o.of(u,{source:`character-counter`})]);export{i as CHAR_COUNTER_TYPE,c as RAW_CHARACTER_COUNT_PROFILE_ID,s as charCountDisplay,t as charLimitProp,n as charProfileProp,r as charScopeProp,l as characterCountProfilesFacet,d as characterCounterPlugin};
 //# sourceMappingURL=index.js.map

@@ -1,14 +1,2 @@
-import { systemToggle } from "../../facets/togglable.js";
-import { keybindingOverridesProp, keybindingsPrefsType } from "./config.js";
-import { keybindingsSettingsDataExtension } from "./dataExtension.js";
-//#region src/plugins/keybindings-settings/index.ts
-var keybindingsSettingsPlugin = systemToggle({
-	id: "system:keybindings-settings",
-	name: "Keyboard shortcuts",
-	description: "Lets you remap any action’s keyboard shortcut. Stores overrides on a per-user prefs block.",
-	essential: true
-}).of([keybindingsSettingsDataExtension]);
-//#endregion
-export { keybindingOverridesProp, keybindingsPrefsType, keybindingsSettingsPlugin };
-
+import{defineHiddenPresetPresentation as e}from"../../data/api/valuePresets.js";import"../../data/api/index.js";import{valuePresetPresentationsFacet as t}from"../../data/facets.js";import{systemToggle as n}from"../../facets/togglable.js";import{keybindingOverridesPresetCore as r,keybindingOverridesProp as i,keybindingsPrefsType as a}from"./config.js";import{keybindingsSettingsDataExtension as o}from"./dataExtension.js";var s=n({id:`system:keybindings-settings`,name:`Keyboard shortcuts`,description:`Lets you remap any action’s keyboard shortcut. Stores overrides on a per-user prefs block.`,essential:!0}).of([o,t.of(e(r,`Keybinding overrides`),{source:`keybindings-settings`})]);export{i as keybindingOverridesProp,a as keybindingsPrefsType,s as keybindingsSettingsPlugin};
 //# sourceMappingURL=index.js.map

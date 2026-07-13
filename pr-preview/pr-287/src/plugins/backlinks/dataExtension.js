@@ -1,16 +1,2 @@
-import { propertySchemasFacet, queriesFacet } from "../../data/facets.js";
-import { pluginPrefsExtension } from "../../data/pluginStateExtensions.js";
-import { backlinksForBlockQuery } from "./query.js";
-import { backlinksFilterProp } from "./filterProperty.js";
-import { backlinksPrefsType, dailyNoteBacklinksDefaultsProp } from "./dailyNoteDefaults.js";
-//#region src/plugins/backlinks/dataExtension.ts
-var backlinksDataExtension = [
-	queriesFacet.of(backlinksForBlockQuery, { source: "backlinks" }),
-	propertySchemasFacet.of(backlinksFilterProp, { source: "backlinks" }),
-	propertySchemasFacet.of(dailyNoteBacklinksDefaultsProp, { source: "backlinks" }),
-	...pluginPrefsExtension(backlinksPrefsType, "backlinks")
-];
-//#endregion
-export { backlinksDataExtension };
-
+import{propertySchemasFacet as e,queriesFacet as t,valuePresetCoresFacet as n}from"../../data/facets.js";import{pluginPrefsExtension as r}from"../../data/pluginStateExtensions.js";import{backlinksForBlockQuery as i}from"./query.js";import{backlinksFilterPresetCore as a,backlinksFilterProp as o}from"./filterProperty.js";import{backlinksPrefsType as s,dailyNoteBacklinksDefaultsProp as c}from"./dailyNoteDefaults.js";var l=[t.of(i,{source:`backlinks`}),e.of(o,{source:`backlinks`}),e.of(c,{source:`backlinks`}),n.of(a,{source:`backlinks`}),...r(s,`backlinks`)];export{l as backlinksDataExtension};
 //# sourceMappingURL=dataExtension.js.map

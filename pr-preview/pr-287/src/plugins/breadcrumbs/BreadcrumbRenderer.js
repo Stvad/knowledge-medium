@@ -1,26 +1,2 @@
-import { MarkdownContentRenderer } from "../../components/renderer/MarkdownContentRenderer.js";
-import { getBreadcrumbContentPreview } from "./breadcrumbPreview.js";
-import { c } from "react/compiler-runtime";
-import { jsx } from "react/jsx-runtime";
-//#region src/plugins/breadcrumbs/BreadcrumbRenderer.tsx
-var BreadcrumbRenderer = (props) => {
-	const $ = c(2);
-	let t0;
-	if ($[0] !== props) {
-		t0 = /* @__PURE__ */ jsx(MarkdownContentRenderer, {
-			...props,
-			contentTransform: getBreadcrumbContentPreview,
-			containerElement: "span",
-			containerClassName: "inline min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-baseline [&>*]:inline [&>*]:m-0 [&>*]:font-normal [&>*]:text-inherit"
-		});
-		$[0] = props;
-		$[1] = t0;
-	} else t0 = $[1];
-	return t0;
-};
-BreadcrumbRenderer.canRender = ({ context }) => !!context?.isBreadcrumb;
-BreadcrumbRenderer.priority = () => 10;
-//#endregion
-export { BreadcrumbRenderer };
-
+import{MarkdownContentRenderer as e}from"../../components/renderer/MarkdownContentRenderer.js";import{getBreadcrumbContentPreview as t}from"./breadcrumbPreview.js";import{c as n}from"react/compiler-runtime";import{jsx as r}from"react/jsx-runtime";var i=i=>{let a=n(2),o;return a[0]===i?o=a[1]:(o=r(e,{...i,contentTransform:t,containerElement:`span`,containerClassName:`inline min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap align-baseline [&>*]:inline [&>*]:m-0 [&>*]:font-normal [&>*]:text-inherit`}),a[0]=i,a[1]=o),o};i.canRender=({context:e})=>!!e?.isBreadcrumb,i.priority=()=>10;export{i as BreadcrumbRenderer};
 //# sourceMappingURL=BreadcrumbRenderer.js.map

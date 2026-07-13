@@ -1,24 +1,2 @@
-//#region src/utils/dom.ts
-var isElementProperlyVisible = (element) => {
-	const rect = element.getBoundingClientRect();
-	const windowHeight = window.innerHeight || document.documentElement.clientHeight;
-	const elementHeight = rect.height;
-	const computedStyle = window.getComputedStyle(element);
-	const minVisibleHeight = parseFloat(computedStyle.lineHeight) || parseFloat(computedStyle.fontSize) * 1.2;
-	const visibleTop = Math.max(0, rect.top);
-	const visibleBottom = Math.min(windowHeight, rect.bottom);
-	const visibleHeight = Math.max(0, visibleBottom - visibleTop);
-	if (elementHeight <= windowHeight) return visibleHeight >= minVisibleHeight;
-	const heightRatio = visibleHeight / windowHeight;
-	const elementVisibilityRatio = visibleHeight / elementHeight;
-	return heightRatio >= .6 || elementVisibilityRatio >= .2 || visibleHeight >= minVisibleHeight;
-};
-var isEditorElement = (element) => {
-	if (!element) return false;
-	return element instanceof HTMLTextAreaElement || Boolean(element.closest(".cm-editor"));
-};
-var shouldExitEditModeAfterBlur = (activeElement) => !isEditorElement(activeElement);
-//#endregion
-export { isEditorElement, isElementProperlyVisible, shouldExitEditModeAfterBlur };
-
+var e=()=>({top:0,bottom:window.innerHeight||document.documentElement.clientHeight}),t=t=>{let n=e(),r=t.parentElement;for(;r;){let{overflowY:e}=window.getComputedStyle(r);if(e===`auto`||e===`scroll`||e===`overlay`){let e=r.getBoundingClientRect();return{top:Math.max(n.top,e.top),bottom:Math.min(n.bottom,e.bottom)}}r=r.parentElement}return n},n=(t,n=e())=>{let r=t.getBoundingClientRect(),i=Math.max(0,n.bottom-n.top);if(i<=0)return!1;let a=r.height,o=window.getComputedStyle(t),s=parseFloat(o.lineHeight)||parseFloat(o.fontSize)*1.2,c=Math.max(n.top,r.top),l=Math.min(n.bottom,r.bottom),u=Math.max(0,l-c);if(a<=i)return u>=s;let d=u/i,f=u/a;return d>=.6||f>=.2||u>=s},r=e=>e?e instanceof HTMLTextAreaElement||!!e.closest(`.cm-editor`):!1,i=e=>!r(e);export{t as getElementScrollportBounds,r as isEditorElement,n as isElementProperlyVisible,i as shouldExitEditModeAfterBlur};
 //# sourceMappingURL=dom.js.map

@@ -1,6 +1,2 @@
-//#region src/components/propertyEditors/selectablePresets.ts
-var selectablePresets = (presets, keepId) => Array.from(presets.values()).filter((preset) => !preset.hideFromPicker || preset.id === keepId).sort((a, b) => a.label.localeCompare(b.label));
-//#endregion
-export { selectablePresets };
-
+var e=(e,t)=>Array.from(e.values()).filter(e=>!e.hideFromPicker||e.id===t).sort((e,t)=>e.label.localeCompare(t.label));export{e as selectablePresets};
 //# sourceMappingURL=selectablePresets.js.map
