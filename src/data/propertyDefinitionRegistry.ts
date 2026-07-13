@@ -88,29 +88,42 @@ export const buildPropertyDefinitionRegistry = (
     })
   }
 
-  const {byKey: seedsByKey, byName: seedsByNameMutable} = indexSeeds(args.seeds)
-
-  const schemas = new Map(args.legacySchemas)
-  for (const projected of args.projectedDefinitions.values()) {
-    if (!projected.schema) continue
-    const definition = projected.metadata
-    if (!definitionsByFieldId.has(definition.fieldId)) continue
-    const name = definition.name
-    schemas.set(name, name === projected.schema.name
-      ? projected.schema
-      : {...projected.schema, name})
-  }
-  for (const namedSeeds of seedsByNameMutable.values()) {
-    // Multiple local declarations with one display name need synced metadata
-    // before a fleet-wide winner can be selected. Do not let load order choose.
-    if (namedSeeds.length !== 1) continue
-    const seed = namedSeeds[0]!
+  const {byKey: seedsByKey, byName: seedsByDeclarationName} = indexSeeds(args.seeds)
+  const seedsByNameMutable = new Map<string, AnyPropertySeedDeclaration[]>()
+  for (const seed of seedsByKey.values()) {
     const fieldId = propertyDefinitionBlockId(args.workspaceId, seed.seedKey)
     const definition = definitionsByFieldId.get(fieldId)
-    // A deterministic-id occupant without the expected provenance is a hard
-    // identity collision, not a synthesized seed entry.
+    // A deterministic-id occupant with different provenance invalidates this
+    // declaration for the workspace; it must not participate in name fallback.
     if (definition && definition.seedKey !== seed.seedKey) continue
-    const name = definition?.name ?? seed.name
+    pushGrouped(seedsByNameMutable, definition?.name ?? seed.name, seed)
+  }
+
+  const schemas = new Map(args.legacySchemas)
+  // Declarations own their original names even after synced metadata renames
+  // them. Clear transitional behavior under both declaration and effective
+  // names before selected winners repopulate the ambient map.
+  for (const name of seedsByDeclarationName.keys()) schemas.delete(name)
+  for (const [name, definitions] of definitionsByNameMutable) {
+    const winnerSchema = schemasByFieldId.get(definitions[0]!.fieldId)
+    if (!winnerSchema) {
+      schemas.delete(name)
+      continue
+    }
+    schemas.set(name, name === winnerSchema.name
+      ? winnerSchema
+      : {...winnerSchema, name})
+  }
+  for (const [name, namedSeeds] of seedsByNameMutable) {
+    const winner = definitionsByNameMutable.get(name)?.[0]
+    const seed = winner
+      ? namedSeeds.find(candidate =>
+        propertyDefinitionBlockId(args.workspaceId, candidate.seedKey) === winner.fieldId)
+      : namedSeeds.length === 1 ? namedSeeds[0] : undefined
+    // With synced state, publish only its selected deterministic declaration.
+    // With zero rows, a unique effective name is required; contribution order
+    // never selects between ambiguous declarations.
+    if (!seed) continue
     schemas.set(name, name === seed.name ? seed : {...seed, name})
   }
 
