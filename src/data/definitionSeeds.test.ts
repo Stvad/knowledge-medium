@@ -366,3 +366,39 @@ describe('property seed materialization access', () => {
     await expect(waiting).resolves.toEqual({allowed: false, reason: 'inactive-workspace'})
   })
 })
+
+describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
+  const insertEditorMembership = async (): Promise<void> => {
+    await repo.db.execute(
+      `INSERT INTO workspace_members (id, workspace_id, user_id, role, create_time)
+       VALUES (?, ?, ?, ?, ?)`,
+      ['member-editor', WS, repo.user.id, 'editor', 1],
+    )
+  }
+
+  it('materializes the active workspace registry seeds through the deferred pass', async () => {
+    // A writable membership so the (non-fresh) access gate resolves rather than
+    // parking on the membership row — otherwise the drain below would hang.
+    await insertEditorMembership()
+    // Priming the registry is itself a seedKey-set change (null → the kernel
+    // seeds), so the applyTypesAndSchemas trigger schedules the pass; the
+    // explicit call mirrors the bootstrap trigger. Both drain to the same
+    // idempotent create.
+    await repo.whenPropertyDefinitionsReady(WS)
+    const seedKeys = [...(repo.propertyDefinitions?.seedsByKey.keys() ?? [])]
+    expect(seedKeys.length).toBeGreaterThan(0)
+
+    repo.scheduleWorkspaceSeedMaterialization(WS, false)
+    await repo.awaitSeedMaterialization()
+
+    // Every registry seed now has a live definition block under Properties.
+    for (const seedKey of seedKeys) {
+      const id = propertyDefinitionBlockId(WS, seedKey)
+      const row = await sharedDb.db.get<{parent_id: string; deleted: number}>(
+        'SELECT parent_id, deleted FROM blocks WHERE id = ?', [id],
+      )
+      expect(row?.parent_id).toBe(propertiesPageBlockId(WS))
+      expect(row?.deleted).toBe(0)
+    }
+  })
+})

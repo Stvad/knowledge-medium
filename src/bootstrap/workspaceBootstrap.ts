@@ -140,6 +140,15 @@ export const bootstrapWorkspace = async ({
   // own rows. Marker-gated once per workspace, deferred off this critical path.
   repo.scheduleWorkspaceRefBackfill(workspaceId)
 
+  // Materialize the code-declared property seeds into block-backed definitions
+  // for this workspace (schema-unification §4.3). At bootstrap the installed
+  // runtime is the static-data one, so only its seeds land here; the post-paint
+  // app-runtime install (and dynamic-extension loads) re-fire the pass from the
+  // registry-apply path as plugin seeds appear. Deferred + create/restore-only;
+  // `freshlyCreated` lets a fresh workspace skip the membership-row wait its
+  // access gate otherwise performs.
+  repo.scheduleWorkspaceSeedMaterialization(workspaceId, freshlyCreated)
+
   // One-time post-upgrade recovery for the deterministic-id shadow: clients that
   // skip-staled the server's authoritative row under the old reconcile gate
   // consumed its change-queue entry, so a normal startup never re-evaluates it.

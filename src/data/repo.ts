@@ -126,6 +126,11 @@ import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
 import {
+  materializePropertySeeds,
+  awaitPropertySeedMaterializationAccess,
+} from './definitionSeeds'
+import type {AnyPropertySeedDeclaration} from './propertySeeds'
+import {
   propertySchemaResolverForWorkspace,
   type PropertySchemaResolver,
 } from './internals/propertySchemaResolution'
@@ -232,6 +237,24 @@ const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
  *  shape/rationale as `reprojectionMarkerKey`. */
 const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
   `${workspaceId}:${id}`
+
+/** True when two registry snapshots carry the same SET of seed keys (ignoring
+ *  order, revisions, and everything else). Used to fire seed materialization
+ *  only when the active workspace's declared seeds actually change — a new
+ *  seed appearing (or one dropping) is the sole trigger the create/restore pass
+ *  cares about; revisions are the operator step's concern (§4.3/§6.1). Treats
+ *  an absent map as the empty set. */
+const sameSeedKeySet = (
+  a: ReadonlyMap<string, unknown> | undefined,
+  b: ReadonlyMap<string, unknown> | undefined,
+): boolean => {
+  const sizeA = a?.size ?? 0
+  const sizeB = b?.size ?? 0
+  if (sizeA !== sizeB) return false
+  if (!a || !b) return true
+  for (const key of a.keys()) if (!b.has(key)) return false
+  return true
+}
 
 export interface RepoOptions {
   db: PowerSyncDb
@@ -460,6 +483,12 @@ export class Repo {
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** In-flight property-seed materialization passes (§4.3 of the schema-
+   *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
+   *  siblings the pass is create/restore-only + idempotent rather than
+   *  marker-gated once-per-workspace, so it can re-run on every seed-set change
+   *  (a probe SELECT that short-circuits in steady state). */
+  private readonly seedMaterializationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -716,8 +745,19 @@ export class Repo {
         if (this._propertyDefinitionRegistry && incomingWorkspaceId !== currentWorkspaceId) {
           this._previousPropertyDefinitionRegistry = this._propertyDefinitionRegistry
         }
+        // Seed materialization (§4.3): plugin/dynamic seeds first appear when the
+        // toggle-aware app runtime installs in a post-paint effect, long after
+        // bootstrap ran — so re-run the create/restore pass whenever this active
+        // workspace's seedKey SET changes (not on every type/preset rebuild).
+        const seedKeysChanged = !sameSeedKeySet(
+          this._propertyDefinitionRegistry?.seedsByKey,
+          propertyDefinitions?.seedsByKey,
+        )
         this._propertyDefinitionRegistry = propertyDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
+        if (seedKeysChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
+          this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
+        }
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
@@ -1281,6 +1321,8 @@ export class Repo {
       this.scheduleWorkspaceBackfills(ws)
     const scheduleWorkspaceRefBackfill: Repo['scheduleWorkspaceRefBackfill'] = (ws) =>
       this.scheduleWorkspaceRefBackfill(ws)
+    const scheduleWorkspaceSeedMaterialization: Repo['scheduleWorkspaceSeedMaterialization'] =
+      (ws, freshlyCreated) => this.scheduleWorkspaceSeedMaterialization(ws, freshlyCreated)
     const scheduleReconcileRescan: Repo['scheduleReconcileRescan'] = (ws) =>
       this.scheduleReconcileRescan(ws)
     // Field-assigning members: run with the facade as `this`, the
@@ -1302,7 +1344,8 @@ export class Repo {
     return Object.assign(facade, {
       tx, run, mutate, undoGroup, block, runQuery,
       addType, removeType, toggleType, setBlockTypes,
-      scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill, scheduleReconcileRescan,
+      scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
+      scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
       setActiveWorkspaceId, setReadOnly, undo, redo,
       startSyncObserver, stopSyncObserver, resetMetrics,
     })
@@ -2054,6 +2097,63 @@ export class Repo {
     this.workspaceBackfillJobs.schedule(() =>
       this.runWorkspaceBackfills(workspaceId, backfills),
     )
+  }
+
+  /**
+   * Materialize the code-declared property seeds visible to the installed
+   * runtime into real `property-schema` blocks under the workspace's Properties
+   * page (§4.3 of the schema-unification design). This is what makes seeded
+   * definitions visible/editable in the UI and available to clients that don't
+   * have the contributing plugin loaded; the in-memory registry itself works
+   * with zero rows, so this pass never blocks correctness.
+   *
+   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
+   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
+   * on every seed-set change — create/restore-only + idempotent, so steady state
+   * is a single probe SELECT that short-circuits on `seed:revision`. Seeds are
+   * captured HERE (write-visibility = seed-visibility): exactly the seeds the
+   * matching registry carries, frozen so a later workspace switch can't change
+   * what this scheduled pass materializes.
+   *
+   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
+   * (for a non-freshly-created workspace) waits for the membership row before
+   * writing — a fresh device defaults a not-yet-synced role to writable, so a
+   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
+   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
+   * read-only session; the gate is the authoritative check.
+   */
+  scheduleWorkspaceSeedMaterialization(workspaceId: string, freshlyCreated: boolean): void {
+    if (this.isReadOnly || !workspaceId) return
+    const registry = this._propertyDefinitionRegistry
+    if (!registry || registry.workspaceId !== workspaceId) return
+    const seeds = [...registry.seedsByKey.values()]
+    if (seeds.length === 0) return
+    this.seedMaterializationJobs.schedule(() =>
+      this.runWorkspaceSeedMaterialization(workspaceId, seeds, freshlyCreated),
+    )
+  }
+
+  private async runWorkspaceSeedMaterialization(
+    workspaceId: string,
+    seeds: readonly AnyPropertySeedDeclaration[],
+    freshlyCreated: boolean,
+  ): Promise<void> {
+    try {
+      const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated})
+      if (!access.allowed) return
+      await materializePropertySeeds(this, workspaceId, seeds)
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(
+        `[seedMaterialization] workspace ${workspaceId} failed (will retry next open/seed change): ${reason}`,
+      )
+    }
+  }
+
+  /** Test helper — drains seed-materialization passes whose deferral timer has
+   *  fired. Mirror of `awaitWorkspaceBackfills`. */
+  async awaitSeedMaterialization(): Promise<void> {
+    await this.seedMaterializationJobs.drain()
   }
 
   private async runWorkspaceBackfills(
