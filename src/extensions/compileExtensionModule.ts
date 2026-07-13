@@ -30,35 +30,25 @@ export interface CompileResult {
  * for the lifetime of the page); tests construct their own instances to
  * avoid cross-test pollution from the module-level singleton.
  *
- * This sits ABOVE the persistent {@link CompiledModuleCache}: an L1/L2
+ * This sits ABOVE the persistent {@link CompiledModuleCache}: an in-memory
  * hit returns a live module reference with no IndexedDB round-trip; only
- * an L1 miss consults the persistent cache (and only a persistent miss
+ * an in-memory miss consults the persistent cache (and only a persistent miss
  * loads Babel).
  */
 export interface CompileCache {
-  // L1: contentHash -> in-flight or resolved compile.
-  // Same content from any block returns the same module instance.
-  // Also dedupes concurrent compiles of the same content.
-  byHash: Map<string, Promise<ExtensionModule>>
-
-  // L2: blockId -> { contentHash, modulePromise }.
-  // Lets unchanged blocks return the same module reference across
-  // multiple resolutions — critical for renderer modules so React
-  // doesn't unmount/remount on every refreshAppRuntime.
-  byBlock: Map<
-    string,
-    {contentHash: string, modulePromise: Promise<ExtensionModule>}
-  >
+  // blockId + contentHash -> in-flight or resolved compile.
+  // A live module belongs to one extension block: its declaration handles may
+  // be bound to that block's durable seed identities. This still dedupes
+  // concurrent compiles of the same block content.
+  byBlockAndHash: Map<string, Map<string, Promise<ExtensionModule>>>
 }
 
 export const createCompileCache = (): CompileCache => ({
-  byHash: new Map(),
-  byBlock: new Map(),
+  byBlockAndHash: new Map(),
 })
 
-// Process-wide singleton used by the loader in production. Bounded only
-// by the number of distinct block content versions that have ever been
-// compiled this session — eviction is a follow-up.
+// Process-wide singleton used by the loader in production. Content versions
+// remain cached until their owning block is evicted or the page tears down.
 const defaultCache = createCompileCache()
 
 // ──────────────────────────────────────────────────────────────────────
@@ -111,8 +101,7 @@ export function __setInstantiateImplForTest(impl: InstantiateImpl): () => void {
 }
 
 export function __resetCompileCacheForTest(): void {
-  defaultCache.byHash.clear()
-  defaultCache.byBlock.clear()
+  defaultCache.byBlockAndHash.clear()
 }
 
 /** Pure SHA-256 of the source. The compiler version is intentionally NOT
@@ -139,10 +128,8 @@ export async function hashExtensionSource(content: string): Promise<string> {
  *     revoked the instant the import resolves, so without this a throw shows
  *     `blob:<uuid>` with no name; the sourceURL survives revocation and, when
  *     `blockId` is known, identifies *which* extension a frame came from.
- *  Note: the L1 cache is keyed by content hash, so two blocks with identical
- *  source share one compiled string — the sourceURL then carries whichever
- *  block compiled first. Cosmetic only (identical-source extensions are rare;
- *  they already share one module instance). */
+ *  Note: live modules are cached per block as well as source hash so the
+ *  sourceURL consistently identifies the owning extension block. */
 async function defaultTranspileViaBabel(content: string, blockId?: string): Promise<string> {
   const Babel = await import('@babel/standalone')
   // SECURITY: block ids are NOT trusted input — `tx.create` accepts a
@@ -182,15 +169,15 @@ async function defaultInstantiateViaBlob(compiled: string): Promise<ExtensionMod
 }
 
 /**
- * Resolve a module through the in-memory L1 (content-hash) / L2 (blockId)
+ * Resolve a module through the block-scoped in-memory cache
  * cache, building it via `factory` only on a miss. `hashKey` is the
- * content hash that keys L1 — for an approved load it's the APPROVED
- * source hash (the pin), so two blocks sharing the same approved source
- * share one module instance, and a re-resolve of an unchanged pin returns
- * the same reference (React doesn't remount).
+ * content hash that participates in the cache key — for an approved load it's
+ * the APPROVED source hash (the pin). A re-resolve of an unchanged pin returns
+ * the same reference (React doesn't remount), while a different block gets a
+ * separate live module even when its source is identical.
  *
- * A rejected build is dropped from BOTH layers so the next call retries
- * rather than caching the failure forever.
+ * A rejected build is dropped so the next call retries rather than caching
+ * the failure forever.
  */
 function resolveCachedModule(
   cache: CompileCache,
@@ -198,23 +185,28 @@ function resolveCachedModule(
   blockId: string,
   factory: () => Promise<ExtensionModule>,
 ): Promise<ExtensionModule> {
-  // L2 hit: same block + same hash → reuse the module reference.
-  const cachedForBlock = cache.byBlock.get(blockId)
-  if (cachedForBlock?.contentHash === hashKey) return cachedForBlock.modulePromise
-
-  // L1 hit: same content as something we've built before (possibly for a
-  // different block). Extensions are values; identity follows source.
-  let modulePromise = cache.byHash.get(hashKey)
+  let modulesForBlock = cache.byBlockAndHash.get(blockId)
+  if (!modulesForBlock) {
+    modulesForBlock = new Map()
+    cache.byBlockAndHash.set(blockId, modulesForBlock)
+  }
+  // Cache hit: same block and content as something we've built before.
+  let modulePromise = modulesForBlock.get(hashKey)
   if (!modulePromise) {
     modulePromise = factory()
-    cache.byHash.set(hashKey, modulePromise)
+    modulesForBlock.set(hashKey, modulePromise)
     modulePromise.catch(() => {
-      if (cache.byHash.get(hashKey) === modulePromise) cache.byHash.delete(hashKey)
-      const l2 = cache.byBlock.get(blockId)
-      if (l2?.modulePromise === modulePromise) cache.byBlock.delete(blockId)
+      if (modulesForBlock.get(hashKey) === modulePromise) {
+        modulesForBlock.delete(hashKey)
+        if (
+          modulesForBlock.size === 0 &&
+          cache.byBlockAndHash.get(blockId) === modulesForBlock
+        ) {
+          cache.byBlockAndHash.delete(blockId)
+        }
+      }
     })
   }
-  cache.byBlock.set(blockId, {contentHash: hashKey, modulePromise})
   return modulePromise
 }
 
@@ -421,7 +413,7 @@ export async function compileForVerification(
 
 /**
  * Revoke a block's device-local approval: delete the persisted row and
- * drop the in-memory L2 entry, so the block stops running on the next
+ * drop its in-memory module entries, so the block stops running on the next
  * resolve. Best-effort (a failed delete must not break disable/uninstall);
  * the worst case is an orphaned row that a later re-approval overwrites (or
  * that a full "clear site data" wipe drops).
@@ -440,15 +432,14 @@ export async function revokeExtensionApproval(
 }
 
 /**
- * Drop a block's entry from the in-memory L2 cache. Use when a block is
- * deleted/revoked so its modulePromise is eligible for GC. (The L1 entry
- * under the old hash may survive — acceptable since other blocks could
- * share it.) Does not touch the persisted approval; use
+ * Drop every live module for a block from the in-memory caches. Use when a
+ * block is deleted/revoked so its top-level closures and bound declarations
+ * can be collected. Does not touch persisted approval; use
  * {@link revokeExtensionApproval} for that.
  */
 export function evictBlockFromCache(
   blockId: string,
   cache: CompileCache = defaultCache,
 ): void {
-  cache.byBlock.delete(blockId)
+  cache.byBlockAndHash.delete(blockId)
 }

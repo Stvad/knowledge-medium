@@ -24,6 +24,10 @@ import { getBoundary } from '@/facets/togglable'
 import type { Overrides } from '@/facets/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
+import {ChangeScope} from '@/data/api'
+import {definitionSeedsFacet} from '@/data/facets'
+import {seedProperty} from '@/data/propertySeeds'
+import {extensionPropertySeedKey} from '@/extensions/dynamicExtensionSeeds'
 
 // Test-local facet so contributions don't pollute / collide with the
 // real app facets.
@@ -276,6 +280,83 @@ describe('dynamicExtensionsExtension — provenance', () => {
       expect(innerNoSource.length).toBe(2)
     } finally {
       restore()
+    }
+  })
+})
+
+describe('dynamicExtensionsExtension — property seed identity', () => {
+  it('binds reserved seed owners per block and does not share identical-source modules', async () => {
+    const blocks = [
+      blockData({id: 'ext/one', content: 'same-source'}),
+      blockData({id: 'ext-two', content: 'same-source'}),
+    ]
+    const declarations: ReturnType<typeof seedProperty>[] = []
+    const restore = __setCompileImplForTest(async () => {
+      const declaration = seedProperty({
+        seedKey: extensionPropertySeedKey('status'),
+        revision: 1,
+        name: 'example:status',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      declarations.push(declaration)
+      return {default: definitionSeedsFacet.of(declaration)}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      expect(declarations).toHaveLength(2)
+      expect(declarations[0]).not.toBe(declarations[1])
+      const runtimeSeeds = runtime.read(definitionSeedsFacet)
+      expect(runtimeSeeds[0]).toBe(declarations[0])
+      expect(runtimeSeeds[1]).toBe(declarations[1])
+      expect(declarations.map(seed => seed.seedKey)).toEqual([
+        'ext%2Fone/property/status',
+        'ext-two/property/status',
+      ])
+    } finally {
+      restore()
+    }
+  })
+
+  it('rejects hard-coded owners so dynamic seeds cannot collide across installs', async () => {
+    const blocks = [blockData({id: 'ext-hardcoded', content: 'hardcoded'})]
+    const declaration = seedProperty({
+      seedKey: 'example/property/status',
+      revision: 1,
+      name: 'example:status',
+      preset: 'boolean',
+      defaultValue: false,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const restore = stubCompileByBlockId({
+      hardcoded: {default: definitionSeedsFacet.of(declaration)},
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(definitionSeedsFacet)).toEqual([])
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-hardcoded',
+        expect.objectContaining({
+          message: 'Dynamic property seeds must use extensionPropertySeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
     }
   })
 })

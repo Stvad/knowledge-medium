@@ -150,8 +150,9 @@ The graph is more than pages. The common typed blocks (by frequency):
   \`roam:URL\`, \`roam:create/user\`, \`readwise:author\`). Treat them as the source
   of truth they were imported from; don't delete them when migrating.
 - \`system:*\` (e.g. \`system:collapsed\`) is UI/system state, not user content.
-- To see the property schemas / types the runtime knows:
-  \`yarn agent describe-runtime --facets data.propertySchemas\` (and \`data.types\`).
+- To inspect code-declared and block-projected property definitions:
+  \`yarn agent describe-runtime --facets data.definition-seeds --facets data.projected-property-definitions\`.
+  Inspect types separately with \`yarn agent describe-runtime --facets data.types\`.
 
 ## Finding things — the named queries you can call
 
