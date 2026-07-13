@@ -128,6 +128,7 @@ import {
   propertySchemaResolverForWorkspace,
   type PropertySchemaResolver,
 } from './internals/propertySchemaResolution'
+import { runFreshInitialLoad } from './internals/freshInitialLoad'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -1486,7 +1487,12 @@ export class Repo {
       const unsubscribe = handle.subscribe(rows => {
         if (!initialPending) listener(rows)
       })
-      void handle.loadFresh().then(
+      // Bounded retry: a transient initial-load fault must not settle projector
+      // readiness as failed for the whole generation (which would wedge every
+      // active-workspace transaction until the next re-pin). Only a persistent
+      // failure reaches onInitialError.
+      const cancelLoad = runFreshInitialLoad(
+        () => handle.loadFresh(),
         rows => {
           initialPending = false
           try {
@@ -1500,7 +1506,10 @@ export class Repo {
           options.onInitialError?.(error)
         },
       )
-      return unsubscribe
+      return () => {
+        cancelLoad()
+        unsubscribe()
+      }
     }
     const current = handle.peek()
     if (current !== undefined) queueMicrotask(() => listener(current))
