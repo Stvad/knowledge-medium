@@ -80,8 +80,20 @@ class TransitionalLegacyPropertySchemaResolver
   }
 
   override resolveBoundary<T>(schema: PropertySchema<T>): PropertyBoundaryResolution<T> {
-    if (isPropertyHandle(schema) || isResolvedPropertySchema(schema)) {
+    if (isResolvedPropertySchema(schema)) {
+      // A resolved schema asserts a durable field id + workspace we cannot
+      // re-verify without a snapshot — fail closed.
       return super.resolveBoundary(schema)
+    }
+    if (isPropertyHandle(schema)) {
+      // A PropertyHandle is code-owned: its seedKey identity is deterministic
+      // and `addSchema` forbids user definitions from claiming a seed name, so
+      // a seeded handle cannot be shadowed. Its own codec is therefore the
+      // authoritative interpretation even before this workspace's definition
+      // projection has primed — a read during the boot window must return the
+      // stored value, not the schema default. (Revisit once seed-metadata
+      // renames can move the stored key.)
+      return {status: 'available', schema}
     }
     const seedCount = this.seedNameCounts.get(schema.name) ?? 0
     if (seedCount > 0) {
