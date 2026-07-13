@@ -10,8 +10,8 @@ import { aliasesProp, typesProp } from '@/data/properties'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import {
   invalidationRulesFacet,
+  definitionSeedsFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   queriesFacet,
 } from '@/data/facets.js'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
@@ -113,16 +113,17 @@ describe('backlinksDataExtension query', () => {
     expect(queries.get(BACKLINKS_FOR_BLOCK_QUERY)).toBeDefined()
   })
 
-  it('contributes its backlink filter property schema', () => {
+  it('contributes its backlink filter property seeds', () => {
     const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
-    expect(runtime.read(propertySchemasFacet).get(backlinksFilterProp.name)).toBe(backlinksFilterProp)
-    expect(runtime.read(propertySchemasFacet).get(dailyNoteBacklinksDefaultsProp.name))
-      .toBe(dailyNoteBacklinksDefaultsProp)
+    expect(runtime.read(definitionSeedsFacet)).toEqual(expect.arrayContaining([
+      backlinksFilterProp,
+      dailyNoteBacklinksDefaultsProp,
+    ]))
   })
 
   it('contributes a custom property UI for daily note backlink defaults', () => {
     const runtime = resolveFacetRuntimeSync(backlinksPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
+    const schemas = new Map([[dailyNoteBacklinksDefaultsProp.name, dailyNoteBacklinksDefaultsProp]])
     const uis = runtime.read(propertyEditorOverridesFacet)
 
     expect(uis.get(dailyNoteBacklinksDefaultsProp.name)).toBe(dailyNoteBacklinksDefaultsUi)

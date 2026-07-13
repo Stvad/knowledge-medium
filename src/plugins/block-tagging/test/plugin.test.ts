@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { Tag } from 'lucide-react'
 import { actionsFacet } from '@/extensions/core.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { propertySchemasFacet, propertyEditorOverridesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, propertyEditorOverridesFacet } from '@/data/facets.js'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.js'
 import { ActionContextTypes } from '@/shortcuts/types.js'
 import {
@@ -15,10 +15,9 @@ import {
 } from '../index.ts'
 
 describe('blockTaggingPlugin', () => {
-  it('registers the tags-config property schema', () => {
+  it('registers the tags-config property seed', () => {
     const runtime = resolveFacetRuntimeSync(blockTaggingPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
-    expect(schemas.get(blockTagsConfigProp.name)).toBe(blockTagsConfigProp)
+    expect(runtime.read(definitionSeedsFacet)).toContain(blockTagsConfigProp)
   })
 
   it('contributes a property editor override for the tag-list config', () => {

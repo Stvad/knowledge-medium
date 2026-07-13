@@ -2,7 +2,7 @@ import {
   ChangeScope,
   defineBlockType,
   definePresetCore,
-  defineProperty,
+  seedProperty,
   type Codec,
 } from '@/data/api'
 import { uniqueStrings } from '@/utils/array'
@@ -44,14 +44,14 @@ export const blockTagsConfigPresetCore = definePresetCore<string[]>({
  *  ` [[name]]` to each selected block's content if not already
  *  present (no `#` prefix, matching how the user writes tags
  *  inline). */
-export const blockTagsConfigProp = defineProperty<string[]>(
-  'blockTagging:tagsConfig',
-  {
-    codec: blockTagsConfigCodec,
-    defaultValue: [],
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const blockTagsConfigProp = seedProperty({
+  seedKey: 'system:block-tagging/property/tags-config',
+  revision: 1,
+  name: 'blockTagging:tagsConfig',
+  preset: blockTagsConfigPresetCore,
+  defaultValue: [],
+  changeScope: ChangeScope.UserPrefs,
+})
 
 /** Per-plugin prefs sub-block for the block-tagging plugin. Holds
  *  `blockTagsConfigProp` (the user's curated tag list). */

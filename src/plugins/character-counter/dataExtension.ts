@@ -2,7 +2,7 @@
  *  `char-counter` block type and `char:*` property schemas.
  *  Composed into the user-facing `characterCounterPlugin` in `./index.ts`. */
 
-import { propertySchemasFacet, typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typesFacet } from '@/data/facets'
 import type { AppExtension } from '@/facets/facet'
 import { CHAR_COUNTER_TYPE_CONTRIBUTIONS } from './blockType'
 import { charLimitProp, charProfileProp, charScopeProp } from './properties'
@@ -13,5 +13,5 @@ export const characterCounterDataExtension: AppExtension = [
     charLimitProp,
     charScopeProp,
     charProfileProp,
-  ].map(prop => propertySchemasFacet.of(prop, {source: 'character-counter'})),
+  ].map(prop => definitionSeedsFacet.of(prop, {source: 'character-counter'})),
 ]

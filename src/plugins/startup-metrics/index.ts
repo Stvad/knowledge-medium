@@ -1,7 +1,7 @@
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { appEffectsFacet } from '@/extensions/core.js'
-import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, typesFacet } from '@/data/facets.js'
 import {
   collectStartupMetricsEffect,
   startupMetricsUIStateType,
@@ -17,6 +17,6 @@ export const startupMetricsPlugin: AppExtension = systemToggle({
   description: 'Records time-to-interactivity and settle timings each load so regressions are visible over time.',
 }).of([
   appEffectsFacet.of(collectStartupMetricsEffect, { source: 'startup-metrics' }),
-  propertySchemasFacet.of(startupRecordProp, { source: 'startup-metrics' }),
+  definitionSeedsFacet.of(startupRecordProp, { source: 'startup-metrics' }),
   typesFacet.of(startupMetricsUIStateType, { source: 'startup-metrics' }),
 ])

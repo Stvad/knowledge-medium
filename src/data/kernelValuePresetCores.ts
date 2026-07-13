@@ -1,5 +1,4 @@
 import {CodecError, codecs, type Codec, type EnumOption, type RefCodecOptions} from './api/codecs'
-import {ChangeScope} from './api/changeScope'
 import {definePresetCore, type AnyValuePresetCore} from './api/valuePresetCore'
 
 /** Validates ref / refList preset config below the UI layer. */
@@ -88,19 +87,15 @@ export const enumValuePresetCore = definePresetCore<string, EnumPresetConfig>({
     defaultConfig: {options: []},
     configCodec: enumConfigCodec,
 })
-const changeScopeOptions = [
-  {value: ChangeScope.BlockDefault, label: 'Block default'},
-  {value: ChangeScope.UiState, label: 'UI state'},
-  {value: ChangeScope.UserPrefs, label: 'User preferences'},
-  {value: ChangeScope.Automation, label: 'Automation'},
-  {value: ChangeScope.References, label: 'References'},
-] as const
-/** Internal metadata core. Unlike the user-facing enum preset, writes do not
- * accept the empty "unset" sentinel: every definition must name a real tx scope. */
-export const changeScopeValuePresetCore = definePresetCore<ChangeScope>({
-  id: 'change-scope',
-  build: () => codecs.enum(changeScopeOptions),
-  defaultValue: ChangeScope.BlockDefault,
+/** Code-declared fixed unions use strict writes, unlike the user-facing Choice
+ * preset's empty "unset" sentinel. Declarations must persist an explicit
+ * default because no one default can be valid for every configured option set. */
+export const strictEnumValuePresetCore = definePresetCore<string, EnumPresetConfig>({
+  id: 'strict-enum',
+  build: config => codecs.enum(config.options),
+  defaultValue: '',
+  defaultConfig: {options: []},
+  configCodec: enumConfigCodec,
 })
 export const refValuePresetCore = definePresetCore<string, RefCodecOptions>({
     id: 'ref',
@@ -163,7 +158,7 @@ export const kernelValuePresetCoresById = {
   date: dateValuePresetCore,
   url: urlValuePresetCore,
   enum: enumValuePresetCore,
-  'change-scope': changeScopeValuePresetCore,
+  'strict-enum': strictEnumValuePresetCore,
   ref: refValuePresetCore,
   refList: refListValuePresetCore,
   'optional-string': optionalStringValuePresetCore,

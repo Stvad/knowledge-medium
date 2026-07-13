@@ -10,6 +10,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { getPluginUIStateBlock, getPluginUIStateChild } from '@/data/stateBlocks'
 import { getClientId, resetClientIdCache } from '@/utils/clientId'
 import type { User } from '@/data/api'
+import { definitionSeedsFacet } from '@/data/facets'
 import type { FacetRuntime } from '@/facets/facet'
 import {
   buildStartupRecord,
@@ -40,7 +41,11 @@ beforeEach(async () => {
   resetStartupTimeline()
   resetStartupMetricsRecorded()
   resetClientIdCache()
-  repo = createTestRepo({ db: sharedDb.db, user: USER }).repo
+  repo = createTestRepo({
+    db: sharedDb.db,
+    user: USER,
+    extensions: [definitionSeedsFacet.of(startupRecordProp, {source: 'test'})],
+  }).repo
   repo.setActiveWorkspaceId(WS)
 })
 afterEach(() => {

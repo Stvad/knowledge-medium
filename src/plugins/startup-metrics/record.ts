@@ -10,7 +10,7 @@
  * "store it so we can see TTI trend, not just feel it" half.
  */
 
-import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
+import { ChangeScope, defineBlockType, seedProperty } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
 import { onFirstSync, type SyncStatusDb } from '@/data/internals/firstSync.js'
@@ -66,8 +66,11 @@ export interface StartupRecordData {
 /** The whole record rides one identity-codec property (an engine-controlled
  *  blob), so the shape can evolve without per-field schema churn. A future
  *  trend view reads the child blocks and parses these — fine at this volume. */
-export const startupRecordProp = defineProperty<StartupRecordData | undefined>('startupRecord', {
-  codec: codecs.optionalIdentity<StartupRecordData>('object'),
+export const startupRecordProp = seedProperty<StartupRecordData | undefined>({
+  seedKey: 'system:startup-metrics/property/startup-record',
+  revision: 1,
+  name: 'startupRecord',
+  preset: 'optional-json',
   defaultValue: undefined,
   // Automation scope (not UiState) so the record is VISIBLE in the property
   // panel — it renders raw (no editor for an object blob), so the metrics are

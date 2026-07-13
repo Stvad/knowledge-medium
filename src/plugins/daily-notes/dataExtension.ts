@@ -1,4 +1,5 @@
 import {
+  definitionSeedsFacet,
   localSchemaFacet,
   refTargetFilterDefaultsFacet,
   systemPagesFacet,
@@ -12,6 +13,7 @@ import { dailyNotesLocalSchema } from './localSchema.ts'
 import { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 
 export const dailyNotesDataExtension: AppExtension = [
+  definitionSeedsFacet.of(dailyNoteDateProp, {source: 'daily-notes'}),
   typesFacet.of(dailyNoteType, {source: 'daily-notes'}),
   localSchemaFacet.of(dailyNotesLocalSchema, {source: 'daily-notes'}),
   workspaceBackfillsFacet.of(dailyNoteDateBackfill, {source: 'daily-notes'}),

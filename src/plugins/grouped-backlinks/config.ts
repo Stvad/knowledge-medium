@@ -1,9 +1,8 @@
 import {
   ChangeScope,
-  codecs,
   defineBlockType,
   definePresetCore,
-  defineProperty,
+  seedProperty,
   type BlockData,
   type Codec,
 } from '@/data/api'
@@ -154,23 +153,22 @@ export const groupedBacklinksOverridesPresetCore = definePresetCore<GroupedBackl
   defaultValue: EMPTY_GROUPED_BACKLINKS_OVERRIDES,
 })
 
-export const groupedBacklinksDefaultsProp = defineProperty<GroupedBacklinksConfig>(
-  'groupedBacklinks:defaults',
-  {
-    codec: groupedBacklinksConfigCodec,
-    defaultValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const groupedBacklinksDefaultsProp = seedProperty({
+  seedKey: 'system:grouped-backlinks/property/defaults',
+  revision: 1,
+  name: 'groupedBacklinks:defaults',
+  preset: groupedBacklinksConfigPresetCore,
+  defaultValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
+  changeScope: ChangeScope.UserPrefs,
+})
 
-export const groupedBacklinksOverridesProp = defineProperty<GroupedBacklinksOverrides>(
-  'groupedBacklinks:overrides',
-  {
-    codec: groupedBacklinksOverridesCodec,
-    defaultValue: EMPTY_GROUPED_BACKLINKS_OVERRIDES,
-    changeScope: ChangeScope.BlockDefault,
-  },
-)
+export const groupedBacklinksOverridesProp = seedProperty({
+  seedKey: 'system:grouped-backlinks/property/overrides',
+  revision: 1,
+  name: 'groupedBacklinks:overrides',
+  preset: groupedBacklinksOverridesPresetCore,
+  changeScope: ChangeScope.BlockDefault,
+})
 
 /** Per-plugin prefs sub-block for grouped-backlinks defaults. The
  *  defaults live here (UserPrefs scope); per-block overrides keep using
@@ -188,8 +186,12 @@ export const groupedBacklinksPrefsType = defineBlockType({
  *  query reads to expand each backlink's group set. */
 export const GROUP_WITH_PROP_NAME = 'groupWith'
 
-export const groupWithProp = defineProperty<readonly string[]>(GROUP_WITH_PROP_NAME, {
-  codec: codecs.refList(),
+export const groupWithProp = seedProperty({
+  seedKey: 'system:grouped-backlinks/property/group-with',
+  revision: 1,
+  name: GROUP_WITH_PROP_NAME,
+  preset: 'refList',
+  config: {},
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })

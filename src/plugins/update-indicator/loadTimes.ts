@@ -1,22 +1,27 @@
 import { getPluginPrefsBlock } from '@/data/stateBlocks.js'
 import {
   ChangeScope,
-  codecs,
   defineBlockType,
-  defineProperty,
+  seedProperty,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.js'
 import { scheduleDeepIdle, LAZY_DEEP_IDLE } from '@/utils/scheduleIdle.js'
 
-export const previousLoadTimeProp = defineProperty<number | undefined>('previousLoadTime', {
-  codec: codecs.optionalNumber,
+export const previousLoadTimeProp = seedProperty({
+  seedKey: 'system:update-indicator/property/previous-load-time',
+  revision: 1,
+  name: 'previousLoadTime',
+  preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
 
-export const currentLoadTimeProp = defineProperty<number | undefined>('currentLoadTime', {
-  codec: codecs.optionalNumber,
+export const currentLoadTimeProp = seedProperty({
+  seedKey: 'system:update-indicator/property/current-load-time',
+  revision: 1,
+  name: 'currentLoadTime',
+  preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })

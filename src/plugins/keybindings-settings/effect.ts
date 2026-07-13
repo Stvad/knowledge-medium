@@ -15,7 +15,6 @@
 import type {AppEffect} from '@/extensions/core.js'
 import {getPluginPrefsBlock} from '@/data/stateBlocks.js'
 import type {FacetRuntime} from '@/facets/facet.js'
-import type {PropertySchema} from '@/data/api'
 import {
   KEYBINDING_OVERRIDE_USER_SOURCE,
   keybindingOverridesFacet,
@@ -28,7 +27,9 @@ import {
 import {toFacetOverride} from './overrideStore.ts'
 
 interface OverridesReadable {
-  peekProperty<T>(schema: PropertySchema<T>): T | undefined
+  peekProperty(
+    schema: typeof keybindingOverridesProp,
+  ): StoredKeybindingOverrides | undefined
 }
 
 export const readOverridesFromBlock = (block: OverridesReadable): StoredKeybindingOverrides => {

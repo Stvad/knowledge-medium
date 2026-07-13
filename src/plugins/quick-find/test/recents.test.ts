@@ -5,6 +5,7 @@ import { ChangeScope } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
+import { definitionSeedsFacet } from '@/data/facets'
 import {
   RECENT_BLOCKS_LIMIT,
   pushRecentBlockId,
@@ -25,7 +26,9 @@ const setup = async (initialIds: string[]): Promise<Harness> => {
   const { repo } = createTestRepo({
     db: h.db,
     user: {id: 'user-1'},
+    extensions: [definitionSeedsFacet.of(recentBlockIdsProp, {source: 'test'})],
   })
+  repo.setActiveWorkspaceId(WS)
   await repo.tx(tx => tx.create({
     id: PREFS_BLOCK_ID,
     workspaceId: WS,

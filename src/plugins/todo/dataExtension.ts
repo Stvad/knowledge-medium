@@ -1,8 +1,9 @@
-import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, typesFacet } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
-import { roamTodoStateProp, todoType } from './schema.ts'
+import { roamTodoStateProp, statusProp, todoType } from './schema.ts'
 
 export const todoDataExtension: AppExtension = [
-  propertySchemasFacet.of(roamTodoStateProp, {source: 'todo'}),
+  definitionSeedsFacet.of(statusProp, {source: 'todo'}),
+  definitionSeedsFacet.of(roamTodoStateProp, {source: 'todo'}),
   typesFacet.of(todoType, {source: 'todo'}),
 ]

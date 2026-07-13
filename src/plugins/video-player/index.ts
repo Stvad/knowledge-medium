@@ -3,7 +3,7 @@ import {
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.js'
 import { blockRenderersFacet } from '@/extensions/core.js'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { markdownExtensionsFacet } from '@/markdown/extensions.js'
@@ -23,8 +23,8 @@ export const videoPlayerPlugin: AppExtension = systemToggle({
   name: 'Video player',
   description: 'Inline playback for blocks whose content is a video URL.',
 }).of([
-  propertySchemasFacet.of(videoPlayerViewProp, {source: 'video-player'}),
-  propertySchemasFacet.of(videoNotesPaneRatioProp, {source: 'video-player'}),
+  definitionSeedsFacet.of(videoPlayerViewProp, {source: 'video-player'}),
+  definitionSeedsFacet.of(videoNotesPaneRatioProp, {source: 'video-player'}),
   blockRenderersFacet.of({id: 'videoPlayer', renderer: VideoPlayerRenderer}, {source: 'video-player'}),
   blockLayoutFacet.of(videoPlayerLayoutContribution, {source: 'video-player'}),
   markdownExtensionsFacet.of(videoPlayerMarkdownExtension, {source: 'video-player'}),

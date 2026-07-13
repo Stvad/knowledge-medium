@@ -24,7 +24,7 @@ describe('kernel value preset split', () => {
     const cores = runtime.read(valuePresetCoresFacet)
     expect([...cores.keys()]).toEqual(expect.arrayContaining([
       'optional-string', 'optional-number', 'string-list',
-      'optional-ref', 'json', 'optional-json', 'raw-json', 'change-scope',
+      'optional-ref', 'json', 'optional-json', 'raw-json', 'strict-enum',
     ]))
     expect(cores.get('optional-string')?.build(undefined).encode(undefined)).toBeNull()
     expect(cores.get('optional-number')?.build(undefined).decode(null)).toBeUndefined()
@@ -36,8 +36,11 @@ describe('kernel value preset split', () => {
     expect(cores.get('optional-json')?.build(undefined).decode(null)).toBeUndefined()
     expect(cores.get('raw-json')?.defaultValue).toBeUndefined()
     expect(cores.get('raw-json')?.build(undefined).decode(null)).toBeNull()
-    expect(cores.get('change-scope')?.defaultValue).toBe(ChangeScope.BlockDefault)
-    expect(() => cores.get('change-scope')?.build(undefined).encode('' as ChangeScope)).toThrow()
+    const strictEnum = cores.get('strict-enum')!
+    const strictConfig = strictEnum.configCodec!.decode({options: [
+      {value: ChangeScope.BlockDefault, label: 'Block default'},
+    ]})
+    expect(() => strictEnum.build(strictConfig).encode('' as ChangeScope)).toThrow()
 
     const enumCore = cores.get('enum')!
     const enumConfig = enumCore.configCodec!.decode({

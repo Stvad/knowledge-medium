@@ -1,5 +1,5 @@
 import {
-  propertySchemasFacet,
+  definitionSeedsFacet,
   queriesFacet,
   valuePresetCoresFacet,
 } from '@/data/facets.js'
@@ -11,8 +11,8 @@ import { backlinksPrefsType, dailyNoteBacklinksDefaultsProp } from './dailyNoteD
 
 export const backlinksDataExtension: AppExtension = [
   queriesFacet.of(backlinksForBlockQuery, {source: 'backlinks'}),
-  propertySchemasFacet.of(backlinksFilterProp, {source: 'backlinks'}),
-  propertySchemasFacet.of(dailyNoteBacklinksDefaultsProp, {source: 'backlinks'}),
+  definitionSeedsFacet.of(backlinksFilterProp, {source: 'backlinks'}),
+  definitionSeedsFacet.of(dailyNoteBacklinksDefaultsProp, {source: 'backlinks'}),
   valuePresetCoresFacet.of(backlinksFilterPresetCore, {source: 'backlinks'}),
   ...pluginPrefsExtension(backlinksPrefsType, 'backlinks'),
 ]

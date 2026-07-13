@@ -252,7 +252,15 @@ export const propertyChangeScopeProp = seedProperty({
   seedKey: 'system:kernel-data/property/property-schema-change-scope',
   revision: 1,
   name: 'property-schema:change-scope',
-  preset: 'change-scope',
+  preset: 'strict-enum',
+  config: {options: [
+    {value: ChangeScope.BlockDefault, label: 'Block default'},
+    {value: ChangeScope.UiState, label: 'UI state'},
+    {value: ChangeScope.UserPrefs, label: 'User preferences'},
+    {value: ChangeScope.Automation, label: 'Automation'},
+    {value: ChangeScope.References, label: 'References'},
+  ]},
+  defaultValue: ChangeScope.BlockDefault,
   changeScope: ChangeScope.BlockDefault,
 })
 

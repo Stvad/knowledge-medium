@@ -64,6 +64,7 @@ describe('kernel property seed conversion', () => {
     const seeds = resolveFacetRuntimeSync([kernelDataExtension]).read(definitionSeedsFacet)
     expect(seeds.filter(seed => seed.hasExplicitDefault).map(seed => seed.name).sort()).toEqual([
       'blockSelectionState',
+      'property-schema:change-scope',
       'property-schema:config',
     ])
     expect(seeds.find(seed => seed.name === 'blockSelectionState')?.encodedDefaultValue)
@@ -82,7 +83,7 @@ describe('kernel property seed conversion', () => {
     const seeds = resolveFacetRuntimeSync([kernelDataExtension]).read(definitionSeedsFacet)
     expect(seeds.find(seed => seed.name === 'block-type:properties')?.encodedConfig)
       .toEqual({targetTypes: ['property-schema']})
-    expect(propertyChangeScopeProp.presetId).toBe('change-scope')
+    expect(propertyChangeScopeProp.presetId).toBe('strict-enum')
     expect(propertyChangeScopeProp.defaultValue).toBe(ChangeScope.BlockDefault)
     expect(() => propertyChangeScopeProp.codec.encode('' as ChangeScope)).toThrow()
   })

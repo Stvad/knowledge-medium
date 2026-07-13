@@ -12,7 +12,6 @@
  *   - identical maps → no-op
  */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
-import type {PropertySchema} from '@/data/api'
 import {
   reconcileOverrides,
   readOverridesFromBlock,
@@ -29,10 +28,10 @@ import type {Overrides} from '@/facets/togglable.js'
 const makeBlock = (
   overridesOrError: Overrides | Error,
 ) => ({
-  peekProperty<T>(schema: PropertySchema<T>): T | undefined {
+  peekProperty(schema: typeof extensionsOverridesProp): Overrides | undefined {
     if (schema !== extensionsOverridesProp) return undefined
     if (overridesOrError instanceof Error) throw overridesOrError
-    return overridesOrError as unknown as T
+    return overridesOrError
   },
 })
 

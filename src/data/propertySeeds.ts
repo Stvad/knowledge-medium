@@ -1,4 +1,5 @@
 import {ChangeScope, isChangeScope} from './api/changeScope'
+import type {EnumOption} from './api/codecs'
 import type {PropertyHandle} from './api/propertySchema'
 import {normalizePresetDefault, type ValuePresetCore} from './api/valuePresetCore'
 import {kernelValuePresetCoresById} from './kernelValuePresetCores'
@@ -54,6 +55,14 @@ type ExplicitCoreSeedPropertyArgs<T, TConfig> =
 
 type AssertedJsonSeedPropertyArgs<T, K extends 'json' | 'optional-json'> =
   Omit<SeedPropertyArgs<T, void>, 'preset'> & {readonly preset: K}
+type StrictEnumSeedPropertyArgs<T extends string> = Omit<
+  SeedPropertyArgs<T, {readonly options: readonly EnumOption<T>[]}>,
+  'preset' | 'config' | 'defaultValue'
+> & {
+  readonly preset: 'strict-enum'
+  readonly config: {readonly options: readonly EnumOption<T>[]}
+  readonly defaultValue: T
+}
 
 const own = (value: object, key: PropertyKey): boolean =>
   Object.prototype.hasOwnProperty.call(value, key)
@@ -132,6 +141,9 @@ export function seedProperty<T>(
 export function seedProperty<T>(
   args: AssertedJsonSeedPropertyArgs<T, 'optional-json'>,
 ): PropertySeedDeclaration<T, void>
+export function seedProperty<T extends string>(
+  args: StrictEnumSeedPropertyArgs<T>,
+): PropertySeedDeclaration<T, {readonly options: readonly EnumOption<T>[]}>
 export function seedProperty<K extends KernelPresetId>(
   args: KernelSeedPropertyArgs<K>,
 ): PropertySeedDeclaration<
@@ -179,7 +191,7 @@ export function seedProperty<T, TConfig = void>(
 
   const codec = core.build(config)
   const hasExplicitDefault = own(args, 'defaultValue')
-  let defaultValue = normalizePresetDefault(core, codec)
+  let defaultValue: T
   let encodedDefaultValue: unknown = undefined
   if (hasExplicitDefault) {
     encodedDefaultValue = codec.encode(args.defaultValue as T)
@@ -189,6 +201,8 @@ export function seedProperty<T, TConfig = void>(
       )
     }
     defaultValue = codec.decode(encodedDefaultValue)
+  } else {
+    defaultValue = normalizePresetDefault(core, codec)
   }
 
   return {

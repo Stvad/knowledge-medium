@@ -100,6 +100,17 @@ describe('seedProperty', () => {
       preset: 'string',
       changeScope: ChangeScope.BlockDefault,
     })
+
+    const missingStrictEnumConfig = () => seedProperty<'open'>({
+      seedKey: 'system:test/property/missing-strict-options',
+      revision: 1,
+      name: 'test:missing-strict-options',
+      // @ts-expect-error strict-enum declarations must provide their option config
+      preset: 'strict-enum',
+      defaultValue: 'open',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    void missingStrictEnumConfig
   })
 
   it('normalizes default config and distinguishes omitted from explicit undefined defaults', () => {

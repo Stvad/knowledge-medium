@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import type { Block } from '@/data/block'
 import { makeBlockData } from '@/data/test/factories.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
@@ -21,12 +21,14 @@ const canRenderContent = (content: string) =>
   VideoPlayerRenderer.canRender?.({block: blockWithContent(content)}) ?? false
 
 describe('videoPlayerPlugin', () => {
-  it('contributes its player schemas', () => {
+  it('contributes its player property seeds', () => {
     const runtime = resolveFacetRuntimeSync(videoPlayerPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
+    const seeds = runtime.read(definitionSeedsFacet)
 
-    expect(schemas.get(videoPlayerViewProp.name)).toBe(videoPlayerViewProp)
-    expect(schemas.get(videoNotesPaneRatioProp.name)).toBe(videoNotesPaneRatioProp)
+    expect(seeds).toEqual(expect.arrayContaining([
+      videoPlayerViewProp,
+      videoNotesPaneRatioProp,
+    ]))
     expect(videoNotesPaneRatioProp.changeScope).toBe(ChangeScope.UserPrefs)
   })
 
