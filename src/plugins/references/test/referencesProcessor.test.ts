@@ -1145,3 +1145,47 @@ describe('cleanupOrphanAliases — schema validation at enqueue', () => {
     expect(await env.read('src-bad')).toBeNull()
   })
 })
+
+describe('parseReferences — workspace-switch reprojection', () => {
+  const reviewerProp = defineProperty<string>('reviewer', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  beforeEach(async () => {
+    await env.h.cleanup()
+    // `reviewer` is an unscoped static schema → ref-typed in EVERY workspace,
+    // so switching between two workspaces produces an empty ref-ness diff.
+    env = await setup([propertySchemasFacet.of(reviewerProp, {source: 'test'})])
+  })
+
+  it('backfills a newly-pinned workspace sharing a ref-typed name with the prior one', async () => {
+    // `ws-1` (the setup default) is the previously-active workspace. Create a
+    // `ws-b` row with a ref value while `ws-b` is inactive, then blank its
+    // derived references to model a row synced from another device that never
+    // ran this client's per-write references processor.
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'srcB',
+        workspaceId: 'ws-b',
+        parentId: null,
+        orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    await env.h.db.execute(`UPDATE blocks SET references_json = '[]' WHERE id = ?`, ['srcB'])
+    expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([])
+
+    // Pin `ws-b`. `reviewer` is ref-typed in both `ws-1` and `ws-b`, so the
+    // prev-vs-new diff is empty — only the activation full-scan reaches srcB.
+    env.repo.setActiveWorkspaceId('ws-b')
+    await flush()
+
+    expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
+  })
+})

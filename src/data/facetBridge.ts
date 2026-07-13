@@ -60,7 +60,7 @@ import {
   workspaceBackfillsFacet,
   type WorkspaceBackfill,
 } from './facets'
-import { changedRefSchemaNames, mergeLiftedSchemas } from './internals/refProjection'
+import { changedRefSchemaNames, mergeLiftedSchemas, refTypedSchemaNames } from './internals/refProjection'
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
 /** A named rebuild step. Declares which facets it reads via `inputs` so
@@ -116,6 +116,12 @@ export class FacetBridge {
    *  `setFacetRuntime` call. */
   private runtime: FacetRuntime | null = null
   private activeWorkspaceId: string | null = null
+  /** The workspace whose full ref-typed schema set was last scheduled for a
+   *  marker-gated reprojection scan. A pin to a *different* workspace triggers a
+   *  fresh full scan so it backfills its own rows even when a ref-typed name is
+   *  unchanged from the previously-active workspace (see the `propertySchemas`
+   *  step). */
+  private lastRefBackfillWorkspaceId: string | null = null
   /** Workspace-scoped inputs may each notify during a filter flip. Their
    * owning steps run once after the runtime reaches the complete new view. */
   private workspacePinInProgress = false
@@ -408,9 +414,22 @@ export class FacetBridge {
             propertyDefinitions,
             propertySeedNameCounts,
           )
-          const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, propertySchemas)
-          if (refSchemaChanges.length > 0) {
-            target.scheduleReprojection(refSchemaChanges, propertySchemas)
+          // On a workspace PIN (activation), scan the new workspace's full
+          // ref-typed set — not just the prev-vs-new diff. Two workspaces that
+          // share a ref-typed name (e.g. a static seed like next-review-date)
+          // produce an empty diff, so the newly-pinned workspace's existing rows
+          // would otherwise never backfill their derived refs. Markers are
+          // (workspaceId, name)-keyed, so this scans each name at most once per
+          // workspace. Same-workspace contribution changes keep the minimal diff.
+          if (this.activeWorkspaceId && this.activeWorkspaceId !== this.lastRefBackfillWorkspaceId) {
+            this.lastRefBackfillWorkspaceId = this.activeWorkspaceId
+            const refNames = refTypedSchemaNames(propertySchemas)
+            if (refNames.length > 0) target.scheduleReprojection(refNames, propertySchemas)
+          } else {
+            const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, propertySchemas)
+            if (refSchemaChanges.length > 0) {
+              target.scheduleReprojection(refSchemaChanges, propertySchemas)
+            }
           }
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.
