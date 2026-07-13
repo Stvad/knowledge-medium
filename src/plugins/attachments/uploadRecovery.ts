@@ -40,7 +40,8 @@
  *   - transient GET (offline/5xx/
  *     unknown), not-materializable
  *     (locked/unpinned/signed-out),
- *     or wrong active account      → DEFER (no state change); a later Retry re-probes.
+ *     no live session token, or
+ *     wrong active account         → DEFER (no state change); a later Retry re-probes.
  *                                    No attempt burn, no PUT.
  *
  * WHY THE DOWN-LANE CAN'T DO THIS: the down-lane fetches bytes that are ABSENT locally;
@@ -75,6 +76,13 @@ export interface UploadRecoveryDeps {
    *  session + resolve keys against the active user, so a mid-recovery account switch
    *  must not verify/re-drive userA's record under userB. Defaults to always-active. */
   readonly isActiveUser?: () => boolean
+  /** The active session's access token (the same getter the blob store PUTs with); null
+   *  ⟹ no live Supabase session. Required to TRUST a probe: with no token the read rides
+   *  the anon role and an RLS-denied download is 404-shaped (existence-hiding), so a 404
+   *  can't be read as "path free" — and the tokenless drain couldn't upload anyway. So a
+   *  missing token DEFERS (keeps the record `failed` + its §9 warning) rather than requeue
+   *  it into invisible `pending`. Defaults to always-authed (tests opt in). */
+  readonly getAccessToken?: () => Promise<string | null>
 }
 
 export interface RecoverySummary {
@@ -96,6 +104,7 @@ interface RecoverOneCtx {
   readonly getMaterializability: GetMaterializability
   readonly getCek: GetCek
   readonly isActiveUser: () => boolean
+  readonly getAccessToken: () => Promise<string | null>
 }
 
 const recoverOne = async (
@@ -113,13 +122,20 @@ const recoverOne = async (
   const mode = materializabilityToMode(await ctx.getMaterializability(rec.workspaceId))
   if (mode === null) return 'deferred'
 
-  // (2) The probe. A definitive 404 → null (path free); any other error throws → transient
-  //     (offline / 5xx / unknown) → defer, never a PUT. NOTE a genuinely DENIED read is not a
-  //     throw here: Supabase Storage hides existence, so an unauthorized download returns a
-  //     404-shape → null → treated as "path free". That's harmless — the re-drive it triggers
-  //     is gated by the drain's own `isActiveUser` check (no PUT under the wrong session) and
-  //     self-corrects via the 409-verify when the right user is active — and the re-check
-  //     below skips it entirely on an account switch.
+  // (1b) A live session is required to TRUST the probe. With no token the read rides the anon
+  //      role, where an RLS-denied download is 404-shaped (Storage hides existence) — so a 404
+  //      can't be read as "path free", and requeuing off it would clear the §9 warning while the
+  //      equally-tokenless drain can't actually upload (its PUT 401s → transient → back to
+  //      invisible `pending`, age reset, bytes still only local). Defer until authed — no probe.
+  if ((await ctx.getAccessToken()) === null) return 'deferred'
+
+  // (2) The probe, now that (0)/(1)/(1b) guarantee the active account, a materializable
+  //     workspace, AND a live session. A definitive 404 → null (path free); any other error
+  //     throws → transient (offline / 5xx / unknown) → defer, never a PUT. A DENIED read is
+  //     404-shaped, but with (1b) requiring a token the only denial left is the narrow
+  //     account-switch race — the probe ran under userB and 404'd on userA's RLS-hidden path —
+  //     which the (2b) re-check catches before it can requeue. So a surviving 404 here means our
+  //     OWN authenticated read found the path free, not that we couldn't see it.
   let stored: Uint8Array<ArrayBuffer> | null
   try {
     stored = await ctx.blobStore.probe(rec.workspaceId, rec.contentKey)
@@ -180,6 +196,7 @@ export const recoverFailedUploads = async (
     getMaterializability: deps.getMaterializability,
     getCek: deps.getCek,
     isActiveUser: deps.isActiveUser ?? (() => true),
+    getAccessToken: deps.getAccessToken ?? (async () => 'authed'),
   }
 
   const failed = await deps.store.listByStatus(userId, 'failed')

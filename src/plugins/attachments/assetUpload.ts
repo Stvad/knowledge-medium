@@ -49,13 +49,20 @@ let blobStoreSingleton: BlobStore | null = null
  *  configured Supabase client but must upload NOTHING — capture stays in OPFS and the
  *  lane is a no-op (Codex P1). Re-checked each call (before the singleton) so the gate
  *  is dynamic across an account/mode switch. */
+/** The active Supabase session's access token, or null when there's no live session
+ *  (signed out / offline with an unrefreshable token). Shared by the blob store's
+ *  authenticated PUT and §9 recovery's session gate — recovery must NOT trust a probe's
+ *  404 (an anon/RLS-denied read is existence-hiding) or attempt an upload without one. */
+const getSupabaseAccessToken = async (): Promise<string | null> =>
+  supabase ? ((await supabase.auth.getSession()).data.session?.access_token ?? null) : null
+
 const getBlobStore = (): BlobStore | null => {
   if (!supabase || !isRemoteSyncActive()) return null
   if (!blobStoreSingleton) {
     const client = supabase
     blobStoreSingleton = createSupabaseBlobStore({
       client,
-      getAccessToken: async () => (await client.auth.getSession()).data.session?.access_token ?? null,
+      getAccessToken: getSupabaseAccessToken,
     })
   }
   // Per-call gate (not just the arm-time check above): the drain captures this store
@@ -171,6 +178,7 @@ export const runUploadRecovery = (userId: string): Promise<void> =>
       blobStore,
       ...laneKeyDeps(resolver),
       isActiveUser,
+      getAccessToken: getSupabaseAccessToken,
     })
   })
 

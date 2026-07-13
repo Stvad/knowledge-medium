@@ -192,6 +192,20 @@ describe('recoverFailedUploads (§9 failed-upload recovery actor)', () => {
     expect((await store.get(USER, BLOCK))?.status).toBe('failed')
   })
 
+  it('DEFERS (no probe) when there is no live session token — a 404 can’t be trusted unauthenticated', async () => {
+    // Same active user, materializable — but no Supabase token. An anon read is 404-shaped
+    // (Storage hides existence), so requeuing off a "free" probe would hide the §9 warning while
+    // the tokenless drain can't upload. Must stay `failed`, and never even hit the network.
+    await stageFailed(store)
+    blobStore.probeResult = null // even though the path *looks* free
+
+    const summary = await recoverFailedUploads(USER, deps({ getAccessToken: async () => null }))
+
+    expect(summary).toMatchObject({ deferred: 1, requeued: 0, cleared: 0 })
+    expect(blobStore.probes).toBe(0)
+    expect((await store.get(USER, BLOCK))?.status).toBe('failed')
+  })
+
   it('only touches FAILED records — pending / staged are left for the drain / reconciler', async () => {
     await store.stage(stageInput({ assetBlockId: 'media:staged', contentKey: 'ks' })) // staged
     await store.stage(stageInput({ assetBlockId: 'media:pending', contentKey: 'kp' }))

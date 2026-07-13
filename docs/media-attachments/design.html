@@ -139,7 +139,7 @@ no re-upload; present + mismatch → stay <code>failed</code>, §17). Transient 
 quarantined permanent-ish set (plus that rare aged-out transient), for which manual retry (not an automatic
 re-drive loop) is the right, and the codebase-consistent, UX. The user is the rate limiter, so there is no
 automatic re-drive bound.
-Last verified against code 2026-07-03. Treat as current intent. The least-settled part is the byte-lane
+Last verified against code 2026-07-13. Treat as current intent. The least-settled part is the byte-lane
 lifecycle / failure-recovery machinery (§8–§9, §16): the happy path and the crypto / threat model are
 solid; §16 GC is the remaining recovery edge still on the spec.
 </aside>
@@ -898,7 +898,9 @@ so it can't strip a co-referencing block's bytes or strand its route to the serv
   record's bytes are <em>present</em>, so the down-lane would never visit it; this re-attempt is the up-lane's
   own. Retry first does a <strong>direct
   RLS-gated <code>GET</code> of the content path</strong> (reads are direct, §8 — a 404 when the path is free,
-  the object's bytes when it's occupied) and
+  the object's bytes when it's occupied; only attempted <em>with a live session</em>, since a tokenless/anon read
+  is 404-shaped existence-hiding — with no session recovery <strong>defers</strong> rather than mis-read that 404
+  as &quot;path free&quot; and clear the warning without backing anything up) and
   branches on what's there: object <strong>absent</strong> → the path is free, drain normally → clears;
   <strong>present and hash-verifies</strong> → another device already materialized it → delete the record,
   no upload → clears (the bytes are now eviction-eligible like any replicated bytes — note this drops the
