@@ -4,10 +4,8 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   codecs,
-  definePreset,
   definePresetCore,
   defineProperty,
-  type AnyValuePreset,
   type AnyValuePresetCore,
 } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -335,12 +333,10 @@ describe('UserSchemasService subscription', () => {
   })
 
   it('keeps metadata when preset/default/build behavior decoding throws', async () => {
-    const throwingPreset = definePreset<string>({
+    const throwingPreset = definePresetCore<string>({
       id: 'test-throwing-build',
-      label: 'Throwing',
       build: () => { throw new Error('build failed') },
       defaultValue: '',
-      Editor: (): JSX.Element => createElement('span', null, null),
     })
     env = await setup([throwingPreset])
     const malformedPresetId = await createExternalSchemaBlock(
@@ -385,9 +381,8 @@ describe('UserSchemasService subscription', () => {
   })
 
   it('normalizes omitted defaults identically for declarations and block fallbacks', async () => {
-    const normalizingPreset = definePreset<string>({
+    const normalizingPreset = definePresetCore<string>({
       id: 'test:normalizing-default',
-      label: 'Normalizing default',
       defaultValue: '  padded  ',
       build: () => ({
         type: 'test:normalizing-default',
@@ -397,7 +392,6 @@ describe('UserSchemasService subscription', () => {
           return value
         },
       }),
-      Editor: (): JSX.Element => createElement('span', null, null),
     })
     const declaration = seedProperty({
       seedKey: 'system:test/property/normalizing-default',
@@ -739,12 +733,10 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
   })
 
   it('drops removed-preset behavior during the runtime swap while retaining metadata', async () => {
-    const pluginPreset = definePreset<string>({
+    const pluginPreset = definePresetCore<string>({
       id: 'test-runtime-only-preset',
-      label: 'Runtime only',
       build: () => codecs.string,
       defaultValue: '',
-      Editor: (): JSX.Element => createElement('span', null, null),
     })
     env = await setup([pluginPreset])
     const id = await createExternalSchemaBlock('plugin:runtime-only', pluginPreset.id)
