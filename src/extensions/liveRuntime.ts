@@ -24,6 +24,7 @@
 import {
   FacetRuntime,
   runtimeContributionBucketKey,
+  type CapturedFacetContributions,
   type Facet,
   type FacetContribution,
   type RuntimeContributionOptions,
@@ -102,10 +103,8 @@ export class LiveRuntimeHandle extends FacetRuntime {
     return this.current.readForWorkspace(facet, workspaceId)
   }
 
-  override workspaceIdsForFacets(
-    facets: readonly Facet<unknown, unknown>[],
-  ): ReadonlySet<string> {
-    return this.current.workspaceIdsForFacets(facets)
+  override captureContributions(): CapturedFacetContributions {
+    return this.current.captureContributions()
   }
 
   override contributions<Input>(facet: Facet<Input, unknown>): FacetContribution<Input>[] {

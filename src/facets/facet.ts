@@ -216,6 +216,71 @@ interface RuntimeBucket {
   readonly durable: boolean
 }
 
+/** Filter a facet's static + runtime buckets to the contributions visible for
+ *  `workspaceId` (unscoped buckets are always visible). Returns the shared
+ *  static array directly when there are no runtime buckets — callers only read
+ *  the result, never mutate it. */
+const collectFilteredContributions = (
+  staticContributions: readonly FacetContribution<unknown>[] | undefined,
+  runtimeBuckets: ReadonlyMap<string, RuntimeBucket> | undefined,
+  workspaceId: string | null,
+): readonly FacetContribution<unknown>[] => {
+  const stat = staticContributions ?? []
+  if (!runtimeBuckets || runtimeBuckets.size === 0) return stat
+  const out: FacetContribution<unknown>[] = [...stat]
+  for (const bucket of runtimeBuckets.values()) {
+    if (bucket.workspaceId === undefined || bucket.workspaceId === workspaceId) {
+      out.push(...bucket.contributions)
+    }
+  }
+  return out
+}
+
+const combineFacetContributions = <Input, Output>(
+  facet: Facet<Input, Output>,
+  contributions: readonly FacetContribution<unknown>[],
+  context: FacetResolveContext,
+): Output => {
+  if (!contributions.length) return facet.empty(context)
+  const values = contributions
+    .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
+    .map((contribution) => contribution.value as Input)
+  return facet.combine(values, context)
+}
+
+/** A tx-start-stable view of a runtime's contributions. Reads apply the same
+ *  workspace filter as `FacetRuntime.readForWorkspace` but never observe later
+ *  live writes — see `FacetRuntime.captureContributions`. */
+export interface CapturedFacetContributions {
+  readForWorkspace<Input, Output>(
+    facet: Facet<Input, Output>,
+    workspaceId: string | null,
+  ): Output
+}
+
+class FrozenFacetContributions implements CapturedFacetContributions {
+  constructor(
+    private readonly context: FacetResolveContext,
+    private readonly staticContributionsByFacet: ReadonlyMap<string, FacetContribution<unknown>[]>,
+    private readonly runtimeContributionsByFacet: ReadonlyMap<string, ReadonlyMap<string, RuntimeBucket>>,
+  ) {}
+
+  readForWorkspace<Input, Output>(
+    facet: Facet<Input, Output>,
+    workspaceId: string | null,
+  ): Output {
+    return combineFacetContributions(
+      facet,
+      collectFilteredContributions(
+        this.staticContributionsByFacet.get(facet.id),
+        this.runtimeContributionsByFacet.get(facet.id),
+        workspaceId,
+      ),
+      this.context,
+    )
+  }
+}
+
 type FacetChangeListener = () => void
 
 /** NOTE: `LiveRuntimeHandle` (src/extensions/liveRuntime.ts) subclasses
@@ -265,17 +330,12 @@ export class FacetRuntime {
   private collectContributions(
     facetId: string,
     workspaceId: string | null = this.activeWorkspaceId,
-  ): FacetContribution<unknown>[] {
-    const stat = this.staticContributionsByFacet.get(facetId) ?? []
-    const runtime = this.runtimeContributionsByFacet.get(facetId)
-    if (!runtime || runtime.size === 0) return stat
-    const out: FacetContribution<unknown>[] = [...stat]
-    for (const bucket of runtime.values()) {
-      if (bucket.workspaceId === undefined || bucket.workspaceId === workspaceId) {
-        out.push(...bucket.contributions)
-      }
-    }
-    return out
+  ): readonly FacetContribution<unknown>[] {
+    return collectFilteredContributions(
+      this.staticContributionsByFacet.get(facetId),
+      this.runtimeContributionsByFacet.get(facetId),
+      workspaceId,
+    )
   }
 
   /** Flip the read filter for workspace-scoped runtime buckets. Static and
@@ -325,23 +385,28 @@ export class FacetRuntime {
     facet: Facet<Input, Output>,
     workspaceId: string | null,
   ): Output {
-    const contributions = this.collectContributions(facet.id, workspaceId)
-    if (!contributions.length) return facet.empty(this.context)
-    const values = contributions
-      .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
-      .map(contribution => contribution.value as Input)
-    return facet.combine(values, this.context)
+    return combineFacetContributions(
+      facet,
+      this.collectContributions(facet.id, workspaceId),
+      this.context,
+    )
   }
 
-  /** Workspace ids represented by runtime buckets for the listed facets. */
-  workspaceIdsForFacets(facets: readonly Facet<unknown, unknown>[]): ReadonlySet<string> {
-    const ids = new Set<string>()
-    for (const facet of facets) {
-      for (const bucket of this.runtimeContributionsByFacet.get(facet.id)?.values() ?? []) {
-        if (bucket.workspaceId !== undefined) ids.add(bucket.workspaceId)
-      }
+  /** Capture a tx-start-stable view of the current contributions for deferred,
+   *  workspace-filtered reads that must NOT observe later live writes. Runtime
+   *  buckets are replaced wholesale by `setRuntimeContributions` (never mutated
+   *  in place), so shallow-copying the outer maps fully isolates the snapshot
+   *  from subsequent writes without deep-copying the contribution arrays. */
+  captureContributions(): CapturedFacetContributions {
+    const runtimeByFacet = new Map<string, Map<string, RuntimeBucket>>()
+    for (const [facetId, buckets] of this.runtimeContributionsByFacet) {
+      runtimeByFacet.set(facetId, new Map(buckets))
     }
-    return ids
+    return new FrozenFacetContributions(
+      this.context,
+      new Map(this.staticContributionsByFacet),
+      runtimeByFacet,
+    )
   }
 
   /** Replace the runtime contributions bucket for this facet under
@@ -459,7 +524,7 @@ export class FacetRuntime {
    * needing the original Facet definition in scope.
    */
   contributionsById(facetId: string): FacetContribution<unknown>[] {
-    return this.collectContributions(facetId)
+    return [...this.collectContributions(facetId)]
   }
 }
 

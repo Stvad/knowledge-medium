@@ -36,7 +36,12 @@ import {
   buildPropertyDefinitionRegistry,
   buildUnboundPropertySchemas,
 } from '@/data/propertyDefinitionRegistry'
-import type { Facet, FacetRuntime, WorkspaceRuntimeContributionOptions } from '@/facets/facet'
+import type {
+  CapturedFacetContributions,
+  Facet,
+  FacetRuntime,
+  WorkspaceRuntimeContributionOptions,
+} from '@/facets/facet'
 import { CallbackSet } from '@/utils/callbackSet'
 import type { InvalidationRule } from './invalidation'
 import {
@@ -252,22 +257,22 @@ export class FacetBridge {
   }
 
   private buildPropertyDefinitionsForWorkspace(
-    runtime: FacetRuntime,
+    reader: CapturedFacetContributions,
     workspaceId: string,
   ): PropertyDefinitionRegistrySnapshot {
-    const types = runtime.readForWorkspace(typesFacet, workspaceId)
+    const types = reader.readForWorkspace(typesFacet, workspaceId)
     const legacySchemas = mergeLiftedSchemas(
-      runtime.readForWorkspace(propertySchemasFacet, workspaceId),
+      reader.readForWorkspace(propertySchemasFacet, workspaceId),
       types,
     )
     return buildPropertyDefinitionRegistry({
       workspaceId,
       legacySchemas,
-      projectedDefinitions: runtime.readForWorkspace(
+      projectedDefinitions: reader.readForWorkspace(
         projectedPropertyDefinitionsFacet,
         workspaceId,
       ),
-      seeds: runtime.readForWorkspace(definitionSeedsFacet, workspaceId),
+      seeds: reader.readForWorkspace(definitionSeedsFacet, workspaceId),
     })
   }
 
@@ -292,51 +297,28 @@ export class FacetBridge {
       : null
   }
 
-  /** Capture every known workspace bucket plus immutable unscoped inputs at
-   * tx start. The returned factory never consults the live runtime. */
+  /** Freeze a tx-start-stable view of the contribution buckets and hand back a
+   * per-workspace registry factory over it. The snapshot never consults the
+   * live runtime, but each workspace's registry is built lazily on first
+   * request and memoised: the tx serves the active workspace from its own
+   * separately-captured registry, so a same-workspace transaction never invokes
+   * this factory and pays only the shallow bucket copy. */
   capturePropertyDefinitionRegistryFactory(): (
     workspaceId: string,
   ) => PropertyDefinitionRegistrySnapshot | null {
     const runtime = this.runtime
     if (!runtime) return () => null
     const unavailableActiveWorkspaceId = this.unavailableActiveWorkspaceId()
-
-    const facets = [
-      typesFacet,
-      propertySchemasFacet,
-      projectedPropertyDefinitionsFacet,
-      definitionSeedsFacet,
-    ] as readonly Facet<unknown, unknown>[]
-    const knownWorkspaceIds = new Set(runtime.workspaceIdsForFacets(facets))
-    if (this.activeWorkspaceId) knownWorkspaceIds.add(this.activeWorkspaceId)
-    const snapshots = new Map<string, PropertyDefinitionRegistrySnapshot>()
-    for (const workspaceId of knownWorkspaceIds) {
-      if (workspaceId === unavailableActiveWorkspaceId) continue
-      snapshots.set(
-        workspaceId,
-        this.buildPropertyDefinitionsForWorkspace(runtime, workspaceId),
-      )
-    }
-
-    const unscopedTypes = runtime.readForWorkspace(typesFacet, null)
-    const unscopedLegacySchemas = mergeLiftedSchemas(
-      runtime.readForWorkspace(propertySchemasFacet, null),
-      unscopedTypes,
-    )
-    const unscopedProjectedDefinitions = runtime.readForWorkspace(
-      projectedPropertyDefinitionsFacet,
-      null,
-    )
-    const unscopedSeeds = runtime.readForWorkspace(definitionSeedsFacet, null)
+    const frozen = runtime.captureContributions()
+    const cache = new Map<string, PropertyDefinitionRegistrySnapshot>()
 
     return workspaceId => {
       if (workspaceId === unavailableActiveWorkspaceId) return null
-      return snapshots.get(workspaceId) ?? buildPropertyDefinitionRegistry({
-        workspaceId,
-        legacySchemas: unscopedLegacySchemas,
-        projectedDefinitions: unscopedProjectedDefinitions,
-        seeds: unscopedSeeds,
-      })
+      const cached = cache.get(workspaceId)
+      if (cached) return cached
+      const snapshot = this.buildPropertyDefinitionsForWorkspace(frozen, workspaceId)
+      cache.set(workspaceId, snapshot)
+      return snapshot
     }
   }
 
