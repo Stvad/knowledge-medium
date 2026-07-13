@@ -23,7 +23,7 @@ import {
   defineProperty,
   type PropertySchema,
 } from '@/data/api'
-import { outlineRenderScopeId } from '@/utils/renderScope'
+import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
 // ──── UI-state schemas (changeScope: UiState) ────
 
@@ -382,6 +382,22 @@ const isEditingFromProperties = (
     : isEditingProp.codec.decode(encoded)
 }
 
+/** Default render scope for a location on `uiStateBlock`'s surface when the
+ *  caller didn't thread the rendered scope through. Panel rows are the only
+ *  ui-state blocks carrying `topLevelBlockIdProp` (written exclusively by
+ *  `writePanelContent` / `createPanelRowInTx`), so its presence identifies a
+ *  panel — those get the per-pane scope; non-panel ui-state falls back to
+ *  the plain outline scope of `blockId`. Keeps every focus WRITE in the same
+ *  scope namespace the surface RENDERS under (scope ids are compared for the
+ *  focus highlight, edit-mode gating, and DOM location matching). Assumes
+ *  the ui-state block is loaded (`peekProperty` is a sync cache read). */
+export const uiStateRenderScopeId = (uiStateBlock: Block, blockId: string): string => {
+  const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+  return topLevelBlockId !== undefined
+    ? panelRenderScopeId(uiStateBlock.id, topLevelBlockId)
+    : outlineRenderScopeId(blockId)
+}
+
 /** Atomically move focus to `blockId` and set the edit flag in one tx.
  *
  *  Focus is a rendered location, not just a logical block id: the
@@ -402,10 +418,9 @@ export const focusBlock = async (
   // nav anchor).
   const targetEdit = edit && !uiStateBlock.repo.isReadOnly ? true : false
   const currentLocation = peekFocusedBlockLocation(uiStateBlock)
-  const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
   const fallbackRenderScopeId = currentLocation?.blockId === blockId
     ? currentLocation.renderScopeId
-    : outlineRenderScopeId(topLevelBlockId ?? blockId)
+    : uiStateRenderScopeId(uiStateBlock, blockId)
   const location: FocusedBlockLocation = {
     blockId,
     renderScopeId: renderScopeId ?? fallbackRenderScopeId,

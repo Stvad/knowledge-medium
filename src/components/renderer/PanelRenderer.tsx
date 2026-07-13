@@ -4,6 +4,7 @@ import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
 import { Button } from '@/components/ui/button.js'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
+  focusedBlockLocationProp,
   panelViewModeProp,
   peekFocusedBlockLocation,
   scrollTopProp,
@@ -25,7 +26,7 @@ import {
   usePanelHistory,
 } from '@/utils/panelHistory.js'
 import { activatePanelRow, deletePanelRow } from '@/utils/panelLayoutProjection.js'
-import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope.js'
 import type { MouseEvent, PointerEvent } from 'react'
 
 const SCROLL_WRITE_DELAY_MS = 200
@@ -62,6 +63,7 @@ function PanelMultiSelectActionContext({scopeRootId}: {scopeRootId: string}) {
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
+  const [panelViewMode] = usePropertyValue(block, panelViewModeProp)
   const blockContext = useBlockContext()
   const canClosePanel = Boolean(blockContext.canClosePanel)
   const stackedPanel = Boolean(blockContext.stackedPanel)
@@ -117,6 +119,25 @@ export function PanelRenderer({block}: BlockRendererProps) {
     if (scrollWriteTimerRef.current) clearTimeout(scrollWriteTimerRef.current)
     scrollWriteTimerRef.current = setTimeout(flushScrollTop, SCROLL_WRITE_DELAY_MS)
   }, [flushScrollTop])
+
+  // DELETABLE SHIM (2026-07): legacy outline:-scope migration; remove after
+  // deploys settle. Pre-deploy panel rows persisted focus locations under the
+  // pane's old `outline:<topLevelBlockId>` scope; renders now use
+  // `panel:<panelId>:<topLevelBlockId>`, and the strict scope compare (focus
+  // highlight, NORMAL_MODE surface activation) would leave keyboard nav dead
+  // until the first click. Rewrite the stored location once on mount.
+  useEffect(() => {
+    if (!topLevelBlockId) return
+    const location = peekFocusedBlockLocation(block)
+    if (!location) return
+    const isLegacyScope = location.renderScopeId === outlineRenderScopeId(topLevelBlockId) ||
+      location.renderScopeId === outlineRenderScopeId(location.blockId)
+    if (!isLegacyScope) return
+    void block.set(focusedBlockLocationProp, {
+      ...location,
+      renderScopeId: panelRenderScopeId(block.id, topLevelBlockId),
+    })
+  }, [block, topLevelBlockId])
 
   // Register a snapshotter so panelHistory can capture (focused block,
   // scroll, view mode) before any navigation away from the current
@@ -219,11 +240,17 @@ export function PanelRenderer({block}: BlockRendererProps) {
   )
 
   const panelBody = (
+    // panelViewMode rides the context so renderer resolution (useRenderer /
+    // canRender) can pick a mode-specific renderer for the top-level block.
+    // NOTE: NestedBlockContextProvider children INHERIT context, so nested
+    // BlockComponents see the field too unless a renderer clears it — the
+    // video-notes renderer does exactly that (slice 5).
     <NestedBlockContextProvider
       overrides={{
         layoutBoundary: false,
-        renderScopeId: outlineRenderScopeId(topLevelBlockId),
+        renderScopeId: panelRenderScopeId(block.id, topLevelBlockId),
         scopeRootId: topLevelBlockId,
+        panelViewMode,
       }}
     >
       <BlockComponent blockId={topLevelBlockId}/>

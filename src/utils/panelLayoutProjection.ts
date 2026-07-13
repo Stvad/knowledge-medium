@@ -23,7 +23,7 @@ import {
 } from '@/utils/routing'
 import { panelHistory, writePanelContent } from '@/utils/panelHistory'
 import { CallbackSet } from '@/utils/callbackSet'
-import { outlineRenderScopeId } from '@/utils/renderScope'
+import { panelRenderScopeId } from '@/utils/renderScope'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -442,15 +442,17 @@ export const createPanelRowInTx = async (
     content: args.blockId,
     properties: {
       [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode(args.blockId),
-      [focusedBlockLocationProp.name]: focusedBlockLocationProp.codec.encode({
-        blockId: args.blockId,
-        renderScopeId: outlineRenderScopeId(args.blockId),
-      }),
       [scrollTopProp.name]: scrollTopProp.codec.encode(0),
       ...(args.viewMode !== undefined
         ? {[panelViewModeProp.name]: panelViewModeProp.codec.encode(args.viewMode)}
         : {}),
     },
+  })
+  // The focus seed needs the per-pane scope, which needs the row id `create`
+  // just minted — written as a second op in the SAME tx.
+  await tx.setProperty(id, focusedBlockLocationProp, {
+    blockId: args.blockId,
+    renderScopeId: panelRenderScopeId(id, args.blockId),
   })
   await repo.addTypeInTx(tx, id, PANEL_TYPE)
   return id

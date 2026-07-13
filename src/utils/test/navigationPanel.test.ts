@@ -80,7 +80,7 @@ describe('navigate explicit panel', () => {
         {
           blockId: 'panel-a',
           property: focusedBlockLocationProp.name,
-          value: {blockId: 'next-block', renderScopeId: 'outline:next-block'},
+          value: {blockId: 'next-block', renderScopeId: 'panel:panel-a:next-block'},
         },
         {blockId: 'panel-a', property: scrollTopProp.name, value: 0},
       ])

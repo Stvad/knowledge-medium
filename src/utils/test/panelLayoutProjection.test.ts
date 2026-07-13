@@ -14,7 +14,7 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { buildLayoutFromSlots } from '@/utils/routing'
-import { outlineRenderScopeId } from '@/utils/renderScope'
+import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   PanelLayoutProjection,
   activatePanelRow,
@@ -27,6 +27,7 @@ import {
   layoutSlotsFromRows,
   panelBlockIds,
   panelBlockId,
+  panelRowsInLayoutOrder,
   reconcilePanelRows,
   retargetPanelBlockIds,
 } from '@/utils/panelLayoutProjection'
@@ -237,7 +238,7 @@ describe('applyCurrentLayoutUrl', () => {
     panelHistory.push(rowB, {
       blockId: 'x',
       state: {
-        focusedLocation: {blockId: 'x-child', renderScopeId: outlineRenderScopeId('x')},
+        focusedLocation: {blockId: 'x-child', renderScopeId: panelRenderScopeId(rowB, 'x')},
         scrollTop: 42,
       },
     })
@@ -253,10 +254,10 @@ describe('applyCurrentLayoutUrl', () => {
     expect(after.get('x')).toBe(rowB)
     expect(env.repo.block(rowB).peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'x-child',
-      renderScopeId: outlineRenderScopeId('x'),
+      renderScopeId: panelRenderScopeId(rowB, 'x'),
     })
     expect(panelHistory.consumeRestore(rowB)).toEqual({
-      focusedLocation: {blockId: 'x-child', renderScopeId: outlineRenderScopeId('x')},
+      focusedLocation: {blockId: 'x-child', renderScopeId: panelRenderScopeId(rowB, 'x')},
       scrollTop: 42,
     })
     expect(panelHistory.getSnapshot(rowB).forward.map(entry => entry.blockId)).toEqual(['b'])
@@ -581,7 +582,7 @@ describe('slot context on rows (slice 2)', () => {
     await applyUrl('#ws-1/a/b')
     const rowA = (await rowIdsByBlock()).get('a')
     if (!rowA) throw new Error('missing a row')
-    const focusedLocation = {blockId: 'a-child', renderScopeId: outlineRenderScopeId('a')}
+    const focusedLocation = {blockId: 'a-child', renderScopeId: panelRenderScopeId(rowA, 'a')}
     await env.repo.tx(async tx => {
       await tx.setProperty(rowA, focusedBlockLocationProp, focusedLocation)
       await tx.setProperty(rowA, scrollTopProp, 42)
@@ -593,6 +594,46 @@ describe('slot context on rows (slice 2)', () => {
     expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('m')
     expect(env.repo.block(rowA).peekProperty(focusedBlockLocationProp)).toEqual(focusedLocation)
     expect(env.repo.block(rowA).peekProperty(scrollTopProp)).toBe(42)
+  })
+})
+
+describe('per-pane render scopes (slice 4)', () => {
+  it('two panes showing the SAME block get distinct per-pane focus scopes', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/same/same',
+    })
+
+    const panelRows = panelRowsInLayoutOrder(env.layoutSessionBlockId, await layoutRows())
+    expect(panelRows.map(row => panelBlockId(row))).toEqual(['same', 'same'])
+    const [first, second] = panelRows
+    const firstLocation = env.repo.block(first.id).peekProperty(focusedBlockLocationProp)
+    const secondLocation = env.repo.block(second.id).peekProperty(focusedBlockLocationProp)
+
+    expect(firstLocation?.renderScopeId).toBe(panelRenderScopeId(first.id, 'same'))
+    expect(secondLocation?.renderScopeId).toBe(panelRenderScopeId(second.id, 'same'))
+    expect(firstLocation?.renderScopeId).not.toBe(secondLocation?.renderScopeId)
+  })
+
+  it('in-panel navigation writes the per-pane scope', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      hash: '#ws-1/a',
+    })
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    await navigateInPanel(env.repo.block(rowA), 'b')
+    panelHistory.clear(rowA) // before assertions: generated row ids repeat across tests
+
+    expect(env.repo.block(rowA).peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'b',
+      renderScopeId: panelRenderScopeId(rowA, 'b'),
+    })
   })
 })
 
@@ -882,7 +923,7 @@ describe('retargetPanelBlockIds', () => {
     for (const row of sourceRows) {
       expect(env.repo.block(row.id).peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'target',
-        renderScopeId: outlineRenderScopeId('target'),
+        renderScopeId: panelRenderScopeId(row.id, 'target'),
       })
       expect(env.repo.block(row.id).peekProperty(scrollTopProp)).toBe(0)
     }
@@ -896,7 +937,7 @@ describe('retargetPanelBlockIds', () => {
       state: {
         focusedLocation: {
           blockId: 'target-child',
-          renderScopeId: outlineRenderScopeId('target'),
+          renderScopeId: panelRenderScopeId(row.id, 'target'),
         },
         scrollTop: 42,
       },
@@ -907,13 +948,13 @@ describe('retargetPanelBlockIds', () => {
     expect(env.repo.block(row.id).peekProperty(topLevelBlockIdProp)).toBe('target')
     expect(env.repo.block(row.id).peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'target-child',
-      renderScopeId: outlineRenderScopeId('target'),
+      renderScopeId: panelRenderScopeId(row.id, 'target'),
     })
     expect(env.repo.block(row.id).peekProperty(scrollTopProp)).toBe(42)
     expect(panelHistory.consumeRestore(row.id)).toEqual({
       focusedLocation: {
         blockId: 'target-child',
-        renderScopeId: outlineRenderScopeId('target'),
+        renderScopeId: panelRenderScopeId(row.id, 'target'),
       },
       scrollTop: 42,
     })

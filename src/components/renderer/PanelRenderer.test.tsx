@@ -9,7 +9,9 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import {
   activePanelIdProp,
+  focusedBlockLocationProp,
   panelViewModeProp,
+  peekFocusedBlockLocation,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { BlockContextProvider } from '@/context/block'
@@ -20,6 +22,7 @@ import { BlockComponent } from '@/components/BlockComponent.js'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { panelHistory } from '@/utils/panelHistory'
+import { outlineRenderScopeId, panelRenderScopeId } from '@/utils/renderScope'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -72,17 +75,30 @@ vi.mock('@/shortcuts/useActionContext', () => ({
   useActionContext: vi.fn(),
 }))
 
-vi.mock('@/components/BlockComponent.tsx', () => ({
-  BlockComponent: vi.fn(({blockId}: {blockId: string}) => (
-    <div data-testid="panel-top-level-block" data-block-id={blockId}>
-      <button
-        type="button"
-        data-testid="panel-content-control"
-        onPointerDown={event => event.stopPropagation()}
-      />
-    </div>
-  )),
-}))
+vi.mock('@/components/BlockComponent.tsx', async () => {
+  const {useBlockContext} = await vi.importActual<typeof import('@/context/block')>('@/context/block')
+  return {
+    BlockComponent: vi.fn(({blockId}: {blockId: string}) => {
+      // Surface the context the top-level block render receives so tests can
+      // pin the per-pane render scope and the panelViewMode threading.
+      const context = useBlockContext()
+      return (
+        <div
+          data-testid="panel-top-level-block"
+          data-block-id={blockId}
+          data-context-render-scope-id={typeof context.renderScopeId === 'string' ? context.renderScopeId : ''}
+          data-context-view-mode={typeof context.panelViewMode === 'string' ? context.panelViewMode : ''}
+        >
+          <button
+            type="button"
+            data-testid="panel-content-control"
+            onPointerDown={event => event.stopPropagation()}
+          />
+        </div>
+      )
+    }),
+  }
+})
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -317,6 +333,62 @@ describe('PanelRenderer', () => {
     await screen.findByTestId('panel-top-level-block')
 
     expect(panelHistory.snapshot(env.panel.id)?.focusedLocation).toBeUndefined()
+  })
+
+  it('renders the top-level block under a per-pane render scope', async () => {
+    renderPanel(false)
+    const el = await screen.findByTestId('panel-top-level-block')
+    expect(el.getAttribute('data-context-render-scope-id'))
+      .toBe(panelRenderScopeId('panel-a', 'page-a'))
+  })
+
+  it('threads panelViewMode into the top-level block context when the prop is set', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty(env.panel.id, panelViewModeProp, 'video-notes')
+    }, {scope: ChangeScope.UiState, description: 'seed panel view mode'})
+    renderPanel(false)
+    const el = await screen.findByTestId('panel-top-level-block')
+    expect(el.getAttribute('data-context-view-mode')).toBe('video-notes')
+  })
+
+  it('panelViewMode is absent from the context when the prop is unset', async () => {
+    renderPanel(false)
+    const el = await screen.findByTestId('panel-top-level-block')
+    expect(el.getAttribute('data-context-view-mode')).toBe('')
+  })
+
+  it('rewrites a legacy outline-scoped stored focus location to the per-pane scope (deletable shim)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, {
+        blockId: 'child-x',
+        renderScopeId: outlineRenderScopeId('page-a'), // pre-deploy pane scope
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed legacy focus scope'})
+    renderPanel(false)
+    const el = await screen.findByTestId('panel-top-level-block')
+
+    await vi.waitFor(() => {
+      expect(peekFocusedBlockLocation(env.panel)).toEqual({
+        blockId: 'child-x', // preserved
+        renderScopeId: panelRenderScopeId('panel-a', 'page-a'),
+      })
+    })
+    // useInFocus-style strict compare now matches the rendered scope.
+    expect(el.getAttribute('data-context-render-scope-id'))
+      .toBe(peekFocusedBlockLocation(env.panel)?.renderScopeId)
+  })
+
+  it('leaves non-legacy stored focus locations alone', async () => {
+    const location = {blockId: 'child-x', renderScopeId: 'embed:parent:child-x:0'}
+    await env.repo.tx(async tx => {
+      await tx.setProperty('panel-a', focusedBlockLocationProp, location)
+    }, {scope: ChangeScope.UiState, description: 'seed embed focus scope'})
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    // Settle any mount effects, then confirm the shim did not touch it.
+    await act(async () => {})
+    expect(peekFocusedBlockLocation(env.panel)).toEqual(location)
   })
 
   it('captures the panel view mode in history snapshots', async () => {

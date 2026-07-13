@@ -3,6 +3,7 @@ import {
   focusBlock,
   isCollapsedProp,
   selectionStateProp,
+  uiStateRenderScopeId,
 } from '@/data/properties.js'
 import {
   getLastVisibleDescendant,
@@ -24,7 +25,6 @@ import {
   ActionContextTypes,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.js'
-import { outlineRenderScopeId } from '@/utils/renderScope.js'
 
 const JUMP_BLOCK_COUNT = 8
 
@@ -191,7 +191,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!scopeRootId) return
 
         void focusBlock(uiStateBlock, scopeRootId, {
-          renderScopeId: renderScopeId ?? outlineRenderScopeId(scopeRootId),
+          renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
         })
       },
       defaultBinding: {
@@ -212,7 +212,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!lastBlock) return
 
         void focusBlock(uiStateBlock, lastBlock.id, {
-          renderScopeId: renderScopeId ?? outlineRenderScopeId(scopeRootId),
+          renderScopeId: renderScopeId ?? uiStateRenderScopeId(uiStateBlock, scopeRootId),
         })
       },
       defaultBinding: {

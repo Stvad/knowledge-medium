@@ -29,7 +29,7 @@ import {
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { outlineRenderScopeId } from '@/utils/renderScope'
+import { panelRenderScopeId } from '@/utils/renderScope'
 import { CallbackSet } from '@/utils/callbackSet'
 import { withMoveTransition } from '@/utils/viewTransition'
 
@@ -272,7 +272,7 @@ export const writePanelContent = async (
   }
   await tx.setProperty(panelId, focusedBlockLocationProp, state?.focusedLocation ?? {
     blockId,
-    renderScopeId: outlineRenderScopeId(blockId),
+    renderScopeId: panelRenderScopeId(panelId, blockId),
   })
   await tx.setProperty(panelId, scrollTopProp, state?.scrollTop ?? 0)
 }
