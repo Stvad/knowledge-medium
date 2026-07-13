@@ -146,14 +146,6 @@ export class UserTypesService {
 
   /** Start the type projector for the active workspace. Returns a
    *  disposer; throws on double-start / no active workspace. */
-  start(): () => void {
-    return this.repo.projectors.startById(USER_TYPES_PROJECTOR_ID)
-  }
-
-  dispose(): void {
-    this.repo.projectors.disposeProjector(USER_TYPES_PROJECTOR_ID)
-  }
-
   /** Look up the source block id for a published type id. Returns
    *  undefined for kernel/plugin types (no backing block) or ids that
    *  aren't user-data registered. */

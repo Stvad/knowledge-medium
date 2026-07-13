@@ -20,9 +20,13 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type BlockData } from '@/data/api'
+import {definitionBlockProjectorFacet} from '@/data/facets'
+import type {DefinitionBlockProjector} from '@/data/projectorRuntime'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import {kernelDataExtension} from '@/data/kernelDataExtension'
+import {defineFacet, resolveFacetRuntimeSync} from '@/facets/facet'
 import { Repo } from '../repo'
 
 interface Harness {
@@ -110,6 +114,118 @@ describe('repo.activeWorkspaceId', () => {
     expect(env.repo.activeWorkspaceId).toBe('ws-2')
     env.repo.setActiveWorkspaceId(null)
     expect(env.repo.activeWorkspaceId).toBeNull()
+  })
+
+  it('owns projector lifecycle at the workspace pin in production mode', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+    })
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace')
+
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setActiveWorkspaceId('ws-2')
+    repo.setActiveWorkspaceId(null)
+
+    expect(pin.mock.calls).toEqual([['ws-1'], ['ws-2'], [null]])
+  })
+
+  it('rolls back the Repo pin when projector startup fails and permits retry', () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-1')
+    const originalPin = repo.projectors.pinWorkspace.bind(repo.projectors)
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementation(workspaceId => {
+      if (workspaceId === 'ws-2') throw new Error('injected projector failure')
+      originalPin(workspaceId)
+    })
+
+    expect(() => repo.setActiveWorkspaceId('ws-2')).toThrow('injected projector failure')
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+
+    pin.mockRestore()
+    expect(() => repo.setActiveWorkspaceId('ws-2')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-2')
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('starts descriptors that arrive in a replacement runtime for an already-active workspace', async () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId('ws-late-runtime')
+    expect(repo.projectors.isPrimed('ws-late-runtime')).toBe(true)
+
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    await expect(repo.projectors.whenPrimed('ws-late-runtime')).resolves.toBeUndefined()
+    expect(repo.projectors.isPrimed('ws-late-runtime')).toBe(true)
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('mirrors a failed runtime-replacement reconcile and permits an explicit retry', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId('ws-runtime-failure')
+
+    let failStart = true
+    const targetFacet = defineFacet<{readonly id: string}>({id: 'test.runtime-failure-target'})
+    const throwingDescriptor: DefinitionBlockProjector<BlockData, {readonly id: string}> = {
+      id: 'test-runtime-failure',
+      metaType: 'test-runtime-failure',
+      targetFacet,
+      sourceId: 'test-runtime-failure',
+      project: block => ({id: block.id}),
+      keyOf: contribution => contribution.id,
+      secondarySignal: () => {
+        if (failStart) throw new Error('replacement projector failed')
+        return vi.fn()
+      },
+    }
+    const replacement = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionBlockProjectorFacet.of(throwingDescriptor),
+    ])
+
+    expect(() => repo.setFacetRuntime(replacement)).toThrow(
+      'failed to pin ws-runtime-failure and restore ws-runtime-failure',
+    )
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.projectors.workspaceId).toBeNull()
+
+    failStart = false
+    expect(() => repo.setActiveWorkspaceId('ws-runtime-failure')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-runtime-failure')
+    expect(repo.projectors.workspaceId).toBe('ws-runtime-failure')
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('falls back to a null pin when incoming start and outgoing restoration both fail', () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-1')
+    const originalPin = repo.projectors.pinWorkspace.bind(repo.projectors)
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementation(workspaceId => {
+      if (workspaceId === 'ws-2') {
+        originalPin(null)
+        throw new AggregateError([new Error('incoming'), new Error('rollback')], 'nested failure')
+      }
+      originalPin(workspaceId)
+    })
+
+    expect(() => repo.setActiveWorkspaceId('ws-2')).toThrow('nested failure')
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.projectors.workspaceId).toBeNull()
+
+    pin.mockRestore()
+    expect(() => repo.setActiveWorkspaceId('ws-1')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+    repo.setActiveWorkspaceId(null)
   })
 })
 

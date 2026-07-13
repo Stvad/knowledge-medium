@@ -515,9 +515,9 @@ export class Repo {
 
   /** Registry + driver for definition-block projectors (the
    *  data-defined "watch a meta-type → mirror into a facet bucket"
-   *  pattern, issue #90). Owns the shared lifecycle for every projector
-   *  registered in `definitionBlockProjectorFacet`; the React provider
-   *  starts them all once per workspace via `startAll()`. The
+   *  pattern, issue #90). The synchronous Repo workspace pin owns the
+   *  lifecycle for every projector in `definitionBlockProjectorFacet`.
+   *  Each incoming generation exposes an awaitable first-tick prime. The
    *  `userSchemas` / `userTypes` facades read their state through it. */
   readonly projectors: ProjectorRuntime = new ProjectorRuntime(this)
 
@@ -526,8 +526,8 @@ export class Repo {
    *  one instance means imperative call sites (the AddPropertyForm,
    *  the Roam importer) all hit the same in-memory list rather than
    *  each fresh instance clobbering the bucket from an empty start.
-   *  The block-subscription path is opt-in via `start()` (delegates to
-   *  the `'user-schemas'` projector). */
+   *  The Repo pin starts the `'user-schemas'` projector before callers
+   *  can perform workspace work. */
   readonly userSchemas: UserSchemasService = new UserSchemasService(this)
 
   /** UserTypesService singleton bound to this Repo. Symmetric to
@@ -942,8 +942,25 @@ export class Repo {
   }
 
   setActiveWorkspaceId(workspaceId: string | null): void {
+    if (
+      workspaceId === this._activeWorkspaceId &&
+      (!this.facetRuntime || workspaceId === this.projectors.workspaceId)
+    ) return
     this._activeWorkspaceId = workspaceId
     this.facetBridge.setActiveWorkspaceId(workspaceId)
+    try {
+      if (this.facetRuntime) {
+        this.projectors.pinWorkspace(workspaceId)
+      }
+    } catch (error) {
+      // ProjectorRuntime attempts to restore its outgoing generation. If that
+      // nested rollback also failed, its honest state is null; mirror that
+      // rather than claiming the old workspace and suppressing a retry.
+      const restoredWorkspaceId = this.projectors.workspaceId
+      this._activeWorkspaceId = restoredWorkspaceId
+      this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
+      throw error
+    }
   }
 
   /** The active workspace's undo / redo manager — what cmd-Z and the
@@ -1470,6 +1487,20 @@ export class Repo {
    *  the static-facet bundle the kernel ships. */
   setFacetRuntime(runtime: FacetRuntime): void {
     this.facetBridge.setFacetRuntime(runtime)
+    if (this._activeWorkspaceId) {
+      try {
+        this.projectors.pinWorkspace(this._activeWorkspaceId)
+      } catch (error) {
+        // A changed descriptor set can fail both its incoming start and the
+        // attempted restoration under this same replacement runtime. Keep the
+        // Repo/filter pin honest with the projector runtime so an explicit
+        // workspace retry is not suppressed.
+        const restoredWorkspaceId = this.projectors.workspaceId
+        this._activeWorkspaceId = restoredWorkspaceId
+        this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
+        throw error
+      }
+    }
   }
 
   /** Replace the runtime contribution bucket for `facet` keyed by

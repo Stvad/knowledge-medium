@@ -48,6 +48,8 @@ export interface CreateTestRepoOptions {
   user?: User
   /** Start the Layout B sync observer. Default FALSE — see the module doc. */
   startSyncObserver?: boolean
+  /** Forward Repo's construction-time kernel runtime install. Default true. */
+  installKernelRuntime?: boolean
   /** Reject `BlockDefault` / `References` writes (read-only mode). Default false. */
   isReadOnly?: boolean
   /** Override the deterministic generators. Defaults are monotonic counters so
@@ -87,6 +89,7 @@ export const createTestRepo = (opts: CreateTestRepoOptions): TestRepo => {
     newTxSeq: opts.newTxSeq ?? (() => ++txSeqCursor),
     isReadOnly: opts.isReadOnly,
     startSyncObserver: opts.startSyncObserver ?? false,
+    installKernelRuntime: opts.installKernelRuntime,
   })
   if (opts.extensions?.length) {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, ...opts.extensions]))

@@ -130,22 +130,12 @@ export interface AddSchemaArgs {
  *  its own — the lifecycle + the contribution list / id maps live in
  *  the projector's `ProjectorHandle`, reached through `repo.projectors`.
  *  Singleton on `Repo` so imperative call sites (AddPropertyForm, the
- *  Roam importer) all hit the same in-memory bucket. */
+ *  Roam importer) all hit the Repo-pin-owned projector generation. */
 export class UserSchemasService {
   constructor(private readonly repo: Repo) {}
 
   private get handle() {
     return this.repo.projectors.handle<AnyPropertySchema>(USER_SCHEMAS_PROJECTOR_ID)
-  }
-
-  /** Start the schema projector for the active workspace. Returns a
-   *  disposer; throws on double-start / no active workspace. */
-  start(): () => void {
-    return this.repo.projectors.startById(USER_SCHEMAS_PROJECTOR_ID)
-  }
-
-  dispose(): void {
-    this.repo.projectors.disposeProjector(USER_SCHEMAS_PROJECTOR_ID)
   }
 
   /** Look up the property-schema block id for a registered user-data

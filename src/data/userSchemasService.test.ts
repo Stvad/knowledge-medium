@@ -39,7 +39,7 @@ const setup = async (extraPresets: readonly AnyValuePresetCore[] = []): Promise<
   repo.setActiveWorkspaceId(WS)
   await getOrCreatePropertiesPage(repo, WS)
   const service = repo.userSchemas
-  const dispose = service.start()
+  const dispose = (): void => repo.setActiveWorkspaceId(null)
   const h: TestDb = {db: sharedDb.db, cleanup: async () => {}}
   return {h, repo, service, dispose}
 }
@@ -275,31 +275,6 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
 })
 
 describe('UserSchemasService workspace switch', () => {
-  it('drops pre-start state when the persistent projector starts in another workspace', async () => {
-    await resetTestDb(sharedDb.db)
-    const {repo} = createTestRepo({
-      db: sharedDb.db,
-      user: {id: 'user-1'},
-      extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension],
-    })
-    repo.setActiveWorkspaceId(WS)
-    await getOrCreatePropertiesPage(repo, WS)
-    const service = repo.userSchemas
-    await service.addSchema({name: 'only-w1', presetId: 'url'})
-
-    const W2 = 'ws-user-schemas-prestart-2'
-    repo.setActiveWorkspaceId(W2)
-    await getOrCreatePropertiesPage(repo, W2)
-    const dispose = service.start()
-    env = {h: {db: sharedDb.db, cleanup: async () => {}}, repo, service, dispose}
-    await service.addSchema({name: 'only-w2', presetId: 'url'})
-
-    expect(repo.propertySchemas.get('only-w1')).toBeUndefined()
-    expect(service.getSchemaBlockId('only-w1')).toBeUndefined()
-    expect(repo.propertySchemas.get('only-w2')?.codec.type).toBe('url')
-    expect(service.getSchemaBlockId('only-w2')).toBeDefined()
-  })
-
   it('synchronously filters the old workspace bucket when the active workspace changes', async () => {
     env = await setup()
     await env.service.addSchema({name: 'workspace-only', presetId: 'url'})
@@ -309,7 +284,9 @@ describe('UserSchemasService workspace switch', () => {
     expect(env.repo.propertySchemas.get('workspace-only')).toBeUndefined()
 
     env.repo.setActiveWorkspaceId(WS)
-    expect(env.repo.propertySchemas.get('workspace-only')?.codec.type).toBe('url')
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('workspace-only')?.codec.type).toBe('url')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   // Regression for the in-flight-write cross-workspace leak surfaced in the
@@ -325,14 +302,10 @@ describe('UserSchemasService workspace switch', () => {
     // before the first await (createChild).
     const pending = env.service.addSchema({name: 'leaky', presetId: 'url'})
 
-    // Mimic the production workspace switch that the React provider runs while
-    // the tx is in flight: dispose the projector (tears down the W1
-    // subscription + clears the bucket), activate W2, restart on W2.
-    env.service.dispose()
+    // The Repo pin synchronously tears down W1 and starts W2 projectors.
     const W2 = 'ws-user-schemas-2'
     env.repo.setActiveWorkspaceId(W2)
     await getOrCreatePropertiesPage(env.repo, W2)
-    env.service.start()
 
     await pending
     // The W1 schema must not surface in W2's runtime view.
@@ -394,26 +367,14 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
 })
 
 describe('UserSchemasService workspace switch', () => {
-  // Regression: the Repo is a per-user singleton reused across workspace
-  // switches, and setFacetRuntime carries the durable user-data bucket
-  // forward (adoptDurableContributionsFrom). Before the fix, dispose() left
-  // the bucket in place, so the previous workspace's user-defined property
-  // schemas leaked into the next workspace until its subscription's first
-  // rebuild. Mirrors the hardening UserTypesService already had.
-  it('clears the user-data bucket on dispose so schemas do not leak into the next workspace', async () => {
+  it('clears the outgoing user-data bucket at the Repo workspace pin', async () => {
     env = await setup()
     await env.service.addSchema({name: 'homepage', presetId: 'url'})
     expect(env.repo.propertySchemas.get('homepage')?.codec.type).toBe('url')
 
-    // Workspace switch: dispose W1's service, switch the active workspace,
-    // bootstrap its properties page, restart. W1's schema must be gone.
-    env.service.dispose()
-    expect(env.repo.propertySchemas.get('homepage')).toBeUndefined()
-
     const W2 = 'ws-user-schemas-2'
     env.repo.setActiveWorkspaceId(W2)
     await getOrCreatePropertiesPage(env.repo, W2)
-    env.service.start()
     expect(env.repo.propertySchemas.get('homepage')).toBeUndefined()
   })
 })

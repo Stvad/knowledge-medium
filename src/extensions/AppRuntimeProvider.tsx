@@ -225,23 +225,6 @@ export function AppRuntimeProvider({
   // (the diff) rather than tearing every effect down.
   useEffect(() => () => effectReconciler.dispose(), [effectReconciler])
 
-  // Start every definition-block projector (issue #90) for the active
-  // workspace: user-defined property-schema blocks → propertySchemasFacet
-  // and block-type blocks → typesFacet, each mirrored into a 'user-data'
-  // bucket by the shared ProjectorRuntime. `startAll` reads the
-  // descriptors from `definitionBlockProjectorFacet` and starts them in
-  // dependency order (schemas before types, since the type build path
-  // resolves block-type:properties refs through the schema projector);
-  // the returned disposer tears them down in reverse. The same singleton
-  // facades (repo.userSchemas / repo.userTypes) that imperative call
-  // sites use — e.g. addSchema on AddPropertyForm submit — read the
-  // resulting in-memory state through this runtime.
-  useEffect(() => {
-    if (!workspaceId) return
-    const dispose = repo.projectors.startAll()
-    return () => dispose()
-  }, [repo, workspaceId])
-
   return (
     <AppRuntimeContextProvider value={runtime}>
       <ExtensionLoadErrorsProvider store={errorStore}>

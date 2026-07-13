@@ -42,14 +42,8 @@ const setup = async (): Promise<Harness> => {
   repo.setActiveWorkspaceId(WS)
   await getOrCreatePropertiesPage(repo, WS)
   await getOrCreateTypesPage(repo, WS)
-  const userSchemas = repo.userSchemas
-  const disposeUserSchemas = userSchemas.start()
   const service = repo.userTypes
-  const disposeService = service.start()
-  const dispose = (): void => {
-    disposeService()
-    disposeUserSchemas()
-  }
+  const dispose = (): void => repo.setActiveWorkspaceId(null)
   return {h, repo, service, dispose}
 }
 
@@ -244,11 +238,11 @@ describe('UserTypesService subscription', () => {
     expect(env.repo.types.get(id)?.properties).toEqual([schema])
   })
 
-  it('disposes cleanly: dispose clears the bucket and later block edits do not republish', async () => {
+  it('stops cleanly at a null Repo pin: clears the bucket and later edits do not republish', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {label: 'Person'})
     expect(env.repo.types.get(id)).toBeDefined()
-    env.service.dispose()
+    env.repo.setActiveWorkspaceId(null)
     // Dispose now clears the user-data bucket — the type is gone, not
     // simply frozen at its pre-dispose value (see workspace-switch race
     // fix below).
@@ -259,11 +253,6 @@ describe('UserTypesService subscription', () => {
       await tx.setProperty(id, blockTypeLabelProp, 'Renamed')
     }, {scope: ChangeScope.BlockDefault})
     expect(env.repo.types.get(id)).toBeUndefined()
-  })
-
-  it('double-start throws to surface lifecycle bugs', async () => {
-    env = await setup()
-    expect(() => env.service.start()).toThrow(/already started/)
   })
 
   it('does not feedback-loop with the propertySchemas rebuild step', async () => {
@@ -288,8 +277,8 @@ describe('UserTypesService subscription', () => {
 })
 
 describe('UserTypesService workspace switch', () => {
-  // Regression for reviewer feedback: AppRuntimeProvider starts
-  // userSchemas before userTypes; on workspace switch the new
+  // Regression for reviewer feedback: Repo pinning starts userSchemas before
+  // userTypes; on workspace switch the new
   // userSchemas service can publish before the new userTypes
   // subscription has loaded, firing onPropertySchemasChange. Before
   // the fix, UserTypesService would rebuild against the PREVIOUS
@@ -299,23 +288,16 @@ describe('UserTypesService workspace switch', () => {
   // listener rebuild is gated on the workspace-pinned subscription's
   // first tick.
 
-  it('does not leak previous-workspace types after dispose+restart on a new workspace', async () => {
+  it('does not leak previous-workspace types after a Repo-pin switch', async () => {
     env = await setup()
     // Create a type block in workspace W1.
     const w1TypeBlockId = await createBlockTypeBlock(env.repo, {label: 'Person'})
     expect(env.repo.types.get(w1TypeBlockId)?.label).toBe('Person')
 
-    // Workspace switch: dispose the service, set a new active workspace,
-    // bootstrap its pages, and start again. The user-data type bucket
-    // should be clear AFTER dispose — no leakage into W2.
-    env.service.dispose()
-    expect(env.repo.types.get(w1TypeBlockId)).toBeUndefined()
-
     const W2 = 'ws-user-types-2'
     env.repo.setActiveWorkspaceId(W2)
     await getOrCreatePropertiesPage(env.repo, W2)
     await getOrCreateTypesPage(env.repo, W2)
-    env.service.start()
 
     // Mimics the React-effect remount sequence on workspace switch:
     // the new workspace's userSchemas publishes first, firing
@@ -328,11 +310,11 @@ describe('UserTypesService workspace switch', () => {
     expect(env.repo.types.get(w1TypeBlockId)).toBeUndefined()
   })
 
-  it('clears the user-data type bucket on dispose()', async () => {
+  it('clears the user-data type bucket on a null Repo pin', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {label: 'Person'})
     expect(env.repo.types.has(id)).toBe(true)
-    env.service.dispose()
+    env.repo.setActiveWorkspaceId(null)
     expect(env.repo.types.has(id)).toBe(false)
   })
 })
