@@ -82,6 +82,27 @@ class IdentityUnavailablePropertySchemaResolver implements PropertySchemaResolve
 export const unavailablePropertySchemaResolver: PropertySchemaResolver =
   new IdentityUnavailablePropertySchemaResolver()
 
+/** Wrap a schema so its codec's `decode` falls back to the schema default
+ *  instead of throwing. Used for a PLUGIN handle read before this workspace's
+ *  projection has primed: the stored value is almost always the plugin's own
+ *  (decodes cleanly), but a rare pre-existing/synced user definition could
+ *  shadow the name with a value the plugin's (strict) codec rejects — degrade
+ *  that to the default rather than throw in a synchronous render. `encode` is
+ *  unchanged, so a write still goes through the plugin's own codec. */
+const withDecodeFallback = <T>(schema: PropertySchema<T>): PropertySchema<T> => ({
+  ...schema,
+  codec: {
+    ...schema.codec,
+    decode: (value: unknown): T => {
+      try {
+        return schema.codec.decode(value)
+      } catch {
+        return schema.defaultValue
+      }
+    },
+  },
+})
+
 class TransitionalLegacyPropertySchemaResolver
   extends IdentityUnavailablePropertySchemaResolver {
   constructor(private readonly seedNameCounts: ReadonlyMap<string, number>) {
@@ -95,22 +116,21 @@ class TransitionalLegacyPropertySchemaResolver
       return super.resolveBoundary(schema)
     }
     if (isPropertyHandle(schema)) {
-      // Only KERNEL handles are truly unshadowable: they are registered at Repo
-      // construction and never existed as a user schema on any device, so their
-      // own codec is the authoritative interpretation even before this
-      // workspace's definition projection has primed — a boot-window read must
-      // return the stored value, not the schema default (the isCollapsed/types
-      // case the fix targets). A PLUGIN seed name can legitimately collide with
-      // a user definition created while the plugin was absent (or synced from a
-      // device without it); the primed registry models that as a 'shadowed'
-      // winner. Without a snapshot we cannot detect the shadow, so a plugin
-      // handle fails closed here rather than risk decoding a value written
-      // under the shadowing schema with the wrong codec.
-      // (Revisit once seed-metadata renames can move a kernel handle's key.)
+      // A code-owned handle is authoritative before this workspace's projection
+      // has primed: decode the stored value with the handle's own codec rather
+      // than returning the schema default (the isCollapsed/types boot-window
+      // bug). KERNEL handles are unshadowable — registered at Repo construction
+      // on every device, so no user schema ever existed at their name — so their
+      // codec is unconditionally safe. A PLUGIN seed name CAN collide with a
+      // pre-existing/synced user definition we can't detect without a snapshot,
+      // so we resolve it with a decode fallback: the common (unshadowed) value
+      // decodes correctly, while a shadowed value the plugin's strict codec
+      // rejects degrades to the default instead of throwing in a synchronous
+      // render. (Revisit once seed-metadata renames can move a handle's key.)
       if (propertySchemaOriginForSeedKey(schema.seedKey) === 'kernel') {
         return {status: 'available', schema}
       }
-      return super.resolveBoundary(schema)
+      return {status: 'available', schema: withDecodeFallback(schema)}
     }
     const seedCount = this.seedNameCounts.get(schema.name) ?? 0
     if (seedCount > 0) {

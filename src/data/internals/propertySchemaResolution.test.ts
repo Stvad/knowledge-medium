@@ -62,15 +62,21 @@ describe('property schema identity resolution', () => {
       })
     })
 
-    it('fails a plugin handle closed during boot (it may be shadowed by a user schema)', () => {
+    it('resolves a plugin handle during boot with a decode fallback', () => {
       // A plugin seed name can collide with a pre-existing/synced user
-      // definition; without a snapshot the shadow is undetectable, so decoding
-      // with the plugin codec could throw or miscode. Fail closed to the
-      // default instead until the projection primes.
-      expect(transitional.resolveBoundary(pluginHandle)).toEqual({
-        status: 'identity-unavailable',
-        reason: 'registry-not-workspace-keyed',
-      })
+      // definition; without a snapshot the shadow is undetectable. Resolve it to
+      // its own codec so the common (unshadowed) value reads correctly, but with
+      // a decode fallback so a shadowed value the strict codec rejects degrades
+      // to the default rather than throwing in a synchronous render.
+      const resolution = transitional.resolveBoundary(pluginHandle)
+      expect(resolution.status).toBe('available')
+      if (resolution.status !== 'available') throw new Error('expected available')
+      // Common case: a valid stored value decodes normally.
+      expect(resolution.schema.codec.decode('stored')).toBe('stored')
+      // Shadowed/incompatible value: fall back to the default, don't throw.
+      expect(resolution.schema.codec.decode(42)).toBe(pluginHandle.defaultValue)
+      // Writes still encode through the plugin's own codec.
+      expect(resolution.schema.codec.encode('x')).toEqual(pluginHandle.codec.encode('x'))
     })
 
     it('accepts an unclaimed plain schema but rejects one squatting on a seed name', () => {
