@@ -1,13 +1,13 @@
 // @vitest-environment node
 
 import { describe, expect, it } from 'vitest'
-import type { AnyValuePreset } from '@/data/api'
+import type { AnyJoinedValuePreset } from '@/data/api'
 import { selectablePresets } from './selectablePresets'
 
-const preset = (id: string, label: string, hideFromPicker = false): AnyValuePreset =>
-  ({id, label, hideFromPicker}) as unknown as AnyValuePreset
+const preset = (id: string, label: string, hideFromPicker = false): AnyJoinedValuePreset =>
+  ({id, label, hideFromPicker}) as unknown as AnyJoinedValuePreset
 
-const presetMap = (...ps: AnyValuePreset[]) => new Map(ps.map(p => [p.id, p]))
+const presetMap = (...ps: AnyJoinedValuePreset[]) => new Map(ps.map(p => [p.id, p]))
 
 describe('selectablePresets', () => {
   it('drops hideFromPicker presets and sorts the rest by label', () => {

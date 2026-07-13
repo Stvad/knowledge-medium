@@ -50,7 +50,8 @@ const hiddenKernelPropertyUis = [
 }))
 
 /** Per-name editor overrides only — type-keyed editor selection now
- *  flows through `valuePresetsFacet`. See user-defined-properties §1-edit. */
+ *  flows through the value-preset cores + presentations join
+ *  (`readValuePresets`). See user-defined-properties §1-edit. */
 export const kernelPropertyUiExtension: AppExtension = systemToggle({
   id: 'system:kernel-property-ui',
   name: 'Property editors',

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { propertyEditorOverridesFacet, valuePresetsFacet } from '@/data/facets.js'
+import { propertyEditorOverridesFacet, valuePresetCoresFacet, valuePresetPresentationsFacet } from '@/data/facets.js'
 import type { Block } from '@/data/block'
 import { PropertyPicker } from './PropertyPicker.tsx'
 
@@ -31,7 +31,10 @@ const activeOption = () =>
 beforeEach(() => {
   store.schemas = new Map([['apple', schema('apple')], ['apricot', schema('apricot')]])
   store.byFacetId = new Map<string, unknown>([
-    [valuePresetsFacet.id, new Map([['string', {id: 'string', label: 'Text', Glyph: () => null}]])],
+    // The picker reads the joined registry (cores ⋈ presentations by id), so
+    // 'string' must be present in both facets for the joined preset to appear.
+    [valuePresetCoresFacet.id, new Map([['string', {id: 'string', build: () => ({type: 'string'}), defaultValue: ''}]])],
+    [valuePresetPresentationsFacet.id, new Map([['string', {id: 'string', label: 'Text', Glyph: () => null}]])],
     [propertyEditorOverridesFacet.id, new Map()],
   ])
 })

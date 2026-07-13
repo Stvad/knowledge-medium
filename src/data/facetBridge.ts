@@ -28,7 +28,6 @@ import type {
   AnyPropertySchema,
   AnyQuery,
   AnySameTxProcessor,
-  AnyValuePreset,
   AnyValuePresetCore,
   TypeContribution,
 } from '@/data/api'
@@ -46,7 +45,6 @@ import {
   typesFacet,
   valuePresetCoresFacet,
   valuePresetPresentationsFacet,
-  valuePresetsFacet,
   workspaceBackfillsFacet,
   type WorkspaceBackfill,
 } from './facets'
@@ -81,7 +79,6 @@ export interface FacetBridgeTarget {
   ): void
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
   applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
-  applyValuePresets(presets: ReadonlyMap<string, AnyValuePreset>): void
   applyQueries(queries: Map<string, AnyQuery>): void
   /** Defer a ref-typed-property reprojection for the names whose ref-ness
    *  changed in this swap (off the cold-start critical path). */
@@ -279,12 +276,12 @@ export class FacetBridge {
         inputs: [
           valuePresetCoresFacet as Facet<unknown, unknown>,
           valuePresetPresentationsFacet as Facet<unknown, unknown>,
-          valuePresetsFacet as Facet<unknown, unknown>,
         ],
+        // Fires `onValuePresetsChange` on any core/presentation change so
+        // `userSchemasService` re-resolves schemas when a preset's plugin loads.
         run: (rt) => {
           const presets = readValuePresetRegistry(rt)
           target.applyValuePresetCores(presets.cores)
-          target.applyValuePresets(rt.read(valuePresetsFacet))
           this.valuePresetsListeners.notify()
         },
       },

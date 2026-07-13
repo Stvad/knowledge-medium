@@ -1,14 +1,13 @@
 // @vitest-environment node
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
-import { ChangeScope, codecs, definePreset, defineProperty, type AnyValuePreset } from '@/data/api'
+import { ChangeScope, codecs, definePresetCore, defineProperty, type AnyValuePresetCore } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
-import { propertySchemasFacet, valuePresetsFacet } from '@/data/facets'
+import { propertySchemasFacet, valuePresetCoresFacet } from '@/data/facets'
 import { propertyNameProp } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { UserSchemasService } from './userSchemasService'
@@ -24,7 +23,7 @@ interface Harness {
   dispose: () => void
 }
 
-const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harness> => {
+const setup = async (extraPresets: readonly AnyValuePresetCore[] = []): Promise<Harness> => {
   // Shared DB opened once per file (beforeAll); each test calls setup()
   // inline, so reset here gives the per-test clean slate.
   await resetTestDb(sharedDb.db)
@@ -34,7 +33,7 @@ const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harn
     extensions: [
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
-      ...extraPresets.map(p => valuePresetsFacet.of(p, {source: 'test'})),
+      ...extraPresets.map(p => valuePresetCoresFacet.of(p, {source: 'test'})),
     ],
   })
   repo.setActiveWorkspaceId(WS)
@@ -176,16 +175,14 @@ describe('UserSchemasService subscription', () => {
     await createExternalSchemaBlock('priority', 'priority-preset')
     expect(env.repo.propertySchemas.get('priority')).toBeUndefined()
 
-    // Plugin loads and contributes the missing preset → schema resolves on the
-    // valuePresets-change tick.
-    const priorityPreset = definePreset<string>({
+    // Plugin loads and contributes the missing preset core → schema resolves on
+    // the valuePresets-change tick.
+    const priorityPreset = definePresetCore<string>({
       id: 'priority-preset',
-      label: 'Priority',
       build: () => codecs.string,
       defaultValue: 'low',
-      Editor: (): JSX.Element => createElement('span', null, null),
     })
-    env.repo.setRuntimeContributions(valuePresetsFacet, 'plugin', [priorityPreset])
+    env.repo.setRuntimeContributions(valuePresetCoresFacet, 'plugin', [priorityPreset])
     // The preset arrival re-resolves the previously-skipped schema on the
     // valuePresets-change tick. Unlike the subscription-path assertions, this
     // read isn't preceded by an awaited change event, and the
