@@ -350,6 +350,47 @@ describe('FacetRuntime runtime contributions', () => {
   })
 })
 
+// captureContributions freezes a tx-start view so a per-workspace registry
+// factory can be built lazily inside a transaction without observing a
+// projector tick that lands mid-tx. Its soundness rests entirely on buckets
+// being replaced wholesale (never mutated in place) — this pins that invariant.
+describe('FacetRuntime.captureContributions', () => {
+  const labelsFacet = defineFacet<string, string>({
+    id: 'test.capture-labels',
+    combine: values => values.join(','),
+    empty: () => '',
+  })
+
+  it('reads a workspace-filtered view (static + unscoped + that workspace only)', () => {
+    const runtime = resolveFacetRuntimeSync([labelsFacet.of('static')])
+    runtime.setRuntimeContributions(labelsFacet, 'unscoped', ['u'])
+    runtime.setRuntimeContributions(labelsFacet, 'user-data', ['a'], {workspaceId: 'ws-a'})
+    runtime.setRuntimeContributions(labelsFacet, 'user-data', ['b'], {workspaceId: 'ws-b'})
+
+    const frozen = runtime.captureContributions()
+    expect(frozen.readForWorkspace(labelsFacet, 'ws-a')).toBe('static,u,a')
+    expect(frozen.readForWorkspace(labelsFacet, 'ws-b')).toBe('static,u,b')
+    expect(frozen.readForWorkspace(labelsFacet, null)).toBe('static,u')
+  })
+
+  it('does not observe live bucket mutations after capture (replace, add, remove)', () => {
+    const runtime = resolveFacetRuntimeSync([labelsFacet.of('static')])
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['before'], {workspaceId: 'ws-a'})
+
+    const frozen = runtime.captureContributions()
+
+    // Every way a live bucket changes, applied after the freeze.
+    runtime.setRuntimeContributions(labelsFacet, 'svc', ['after'], {workspaceId: 'ws-a'}) // replace
+    runtime.setRuntimeContributions(labelsFacet, 'svc2', ['extra'], {workspaceId: 'ws-a'}) // add
+    runtime.setRuntimeContributions(labelsFacet, 'svc', [], {workspaceId: 'ws-a'}) // remove
+
+    // The snapshot still reflects capture-time state...
+    expect(frozen.readForWorkspace(labelsFacet, 'ws-a')).toBe('static,before')
+    // ...while the live runtime reflects the mutations.
+    expect(runtime.readForWorkspace(labelsFacet, 'ws-a')).toBe('static,extra')
+  })
+})
+
 // adoptDurableContributionsFrom is how a `setFacetRuntime` swap carries
 // repo-owned user data (durable buckets) forward without a separate
 // mirror (B1(2)). The durable/transient split is load-bearing: copying
