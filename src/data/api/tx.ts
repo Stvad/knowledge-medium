@@ -145,13 +145,21 @@ export interface Tx {
 
   // ──── Typed property primitives ────
 
-  /** `setProperty`: applies `codec.encode`, merges into the row's
-   *  `properties` map, and writes through immediately. Bypassing codecs
-   *  (raw `properties` writes) goes through `tx.update`. */
+  /** `setProperty`: resolves schema identity, applies `codec.encode`, merges
+   *  into the row's `properties` map, and writes through immediately.
+   *  The updater overload runs inside this serialized tx after identity is
+   *  accepted and receives `undefined` (not `defaultValue`) when absent.
+   *  Bypassing codecs (raw `properties` writes) goes through `tx.update`. */
   setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
     value: T,
+    opts?: TxWriteOpts,
+  ): Promise<void>
+  setProperty<T>(
+    id: string,
+    schema: PropertySchema<T>,
+    updater: (current: T | undefined) => T,
     opts?: TxWriteOpts,
   ): Promise<void>
 

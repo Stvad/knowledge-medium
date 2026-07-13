@@ -95,6 +95,19 @@ export class LiveRuntimeHandle extends FacetRuntime {
     return this.current.read(facet)
   }
 
+  override readForWorkspace<Input, Output>(
+    facet: Facet<Input, Output>,
+    workspaceId: string | null,
+  ): Output {
+    return this.current.readForWorkspace(facet, workspaceId)
+  }
+
+  override workspaceIdsForFacets(
+    facets: readonly Facet<unknown, unknown>[],
+  ): ReadonlySet<string> {
+    return this.current.workspaceIdsForFacets(facets)
+  }
+
   override contributions<Input>(facet: Facet<Input, unknown>): FacetContribution<Input>[] {
     return this.current.contributions(facet)
   }

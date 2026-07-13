@@ -85,7 +85,9 @@ export interface FacetBridgeTarget {
   applyTypesAndSchemas(
     types: ReadonlyMap<string, TypeContribution>,
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+    legacyPropertySchemas: ReadonlyMap<string, AnyPropertySchema>,
     propertyDefinitions: PropertyDefinitionRegistrySnapshot | null,
+    propertySeedNameCounts: ReadonlyMap<string, number>,
   ): void
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
   applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
@@ -243,6 +245,78 @@ export class FacetBridge {
     return this.valuePresetsListeners.add(listener)
   }
 
+  private buildPropertyDefinitionsForWorkspace(
+    runtime: FacetRuntime,
+    workspaceId: string,
+  ): PropertyDefinitionRegistrySnapshot {
+    const types = runtime.readForWorkspace(typesFacet, workspaceId)
+    const legacySchemas = mergeLiftedSchemas(
+      runtime.readForWorkspace(propertySchemasFacet, workspaceId),
+      types,
+    )
+    return buildPropertyDefinitionRegistry({
+      workspaceId,
+      legacySchemas,
+      projectedDefinitions: runtime.readForWorkspace(
+        projectedPropertyDefinitionsFacet,
+        workspaceId,
+      ),
+      seeds: runtime.readForWorkspace(definitionSeedsFacet, workspaceId),
+    })
+  }
+
+  /** Live row-workspace lookup for synchronous Block reads. */
+  propertyDefinitionRegistryForWorkspace(
+    workspaceId: string,
+  ): PropertyDefinitionRegistrySnapshot | null {
+    return this.runtime
+      ? this.buildPropertyDefinitionsForWorkspace(this.runtime, workspaceId)
+      : null
+  }
+
+  /** Capture every known workspace bucket plus immutable unscoped inputs at
+   * tx start. The returned factory never consults the live runtime. */
+  capturePropertyDefinitionRegistryFactory(): (
+    workspaceId: string,
+  ) => PropertyDefinitionRegistrySnapshot | null {
+    const runtime = this.runtime
+    if (!runtime) return () => null
+
+    const facets = [
+      typesFacet,
+      propertySchemasFacet,
+      projectedPropertyDefinitionsFacet,
+      definitionSeedsFacet,
+    ] as readonly Facet<unknown, unknown>[]
+    const knownWorkspaceIds = new Set(runtime.workspaceIdsForFacets(facets))
+    if (this.activeWorkspaceId) knownWorkspaceIds.add(this.activeWorkspaceId)
+    const snapshots = new Map<string, PropertyDefinitionRegistrySnapshot>()
+    for (const workspaceId of knownWorkspaceIds) {
+      snapshots.set(
+        workspaceId,
+        this.buildPropertyDefinitionsForWorkspace(runtime, workspaceId),
+      )
+    }
+
+    const unscopedTypes = runtime.readForWorkspace(typesFacet, null)
+    const unscopedLegacySchemas = mergeLiftedSchemas(
+      runtime.readForWorkspace(propertySchemasFacet, null),
+      unscopedTypes,
+    )
+    const unscopedProjectedDefinitions = runtime.readForWorkspace(
+      projectedPropertyDefinitionsFacet,
+      null,
+    )
+    const unscopedSeeds = runtime.readForWorkspace(definitionSeedsFacet, null)
+
+    return workspaceId => snapshots.get(workspaceId) ?? buildPropertyDefinitionRegistry({
+      workspaceId,
+      legacySchemas: unscopedLegacySchemas,
+      projectedDefinitions: unscopedProjectedDefinitions,
+      seeds: unscopedSeeds,
+    })
+  }
+
   /** Rebuild step list. Order matters: value presets run before property
    * schemas so a runtime swap re-resolves block behavior against the incoming
    * cores before the final registry snapshot; types are read by the schema
@@ -305,6 +379,13 @@ export class FacetBridge {
           const types = rt.read(typesFacet)
           const legacySchemas = mergeLiftedSchemas(rt.read(propertySchemasFacet), types)
           const seeds = rt.read(definitionSeedsFacet)
+          const propertySeedNameCounts = new Map<string, number>()
+          for (const seed of seeds) {
+            propertySeedNameCounts.set(
+              seed.name,
+              (propertySeedNameCounts.get(seed.name) ?? 0) + 1,
+            )
+          }
           const propertyDefinitions = this.activeWorkspaceId
             ? buildPropertyDefinitionRegistry({
               workspaceId: this.activeWorkspaceId,
@@ -315,7 +396,13 @@ export class FacetBridge {
             : null
           const propertySchemas = propertyDefinitions?.schemas
             ?? buildUnboundPropertySchemas(legacySchemas, seeds)
-          target.applyTypesAndSchemas(types, propertySchemas, propertyDefinitions)
+          target.applyTypesAndSchemas(
+            types,
+            propertySchemas,
+            legacySchemas,
+            propertyDefinitions,
+            propertySeedNameCounts,
+          )
           const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, propertySchemas)
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)

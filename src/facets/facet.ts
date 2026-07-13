@@ -262,13 +262,16 @@ export class FacetRuntime {
     }
   }
 
-  private collectContributions(facetId: string): FacetContribution<unknown>[] {
+  private collectContributions(
+    facetId: string,
+    workspaceId: string | null = this.activeWorkspaceId,
+  ): FacetContribution<unknown>[] {
     const stat = this.staticContributionsByFacet.get(facetId) ?? []
     const runtime = this.runtimeContributionsByFacet.get(facetId)
     if (!runtime || runtime.size === 0) return stat
     const out: FacetContribution<unknown>[] = [...stat]
     for (const bucket of runtime.values()) {
-      if (bucket.workspaceId === undefined || bucket.workspaceId === this.activeWorkspaceId) {
+      if (bucket.workspaceId === undefined || bucket.workspaceId === workspaceId) {
         out.push(...bucket.contributions)
       }
     }
@@ -308,6 +311,31 @@ export class FacetRuntime {
     const value = facet.combine(values, this.context)
     this.cache.set(facet.id, value)
     return value
+  }
+
+  /** Read a facet through an explicit workspace filter without mutating the
+   * runtime's active pin or cache. Used by tx-bound workspace resolution. */
+  readForWorkspace<Input, Output>(
+    facet: Facet<Input, Output>,
+    workspaceId: string | null,
+  ): Output {
+    const contributions = this.collectContributions(facet.id, workspaceId)
+    if (!contributions.length) return facet.empty(this.context)
+    const values = contributions
+      .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
+      .map(contribution => contribution.value as Input)
+    return facet.combine(values, this.context)
+  }
+
+  /** Workspace ids represented by runtime buckets for the listed facets. */
+  workspaceIdsForFacets(facets: readonly Facet<unknown, unknown>[]): ReadonlySet<string> {
+    const ids = new Set<string>()
+    for (const facet of facets) {
+      for (const bucket of this.runtimeContributionsByFacet.get(facet.id)?.values() ?? []) {
+        if (bucket.workspaceId !== undefined) ids.add(bucket.workspaceId)
+      }
+    }
+    return ids
   }
 
   /** Replace the runtime contributions bucket for this facet under

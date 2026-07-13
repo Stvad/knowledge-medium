@@ -26,6 +26,7 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertySchema,
   BlockData,
   BlockDataPatch,
   ChangeScope,
@@ -70,6 +71,12 @@ import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
+import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  propertySchemaResolverForWorkspace,
+  requireWritablePropertySchema,
+  type PropertySchemaResolver,
+} from './propertySchemaResolution'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -145,6 +152,15 @@ export interface TxImplContext {
    *  fails the originating tx (clean rollback) instead of failing
    *  later at fire time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  /** Tx-start-captured registry factory. The row workspace selects a snapshot
+   * without consulting the live active-workspace runtime. */
+  propertyDefinitionRegistryForWorkspace: (
+    workspaceId: string,
+  ) => PropertyDefinitionRegistrySnapshot | null
+  propertySchemaWorkspaceId: string | null
+  foreignPlainPropertySchemas: ReadonlySet<AnyPropertySchema>
+  /** Seed-name multiplicity captured for temporary unbound legacy resolution. */
+  propertySeedNameCounts: ReadonlyMap<string, number>
   /** UUID generator — injected for testability. */
   newId: () => string
 }
@@ -227,6 +243,19 @@ export class TxImpl implements Tx {
     if (ctx.meta.workspaceId !== null) {
       this.workspacePinned = true
     }
+  }
+
+  private propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
+    const snapshot = this.ctx.propertyDefinitionRegistryForWorkspace(workspaceId)
+    const forbidden = workspaceId === this.ctx.propertySchemaWorkspaceId
+      ? new Set<AnyPropertySchema>()
+      : this.ctx.foreignPlainPropertySchemas
+    return propertySchemaResolverForWorkspace(
+      snapshot,
+      workspaceId,
+      this.ctx.propertySeedNameCounts,
+      forbidden,
+    )
   }
 
   // ──── Reads ────
@@ -447,14 +476,24 @@ export class TxImpl implements Tx {
   async setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
-    value: T,
+    valueOrUpdater: T | ((current: T | undefined) => T),
     opts?: TxWriteOpts,
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    const encoded = schema.codec.encode(value)
-    if (jsonValuesEqual(before.properties[schema.name], encoded)) return
-    const properties = {...before.properties, [schema.name]: encoded}
+    const resolvedSchema = requireWritablePropertySchema(
+      schema,
+      this.propertySchemaResolverFor(before.workspaceId),
+    )
+    const stored = before.properties[resolvedSchema.name]
+    const value = typeof valueOrUpdater === 'function'
+      ? (valueOrUpdater as (current: T | undefined) => T)(
+        stored === undefined ? undefined : resolvedSchema.codec.decode(stored),
+      )
+      : valueOrUpdater
+    const encoded = resolvedSchema.codec.encode(value)
+    if (jsonValuesEqual(stored, encoded)) return
+    const properties = {...before.properties, [resolvedSchema.name]: encoded}
     const after: BlockData = {
       ...before,
       properties,
@@ -472,9 +511,13 @@ export class TxImpl implements Tx {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     const data = parseBlockRow(row)
-    const stored = data.properties[schema.name]
-    if (stored === undefined) return schema.defaultValue
-    return schema.codec.decode(stored)
+    const resolution = this.propertySchemaResolverFor(data.workspaceId)
+      .resolveBoundary(schema)
+    if (resolution.status === 'identity-unavailable') return schema.defaultValue
+    const resolvedSchema = resolution.schema
+    const stored = data.properties[resolvedSchema.name]
+    if (stored === undefined) return resolvedSchema.defaultValue
+    return resolvedSchema.codec.decode(stored)
   }
 
   // ──── Composition ────

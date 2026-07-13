@@ -212,8 +212,11 @@ describe('repo.activeWorkspaceId', () => {
       }),
     })
     expect(repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)).toEqual({
-      status: 'identity-unavailable',
-      reason: 'registry-not-workspace-keyed',
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-synthesis-a', declaration.seedKey),
+        workspaceId: 'ws-synthesis-a',
+      }),
     })
     repo.setActiveWorkspaceId(null)
   })

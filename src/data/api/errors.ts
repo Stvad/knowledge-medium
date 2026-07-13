@@ -2,6 +2,8 @@
  *  any of these; they all subclass `Error`. Names align with the data-layer
  *  spec (`tasks/data-layer-redesign.md` §5.3, §10.4, §4.7, §13.1). */
 
+import type {PropertySchemaIdentityUnavailableReason} from './propertySchema'
+
 // `name` is pinned for every subclass in the block at the BOTTOM of this file —
 // a source string literal that survives production minification. We deliberately
 // do NOT set it here via `new.target.name`: OXC minification strips class names,
@@ -164,6 +166,21 @@ export class WorkspaceNotPinnedError extends DataLayerError {
   }
 }
 
+/** A property schema could not prove that it maps to the target workspace's
+ * winning definition. Reads degrade at their boundary; writes surface this
+ * structured error before codecs or updater callbacks run. */
+export class PropertySchemaIdentityError extends DataLayerError {
+  constructor(
+    public readonly schemaName: string,
+    public readonly reason: PropertySchemaIdentityUnavailableReason,
+  ) {
+    super(
+      `cannot write property ${JSON.stringify(schemaName)}: ` +
+      `schema identity is unavailable (${reason})`,
+    )
+  }
+}
+
 // ──── Mode / dispatch ────
 
 export class ReadOnlyError extends DataLayerError {
@@ -234,6 +251,7 @@ const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
   ['ParentDeletedError', ParentDeletedError],
   ['WorkspaceMismatchError', WorkspaceMismatchError],
   ['WorkspaceNotPinnedError', WorkspaceNotPinnedError],
+  ['PropertySchemaIdentityError', PropertySchemaIdentityError],
   ['ReadOnlyError', ReadOnlyError],
   ['MutatorNotRegisteredError', MutatorNotRegisteredError],
   ['QueryNotRegisteredError', QueryNotRegisteredError],

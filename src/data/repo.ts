@@ -125,8 +125,7 @@ import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
 import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
 import {
-  createPropertySchemaResolver,
-  unavailablePropertySchemaResolver,
+  propertySchemaResolverForWorkspace,
   type PropertySchemaResolver,
 } from './internals/propertySchemaResolution'
 
@@ -314,9 +313,16 @@ export class Repo {
   private queries: Map<string, AnyQuery> = new Map()
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
   private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
+  /** Transitional registrations before active-workspace projection. Used to
+   * identify plain projected objects that cannot cross workspace boundaries. */
+  private _legacyPropertySchemas: ReadonlyMap<string, AnyPropertySchema> =
+    KERNEL_PROPERTY_SCHEMA_MAP
   /** Atomic active-workspace definition snapshot. Null at stage 0 before a
    * workspace pin; identity resolution is unavailable in that state. */
   private _propertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null
+  /** Seed-name multiplicity retained for temporary unbound/mismatched-workspace
+   * legacy boundaries so known synthesized-name competitors still reject. */
+  private _propertySeedNameCounts: ReadonlyMap<string, number> = new Map()
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
   private _valuePresetCores: ReadonlyMap<string, AnyValuePresetCore> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
@@ -514,10 +520,26 @@ export class Repo {
    * workspace (the transaction layer owns that fact); resolve() itself accepts
    * only a handle/name and is therefore immune to ambient workspace switches. */
   propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
-    const snapshot = this._propertyDefinitionRegistry
-    return snapshot?.workspaceId === workspaceId
-      ? createPropertySchemaResolver(snapshot)
-      : unavailablePropertySchemaResolver
+    const snapshot = this._propertyDefinitionRegistry?.workspaceId === workspaceId
+      ? this._propertyDefinitionRegistry
+      : this.facetBridge.propertyDefinitionRegistryForWorkspace(workspaceId)
+    const forbidden = workspaceId === this._activeWorkspaceId
+      ? new Set<AnyPropertySchema>()
+      : this.foreignPlainPropertySchemas()
+    return propertySchemaResolverForWorkspace(
+      snapshot,
+      workspaceId,
+      this._propertySeedNameCounts,
+      forbidden,
+    )
+  }
+
+  private foreignPlainPropertySchemas(): ReadonlySet<AnyPropertySchema> {
+    const schemas = new Set<AnyPropertySchema>()
+    for (const [name, schema] of this._propertySchemas) {
+      if (this._legacyPropertySchemas.get(name) !== schema) schemas.add(schema)
+    }
+    return schemas
   }
 
   get propertyEditorOverrides(): ReadonlyMap<string, AnyPropertyEditorOverride> {
@@ -678,10 +700,18 @@ export class Repo {
       applySameTxProcessors: (processors) => { this.sameTxProcessors = processors },
       applyInvalidationRules: (rules) => { this.invalidationRules = rules },
       applyWorkspaceBackfills: (backfills) => { this._workspaceBackfills = backfills },
-      applyTypesAndSchemas: (types, propertySchemas, propertyDefinitions) => {
+      applyTypesAndSchemas: (
+        types,
+        propertySchemas,
+        legacyPropertySchemas,
+        propertyDefinitions,
+        propertySeedNameCounts,
+      ) => {
         this._types = types
         this._propertySchemas = propertySchemas
+        this._legacyPropertySchemas = legacyPropertySchemas
         this._propertyDefinitionRegistry = propertyDefinitions
+        this._propertySeedNameCounts = propertySeedNameCounts
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
@@ -1278,6 +1308,9 @@ export class Repo {
   ) {
     const txT0 = performance.now()
     let result
+    const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
+    const capturedPropertyDefinitionFactory =
+      this.facetBridge.capturePropertyDefinitionRegistryFactory()
     try {
       result = await runTx({
         db: this.db,
@@ -1294,6 +1327,13 @@ export class Repo {
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        propertyDefinitionRegistryForWorkspace:
+          workspaceId => capturedActivePropertyDefinitions?.workspaceId === workspaceId
+            ? capturedActivePropertyDefinitions
+            : capturedPropertyDefinitionFactory(workspaceId),
+        propertySchemaWorkspaceId: this._activeWorkspaceId,
+        foreignPlainPropertySchemas: this.foreignPlainPropertySchemas(),
+        propertySeedNameCounts: this._propertySeedNameCounts,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact
         // restore (#187). Post-commit processors still dispatch below.

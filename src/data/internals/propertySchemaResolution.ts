@@ -1,13 +1,33 @@
 import type {
   AnyPropertySchema,
   PropertyHandle,
+  PropertySchema,
+  PropertySchemaIdentityUnavailableReason,
   PropertySchemaResolution,
   ResolvedPropertySchema,
 } from '@/data/api'
+import {PropertySchemaIdentityError} from '@/data/api'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {propertySchemaOriginForSeedKey} from '@/data/propertyDefinitionMetadata'
 import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+
+export type PropertyBoundaryResolution<T> =
+  | {readonly status: 'available'; readonly schema: PropertySchema<T>}
+  | {
+      readonly status: 'identity-unavailable'
+      readonly reason: PropertySchemaIdentityUnavailableReason
+    }
+
+const isPropertyHandle = <T>(schema: PropertySchema<T>): schema is PropertyHandle<T> =>
+  typeof (schema as Partial<PropertyHandle<T>>).seedKey === 'string'
+
+const isResolvedPropertySchema = <T>(
+  schema: PropertySchema<T>,
+): schema is ResolvedPropertySchema<T> => {
+  const candidate = schema as Partial<ResolvedPropertySchema<T>>
+  return typeof candidate.fieldId === 'string' && typeof candidate.workspaceId === 'string'
+}
 
 /** A resolver is created for an owning transaction/workspace registry
  * snapshot; callers supply only the definition handle or name, never a
@@ -15,6 +35,7 @@ import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinition
 export interface PropertySchemaResolver {
   resolve<T>(handle: PropertyHandle<T>): PropertySchemaResolution<T>
   resolve(name: string): PropertySchemaResolution<unknown>
+  resolveBoundary<T>(schema: PropertySchema<T>): PropertyBoundaryResolution<T>
 }
 
 class IdentityUnavailablePropertySchemaResolver implements PropertySchemaResolver {
@@ -27,13 +48,54 @@ class IdentityUnavailablePropertySchemaResolver implements PropertySchemaResolve
       reason: 'registry-not-workspace-keyed',
     }
   }
+
+  resolveBoundary<T>(schema: PropertySchema<T>): PropertyBoundaryResolution<T> {
+    void schema
+    return {status: 'identity-unavailable', reason: 'registry-not-workspace-keyed'}
+  }
 }
 
-/** Stage-0/mismatch form of the single property-identity primitive. It cannot
- * construct a resolved schema; boundary sites consume a resolver bound to the
- * target row's workspace snapshot. */
+/** Fail-closed form of the property-identity primitive. It cannot construct a
+ * resolved schema; boundary sites consume a resolver bound to the target row's
+ * workspace snapshot. */
 export const unavailablePropertySchemaResolver: PropertySchemaResolver =
   new IdentityUnavailablePropertySchemaResolver()
+
+class TransitionalLegacyPropertySchemaResolver
+  extends IdentityUnavailablePropertySchemaResolver {
+  constructor(private readonly seedNameCounts: ReadonlyMap<string, number>) {
+    super()
+  }
+
+  override resolveBoundary<T>(schema: PropertySchema<T>): PropertyBoundaryResolution<T> {
+    if (isPropertyHandle(schema) || isResolvedPropertySchema(schema)) {
+      return super.resolveBoundary(schema)
+    }
+    const seedCount = this.seedNameCounts.get(schema.name) ?? 0
+    if (seedCount > 0) {
+      return {
+        status: 'identity-unavailable',
+        reason: seedCount > 1 ? 'ambiguous' : 'shadowed',
+      }
+    }
+    return {status: 'available', schema}
+  }
+}
+
+/** Select the boundary resolver for a target row workspace. The temporary
+ * pre-B4 unbound mode rejects known seed-name competitors while preserving
+ * unclaimed legacy entries. A non-null workspace mismatch fails closed. */
+export const propertySchemaResolverForWorkspace = (
+  snapshot: PropertyDefinitionRegistrySnapshot | null,
+  workspaceId: string,
+  unboundSeedNameCounts: ReadonlyMap<string, number> = new Map(),
+  forbiddenPlainSchemas: ReadonlySet<AnyPropertySchema> = new Set(),
+): PropertySchemaResolver => {
+  if (!snapshot) return new TransitionalLegacyPropertySchemaResolver(unboundSeedNameCounts)
+  return snapshot.workspaceId === workspaceId
+    ? createPropertySchemaResolver(snapshot, forbiddenPlainSchemas)
+    : unavailablePropertySchemaResolver
+}
 
 const resolved = <T>(
   workspaceId: string,
@@ -55,7 +117,10 @@ const resolved = <T>(
 })
 
 class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
-  constructor(private readonly snapshot: PropertyDefinitionRegistrySnapshot) {}
+  constructor(
+    private readonly snapshot: PropertyDefinitionRegistrySnapshot,
+    private readonly forbiddenPlainSchemas: ReadonlySet<AnyPropertySchema> = new Set(),
+  ) {}
 
   resolve<T>(handle: PropertyHandle<T>): PropertySchemaResolution<T>
   resolve(name: string): PropertySchemaResolution<unknown>
@@ -95,14 +160,7 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
 
   private resolveName(name: string): PropertySchemaResolution<unknown> {
     const winner = this.snapshot.definitionsByName.get(name)?.[0]
-    if (winner) {
-      const declaration = winner.seedKey
-        ? this.snapshot.seedsByKey.get(winner.seedKey)
-        : undefined
-      const behavior = declaration ?? this.snapshot.schemasByFieldId.get(winner.fieldId)
-      if (!behavior) return {status: 'identity-unavailable', reason: 'definition-unavailable'}
-      return resolved(this.snapshot.workspaceId, winner.fieldId, behavior, winner)
-    }
+    if (winner) return this.resolveField(winner.fieldId)
 
     const seeds = this.snapshot.seedsByName.get(name) ?? []
     if (seeds.length !== 1) {
@@ -113,6 +171,89 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
     }
     return this.resolve(seeds[0]!)
   }
+
+  private resolveField<T>(fieldId: string): PropertySchemaResolution<T> {
+    const metadata = this.snapshot.definitionsByFieldId.get(fieldId)
+    if (!metadata) {
+      const declaration = [...this.snapshot.seedsByKey.values()].find(seed =>
+        propertyDefinitionBlockId(this.snapshot.workspaceId, seed.seedKey) === fieldId)
+      return declaration
+        ? this.resolve(declaration) as PropertySchemaResolution<T>
+        : {status: 'identity-unavailable', reason: 'definition-unavailable'}
+    }
+    const winner = this.snapshot.definitionsByName.get(metadata.name)?.[0]
+    if (!winner || winner.fieldId !== fieldId) {
+      return {status: 'identity-unavailable', reason: 'shadowed'}
+    }
+    const declaration = metadata.seedKey
+      ? this.snapshot.seedsByKey.get(metadata.seedKey)
+      : undefined
+    const behavior = declaration ?? this.snapshot.schemasByFieldId.get(fieldId)
+    if (!behavior) return {status: 'identity-unavailable', reason: 'definition-unavailable'}
+    return resolved<T>(this.snapshot.workspaceId, fieldId, behavior, metadata)
+  }
+
+  resolveBoundary<T>(schema: PropertySchema<T>): PropertyBoundaryResolution<T> {
+    // The ambient map may publish a name-adjusted clone of a declared/projected
+    // behavior. Exact membership proves it is this snapshot's selected entry;
+    // arbitrary lookalikes still take the identity-aware branches below.
+    if (
+      this.snapshot.schemas.get(schema.name) === schema &&
+      (
+        this.snapshot.definitionsByName.has(schema.name) ||
+        this.snapshot.seedsByName.has(schema.name)
+      )
+    ) {
+      return this.asBoundaryResolution(
+        this.resolveName(schema.name) as PropertySchemaResolution<T>,
+      )
+    }
+    if (isPropertyHandle(schema)) return this.asBoundaryResolution(this.resolve(schema))
+
+    if (isResolvedPropertySchema(schema)) {
+      if (schema.workspaceId !== this.snapshot.workspaceId) {
+        return {status: 'identity-unavailable', reason: 'registry-not-workspace-keyed'}
+      }
+      return this.asBoundaryResolution(this.resolveField<T>(schema.fieldId))
+    }
+
+    if (this.forbiddenPlainSchemas.has(schema)) {
+      return {status: 'identity-unavailable', reason: 'registry-not-workspace-keyed'}
+    }
+
+    const winner = this.snapshot.definitionsByName.get(schema.name)?.[0]
+    if (winner) {
+      const winnerBehavior = winner.seedKey
+        ? this.snapshot.seedsByKey.get(winner.seedKey)
+        : this.snapshot.schemasByFieldId.get(winner.fieldId)
+      if (!winnerBehavior) {
+        return {status: 'identity-unavailable', reason: 'definition-unavailable'}
+      }
+      if (winnerBehavior !== schema) {
+        return {status: 'identity-unavailable', reason: 'shadowed'}
+      }
+      return this.asBoundaryResolution(
+        resolved<T>(this.snapshot.workspaceId, winner.fieldId, winnerBehavior, winner),
+      )
+    }
+
+    const synthesized = this.snapshot.seedsByName.get(schema.name) ?? []
+    if (synthesized.length > 0) {
+      return {
+        status: 'identity-unavailable',
+        reason: synthesized.length > 1 ? 'ambiguous' : 'shadowed',
+      }
+    }
+    return {status: 'available', schema}
+  }
+
+  private asBoundaryResolution<T>(
+    resolution: PropertySchemaResolution<T>,
+  ): PropertyBoundaryResolution<T> {
+    return resolution.status === 'resolved'
+      ? {status: 'available', schema: resolution.schema}
+      : resolution
+  }
 }
 
 /** Bind identity resolution to one atomic workspace snapshot. Boundary sites
@@ -120,4 +261,14 @@ class SnapshotPropertySchemaResolver implements PropertySchemaResolver {
  * ambient active-workspace id into resolve(). */
 export const createPropertySchemaResolver = (
   snapshot: PropertyDefinitionRegistrySnapshot,
-): PropertySchemaResolver => new SnapshotPropertySchemaResolver(snapshot)
+  forbiddenPlainSchemas: ReadonlySet<AnyPropertySchema> = new Set(),
+): PropertySchemaResolver => new SnapshotPropertySchemaResolver(snapshot, forbiddenPlainSchemas)
+
+export const requireWritablePropertySchema = <T>(
+  schema: PropertySchema<T>,
+  resolver: PropertySchemaResolver,
+): PropertySchema<T> => {
+  const resolution = resolver.resolveBoundary(schema)
+  if (resolution.status === 'available') return resolution.schema
+  throw new PropertySchemaIdentityError(schema.name, resolution.reason)
+}
