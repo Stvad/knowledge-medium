@@ -1,10 +1,10 @@
 import{ChangeScope as e}from"../data/api/changeScope.js";import"../data/api/index.js";import{extensionDescriptionProp as t,extensionNameProp as n}from"../data/properties.js";import{EXTENSION_TYPE as r}from"../data/blockTypes.js";import{createChild as i}from"../data/mutators.js";var a=[{id:`hello-renderer`,name:`Hello renderer`,description:`Content-renderer variant gated by 'user:hello = true'.`,source:`import {
   blockContentRendererFacet,
   ChangeScope,
-  codecs,
-  defineProperty,
+  definitionSeedsFacet,
   defineVariant,
-  propertySchemasFacet,
+  extensionPropertySeedKey,
+  seedProperty,
 } from '@/extensions/api.js'
 
 // Variant on blockContentRendererFacet: contributes an alternative
@@ -15,8 +15,11 @@ import{ChangeScope as e}from"../data/api/changeScope.js";import"../data/api/inde
 // content area inside DefaultBlockRenderer — the rest of the block
 // chrome is untouched.
 
-const helloProp = defineProperty('user:hello', {
-  codec: codecs.boolean,
+const helloProp = seedProperty({
+  seedKey: extensionPropertySeedKey('hello'),
+  revision: 1,
+  name: 'user:hello',
+  preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
 })
@@ -33,7 +36,7 @@ const HelloContent = ({ block }) => (
 export default [
   // Register the schema so the value-preset / property-editor lookups
   // can find this prop, and describeRuntime can list it.
-  propertySchemasFacet.of(helloProp),
+  definitionSeedsFacet.of(helloProp),
   blockContentRendererFacet.of((ctx) => {
     if (!ctx.block.peekProperty(helloProp)) return null
     return defineVariant('user.hello', 'Hello', HelloContent)
@@ -92,10 +95,10 @@ export default actionsFacet.of({
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   ChangeScope,
-  codecs,
-  defineProperty,
+  definitionSeedsFacet,
+  extensionPropertySeedKey,
   isSelectionClick,
-  propertySchemasFacet,
+  seedProperty,
 } from '@/extensions/api.js'
 
 // Multi-facet plugin: an action, a click handler, and a content
@@ -107,8 +110,11 @@ export default actionsFacet.of({
 // custom 'renderer: hello-renderer' property still gets its reactions
 // row.
 
-const reactionsProp = defineProperty('user:reactions', {
-  codec: codecs.list(codecs.string),
+const reactionsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('reactions'),
+  revision: 1,
+  name: 'user:reactions',
+  preset: 'string-list',
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
@@ -130,7 +136,7 @@ const cycleReaction = async (block) => {
 export default [
   // Register the schema so the codec/editor lookups know about this
   // property and describeRuntime can list it.
-  propertySchemasFacet.of(reactionsProp),
+  definitionSeedsFacet.of(reactionsProp),
 
   // Click on a block while holding Alt to add a reaction.
   blockClickHandlersFacet.of((ctx) => (event) => {
@@ -208,10 +214,10 @@ export default [
 `},{id:`split-layout`,name:`Split layout`,description:`Block-layout variant for blocks tagged 'user:layout = split' — places content and children side by side.`,source:`import {
   blockLayoutFacet,
   ChangeScope,
-  codecs,
-  defineProperty,
+  definitionSeedsFacet,
   defineVariant,
-  propertySchemasFacet,
+  extensionPropertySeedKey,
+  seedProperty,
 } from '@/extensions/api.js'
 
 // blockLayoutFacet contributions arrange the four slots (Content,
@@ -226,8 +232,12 @@ export default [
 // arranges the slots; the slots' insides are still resolved through
 // the rest of the registry.
 
-const layoutProp = defineProperty('user:layout', {
-  codec: codecs.string,
+const layoutProp = seedProperty({
+  seedKey: extensionPropertySeedKey('layout'),
+  revision: 1,
+  name: 'user:layout',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -257,7 +267,7 @@ const SplitLayout = ({ Content, Children, Properties, Footer }) => (
 export default [
   // Register the schema so describeRuntime / property-editor lookups
   // know about this property.
-  propertySchemasFacet.of(layoutProp),
+  definitionSeedsFacet.of(layoutProp),
   blockLayoutFacet.of((ctx) => {
     if (ctx.block.peekProperty(layoutProp) !== 'split') return null
     return defineVariant('split', 'Split (content / children)', SplitLayout)
