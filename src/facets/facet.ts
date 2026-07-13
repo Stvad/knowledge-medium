@@ -362,19 +362,11 @@ export class FacetRuntime {
     if (this.cache.has(facet.id)) {
       return this.cache.get(facet.id) as Output
     }
-
-    const contributions = this.collectContributions(facet.id)
-    if (!contributions.length) {
-      const emptyValue = facet.empty(this.context)
-      this.cache.set(facet.id, emptyValue)
-      return emptyValue
-    }
-
-    const values = contributions
-      .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
-      .map((contribution) => contribution.value as Input)
-
-    const value = facet.combine(values, this.context)
+    const value = combineFacetContributions(
+      facet,
+      this.collectContributions(facet.id),
+      this.context,
+    )
     this.cache.set(facet.id, value)
     return value
   }
@@ -394,9 +386,11 @@ export class FacetRuntime {
 
   /** Capture a tx-start-stable view of the current contributions for deferred,
    *  workspace-filtered reads that must NOT observe later live writes. Runtime
-   *  buckets are replaced wholesale by `setRuntimeContributions` (never mutated
-   *  in place), so shallow-copying the outer maps fully isolates the snapshot
-   *  from subsequent writes without deep-copying the contribution arrays. */
+   *  buckets are added/removed on the live inner maps by `setRuntimeContributions`,
+   *  so those maps are shallow-copied to isolate the snapshot; the copies still
+   *  share the (immutable, wholesale-replaced) bucket objects. Static
+   *  contributions are written only by the constructor, so the static map is
+   *  shared by reference rather than copied. */
   captureContributions(): CapturedFacetContributions {
     const runtimeByFacet = new Map<string, Map<string, RuntimeBucket>>()
     for (const [facetId, buckets] of this.runtimeContributionsByFacet) {
@@ -404,7 +398,7 @@ export class FacetRuntime {
     }
     return new FrozenFacetContributions(
       this.context,
-      new Map(this.staticContributionsByFacet),
+      this.staticContributionsByFacet,
       runtimeByFacet,
     )
   }

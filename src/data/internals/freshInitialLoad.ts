@@ -13,9 +13,9 @@
  *
  *  `schedule` is injected so tests can drive the backoff synchronously. */
 
-export const FRESH_INITIAL_LOAD_RETRIES = 3
+const FRESH_INITIAL_LOAD_RETRIES = 3
 
-export const freshInitialRetryDelayMs = (attempt: number): number => 100 * 2 ** attempt
+const freshInitialRetryDelayMs = (attempt: number): number => 100 * 2 ** attempt
 
 /** Run `run` after `delayMs`; return a canceller for the pending timer. */
 export type RetryScheduler = (run: () => void, delayMs: number) => () => void
@@ -27,7 +27,6 @@ const defaultScheduler: RetryScheduler = (run, delayMs) => {
 
 export interface FreshInitialLoadOptions {
   readonly retries?: number
-  readonly delayMs?: (attempt: number) => number
   readonly schedule?: RetryScheduler
 }
 
@@ -42,7 +41,6 @@ export const runFreshInitialLoad = <T>(
   options: FreshInitialLoadOptions = {},
 ): (() => void) => {
   const retries = options.retries ?? FRESH_INITIAL_LOAD_RETRIES
-  const delayMs = options.delayMs ?? freshInitialRetryDelayMs
   const schedule = options.schedule ?? defaultScheduler
   let cancelled = false
   let cancelPendingRetry: (() => void) | undefined
@@ -55,7 +53,10 @@ export const runFreshInitialLoad = <T>(
       error => {
         if (cancelled) return
         if (attemptIndex < retries) {
-          cancelPendingRetry = schedule(() => attempt(attemptIndex + 1), delayMs(attemptIndex))
+          cancelPendingRetry = schedule(
+            () => attempt(attemptIndex + 1),
+            freshInitialRetryDelayMs(attemptIndex),
+          )
           return
         }
         onError(error)
