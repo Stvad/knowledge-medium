@@ -15,7 +15,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import type { FacetRuntime, Facet } from '@/facets/facet'
+import type { FacetRuntime, Facet, WorkspaceRuntimeContributionOptions } from '@/facets/facet'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type {
   AnyMutator,
@@ -943,6 +943,7 @@ export class Repo {
 
   setActiveWorkspaceId(workspaceId: string | null): void {
     this._activeWorkspaceId = workspaceId
+    this.facetBridge.setActiveWorkspaceId(workspaceId)
   }
 
   /** The active workspace's undo / redo manager — what cmd-Z and the
@@ -1479,18 +1480,18 @@ export class Repo {
    *
    *  OWNERSHIP CONTRACT: the bucket is DURABLE — it survives `setFacetRuntime`
    *  swaps via `FacetRuntime.adoptDurableContributionsFrom`, and the Repo is a
-   *  per-user singleton reused across workspace switches. A writer that owns a
-   *  workspace-scoped bucket (e.g. `UserSchemasService` / `UserTypesService`)
-   *  MUST clear it — `setRuntimeContributions(facet, sourceId, [])` — when it
-   *  tears down on a workspace switch, or the previous workspace's data is
-   *  adopted into the next workspace's runtime until the new bucket rebuilds.
-   *  (This is the leak fixed in `UserSchemasService.dispose`.) */
+   *  per-user singleton reused across workspace switches. Workspace-scoped
+   *  buckets are filtered synchronously by the Repo pin, so they cannot bleed
+   *  into another workspace. Their owner still clears the captured workspace's
+   *  bucket on teardown to bound retained/adopted state and ensure a later
+   *  restart rebuilds from the current rows. */
   setRuntimeContributions<Input>(
     facet: Facet<Input, unknown>,
     sourceId: string,
     contributions: readonly Input[],
+    options?: WorkspaceRuntimeContributionOptions,
   ): void {
-    this.facetBridge.setRuntimeContributions(facet, sourceId, contributions)
+    this.facetBridge.setRuntimeContributions(facet, sourceId, contributions, options)
   }
 
   /** Subscribe to changes on `_propertySchemas`. Fires when

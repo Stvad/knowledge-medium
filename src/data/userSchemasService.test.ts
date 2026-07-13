@@ -275,6 +275,43 @@ describe('UserSchemasService.getSchemaForBlockId', () => {
 })
 
 describe('UserSchemasService workspace switch', () => {
+  it('drops pre-start state when the persistent projector starts in another workspace', async () => {
+    await resetTestDb(sharedDb.db)
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      extensions: [kernelPropertyUiExtension, kernelValuePresetsExtension],
+    })
+    repo.setActiveWorkspaceId(WS)
+    await getOrCreatePropertiesPage(repo, WS)
+    const service = repo.userSchemas
+    await service.addSchema({name: 'only-w1', presetId: 'url'})
+
+    const W2 = 'ws-user-schemas-prestart-2'
+    repo.setActiveWorkspaceId(W2)
+    await getOrCreatePropertiesPage(repo, W2)
+    const dispose = service.start()
+    env = {h: {db: sharedDb.db, cleanup: async () => {}}, repo, service, dispose}
+    await service.addSchema({name: 'only-w2', presetId: 'url'})
+
+    expect(repo.propertySchemas.get('only-w1')).toBeUndefined()
+    expect(service.getSchemaBlockId('only-w1')).toBeUndefined()
+    expect(repo.propertySchemas.get('only-w2')?.codec.type).toBe('url')
+    expect(service.getSchemaBlockId('only-w2')).toBeDefined()
+  })
+
+  it('synchronously filters the old workspace bucket when the active workspace changes', async () => {
+    env = await setup()
+    await env.service.addSchema({name: 'workspace-only', presetId: 'url'})
+    expect(env.repo.propertySchemas.get('workspace-only')?.codec.type).toBe('url')
+
+    env.repo.setActiveWorkspaceId('ws-user-schemas-2')
+    expect(env.repo.propertySchemas.get('workspace-only')).toBeUndefined()
+
+    env.repo.setActiveWorkspaceId(WS)
+    expect(env.repo.propertySchemas.get('workspace-only')?.codec.type).toBe('url')
+  })
+
   // Regression for the in-flight-write cross-workspace leak surfaced in the
   // #90 adversarial review: addSchema pins the active workspace before its
   // first await, so a schema whose create/tx is still in flight when the user

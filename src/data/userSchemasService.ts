@@ -169,8 +169,8 @@ export class UserSchemasService {
    *  before any dependent property write so the form's "create-then-
    *  write-initial-value" flow doesn't race the subscription tick.
    *  `blockId` is the property-schema block that produced `schema`. */
-  appendUserSchema(schema: AnyPropertySchema, blockId: string): void {
-    this.handle?.upsert(schema, blockId)
+  appendUserSchema(schema: AnyPropertySchema, blockId: string, workspaceId: string): void {
+    this.handle?.upsert(schema, blockId, workspaceId)
   }
 
   /** Create a property-schema block in the workspace's Properties
@@ -242,15 +242,14 @@ export class UserSchemasService {
     // Register synchronously, before returning — but only if the workspace
     // didn't change while the create/tx was in flight. The schema block is
     // durably persisted under `workspaceId`'s Properties page; publishing it
-    // into the (workspace-agnostic) 'user-data' bucket after a switch would
-    // leak it into the new workspace. The projector's `disposed` guard can't
-    // catch this — the per-projector container is reused and re-armed across
-    // the switch — so the in-flight write is pinned to its workspace here.
+    // into the wrong workspace-scoped bucket after a switch would corrupt that
+    // bucket's snapshot. The projector's generation guard protects subscription
+    // callbacks; this imperative async path additionally pins at the call site.
     // Skipping is safe: when `workspaceId` is active again, its subscription
     // re-materialises the block. The subscription otherwise arrives at an
     // idempotent state.
     if (this.repo.activeWorkspaceId === workspaceId) {
-      this.appendUserSchema(newSchema, childId)
+      this.appendUserSchema(newSchema, childId, workspaceId)
     }
     return newSchema
   }

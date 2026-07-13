@@ -31,7 +31,7 @@ import type {
   AnyValuePresetCore,
   TypeContribution,
 } from '@/data/api'
-import type { Facet, FacetRuntime } from '@/facets/facet'
+import type { Facet, FacetRuntime, WorkspaceRuntimeContributionOptions } from '@/facets/facet'
 import { CallbackSet } from '@/utils/callbackSet'
 import type { InvalidationRule } from './invalidation'
 import {
@@ -92,6 +92,7 @@ export class FacetBridge {
   /** Currently-installed FacetRuntime. Null until the first
    *  `setFacetRuntime` call. */
   private runtime: FacetRuntime | null = null
+  private activeWorkspaceId: string | null = null
   /** Per-facet listener disposers from `onFacetChange` registrations.
    *  Cleared when `setFacetRuntime` swaps to a fresh runtime — old
    *  listeners would fire against stale rebuild closures otherwise. */
@@ -147,6 +148,7 @@ export class FacetBridge {
     // merged view on first read (no flicker through a state where
     // user-data is missing and then re-added).
     if (previous) runtime.adoptDurableContributionsFrom(previous)
+    runtime.setActiveWorkspaceId(this.activeWorkspaceId)
 
     // Run every rebuild step on the fresh runtime.
     for (const step of this.rebuildSteps) step.run(runtime)
@@ -181,11 +183,22 @@ export class FacetBridge {
     facet: Facet<Input, unknown>,
     sourceId: string,
     contributions: readonly Input[],
+    options?: WorkspaceRuntimeContributionOptions,
   ): void {
     if (!this.runtime) {
       throw new Error('[FacetBridge.setRuntimeContributions] called before setFacetRuntime')
     }
-    this.runtime.setRuntimeContributions(facet, sourceId, contributions, { durable: true })
+    this.runtime.setRuntimeContributions(facet, sourceId, contributions, {
+      durable: true,
+      workspaceId: options?.workspaceId,
+    })
+  }
+
+  /** Synchronously flip the workspace filter on the installed runtime.
+   * The pin is retained across future runtime swaps. */
+  setActiveWorkspaceId(workspaceId: string | null): void {
+    this.activeWorkspaceId = workspaceId
+    this.runtime?.setActiveWorkspaceId(workspaceId)
   }
 
   onPropertySchemasChange(listener: () => void): () => void {

@@ -15,10 +15,9 @@
  *    - a `primed` gate so a cross-projector publish on the secondary
  *      signal during a workspace-switch handoff can't rebuild against
  *      rows this projector doesn't own yet;
- *    - on dispose: reset in-memory state AND clear the bucket (the Repo
- *      is a per-user singleton reused across workspace switches and
- *      `setFacetRuntime` carries durable buckets forward, so a stale
- *      bucket would leak into the next workspace until its first tick);
+ *    - on dispose: reset in-memory state AND clear the captured workspace's
+ *      bucket (scoped filtering prevents visibility leaks; clearing bounds
+ *      durable state and forces a current-row rebuild on restart);
  *    - one `disposed` flag checked before every synchronous publish, so a
  *      publish from a torn-down container (a queued subscription/secondary
  *      callback, or a write landing during the dispose→restart gap) can't
@@ -56,10 +55,9 @@ export interface ProjectorHandle<Contribution = unknown> {
   contributionForBlockId(blockId: string): Contribution | undefined
   /** Synchronously upsert one contribution and publish — the
    *  schemas `addSchema` path registers before the subscription tick.
-   *  No-op once the container is disposed (guards a publish from a
-   *  torn-down container; see the module header for the cross-workspace
-   *  limit this does NOT cover). */
-  upsert(contribution: Contribution, blockId: string): void
+   *  The explicit workspace plus lifecycle generation prevent an outgoing
+   *  async path from publishing through a container re-armed elsewhere. */
+  upsert(contribution: Contribution, blockId: string, workspaceId: string): void
 }
 
 /** Handed to a descriptor's `project` / `hydrate` so it can reach the
@@ -132,6 +130,10 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
   /** True once the workspace-pinned subscription has delivered its
    *  first tick. Gates the secondary-signal rebuild. */
   private primed = false
+  private pinnedWorkspaceId: string | null = null
+  /** Monotonic lifecycle token: callbacks captured by an outgoing workspace
+   * cannot publish after the persistent container is re-armed for another. */
+  private generation = 0
   /** False until dispose(); the in-flight-write guard (see module
    *  header). Starts false so the synchronous write path (`upsert`,
    *  used by schemas' `addSchema`) works even when the subscription was
@@ -157,13 +159,22 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
     if (!workspaceId) {
       throw new Error(`[projector ${this.descriptor.id}] no active workspace at start()`)
     }
+    if (this.pinnedWorkspaceId && this.pinnedWorkspaceId !== workspaceId) {
+      this.clearWorkspaceBucket(this.pinnedWorkspaceId)
+      this.resetState()
+    }
     // Re-arm after a prior dispose (the container is reused across
     // workspace switches; see ProjectorRuntime).
     this.disposed = false
+    this.pinnedWorkspaceId = workspaceId
+    const generation = ++this.generation
 
     this.subscriptionDisposer = this.repo.subscribeBlocks(
       { workspaceId, types: [this.descriptor.metaType] },
-      rows => this.rebuild(this.hydrate(rows)),
+      rows => {
+        if (this.disposed || this.generation !== generation) return
+        this.rebuild(this.hydrate(rows))
+      },
     )
 
     const secondarySignal = this.descriptor.secondarySignal
@@ -172,26 +183,25 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
         // Ignore until our own subscription has primed (workspace-switch
         // handoff: another projector may publish first and fire this
         // signal) and never run after teardown.
-        if (!this.primed || this.disposed) return
+        if (!this.primed || this.disposed || this.generation !== generation) return
         this.rebuild(this.latestRows)
       })
     }
   }
 
   dispose(): void {
+    const workspaceId = this.pinnedWorkspaceId
     this.disposed = true
+    this.generation += 1
     this.subscriptionDisposer?.()
     this.subscriptionDisposer = null
     this.secondaryDisposer?.()
     this.secondaryDisposer = null
     // Reset in-memory state AND clear the bucket — the invariant that
     // diverged between the two copied services (see module header).
-    this.latestRows = []
-    this.contributions = []
-    this.byKey = new Map()
-    this.byBlockId = new Map()
-    this.primed = false
-    this.repo.setRuntimeContributions(this.descriptor.targetFacet, this.descriptor.sourceId, [])
+    this.resetState()
+    this.pinnedWorkspaceId = null
+    if (workspaceId) this.clearWorkspaceBucket(workspaceId)
   }
 
   blockIdForKey(key: string): string | undefined {
@@ -202,8 +212,10 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
     return this.byBlockId.get(blockId)
   }
 
-  upsert(contribution: Contribution, blockId: string): void {
+  upsert(contribution: Contribution, blockId: string, workspaceId: string): void {
     if (this.disposed) return
+    if (this.pinnedWorkspaceId === null) this.pinnedWorkspaceId = workspaceId
+    if (this.pinnedWorkspaceId !== workspaceId) return
     const key = this.descriptor.keyOf(contribution)
     this.contributions = [
       ...this.contributions.filter(c => this.descriptor.keyOf(c) !== key),
@@ -260,12 +272,30 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
   }
 
   private publish(): void {
-    if (this.disposed) return
+    if (this.disposed || !this.pinnedWorkspaceId) return
     this.repo.setRuntimeContributions(
       this.descriptor.targetFacet,
       this.descriptor.sourceId,
       this.contributions,
+      {workspaceId: this.pinnedWorkspaceId},
     )
+  }
+
+  private clearWorkspaceBucket(workspaceId: string): void {
+    this.repo.setRuntimeContributions(
+      this.descriptor.targetFacet,
+      this.descriptor.sourceId,
+      [],
+      {workspaceId},
+    )
+  }
+
+  private resetState(): void {
+    this.latestRows = []
+    this.contributions = []
+    this.byKey = new Map()
+    this.byBlockId = new Map()
+    this.primed = false
   }
 }
 

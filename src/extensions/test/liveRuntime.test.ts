@@ -24,6 +24,21 @@ describe('LiveRuntimeHandle', () => {
     expect(handle.read(labels)).toBe('a')
   })
 
+  it('delegates the active-workspace filter and preserves scoped buckets across a swap', () => {
+    const first = resolveFacetRuntimeSync([])
+    const handle = new LiveRuntimeHandle(first)
+    handle.setRuntimeContributions(out, 'user-data', ['a'], {workspaceId: 'ws-a'})
+    handle.setRuntimeContributions(out, 'user-data', ['b'], {workspaceId: 'ws-b'})
+    handle.setActiveWorkspaceId('ws-a')
+    expect(handle.read(out)).toBe('a')
+
+    const second = resolveFacetRuntimeSync([])
+    handle.setCurrent(second)
+    expect(handle.read(out)).toBe('a')
+    handle.setActiveWorkspaceId('ws-b')
+    expect(handle.read(out)).toBe('b')
+  })
+
   it('re-points a forwarded onFacetChange subscription onto the new runtime', () => {
     const first = resolveFacetRuntimeSync([])
     const handle = new LiveRuntimeHandle(first)
