@@ -11,7 +11,7 @@ import {
   Type as TypeIcon,
 } from 'lucide-react'
 import {
-  defineSplitPreset,
+  joinValuePreset,
   type AnyValuePresetPresentation,
   type PropertyEditor,
   type ValuePresetCore,
@@ -61,14 +61,15 @@ import {EnumOptionsConfigEditor} from './EnumOptionsConfigEditor'
 const asEditor = <T>(editor: PropertyEditor<any>): PropertyEditor<T> =>
   editor as unknown as PropertyEditor<T>
 
-/** Join a kernel core to its presentation, validating the id match, and
- *  return just the presentation half — cores are registered separately via
- *  `kernelDataExtension`. */
+/** Validate a kernel core/presentation id match and return the presentation
+ *  half — cores are registered separately via `kernelDataExtension`. */
 const kernelPresetPresentation = <TValue, TConfig>(
   core: ValuePresetCore<TValue, TConfig>,
   presentation: ValuePresetPresentation<NoInfer<TValue>, NoInfer<TConfig>>,
-): ValuePresetPresentation<TValue, TConfig> =>
-  defineSplitPreset(core, presentation).presentation
+): ValuePresetPresentation<TValue, TConfig> => {
+  joinValuePreset(core, presentation) // throws on id mismatch; result unused
+  return presentation
+}
 
 export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation[] = [
   kernelPresetPresentation(stringValuePresetCore, {
