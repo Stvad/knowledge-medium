@@ -18,7 +18,6 @@ import type {
   AnySameTxProcessor,
   AnyValuePresetCore,
   AnyValuePresetPresentation,
-  AnyValuePreset,
   ChangeScope,
   Tx,
   TypeContribution,
@@ -148,10 +147,6 @@ export const valuePresetCoresFacet = keyedMapFacet<AnyValuePresetCore>('data.val
 
 /** React presentation contributions, joined live to cores by id. */
 export const valuePresetPresentationsFacet = keyedMapFacet<AnyValuePresetPresentation>('data.value-preset-presentations', p => p.id)
-
-/** Pre-split compatibility facet for full ValuePreset contributions.
- * New code contributes a core + presentation separately. */
-export const valuePresetsFacet = keyedMapFacet<AnyValuePreset>('data.valuePresets', p => p.id)
 
 export const postCommitProcessorsFacet = keyedMapFacet<AnyPostCommitProcessor>('data.postCommitProcessors', p => p.name)
 

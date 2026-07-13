@@ -5,7 +5,6 @@ import {resolveFacetRuntimeSync} from '@/facets/facet'
 import {
   valuePresetCoresFacet,
   valuePresetPresentationsFacet,
-  valuePresetsFacet,
 } from '@/data/facets'
 import {extensionsDataExtension} from './extensions-settings/dataExtension'
 import {extensionsSettingsPlugin} from './extensions-settings'
@@ -76,7 +75,6 @@ describe('plugin value preset registrations', () => {
 
     expect([...cores.keys()].toSorted()).toEqual(EXPECTED_IDS)
     expect(runtime.read(valuePresetPresentationsFacet).size).toBe(0)
-    expect(runtime.read(valuePresetsFacet).size).toBe(0)
 
     for (const [expectedCore, codec] of EXPECTED) {
       const core = cores.get(expectedCore.id)!
@@ -101,6 +99,5 @@ describe('plugin value preset registrations', () => {
       expect(presentation.hideFromPicker).toBe(true)
       expect(presentation.Editor).toBeUndefined()
     }
-    expect(runtime.read(valuePresetsFacet).size).toBe(0)
   })
 })

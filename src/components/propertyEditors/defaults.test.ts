@@ -14,12 +14,12 @@ import { createElement, type JSX } from 'react'
 import {
   ChangeScope,
   codecs,
-  definePreset,
   defineProperty,
   definePropertyEditorOverride,
+  type AnyJoinedValuePreset,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyValuePreset,
+  type JoinedValuePreset,
   type PropertyEditor,
 } from '@/data/api'
 import {
@@ -39,7 +39,12 @@ const schemasMap = (entries: AnyPropertySchema[]): ReadonlyMap<string, AnyProper
 const uisMap = (entries: AnyPropertyEditorOverride[]): ReadonlyMap<string, AnyPropertyEditorOverride> =>
   new Map(entries.map(u => [u.name, u]))
 
-const presetsMap = (entries: readonly AnyValuePreset[]): ReadonlyMap<string, AnyValuePreset> =>
+/** Local join-preset builder standing in for the removed `definePreset`
+ *  identity helper — these display-lookup fixtures are already joined
+ *  (core + presentation) shapes. */
+const definePreset = <TValue>(preset: JoinedValuePreset<TValue>): JoinedValuePreset<TValue> => preset
+
+const presetsMap = (entries: readonly AnyJoinedValuePreset[]): ReadonlyMap<string, AnyJoinedValuePreset> =>
   new Map(entries.map(p => [p.id, p]))
 
 /** Test-only Editor that returns a real fragment element so it satisfies
@@ -50,7 +55,7 @@ const noopEditor = (): JSX.Element => createElement('span', null, null)
 const asEditor = <T>(editor: PropertyEditor<any>): PropertyEditor<T> =>
   editor as unknown as PropertyEditor<T>
 
-const presets: readonly AnyValuePreset[] = [
+const presets: readonly AnyJoinedValuePreset[] = [
   definePreset<string>({
     id: 'string',
     label: 'Plain text',

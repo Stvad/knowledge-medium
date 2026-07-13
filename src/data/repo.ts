@@ -24,7 +24,6 @@ import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyQuery,
-  AnyValuePreset,
   AnyValuePresetCore,
   BlockData,
   Mutator,
@@ -311,7 +310,6 @@ export class Repo {
   private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
   private _valuePresetCores: ReadonlyMap<string, AnyValuePresetCore> = new Map()
-  private _valuePresets: ReadonlyMap<string, AnyValuePreset> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
   /** Facet→registry bridge (audit D1(c)) — owns the installed
    *  FacetRuntime, the rebuild steps, the per-facet change subscriptions,
@@ -507,12 +505,6 @@ export class Repo {
     return this._valuePresetCores
   }
 
-  /** Legacy editorful preset map. Canonical split consumers join cores and
-   * presentations with `readValuePresets(runtime)` instead. */
-  get valuePresets(): ReadonlyMap<string, AnyValuePreset> {
-    return this._valuePresets
-  }
-
   /** Deterministic id of the workspace's Properties page (parent of
    *  all `'property-schema'` blocks). Created lazily by
    *  `getOrCreatePropertiesPage` during workspace bootstrap. */
@@ -669,7 +661,6 @@ export class Repo {
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
-      applyValuePresets: (presets) => { this._valuePresets = presets },
       applyQueries: (queries) => { this.swapQueries(queries) },
       scheduleReprojection: (names, schemas) => { this.scheduleReprojection(names, schemas) },
     })

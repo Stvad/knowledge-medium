@@ -22,7 +22,7 @@ import {
   codecs,
   defineBlockType,
   defineMutator,
-  definePreset,
+  definePresetCore,
   defineProperty,
   definePropertyEditorOverride,
   defineQuery,
@@ -37,7 +37,7 @@ import {
   propertySchemasFacet,
   queriesFacet,
   typesFacet,
-  valuePresetsFacet,
+  valuePresetCoresFacet,
 } from '../facets'
 import {
   KERNEL_PROPERTY_SCHEMAS,
@@ -347,28 +347,23 @@ describe('typesFacet + schema lift', () => {
   })
 })
 
-describe('valuePresetsFacet', () => {
-  it('keys presets by id and last-wins on collision', () => {
-    const Editor = (): JSX.Element => createElement('span', null, null)
-    const first = definePreset<string>({
+describe('valuePresetCoresFacet', () => {
+  it('keys cores by id and last-wins on collision', () => {
+    const first = definePresetCore<string>({
       id: 'string',
-      label: 'First',
       build: () => codecs.string,
-      defaultValue: '',
-      Editor,
+      defaultValue: 'first',
     })
-    const second = definePreset<string>({
+    const second = definePresetCore<string>({
       id: 'string',
-      label: 'Second',
       build: () => codecs.string,
-      defaultValue: '',
-      Editor,
+      defaultValue: 'second',
     })
     const runtime = resolveFacetRuntimeSync([
-      valuePresetsFacet.of(first, {source: 'test'}),
-      valuePresetsFacet.of(second, {source: 'test'}),
+      valuePresetCoresFacet.of(first, {source: 'test'}),
+      valuePresetCoresFacet.of(second, {source: 'test'}),
     ])
-    expect(runtime.read(valuePresetsFacet).get('string')?.label).toBe('Second')
+    expect(runtime.read(valuePresetCoresFacet).get('string')?.defaultValue).toBe('second')
   })
 })
 

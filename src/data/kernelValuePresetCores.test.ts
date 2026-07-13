@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from './kernelDataExtension'
 import {stringValuePresetCore} from './kernelValuePresetCores'
-import { valuePresetCoresFacet, valuePresetsFacet } from './facets'
+import { valuePresetCoresFacet } from './facets'
 import {definePresetCore} from './api/valuePresetCore'
-import { definePreset, defineSplitPreset, joinValuePreset, type ValuePresetPresentation } from './api/valuePresets'
+import { defineSplitPreset, joinValuePreset, type ValuePresetPresentation } from './api/valuePresets'
 import {readValuePresets} from './valuePresetRegistry'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
 
@@ -54,14 +54,10 @@ describe('kernel value preset split', () => {
     ])
     const stringCore = runtime.read(valuePresetCoresFacet).get('string')
     const stringPreset = readValuePresets(runtime).get('string')
-    const legacyPresets = runtime.read(valuePresetsFacet)
 
     expect(stringPreset?.build).toBe(stringCore?.build)
     expect(stringPreset?.Editor).toBeTypeOf('function')
     expect(stringPreset?.label).toBe('Plain text')
-    expect(legacyPresets.has('json')).toBe(false)
-    expect(legacyPresets.has('optional-json')).toBe(false)
-    expect([...legacyPresets.values()].every(preset => typeof preset.Editor === 'function')).toBe(true)
 
     const replacement = definePresetCore<string>({
       id: 'string',
@@ -102,22 +98,5 @@ describe('kernel value preset split', () => {
       defineSplitPreset(stringValuePresetCore, numberPresentation)
     }
     void assertMismatchRejected
-  })
-
-  it('preserves legacy whole-preset overrides until they migrate', () => {
-    const runtime = resolveFacetRuntimeSync([kernelDataExtension, kernelValuePresetsExtension])
-    const legacy = definePreset<string>({
-      id: 'string',
-      label: 'Legacy string',
-      build: () => ({type: 'legacy-string', encode: value => value, decode: value => String(value)}),
-      defaultValue: 'legacy',
-      Editor: () => { throw new Error('not rendered') },
-    })
-
-    runtime.setRuntimeContributions(valuePresetsFacet, 'legacy-plugin', [legacy])
-    expect(readValuePresets(runtime).get('string')?.build(undefined).type).toBe('legacy-string')
-
-    runtime.setRuntimeContributions(valuePresetsFacet, 'legacy-plugin', [])
-    expect(readValuePresets(runtime).get('string')?.build(undefined).type).toBe('string')
   })
 })
