@@ -28,7 +28,9 @@ export const addProperty = async (
 ): Promise<AnyPropertySchema | undefined> => {
   const name = args.name.trim()
   if (!name) return undefined
-  if (isPropertyPanelHiddenProperty(name, schemas, uis)) return undefined
+  if (isPropertyPanelHiddenProperty(name, schemas, uis, block.repo.propertyDefinitions)) {
+    return undefined
+  }
 
   if (args.adopted) {
     return args.adopted
@@ -65,8 +67,9 @@ export const renameProperty = async (args: {
   if (!nextName || nextName === args.oldName) return
   if (args.oldName === typesProp.name || nextName === typesProp.name) return
   if (args.schemas.has(args.oldName) || args.schemas.has(nextName)) return
-  if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis)) return
-  if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis)) return
+  const definitions = args.block.repo.propertyDefinitions
+  if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis, definitions)) return
+  if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis, definitions)) return
 
   const value = args.properties[args.oldName]
   if (value === undefined || !Object.hasOwn(args.properties, args.oldName)) return
@@ -90,7 +93,12 @@ export const deleteProperty = async (args: {
   name: string
 }) => {
   if (args.name === typesProp.name) return
-  if (isPropertyPanelHiddenProperty(args.name, args.schemas, args.uis)) return
+  if (isPropertyPanelHiddenProperty(
+    args.name,
+    args.schemas,
+    args.uis,
+    args.block.repo.propertyDefinitions,
+  )) return
   if (!Object.hasOwn(args.properties, args.name)) return
 
   const next = {...args.properties}

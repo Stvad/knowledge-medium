@@ -13,6 +13,7 @@ import {
   type PropertyPanelSection,
 } from '@/components/propertyPanelSections'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
+import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 import { isPropertyPanelHiddenProperty } from './visibility'
 
 const EMPTY_BLOCK_TYPES: readonly string[] = []
@@ -89,6 +90,7 @@ const partitionProperties = (
   properties: Record<string, unknown>,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
 ): {
   visibleProperties: Record<string, unknown>
   hiddenProperties: Record<string, unknown>
@@ -97,7 +99,7 @@ const partitionProperties = (
   const hiddenProperties: Record<string, unknown> = {}
 
   for (const [name, value] of Object.entries(properties)) {
-    if (isPropertyPanelHiddenProperty(name, schemas, uis)) hiddenProperties[name] = value
+    if (isPropertyPanelHiddenProperty(name, schemas, uis, definitions)) hiddenProperties[name] = value
     else visibleProperties[name] = value
   }
 
@@ -182,6 +184,7 @@ export const buildPropertyPanelModel = (args: {
   updatedByBlockId?: string
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
+  propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   presets: ReadonlyMap<string, AnyJoinedValuePreset>
   typesRegistry: ReadonlyMap<string, TypeContribution>
@@ -192,6 +195,7 @@ export const buildPropertyPanelModel = (args: {
     args.properties,
     args.schemas,
     args.uis,
+    args.propertyDefinitions,
   )
   const pinnedRawRows: readonly PropertyPanelRow[] = [{
     name: typesProp.name,
@@ -221,7 +225,15 @@ export const buildPropertyPanelModel = (args: {
   })
 
   const sections = rawSections
-    .map(section => resolveSection(section, {
+    .map(section => resolveSection({
+      ...section,
+      rows: section.rows.filter(row => !isPropertyPanelHiddenProperty(
+        row.name,
+        args.schemas,
+        args.uis,
+        args.propertyDefinitions,
+      )),
+    }, {
       schemas: args.schemas,
       uis: args.uis,
       presets: args.presets,

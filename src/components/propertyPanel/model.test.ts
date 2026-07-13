@@ -10,6 +10,9 @@ import {
   type AnyPropertySchema,
 } from '@/data/api'
 import { typesProp } from '@/data/properties'
+import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
+import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
+import {seedProperty} from '@/data/propertySeeds'
 import { buildPropertyPanelModel } from './model'
 
 const schemasMap = (schemas: readonly AnyPropertySchema[]) =>
@@ -35,6 +38,7 @@ describe('buildPropertyPanelModel', () => {
         [typesProp.name]: typesProp.codec.encode(['task']),
       },
       schemas: schemasMap([visibleProp, typesProp]),
+      propertyDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -67,6 +71,7 @@ describe('buildPropertyPanelModel', () => {
         [internalProp.name]: 'secret',
       },
       schemas: schemasMap([visibleProp, internalProp]),
+      propertyDefinitions: null,
       uis: uisMap([
         definePropertyEditorOverride<string>({
           name: internalProp.name,
@@ -111,6 +116,7 @@ describe('buildPropertyPanelModel', () => {
       updatedBy: 'user-1',
       properties: {},
       schemas: schemasMap([dateProp]),
+      propertyDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -152,6 +158,7 @@ describe('buildPropertyPanelModel', () => {
         [systemProp.name]: true,
       },
       schemas: schemasMap([uiStateProp, systemProp]),
+      propertyDefinitions: null,
       uis: uisMap([]),
       presets: new Map(),
       typesRegistry: new Map(),
@@ -164,6 +171,77 @@ describe('buildPropertyPanelModel', () => {
       uiStateProp.name,
       systemProp.name,
     ])
+  })
+
+  it('uses projected hidden metadata that is absent from the ambient schema', () => {
+    const schema = defineProperty<string>('secret', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const hidden: PropertyDefinitionMetadata = {
+      fieldId: 'field-secret',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: schema.name,
+      changeScope: ChangeScope.BlockDefault,
+      hidden: true,
+      origin: 'user',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map([[schema.name, schema]]),
+      projectedDefinitions: new Map([[hidden.fieldId, {metadata: hidden}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {[schema.name]: 'private'},
+      schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
+      propertyDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    expect(model.sections.flatMap(section => section.rows.map(row => row.name)))
+      .not.toContain(schema.name)
+    expect(model.hiddenSection.rows.map(row => row.name)).toEqual([schema.name])
+  })
+
+  it('does not resurface a hidden declaration through an unset type-contributed row', () => {
+    const hidden = seedProperty({
+      seedKey: 'plugin:test/property/secret',
+      revision: 1,
+      name: 'secret',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: true,
+    })
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map(),
+      projectedDefinitions: new Map(),
+      seeds: [hidden],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {[typesProp.name]: typesProp.codec.encode(['test'])},
+      schemas: new Map([...propertyDefinitions.schemas, [typesProp.name, typesProp]]),
+      propertyDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map([['test', {id: 'test', properties: [hidden]}]]),
+    })
+
+    expect(model.sections.flatMap(section => section.rows.map(row => row.name)))
+      .not.toContain(hidden.name)
   })
 
 })

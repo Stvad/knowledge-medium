@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {ChangeScope} from '@/data/api'
 import { propertyEditorOverridesFacet, valuePresetCoresFacet, valuePresetPresentationsFacet } from '@/data/facets.js'
 import type { Block } from '@/data/block'
+import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
+import {seedProperty} from '@/data/propertySeeds'
 import { PropertyPicker } from './PropertyPicker.tsx'
 
 const store = vi.hoisted(() => ({
@@ -21,6 +24,9 @@ vi.mock('./usePropertyEditingActivation', () => ({
 }))
 
 const schema = (name: string) => ({name, codec: {type: 'string'}})
+const pickerBlock = (propertyDefinitions: Block['repo']['propertyDefinitions'] = null) => ({
+  repo: {propertyDefinitions},
+}) as Block
 // Read the highlighted option from the input's aria-activedescendant rather than
 // the rendered listbox: the input attribute updates synchronously with state,
 // whereas FloatingListbox mounts its options asynchronously (floating-ui
@@ -51,7 +57,7 @@ describe('PropertyPicker', () => {
       <PropertyPicker
         onAdd={onAdd}
         onConfigureNewSchema={vi.fn().mockResolvedValue(undefined)}
-        block={{} as Block}
+        block={pickerBlock()}
       />,
     )
     const input = screen.getByPlaceholderText('Field')
@@ -73,5 +79,46 @@ describe('PropertyPicker', () => {
     // passes if reset() already cleared it. Highlight must be back at the top.
     fireEvent.focus(input)
     expect(activeOption()).toMatch(/-option-0$/)
+  })
+
+  it('does not suggest, submit, or configure a hidden seed when bound or at stage 0', async () => {
+    const hidden = seedProperty({
+      seedKey: 'plugin:test/property/secret',
+      revision: 1,
+      name: 'secret',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: true,
+    })
+    const snapshot = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map(),
+      projectedDefinitions: new Map(),
+      seeds: [hidden],
+    })
+    store.schemas = new Map(snapshot.schemas)
+    for (const definitions of [snapshot, null]) {
+      const onAdd = vi.fn()
+      const onConfigureNewSchema = vi.fn()
+      const view = render(
+        <PropertyPicker
+          onAdd={onAdd}
+          onConfigureNewSchema={onConfigureNewSchema}
+          block={pickerBlock(definitions)}
+        />,
+      )
+
+      const input = screen.getByPlaceholderText('Field')
+      fireEvent.change(input, {target: {value: hidden.name}})
+      // itemCount=0 is reflected synchronously even though FloatingListbox
+      // itself mounts asynchronously.
+      expect(input.getAttribute('aria-activedescendant')).toBeNull()
+      fireEvent.keyDown(input, {key: 'Enter'})
+      fireEvent.click(screen.getByRole('button', {name: 'Configure New field'}))
+
+      expect(onAdd).not.toHaveBeenCalled()
+      expect(onConfigureNewSchema).not.toHaveBeenCalled()
+      view.unmount()
+    }
   })
 })
