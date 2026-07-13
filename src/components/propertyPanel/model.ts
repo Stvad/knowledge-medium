@@ -14,7 +14,10 @@ import {
 } from '@/components/propertyPanelSections'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
-import { isPropertyPanelHiddenProperty } from './visibility'
+import {
+  isPropertyPanelHiddenProperty,
+  isPropertyPanelReadOnlyProperty,
+} from './visibility'
 import {
   declarationOnlyDefinitionForName,
   declarationOnlyStatusText,
@@ -134,6 +137,7 @@ const resolveModelRow = (
     row.name,
     args.definitions,
   )
+  const rowReadOnly = declarationOnly !== undefined || isPropertyPanelReadOnlyProperty(row.name)
 
   if (!row.isSet && !display.isKnown && declarationOnly === undefined) return null
 
@@ -158,13 +162,13 @@ const resolveModelRow = (
     schemaUnknown: !display.isKnown && declarationOnly === undefined,
     decodeFailed,
     value: decodeFailed ? row.encodedValue : decodedValue,
-    Editor: declarationOnly ? undefined : display.Editor,
+    Editor: rowReadOnly ? undefined : display.Editor,
     Glyph: display.Glyph,
-    canRename: !args.hidden && !display.isKnown && declarationOnly === undefined,
-    canDelete: !args.hidden && row.isSet && !isTypeMembershipRow && declarationOnly === undefined,
-    canChangeShape: !args.hidden && !display.isKnown && declarationOnly === undefined,
+    canRename: !args.hidden && !display.isKnown && !rowReadOnly,
+    canDelete: !args.hidden && row.isSet && !isTypeMembershipRow && !rowReadOnly,
+    canChangeShape: !args.hidden && !display.isKnown && !rowReadOnly,
     isHidden: args.hidden,
-    readOnly: declarationOnly !== undefined,
+    readOnly: rowReadOnly,
     ...(declarationOnly
       ? {
           statusText: declarationOnlyStatusText(declarationOnly),

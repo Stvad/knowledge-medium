@@ -26,7 +26,13 @@ import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from './propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { Block } from '@/data/block'
-import { aliasesProp, showPropertiesProp, typesProp } from '@/data/properties'
+import {
+  aliasesProp,
+  seedKeyProp,
+  seedRevisionProp,
+  showPropertiesProp,
+  typesProp,
+} from '@/data/properties'
 import { useContent } from '@/hooks/block'
 import type { BlockRendererProps } from '@/types'
 
@@ -252,6 +258,54 @@ describe('BlockProperties component', () => {
     expect(screen.getByText('Hidden')).toBeTruthy()
     expect(screen.getByText('ID')).toBeTruthy()
     expect(screen.queryByText('types')).toBeNull()
+  })
+
+  it('keeps seed provenance fields out of ordinary rows and capability-limited under Hidden', async () => {
+    const block = repo.block('block-1')
+    // Core safety must not depend on the optional kernel-property-ui toggle.
+    runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+      defaultActionContextConfigs.map(c => actionContextsFacet.of(c, {source: 'test'})),
+    ])
+    repo.setFacetRuntime(runtime)
+    await block.set(seedKeyProp, 'srs-rescheduling/property/config')
+    await block.set(seedRevisionProp, 3)
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(document.querySelector(`[data-property-name="${seedKeyProp.name}"]`)).toBeNull()
+    expect(document.querySelector(`[data-property-name="${seedRevisionProp.name}"]`)).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /show hidden fields/i}))
+    })
+
+    const hiddenLabel = screen.getByText('Hidden')
+    const hiddenGroup = hiddenLabel.parentElement?.parentElement
+    expect(hiddenGroup).toBeTruthy()
+    for (const property of [seedKeyProp, seedRevisionProp]) {
+      const row = hiddenGroup!.querySelector<HTMLElement>(
+        `[data-property-name="${property.name}"]`,
+      )
+      expect(row).toBeTruthy()
+      const glyph = within(row!).getByRole('button', {
+        name: new RegExp(`configure ${property.name}`, 'i'),
+      }) as HTMLButtonElement
+      expect(glyph.disabled).toBe(true)
+      expect(within(row!).queryByLabelText(`Field ${property.name}`)).toBeNull()
+      expect(within(row!).queryByTitle(`Delete ${property.name}`)).toBeNull()
+      expect(within(row!).queryByRole('textbox')).toBeNull()
+      expect(row!.querySelector('[data-property-value]')?.textContent).toContain(
+        JSON.stringify(block.data.properties[property.name]),
+      )
+    }
   })
 
   it('pins type membership above contributed property rows', () => {

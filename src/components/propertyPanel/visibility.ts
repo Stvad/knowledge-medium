@@ -5,6 +5,17 @@ import {
 } from '@/data/api'
 import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 import {isPropertySeedDeclaration} from '@/data/propertySeeds'
+import {seedKeyProp, seedRevisionProp} from '@/data/properties'
+
+const INTRINSIC_READ_ONLY_PROPERTY_NAMES = new Set([
+  seedKeyProp.name,
+  seedRevisionProp.name,
+])
+
+/** Code-owned identity/upgrade metadata stays inspectable but never editable,
+ * independent of optional UI extensions or safe-mode filtering. */
+export const isPropertyPanelReadOnlyProperty = (name: string): boolean =>
+  INTRINSIC_READ_ONLY_PROPERTY_NAMES.has(name)
 
 const isDefinitionHidden = (
   name: string,
@@ -42,7 +53,8 @@ export const isPropertyPanelHiddenProperty = (
 ): boolean => {
   const schema = schemas.get(name)
   const ui = uis.get(name)
-  return ui?.hidden === true ||
+  return isPropertyPanelReadOnlyProperty(name) ||
+    ui?.hidden === true ||
     isDefinitionHidden(name, schema, definitions) ||
     name.startsWith('system:') ||
     schema?.changeScope === ChangeScope.UiState

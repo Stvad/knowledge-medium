@@ -5,7 +5,10 @@ import {
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
-import { isPropertyPanelHiddenProperty } from './visibility'
+import {
+  isPropertyPanelHiddenProperty,
+  isPropertyPanelReadOnlyProperty,
+} from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
 import {declarationOnlyDefinitionForName} from './declarationOnly'
 
@@ -14,6 +17,7 @@ export const writeProperty = (
   schema: AnyPropertySchema,
   decodedValue: unknown,
 ): Promise<void> => {
+  if (isPropertyPanelReadOnlyProperty(schema.name)) return Promise.resolve()
   if (declarationOnlyDefinitionForName(
     schema.name,
     block.repo.propertyDefinitions,
@@ -75,6 +79,10 @@ export const renameProperty = async (args: {
   const nextName = args.newName.trim()
   if (!nextName || nextName === args.oldName) return
   if (args.oldName === typesProp.name || nextName === typesProp.name) return
+  if (
+    isPropertyPanelReadOnlyProperty(args.oldName) ||
+    isPropertyPanelReadOnlyProperty(nextName)
+  ) return
   if (args.schemas.has(args.oldName) || args.schemas.has(nextName)) return
   const definitions = args.block.repo.propertyDefinitions
   if (declarationOnlyDefinitionForName(args.oldName, definitions)) return
@@ -104,6 +112,7 @@ export const deleteProperty = async (args: {
   name: string
 }) => {
   if (args.name === typesProp.name) return
+  if (isPropertyPanelReadOnlyProperty(args.name)) return
   if (declarationOnlyDefinitionForName(
     args.name,
     args.block.repo.propertyDefinitions,

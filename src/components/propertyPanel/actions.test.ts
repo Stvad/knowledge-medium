@@ -1,17 +1,60 @@
 // @vitest-environment node
 
 import {describe, expect, it, vi} from 'vitest'
-import {ChangeScope, codecs, defineProperty} from '@/data/api'
+import {ChangeScope, codecs, defineProperty, type AnyPropertySchema} from '@/data/api'
 import type {Block} from '@/data/block'
+import {seedKeyProp, seedRevisionProp} from '@/data/properties'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
 import {
   addProperty,
   deleteProperty,
   renameProperty,
+  writeProperty,
 } from './actions'
 
 describe('property panel action visibility guards', () => {
+  it('refuses every mutation path for intrinsic seed provenance fields', async () => {
+    const set = vi.fn()
+    const tx = vi.fn()
+    const block = {
+      id: 'block-1',
+      set,
+      repo: {
+        propertyDefinitions: null,
+        propertySchemas: new Map<string, AnyPropertySchema>([
+          [seedKeyProp.name, seedKeyProp],
+          [seedRevisionProp.name, seedRevisionProp],
+        ]),
+        tx,
+      },
+    } as unknown as Block
+    const properties = {
+      [seedKeyProp.name]: 'srs-rescheduling/property/config',
+      [seedRevisionProp.name]: 3,
+    }
+
+    await writeProperty(block, seedKeyProp, 'tampered/property/key')
+    await renameProperty({
+      block,
+      properties,
+      schemas: block.repo.propertySchemas,
+      uis: new Map(),
+      oldName: seedKeyProp.name,
+      newName: 'renamed-seed-key',
+    })
+    await deleteProperty({
+      block,
+      properties,
+      schemas: block.repo.propertySchemas,
+      uis: new Map(),
+      name: seedRevisionProp.name,
+    })
+
+    expect(set).not.toHaveBeenCalled()
+    expect(tx).not.toHaveBeenCalled()
+  })
+
   it('refuses add and delete when only projected metadata marks an ordinary schema hidden', async () => {
     const schema = defineProperty<string>('secret', {
       codec: codecs.string,
