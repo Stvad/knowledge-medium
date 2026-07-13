@@ -1,2 +1,2 @@
-var e=3,t=e=>100*2**e,n=(e,t)=>{let n=setTimeout(e,t);return()=>clearTimeout(n)},r=(e,r,i,a={})=>{let o=a.retries??3,s=a.delayMs??t,c=a.schedule??n,l=!1,u,d=t=>{e().then(e=>{l||r(e)},e=>{if(!l){if(t<o){u=c(()=>d(t+1),s(t));return}i(e)}})};return d(0),()=>{l=!0,u?.()}};export{e as FRESH_INITIAL_LOAD_RETRIES,t as freshInitialRetryDelayMs,r as runFreshInitialLoad};
+var e=3,t=e=>100*2**e,n=(e,t)=>{let n=setTimeout(e,t);return()=>clearTimeout(n)},r=(r,i,a,o={})=>{let s=o.retries??e,c=o.schedule??n,l=!1,u,d=e=>{r().then(e=>{l||i(e)},n=>{if(!l){if(e<s){u=c(()=>d(e+1),t(e));return}a(n)}})};return d(0),()=>{l=!0,u?.()}};export{r as runFreshInitialLoad};
 //# sourceMappingURL=freshInitialLoad.js.map
