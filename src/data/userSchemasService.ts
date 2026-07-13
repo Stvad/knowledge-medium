@@ -1,5 +1,6 @@
-/** User-defined `'property-schema'` blocks → the `propertySchemasFacet`
- *  `'user-data'` runtime-contribution bucket. See
+/** Property-schema blocks → a workspace-scoped, field-id-keyed projection
+ *  with mandatory metadata and optional locally-buildable behavior. The
+ *  bridge derives the public name-keyed registry from this bucket. See
  *  user-defined-properties.md §5 + §7.
  *
  *  The reactive lifecycle (subscribe / pin / publish / reset+clear on
@@ -19,12 +20,20 @@ import {
 import type { Repo } from '@/data/repo'
 import type { DefinitionBlockProjector } from '@/data/projectorRuntime'
 import {
+  parsePropertyDefinitionMetadata,
+  type PropertyDefinitionMetadata,
+} from '@/data/propertyDefinitionMetadata'
+import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {
   presetConfigProp,
   presetIdProp,
+  propertyDefaultProp,
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { propertySchemasFacet } from '@/data/facets'
+import {
+  projectedPropertyDefinitionsFacet,
+} from '@/data/facets'
 
 /** Projector id for the user-defined property-schema bridge. */
 export const USER_SCHEMAS_PROJECTOR_ID = 'user-schemas'
@@ -51,16 +60,15 @@ const rawPresetConfig = (
   return preset.configCodec.encode(preset.defaultConfig)
 }
 
-/** Validates a schema block against the current presets and returns the
- *  schema if it parses, or null with a logged diagnostic if not. Three
- *  skip paths: (1) preset not loaded, (2) name empty, (3)
- *  configCodec.decode throws. The block stays in the database
+/** Builds optional local behavior for already-validated definition metadata.
+ *  Missing presets and invalid configs return null with a diagnostic. The block stays in the database
  *  untouched; a fix re-runs this on the next subscription tick (or the
  *  `onValuePresetsChange` re-resolve when a missing preset's plugin
  *  loads). */
 const tryBuildSchema = (
   row: BlockData,
   presets: ReadonlyMap<string, AnyValuePresetCore>,
+  metadata: PropertyDefinitionMetadata,
 ): AnyPropertySchema | null => {
   const presetId = peekRowProperty(row, presetIdProp) ?? ''
   if (!presetId) {
@@ -75,11 +83,6 @@ const tryBuildSchema = (
     )
     return null
   }
-  const name = peekRowProperty(row, propertyNameProp) ?? ''
-  if (!name) {
-    console.warn(`[UserSchemasService] schema block ${row.id} has empty propertyName`)
-    return null
-  }
   let config: unknown
   if (preset.configCodec) {
     try {
@@ -87,18 +90,25 @@ const tryBuildSchema = (
       config = preset.configCodec.decode(raw)
     } catch (err) {
       console.warn(
-        `[UserSchemasService] schema "${name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
+        `[UserSchemasService] schema "${metadata.name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
       )
       return null
     }
   } else {
     config = undefined
   }
+  const codec = preset.build(config as never)
+  const hasStoredDefault = Object.prototype.hasOwnProperty.call(
+    row.properties,
+    propertyDefaultProp.name,
+  )
   return {
-    name,
-    codec: preset.build(config as never),
-    defaultValue: preset.defaultValue,
-    changeScope: ChangeScope.BlockDefault,
+    name: metadata.name,
+    codec,
+    defaultValue: hasStoredDefault
+      ? codec.decode(row.properties[propertyDefaultProp.name])
+      : preset.defaultValue,
+    changeScope: metadata.changeScope,
   }
 }
 
@@ -106,13 +116,29 @@ const tryBuildSchema = (
  *  lifecycle. Raw `BlockData` rows (no hydrate — see `peekRowProperty`);
  *  re-resolves on `onValuePresetsChange` so a schema skipped for an
  *  unknown preset resolves when that preset's plugin loads. */
-export const userSchemasProjector: DefinitionBlockProjector<BlockData, AnyPropertySchema> = {
+export const userSchemasProjector: DefinitionBlockProjector<
+  BlockData,
+  ProjectedPropertyDefinition
+> = {
   id: USER_SCHEMAS_PROJECTOR_ID,
   metaType: PROPERTY_SCHEMA_TYPE,
-  targetFacet: propertySchemasFacet,
+  targetFacet: projectedPropertyDefinitionsFacet,
   sourceId: USER_DATA_SOURCE_ID,
-  keyOf: schema => schema.name,
-  project: (row, ctx) => tryBuildSchema(row, ctx.repo.valuePresetCores),
+  keyOf: definition => definition.metadata.fieldId,
+  project: (row, ctx) => {
+    const metadata = parsePropertyDefinitionMetadata(row)
+    if (!metadata) return null
+    let schema: AnyPropertySchema | null = null
+    try {
+      schema = tryBuildSchema(row, ctx.repo.valuePresetCores, metadata)
+    } catch (error) {
+      console.warn(
+        `[UserSchemasService] schema block ${row.id} behavior failed; publishing metadata only`,
+        error,
+      )
+    }
+    return {metadata, ...(schema ? {schema} : {})}
+  },
   secondarySignal: (repo, rebuild) => repo.onValuePresetsChange(rebuild),
 }
 
@@ -135,14 +161,14 @@ export class UserSchemasService {
   constructor(private readonly repo: Repo) {}
 
   private get handle() {
-    return this.repo.projectors.handle<AnyPropertySchema>(USER_SCHEMAS_PROJECTOR_ID)
+    return this.repo.projectors.handle<ProjectedPropertyDefinition>(USER_SCHEMAS_PROJECTOR_ID)
   }
 
   /** Look up the property-schema block id for a registered user-data
    *  schema name. Returns undefined for kernel/plugin schemas (which
    *  don't have backing blocks) or names that aren't registered. */
   getSchemaBlockId(name: string): string | undefined {
-    return this.handle?.blockIdForKey(name)
+    return this.repo.propertyDefinitions?.definitionsByName.get(name)?.[0]?.fieldId
   }
 
   /** Look up the published user-data schema for a property-schema
@@ -151,16 +177,21 @@ export class UserSchemasService {
    *  blocks failing `tryBuildSchema` validation (empty name, unknown
    *  preset, invalid config), and ids that simply don't exist. */
   getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined {
-    return this.handle?.contributionForBlockId(blockId)
+    return this.handle?.contributionForBlockId(blockId)?.schema
   }
 
-  /** Synchronously add a user-data schema to the runtime bucket. Used
+  /** Synchronously add a projected definition to the runtime bucket. Used
    *  by `addSchema` after persisting the schema block — registers
    *  before any dependent property write so the form's "create-then-
    *  write-initial-value" flow doesn't race the subscription tick.
    *  `blockId` is the property-schema block that produced `schema`. */
   appendUserSchema(schema: AnyPropertySchema, blockId: string, workspaceId: string): void {
-    this.handle?.upsert(schema, blockId, workspaceId)
+    const row = this.repo.block(blockId).peek()
+    const metadata = row ? parsePropertyDefinitionMetadata(row) : null
+    if (!metadata) {
+      throw new Error(`[UserSchemasService] cannot publish metadata for schema block ${blockId}`)
+    }
+    this.handle?.upsert({metadata, schema}, blockId, workspaceId)
   }
 
   /** Create a property-schema block in the workspace's Properties

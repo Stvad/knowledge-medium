@@ -5,10 +5,21 @@ import { ChangeScope, codecs, definePresetCore, defineProperty, type AnyValuePre
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
-import { propertySchemasFacet, valuePresetCoresFacet } from '@/data/facets'
-import { propertyNameProp } from '@/data/properties'
+import {
+  projectedPropertyDefinitionsFacet,
+  propertySchemasFacet,
+  valuePresetCoresFacet,
+} from '@/data/facets'
+import {
+  propertyChangeScopeProp,
+  propertyDefaultProp,
+  propertyHiddenProp,
+  propertyNameProp,
+  seedKeyProp,
+} from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { UserSchemasService } from './userSchemasService'
 import { Repo } from './repo'
@@ -85,6 +96,7 @@ const createExternalSchemaBlock = async (
   name: string,
   presetId = 'string',
   config: unknown = {},
+  extraProperties: Record<string, unknown> = {},
 ): Promise<string> => {
   const propertiesPageId = env.repo.propertiesPageId!
   const id = await env.repo.mutate.createChild({parentId: propertiesPageId})
@@ -96,6 +108,7 @@ const createExternalSchemaBlock = async (
           'property-schema:name': name,
           'property-schema:preset': presetId,
           'property-schema:config': config,
+          ...extraProperties,
         },
       })
     }, {scope: ChangeScope.BlockDefault})
@@ -111,6 +124,29 @@ describe('UserSchemasService.addSchema', () => {
     expect(schema.codec.type).toBe('url')
     // Synchronous: visible in repo.propertySchemas before any subscription tick.
     expect(env.repo.propertySchemas.get('homepage')).toBe(schema)
+    expect(env.repo.propertySchemaResolverFor(WS).resolve('homepage')).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: env.service.getSchemaBlockId('homepage'),
+        workspaceId: WS,
+      }),
+    })
+  })
+
+  it('retains same-name definitions by field id during an immediate append', async () => {
+    env = await setup()
+    await env.service.addSchema({name: 'status', presetId: 'string'})
+    const firstId = env.service.getSchemaBlockId('status')!
+    await env.service.addSchema({name: 'status', presetId: 'string'})
+
+    const definitions = env.repo.propertyDefinitions?.definitionsByName.get('status') ?? []
+    expect(definitions.map(definition => definition.fieldId)).toContain(firstId)
+    expect(definitions).toHaveLength(2)
+    expect(env.service.getSchemaBlockId('status')).toBe(definitions[0]?.fieldId)
+    expect(env.repo.propertySchemaResolverFor(WS).resolve('status')).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({fieldId: definitions[0]?.fieldId}),
+    })
   })
 
   it('rejects unknown preset ids', async () => {
@@ -191,6 +227,117 @@ describe('UserSchemasService subscription', () => {
     // poll for the resolved schema.
     await vi.waitFor(() => {
       expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+  })
+
+  it('publishes codec-less metadata even while an unknown preset blocks behavior', async () => {
+    env = await setup()
+    const id = await createExternalSchemaBlock(
+      'plugin:config',
+      'plugin:not-installed',
+      {},
+      {
+        [propertyChangeScopeProp.name]: ChangeScope.Automation,
+        [propertyHiddenProp.name]: true,
+      },
+    )
+
+    await vi.waitFor(() => {
+      expect(env.repo.propertyDefinitions?.definitionsByFieldId.get(id)).toMatchObject({
+        fieldId: id,
+        workspaceId: WS,
+        name: 'plugin:config',
+        changeScope: ChangeScope.Automation,
+        hidden: true,
+        origin: 'user',
+      })
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    expect(env.repo.propertySchemas.get('plugin:config')).toBeUndefined()
+  })
+
+  it('keeps metadata when preset/default/build behavior decoding throws', async () => {
+    const throwingPreset = definePreset<string>({
+      id: 'test-throwing-build',
+      label: 'Throwing',
+      build: () => { throw new Error('build failed') },
+      defaultValue: '',
+      Editor: (): JSX.Element => createElement('span', null, null),
+    })
+    env = await setup([throwingPreset])
+    const malformedPresetId = await createExternalSchemaBlock(
+      'bad:preset',
+      'string',
+      {},
+      {'property-schema:preset': 42},
+    )
+    const malformedDefaultId = await createExternalSchemaBlock(
+      'bad:default',
+      'string',
+      {},
+      {[propertyDefaultProp.name]: {not: 'a string'}},
+    )
+    const throwingBuildId = await createExternalSchemaBlock('bad:build', throwingPreset.id)
+
+    for (const [id, name] of [
+      [malformedPresetId, 'bad:preset'],
+      [malformedDefaultId, 'bad:default'],
+      [throwingBuildId, 'bad:build'],
+    ] as const) {
+      await vi.waitFor(() => {
+        expect(env.repo.propertyDefinitions?.definitionsByFieldId.get(id)?.name).toBe(name)
+      }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+      expect(env.repo.propertySchemas.has(name)).toBe(false)
+    }
+  })
+
+  it('builds fallback behavior from the persisted scope and explicit default', async () => {
+    env = await setup()
+    await createExternalSchemaBlock('scoped:title', 'string', {}, {
+      [propertyChangeScopeProp.name]: ChangeScope.UserPrefs,
+      [propertyDefaultProp.name]: 'from-definition',
+    })
+
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('scoped:title')).toMatchObject({
+        changeScope: ChangeScope.UserPrefs,
+        defaultValue: 'from-definition',
+      })
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+  })
+
+  it('resolves an identity-checked seeded row as fallback without a local declaration', async () => {
+    env = await setup()
+    const seedKey = 'system:missing-plugin/property/fallback-title'
+    const id = propertyDefinitionBlockId(WS, seedKey)
+    await waitForPropertySchemasChange(async () => {
+      await env.repo.tx(async tx => {
+        await tx.create({
+          id,
+          workspaceId: WS,
+          parentId: env.repo.propertiesPageId,
+          orderKey: 'a0',
+          content: 'fallback:title',
+          properties: {
+            types: ['property-schema'],
+            'property-schema:name': 'fallback:title',
+            'property-schema:preset': 'string',
+            'property-schema:config': {},
+            [seedKeyProp.name]: seedKey,
+          },
+        })
+      }, {scope: ChangeScope.BlockDefault})
+    })
+
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemaResolverFor(WS).resolve('fallback:title')).toEqual({
+        status: 'resolved',
+        schema: expect.objectContaining({
+          fieldId: id,
+          workspaceId: WS,
+          name: 'fallback:title',
+          origin: 'plugin:system:missing-plugin',
+        }),
+      })
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
@@ -328,7 +475,32 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
     ]))
+    expect(env.repo.facetRuntime?.read(projectedPropertyDefinitionsFacet).size).toBe(1)
+    expect(env.repo.propertyDefinitions?.definitionsByName.get('homepage')).toHaveLength(1)
     expect(env.repo.propertySchemas.get('homepage')?.codec.type).toBe('url')
+  })
+
+  it('drops removed-preset behavior during the runtime swap while retaining metadata', async () => {
+    const pluginPreset = definePreset<string>({
+      id: 'test-runtime-only-preset',
+      label: 'Runtime only',
+      build: () => codecs.string,
+      defaultValue: '',
+      Editor: (): JSX.Element => createElement('span', null, null),
+    })
+    env = await setup([pluginPreset])
+    const id = await createExternalSchemaBlock('plugin:runtime-only', pluginPreset.id)
+    expect(env.repo.propertySchemas.get('plugin:runtime-only')?.codec.type).toBe('string')
+
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+    ]))
+
+    expect(env.repo.propertyDefinitions?.definitionsByFieldId.get(id)?.name)
+      .toBe('plugin:runtime-only')
+    expect(env.repo.propertySchemas.has('plugin:runtime-only')).toBe(false)
   })
 
   it('direct setRuntimeContributions bucket survives a runtime swap', async () => {

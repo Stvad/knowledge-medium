@@ -5,7 +5,8 @@
  *  contribution per matching block, and publishes the set into a
  *  facet's `'user-data'` runtime-contribution bucket. Two instances
  *  exist today and were hand-copied then DIVERGED:
- *    - `UserSchemasService` — `'property-schema'` blocks → `propertySchemasFacet`
+ *    - `UserSchemasService` — `'property-schema'` blocks →
+ *      `projectedPropertyDefinitionsFacet` (the bridge derives `propertySchemas`)
  *    - `UserTypesService`   — `'block-type'`    blocks → `typesFacet`
  *
  *  This module owns the ONE copy of the safety-critical lifecycle the
@@ -49,7 +50,7 @@ import { definitionBlockProjectorFacet } from '@/data/facets'
  *  rather than reaching into the lifecycle. */
 export interface ProjectorHandle<Contribution = unknown> {
   /** Block id that materialised the contribution registered under
-   *  `key` (a schema name / a type id). */
+   *  `key` (a definition field id / a type id). */
   blockIdForKey(key: string): string | undefined
   /** Contribution currently materialised from `blockId`. */
   contributionForBlockId(blockId: string): Contribution | undefined
@@ -117,7 +118,7 @@ export interface DefinitionBlockProjector<
   readonly dependsOn?: readonly string[]
   /** Build a contribution from a row, or null to skip it. */
   project(row: Row, ctx: ProjectorBuildContext): Contribution | null
-  /** Registry key for a contribution (schema name / type id) — drives
+  /** Registry key for a contribution (definition field id / type id) — drives
    *  the `blockIdForKey` index. */
   keyOf(contribution: Contribution): string
   /** Map the delivered raw rows into the form `project` expects.
@@ -144,7 +145,7 @@ export type AnyDefinitionBlockProjector = DefinitionBlockProjector<any, any>
 class ProjectorLifecycle<Row extends { id: string }, Contribution>
   implements ProjectorHandle<Contribution> {
   private contributions: readonly Contribution[] = []
-  /** key (schema name / type id) -> source block id. */
+  /** descriptor key (definition field id / type id) -> source block id. */
   private byKey = new Map<string, string>()
   /** source block id -> resolved contribution. */
   private byBlockId = new Map<string, Contribution>()
@@ -207,7 +208,10 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
           // handoff: another projector may publish first and fire this
           // signal) and never run after teardown.
           if (!this.primed || this.disposed || this.generation !== generation) return
-          this.rebuild(this.latestRows)
+          // Imperative upserts may precede their subscription row (the
+          // create-then-immediate-use path). Re-resolve rows we do own while
+          // retaining only contributions whose source row has not arrived yet.
+          this.rebuild(this.latestRows, true)
         })
       }
     } catch (error) {
@@ -290,7 +294,7 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
       : (rows as readonly unknown[] as readonly Row[])
   }
 
-  private rebuild(rows: readonly Row[]): void {
+  private rebuild(rows: readonly Row[], preserveContributionsMissingRows = false): void {
     if (this.disposed) return
     this.latestRows = rows
     this.primed = true
@@ -319,6 +323,15 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
         next.push(built)
         nextByKey.set(this.descriptor.keyOf(built), row.id)
         nextByBlockId.set(row.id, built)
+      }
+    }
+    if (preserveContributionsMissingRows) {
+      const rowIds = new Set(rows.map(row => row.id))
+      for (const [blockId, contribution] of this.byBlockId) {
+        if (rowIds.has(blockId)) continue
+        next.push(contribution)
+        nextByKey.set(this.descriptor.keyOf(contribution), blockId)
+        nextByBlockId.set(blockId, contribution)
       }
     }
     // Skip AFTER priming + capturing latestRows so the secondary path

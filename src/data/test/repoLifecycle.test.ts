@@ -20,9 +20,15 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, type BlockData } from '@/data/api'
-import {definitionBlockProjectorFacet} from '@/data/facets'
+import { ChangeScope, defineProperty, codecs, type BlockData } from '@/data/api'
+import {
+  definitionBlockProjectorFacet,
+  definitionSeedsFacet,
+  projectedPropertyDefinitionsFacet,
+} from '@/data/facets'
 import type {DefinitionBlockProjector} from '@/data/projectorRuntime'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {seedProperty} from '@/data/propertySeeds'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {kernelDataExtension} from '@/data/kernelDataExtension'
@@ -162,6 +168,118 @@ describe('repo.activeWorkspaceId', () => {
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
     await expect(repo.projectors.whenPrimed('ws-late-runtime')).resolves.toBeUndefined()
     expect(repo.projectors.isPrimed('ws-late-runtime')).toBe(true)
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('recomputes seed synthesis and identity synchronously for each workspace pin', () => {
+    const declaration = seedProperty({
+      seedKey: 'system:kernel-data/property/test-synthesized',
+      revision: 1,
+      name: 'test:synthesized',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionSeedsFacet.of(declaration),
+    ]))
+
+    expect(repo.propertySchemas.get(declaration.name)).toBe(declaration)
+    expect(repo.propertyDefinitions).toBeNull()
+
+    repo.setActiveWorkspaceId('ws-synthesis-a')
+    const resolvedA = repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)
+    expect(resolvedA).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-synthesis-a', declaration.seedKey),
+        workspaceId: 'ws-synthesis-a',
+      }),
+    })
+
+    repo.setActiveWorkspaceId('ws-synthesis-b')
+    const resolvedB = repo.propertySchemaResolverFor('ws-synthesis-b').resolve(declaration)
+    expect(resolvedB).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-synthesis-b', declaration.seedKey),
+        workspaceId: 'ws-synthesis-b',
+      }),
+    })
+    expect(repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)).toEqual({
+      status: 'identity-unavailable',
+      reason: 'registry-not-workspace-keyed',
+    })
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('recomputes synthesis when a seed contribution arrives after the workspace pin', () => {
+    const declaration = seedProperty({
+      seedKey: 'system:test-plugin/property/late-seed',
+      revision: 1,
+      name: 'test:late-seed',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-late-seed')
+    expect(repo.propertySchemas.has(declaration.name)).toBe(false)
+
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-late-seed', [declaration])
+
+    expect(repo.propertySchemas.get(declaration.name)).toBe(declaration)
+    expect(repo.propertySchemaResolverFor('ws-late-seed').resolve(declaration)).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-late-seed', declaration.seedKey),
+        origin: 'plugin:system:test-plugin',
+      }),
+    })
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('rebuilds workspace-scoped schema state once per pin transition', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    const schema = defineProperty('test:scoped', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-scoped',
+      [{
+        metadata: {
+          fieldId: 'field-scoped',
+          workspaceId: 'ws-scoped',
+          createdAt: 1,
+          name: schema.name,
+          changeScope: schema.changeScope,
+          hidden: false,
+          origin: 'user',
+        },
+        schema,
+      }],
+      {workspaceId: 'ws-scoped'},
+    )
+    let rebuilds = 0
+    const dispose = repo.onPropertySchemasChange(() => { rebuilds += 1 })
+
+    repo.setActiveWorkspaceId('ws-scoped')
+    expect(rebuilds).toBe(1)
+    expect(repo.propertySchemas.get(schema.name)).toBe(schema)
+
+    dispose()
     repo.setActiveWorkspaceId(null)
   })
 

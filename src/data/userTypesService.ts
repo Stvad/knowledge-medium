@@ -37,6 +37,7 @@ import {
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { typesFacet } from '@/data/facets'
 import { USER_SCHEMAS_PROJECTOR_ID } from '@/data/userSchemasService'
+import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
 
 /** Projector id for the user-defined block-type bridge. */
 export const USER_TYPES_PROJECTOR_ID = 'user-types'
@@ -59,7 +60,7 @@ const safeDisplayProp = <T,>(block: Block, prop: PropertySchema<T>, fallback: T)
  *  `onPropertySchemasChange` tick when the missing schema publishes). */
 const tryBuildType = (
   block: Block,
-  schemas: ProjectorHandle<AnyPropertySchema> | undefined,
+  schemas: ProjectorHandle<ProjectedPropertyDefinition> | undefined,
 ): TypeContribution | null => {
   const label = block.peekProperty(blockTypeLabelProp) ?? ''
   if (!label) {
@@ -77,8 +78,8 @@ const tryBuildType = (
   const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
   const properties: AnyPropertySchema[] = []
   for (const refId of refIds) {
-    const schema = schemas?.contributionForBlockId(refId)
-    if (schema) properties.push(schema)
+    const definition = schemas?.contributionForBlockId(refId)
+    if (definition?.schema) properties.push(definition.schema)
   }
   return {
     id: block.id,
@@ -133,7 +134,10 @@ export const userTypesProjector: DefinitionBlockProjector<Block, TypeContributio
   keyOf: type => type.id,
   hydrate: (rows, ctx) => rows.map(row => ctx.repo.block(row.id)),
   project: (block, ctx) =>
-    tryBuildType(block, ctx.handle(USER_SCHEMAS_PROJECTOR_ID) as ProjectorHandle<AnyPropertySchema> | undefined),
+    tryBuildType(
+      block,
+      ctx.handle(USER_SCHEMAS_PROJECTOR_ID) as ProjectorHandle<ProjectedPropertyDefinition> | undefined,
+    ),
   dedup: contributionsEqual,
   secondarySignal: (repo, rebuild) => repo.onPropertySchemasChange(rebuild),
 }

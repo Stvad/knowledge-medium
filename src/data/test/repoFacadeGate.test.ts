@@ -67,6 +67,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   facetRuntime: 'getter read',
   propertiesPageId: 'getter read',
   propertyEditorOverrides: 'getter read',
+  propertyDefinitions: 'getter read',
   propertySchemas: 'getter read',
   types: 'getter read',
   typesPageId: 'getter read',
@@ -76,6 +77,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   exists: 'read',
   countBlocksUsingProperty: 'read',
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
+  propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
 
@@ -146,6 +148,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
  *  don't introduce either on Repo. */
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   _activeWorkspaceId: 'data field',
+  _propertyDefinitionRegistry: 'data field',
   _propertyEditorOverrides: 'data field',
   _propertySchemas: 'data field',
   _types: 'data field',

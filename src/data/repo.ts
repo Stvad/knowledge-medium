@@ -123,6 +123,12 @@ import { UserSchemasService } from './userSchemasService'
 import { UserTypesService } from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
+import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
+import {
+  createPropertySchemaResolver,
+  unavailablePropertySchemaResolver,
+  type PropertySchemaResolver,
+} from './internals/propertySchemaResolution'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -308,6 +314,9 @@ export class Repo {
   private queries: Map<string, AnyQuery> = new Map()
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
   private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
+  /** Atomic active-workspace definition snapshot. Null at stage 0 before a
+   * workspace pin; identity resolution is unavailable in that state. */
+  private _propertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
   private _valuePresetCores: ReadonlyMap<string, AnyValuePresetCore> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
@@ -497,6 +506,20 @@ export class Repo {
     return this._propertySchemas
   }
 
+  get propertyDefinitions(): PropertyDefinitionRegistrySnapshot | null {
+    return this._propertyDefinitionRegistry
+  }
+
+  /** Internal identity boundary factory. The caller supplies the target row's
+   * workspace (the transaction layer owns that fact); resolve() itself accepts
+   * only a handle/name and is therefore immune to ambient workspace switches. */
+  propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
+    const snapshot = this._propertyDefinitionRegistry
+    return snapshot?.workspaceId === workspaceId
+      ? createPropertySchemaResolver(snapshot)
+      : unavailablePropertySchemaResolver
+  }
+
   get propertyEditorOverrides(): ReadonlyMap<string, AnyPropertyEditorOverride> {
     return this._propertyEditorOverrides
   }
@@ -655,9 +678,10 @@ export class Repo {
       applySameTxProcessors: (processors) => { this.sameTxProcessors = processors },
       applyInvalidationRules: (rules) => { this.invalidationRules = rules },
       applyWorkspaceBackfills: (backfills) => { this._workspaceBackfills = backfills },
-      applyTypesAndSchemas: (types, propertySchemas) => {
+      applyTypesAndSchemas: (types, propertySchemas, propertyDefinitions) => {
         this._types = types
         this._propertySchemas = propertySchemas
+        this._propertyDefinitionRegistry = propertyDefinitions
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
