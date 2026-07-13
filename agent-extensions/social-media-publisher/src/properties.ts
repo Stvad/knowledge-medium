@@ -1,52 +1,57 @@
 import {
   ChangeScope,
-  codecs,
   defineBlockType,
-  defineProperty,
+  seedProperty,
 } from '@/extensions/api.js'
 
 import type {TargetPlatform} from './types'
 
-export const blueskyHandleProp = defineProperty<string>('socialPublisher:blueskyHandle', {
-  codec: codecs.string,
+export const blueskyHandleProp = seedProperty({
+  seedKey: 'system:social-media-publisher/property/bluesky-handle',
+  revision: 1,
+  name: 'socialPublisher:blueskyHandle',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.UserPrefs,
 })
 
-export const corsProxyUrlProp = defineProperty<string>('socialPublisher:corsProxyUrl', {
-  codec: codecs.string,
+export const corsProxyUrlProp = seedProperty({
+  seedKey: 'system:social-media-publisher/property/cors-proxy-url',
+  revision: 1,
+  name: 'socialPublisher:corsProxyUrl',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.UserPrefs,
 })
 
 // Schema-only settings rows. Their editors derive device-local credential
 // status directly and never persist these values to synced user preferences.
-export const twitterConnectedHintProp = defineProperty<boolean>(
-  'socialPublisher:twitterConfigured',
-  {
-    codec: codecs.boolean,
-    defaultValue: false,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const twitterConnectedHintProp = seedProperty({
+  seedKey: 'system:social-media-publisher/property/twitter-configured',
+  revision: 1,
+  name: 'socialPublisher:twitterConfigured',
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.UserPrefs,
+})
 
-export const blueskyConnectedHintProp = defineProperty<boolean>(
-  'socialPublisher:blueskyConfigured',
-  {
-    codec: codecs.boolean,
-    defaultValue: false,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const blueskyConnectedHintProp = seedProperty({
+  seedKey: 'system:social-media-publisher/property/bluesky-configured',
+  revision: 1,
+  name: 'socialPublisher:blueskyConfigured',
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.UserPrefs,
+})
 
-export const lesswrongConnectedHintProp = defineProperty<boolean>(
-  'socialPublisher:lesswrongConfigured',
-  {
-    codec: codecs.boolean,
-    defaultValue: false,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const lesswrongConnectedHintProp = seedProperty({
+  seedKey: 'system:social-media-publisher/property/lesswrong-configured',
+  revision: 1,
+  name: 'socialPublisher:lesswrongConfigured',
+  preset: 'boolean',
+  defaultValue: false,
+  changeScope: ChangeScope.UserPrefs,
+})
 
 export const publisherPrefsType = defineBlockType({
   id: 'social-publisher-prefs',

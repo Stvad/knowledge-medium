@@ -3,8 +3,8 @@ import {blockContentDecoratorsFacet} from '@/extensions/blockInteraction.js'
 import {dialogAppMountExtension} from '@/extensions/dialogAppMount.js'
 import {pluginPrefsExtension} from '@/data/pluginStateExtensions.js'
 import {
+  definitionSeedsFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   typesFacet,
 } from '@/data/facets.js'
 import {characterCountProfilesFacet} from '@/plugins/character-counter/index.js'
@@ -39,11 +39,11 @@ export default [
   ...pluginPrefsExtension(publisherPrefsType, source),
   ...commandTypes.map(command => typesFacet.of(command.type, {source})),
 
-  propertySchemasFacet.of(blueskyHandleProp, {source}),
-  propertySchemasFacet.of(corsProxyUrlProp, {source}),
-  propertySchemasFacet.of(twitterConnectedHintProp, {source}),
-  propertySchemasFacet.of(blueskyConnectedHintProp, {source}),
-  propertySchemasFacet.of(lesswrongConnectedHintProp, {source}),
+  definitionSeedsFacet.of(blueskyHandleProp, {source}),
+  definitionSeedsFacet.of(corsProxyUrlProp, {source}),
+  definitionSeedsFacet.of(twitterConnectedHintProp, {source}),
+  definitionSeedsFacet.of(blueskyConnectedHintProp, {source}),
+  definitionSeedsFacet.of(lesswrongConnectedHintProp, {source}),
 
   propertyEditorOverridesFacet.of(blueskyHandleEditor, {source}),
   propertyEditorOverridesFacet.of(corsProxyUrlEditor, {source}),

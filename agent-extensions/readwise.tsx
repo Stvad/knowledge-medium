@@ -1,9 +1,9 @@
 import {
   actionTransformsFacet, actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
-  blockContentDecoratorsFacet, ChangeScope, codecs, defineBlockType, defineProperty,
-  definePropertyEditorOverride, getPluginPrefsBlock,
+  blockContentDecoratorsFacet, ChangeScope, defineBlockType,
+  definePropertyEditorOverride, definitionSeedsFacet, getPluginPrefsBlock,
   keyBetween, keysBetween, pluginBlockId,
-  propertyEditorOverridesFacet, propertySchemasFacet,
+  propertyEditorOverridesFacet, seedProperty,
   showError, showInfo, showProgress, showPropertiesProp,
   showSuccess, typesFacet, useRepo,
   type ActionConfig,
@@ -13,6 +13,7 @@ import {
   type BlockContentDecoratorContribution,
   type PropertyEditorProps,
   type PropertySchema,
+  type PropertySeedDeclaration,
 } from '@/extensions/api.js'
 import type { Block } from '@/data/block.js'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes.js'
@@ -93,171 +94,279 @@ const validateToken = async (candidate: string): Promise<boolean> => {
 // ---------------------------------------------------------------------------
 // properties
 
-const lastSyncedAtProp = defineProperty<string | undefined>('readwise:lastSyncedAt', {
-  codec: codecs.optionalString,
+const lastSyncedAtProp = seedProperty({
+  seedKey: 'system:readwise/property/last-synced-at',
+  revision: 1,
+  name: 'readwise:lastSyncedAt',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
 })
-const syncSinceProp = defineProperty<Date | undefined>('readwise:syncSince', {
-  codec: codecs.date,
+const syncSinceProp = seedProperty({
+  seedKey: 'system:readwise/property/sync-since',
+  revision: 1,
+  name: 'readwise:syncSince',
+  preset: 'date',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const pageTitleTemplateProp = defineProperty<string>('readwise:pageTitleTemplate', {
-  codec: codecs.string,
+const pageTitleTemplateProp = seedProperty({
+  seedKey: 'system:readwise/property/page-title-template',
+  revision: 1,
+  name: 'readwise:pageTitleTemplate',
+  preset: 'string',
   defaultValue: DEFAULT_PAGE_TITLE_TEMPLATE,
   changeScope: ChangeScope.BlockDefault,
 })
-const bookTemplateProp = defineProperty<string>('readwise:bookTemplate', {
-  codec: codecs.string,
+const bookTemplateProp = seedProperty({
+  seedKey: 'system:readwise/property/book-template',
+  revision: 1,
+  name: 'readwise:bookTemplate',
+  preset: 'string',
   defaultValue: DEFAULT_BOOK_TEMPLATE,
   changeScope: ChangeScope.BlockDefault,
 })
-const highlightTemplateProp = defineProperty<string>('readwise:highlightTemplate', {
-  codec: codecs.string,
+const highlightTemplateProp = seedProperty({
+  seedKey: 'system:readwise/property/highlight-template',
+  revision: 1,
+  name: 'readwise:highlightTemplate',
+  preset: 'string',
   defaultValue: DEFAULT_HIGHLIGHT_TEMPLATE,
   changeScope: ChangeScope.BlockDefault,
 })
-const autoSyncIntervalProp = defineProperty<number>('readwise:autoSyncIntervalMin', {
-  codec: codecs.number,
+const autoSyncIntervalProp = seedProperty({
+  seedKey: 'system:readwise/property/auto-sync-interval-min',
+  revision: 1,
+  name: 'readwise:autoSyncIntervalMin',
+  preset: 'number',
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
 })
-const authorPageTypesProp = defineProperty<readonly string[]>('readwise:authorPageTypes', {
-  codec: codecs.refList({ targetTypes: [BLOCK_TYPE_TYPE] }),
+const authorPageTypesProp = seedProperty({
+  seedKey: 'system:readwise/property/author-page-types',
+  revision: 1,
+  name: 'readwise:authorPageTypes',
+  preset: 'refList',
+  config: { targetTypes: [BLOCK_TYPE_TYPE] },
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
-const documentPageTypesProp = defineProperty<readonly string[]>('readwise:documentPageTypes', {
-  codec: codecs.refList({ targetTypes: [BLOCK_TYPE_TYPE] }),
+const documentPageTypesProp = seedProperty({
+  seedKey: 'system:readwise/property/document-page-types',
+  revision: 1,
+  name: 'readwise:documentPageTypes',
+  preset: 'refList',
+  config: { targetTypes: [BLOCK_TYPE_TYPE] },
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
-const highlightTypesProp = defineProperty<readonly string[]>('readwise:highlightTypes', {
-  codec: codecs.refList({ targetTypes: [BLOCK_TYPE_TYPE] }),
+const highlightTypesProp = seedProperty({
+  seedKey: 'system:readwise/property/highlight-types',
+  revision: 1,
+  name: 'readwise:highlightTypes',
+  preset: 'refList',
+  config: { targetTypes: [BLOCK_TYPE_TYPE] },
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
 // purely a UI hint — the source of truth is localStorage. We mirror it so the
 // settings page can render a "Connected" pill without subscribing to storage.
-const connectedHintProp = defineProperty<boolean>('readwise:connectedHint', {
-  codec: codecs.boolean,
+const connectedHintProp = seedProperty({
+  seedKey: 'system:readwise/property/connected-hint',
+  revision: 1,
+  name: 'readwise:connectedHint',
+  preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.UserPrefs,
 })
 // per-block external ids on imported pages / highlights
-const userBookIdProp = defineProperty<string | undefined>('readwise:user_book_id', {
-  codec: codecs.optionalString,
+const userBookIdProp = seedProperty({
+  seedKey: 'system:readwise/property/user-book-id',
+  revision: 1,
+  name: 'readwise:user_book_id',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const highlightIdProp = defineProperty<string | undefined>('readwise:highlight_id', {
-  codec: codecs.optionalString,
+const highlightIdProp = seedProperty({
+  seedKey: 'system:readwise/property/highlight-id',
+  revision: 1,
+  name: 'readwise:highlight_id',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const titleProp = defineProperty<string | undefined>('readwise:title', {
-  codec: codecs.optionalString,
+const titleProp = seedProperty({
+  seedKey: 'system:readwise/property/title',
+  revision: 1,
+  name: 'readwise:title',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const authorProp = defineProperty<string>('readwise:author', {
-  codec: codecs.ref({ targetTypes: [PAGE_TYPE] }),
+const authorProp = seedProperty({
+  seedKey: 'system:readwise/property/author',
+  revision: 1,
+  name: 'readwise:author',
+  preset: 'ref',
+  config: { targetTypes: [PAGE_TYPE] },
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const categoryProp = defineProperty<string | undefined>('readwise:category', {
-  codec: codecs.optionalString,
+const categoryProp = seedProperty({
+  seedKey: 'system:readwise/property/category',
+  revision: 1,
+  name: 'readwise:category',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const sourceProp = defineProperty<string | undefined>('readwise:source', {
-  codec: codecs.optionalString,
+const sourceProp = seedProperty({
+  seedKey: 'system:readwise/property/source',
+  revision: 1,
+  name: 'readwise:source',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const sourceUrlProp = defineProperty<string | undefined>('readwise:source_url', {
-  codec: codecs.optionalString,
+const sourceUrlProp = seedProperty({
+  seedKey: 'system:readwise/property/source-url',
+  revision: 1,
+  name: 'readwise:source_url',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const readwiseUrlProp = defineProperty<string | undefined>('readwise:readwise_url', {
-  codec: codecs.optionalString,
+const readwiseUrlProp = seedProperty({
+  seedKey: 'system:readwise/property/readwise-url',
+  revision: 1,
+  name: 'readwise:readwise_url',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const coverImageUrlProp = defineProperty<string | undefined>('readwise:cover_image_url', {
-  codec: codecs.optionalString,
+const coverImageUrlProp = seedProperty({
+  seedKey: 'system:readwise/property/cover-image-url',
+  revision: 1,
+  name: 'readwise:cover_image_url',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const documentNoteProp = defineProperty<string | undefined>('readwise:document_note', {
-  codec: codecs.optionalString,
+const documentNoteProp = seedProperty({
+  seedKey: 'system:readwise/property/document-note',
+  revision: 1,
+  name: 'readwise:document_note',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const numHighlightsProp = defineProperty<number | undefined>('readwise:num_highlights', {
-  codec: codecs.optionalNumber,
+const numHighlightsProp = seedProperty({
+  seedKey: 'system:readwise/property/num-highlights',
+  revision: 1,
+  name: 'readwise:num_highlights',
+  preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const lastHighlightAtProp = defineProperty<string | undefined>('readwise:last_highlight_at', {
-  codec: codecs.optionalString,
+const lastHighlightAtProp = seedProperty({
+  seedKey: 'system:readwise/property/last-highlight-at',
+  revision: 1,
+  name: 'readwise:last_highlight_at',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const asinProp = defineProperty<string | undefined>('readwise:asin', {
-  codec: codecs.optionalString,
+const asinProp = seedProperty({
+  seedKey: 'system:readwise/property/asin',
+  revision: 1,
+  name: 'readwise:asin',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const tagsProp = defineProperty<string[]>('readwise:tags', {
-  codec: codecs.list(codecs.string),
+// The shared string-list preset core exposes readonly values; cast back to
+// this property's historical string[] handle contract (same idiom as
+// `aliasesProp` in `@/data/properties`) so downstream consumers that build
+// and assign plain string[] arrays don't all need a readonly-array update.
+const tagsProp = seedProperty({
+  seedKey: 'system:readwise/property/tags',
+  revision: 1,
+  name: 'readwise:tags',
+  preset: 'string-list',
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-})
-const locationProp = defineProperty<string | undefined>('readwise:location', {
-  codec: codecs.optionalString,
+}) as PropertySeedDeclaration<string[]>
+const locationProp = seedProperty({
+  seedKey: 'system:readwise/property/location',
+  revision: 1,
+  name: 'readwise:location',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const locationTypeProp = defineProperty<string | undefined>('readwise:location_type', {
-  codec: codecs.optionalString,
+const locationTypeProp = seedProperty({
+  seedKey: 'system:readwise/property/location-type',
+  revision: 1,
+  name: 'readwise:location_type',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const colorProp = defineProperty<string | undefined>('readwise:color', {
-  codec: codecs.optionalString,
+const colorProp = seedProperty({
+  seedKey: 'system:readwise/property/color',
+  revision: 1,
+  name: 'readwise:color',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const highlightedAtProp = defineProperty<string | undefined>('readwise:highlighted_at', {
-  codec: codecs.optionalString,
+const highlightedAtProp = seedProperty({
+  seedKey: 'system:readwise/property/highlighted-at',
+  revision: 1,
+  name: 'readwise:highlighted_at',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const updatedAtProp = defineProperty<string | undefined>('readwise:updated_at', {
-  codec: codecs.optionalString,
+const updatedAtProp = seedProperty({
+  seedKey: 'system:readwise/property/updated-at',
+  revision: 1,
+  name: 'readwise:updated_at',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const createdAtProp = defineProperty<string | undefined>('readwise:created_at', {
-  codec: codecs.optionalString,
+const createdAtProp = seedProperty({
+  seedKey: 'system:readwise/property/created-at',
+  revision: 1,
+  name: 'readwise:created_at',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const noteForHighlightIdProp = defineProperty<string | undefined>('readwise:note_for_highlight_id', {
-  codec: codecs.optionalString,
+const noteForHighlightIdProp = seedProperty({
+  seedKey: 'system:readwise/property/note-for-highlight-id',
+  revision: 1,
+  name: 'readwise:note_for_highlight_id',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const reviewDateProp = defineProperty<string>('readwise:review_date', {
-  codec: codecs.ref({ targetTypes: [DAILY_NOTE_TYPE] }),
+const reviewDateProp = seedProperty({
+  seedKey: 'system:readwise/property/review-date',
+  revision: 1,
+  name: 'readwise:review_date',
+  preset: 'ref',
+  config: { targetTypes: [DAILY_NOTE_TYPE] },
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const reviewedProp = defineProperty<boolean>('readwise:reviewed', {
-  codec: codecs.boolean,
+const reviewedProp = seedProperty({
+  seedKey: 'system:readwise/property/reviewed',
+  revision: 1,
+  name: 'readwise:reviewed',
+  preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
 })
@@ -1646,17 +1755,17 @@ export default [
   typesFacet.of(readwiseHighlightType, { source }),
   typesFacet.of(readwiseNoteType, { source }),
 
-  propertySchemasFacet.of(lastSyncedAtProp, { source }),
-  propertySchemasFacet.of(syncSinceProp, { source }),
-  propertySchemasFacet.of(pageTitleTemplateProp, { source }),
-  propertySchemasFacet.of(bookTemplateProp, { source }),
-  propertySchemasFacet.of(highlightTemplateProp, { source }),
-  propertySchemasFacet.of(autoSyncIntervalProp, { source }),
-  propertySchemasFacet.of(authorPageTypesProp, { source }),
-  propertySchemasFacet.of(documentPageTypesProp, { source }),
-  propertySchemasFacet.of(highlightTypesProp, { source }),
-  propertySchemasFacet.of(connectedHintProp, { source }),
-  ...IMPORTED_PROPERTY_SCHEMAS.map(schema => propertySchemasFacet.of(schema, { source })),
+  definitionSeedsFacet.of(lastSyncedAtProp, { source }),
+  definitionSeedsFacet.of(syncSinceProp, { source }),
+  definitionSeedsFacet.of(pageTitleTemplateProp, { source }),
+  definitionSeedsFacet.of(bookTemplateProp, { source }),
+  definitionSeedsFacet.of(highlightTemplateProp, { source }),
+  definitionSeedsFacet.of(autoSyncIntervalProp, { source }),
+  definitionSeedsFacet.of(authorPageTypesProp, { source }),
+  definitionSeedsFacet.of(documentPageTypesProp, { source }),
+  definitionSeedsFacet.of(highlightTypesProp, { source }),
+  definitionSeedsFacet.of(connectedHintProp, { source }),
+  ...IMPORTED_PROPERTY_SCHEMAS.map(schema => definitionSeedsFacet.of(schema, { source })),
 
   propertyEditorOverridesFacet.of(connectedEditor, { source }),
   propertyEditorOverridesFacet.of(lastSyncedEditor, { source }),

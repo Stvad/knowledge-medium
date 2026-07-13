@@ -2,8 +2,8 @@ import {
   actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
   blockContentDecoratorsFacet,
   diagnosticsFacet,
-  ChangeScope, codecs, defineBlockType, defineProperty, definePropertyEditorOverride,
-  getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, propertySchemasFacet,
+  ChangeScope, defineBlockType, seedProperty, definePropertyEditorOverride,
+  getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, definitionSeedsFacet,
   showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
   type DiagnosticSnapshot,
   type DiagnosticSourceContribution,
@@ -83,52 +83,79 @@ const RESTART_EVENT = 'matrix:ingest:restart'
 // attributes promoted out of message *content* (which keep the `matrix:*`
 // namespace — see matrixPromotionOptions below).
 
-const homeserverProp = defineProperty<string>('matrix:homeserver', {
-  codec: codecs.string,
+const homeserverProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/homeserver',
+  revision: 1,
+  name: 'matrix:homeserver',
+  preset: 'string',
   defaultValue: 'https://matrix.org',
   changeScope: ChangeScope.BlockDefault,
 })
-const roomIdProp = defineProperty<string>('matrix:roomId', {
-  codec: codecs.string,
+const roomIdProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/room-id',
+  revision: 1,
+  name: 'matrix:roomId',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const autoStartProp = defineProperty<boolean>('matrix:autoStart', {
-  codec: codecs.boolean,
+const autoStartProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/auto-start',
+  revision: 1,
+  name: 'matrix:autoStart',
+  preset: 'boolean',
   defaultValue: true,
   changeScope: ChangeScope.BlockDefault,
 })
 // UI hint mirrored onto the prefs block so the settings panel can render
 // connectivity without subscribing to localStorage or the poll loop.
-const connectedHintProp = defineProperty<boolean>('matrix:connected', {
-  codec: codecs.boolean,
+const connectedHintProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/connected',
+  revision: 1,
+  name: 'matrix:connected',
+  preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.UserPrefs,
 })
 
 // Per-message event metadata. Reserved `matrix-event:*` namespace.
-const eventIdProp = defineProperty<string>('matrix-event:id', {
-  codec: codecs.string,
+const eventIdProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/event-id',
+  revision: 1,
+  name: 'matrix-event:id',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const eventRoomProp = defineProperty<string>('matrix-event:room', {
-  codec: codecs.string,
+const eventRoomProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/event-room',
+  revision: 1,
+  name: 'matrix-event:room',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const eventUrlProp = defineProperty<string | undefined>('matrix-event:url', {
-  codec: codecs.optionalString,
+const eventUrlProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/event-url',
+  revision: 1,
+  name: 'matrix-event:url',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const eventAuthorProp = defineProperty<string | undefined>('matrix-event:author', {
-  codec: codecs.optionalString,
+const eventAuthorProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/event-author',
+  revision: 1,
+  name: 'matrix-event:author',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const eventTimestampProp = defineProperty<number | undefined>('matrix-event:timestamp', {
-  codec: codecs.optionalNumber,
+const eventTimestampProp = seedProperty({
+  seedKey: 'system:matrix-chat-client/property/event-timestamp',
+  revision: 1,
+  name: 'matrix-event:timestamp',
+  preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
@@ -1276,15 +1303,15 @@ export default [
   typesFacet.of(matrixChatPrefsType, {source}),
   typesFacet.of(matrixMessageType, {source}),
 
-  propertySchemasFacet.of(homeserverProp, {source}),
-  propertySchemasFacet.of(roomIdProp, {source}),
-  propertySchemasFacet.of(autoStartProp, {source}),
-  propertySchemasFacet.of(connectedHintProp, {source}),
-  propertySchemasFacet.of(eventIdProp, {source}),
-  propertySchemasFacet.of(eventRoomProp, {source}),
-  propertySchemasFacet.of(eventUrlProp, {source}),
-  propertySchemasFacet.of(eventAuthorProp, {source}),
-  propertySchemasFacet.of(eventTimestampProp, {source}),
+  definitionSeedsFacet.of(homeserverProp, {source}),
+  definitionSeedsFacet.of(roomIdProp, {source}),
+  definitionSeedsFacet.of(autoStartProp, {source}),
+  definitionSeedsFacet.of(connectedHintProp, {source}),
+  definitionSeedsFacet.of(eventIdProp, {source}),
+  definitionSeedsFacet.of(eventRoomProp, {source}),
+  definitionSeedsFacet.of(eventUrlProp, {source}),
+  definitionSeedsFacet.of(eventAuthorProp, {source}),
+  definitionSeedsFacet.of(eventTimestampProp, {source}),
 
   propertyEditorOverridesFacet.of(connectedEditor, {source}),
   propertyEditorOverridesFacet.of(homeserverEditor, {source}),
