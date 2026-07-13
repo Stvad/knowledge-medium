@@ -56,8 +56,11 @@ export interface ProjectorHandle<Contribution = unknown> {
   contributionForBlockId(blockId: string): Contribution | undefined
   /** Synchronously upsert one contribution and publish — the
    *  schemas `addSchema` path registers before the subscription tick.
-   *  The explicit workspace plus lifecycle generation prevent an outgoing
-   *  async path from publishing through a container re-armed elsewhere. */
+   *  Requires a Repo-pinned projector generation: calling before the first
+   *  pin throws, while a disposed generation or a different workspace
+   *  no-ops. The explicit workspace plus lifecycle generation prevent an
+   *  outgoing async path from publishing through a container re-armed
+   *  elsewhere. */
   upsert(contribution: Contribution, blockId: string, workspaceId: string): void
   isPrimedFor(workspaceId: string): boolean
   whenPrimed(workspaceId: string): Promise<void>
@@ -373,6 +376,7 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
 }
 
 interface PinnedProjectorGeneration {
+  readonly token: number
   readonly workspaceId: string
   readonly descriptorIds: readonly string[]
   readonly dispose: Unsubscribe
@@ -395,6 +399,7 @@ export class ProjectorRuntime {
   private readonly lifecycles = new Map<string, ProjectorLifecycle<any, any>>()
   private readonly ctx: ProjectorBuildContext
   private pinnedGeneration: PinnedProjectorGeneration | null = null
+  private nextGenerationToken = 1
 
   constructor(private readonly repo: Repo) {
     this.ctx = {
@@ -405,6 +410,12 @@ export class ProjectorRuntime {
 
   get workspaceId(): string | null {
     return this.pinnedGeneration?.workspaceId ?? null
+  }
+
+  /** Monotonic identity of the current pin generation. Unlike workspaceId,
+   * this detects an away-and-back switch that reuses the same workspace. */
+  get generationToken(): number | null {
+    return this.pinnedGeneration?.token ?? null
   }
 
   /** Read handle onto a projector's state — for the service facades and
@@ -449,6 +460,7 @@ export class ProjectorRuntime {
       }
     }
     return {
+      token: this.nextGenerationToken++,
       workspaceId,
       descriptorIds: descriptors.map(descriptor => descriptor.id),
       dispose: disposeStarted,
@@ -518,8 +530,8 @@ export class ProjectorRuntime {
    *  *different* descriptor would keep serving the original. That holds
    *  today — the two projectors are kernel consts registered once, never
    *  overridden — and `definitionBlockProjectorFacet` is not last-wins, so
-   *  a duplicate id surfaces as a `startAll` double-start throw rather than
-   *  a silent swap. Revisit this caching if projectors ever become
+   *  a duplicate id surfaces as a validation error before any projector starts
+   *  rather than a silent swap. Revisit this caching if projectors ever become
    *  per-id-overridable (e.g. plugin-replaceable descriptors). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- container generics are erased at the registry boundary
   private obtain(projectorId: string): ProjectorLifecycle<any, any> | undefined {
@@ -544,6 +556,13 @@ export class ProjectorRuntime {
 function orderByDependencies(
   descriptors: readonly AnyDefinitionBlockProjector[],
 ): readonly AnyDefinitionBlockProjector[] {
+  const seenIds = new Set<string>()
+  for (const descriptor of descriptors) {
+    if (seenIds.has(descriptor.id)) {
+      throw new Error(`[ProjectorRuntime] duplicate projector id ${descriptor.id}`)
+    }
+    seenIds.add(descriptor.id)
+  }
   const byId = new Map(descriptors.map(d => [d.id, d]))
   const ordered: AnyDefinitionBlockProjector[] = []
   const done = new Set<string>()

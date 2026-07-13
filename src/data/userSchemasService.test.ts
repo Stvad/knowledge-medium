@@ -9,10 +9,12 @@ import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
+  definitionSeedsFacet,
   projectedPropertyDefinitionsFacet,
   propertySchemasFacet,
   valuePresetCoresFacet,
 } from '@/data/facets'
+import {seedProperty} from '@/data/propertySeeds'
 import {
   propertyChangeScopeProp,
   propertyDefaultProp,
@@ -21,7 +23,10 @@ import {
   seedKeyProp,
 } from '@/data/properties'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
-import type { UserSchemasService } from './userSchemasService'
+import {
+  USER_SCHEMAS_PROJECTOR_ID,
+  type UserSchemasService,
+} from './userSchemasService'
 import { Repo } from './repo'
 
 const WS = 'ws-user-schemas'
@@ -133,20 +138,86 @@ describe('UserSchemasService.addSchema', () => {
     })
   })
 
-  it('retains same-name definitions by field id during an immediate append', async () => {
+  it('rejects a name already claimed by a live definition', async () => {
     env = await setup()
     await env.service.addSchema({name: 'status', presetId: 'string'})
     const firstId = env.service.getSchemaBlockId('status')!
-    await env.service.addSchema({name: 'status', presetId: 'string'})
+    await expect(env.service.addSchema({name: 'status', presetId: 'string'}))
+      .rejects.toThrow('already claimed')
 
     const definitions = env.repo.propertyDefinitions?.definitionsByName.get('status') ?? []
-    expect(definitions.map(definition => definition.fieldId)).toContain(firstId)
-    expect(definitions).toHaveLength(2)
-    expect(env.service.getSchemaBlockId('status')).toBe(definitions[0]?.fieldId)
-    expect(env.repo.propertySchemaResolverFor(WS).resolve('status')).toEqual({
-      status: 'resolved',
-      schema: expect.objectContaining({fieldId: definitions[0]?.fieldId}),
+    expect(definitions).toHaveLength(1)
+    expect(definitions[0]?.fieldId).toBe(firstId)
+  })
+
+  it('rejects a synthesized seed name before its definition row exists', async () => {
+    env = await setup()
+    const reserved = seedProperty({
+      seedKey: 'system:test-plugin/property/reserved-name',
+      revision: 1,
+      name: 'reserved-name',
+      preset: 'string',
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
     })
+    env.repo.setRuntimeContributions(definitionSeedsFacet, 'test-reserved-name', [reserved])
+
+    expect(env.repo.propertyDefinitions?.seedsByName.get(reserved.name)).toEqual([reserved])
+    expect(env.repo.block(propertyDefinitionBlockId(WS, reserved.seedKey)).peek()).toBeUndefined()
+    await expect(env.service.addSchema({name: reserved.name, presetId: 'string'}))
+      .rejects.toThrow(reserved.seedKey)
+    expect(env.service.getSchemaBlockId(reserved.name)).toBeUndefined()
+  })
+
+  it('waits for the current workspace projector generation before creating', async () => {
+    env = await setup()
+    let release!: () => void
+    const primed = new Promise<void>(resolve => { release = resolve })
+    const handle = env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!
+    const whenPrimed = vi.spyOn(handle, 'whenPrimed').mockReturnValueOnce(primed)
+    const tx = vi.spyOn(env.repo, 'tx')
+
+    const pending = env.service.addSchema({name: 'after-prime', presetId: 'string'})
+    await Promise.resolve()
+    expect(tx).not.toHaveBeenCalled()
+
+    release()
+    await expect(pending).resolves.toMatchObject({name: 'after-prime'})
+    expect(whenPrimed).toHaveBeenCalledWith(WS)
+    expect(tx).toHaveBeenCalled()
+  })
+
+  it('rejects concurrent same-name creation before either call can persist', async () => {
+    env = await setup()
+    let release!: () => void
+    const primed = new Promise<void>(resolve => { release = resolve })
+    const handle = env.repo.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)!
+    vi.spyOn(handle, 'whenPrimed').mockReturnValueOnce(primed)
+
+    const first = env.service.addSchema({name: 'same-name', presetId: 'string'})
+    const second = env.service.addSchema({name: 'same-name', presetId: 'string'})
+    await expect(second).rejects.toThrow('already being created')
+    release()
+    await expect(first).resolves.toMatchObject({name: 'same-name'})
+    expect(env.repo.propertyDefinitions?.definitionsByName.get('same-name')).toHaveLength(1)
+  })
+
+  it('rolls back the child when schema metadata initialization fails', async () => {
+    env = await setup()
+    await env.repo.projectors.whenPrimed(WS)
+    const before = await env.repo.db.get<{count: number}>(
+      'SELECT COUNT(*) AS count FROM blocks WHERE parent_id = ?',
+      [env.repo.propertiesPageId],
+    )
+    vi.spyOn(env.repo, 'addTypeInTx').mockRejectedValueOnce(new Error('injected type failure'))
+
+    await expect(env.service.addSchema({name: 'rolled-back', presetId: 'string'}))
+      .rejects.toThrow('injected type failure')
+    const after = await env.repo.db.get<{count: number}>(
+      'SELECT COUNT(*) AS count FROM blocks WHERE parent_id = ?',
+      [env.repo.propertiesPageId],
+    )
+    expect(after.count).toBe(before.count)
   })
 
   it('rejects unknown preset ids', async () => {
@@ -436,28 +507,98 @@ describe('UserSchemasService workspace switch', () => {
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
-  // Regression for the in-flight-write cross-workspace leak surfaced in the
-  // #90 adversarial review: addSchema pins the active workspace before its
-  // first await, so a schema whose create/tx is still in flight when the user
-  // switches workspaces (dispose → restart the projector on the new
-  // workspace) is NOT published into the new workspace's 'user-data' bucket.
-  // The projector's `disposed` flag alone can't catch this — the per-projector
-  // container is reused and re-armed across the switch.
-  it('does not leak an in-flight addSchema into a newly-switched workspace', async () => {
+  it('translates a real projector-generation cancellation into an addSchema workspace error', async () => {
     env = await setup()
-    // Kick off addSchema; its synchronous prologue pins the W1 workspace
-    // before the first await (createChild).
-    const pending = env.service.addSchema({name: 'leaky', presetId: 'url'})
-
-    // The Repo pin synchronously tears down W1 and starts W2 projectors.
+    vi.spyOn(env.repo, 'subscribeBlocks').mockImplementation(() => vi.fn())
     const W2 = 'ws-user-schemas-2'
     env.repo.setActiveWorkspaceId(W2)
     await getOrCreatePropertiesPage(env.repo, W2)
+    const pending = env.service.addSchema({name: 'leaky', presetId: 'url'})
 
-    await pending
-    // The W1 schema must not surface in W2's runtime view.
+    env.repo.setActiveWorkspaceId('ws-user-schemas-3')
+
+    await expect(pending).rejects.toThrow('active workspace generation changed')
     expect(env.repo.propertySchemas.get('leaky')).toBeUndefined()
     expect(env.service.getSchemaBlockId('leaky')).toBeUndefined()
+  })
+
+  it('does not resolve success across an away-and-back generation switch during persistence', async () => {
+    env = await setup()
+    await env.repo.projectors.whenPrimed(WS)
+    const before = await env.repo.db.get<{count: number}>(
+      'SELECT COUNT(*) AS count FROM blocks WHERE parent_id = ?',
+      [env.repo.propertiesPageId],
+    )
+    const originalTx = env.repo.tx.bind(env.repo)
+    let release!: () => void
+    const persist = new Promise<void>(resolve => { release = resolve })
+    const tx = vi.spyOn(env.repo, 'tx')
+    tx.mockImplementationOnce(async (fn, opts) => {
+      await persist
+      return originalTx(fn, opts)
+    })
+
+    const pending = env.service.addSchema({name: 'late-switch', presetId: 'url'})
+    await vi.waitFor(() => { expect(tx).toHaveBeenCalled() })
+    env.repo.setActiveWorkspaceId('ws-user-schemas-2')
+    env.repo.setActiveWorkspaceId(WS)
+    const claimant = seedProperty({
+      seedKey: 'system:test-plugin/property/late-switch',
+      revision: 1,
+      name: 'late-switch',
+      preset: 'url',
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    env.repo.setRuntimeContributions(definitionSeedsFacet, 'test-late-switch', [claimant])
+    release()
+
+    await expect(pending).rejects.toThrow(
+      'active workspace generation changed before schema creation',
+    )
+    expect(env.repo.propertySchemas.get('late-switch')).toBe(claimant)
+    const after = await env.repo.db.get<{count: number}>(
+      'SELECT COUNT(*) AS count FROM blocks WHERE parent_id = ?',
+      [env.repo.propertiesPageId],
+    )
+    expect(after.count).toBe(before.count)
+  })
+
+  it('rolls back when a seed claims the name while creation waits for the write transaction', async () => {
+    env = await setup()
+    await env.repo.projectors.whenPrimed(WS)
+    const before = await env.repo.db.get<{count: number}>(
+      'SELECT COUNT(*) AS count FROM blocks WHERE parent_id = ?',
+      [env.repo.propertiesPageId],
+    )
+    const originalTx = env.repo.tx.bind(env.repo)
+    let release!: () => void
+    const persist = new Promise<void>(resolve => { release = resolve })
+    const tx = vi.spyOn(env.repo, 'tx')
+    tx.mockImplementationOnce(async (fn, opts) => {
+      await persist
+      return originalTx(fn, opts)
+    })
+
+    const pending = env.service.addSchema({name: 'late-seed', presetId: 'url'})
+    await vi.waitFor(() => { expect(tx).toHaveBeenCalled() })
+    const claimant = seedProperty({
+      seedKey: 'system:test-plugin/property/late-seed',
+      revision: 1,
+      name: 'late-seed',
+      preset: 'url',
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    env.repo.setRuntimeContributions(definitionSeedsFacet, 'test-late-seed', [claimant])
+    release()
+
+    await expect(pending).rejects.toThrow(claimant.seedKey)
+    const after = await env.repo.db.get<{count: number}>(
+      'SELECT COUNT(*) AS count FROM blocks WHERE parent_id = ?',
+      [env.repo.propertiesPageId],
+    )
+    expect(after.count).toBe(before.count)
   })
 })
 

@@ -232,6 +232,47 @@ describe('materializePropertySeeds', () => {
     )
   })
 
+  it('aborts the whole batch before writing when any deterministic id is poisoned', async () => {
+    const poisonedId = propertyDefinitionBlockId(WS, seed.seedKey)
+    const untouchedId = propertyDefinitionBlockId(WS, seedWithoutDefault.seedKey)
+    await repo.tx(tx => tx.create({
+      id: poisonedId,
+      workspaceId: WS,
+      parentId: propertiesPageBlockId(WS),
+      orderKey: 'a0',
+      content: 'wrong provenance',
+      properties: {
+        ...canonicalPropertySeedProperties(seed),
+        [seedKeyProp.name]: 'system:test/property/impostor',
+      },
+    }), {scope: ChangeScope.BlockDefault})
+
+    await expect(materializePropertySeeds(repo, WS, [seedWithoutDefault, seed]))
+      .rejects.toThrow(`seed id ${poisonedId} does not carry expected seed key ${seed.seedKey}`)
+    expect(await repo.db.getOptional('SELECT id FROM blocks WHERE id = ?', [untouchedId])).toBeNull()
+  })
+
+  it('revalidates every seed in the write transaction before materializing any', async () => {
+    await materializePropertySeeds(repo, WS, [seed])
+    const poisonedId = propertyDefinitionBlockId(WS, seed.seedKey)
+    const untouchedId = propertyDefinitionBlockId(WS, seedWithoutDefault.seedKey)
+    const originalGetAll = repo.db.getAll.bind(repo.db)
+    vi.spyOn(repo.db, 'getAll').mockImplementationOnce(async (sql, params) => {
+      const rows = await originalGetAll(sql, params)
+      await repo.tx(tx => tx.update(poisonedId, {
+        properties: {
+          ...canonicalPropertySeedProperties(seed),
+          [seedKeyProp.name]: 'system:test/property/raced-impostor',
+        },
+      }), {scope: ChangeScope.BlockDefault})
+      return rows
+    })
+
+    await expect(materializePropertySeeds(repo, WS, [seed, seedWithoutDefault]))
+      .rejects.toThrow(`seed id ${poisonedId} does not carry expected seed key ${seed.seedKey}`)
+    expect(await repo.db.getOptional('SELECT id FROM blocks WHERE id = ?', [untouchedId])).toBeNull()
+  })
+
   it('never restores a tombstoned deterministic-id occupant with missing provenance', async () => {
     const id = propertyDefinitionBlockId(WS, seed.seedKey)
     const properties = canonicalPropertySeedProperties(seed)

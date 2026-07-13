@@ -52,6 +52,8 @@ describe('ProjectorRuntime workspace pin and readiness', () => {
     const projectors = new ProjectorRuntime(repo)
 
     projectors.pinWorkspace('ws-1')
+    const firstGeneration = projectors.generationToken
+    expect(firstGeneration).not.toBeNull()
     let firstSettled = false
     const firstPrime = projectors.whenPrimed('ws-1').then(() => { firstSettled = true })
     await Promise.resolve()
@@ -69,6 +71,7 @@ describe('ProjectorRuntime workspace pin and readiness', () => {
 
     const outgoingCallback = callbacks[0]!
     projectors.pinWorkspace('ws-2')
+    expect(projectors.generationToken).not.toBe(firstGeneration)
     const callsAfterSwitch = setRuntimeContributions.mock.calls.length
     outgoingCallback([row('ws-1', 'late-w1', 'late')])
     expect(setRuntimeContributions).toHaveBeenCalledTimes(callsAfterSwitch)
@@ -163,5 +166,22 @@ describe('ProjectorRuntime workspace pin and readiness', () => {
     facetRuntime = resolveFacetRuntimeSync([])
     projectors.pinWorkspace('ws-1')
     expect(projectors.handle(descriptor.id)).toBeUndefined()
+  })
+
+  it('rejects duplicate projector ids instead of silently selecting one', () => {
+    const duplicate = {...descriptor, metaType: 'other-meta'}
+    const repo = {
+      facetRuntime: resolveFacetRuntimeSync([
+        definitionBlockProjectorFacet.of(descriptor),
+        definitionBlockProjectorFacet.of(duplicate),
+      ]),
+      subscribeBlocks: vi.fn(() => vi.fn()),
+      setRuntimeContributions: vi.fn(),
+    } as unknown as Repo
+    const projectors = new ProjectorRuntime(repo)
+
+    expect(() => projectors.pinWorkspace('ws-1'))
+      .toThrow('[ProjectorRuntime] duplicate projector id test-projector')
+    expect(repo.subscribeBlocks).not.toHaveBeenCalled()
   })
 })

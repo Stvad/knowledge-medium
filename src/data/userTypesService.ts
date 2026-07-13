@@ -148,8 +148,6 @@ export const userTypesProjector: DefinitionBlockProjector<Block, TypeContributio
 export class UserTypesService {
   constructor(private readonly repo: Repo) {}
 
-  /** Start the type projector for the active workspace. Returns a
-   *  disposer; throws on double-start / no active workspace. */
   /** Look up the source block id for a published type id. Returns
    *  undefined for kernel/plugin types (no backing block) or ids that
    *  aren't user-data registered. */

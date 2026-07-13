@@ -286,7 +286,13 @@ export class FacetRuntime {
     if (workspaceId === this.activeWorkspaceId) return
     this.activeWorkspaceId = workspaceId
     for (const [facetId, buckets] of this.runtimeContributionsByFacet) {
-      if (![...buckets.values()].some(bucket => bucket.workspaceId !== undefined)) continue
+      let hasWorkspaceScopedBucket = false
+      for (const bucket of buckets.values()) {
+        if (bucket.workspaceId === undefined) continue
+        hasWorkspaceScopedBucket = true
+        break
+      }
+      if (!hasWorkspaceScopedBucket) continue
       this.cache.delete(facetId)
       this.notifyFacetListeners(facetId)
     }

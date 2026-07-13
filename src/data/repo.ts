@@ -566,18 +566,14 @@ export class Repo {
    *  `userSchemas` / `userTypes` facades read their state through it. */
   readonly projectors: ProjectorRuntime = new ProjectorRuntime(this)
 
-  /** UserSchemasService singleton bound to this Repo. Owns the
-   *  user-data contribution bucket on `propertySchemasFacet`; sharing
-   *  one instance means imperative call sites (the AddPropertyForm,
-   *  the Roam importer) all hit the same in-memory list rather than
-   *  each fresh instance clobbering the bucket from an empty start.
-   *  The Repo pin starts the `'user-schemas'` projector before callers
-   *  can perform workspace work. */
+  /** Thin facade over the Repo-owned `'user-schemas'` projector. The
+   *  projector runtime owns its lifecycle, contribution state, and indexes;
+   *  the Repo pin starts its workspace generation before callers can perform
+   *  workspace work. */
   readonly userSchemas: UserSchemasService = new UserSchemasService(this)
 
-  /** UserTypesService singleton bound to this Repo. Symmetric to
-   *  `userSchemas`: owns the user-data contribution bucket on
-   *  `typesFacet`. The `'user-types'` projector depends on
+  /** Thin facade over the Repo-owned `'user-types'` projector. The projector
+   *  runtime owns its lifecycle, contribution state, and indexes. It depends on
    *  `'user-schemas'` (started first) to resolve block-type:properties
    *  refList entries to live property schemas. */
   readonly userTypes: UserTypesService = new UserTypesService(this)

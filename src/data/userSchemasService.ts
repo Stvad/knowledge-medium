@@ -34,6 +34,7 @@ import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import {
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
+import {createChild as createChildMutator} from '@/data/mutators'
 
 /** Projector id for the user-defined property-schema bridge. */
 export const USER_SCHEMAS_PROJECTOR_ID = 'user-schemas'
@@ -152,21 +153,23 @@ export interface AddSchemaArgs {
   config?: unknown
 }
 
-/** Thin facade over the `'user-schemas'` projector. Holds no state of
- *  its own — the lifecycle + the contribution list / id maps live in
- *  the projector's `ProjectorHandle`, reached through `repo.projectors`.
- *  Singleton on `Repo` so imperative call sites (AddPropertyForm, the
- *  Roam importer) all hit the Repo-pin-owned projector generation. */
+/** Thin facade over the `'user-schemas'` projector. Projector lifecycle,
+ * contribution state, and indexes live in the `ProjectorHandle`, reached
+ * through `repo.projectors`; this facade owns only in-flight name reservations
+ * that serialize same-Repo creation attempts. Singleton on `Repo` so
+ * imperative callers share both the projector generation and reservations. */
 export class UserSchemasService {
+  private readonly pendingCreations = new Set<string>()
+
   constructor(private readonly repo: Repo) {}
 
   private get handle() {
     return this.repo.projectors.handle<ProjectedPropertyDefinition>(USER_SCHEMAS_PROJECTOR_ID)
   }
 
-  /** Look up the property-schema block id for a registered user-data
-   *  schema name. Returns undefined for kernel/plugin schemas (which
-   *  don't have backing blocks) or names that aren't registered. */
+  /** Look up the selected live definition block id for a schema name.
+   * Returns undefined while a seed exists only in synthesis (its deterministic
+   * row has not materialized yet), or when the name has no live definition. */
   getSchemaBlockId(name: string): string | undefined {
     return this.repo.propertyDefinitions?.definitionsByName.get(name)?.[0]?.fieldId
   }
@@ -200,6 +203,22 @@ export class UserSchemasService {
   async addSchema(args: AddSchemaArgs): Promise<AnyPropertySchema> {
     const name = args.name.trim()
     if (!name) throw new Error('[addSchema] name is required')
+
+    // Capture the generation before the first await. Creation is a
+    // definition-identity write: synthesis is available synchronously, but
+    // existing user definitions are complete only after this workspace's
+    // projector has delivered its first tick.
+    const workspaceId = this.repo.activeWorkspaceId
+    const propertiesPageId = this.repo.propertiesPageId
+    const generationToken = this.repo.projectors.generationToken
+    if (
+      !workspaceId ||
+      !propertiesPageId ||
+      generationToken === null ||
+      this.repo.projectors.workspaceId !== workspaceId
+    ) {
+      throw new Error('[addSchema] no active workspace; properties page unavailable')
+    }
 
     const preset = this.repo.valuePresetCores.get(args.presetId)
     if (!preset) {
@@ -238,40 +257,82 @@ export class UserSchemasService {
       ? preset.configCodec.encode(parsedConfig as never)
       : {}
 
-    const workspaceId = this.repo.activeWorkspaceId
-    const propertiesPageId = this.repo.propertiesPageId
-    if (!workspaceId || !propertiesPageId) {
-      throw new Error('[addSchema] no active workspace; properties page unavailable')
+    const reservationKey = `${workspaceId}\u0000${name}`
+    if (this.pendingCreations.has(reservationKey)) {
+      throw new Error(`[addSchema] name ${JSON.stringify(name)} is already being created`)
     }
+    this.pendingCreations.add(reservationKey)
+    try {
+      const handle = this.handle
+      if (!handle) throw new Error('[addSchema] user-schemas projector unavailable')
+      const assertGeneration = (phase: 'creation' | 'registration'): void => {
+        if (
+          this.repo.activeWorkspaceId !== workspaceId ||
+          this.repo.projectors.generationToken !== generationToken ||
+          !handle.isPrimedFor(workspaceId)
+        ) {
+          throw new Error(`[addSchema] active workspace generation changed before schema ${phase}`)
+        }
+      }
+      const assertNameAvailable = (): void => {
+        const registry = this.repo.propertyDefinitions
+        if (!registry || registry.workspaceId !== workspaceId) {
+          throw new Error('[addSchema] property definitions unavailable for active workspace')
+        }
+        const definition = registry.definitionsByName.get(name)?.[0]
+        const declaration = registry.seedsByName.get(name)?.[0]
+        if (definition || declaration) {
+          const claimant = declaration
+            ? `seed ${JSON.stringify(declaration.seedKey)}`
+            : `definition ${JSON.stringify(definition!.fieldId)}`
+          throw new Error(`[addSchema] name ${JSON.stringify(name)} is already claimed by ${claimant}`)
+        }
+      }
+      try {
+        await handle.whenPrimed(workspaceId)
+      } catch (error) {
+        if (
+          this.repo.activeWorkspaceId !== workspaceId ||
+          this.repo.projectors.generationToken !== generationToken
+        ) {
+          throw new Error(
+            '[addSchema] active workspace generation changed before schema creation',
+            {cause: error},
+          )
+        }
+        throw error
+      }
+      assertGeneration('creation')
+      assertNameAvailable()
 
-    const childId: string = await this.repo.mutate.createChild({
-      parentId: propertiesPageId,
-      position: {kind: 'last'},
-    })
+      const childId = await this.repo.tx(async tx => {
+        // Recheck after acquiring the write transaction and immediately before
+        // return. A queued write must not commit against a projector generation
+        // or seed/name registry that changed after the optimistic preflight.
+        assertGeneration('creation')
+        assertNameAvailable()
+        const id = await tx.run(createChildMutator, {
+          parentId: propertiesPageId,
+          position: {kind: 'last'},
+        })
+        // Lift property-schema type membership through Repo.addTypeInTx
+        // so types invariants stay consistent (block_types row + the
+        // typesProp lift). The remaining property-schema fields are
+        // written directly since they're scoped to this block.
+        await this.repo.addTypeInTx(tx, id, PROPERTY_SCHEMA_TYPE, {})
+        await tx.setProperty(id, propertyNameProp, name)
+        await tx.setProperty(id, presetIdProp, args.presetId)
+        await tx.setProperty(id, presetConfigProp, persistConfig as Record<string, unknown>)
+        assertGeneration('creation')
+        assertNameAvailable()
+        return id
+      }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
 
-    await this.repo.tx(async tx => {
-      // Lift property-schema type membership through Repo.addTypeInTx
-      // so types invariants stay consistent (block_types row + the
-      // typesProp lift). The remaining property-schema fields are
-      // written directly since they're scoped to this block.
-      await this.repo.addTypeInTx(tx, childId, PROPERTY_SCHEMA_TYPE, {})
-      await tx.setProperty(childId, propertyNameProp, name)
-      await tx.setProperty(childId, presetIdProp, args.presetId)
-      await tx.setProperty(childId, presetConfigProp, persistConfig as Record<string, unknown>)
-    }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
-
-    // Register synchronously, before returning — but only if the workspace
-    // didn't change while the create/tx was in flight. The schema block is
-    // durably persisted under `workspaceId`'s Properties page; publishing it
-    // into the wrong workspace-scoped bucket after a switch would corrupt that
-    // bucket's snapshot. The projector's generation guard protects subscription
-    // callbacks; this imperative async path additionally pins at the call site.
-    // Skipping is safe: when `workspaceId` is active again, its subscription
-    // re-materialises the block. The subscription otherwise arrives at an
-    // idempotent state.
-    if (this.repo.activeWorkspaceId === workspaceId) {
+      assertGeneration('registration')
       this.appendUserSchema(newSchema, childId, workspaceId)
+      return newSchema
+    } finally {
+      this.pendingCreations.delete(reservationKey)
     }
-    return newSchema
   }
 }

@@ -195,9 +195,12 @@ const parseProbeProperties = (row: SeedProbeRow): Record<string, unknown> => {
  * trigger/access-gate wiring intentionally lands in a later sub-slice.
  *
  * The background pass never repairs payloads: live stale rows only log, and a
- * tombstone restore preserves its existing bag. Missing definitions are minted
- * beneath the already-ensured deterministic Properties page in one Automation
- * transaction with pristine systemMint timestamps. */
+ * tombstone restore preserves its existing bag. The batched probe validates
+ * every occupied deterministic id before entering the write transaction; one
+ * poisoned id intentionally aborts the whole batch rather than partially
+ * materializing a declaration set whose identity is suspect. Missing
+ * definitions are minted beneath the already-ensured deterministic Properties
+ * page in one Automation transaction with pristine systemMint timestamps. */
 export const materializePropertySeeds = async (
   repo: Repo,
   workspaceId: string,
@@ -243,15 +246,23 @@ export const materializePropertySeeds = async (
   let restored = 0
   const parentId = propertiesPageBlockId(workspaceId)
   await repo.tx(async tx => {
-    for (const seed of pending) {
+    const currentById = new Map<string, Awaited<ReturnType<typeof tx.get>>>()
+    // Revalidate the complete declaration set under the same write lock before
+    // the first mutation. The outside batch is only a fast no-work probe; it
+    // cannot authorize a partial write if another actor poisons a previously
+    // valid deterministic id between the probe and this transaction.
+    for (const seed of seeds) {
       const id = propertyDefinitionBlockId(workspaceId, seed.seedKey)
-      // Recheck under the write lock: another trigger/device-local task may
-      // have materialized the deterministic id after the batched probe.
       const current = await tx.get(id)
       if (current) {
         assertSeedWorkspace(id, workspaceId, current.workspaceId)
         assertSeedProvenance(id, workspaceId, seed.seedKey, current.properties)
       }
+      currentById.set(id, current)
+    }
+    for (const seed of seeds) {
+      const id = propertyDefinitionBlockId(workspaceId, seed.seedKey)
+      const current = currentById.get(id) ?? null
       if (current && !current.deleted) continue
       if (current?.deleted) {
         await tx.restore(id, undefined, {skipMetadata: true})
