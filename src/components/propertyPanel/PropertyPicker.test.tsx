@@ -31,8 +31,10 @@ const activeOption = () =>
 beforeEach(() => {
   store.schemas = new Map([['apple', schema('apple')], ['apricot', schema('apricot')]])
   store.byFacetId = new Map<string, unknown>([
-    // The picker reads the joined registry (cores ⋈ presentations by id), so
-    // 'string' must be present in both facets for the joined preset to appear.
+    // Mirror the runtime shape: the picker reads the joined registry
+    // (cores ⋈ presentations by id), so seed both facets. This test asserts
+    // suggestion navigation/reset, not preset display, so the preset contents
+    // aren't what's under test.
     [valuePresetCoresFacet.id, new Map([['string', {id: 'string', build: () => ({type: 'string'}), defaultValue: ''}]])],
     [valuePresetPresentationsFacet.id, new Map([['string', {id: 'string', label: 'Text', Glyph: () => null}]])],
     [propertyEditorOverridesFacet.id, new Map()],
