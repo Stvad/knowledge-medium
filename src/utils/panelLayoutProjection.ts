@@ -14,6 +14,7 @@ import { keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
 import { keysImmediatelyAfter } from '@/data/orderKeyPlacement'
 import {
   buildLayoutFromSlots,
+  flattenSlots,
   parseLayout,
   preserveHashQueryParams,
   type LayoutSlot,
@@ -197,8 +198,30 @@ const activePanelIdAfterReconcile = (
   return undefined
 }
 
-const flattenLayoutSlots = (slots: readonly LayoutSlot[]): string[] =>
-  slots.flatMap(slot => slot.kind === 'leaf' ? [slot.blockId] : flattenLayoutSlots(slot.children))
+// URL-borne sublayout columns (the parenthesized grammar) can't be
+// materialized as panel rows yet — that lands in a later slice. Degrade
+// them at the URL boundary to their flattened leaves so an inbound hash
+// like `#ws/(a/b)` never crashes bootstrap: a sublayout inside a column
+// splices its leaves into that column's stack; a column that IS a
+// sublayout becomes a stack of its leaves (or a plain leaf if single).
+const hasSublayoutSlots = (slots: readonly LayoutSlot[]): boolean =>
+  slots.some(slot =>
+    slot.kind === 'sublayout' ||
+    (slot.kind === 'stack' && hasSublayoutSlots(slot.children)))
+
+const collectLeafSlots = (slots: readonly LayoutSlot[]): LayoutSlot[] =>
+  slots.flatMap(slot => slot.kind === 'leaf'
+    ? [slot]
+    : collectLeafSlots(slot.kind === 'stack' ? slot.children : slot.columns))
+
+const degradeSublayoutSlots = (slots: readonly LayoutSlot[]): LayoutSlot[] =>
+  slots.flatMap(slot => {
+    if (slot.kind === 'leaf') return [slot]
+    const leaves = collectLeafSlots([slot])
+    if (leaves.length === 0) return []
+    if (leaves.length === 1) return [leaves[0]]
+    return [{kind: 'stack' as const, children: leaves}]
+  })
 
 const sameLayoutSlots = (left: readonly LayoutSlot[], right: readonly LayoutSlot[]): boolean =>
   left.length === right.length && left.every((slot, index) => {
@@ -206,6 +229,7 @@ const sameLayoutSlots = (left: readonly LayoutSlot[], right: readonly LayoutSlot
     if (!other || slot.kind !== other.kind) return false
     if (slot.kind === 'leaf' && other.kind === 'leaf') return slot.blockId === other.blockId
     if (slot.kind === 'stack' && other.kind === 'stack') return sameLayoutSlots(slot.children, other.children)
+    if (slot.kind === 'sublayout' && other.kind === 'sublayout') return sameLayoutSlots(slot.columns, other.columns)
     return false
   })
 
@@ -217,12 +241,17 @@ export const layoutSlotsFromRows = (
 
   const visit = (row: BlockData): LayoutSlot | null => {
     if (isPanelStackRow(row)) {
-      return {
-        kind: 'stack',
-        children: (childrenByParent.get(row.id) ?? [])
-          .map(visit)
-          .filter((slot): slot is LayoutSlot => Boolean(slot)),
-      }
+      const children = (childrenByParent.get(row.id) ?? [])
+        .map(visit)
+        .filter((slot): slot is LayoutSlot => Boolean(slot))
+      // Normalize degenerate stacks: a singleton stack IS its child and an
+      // empty stack is nothing. This keeps rows-with-singleton-stack equal
+      // to the leaf hash (no destructive un-stack reconcile on reload — the
+      // stack row survives silently and insertSidebarStackedPanel can still
+      // join it) and keeps `//` empty segments out of the built hash.
+      if (children.length === 0) return null
+      if (children.length === 1) return children[0]
+      return {kind: 'stack', children}
     }
     const blockId = panelBlockId(row)
     return blockId ? {kind: 'leaf', blockId} : null
@@ -234,7 +263,7 @@ export const layoutSlotsFromRows = (
 }
 
 export const layoutBlockIdsFromRows = (rootId: string, rows: readonly BlockData[]): string[] =>
-  flattenLayoutSlots(layoutSlotsFromRows(rootId, rows))
+  flattenSlots(layoutSlotsFromRows(rootId, rows))
 
 const loadSubtreeRowsInTx = async (
   tx: Tx,
@@ -539,7 +568,6 @@ export const deletePanelRow = async (
   repo: Repo,
   panelId: string,
 ): Promise<void> => {
-  panelHistory.clear(panelId)
   await repo.tx(async tx => {
     const row = await tx.get(panelId)
     if (!row) return
@@ -564,6 +592,9 @@ export const deletePanelRow = async (
       await tx.setProperty(layoutSession.id, activePanelIdProp, nextActivePanelId)
     }
   }, {scope: ChangeScope.UiState, description: 'close panel'})
+  // Clear in-memory history only after the tx committed — a rollback must
+  // leave the row's history intact with the row.
+  panelHistory.clear(panelId)
 }
 
 export const reconcilePanelRows = async (
@@ -574,7 +605,8 @@ export const reconcilePanelRows = async (
   const targetSlots: LayoutSlot[] = targetSlotsOrBlockIds.map(slot =>
     typeof slot === 'string' ? {kind: 'leaf', blockId: slot} : slot,
   )
-  const targetBlockIds = flattenLayoutSlots(targetSlots)
+  const targetBlockIds = flattenSlots(targetSlots)
+  const deletedPanelRowIds: string[] = []
 
   await repo.tx(async tx => {
     const parent = await tx.get(layoutSessionBlock.id)
@@ -609,8 +641,8 @@ export const reconcilePanelRows = async (
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
 
     for (const slot of rowsToDelete) {
-      panelHistory.clear(slot.row.id)
       await tx.delete(slot.row.id)
+      deletedPanelRowIds.push(slot.row.id)
     }
 
     let targetLeafIndex = 0
@@ -627,6 +659,13 @@ export const reconcilePanelRows = async (
           })
           await materializeSlots(target.children, stackId)
           continue
+        }
+        if (target.kind === 'sublayout') {
+          // Unreachable internal assertion: applyCurrentLayoutUrl degrades
+          // URL-borne sublayouts before reconciling, and layoutSlotsFromRows
+          // never produces them. Reaching here means a caller handed
+          // reconcilePanelRows a sublayout directly — a bug, not user input.
+          throw new Error('reconcilePanelRows: sublayout slots are not materializable yet')
         }
 
         const blockId = target.blockId
@@ -666,6 +705,15 @@ export const reconcilePanelRows = async (
 
     await repairActivePanelId(await loadSubtreeRowsInTx(tx, parent))
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
+
+  // Clear in-memory history only after the tx committed: ANY in-tx throw
+  // (materialization, stack cleanup, active-panel repair) rolls the row
+  // deletes back, and the non-transactional history must survive with them.
+  // (clear is a plain Map delete and cannot throw in production; a throw here
+  // would leak the remaining ids' history, which only the probe test does.)
+  for (const id of deletedPanelRowIds) {
+    panelHistory.clear(id)
+  }
 }
 
 export const retargetPanelBlockIds = async (
@@ -717,11 +765,15 @@ export const applyCurrentLayoutUrl = async ({
   if (route.workspaceId && route.workspaceId !== workspaceId) {
     return {kind: 'ignored'}
   }
+  // Degrade sublayout columns BEFORE they can reach row materialization
+  // (which would throw), then rewrite the URL truthfully below.
+  const degraded = hasSublayoutSlots(route.slots)
+  const targetSlots = degraded ? degradeSublayoutSlots(route.slots) : route.slots
 
   const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id}).load()
   const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
 
-  if (route.slots.length === 0) {
+  if (targetSlots.length === 0) {
     if (currentSlots.length > 0) {
       replaceHash?.(preserveHashQueryParams(buildLayoutFromSlots(workspaceId, currentSlots), hash))
       return {kind: 'normalized'}
@@ -729,8 +781,12 @@ export const applyCurrentLayoutUrl = async ({
     return {kind: 'empty'}
   }
 
-  const layoutAlreadyMatches = sameLayoutSlots(currentSlots, route.slots)
-  await reconcilePanelRows(repo, layoutSessionBlock, route.slots)
+  const layoutAlreadyMatches = sameLayoutSlots(currentSlots, targetSlots)
+  await reconcilePanelRows(repo, layoutSessionBlock, targetSlots)
+  if (degraded) {
+    replaceHash?.(preserveHashQueryParams(buildLayoutFromSlots(workspaceId, targetSlots), hash))
+    return {kind: 'normalized'}
+  }
   return {kind: layoutAlreadyMatches ? 'noop' : 'applied'}
 }
 
@@ -793,7 +849,12 @@ export class PanelLayoutProjection {
       this.handleRowsChanged(rows)
     })
     this.unsubscribeUrl = this.subscribeToUrl(() => {
-      void this.applyCurrentUrl()
+      // Never let an inbound-URL failure escape as an unhandled rejection —
+      // the queue itself already swallows prior failures, but the returned
+      // promise from THIS application can still reject.
+      this.applyCurrentUrl().catch(error => {
+        console.error('PanelLayoutProjection: applying URL change failed', error)
+      })
     })
   }
 
@@ -835,9 +896,15 @@ export class PanelLayoutProjection {
     if (sameLayoutSlots(this.lastSlots, slots)) return
     this.lastSlots = slots
 
-    const nextHash = buildLayoutFromSlots(this.workspaceId, slots)
-    if (this.getHash() === nextHash) return
-    this.pushHash(nextHash)
+    // Echo guard by ROUTE EQUIVALENCE, not raw string compare: the current
+    // hash may carry per-slot context (`;view=…`) or `?query` params that
+    // rows can't represent — a raw compare would push over them, erasing
+    // the user's context and double-pushing history entries. sameLayoutSlots
+    // compares leaves by blockId only, so a context-only difference already
+    // counts as equivalent (the hash keeps the context).
+    const current = parseLayout(this.getHash())
+    if (current.workspaceId === this.workspaceId && sameLayoutSlots(current.slots, slots)) return
+    this.pushHash(buildLayoutFromSlots(this.workspaceId, slots))
     this.listeners.notify()
   }
 }
