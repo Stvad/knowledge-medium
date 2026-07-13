@@ -318,6 +318,13 @@ export class Repo {
   /** Atomic active-workspace definition snapshot. Null at stage 0 before a
    * workspace pin; identity resolution is unavailable in that state. */
   private _propertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null
+  /** The immediately-previous active workspace's snapshot, retained across one
+   * switch so an in-flight read/tx that began for that workspace still resolves
+   * against its REAL definitions (faithful shadow/winner info) instead of a
+   * partial rebuild. Bounded to one workspace: anything older is genuinely
+   * foreign and fails closed. Rotated by `applyTypesAndSchemas` on a pin to a
+   * different workspace. */
+  private _previousPropertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null
   /** Original declaration-name multiplicity retained so both stage-0 and
    * snapshot-bound plain-schema fallbacks reject seed-owned names. */
   private _propertySeedNameCounts: ReadonlyMap<string, number> = new Map()
@@ -518,9 +525,17 @@ export class Repo {
    * workspace (the transaction layer owns that fact); resolve() itself accepts
    * only a handle/name and is therefore immune to ambient workspace switches. */
   propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
+    // Serve the active workspace, or the immediately-previous one still retained
+    // across a switch, from its faithful snapshot. Any other (genuinely foreign)
+    // workspace fails closed — we never synthesise a partial seeds-only snapshot
+    // for a workspace whose definitions aren't loaded (which could resolve a
+    // shadowed seed as a winner). The stage-0/active boot window (null snapshot +
+    // allow-plain) still uses the transitional resolver.
     const snapshot = this._propertyDefinitionRegistry?.workspaceId === workspaceId
       ? this._propertyDefinitionRegistry
-      : this.facetBridge.propertyDefinitionRegistryForWorkspace(workspaceId)
+      : this._previousPropertyDefinitionRegistry?.workspaceId === workspaceId
+        ? this._previousPropertyDefinitionRegistry
+        : null
     return propertySchemaResolverForWorkspace(
       snapshot,
       workspaceId,
@@ -692,6 +707,15 @@ export class Repo {
       ) => {
         this._types = types
         this._propertySchemas = propertySchemas
+        // Retain the outgoing workspace's faithful snapshot when pinning a
+        // DIFFERENT workspace, so an in-flight read/tx that began for it still
+        // resolves against real definitions. A same-workspace rebuild (contribution
+        // change) or a re-prime doesn't rotate the slot.
+        const incomingWorkspaceId = propertyDefinitions?.workspaceId ?? null
+        const currentWorkspaceId = this._propertyDefinitionRegistry?.workspaceId ?? null
+        if (this._propertyDefinitionRegistry && incomingWorkspaceId !== currentWorkspaceId) {
+          this._previousPropertyDefinitionRegistry = this._propertyDefinitionRegistry
+        }
         this._propertyDefinitionRegistry = propertyDefinitions
         this._propertySeedNameCounts = propertySeedNameCounts
       },
@@ -1325,8 +1349,7 @@ export class Repo {
       }
     }
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
-    const capturedPropertyDefinitionFactory =
-      this.facetBridge.capturePropertyDefinitionRegistryFactory()
+    const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
     try {
       result = await runTx({
         db: this.db,
@@ -1343,10 +1366,16 @@ export class Repo {
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        // Serve the tx's active-at-start workspace, or the retained previous one,
+        // from their frozen snapshots; any other workspace resolves null (fail
+        // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
+        // resolution for the workspace the tx is operating on.
         propertyDefinitionRegistryForWorkspace:
           workspaceId => capturedActivePropertyDefinitions?.workspaceId === workspaceId
             ? capturedActivePropertyDefinitions
-            : capturedPropertyDefinitionFactory(workspaceId),
+            : capturedPreviousPropertyDefinitions?.workspaceId === workspaceId
+              ? capturedPreviousPropertyDefinitions
+              : null,
         propertySchemaWorkspaceId: this._activeWorkspaceId,
         propertySeedNameCounts: this._propertySeedNameCounts,
         // Undo/redo replays skip the same-tx processor pass so a

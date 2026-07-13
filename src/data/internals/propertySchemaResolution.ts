@@ -83,9 +83,10 @@ export const unavailablePropertySchemaResolver: PropertySchemaResolver =
   new IdentityUnavailablePropertySchemaResolver()
 
 /** Wrap a schema so its codec's `decode` falls back to the schema default
- *  instead of throwing. Used for a PLUGIN handle read before this workspace's
- *  projection has primed: the stored value is almost always the plugin's own
- *  (decodes cleanly), but a rare pre-existing/synced user definition could
+ *  instead of throwing. Used for a PLUGIN handle read against a workspace whose
+ *  faithful projection isn't loaded (the active workspace before it primes, or a
+ *  genuinely foreign workspace): the stored value is almost always the plugin's
+ *  own (decodes cleanly), but a rare pre-existing/synced user definition could
  *  shadow the name with a value the plugin's (strict) codec rejects — degrade
  *  that to the default rather than throw in a synchronous render. `encode` is
  *  unchanged, so a write still goes through the plugin's own codec. */
@@ -103,9 +104,28 @@ const withDecodeFallback = <T>(schema: PropertySchema<T>): PropertySchema<T> => 
   },
 })
 
-class TransitionalLegacyPropertySchemaResolver
+/** The fallback resolver for a workspace with no faithful registry snapshot —
+ * either the boot window (stage-0, or the active workspace before its projection
+ * primes) or a genuinely foreign workspace (neither active nor the retained
+ * immediately-previous one). In both, we can't consult the workspace's projected
+ * definitions, so name-based lookups can't be trusted. But a code-owned seed
+ * HANDLE is a workspace-independent identity — registered from the same code on
+ * every device — so it still resolves: a KERNEL handle directly (unshadowable, no
+ * user schema ever existed at its name), a PLUGIN handle via a decode fallback
+ * (its name CAN collide with an unloaded user definition, so a shadow-incompatible
+ * stored value degrades to the default instead of throwing). This is what lets
+ * cross-workspace seed writes/reads work — type tagging, ref backfill, a plugin
+ * seeding a note/asset in a non-active target workspace (daily-notes, attachments,
+ * srs). `allowUnregisteredPlainSchemas` is the only boot-window/foreign
+ * difference: the active workspace admits its ambient plain schemas; a foreign
+ * workspace fails an unclaimed plain name closed (we can't confirm it's a winner
+ * there). A name that collides with a seed declaration always fails closed. */
+class HandleTrustingPropertySchemaResolver
   extends IdentityUnavailablePropertySchemaResolver {
-  constructor(private readonly seedNameCounts: ReadonlyMap<string, number>) {
+  constructor(
+    private readonly seedNameCounts: ReadonlyMap<string, number>,
+    private readonly allowUnregisteredPlainSchemas: boolean,
+  ) {
     super()
   }
 
@@ -116,8 +136,8 @@ class TransitionalLegacyPropertySchemaResolver
       return super.resolveBoundary(schema)
     }
     if (isPropertyHandle(schema)) {
-      // A code-owned handle is authoritative before this workspace's projection
-      // has primed: decode the stored value with the handle's own codec rather
+      // A code-owned handle is authoritative even without this workspace's
+      // projection: decode the stored value with the handle's own codec rather
       // than returning the schema default (the isCollapsed/types boot-window
       // bug). KERNEL handles are unshadowable — registered at Repo construction
       // on every device, so no user schema ever existed at their name — so their
@@ -139,31 +159,37 @@ class TransitionalLegacyPropertySchemaResolver
         reason: seedCount > 1 ? 'ambiguous' : 'shadowed',
       }
     }
-    return {status: 'available', schema}
+    // An unclaimed plain schema: trusted only in the active-workspace boot
+    // window. For a foreign workspace we can't confirm it's the winner (its
+    // definitions aren't loaded), so it fails closed.
+    return this.allowUnregisteredPlainSchemas
+      ? {status: 'available', schema}
+      : {status: 'identity-unavailable', reason: 'registry-not-workspace-keyed'}
   }
 }
 
-/** Select the boundary resolver for a target row workspace. Both stage-0 and
- * active-workspace transitional fallback reject original seed-name claims;
- * foreign/inactive snapshots fail closed for arbitrary plain schemas. */
+/** Select the boundary resolver for a target row workspace. A snapshot that
+ * matches the row's workspace resolves faithfully; otherwise the handle-trusting
+ * fallback covers the boot window (allowing the active workspace's ambient plain
+ * schemas) and genuinely foreign workspaces (code-owned handles only), never
+ * synthesising a partial snapshot that would resolve an unloaded plain name. */
 export const propertySchemaResolverForWorkspace = (
   snapshot: PropertyDefinitionRegistrySnapshot | null,
   workspaceId: string,
   propertySeedNameCounts: ReadonlyMap<string, number> = new Map(),
   allowUnregisteredPlainSchemas = false,
 ): PropertySchemaResolver => {
-  if (!snapshot) {
-    return allowUnregisteredPlainSchemas
-      ? new TransitionalLegacyPropertySchemaResolver(propertySeedNameCounts)
-      : unavailablePropertySchemaResolver
-  }
-  return snapshot.workspaceId === workspaceId
-    ? new SnapshotPropertySchemaResolver(
+  if (snapshot && snapshot.workspaceId === workspaceId) {
+    return new SnapshotPropertySchemaResolver(
       snapshot,
       propertySeedNameCounts,
       allowUnregisteredPlainSchemas,
     )
-    : unavailablePropertySchemaResolver
+  }
+  return new HandleTrustingPropertySchemaResolver(
+    propertySeedNameCounts,
+    allowUnregisteredPlainSchemas,
+  )
 }
 
 const resolved = <T>(

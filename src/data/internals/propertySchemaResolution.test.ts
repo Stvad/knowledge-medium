@@ -39,7 +39,9 @@ describe('property schema identity resolution', () => {
     // Transitional resolver: active-workspace row whose definition projection
     // has not primed yet (the boot window). `null` snapshot + allow-plain.
     const transitional = propertySchemaResolverForWorkspace(null, 'ws-1', new Map(), true)
-    // Fully-unavailable resolver: a foreign/inactive workspace snapshot.
+    // Foreign/inactive workspace: no faithful snapshot and NOT the boot window,
+    // so unclaimed plain schemas fail closed — but code-owned seed handles still
+    // resolve (they're workspace-independent identities).
     const foreign = propertySchemaResolverForWorkspace(null, 'ws-1', new Map(), false)
 
     const kernelHandle: PropertyHandle<string> = {
@@ -93,8 +95,24 @@ describe('property schema identity resolution', () => {
       })
     })
 
-    it('keeps a foreign/inactive workspace fail-closed even for a kernel handle', () => {
+    it('resolves code-owned seed handles on a foreign workspace but fails plain schemas closed', () => {
+      // A kernel handle is a workspace-independent identity — it resolves cross-
+      // workspace so a kernel property write/read lands on a block whose workspace
+      // isn't the active one (type tagging, ref backfill, a mid-flight navigate).
       expect(foreign.resolveBoundary(kernelHandle)).toEqual({
+        status: 'available',
+        schema: kernelHandle,
+      })
+      // A plugin handle likewise resolves (with the decode fallback) so a plugin
+      // can seed a note/asset into a non-active target workspace.
+      const plugin = foreign.resolveBoundary(pluginHandle)
+      expect(plugin.status).toBe('available')
+      if (plugin.status !== 'available') throw new Error('expected available')
+      expect(plugin.schema.codec.decode('stored')).toBe('stored')
+      expect(plugin.schema.codec.decode(42)).toBe(pluginHandle.defaultValue)
+      // An unclaimed plain schema, unlike the boot window, fails closed — its
+      // winner can't be confirmed without the foreign workspace's definitions.
+      expect(foreign.resolveBoundary(entry)).toEqual({
         status: 'identity-unavailable',
         reason: 'registry-not-workspace-keyed',
       })

@@ -567,7 +567,7 @@ describe('typed property identity boundary', () => {
     expect(repo.block('fallback-target').peek()!.properties[fallback.name]).toBe(6)
   })
 
-  it('rejects a retained projected schema after its workspace-scoped bucket is cleared', async () => {
+  it('resolves the immediately-previous workspace, then fails closed once it is foreign', async () => {
     const projected = defineProperty('retained-workspace-schema', {
       codec: codecs.number,
       defaultValue: 0,
@@ -617,12 +617,28 @@ describe('typed property identity boundary', () => {
       [],
       {workspaceId: WS},
     )
+    // WS is now the immediately-previous workspace. Its faithful registry is
+    // retained across this one switch, so an in-flight read/tx that began for WS
+    // still resolves against its real definitions rather than failing closed or
+    // synthesising a partial snapshot. (`repo.propertySchemas` is the ACTIVE
+    // workspace's ambient map, so it no longer carries WS's entry.)
     expect(repo.propertySchemas.get(projected.name)).toBeUndefined()
+    expect(repo.propertySchemaResolverFor(WS).resolveBoundary(retained)).toEqual({
+      status: 'available',
+      schema: expect.objectContaining({
+        name: projected.name,
+        fieldId: 'field-retained-workspace-schema',
+        workspaceId: WS,
+      }),
+    })
+
+    // Switch once more: WS is now two workspaces back — genuinely foreign — so it
+    // fails closed instead of resolving against a stale/partial snapshot.
+    repo.setActiveWorkspaceId('ws-property-boundary-c')
     expect(repo.propertySchemaResolverFor(WS).resolveBoundary(retained)).toEqual({
       status: 'identity-unavailable',
       reason: 'registry-not-workspace-keyed',
     })
-
     await expect(repo.tx(
       tx => tx.setProperty('retained-workspace-target', retained, 7),
       {scope: ChangeScope.BlockDefault},
@@ -677,7 +693,7 @@ describe('typed property identity boundary', () => {
       .toBe(42)
   })
 
-  it('never applies an active-workspace resolver to a row in another workspace', async () => {
+  it('resolves a code-owned seed handle on a foreign workspace but fails plain schemas closed', async () => {
     const repo = await setup()
     const legacyLookalike = defineProperty(shadowed.name, {
       codec: codecs.string,
@@ -694,72 +710,49 @@ describe('typed property identity boundary', () => {
       'test-cross-workspace-registered-legacy',
       [registeredLegacy],
     )
-    const activeProjectedBehavior = defineProperty(registeredLegacy.name, {
-      codec: codecs.number,
-      defaultValue: 8,
-      changeScope: ChangeScope.BlockDefault,
-    })
-    repo.setRuntimeContributions(
-      projectedPropertyDefinitionsFacet,
-      'test-active-projected-legacy-name',
-      [{
-        metadata: {
-          ...winnerMetadata,
-          fieldId: 'field-active-projected-legacy-name',
-          name: registeredLegacy.name,
-        },
-        schema: activeProjectedBehavior,
-      }],
-      {workspaceId: WS},
-    )
-    const activeProjected = repo.propertySchemas.get(registeredLegacy.name)
-    if (!activeProjected) throw new Error('expected active projected behavior')
+    // A row in `ws-other`, a workspace that is neither active nor the retained
+    // previous one — its projected definitions are not loaded. A code-owned seed
+    // HANDLE is a workspace-independent identity, so it still resolves there (a
+    // plugin seed via a decode fallback), which is what lets a plugin seed a note
+    // or asset into a non-active target workspace. Plain name lookups, by
+    // contrast, can't be trusted without the workspace's definitions.
     await repo.tx(
       tx => tx.create({
         id: 'other-workspace-target',
         workspaceId: 'ws-other',
         parentId: null,
         orderKey: 'a0',
-        properties: {[shadowed.name]: 'foreign'},
+        properties: {
+          [shadowed.name]: shadowed.codec.encode('stored-seed'),
+          [registeredLegacy.name]: 'before',
+        },
       }),
       {scope: ChangeScope.BlockDefault},
     )
 
-    expect(repo.block('other-workspace-target').get(shadowed)).toBe('foreign')
+    // The seed handle resolves: the read decodes the stored value (not the
+    // default), and a write lands under the seed's own codec.
+    expect(repo.block('other-workspace-target').get(shadowed)).toBe('stored-seed')
     await repo.tx(
       tx => tx.setProperty('other-workspace-target', shadowed, 'changed'),
       {scope: ChangeScope.BlockDefault},
     )
-    expect(repo.block('other-workspace-target').peek()!.properties.status).toBe('changed')
+    expect(repo.block('other-workspace-target').get(shadowed)).toBe('changed')
+
+    // A plain lookalike collides with the seed name (shadowed) and a registered
+    // plain schema has no faithful winner here — both fail closed. Reads return
+    // the schema default, never the foreign workspace's stored value.
     expect(repo.block('other-workspace-target').get(legacyLookalike)).toBe('legacy-default')
-    await expect(repo.tx(
-      tx => tx.setProperty('other-workspace-target', legacyLookalike, 'changed'),
-      {scope: ChangeScope.BlockDefault},
-    )).rejects.toMatchObject({
-      name: 'PropertySchemaIdentityError',
-      reason: 'shadowed',
-    })
-    await repo.tx(
-      tx => tx.update('other-workspace-target', {
-        properties: {status: 'foreign', [registeredLegacy.name]: 'before'},
-      }),
-      {scope: ChangeScope.BlockDefault},
-    )
-    expect(repo.block('other-workspace-target').get(registeredLegacy)).toBe('before')
-    expect(repo.block('other-workspace-target').get(activeProjected)).toBe(8)
-    await expect(repo.tx(
-      tx => tx.setProperty('other-workspace-target', activeProjected, 9),
-      {scope: ChangeScope.BlockDefault},
-    )).rejects.toMatchObject({
-      name: 'PropertySchemaIdentityError',
-      reason: 'registry-not-workspace-keyed',
-    })
-    await repo.tx(
-      tx => tx.setProperty('other-workspace-target', registeredLegacy, 'after'),
-      {scope: ChangeScope.BlockDefault},
-    )
-    expect(repo.block('other-workspace-target').peek()!.properties[registeredLegacy.name])
-      .toBe('after')
-    expect(repo.block('other-workspace-target').peek()!.properties.status).toBe('foreign')
+    expect(repo.block('other-workspace-target').get(registeredLegacy)).toBe('registered-default')
+    for (const schema of [legacyLookalike, registeredLegacy]) {
+      await expect(repo.tx(
+        tx => tx.setProperty('other-workspace-target', schema, 'changed'),
+        {scope: ChangeScope.BlockDefault},
+      )).rejects.toMatchObject({
+        name: 'PropertySchemaIdentityError',
+      })
+    }
+    // The registered-legacy raw value is untouched.
+    expect(repo.block('other-workspace-target').peek()!.properties[registeredLegacy.name]).toBe('before')
   })
 })

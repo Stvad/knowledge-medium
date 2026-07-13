@@ -37,7 +37,6 @@ import {
   buildUnboundPropertySchemas,
 } from '@/data/propertyDefinitionRegistry'
 import type {
-  CapturedFacetContributions,
   Facet,
   FacetRuntime,
   WorkspaceRuntimeContributionOptions,
@@ -256,26 +255,6 @@ export class FacetBridge {
     return this.valuePresetsListeners.add(listener)
   }
 
-  private buildPropertyDefinitionsForWorkspace(
-    reader: CapturedFacetContributions,
-    workspaceId: string,
-  ): PropertyDefinitionRegistrySnapshot {
-    const types = reader.readForWorkspace(typesFacet, workspaceId)
-    const legacySchemas = mergeLiftedSchemas(
-      reader.readForWorkspace(propertySchemasFacet, workspaceId),
-      types,
-    )
-    return buildPropertyDefinitionRegistry({
-      workspaceId,
-      legacySchemas,
-      projectedDefinitions: reader.readForWorkspace(
-        projectedPropertyDefinitionsFacet,
-        workspaceId,
-      ),
-      seeds: reader.readForWorkspace(definitionSeedsFacet, workspaceId),
-    })
-  }
-
   private unavailableActiveWorkspaceId(): string | null {
     const projector = this.target.getPropertyDefinitionProjector()
     return this.activeWorkspaceId
@@ -286,40 +265,6 @@ export class FacetBridge {
 
   private canBuildPropertyDefinitionsForWorkspace(workspaceId: string): boolean {
     return workspaceId !== this.unavailableActiveWorkspaceId()
-  }
-
-  /** Live row-workspace lookup for synchronous Block reads. */
-  propertyDefinitionRegistryForWorkspace(
-    workspaceId: string,
-  ): PropertyDefinitionRegistrySnapshot | null {
-    return this.runtime && this.canBuildPropertyDefinitionsForWorkspace(workspaceId)
-      ? this.buildPropertyDefinitionsForWorkspace(this.runtime, workspaceId)
-      : null
-  }
-
-  /** Freeze a tx-start-stable view of the contribution buckets and hand back a
-   * per-workspace registry factory over it. The snapshot never consults the
-   * live runtime, but each workspace's registry is built lazily on first
-   * request and memoised: the tx serves the active workspace from its own
-   * separately-captured registry, so a same-workspace transaction never invokes
-   * this factory and pays only the shallow bucket copy. */
-  capturePropertyDefinitionRegistryFactory(): (
-    workspaceId: string,
-  ) => PropertyDefinitionRegistrySnapshot | null {
-    const runtime = this.runtime
-    if (!runtime) return () => null
-    const unavailableActiveWorkspaceId = this.unavailableActiveWorkspaceId()
-    const frozen = runtime.captureContributions()
-    const cache = new Map<string, PropertyDefinitionRegistrySnapshot>()
-
-    return workspaceId => {
-      if (workspaceId === unavailableActiveWorkspaceId) return null
-      const cached = cache.get(workspaceId)
-      if (cached) return cached
-      const snapshot = this.buildPropertyDefinitionsForWorkspace(frozen, workspaceId)
-      cache.set(workspaceId, snapshot)
-      return snapshot
-    }
   }
 
   /** Rebuild step list. Order matters: value presets run before property

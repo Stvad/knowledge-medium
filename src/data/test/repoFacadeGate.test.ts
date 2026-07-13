@@ -151,6 +151,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
 const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   _activeWorkspaceId: 'data field',
   _propertyDefinitionRegistry: 'data field',
+  _previousPropertyDefinitionRegistry: 'data field',
   _propertySeedNameCounts: 'data field',
   _propertyEditorOverrides: 'data field',
   _propertySchemas: 'data field',
