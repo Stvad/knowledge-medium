@@ -268,7 +268,7 @@ describe('Repo type membership orchestration', () => {
     expect(repo.block('set').peek()!.properties.types).toBe('winner-set')
   })
 
-  it('resolves renamed type properties and preserves an existing canonical value', async () => {
+  it('pins a divergent-named type-property seed to its declared name and preserves an existing value', async () => {
     const declared = seedProperty({
       seedKey: 'system:test/property/status',
       revision: 1,
@@ -283,6 +283,9 @@ describe('Repo type membership orchestration', () => {
     ]))
     repo.setActiveWorkspaceId('ws-1')
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-seed', [declared])
+    // The projected row carries a divergent stored name; seeds are non-renamable
+    // (rename deferred to #288), so it is ignored and the property stays at its
+    // declared name — the type section and writes resolve under 'status'.
     repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-renamed', [{
       metadata: {
         fieldId,
@@ -296,17 +299,17 @@ describe('Repo type membership orchestration', () => {
       },
     }], {workspaceId: 'ws-1'})
     await createBlock('empty')
-    await createBlock('existing', {'renamed-status': null})
+    await createBlock('existing', {status: null})
 
     await repo.addType('empty', 'todo', {status: 'initial'})
     await repo.addType('existing', 'todo', {status: 'replacement'})
 
     expect(repo.block('empty').peek()!.properties).toMatchObject({
       types: ['todo'],
-      'renamed-status': 'initial',
+      status: 'initial',
     })
-    expect(repo.block('empty').peek()!.properties.status).toBeUndefined()
-    expect(repo.block('existing').peek()!.properties['renamed-status']).toBeNull()
+    expect(repo.block('empty').peek()!.properties['renamed-status']).toBeUndefined()
+    expect(repo.block('existing').peek()!.properties.status).toBeNull()
   })
 
   it('throws for unknown type ids and unknown initial value schemas', async () => {
