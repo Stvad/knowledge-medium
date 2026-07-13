@@ -12,6 +12,7 @@
 
 import {
   ChangeScope,
+  normalizePresetDefault,
   type AnyPropertySchema,
   type AnyValuePresetCore,
   type BlockData,
@@ -109,7 +110,7 @@ const tryBuildSchema = (
     codec,
     defaultValue: hasStoredDefault
       ? codec.decode(row.properties[propertyDefaultProp.name])
-      : preset.defaultValue,
+      : normalizePresetDefault(preset, codec),
     changeScope: metadata.changeScope,
   }
 }

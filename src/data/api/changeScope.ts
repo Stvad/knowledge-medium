@@ -28,6 +28,12 @@ export const ChangeScope = {
 
 export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
 
+const CHANGE_SCOPE_VALUES = new Set<unknown>(Object.values(ChangeScope))
+
+/** Runtime guard for persisted/config-provided scope strings. */
+export const isChangeScope = (value: unknown): value is ChangeScope =>
+  CHANGE_SCOPE_VALUES.has(value)
+
 /** `tx_context.source` values written by `repo.tx`. Sync-applied writes leave
  *  `source = NULL`; row_events triggers `COALESCE` it to `'sync'`. The string
  *  `'sync'` is therefore reserved for the trigger output and is not assignable

@@ -1,6 +1,6 @@
-import {ChangeScope} from './api/changeScope'
+import {ChangeScope, isChangeScope} from './api/changeScope'
 import type {PropertyHandle} from './api/propertySchema'
-import type {ValuePresetCore} from './api/valuePresetCore'
+import {normalizePresetDefault, type ValuePresetCore} from './api/valuePresetCore'
 import {kernelValuePresetCoresById} from './kernelValuePresetCores'
 
 type KernelPresetCoreMap = typeof kernelValuePresetCoresById
@@ -88,8 +88,6 @@ const isJsonValue = (value: unknown, active = new Set<object>()): boolean => {
   return valid
 }
 
-const changeScopes = new Set<unknown>(Object.values(ChangeScope))
-
 /** Runtime boundary for public/dynamic extension contributions. This mirrors
  * the constructor invariants so one malformed contribution is dropped before
  * it can abort a shared materialization pass. */
@@ -109,7 +107,7 @@ export const isPropertySeedDeclaration = (
   typeof value.codec.encode === 'function' &&
   typeof value.codec.decode === 'function' &&
   own(value, 'defaultValue') &&
-  changeScopes.has(value.changeScope) &&
+  isChangeScope(value.changeScope) &&
   typeof value.hidden === 'boolean' &&
   typeof value.hasExplicitDefault === 'boolean' &&
   own(value, 'encodedDefaultValue') &&
@@ -181,7 +179,7 @@ export function seedProperty<T, TConfig = void>(
 
   const codec = core.build(config)
   const hasExplicitDefault = own(args, 'defaultValue')
-  let defaultValue = core.defaultValue
+  let defaultValue = normalizePresetDefault(core, codec)
   let encodedDefaultValue: unknown = undefined
   if (hasExplicitDefault) {
     encodedDefaultValue = codec.encode(args.defaultValue as T)

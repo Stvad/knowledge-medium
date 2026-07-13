@@ -1,4 +1,5 @@
 import {CodecError, codecs, type Codec, type EnumOption, type RefCodecOptions} from './api/codecs'
+import {ChangeScope} from './api/changeScope'
 import {definePresetCore, type AnyValuePresetCore} from './api/valuePresetCore'
 
 /** Validates ref / refList preset config below the UI layer. */
@@ -86,7 +87,21 @@ export const enumValuePresetCore = definePresetCore<string, EnumPresetConfig>({
     defaultValue: '',
     defaultConfig: {options: []},
     configCodec: enumConfigCodec,
-  })
+})
+const changeScopeOptions = [
+  {value: ChangeScope.BlockDefault, label: 'Block default'},
+  {value: ChangeScope.UiState, label: 'UI state'},
+  {value: ChangeScope.UserPrefs, label: 'User preferences'},
+  {value: ChangeScope.Automation, label: 'Automation'},
+  {value: ChangeScope.References, label: 'References'},
+] as const
+/** Internal metadata core. Unlike the user-facing enum preset, writes do not
+ * accept the empty "unset" sentinel: every definition must name a real tx scope. */
+export const changeScopeValuePresetCore = definePresetCore<ChangeScope>({
+  id: 'change-scope',
+  build: () => codecs.enum(changeScopeOptions),
+  defaultValue: ChangeScope.BlockDefault,
+})
 export const refValuePresetCore = definePresetCore<string, RefCodecOptions>({
     id: 'ref',
     build: cfg => codecs.ref(cfg),
@@ -131,6 +146,12 @@ export const jsonValuePresetCore = definePresetCore<unknown>({
 export const optionalJsonValuePresetCore = definePresetCore<unknown | undefined>({
   id: 'optional-json', build: () => codecs.optionalIdentity<unknown>(), defaultValue: undefined,
 })
+/** Internal metadata codec for `property-schema:default`. Unlike
+ * `optional-json`, stored null is a meaningful encoded default and must not
+ * collapse to absence; unlike `json`, an absent field defaults to undefined. */
+export const rawJsonValuePresetCore = definePresetCore<unknown | undefined>({
+  id: 'raw-json', build: () => codecs.unsafeIdentity<unknown | undefined>(), defaultValue: undefined,
+})
 
 /** Literal-keyed map keeps the value/config type owned by each kernel preset
  * id available to typed authoring APIs such as seedProperty. */
@@ -142,6 +163,7 @@ export const kernelValuePresetCoresById = {
   date: dateValuePresetCore,
   url: urlValuePresetCore,
   enum: enumValuePresetCore,
+  'change-scope': changeScopeValuePresetCore,
   ref: refValuePresetCore,
   refList: refListValuePresetCore,
   'optional-string': optionalStringValuePresetCore,
@@ -150,6 +172,7 @@ export const kernelValuePresetCoresById = {
   'optional-ref': optionalRefValuePresetCore,
   json: jsonValuePresetCore,
   'optional-json': optionalJsonValuePresetCore,
+  'raw-json': rawJsonValuePresetCore,
 } as const satisfies Readonly<Record<string, AnyValuePresetCore>>
 
 export const kernelValuePresetCores: readonly AnyValuePresetCore[] =

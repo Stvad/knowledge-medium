@@ -1,9 +1,9 @@
 /**
- * Kernel + UI-state property descriptors. Each export is a
- * `PropertySchema<T>` (data-layer definition with codec + default +
- * change scope). Per-name editor overrides for the rare property that
- * needs one live separately under `propertyEditorOverridesFacet`
- * (Phase 3). See spec §4.1.1 / §5.6 / §6.
+ * Kernel + UI-state property handles. Each export is a code-owned seed
+ * declaration whose codec is built through its ValuePreset core; the same
+ * object remains the typed, workspace-agnostic handle passed to block.get/set.
+ * Per-definition editor overrides for the rare property that needs one live
+ * separately under `propertyEditorOverridesFacet` during the B3 cutover.
  *
  * Migration note (1.6): legacy creator helpers (`stringProperty`,
  * `boolProp`, `objectProperty`, etc.) returned a record-shape
@@ -11,38 +11,47 @@
  * shape is flat — `block.set(schema, value)` / `block.get(schema)`
  * encode/decode through the codec; storage holds the encoded value
  * directly. Helpers like `aliasProp(['x','y'])` (which embedded a
- * default value into the descriptor) are gone — the schema's
+ * default value into the descriptor) are gone — the handle's
  * `defaultValue` is the single source of truth, callers pass values
  * via `block.set(schema, value)`.
  */
 import type { Block } from './block'
 import type { BlockData, ChangedRow } from '@/data/api'
+import {ChangeScope, type PropertySchema} from '@/data/api'
 import {
-  ChangeScope,
-  codecs,
-  defineProperty,
-  type PropertySchema,
-} from '@/data/api'
+  seedProperty,
+  type AnyPropertySeedDeclaration,
+  type PropertySeedDeclaration,
+} from './propertySeeds'
 import { outlineRenderScopeId } from '@/utils/renderScope'
 
 // ──── UI-state schemas (changeScope: UiState) ────
 
-export const showPropertiesProp = defineProperty<boolean>('system:showProperties', {
-  codec: codecs.boolean,
-  defaultValue: false,
+export const showPropertiesProp = seedProperty({
+  seedKey: 'system:kernel-data/property/show-properties',
+  revision: 1,
+  name: 'system:showProperties',
+  preset: 'boolean',
   changeScope: ChangeScope.UiState,
+  hidden: true,
 })
 
-export const isEditingProp = defineProperty<boolean>('isEditing', {
-  codec: codecs.boolean,
-  defaultValue: false,
+export const isEditingProp = seedProperty({
+  seedKey: 'system:kernel-data/property/is-editing',
+  revision: 1,
+  name: 'isEditing',
+  preset: 'boolean',
   changeScope: ChangeScope.UiState,
+  hidden: true,
 })
 
-export const topLevelBlockIdProp = defineProperty<string | undefined>('topLevelBlockId', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
+export const topLevelBlockIdProp = seedProperty({
+  seedKey: 'system:kernel-data/property/top-level-block-id',
+  revision: 1,
+  name: 'topLevelBlockId',
+  preset: 'optional-string',
   changeScope: ChangeScope.UiState,
+  hidden: true,
 })
 
 export interface FocusedBlockLocation {
@@ -52,21 +61,28 @@ export interface FocusedBlockLocation {
 
 // Focus is persisted as a rendered location. Retired legacy `focusedBlockId`
 // keys are ignored so stale state cannot compete with this scoped value.
-export const focusedBlockLocationProp = defineProperty<FocusedBlockLocation | undefined>('focusedBlockLocation', {
-  codec: codecs.optionalIdentity<FocusedBlockLocation>(),
-  defaultValue: undefined,
+export const focusedBlockLocationProp = seedProperty<FocusedBlockLocation | undefined>({
+  seedKey: 'system:kernel-data/property/focused-block-location',
+  revision: 1,
+  name: 'focusedBlockLocation',
+  preset: 'optional-json',
+  changeScope: ChangeScope.UiState,
+  hidden: true,
+})
+
+export const activePanelIdProp = seedProperty({
+  seedKey: 'system:kernel-data/property/active-panel-id',
+  revision: 1,
+  name: 'activePanelId',
+  preset: 'optional-string',
   changeScope: ChangeScope.UiState,
 })
 
-export const activePanelIdProp = defineProperty<string | undefined>('activePanelId', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
-  changeScope: ChangeScope.UiState,
-})
-
-export const scrollTopProp = defineProperty<number | undefined>('scrollTop', {
-  codec: codecs.optionalNumber,
-  defaultValue: undefined,
+export const scrollTopProp = seedProperty({
+  seedKey: 'system:kernel-data/property/scroll-top',
+  revision: 1,
+  name: 'scrollTop',
+  preset: 'optional-number',
   changeScope: ChangeScope.UiState,
 })
 
@@ -85,16 +101,22 @@ export interface EditorSelectionState {
   y?: number
 }
 
-export const editorSelection = defineProperty<EditorSelectionState | undefined>('editorSelection', {
-  codec: codecs.optionalIdentity<EditorSelectionState>(),
-  defaultValue: undefined,
+export const editorSelection = seedProperty<EditorSelectionState | undefined>({
+  seedKey: 'system:kernel-data/property/editor-selection',
+  revision: 1,
+  name: 'editorSelection',
+  preset: 'optional-json',
   changeScope: ChangeScope.UiState,
+  hidden: true,
 })
 
-export const editorFocusRequestProp = defineProperty<number>('editorFocusRequest', {
-  codec: codecs.number,
-  defaultValue: 0,
+export const editorFocusRequestProp = seedProperty({
+  seedKey: 'system:kernel-data/property/editor-focus-request',
+  revision: 1,
+  name: 'editorFocusRequest',
+  preset: 'number',
   changeScope: ChangeScope.UiState,
+  hidden: true,
 })
 
 export interface BlockSelectionState {
@@ -102,48 +124,69 @@ export interface BlockSelectionState {
   anchorBlockId: string | null
 }
 
-export const selectionStateProp = defineProperty<BlockSelectionState>('blockSelectionState', {
-  codec: codecs.unsafeIdentity<BlockSelectionState>(),
+export const selectionStateProp = seedProperty<BlockSelectionState>({
+  seedKey: 'system:kernel-data/property/block-selection-state',
+  revision: 1,
+  name: 'blockSelectionState',
+  preset: 'json',
   defaultValue: {selectedBlockIds: [], anchorBlockId: null},
   changeScope: ChangeScope.UiState,
+  hidden: true,
 })
 
 // ──── Block-content schemas (changeScope: BlockDefault) ────
 
-export const isCollapsedProp = defineProperty<boolean>('system:collapsed', {
-  codec: codecs.boolean,
-  defaultValue: false,
+export const isCollapsedProp = seedProperty({
+  seedKey: 'system:kernel-data/property/system:collapsed',
+  revision: 1,
+  name: 'system:collapsed',
+  preset: 'boolean',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
+
+export const typesProp = seedProperty({
+  seedKey: 'system:kernel-data/property/types',
+  revision: 1,
+  name: 'types',
+  preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const typesProp = defineProperty<readonly string[]>('types', {
-  codec: codecs.list(codecs.string),
-  defaultValue: [],
+export const rendererProp = seedProperty({
+  seedKey: 'system:kernel-data/property/renderer',
+  revision: 1,
+  name: 'renderer',
+  preset: 'optional-string',
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
-export const rendererProp = defineProperty<string | undefined>('renderer', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
+export const rendererNameProp = seedProperty({
+  seedKey: 'system:kernel-data/property/renderer-name',
+  revision: 1,
+  name: 'rendererName',
+  preset: 'optional-string',
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
-export const rendererNameProp = defineProperty<string | undefined>('rendererName', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
+export const createdAtProp = seedProperty({
+  seedKey: 'system:kernel-data/property/created-at',
+  revision: 1,
+  name: 'createdAt',
+  preset: 'optional-number',
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
-export const createdAtProp = defineProperty<number | undefined>('createdAt', {
-  codec: codecs.optionalNumber,
-  defaultValue: undefined,
+export const sourceBlockIdProp = seedProperty({
+  seedKey: 'system:kernel-data/property/source-block-id',
+  revision: 1,
+  name: 'sourceBlockId',
+  preset: 'optional-string',
   changeScope: ChangeScope.BlockDefault,
-})
-
-export const sourceBlockIdProp = defineProperty<string | undefined>('sourceBlockId', {
-  codec: codecs.optionalString,
-  defaultValue: undefined,
-  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 // ──── extension block fields ────
@@ -151,91 +194,107 @@ export const sourceBlockIdProp = defineProperty<string | undefined>('sourceBlock
 /** Human-readable extension name. Kept on the block instead of inside
  *  executable extension code so disabled extensions can still be
  *  described in settings without compiling them. */
-export const extensionNameProp = defineProperty<string>('extension:name', {
-  codec: codecs.string,
-  defaultValue: '',
+export const extensionNameProp = seedProperty({
+  seedKey: 'system:kernel-data/property/extension-name',
+  revision: 1,
+  name: 'extension:name',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Optional extension description displayed in the settings surface. */
-export const extensionDescriptionProp = defineProperty<string>('extension:description', {
-  codec: codecs.string,
-  defaultValue: '',
+export const extensionDescriptionProp = seedProperty({
+  seedKey: 'system:kernel-data/property/extension-description',
+  revision: 1,
+  name: 'extension:description',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
 // ──── property-schema kernel type fields (user-defined-properties §4) ────
 
 /** User-supplied property name on a `'property-schema'` block. */
-export const propertyNameProp = defineProperty<string>('property-schema:name', {
-  codec: codecs.string,
-  defaultValue: '',
+export const propertyNameProp = seedProperty({
+  seedKey: 'system:kernel-data/property/property-schema-name',
+  revision: 1,
+  name: 'property-schema:name',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Preset id on a `'property-schema'` block — matches a registered
  *  `ValuePreset.id` (and the codec's `type` for codecs built by that
  *  preset). */
-export const presetIdProp = defineProperty<string>('property-schema:preset', {
-  codec: codecs.string,
-  defaultValue: '',
+export const presetIdProp = seedProperty({
+  seedKey: 'system:kernel-data/property/property-schema-preset',
+  revision: 1,
+  name: 'property-schema:preset',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Preset-specific config JSON. Stored as opaque JSON via the
  *  `unsafeIdentity` codec; validation happens in the preset's
  *  `configCodec.decode` at registration time. */
-export const presetConfigProp = defineProperty<Record<string, unknown>>('property-schema:config', {
-  codec: codecs.unsafeIdentity<Record<string, unknown>>('object'),
+export const presetConfigProp = seedProperty<Record<string, unknown>>({
+  seedKey: 'system:kernel-data/property/property-schema-config',
+  revision: 1,
+  name: 'property-schema:config',
+  preset: 'json',
   defaultValue: {},
   changeScope: ChangeScope.BlockDefault,
+  hidden: true,
 })
 
 /** Durable write semantics for a definition. Existing user schemas omit this
  * field and retain BlockDefault behavior. */
-export const propertyChangeScopeProp = defineProperty<ChangeScope>('property-schema:change-scope', {
-  codec: codecs.enum([
-    {value: ChangeScope.BlockDefault, label: 'Block default'},
-    {value: ChangeScope.UiState, label: 'UI state'},
-    {value: ChangeScope.UserPrefs, label: 'User preferences'},
-    {value: ChangeScope.Automation, label: 'Automation'},
-    {value: ChangeScope.References, label: 'References'},
-  ]),
-  defaultValue: ChangeScope.BlockDefault,
+export const propertyChangeScopeProp = seedProperty({
+  seedKey: 'system:kernel-data/property/property-schema-change-scope',
+  revision: 1,
+  name: 'property-schema:change-scope',
+  preset: 'change-scope',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Optional per-definition default, stored through the definition's own
  * built codec. Absence means the preset default; null can be a real encoded
  * absence value and is therefore distinct from an omitted key. */
-export const propertyDefaultProp = defineProperty<unknown | undefined>('property-schema:default', {
+export const propertyDefaultProp = seedProperty({
+  seedKey: 'system:kernel-data/property/property-schema-default',
+  revision: 1,
+  name: 'property-schema:default',
   // Raw encoded value, deliberately NOT optionalIdentity: encoded null is a
   // meaningful explicit default for optional codecs and must remain distinct
   // from the property key being absent.
-  codec: codecs.unsafeIdentity<unknown>(),
-  defaultValue: undefined,
+  preset: 'raw-json',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Hide the property from ordinary property-panel presentation. */
-export const propertyHiddenProp = defineProperty<boolean>('property-schema:hidden', {
-  codec: codecs.boolean,
-  defaultValue: false,
+export const propertyHiddenProp = seedProperty({
+  seedKey: 'system:kernel-data/property/property-schema-hidden',
+  revision: 1,
+  name: 'property-schema:hidden',
+  preset: 'boolean',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Stable code provenance shared by property and future type seeds. */
-export const seedKeyProp = defineProperty<string>('seed:key', {
-  codec: codecs.string,
-  defaultValue: '',
+export const seedKeyProp = seedProperty({
+  seedKey: 'system:kernel-data/property/seed-key',
+  revision: 1,
+  name: 'seed:key',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Monotonic code-owned seed payload revision. Background materialization
  * reads this for diagnostics only; upgrades remain an operator action. */
-export const seedRevisionProp = defineProperty<number>('seed:revision', {
-  codec: codecs.number,
-  defaultValue: 0,
+export const seedRevisionProp = seedProperty({
+  seedKey: 'system:kernel-data/property/seed-revision',
+  revision: 1,
+  name: 'seed:revision',
+  preset: 'number',
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -243,16 +302,20 @@ export const seedRevisionProp = defineProperty<number>('seed:revision', {
 
 /** Human-readable label on a `'block-type'` block. Shown in the type
  *  picker and as the section header in the property panel. */
-export const blockTypeLabelProp = defineProperty<string>('block-type:label', {
-  codec: codecs.string,
-  defaultValue: '',
+export const blockTypeLabelProp = seedProperty({
+  seedKey: 'system:kernel-data/property/block-type-label',
+  revision: 1,
+  name: 'block-type:label',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Optional free-form description on a `'block-type'` block. */
-export const blockTypeDescriptionProp = defineProperty<string>('block-type:description', {
-  codec: codecs.string,
-  defaultValue: '',
+export const blockTypeDescriptionProp = seedProperty({
+  seedKey: 'system:kernel-data/property/block-type-description',
+  revision: 1,
+  name: 'block-type:description',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -260,27 +323,34 @@ export const blockTypeDescriptionProp = defineProperty<string>('block-type:descr
  *  each ref to the merged property-schema map (via
  *  `UserSchemasService.getSchemaForBlockId`) to build the lifted
  *  property list on the resulting TypeContribution. */
-export const blockTypePropertiesProp = defineProperty<readonly string[]>('block-type:properties', {
-  codec: codecs.refList({targetTypes: ['property-schema']}),
-  defaultValue: [],
+export const blockTypePropertiesProp = seedProperty({
+  seedKey: 'system:kernel-data/property/block-type-properties',
+  revision: 1,
+  name: 'block-type:properties',
+  preset: 'refList',
+  config: {targetTypes: ['property-schema']},
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Don't render this type's chip on blocks (the supertags `#type`
  *  row). Display-only — the type stays taggable and visible in
  *  pickers/panel. Lifted onto `TypeContribution.hideFromBlockDisplay`. */
-export const blockTypeHideFromBlockDisplayProp = defineProperty<boolean>('block-type:hide-from-block-display', {
-  codec: codecs.boolean,
-  defaultValue: false,
+export const blockTypeHideFromBlockDisplayProp = seedProperty({
+  seedKey: 'system:kernel-data/property/block-type-hide-from-block-display',
+  revision: 1,
+  name: 'block-type:hide-from-block-display',
+  preset: 'boolean',
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** CSS color for this type's tag chip (any `color`-property value:
  *  `#e11d48`, `tomato`, `hsl(…)`, …). Empty = default chip styling.
  *  Lifted onto `TypeContribution.color`. */
-export const blockTypeColorProp = defineProperty<string>('block-type:color', {
-  codec: codecs.string,
-  defaultValue: '',
+export const blockTypeColorProp = seedProperty({
+  seedKey: 'system:kernel-data/property/block-type-color',
+  revision: 1,
+  name: 'block-type:color',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -291,9 +361,11 @@ export const blockTypeColorProp = defineProperty<string>('block-type:color', {
  *  between the id and the display name (the block's content) alongside
  *  the human-friendly alias — so attribution surfaces can resolve either
  *  direction without parsing aliases. */
-export const userIdProp = defineProperty<string>('user:id', {
-  codec: codecs.string,
-  defaultValue: '',
+export const userIdProp = seedProperty({
+  seedKey: 'system:kernel-data/property/user-id',
+  revision: 1,
+  name: 'user:id',
+  preset: 'string',
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -305,11 +377,16 @@ export const userIdProp = defineProperty<string>('user:id', {
  *  target block (e.g. `[[Inbox]]` produces a target with
  *  `aliases: ['Inbox']`), and the same schema alias-lookup queries
  *  consult to resolve `[[alias]]` to a target id. */
-export const aliasesProp: PropertySchema<string[]> = defineProperty<string[]>('alias', {
-  codec: codecs.list(codecs.string),
-  defaultValue: [],
+// The shared string-list core exposes readonly values, while its decoder
+// returns a fresh mutable array. Preserve aliasesProp's historical string[]
+// handle contract without widening the public seedProperty overloads.
+export const aliasesProp = seedProperty({
+  seedKey: 'system:kernel-data/property/alias',
+  revision: 1,
+  name: 'alias',
+  preset: 'string-list',
   changeScope: ChangeScope.BlockDefault,
-})
+}) as PropertySeedDeclaration<string[]>
 
 // ──── Helpers ────
 
@@ -502,17 +579,15 @@ export type { PropertySchema }
 
 // ──── Kernel bundle ────
 
-/** Every kernel-owned `PropertySchema` in one array. Consumed by
- *  `kernelDataExtension` to register them with `propertySchemasFacet`
- *  so non-React surfaces (the property panel's schema lookup, future
- *  CLI / server-side audit, plugin authors inspecting the registry)
- *  see the kernel descriptors uniformly.
+/** Every kernel-owned property seed in one array. Consumed by
+ *  `kernelDataExtension` through `definitionSeedsFacet`; the workspace-bound
+ *  registry synthesizes the corresponding behavioral entries and identities.
  *
- *  Heterogeneous `PropertySchema<T>` shapes flatten through
- *  `PropertySchema<unknown>` for storage in the array — the precise
- *  per-schema types stay at the export sites and reach typed callers
- *  via the schema reference (`block.set(typesProp, ...)` etc.). */
-export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
+ *  Heterogeneous seed declarations flatten through
+ *  `AnyPropertySeedDeclaration` for storage in the array — the precise
+ *  per-property types stay at the export sites and reach typed callers
+ *  via the handle reference (`block.set(typesProp, ...)` etc.). */
+export const KERNEL_PROPERTY_SEEDS: readonly AnyPropertySeedDeclaration[] = [
   // UI-state schemas
   showPropertiesProp,
   isEditingProp,
@@ -551,4 +626,4 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   blockTypeColorProp,
   // user page fields
   userIdProp,
-] as ReadonlyArray<PropertySchema<unknown>>
+]

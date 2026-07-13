@@ -114,7 +114,7 @@ import {
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
-import { KERNEL_PROPERTY_SCHEMAS } from './properties'
+import { KERNEL_PROPERTY_SEEDS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
@@ -186,7 +186,7 @@ type KnownQueryDispatch = {
 export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => LoaderHandle<any> }
 
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
-const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
+const KERNEL_PROPERTY_SEED_MAP = new Map(KERNEL_PROPERTY_SEEDS.map(seed => [seed.name, seed]))
 
 /** The `repo.mutate` / `repo.query` proxy shape: string property access
  *  returns `dispatch(name)` (a fresh dispatcher closure per access —
@@ -312,7 +312,7 @@ export class Repo {
   private sameTxProcessors: Map<string, AnySameTxProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
-  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
+  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SEED_MAP
   /** Atomic active-workspace definition snapshot. Null at stage 0 before a
    * workspace pin; identity resolution is unavailable in that state. */
   private _propertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null

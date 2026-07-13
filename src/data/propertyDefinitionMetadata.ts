@@ -1,4 +1,4 @@
-import {ChangeScope, type BlockData, type PropertySchemaOrigin} from '@/data/api'
+import {ChangeScope, isChangeScope, type BlockData, type PropertySchemaOrigin} from '@/data/api'
 import {PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
 import {isValidSeededDefinition} from '@/data/definitionSeeds'
 import {
@@ -50,9 +50,9 @@ export const parsePropertyDefinitionMetadata = (
     const name = decodePresentOrDefault(row, propertyNameProp)
     if (name.length === 0) return null
     const changeScope = decodePresentOrDefault(row, propertyChangeScopeProp)
-    // Enum decode deliberately preserves unknown historic strings; metadata
-    // classification is stricter, so run the write-side membership check too.
-    propertyChangeScopeProp.codec.encode(changeScope)
+    // Enum decode is deliberately membership-lenient for historical stored
+    // strings; definition metadata still requires one of the real tx scopes.
+    if (!isChangeScope(changeScope)) return null
     const hidden = decodePresentOrDefault(row, propertyHiddenProp)
 
     if (!isValidSeededDefinition(row)) {

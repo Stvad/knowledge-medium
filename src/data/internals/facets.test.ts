@@ -9,8 +9,8 @@
  *     registrations DO NOT carry over (the runtime is the snapshot)
  *   - a plugin mutator registered via the runtime is dispatchable via
  *     repo.run('plugin:foo', args) and via repo.mutate['plugin:foo']
- *   - kernelDataExtension contributes kernel property schemas through
- *     propertySchemasFacet (Phase 3 — chunk A)
+ *   - kernelDataExtension contributes kernel property declarations through
+ *     definitionSeedsFacet
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -32,6 +32,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
+  definitionSeedsFacet,
   mutatorsFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
@@ -40,7 +41,7 @@ import {
   valuePresetCoresFacet,
 } from '../facets'
 import {
-  KERNEL_PROPERTY_SCHEMAS,
+  KERNEL_PROPERTY_SEEDS,
   blockTypeDescriptionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
@@ -166,18 +167,14 @@ describe('setFacetRuntime + mutatorsFacet', () => {
   })
 })
 
-describe('propertySchemasFacet — kernel registration', () => {
-  it('kernelDataExtension contributes every KERNEL_PROPERTY_SCHEMAS entry', () => {
+describe('kernel property declaration registration', () => {
+  it('kernelDataExtension contributes every kernel entry as a definition seed', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
-    const registered = runtime.read(propertySchemasFacet)
-    expect(registered.size).toBe(KERNEL_PROPERTY_SCHEMAS.length)
-    for (const schema of KERNEL_PROPERTY_SCHEMAS) {
-      // Identity-equal: facet stores the same instance.
-      expect(registered.get(schema.name)).toBe(schema)
-    }
+    expect(runtime.read(definitionSeedsFacet)).toEqual(KERNEL_PROPERTY_SEEDS)
+    expect(runtime.read(propertySchemasFacet).size).toBe(0)
   })
 
-  it('plugin schema layered onto kernel coexists by name', () => {
+  it('a legacy plugin schema remains available during the staged conversion', () => {
     const pluginSchema = defineProperty<string | undefined>('plugin:foo', {
       codec: codecs.optionalString,
       defaultValue: undefined,
@@ -189,10 +186,7 @@ describe('propertySchemasFacet — kernel registration', () => {
     ])
     const registered = runtime.read(propertySchemasFacet)
     expect(registered.get('plugin:foo')).toBe(pluginSchema)
-    // Kernel entries still present.
-    for (const schema of KERNEL_PROPERTY_SCHEMAS) {
-      expect(registered.get(schema.name)).toBe(schema)
-    }
+    expect(runtime.read(definitionSeedsFacet)).toEqual(KERNEL_PROPERTY_SEEDS)
   })
 
   it('duplicate-name registration logs a warning and last-wins', () => {

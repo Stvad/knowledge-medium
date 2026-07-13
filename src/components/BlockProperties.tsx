@@ -309,9 +309,9 @@ export function BlockProperties({block}: BlockPropertiesProps) {
               return schemas.get(trimmed)
             }
             // If a kernel/plugin schema already owns this name, adopt
-            // it instead of creating a shadowing user schema. There's
-            // no panel to open (kernel schemas have no block) but the
-            // form still gets a schema back to submit with.
+            // it instead of creating a shadowing user schema. A synthesized
+            // seed may not have materialized its definition row yet, so there
+            // is no panel to open; the form can still adopt its behavior.
             const kernelSchema = schemas.get(trimmed)
             if (kernelSchema) return kernelSchema
             try {

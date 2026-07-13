@@ -16,7 +16,6 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   definitionSeedsFacet,
-  propertySchemasFacet,
   projectedPropertyDefinitionsFacet,
   sameTxProcessorsFacet,
   typesFacet,
@@ -46,7 +45,7 @@ const createBlock = async (id: string, properties: Record<string, unknown> = {})
 const resolveTypeRuntime = (
   contributions: readonly AppExtension[],
 ) => resolveFacetRuntimeSync([
-  propertySchemasFacet.of(typesProp, {source: 'test-kernel'}),
+  definitionSeedsFacet.of(typesProp, {source: 'test-kernel'}),
   ...contributions,
 ])
 

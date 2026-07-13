@@ -384,6 +384,38 @@ describe('UserSchemasService subscription', () => {
     }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
+  it('normalizes omitted defaults identically for declarations and block fallbacks', async () => {
+    const normalizingPreset = definePreset<string>({
+      id: 'test:normalizing-default',
+      label: 'Normalizing default',
+      defaultValue: '  padded  ',
+      build: () => ({
+        type: 'test:normalizing-default',
+        encode: value => value.trim(),
+        decode: value => {
+          if (typeof value !== 'string') throw new Error('expected string')
+          return value
+        },
+      }),
+      Editor: (): JSX.Element => createElement('span', null, null),
+    })
+    const declaration = seedProperty({
+      seedKey: 'system:test/property/normalizing-default',
+      revision: 1,
+      name: 'test:normalizing-default',
+      preset: normalizingPreset,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    env = await setup([normalizingPreset])
+    await createExternalSchemaBlock(declaration.name, normalizingPreset.id)
+
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get(declaration.name)?.defaultValue)
+        .toBe(declaration.defaultValue)
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    expect(declaration.defaultValue).toBe('padded')
+  })
+
   it('resolves an identity-checked seeded row as fallback without a local declaration', async () => {
     env = await setup()
     const seedKey = 'system:missing-plugin/property/fallback-title'

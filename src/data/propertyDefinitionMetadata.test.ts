@@ -93,10 +93,12 @@ describe('parsePropertyDefinitionMetadata', () => {
   })
 
   it('rejects malformed present metadata fields instead of silently defaulting them', () => {
-    expect(parsePropertyDefinitionMetadata(definitionRow({
-      [propertyNameProp.name]: 'bad:scope',
-      [propertyChangeScopeProp.name]: 'not-a-scope',
-    }))).toBeNull()
+    for (const scope of ['', 'not-a-scope']) {
+      expect(parsePropertyDefinitionMetadata(definitionRow({
+        [propertyNameProp.name]: 'bad:scope',
+        [propertyChangeScopeProp.name]: scope,
+      }))).toBeNull()
+    }
     expect(parsePropertyDefinitionMetadata(definitionRow({
       [propertyNameProp.name]: 'bad:hidden',
       [propertyHiddenProp.name]: 'yes',
