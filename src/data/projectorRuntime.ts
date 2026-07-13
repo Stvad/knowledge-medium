@@ -66,7 +66,10 @@ export interface ProjectorHandle<Contribution = unknown> {
   whenPrimed(workspaceId: string): Promise<void>
 }
 
-type PrimeOutcome = 'primed' | 'cancelled'
+type PrimeOutcome =
+  | {readonly kind: 'primed'}
+  | {readonly kind: 'cancelled'}
+  | {readonly kind: 'failed'; readonly error: unknown}
 
 interface PrimeDeferred {
   readonly workspaceId: string
@@ -200,7 +203,14 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
         { workspaceId, types: [this.descriptor.metaType] },
         rows => {
           if (this.disposed || this.generation !== generation) return
-          this.rebuild(this.hydrate(rows))
+          this.rebuild(this.hydrate(rows), false, generation)
+        },
+        {
+          freshInitial: true,
+          onInitialError: error => {
+            if (this.disposed || this.generation !== generation) return
+            this.primeDeferred?.settle({kind: 'failed', error})
+          },
         },
       )
 
@@ -214,7 +224,7 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
           // Imperative upserts may precede their subscription row (the
           // create-then-immediate-use path). Re-resolve rows we do own while
           // retaining only contributions whose source row has not arrived yet.
-          this.rebuild(this.latestRows, true)
+          this.rebuild(this.latestRows, true, generation)
         })
       }
     } catch (error) {
@@ -227,7 +237,7 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
 
   dispose(): void {
     const workspaceId = this.pinnedWorkspaceId
-    this.primeDeferred?.settle('cancelled')
+    this.primeDeferred?.settle({kind: 'cancelled'})
     this.primeDeferred = null
     this.disposed = true
     this.generation += 1
@@ -267,11 +277,11 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
         `[projector ${this.descriptor.id}] ${workspaceId} projector readiness unavailable`,
       ))
     }
-    if (this.primed) return Promise.resolve()
     return deferred.promise.then(outcome => {
-      if (outcome === 'cancelled') {
+      if (outcome.kind === 'cancelled') {
         throw new Error(`${workspaceId} projector readiness cancelled`)
       }
+      if (outcome.kind === 'failed') throw outcome.error
     })
   }
 
@@ -297,11 +307,13 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
       : (rows as readonly unknown[] as readonly Row[])
   }
 
-  private rebuild(rows: readonly Row[], preserveContributionsMissingRows = false): void {
-    if (this.disposed) return
+  private rebuild(
+    rows: readonly Row[],
+    preserveContributionsMissingRows = false,
+    generation = this.generation,
+  ): void {
+    if (this.disposed || this.generation !== generation) return
     this.latestRows = rows
-    this.primed = true
-    this.primeDeferred?.settle('primed')
     const next: Contribution[] = []
     const nextByKey = new Map<string, string>()
     const nextByBlockId = new Map<string, Contribution>()
@@ -337,13 +349,53 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
         nextByBlockId.set(blockId, contribution)
       }
     }
-    // Skip AFTER priming + capturing latestRows so the secondary path
-    // still has fresh rows to re-resolve from on the next signal.
-    if (this.descriptor.dedup?.(next, this.contributions)) return
+    // Skip only after capturing latestRows so the secondary path still has
+    // fresh rows to re-resolve from on the next signal. Even a deduped first
+    // result completes readiness; the existing contribution state is already
+    // the value this generation would publish.
+    if (this.descriptor.dedup?.(next, this.contributions)) {
+      this.finishPrime(false, generation)
+      return
+    }
     this.contributions = next
     this.byKey = nextByKey
     this.byBlockId = nextByBlockId
-    this.publish()
+    this.finishPrime(true, generation)
+  }
+
+  /** Make the complete projection visible to the synchronous bridge rebuild
+   * during publish, but release external waiters only after publish returns. */
+  private finishPrime(shouldPublish: boolean, generation: number): void {
+    const deferred = this.primeDeferred
+    const workspaceId = this.pinnedWorkspaceId
+    if (
+      this.disposed
+      || this.generation !== generation
+      || !deferred
+      || !workspaceId
+    ) return
+    this.primed = true
+    try {
+      if (shouldPublish) this.publish()
+    } catch (error) {
+      if (
+        !this.disposed
+        && this.generation === generation
+        && this.primeDeferred === deferred
+        && this.pinnedWorkspaceId === workspaceId
+      ) {
+        this.primed = false
+        deferred.settle({kind: 'failed', error})
+      }
+      throw error
+    }
+    if (
+      this.disposed
+      || this.generation !== generation
+      || this.primeDeferred !== deferred
+      || this.pinnedWorkspaceId !== workspaceId
+    ) return
+    deferred.settle({kind: 'primed'})
   }
 
   private publish(): void {

@@ -549,6 +549,24 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     return this.runLoader()
   }
 
+  /** Resolve only after the handle has no known stale or in-flight follow-up
+   * load. Unlike `load()`, this does not expose a result that was invalidated
+   * while its loader was running. Projector priming uses this completeness
+   * boundary so a cached or superseded snapshot cannot release writes. */
+  async loadFresh(): Promise<T> {
+    while (true) {
+      await this.load()
+      // A dirty settle schedules its follow-up reload in a microtask before
+      // resolving the load promise. Yield once so that reload becomes visible.
+      await Promise.resolve()
+      if (this.inflight || this.stale) continue
+      if (this.value === undefined) {
+        throw new Error(`Handle ${this.key} completed without a value`)
+      }
+      return this.value
+    }
+  }
+
   /** Actually run the loader. Skips the cached-value short-circuit; used
    *  by `load()` (cold path) and `invalidate()` (force re-resolve).
    *

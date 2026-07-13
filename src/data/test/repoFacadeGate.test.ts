@@ -78,6 +78,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   countBlocksUsingProperty: 'read',
   snapshotTypeRegistries: 'read — returns existing registry maps, no minting',
   propertySchemaResolverFor: 'read — returns a resolver bound to an existing immutable snapshot',
+  whenPropertyDefinitionsReady: 'waits on the constructor-bound projector service; assigns no Repo fields',
   load: 'read + shared BlockCache mutation (object-interior, reached via chain)',
   undoManagerFor: 'mints UndoManager into the shared map, but UndoManager captures no repo',
 
@@ -118,6 +119,7 @@ const SAFE_VIA_PROTOTYPE: Record<string, string> = {
   hydrateChildren: 'private read',
   hydrateRows: 'private read + shared-cache mutation',
   makeQueryCtx: 'private (reached via delegated runQuery / real-repo query proxy)',
+  propertyDefinitionProjector: 'private read through the constructor-bound projector service',
   reprojectRefTypedProperties: 'private-ish maintenance; invoked by constructor-bound facetBridge',
   resolveTypedBlockQuery: 'private read',
   runReconcileRescan: 'private; jobs are enqueued via the DELEGATED schedule* overrides',

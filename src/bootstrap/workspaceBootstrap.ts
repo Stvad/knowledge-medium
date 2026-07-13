@@ -113,6 +113,12 @@ export const bootstrapWorkspace = async ({
   requestedHash,
   requestedWorkspaceId,
 }: WorkspaceBootstrapArgs): Promise<Block> => {
+  // A workspace pin starts the property-schema projector asynchronously. Until
+  // its first complete result, declaration synthesis cannot know whether a
+  // stored definition shadows or renames a seed. Keep bootstrap's writes behind
+  // that completeness boundary; the shared Repo tx path queues other callers.
+  await repo.whenPropertyDefinitionsReady(workspaceId)
+
   // Only NOW remember it as the default. Remembering a locked/waiting workspace
   // would make the next empty-hash visit re-select it and render only the key
   // gate (no switcher), trapping the user away from accessible spaces.

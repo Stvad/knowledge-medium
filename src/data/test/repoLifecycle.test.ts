@@ -20,7 +20,13 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, defineProperty, codecs, type BlockData } from '@/data/api'
+import {
+  ChangeScope,
+  PropertySchemaIdentityError,
+  defineProperty,
+  codecs,
+  type BlockData,
+} from '@/data/api'
 import {
   definitionBlockProjectorFacet,
   definitionSeedsFacet,
@@ -171,7 +177,7 @@ describe('repo.activeWorkspaceId', () => {
     repo.setActiveWorkspaceId(null)
   })
 
-  it('recomputes seed synthesis and identity synchronously for each workspace pin', () => {
+  it('keeps seed identity unavailable until the schema projector primes each workspace', async () => {
     const declaration = seedProperty({
       seedKey: 'system:kernel-data/property/test-synthesized',
       revision: 1,
@@ -192,17 +198,52 @@ describe('repo.activeWorkspaceId', () => {
     expect(repo.propertySchemas.get(declaration.name)).toBe(declaration)
     expect(repo.propertyDefinitions).toBeNull()
 
+    await repo.tx(
+      tx => tx.create({
+        id: 'synthesis-target-a',
+        workspaceId: 'ws-synthesis-a',
+        parentId: null,
+        orderKey: 'a0',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await repo.tx(
+      tx => tx.create({
+        id: 'stored-winner-a',
+        workspaceId: 'ws-synthesis-a',
+        parentId: null,
+        orderKey: 'a1',
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': declaration.name,
+          'property-schema:preset': 'string',
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
     repo.setActiveWorkspaceId('ws-synthesis-a')
+    expect(repo.propertyDefinitions).toBeNull()
+    await expect(repo.tx(
+      tx => tx.setProperty('synthesis-target-a', declaration, 'too-early'),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: PropertySchemaIdentityError.name,
+      reason: 'shadowed',
+    })
+
+    await repo.whenPropertyDefinitionsReady('ws-synthesis-a')
+    expect(repo.propertyDefinitions?.definitionsByFieldId.has('stored-winner-a')).toBe(true)
     const resolvedA = repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)
     expect(resolvedA).toEqual({
-      status: 'resolved',
-      schema: expect.objectContaining({
-        fieldId: propertyDefinitionBlockId('ws-synthesis-a', declaration.seedKey),
-        workspaceId: 'ws-synthesis-a',
-      }),
+      status: 'identity-unavailable',
+      reason: 'shadowed',
     })
 
     repo.setActiveWorkspaceId('ws-synthesis-b')
+    expect(repo.propertyDefinitions).toBeNull()
+    await repo.whenPropertyDefinitionsReady('ws-synthesis-b')
+    expect(repo.propertyDefinitions).toMatchObject({workspaceId: 'ws-synthesis-b'})
     const resolvedB = repo.propertySchemaResolverFor('ws-synthesis-b').resolve(declaration)
     expect(resolvedB).toEqual({
       status: 'resolved',
@@ -211,6 +252,19 @@ describe('repo.activeWorkspaceId', () => {
         workspaceId: 'ws-synthesis-b',
       }),
     })
+    await repo.tx(async tx => {
+      const stored = await tx.get('stored-winner-a')
+      if (!stored) throw new Error('expected stored winner')
+      await tx.update('stored-winner-a', {
+        properties: {
+          ...stored.properties,
+          'property-schema:name': 'renamed-while-inactive',
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    repo.setActiveWorkspaceId('ws-synthesis-a')
+    await repo.whenPropertyDefinitionsReady('ws-synthesis-a')
     expect(repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)).toEqual({
       status: 'resolved',
       schema: expect.objectContaining({
@@ -221,7 +275,27 @@ describe('repo.activeWorkspaceId', () => {
     repo.setActiveWorkspaceId(null)
   })
 
-  it('recomputes synthesis when a seed contribution arrives after the workspace pin', () => {
+  it('cancels a queued transaction when the active projector generation changes', async () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-queued-a')
+    await repo.whenPropertyDefinitionsReady('ws-queued-a')
+    let release!: () => void
+    const readiness = new Promise<void>(resolve => { release = resolve })
+    vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockReturnValueOnce(readiness)
+    const body = vi.fn()
+
+    const pending = repo.tx(body, {scope: ChangeScope.BlockDefault})
+    repo.setActiveWorkspaceId('ws-queued-b')
+    release()
+
+    await expect(pending).rejects.toThrow(
+      'active workspace generation changed while waiting for ws-queued-a',
+    )
+    expect(body).not.toHaveBeenCalled()
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('recomputes synthesis when a seed contribution arrives after projector priming', async () => {
     const declaration = seedProperty({
       seedKey: 'system:test-plugin/property/late-seed',
       revision: 1,
@@ -231,6 +305,7 @@ describe('repo.activeWorkspaceId', () => {
     })
     const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
     repo.setActiveWorkspaceId('ws-late-seed')
+    await repo.whenPropertyDefinitionsReady('ws-late-seed')
     expect(repo.propertySchemas.has(declaration.name)).toBe(false)
 
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-late-seed', [declaration])

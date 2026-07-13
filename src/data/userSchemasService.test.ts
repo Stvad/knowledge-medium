@@ -623,10 +623,13 @@ describe('UserSchemasService workspace switch', () => {
 
   it('translates a real projector-generation cancellation into an addSchema workspace error', async () => {
     env = await setup()
-    vi.spyOn(env.repo, 'subscribeBlocks').mockImplementation(() => vi.fn())
     const W2 = 'ws-user-schemas-2'
     env.repo.setActiveWorkspaceId(W2)
+    await env.repo.whenPropertyDefinitionsReady(W2)
     await getOrCreatePropertiesPage(env.repo, W2)
+    env.repo.setActiveWorkspaceId(WS)
+    vi.spyOn(env.repo, 'subscribeBlocks').mockImplementation(() => vi.fn())
+    env.repo.setActiveWorkspaceId(W2)
     const pending = env.service.addSchema({name: 'leaky', presetId: 'url'})
 
     env.repo.setActiveWorkspaceId('ws-user-schemas-3')

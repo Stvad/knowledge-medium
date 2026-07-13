@@ -77,6 +77,13 @@ export interface FacetBridgeTarget {
   /** Current merged property-schema map, read as the "before" snapshot for
    *  the ref-change diff that decides whether a swap needs reprojection. */
   getPropertySchemas(): ReadonlyMap<string, AnyPropertySchema>
+  /** Whether the workspace's persisted property-definition projection has
+   * produced its first complete result. Seed synthesis must not claim names
+   * before this is true: an empty projection and a not-yet-loaded projection
+   * have different winner semantics. */
+  getPropertyDefinitionProjector(): {
+    isPrimedFor(workspaceId: string): boolean
+  } | undefined
   applyMutators(mutators: Map<string, AnyMutator>): void
   applyProcessors(processors: Map<string, AnyPostCommitProcessor>): void
   applySameTxProcessors(processors: Map<string, AnySameTxProcessor>): void
@@ -264,11 +271,23 @@ export class FacetBridge {
     })
   }
 
+  private unavailableActiveWorkspaceId(): string | null {
+    const projector = this.target.getPropertyDefinitionProjector()
+    return this.activeWorkspaceId
+      && projector?.isPrimedFor(this.activeWorkspaceId) === false
+      ? this.activeWorkspaceId
+      : null
+  }
+
+  private canBuildPropertyDefinitionsForWorkspace(workspaceId: string): boolean {
+    return workspaceId !== this.unavailableActiveWorkspaceId()
+  }
+
   /** Live row-workspace lookup for synchronous Block reads. */
   propertyDefinitionRegistryForWorkspace(
     workspaceId: string,
   ): PropertyDefinitionRegistrySnapshot | null {
-    return this.runtime
+    return this.runtime && this.canBuildPropertyDefinitionsForWorkspace(workspaceId)
       ? this.buildPropertyDefinitionsForWorkspace(this.runtime, workspaceId)
       : null
   }
@@ -280,6 +299,7 @@ export class FacetBridge {
   ) => PropertyDefinitionRegistrySnapshot | null {
     const runtime = this.runtime
     if (!runtime) return () => null
+    const unavailableActiveWorkspaceId = this.unavailableActiveWorkspaceId()
 
     const facets = [
       typesFacet,
@@ -291,6 +311,7 @@ export class FacetBridge {
     if (this.activeWorkspaceId) knownWorkspaceIds.add(this.activeWorkspaceId)
     const snapshots = new Map<string, PropertyDefinitionRegistrySnapshot>()
     for (const workspaceId of knownWorkspaceIds) {
+      if (workspaceId === unavailableActiveWorkspaceId) continue
       snapshots.set(
         workspaceId,
         this.buildPropertyDefinitionsForWorkspace(runtime, workspaceId),
@@ -308,12 +329,15 @@ export class FacetBridge {
     )
     const unscopedSeeds = runtime.readForWorkspace(definitionSeedsFacet, null)
 
-    return workspaceId => snapshots.get(workspaceId) ?? buildPropertyDefinitionRegistry({
-      workspaceId,
-      legacySchemas: unscopedLegacySchemas,
-      projectedDefinitions: unscopedProjectedDefinitions,
-      seeds: unscopedSeeds,
-    })
+    return workspaceId => {
+      if (workspaceId === unavailableActiveWorkspaceId) return null
+      return snapshots.get(workspaceId) ?? buildPropertyDefinitionRegistry({
+        workspaceId,
+        legacySchemas: unscopedLegacySchemas,
+        projectedDefinitions: unscopedProjectedDefinitions,
+        seeds: unscopedSeeds,
+      })
+    }
   }
 
   /** Rebuild step list. Order matters: value presets run before property
@@ -386,6 +410,7 @@ export class FacetBridge {
             )
           }
           const propertyDefinitions = this.activeWorkspaceId
+            && this.canBuildPropertyDefinitionsForWorkspace(this.activeWorkspaceId)
             ? buildPropertyDefinitionRegistry({
               workspaceId: this.activeWorkspaceId,
               legacySchemas,

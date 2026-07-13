@@ -119,7 +119,7 @@ import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'
-import { UserSchemasService } from './userSchemasService'
+import {USER_SCHEMAS_PROJECTOR_ID, UserSchemasService} from './userSchemasService'
 import { UserTypesService } from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
@@ -676,6 +676,7 @@ export class Repo {
     // subscriptions, and the React change channels.
     this.facetBridge = new FacetBridge({
       getPropertySchemas: () => this._propertySchemas,
+      getPropertyDefinitionProjector: () => this.propertyDefinitionProjector(),
       applyMutators: (mutators) => { this.mutators = mutators },
       applyProcessors: (processors) => { this.processors = processors },
       applySameTxProcessors: (processors) => { this.sameTxProcessors = processors },
@@ -996,6 +997,20 @@ export class Repo {
     }
   }
 
+  /** Wait until persisted property definitions have produced their first
+   * complete workspace snapshot. Bootstrap calls this before typed writes so
+   * declaration synthesis cannot temporarily outrank a stored rename/shadow. */
+  async whenPropertyDefinitionsReady(workspaceId: string): Promise<void> {
+    const handle = this.propertyDefinitionProjector()
+    if (!handle) return
+    await handle.whenPrimed(workspaceId)
+  }
+
+  private propertyDefinitionProjector() {
+    if (!this.facetRuntime) return undefined
+    return this.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)
+  }
+
   /** The active workspace's undo / redo manager — what cmd-Z and the
    *  Undo UI act on (issue #186). Because each workspace has its own
    *  manager, callers can use the plain `peekUndo` / `popUndo` API and it
@@ -1287,6 +1302,24 @@ export class Repo {
   ) {
     const txT0 = performance.now()
     let result
+    // A workspace pin starts the definition projector asynchronously. Delay
+    // active-workspace transactions at the one shared boundary so callers
+    // cannot capture declaration-only seed winners during that short window.
+    // The wait is generation-bound: a workspace switch rejects it instead of
+    // letting the queued transaction drift into a different workspace.
+    const readinessWorkspaceId = this._activeWorkspaceId
+    const readinessGenerationToken = this.projectors.generationToken
+    if (readinessWorkspaceId) {
+      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
+      if (
+        this._activeWorkspaceId !== readinessWorkspaceId
+        || this.projectors.generationToken !== readinessGenerationToken
+      ) {
+        throw new Error(
+          `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
+        )
+      }
+    }
     const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
     const capturedPropertyDefinitionFactory =
       this.facetBridge.capturePropertyDefinitionRegistryFactory()
@@ -1440,8 +1473,35 @@ export class Repo {
   subscribeBlocks(
     query: TypedBlockQuery,
     listener: (rows: BlockData[]) => void,
+    options?: {
+      /** Projector-only mode: suppress cached delivery and emit exactly one
+       * fresh initial snapshot before forwarding later live changes. */
+      freshInitial?: boolean
+      onInitialError?: (error: unknown) => void
+    },
   ): Unsubscribe {
     const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
+    if (options?.freshInitial) {
+      let initialPending = true
+      const unsubscribe = handle.subscribe(rows => {
+        if (!initialPending) listener(rows)
+      })
+      void handle.loadFresh().then(
+        rows => {
+          initialPending = false
+          try {
+            listener(rows)
+          } catch (error) {
+            options.onInitialError?.(error)
+          }
+        },
+        error => {
+          initialPending = false
+          options.onInitialError?.(error)
+        },
+      )
+      return unsubscribe
+    }
     const current = handle.peek()
     if (current !== undefined) queueMicrotask(() => listener(current))
     return handle.subscribe(listener)

@@ -422,7 +422,11 @@ describe('UserTypesService subscription', () => {
     // A subsequent block edit MUST NOT trigger a republish from this
     // disposed instance (no leaking subscription).
     await env.repo.tx(async tx => {
-      await tx.setProperty(id, blockTypeLabelProp, 'Renamed')
+      const row = await tx.get(id)
+      if (!row) throw new Error('expected type row')
+      await tx.update(id, {
+        properties: {...row.properties, [blockTypeLabelProp.name]: 'Renamed'},
+      })
     }, {scope: ChangeScope.BlockDefault})
     expect(env.repo.types.get(id)).toBeUndefined()
   })

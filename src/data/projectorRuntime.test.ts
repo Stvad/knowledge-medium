@@ -149,6 +149,61 @@ describe('ProjectorRuntime workspace pin and readiness', () => {
     await expect(projectors.whenPrimed('ws-2')).resolves.toBeUndefined()
   })
 
+  it('rejects readiness when the fresh initial query fails', async () => {
+    let failInitial: ((error: unknown) => void) | undefined
+    const repo = {
+      facetRuntime: resolveFacetRuntimeSync([definitionBlockProjectorFacet.of(descriptor)]),
+      subscribeBlocks: vi.fn((_query, _callback, options) => {
+        failInitial = options?.onInitialError
+        return vi.fn()
+      }),
+      setRuntimeContributions: vi.fn(),
+    } as unknown as Repo
+    const projectors = new ProjectorRuntime(repo)
+
+    projectors.pinWorkspace('ws-1')
+    const readiness = projectors.whenPrimed('ws-1')
+    failInitial?.(new Error('initial schema query failed'))
+
+    await expect(readiness).rejects.toThrow('initial schema query failed')
+    expect(projectors.isPrimed('ws-1')).toBe(false)
+  })
+
+  it('does not settle an incoming generation switched during synchronous publish', async () => {
+    const callbacks: Array<(rows: readonly BlockData[]) => void> = []
+    let switched = false
+    let reentrantReadiness: Promise<void> | undefined
+    const repo = {
+      facetRuntime: resolveFacetRuntimeSync([definitionBlockProjectorFacet.of(descriptor)]),
+      subscribeBlocks: vi.fn((_query, callback) => {
+        callbacks.push(callback)
+        return vi.fn()
+      }),
+      setRuntimeContributions: vi.fn((_facet, _source, contributions) => {
+        if (!switched && contributions.length > 0) {
+          switched = true
+          reentrantReadiness = projectors.whenPrimed('ws-1')
+          projectors.pinWorkspace('ws-2')
+        }
+      }),
+    } as unknown as Repo
+    const projectors = new ProjectorRuntime(repo)
+
+    projectors.pinWorkspace('ws-1')
+    const outgoing = projectors.whenPrimed('ws-1')
+    callbacks[0]!([row('ws-1', 'w1-row', 'one')])
+    await expect(outgoing).rejects.toThrow('ws-1 projector readiness cancelled')
+    await expect(reentrantReadiness).rejects.toThrow('ws-1 projector readiness cancelled')
+
+    let incomingSettled = false
+    const incoming = projectors.whenPrimed('ws-2').then(() => { incomingSettled = true })
+    await Promise.resolve()
+    expect(incomingSettled).toBe(false)
+    callbacks[1]!([])
+    await incoming
+    expect(projectors.isPrimed('ws-2')).toBe(true)
+  })
+
   it('stops exposing a handle after its descriptor is removed', () => {
     let facetRuntime = resolveFacetRuntimeSync([
       definitionBlockProjectorFacet.of(descriptor),
