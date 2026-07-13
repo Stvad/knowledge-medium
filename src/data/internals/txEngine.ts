@@ -258,6 +258,16 @@ export class TxImpl implements Tx {
     )
   }
 
+  private resolvePropertySchemaForRow<T>(
+    row: BlockData,
+    schema: PropertySchema<T>,
+  ): PropertySchema<T> {
+    return requireWritablePropertySchema(
+      schema,
+      this.propertySchemaResolverFor(row.workspaceId),
+    )
+  }
+
   // ──── Reads ────
 
   async get(id: string): Promise<BlockData | null> {
@@ -473,6 +483,15 @@ export class TxImpl implements Tx {
 
   // ──── Typed property primitives — the codec boundary sites ────
 
+  async resolvePropertySchema<T>(
+    id: string,
+    schema: PropertySchema<T>,
+  ): Promise<PropertySchema<T>> {
+    const before = await this.requireExisting(id)
+    this.checkWorkspace(before.workspaceId)
+    return this.resolvePropertySchemaForRow(before, schema)
+  }
+
   async setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
@@ -481,10 +500,7 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    const resolvedSchema = requireWritablePropertySchema(
-      schema,
-      this.propertySchemaResolverFor(before.workspaceId),
-    )
+    const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
     const stored = before.properties[resolvedSchema.name]
     const value = typeof valueOrUpdater === 'function'
       ? (valueOrUpdater as (current: T | undefined) => T)(

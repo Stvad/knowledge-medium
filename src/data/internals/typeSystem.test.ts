@@ -5,14 +5,22 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   BlockNotFoundForTypeError,
   ChangeScope,
+  PropertySchemaIdentityError,
   codecs,
   defineBlockType,
   defineProperty,
   defineSameTxProcessor,
+  seedProperty,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
-import { sameTxProcessorsFacet, typesFacet } from '@/data/facets'
+import {
+  definitionSeedsFacet,
+  projectedPropertyDefinitionsFacet,
+  sameTxProcessorsFacet,
+  typesFacet,
+} from '@/data/facets'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import { addedTypes, getBlockTypes, typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 
@@ -157,6 +165,141 @@ describe('Repo type membership orchestration', () => {
     await repo.addType('b1', 'todo', {status: 'done'})
 
     expect(repo.block('b1').get(statusProp)).toBe('open')
+  })
+
+  it('rejects a shadowed type-declared schema before adding membership or initial values', async () => {
+    const shadowed = seedProperty({
+      seedKey: 'system:test/property/status',
+      revision: 1,
+      name: 'status',
+      preset: 'string',
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const winner = defineProperty('status', {
+      codec: codecs.number,
+      defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo', properties: [shadowed]}), {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-seed', [shadowed])
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-winner', [{
+      metadata: {
+        fieldId: 'field-user-status',
+        workspaceId: 'ws-1',
+        createdAt: 1,
+        name: 'status',
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        origin: 'user',
+      },
+      schema: winner,
+    }], {workspaceId: 'ws-1'})
+    await createBlock('b1')
+    await createBlock('caught')
+
+    await expect(repo.addType('b1', 'todo', {status: 7}))
+      .rejects.toBeInstanceOf(PropertySchemaIdentityError)
+    expect(getBlockTypes(repo.block('b1').data)).toEqual([])
+    expect(repo.block('b1').peek()!.properties.status).toBeUndefined()
+
+    await repo.tx(async tx => {
+      try {
+        await repo.addTypeInTx(
+          tx,
+          'caught',
+          'todo',
+          {status: 7},
+          repo.snapshotTypeRegistries(),
+        )
+      } catch (error) {
+        expect(error).toBeInstanceOf(PropertySchemaIdentityError)
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    expect(getBlockTypes(repo.block('caught').data)).toEqual([])
+    expect(repo.block('caught').peek()!.properties.status).toBeUndefined()
+  })
+
+  it('gates add, remove, toggle, and set writes to the types membership cell', async () => {
+    const winner = defineProperty('types', {
+      codec: codecs.string,
+      defaultValue: 'winner-default',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-types-winner', [{
+      metadata: {
+        fieldId: 'field-user-types',
+        workspaceId: 'ws-1',
+        createdAt: 1,
+        name: 'types',
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        origin: 'user',
+      },
+      schema: winner,
+    }], {workspaceId: 'ws-1'})
+    await createBlock('add', {types: 'winner-add'})
+    await createBlock('remove', {types: 'winner-remove'})
+    await createBlock('toggle', {types: 'winner-toggle'})
+    await createBlock('set', {types: 'winner-set'})
+
+    await expect(repo.addType('add', 'todo')).rejects.toBeInstanceOf(PropertySchemaIdentityError)
+    await expect(repo.removeType('remove', 'todo')).rejects.toBeInstanceOf(PropertySchemaIdentityError)
+    await expect(repo.toggleType('toggle', 'todo')).rejects.toBeInstanceOf(PropertySchemaIdentityError)
+    await expect(repo.setBlockTypes('set', [])).rejects.toBeInstanceOf(PropertySchemaIdentityError)
+
+    expect(repo.block('add').peek()!.properties.types).toBe('winner-add')
+    expect(repo.block('remove').peek()!.properties.types).toBe('winner-remove')
+    expect(repo.block('toggle').peek()!.properties.types).toBe('winner-toggle')
+    expect(repo.block('set').peek()!.properties.types).toBe('winner-set')
+  })
+
+  it('resolves renamed type properties and preserves an existing canonical value', async () => {
+    const declared = seedProperty({
+      seedKey: 'system:test/property/status',
+      revision: 1,
+      name: 'status',
+      preset: 'optional-string',
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const fieldId = propertyDefinitionBlockId('ws-1', declared.seedKey)
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo', properties: [declared]}), {source: 'test'}),
+    ]))
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-seed', [declared])
+    repo.setRuntimeContributions(projectedPropertyDefinitionsFacet, 'test-renamed', [{
+      metadata: {
+        fieldId,
+        workspaceId: 'ws-1',
+        createdAt: 1,
+        name: 'renamed-status',
+        changeScope: ChangeScope.BlockDefault,
+        hidden: false,
+        seedKey: declared.seedKey,
+        origin: 'plugin:system:test',
+      },
+    }], {workspaceId: 'ws-1'})
+    await createBlock('empty')
+    await createBlock('existing', {'renamed-status': null})
+
+    await repo.addType('empty', 'todo', {status: 'initial'})
+    await repo.addType('existing', 'todo', {status: 'replacement'})
+
+    expect(repo.block('empty').peek()!.properties).toMatchObject({
+      types: ['todo'],
+      'renamed-status': 'initial',
+    })
+    expect(repo.block('empty').peek()!.properties.status).toBeUndefined()
+    expect(repo.block('existing').peek()!.properties['renamed-status']).toBeNull()
   })
 
   it('throws for unknown type ids and unknown initial value schemas', async () => {
