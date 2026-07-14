@@ -105,15 +105,25 @@ export const buildPropertyDefinitionRegistry = (
     const definition = declared && declared.name !== raw.name ? {...raw, name: declared.name} : raw
     definitionsByFieldId.set(definition.fieldId, definition)
     if (projected.schema) schemasByFieldId.set(definition.fieldId, projected.schema)
-    // v1: code-owned seeds are unshadowable. A non-seed (user/imported)
-    // definition whose name collides with a seed's declared name never competes
-    // as a name winner, so `resolve`/`resolveName` always select the seed for
-    // that name — its handle never resolves `shadowed`, and structural fields
-    // like `types` stay on the seed even when an older same-name block predates
-    // it. The colliding block still lives in `definitionsByFieldId` (resolvable
-    // by field id, itself now shadowed BY the seed); its stored values are read
-    // under the seed's codec (a codec-incompatible leftover surfaces loudly).
-    if (definition.seedKey || !seedsByDeclarationName.has(definition.name)) {
+    // v1: code-owned seeds are unshadowable. A row competes for its name only if
+    // it is a CURRENT seed's own row (its seedKey is still declared/kept) or a
+    // non-seed row whose name doesn't collide with a kept seed's declared name.
+    // Two exclusions fall out of this:
+    //   - a non-seed (user/imported) collider: the seed always wins the name, so
+    //     `resolve`/`resolveName` never resolve `shadowed` and structural fields
+    //     like `types` stay on the seed even when an older same-name block
+    //     predates it;
+    //   - a DROPPED duplicate seed's already-materialized row: `indexSeeds` keeps
+    //     only the first of two same-name seeds, so the loser's seedKey is absent
+    //     from `seedsByKey`. Gating on `seedsByKey.has` (not merely `seedKey`)
+    //     stops that persisted row from out-sorting the kept seed by an earlier
+    //     createdAt and publishing its behavior — otherwise the collider wouldn't
+    //     actually be dropped.
+    // Either way the excluded block still lives in `definitionsByFieldId`
+    // (resolvable by field id, itself shadowed BY the seed); its stored values are
+    // read under the seed's codec (a codec-incompatible leftover surfaces loudly).
+    const isCurrentSeedRow = definition.seedKey !== undefined && seedsByKey.has(definition.seedKey)
+    if (isCurrentSeedRow || !seedsByDeclarationName.has(definition.name)) {
       pushGrouped(definitionsByNameMutable, definition.name, definition)
     }
   }

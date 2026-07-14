@@ -309,6 +309,47 @@ describe('property definition registry snapshot', () => {
     }
   })
 
+  it('keeps a dropped duplicate seed\'s earlier-materialized row from winning the name', () => {
+    // The realistic collider: one extension materialized its seed's row BEFORE a
+    // second same-name extension was enabled. `indexSeeds` drops the second seed,
+    // but its persisted row (earlier createdAt) is still projected. It must NOT
+    // out-sort the kept seed by createdAt and publish its own behavior — else the
+    // "drop the collider" contract is a lie for any workspace that already stored
+    // the loser's row.
+    const droppedFieldId = propertyDefinitionBlockId(WS, competingTitleSeed.seedKey)
+    const droppedRow = metadata(droppedFieldId, competingTitleSeed.name, 1, {
+      seedKey: competingTitleSeed.seedKey,
+    })
+    const droppedSchema = defineProperty(competingTitleSeed.name, {
+      codec: codecs.number,
+      defaultValue: 7,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const snapshot = build({
+        seeds: [titleSeed, competingTitleSeed],
+        projectedDefinitions: new Map([[droppedFieldId, {metadata: droppedRow, schema: droppedSchema}]]),
+      })
+
+      // The kept (first) seed owns the name with its own string behavior — the
+      // dropped row's number schema never surfaces.
+      expect(snapshot.schemas.get(titleSeed.name)).toBe(titleSeed)
+      expect(snapshot.definitionsByName.get(titleSeed.name)).toBeUndefined()
+      expect(createPropertySchemaResolver(snapshot).resolve(titleSeed.name)).toEqual({
+        status: 'resolved',
+        schema: expect.objectContaining({
+          fieldId: propertyDefinitionBlockId(WS, titleSeed.seedKey),
+          codec: titleSeed.codec,
+        }),
+      })
+      // The loser's row is still resolvable BY FIELD ID (shadowed, not erased).
+      expect(snapshot.definitionsByFieldId.has(droppedFieldId)).toBe(true)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
   it('keeps code behavior authoritative over a synced seed projector fallback', () => {
     const fieldId = propertyDefinitionBlockId(WS, titleSeed.seedKey)
     const definition = metadata(fieldId, titleSeed.name, 10, {
