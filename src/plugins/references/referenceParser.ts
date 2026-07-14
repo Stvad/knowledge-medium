@@ -223,15 +223,25 @@ export function extractBlockRefIds(content: string): string[] {
 //      / blockref syntax via string templates and accidentally diverge
 //      from parser expectations). ────
 
-/** Render a wikilink targeting `alias`. If `alias` contains the closing
- *  wikilink delimiter, the output is syntactically safe but lossy;
- *  callers that need alias identity must verify by parsing the result. */
+/** Render a wikilink targeting `alias`. If `alias` contains wikilink
+ *  delimiters (`[[`, `]]`, or a trailing `]`), the output is
+ *  syntactically safe but lossy; callers that need alias identity must
+ *  verify by parsing the result. Guarantee: the output always parses to
+ *  exactly one outermost reference spanning the whole string, and is
+ *  delimiter-balanced so it cannot combine with surrounding text into
+ *  a different link. */
 export const renderWikilink = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
-  // place. Splitting it with a space keeps the visible text close to
-  // the input, but it no longer parses to the same alias.
-  const safe = alias.replace(/]]/g, '] ]')
-  return `[[${safe}]]`
+  // place, and an unclosed `[[` would leak an opener that a later `]]`
+  // anywhere in the document could pair with, swallowing unrelated
+  // text. Splitting either with a space keeps the visible text close
+  // to the input, but it no longer parses to the same alias.
+  const safe = alias.replace(/\[\[/g, '[ [').replace(/]]/g, '] ]')
+  // A trailing `]` would pair with the closing delimiter's first `]`
+  // and close the link one character early, leaving a stray `]`
+  // outside the parsed span.
+  const padded = safe.endsWith(']') ? safe + ' ' : safe
+  return `[[${padded}]]`
 }
 
 /** Render an aliased blockref `[label](((id)))`. Strips `]` and
