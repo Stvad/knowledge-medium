@@ -63,6 +63,33 @@ const rawPresetConfig = (
   return preset.configCodec.encode(preset.defaultConfig)
 }
 
+/** Decode the row's stored default with the built codec, falling back to the
+ *  preset default when the stored value is incompatible. An incompatible stored
+ *  default is a stale *value* (e.g. a `null` optional-string default left behind
+ *  when a seed revision — or an out-of-band edit — switches the preset to plain
+ *  string), not a broken codec: the property keeps working with the preset
+ *  default instead of collapsing to metadata-only and losing all behavior.
+ *  Missing default → preset default, unchanged. */
+const decodeStoredDefault = (
+  row: BlockData,
+  preset: AnyValuePresetCore,
+  codec: ReturnType<AnyValuePresetCore['build']>,
+  name: string,
+): unknown => {
+  if (!Object.prototype.hasOwnProperty.call(row.properties, propertyDefaultProp.name)) {
+    return normalizePresetDefault(preset, codec)
+  }
+  try {
+    return codec.decode(row.properties[propertyDefaultProp.name])
+  } catch (err) {
+    console.warn(
+      `[UserSchemasService] schema "${name}" stored default is incompatible with preset ` +
+      `${JSON.stringify(preset.id)}; using the preset default: ${(err as Error).message}`,
+    )
+    return normalizePresetDefault(preset, codec)
+  }
+}
+
 /** Builds optional local behavior for already-validated definition metadata.
  *  Missing presets and invalid configs return null with a diagnostic. The block stays in the database
  *  untouched; a fix re-runs this on the next subscription tick (or the
@@ -101,16 +128,10 @@ const tryBuildSchema = (
     config = undefined
   }
   const codec = preset.build(config as never)
-  const hasStoredDefault = Object.prototype.hasOwnProperty.call(
-    row.properties,
-    propertyDefaultProp.name,
-  )
   return {
     name: metadata.name,
     codec,
-    defaultValue: hasStoredDefault
-      ? codec.decode(row.properties[propertyDefaultProp.name])
-      : normalizePresetDefault(preset, codec),
+    defaultValue: decodeStoredDefault(row, preset, codec, metadata.name),
     changeScope: metadata.changeScope,
   }
 }

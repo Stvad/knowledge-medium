@@ -332,7 +332,7 @@ describe('UserSchemasService subscription', () => {
     expect(env.repo.propertySchemas.get('plugin:config')).toBeUndefined()
   })
 
-  it('keeps metadata when preset/default/build behavior decoding throws', async () => {
+  it('keeps metadata when the preset or build behavior throws', async () => {
     const throwingPreset = definePresetCore<string>({
       id: 'test-throwing-build',
       build: () => { throw new Error('build failed') },
@@ -345,17 +345,10 @@ describe('UserSchemasService subscription', () => {
       {},
       {'property-schema:preset': 42},
     )
-    const malformedDefaultId = await createExternalSchemaBlock(
-      'bad:default',
-      'string',
-      {},
-      {[propertyDefaultProp.name]: {not: 'a string'}},
-    )
     const throwingBuildId = await createExternalSchemaBlock('bad:build', throwingPreset.id)
 
     for (const [id, name] of [
       [malformedPresetId, 'bad:preset'],
-      [malformedDefaultId, 'bad:default'],
       [throwingBuildId, 'bad:build'],
     ] as const) {
       await vi.waitFor(() => {
@@ -363,6 +356,28 @@ describe('UserSchemasService subscription', () => {
       }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
       expect(env.repo.propertySchemas.has(name)).toBe(false)
     }
+  })
+
+  it('keeps behavior with the preset default when the stored default is incompatible', async () => {
+    // The codec is fine; only the persisted default is stale (e.g. a `null`
+    // optional-string default left behind when the preset flips to plain
+    // string). The property must keep working with the preset default rather
+    // than collapsing to metadata-only.
+    env = await setup()
+    await createExternalSchemaBlock(
+      'bad:default',
+      'string',
+      {},
+      {[propertyDefaultProp.name]: {not: 'a string'}},
+    )
+
+    await vi.waitFor(() => {
+      expect(env.repo.propertySchemas.get('bad:default')).toMatchObject({
+        changeScope: ChangeScope.BlockDefault,
+        defaultValue: '',
+      })
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
+    expect(env.repo.propertySchemas.get('bad:default')?.codec.type).toBe('string')
   })
 
   it('builds fallback behavior from the persisted scope and explicit default', async () => {
