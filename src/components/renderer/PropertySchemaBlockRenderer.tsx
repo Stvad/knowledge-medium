@@ -202,7 +202,7 @@ export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRende
         <Input
           value={draftName}
           placeholder="property name"
-          readOnly={readOnly}
+          disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
           onBlur={() => { void writeName(draftName.trim()) }}
           onKeyDown={(e) => {

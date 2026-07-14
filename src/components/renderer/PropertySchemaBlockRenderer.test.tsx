@@ -95,7 +95,7 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
     expect(typeSelect.value).toBe('optional-string')
 
     const nameInput = screen.getByPlaceholderText('property name') as HTMLInputElement
-    expect(nameInput.readOnly).toBe(true)
+    expect(nameInput.disabled).toBe(true)
 
     expect(screen.queryByText(/Delete schema/)).toBeNull()
     expect(screen.getByText(/Built-in property defined in code/)).toBeTruthy()
@@ -108,7 +108,7 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
     expect(typeSelect.disabled).toBe(false)
 
     const nameInput = screen.getByPlaceholderText('property name') as HTMLInputElement
-    expect(nameInput.readOnly).toBe(false)
+    expect(nameInput.disabled).toBe(false)
 
     expect(screen.getByText(/Delete schema/)).toBeTruthy()
     expect(screen.queryByText(/Built-in property defined in code/)).toBeNull()
