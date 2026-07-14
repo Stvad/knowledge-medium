@@ -93,7 +93,7 @@ describe('isPropertyPanelHiddenProperty', () => {
     )).toBe(true)
   })
 
-  it('hides a unique synthesized seed but not an ambiguous same-name declaration', () => {
+  it('hides a unique synthesized seed; rejects two same-name seeds at registration', () => {
     const unique = hiddenSeed('plugin:one/property/secret')
     const uniqueSnapshot = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
@@ -104,14 +104,13 @@ describe('isPropertyPanelHiddenProperty', () => {
     expect(isPropertyPanelHiddenProperty(unique.name, uniqueSnapshot.schemas, new Map(), uniqueSnapshot))
       .toBe(true)
 
-    const ambiguousSnapshot = buildPropertyDefinitionRegistry({
+    // v1: two seeds sharing a name are rejected at registration (no ambiguity).
+    expect(() => buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
       legacySchemas: new Map(),
       projectedDefinitions: new Map(),
       seeds: [unique, hiddenSeed('plugin:two/property/secret')],
-    })
-    expect(isPropertyPanelHiddenProperty(unique.name, ambiguousSnapshot.schemas, new Map(), ambiguousSnapshot))
-      .toBe(false)
+    })).toThrow(/duplicate seed name/)
   })
 
   it('uses the declaration carried by stage-0 synthesis when no registry is bound', () => {

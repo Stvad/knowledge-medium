@@ -44,6 +44,19 @@ const indexSeeds = (seeds: readonly AnyPropertySeedDeclaration[]) => {
     if (byKey.has(seed.seedKey)) {
       throw new Error(`[property definitions] duplicate seed key ${JSON.stringify(seed.seedKey)}`)
     }
+    // v1 no-shadowing: property values are keyed by name, so two seeds sharing a
+    // name is an inherent conflict (they would fight over one stored cell). Fail
+    // loudly at registration rather than resolving it ambiguously — a plugin
+    // must namespace its property names (e.g. "myplugin:title") instead of
+    // colliding with a kernel or another plugin's name.
+    const existing = byName.get(seed.name)
+    if (existing) {
+      throw new Error(
+        `[property definitions] duplicate seed name ${JSON.stringify(seed.name)} ` +
+        `(seed keys ${JSON.stringify(existing[0]!.seedKey)} and ${JSON.stringify(seed.seedKey)}); ` +
+        `property names must be unique — namespace plugin seeds, e.g. "myplugin:name"`,
+      )
+    }
     byKey.set(seed.seedKey, seed)
     pushGrouped(byName, seed.name, seed)
   }

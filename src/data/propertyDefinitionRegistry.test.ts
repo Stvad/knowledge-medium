@@ -290,101 +290,11 @@ describe('property definition registry snapshot', () => {
     expect(() => build({seeds: [titleSeed, titleSeed]})).toThrow('duplicate seed key')
   })
 
-  it('keeps same-name synthesis handles ambiguous until synced state selects a winner', () => {
-    const snapshot = build({
-      seeds: [titleSeed, competingTitleSeed],
-      legacySchemas: new Map([[titleSeed.name, titleSeed]]),
-    })
-    const resolver = createPropertySchemaResolver(snapshot)
-
-    expect(snapshot.schemas.has(titleSeed.name)).toBe(false)
-    expect(resolver.resolve(titleSeed)).toEqual({
-      status: 'identity-unavailable',
-      reason: 'ambiguous',
-    })
-    expect(resolver.resolve(competingTitleSeed)).toEqual({
-      status: 'identity-unavailable',
-      reason: 'ambiguous',
-    })
-    expect(resolver.resolve(titleSeed.name)).toEqual({
-      status: 'identity-unavailable',
-      reason: 'ambiguous',
-    })
-  })
-
-  it('publishes the synced winner among same-name seed declarations', () => {
-    const fieldId = propertyDefinitionBlockId(WS, titleSeed.seedKey)
-    const winner = metadata(fieldId, titleSeed.name, 10, {
-      seedKey: titleSeed.seedKey,
-      origin: 'kernel',
-    })
-    const snapshot = build({
-      seeds: [titleSeed, competingTitleSeed],
-      projectedDefinitions: new Map([[fieldId, {metadata: winner}]]),
-    })
-    const resolver = createPropertySchemaResolver(snapshot)
-
-    expect(snapshot.schemas.get(titleSeed.name)).toBe(titleSeed)
-    expect(resolver.resolve(titleSeed.name)).toEqual({
-      status: 'resolved',
-      schema: expect.objectContaining({fieldId, codec: titleSeed.codec}),
-    })
-    expect(resolver.resolve(titleSeed)).toEqual({
-      status: 'resolved',
-      schema: expect.objectContaining({fieldId}),
-    })
-    expect(resolver.resolve(competingTitleSeed)).toEqual({
-      status: 'identity-unavailable',
-      reason: 'shadowed',
-    })
-  })
-
-  it('breaks an equal-createdAt tie between synced seeds by field id', () => {
-    const candidates = [titleSeed, competingTitleSeed].map(seed => {
-      const fieldId = propertyDefinitionBlockId(WS, seed.seedKey)
-      return {
-        seed,
-        fieldId,
-        definition: metadata(fieldId, seed.name, 10, {
-          seedKey: seed.seedKey,
-          origin: seed === titleSeed ? 'kernel' : 'plugin:system:other-plugin',
-        }),
-      }
-    })
-    const [winner, loser] = [...candidates].sort((a, b) =>
-      a.fieldId < b.fieldId ? -1 : a.fieldId > b.fieldId ? 1 : 0,
-    )
-    const snapshot = build({
-      seeds: [titleSeed, competingTitleSeed],
-      projectedDefinitions: new Map(
-        [...candidates].reverse().map(candidate => [
-          candidate.fieldId,
-          {metadata: candidate.definition},
-        ]),
-      ),
-    })
-    const resolver = createPropertySchemaResolver(snapshot)
-    const winnerResolution = winner!.seed === titleSeed
-      ? resolver.resolve(titleSeed)
-      : resolver.resolve(competingTitleSeed)
-    const loserResolution = loser!.seed === titleSeed
-      ? resolver.resolve(titleSeed)
-      : resolver.resolve(competingTitleSeed)
-
-    expect(snapshot.definitionsByName.get(titleSeed.name)?.[0]?.fieldId).toBe(winner!.fieldId)
-    expect(snapshot.schemas.get(titleSeed.name)).toBe(winner!.seed)
-    expect(resolver.resolve(titleSeed.name)).toEqual({
-      status: 'resolved',
-      schema: expect.objectContaining({fieldId: winner!.fieldId, codec: winner!.seed.codec}),
-    })
-    expect(winnerResolution).toEqual({
-      status: 'resolved',
-      schema: expect.objectContaining({fieldId: winner!.fieldId}),
-    })
-    expect(loserResolution).toEqual({
-      status: 'identity-unavailable',
-      reason: 'shadowed',
-    })
+  it('rejects two seeds that declare the same name at registration', () => {
+    // v1: property names must be unique across seeds — a plugin declaring a
+    // kernel or other-plugin name must namespace instead of colliding, since
+    // both would otherwise fight over the same name-keyed stored cell.
+    expect(() => build({seeds: [titleSeed, competingTitleSeed]})).toThrow(/duplicate seed name/)
   })
 
   it('keeps code behavior authoritative over a synced seed projector fallback', () => {
