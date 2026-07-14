@@ -124,6 +124,12 @@ const resolveModelRow = (
     presets: ReadonlyMap<string, AnyJoinedValuePreset>
     definitions: PropertyDefinitionRegistrySnapshot | null
     hidden: boolean
+    /** True when the block this panel is for is itself a materialized seed
+     *  definition. Its whole property bag is code-owned (§5.1), so every row
+     *  is locked — not just the `seed:key`/`seed:revision` provenance markers.
+     *  Otherwise editing e.g. `property-schema:hidden` on a code-owned seed
+     *  would mutate the definition metadata the panel itself trusts. */
+    blockIsSeededDefinition: boolean
   },
 ): PropertyPanelModelRow | null => {
   const display = resolvePropertyDisplay({
@@ -137,7 +143,10 @@ const resolveModelRow = (
     row.name,
     args.definitions,
   )
-  const rowReadOnly = declarationOnly !== undefined || isPropertyPanelReadOnlyProperty(row.name)
+  const rowReadOnly =
+    args.blockIsSeededDefinition ||
+    declarationOnly !== undefined ||
+    isPropertyPanelReadOnlyProperty(row.name)
 
   if (!row.isSet && !display.isKnown && declarationOnly === undefined) return null
 
@@ -185,6 +194,7 @@ const resolveSection = (
     presets: ReadonlyMap<string, AnyJoinedValuePreset>
     definitions: PropertyDefinitionRegistrySnapshot | null
     hidden: boolean
+    blockIsSeededDefinition: boolean
   },
 ): PropertyPanelModelSection | null => {
   const rows = section.rows
@@ -216,6 +226,12 @@ export const buildPropertyPanelModel = (args: {
   syntheticRows?: readonly PropertyPanelRow[]
 }): PropertyPanelModel => {
   const blockTypes = readBlockTypes(args.properties)
+  // A materialized seed definition block's whole bag is code-owned. The
+  // registry already parsed this block's provenance (seedKey present iff it's
+  // a valid seed), so lock every row of its panel — not just the provenance
+  // markers `isPropertyPanelReadOnlyProperty` catches by name.
+  const blockIsSeededDefinition =
+    args.propertyDefinitions?.definitionsByFieldId.get(args.blockId)?.seedKey !== undefined
   const {visibleProperties, hiddenProperties} = partitionProperties(
     args.properties,
     args.schemas,
@@ -239,6 +255,7 @@ export const buildPropertyPanelModel = (args: {
       presets: args.presets,
       definitions: args.propertyDefinitions,
       hidden: false,
+      blockIsSeededDefinition,
     }))
     .filter((row): row is PropertyPanelModelRow => row !== null)
 
@@ -265,6 +282,7 @@ export const buildPropertyPanelModel = (args: {
       presets: args.presets,
       definitions: args.propertyDefinitions,
       hidden: false,
+      blockIsSeededDefinition,
     }))
     .filter((section): section is PropertyPanelModelSection => section !== null)
 
@@ -282,6 +300,7 @@ export const buildPropertyPanelModel = (args: {
     presets: args.presets,
     definitions: args.propertyDefinitions,
     hidden: true,
+    blockIsSeededDefinition,
   }) ?? {...HIDDEN_SECTION, rows: []}
 
   const metadataRows = [

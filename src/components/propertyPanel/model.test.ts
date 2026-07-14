@@ -332,4 +332,97 @@ describe('buildPropertyPanelModel', () => {
       .toBe('User-created definition — behavior unavailable')
   })
 
+  it('locks every row when the panel is for a materialized seed definition block', () => {
+    // Panel opened ON a code-owned seed definition block: its whole bag is
+    // seed-owned, so non-provenance rows like property-schema:preset must also
+    // be read-only — not just seed:key/seed:revision. Editing them would mutate
+    // definition metadata the panel itself trusts.
+    const seeded: PropertyDefinitionMetadata = {
+      fieldId: 'seed-def-block',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'test:demo',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'plugin:system:test',
+      seedKey: 'system:test/property/demo',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map(),
+      projectedDefinitions: new Map([[seeded.fieldId, {metadata: seeded}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: seeded.fieldId,
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        'property-schema:preset': 'optional-string',
+        [typesProp.name]: typesProp.codec.encode(['property-schema']),
+      },
+      schemas: new Map([[typesProp.name, typesProp]]),
+      propertyDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const rows = [
+      ...model.pinnedRows,
+      ...model.sections.flatMap(section => section.rows),
+      ...model.hiddenSection.rows,
+    ]
+    const presetRow = rows.find(row => row.name === 'property-schema:preset')
+    expect(presetRow).toMatchObject({
+      readOnly: true,
+      canRename: false,
+      canDelete: false,
+      canChangeShape: false,
+    })
+    expect(presetRow?.Editor).toBeUndefined()
+    // Even the pinned type-membership row is locked on a seed definition.
+    expect(model.pinnedRows.find(row => row.name === typesProp.name)?.readOnly).toBe(true)
+  })
+
+  it('leaves a user-created definition block editable (no seed provenance)', () => {
+    const userDef: PropertyDefinitionMetadata = {
+      fieldId: 'user-def-block',
+      workspaceId: 'ws',
+      createdAt: 1,
+      name: 'my:prop',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'user',
+    }
+    const propertyDefinitions = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map(),
+      projectedDefinitions: new Map([[userDef.fieldId, {metadata: userDef}]]),
+      seeds: [],
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: userDef.fieldId,
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        'property-schema:preset': 'string',
+        [typesProp.name]: typesProp.codec.encode(['property-schema']),
+      },
+      schemas: new Map([[typesProp.name, typesProp]]),
+      propertyDefinitions,
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    const presetRow = model.sections
+      .flatMap(section => section.rows)
+      .find(row => row.name === 'property-schema:preset')
+    expect(presetRow?.readOnly).toBe(false)
+    expect(presetRow?.canDelete).toBe(true)
+  })
+
 })
