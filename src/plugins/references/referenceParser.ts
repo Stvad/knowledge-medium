@@ -242,9 +242,12 @@ export const renderWikilink = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
   // place, and an unclosed `[[` would leak an opener that a later `]]`
   // anywhere in the document could pair with, swallowing unrelated
-  // text. Splitting either with a space keeps the visible text close
-  // to the input, but it no longer parses to the same alias.
-  const safe = alias.replace(/\[\[/g, '[ [').replace(/]]/g, '] ]')
+  // text. Splitting with a space keeps the visible text close to the
+  // input, but it no longer parses to the same alias. Lookahead, not
+  // pair replacement: replacing the pair `]]` recreates one on odd
+  // runs (']]]' → '] ]]') — the space must land between EVERY two
+  // adjacent delimiters. Found by referenceParser.fuzz.
+  const safe = alias.replace(/\[(?=\[)/g, '[ ').replace(/\](?=\])/g, '] ')
   // A trailing `]` would pair with the closing delimiter's first `]`
   // and close the link one character early, leaving a stray `]`
   // outside the parsed span.
