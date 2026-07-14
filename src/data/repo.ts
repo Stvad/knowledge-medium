@@ -129,7 +129,6 @@ import {
   materializePropertySeeds,
   awaitPropertySeedMaterializationAccess,
 } from './definitionSeeds'
-import type {AnyPropertySeedDeclaration} from './propertySeeds'
 import {
   propertySchemaResolverForWorkspace,
   type PropertySchemaResolver,
@@ -512,6 +511,12 @@ export class Repo {
    *  Aborted + renewed whenever the active workspace changes, so parked waits for
    *  a workspace we've left terminate promptly. */
   private seedMaterializationGeneration = new AbortController()
+  /** Workspaces with a seed-materialization pass already queued or parked.
+   *  Repeated seed-set changes within one workspace (e.g. toggling several
+   *  dynamic extensions) coalesce onto the one pending pass instead of stacking
+   *  a job + a `workspace_members` subscription each; the pending pass reads the
+   *  LATEST seed set when it runs, so nothing is missed. Cleared when it settles. */
+  private readonly pendingSeedMaterializationWorkspaces = new Set<string>()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -2141,10 +2146,11 @@ export class Repo {
    * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
    * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
    * on every seed-set change — create/restore-only + idempotent, so steady state
-   * is a single probe SELECT that short-circuits on `seed:revision`. Seeds are
-   * captured HERE (write-visibility = seed-visibility): exactly the seeds the
-   * matching registry carries, frozen so a later workspace switch can't change
-   * what this scheduled pass materializes.
+   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
+   * COALESCE per workspace (one pending pass at a time); the pass reads the
+   * workspace's current seed set at run time, and only if that workspace is still
+   * the active/projected one, so a coalesced set-grow is picked up and a
+   * switched-away workspace is skipped.
    *
    * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
    * (for a non-freshly-created workspace) waits for the membership row before
@@ -2157,23 +2163,36 @@ export class Repo {
     if (this.isReadOnly || !workspaceId) return
     const registry = this._propertyDefinitionRegistry
     if (!registry || registry.workspaceId !== workspaceId) return
-    const seeds = [...registry.seedsByKey.values()]
-    if (seeds.length === 0) return
+    if (registry.seedsByKey.size === 0) return
+    // Coalesce: one pending pass per workspace. Repeated seed-set changes while a
+    // pass is parked on the membership wait would otherwise stack a job + a
+    // `workspace_members` subscription each; the pending pass reads the latest
+    // seed set at run time, so a coalesced change is still materialized.
+    if (this.pendingSeedMaterializationWorkspaces.has(workspaceId)) return
+    this.pendingSeedMaterializationWorkspaces.add(workspaceId)
     const {signal} = this.seedMaterializationGeneration
     this.seedMaterializationJobs.schedule(() =>
-      this.runWorkspaceSeedMaterialization(workspaceId, seeds, freshlyCreated, signal),
+      this.runWorkspaceSeedMaterialization(workspaceId, freshlyCreated, signal)
+        .finally(() => this.pendingSeedMaterializationWorkspaces.delete(workspaceId)),
     )
   }
 
   private async runWorkspaceSeedMaterialization(
     workspaceId: string,
-    seeds: readonly AnyPropertySeedDeclaration[],
     freshlyCreated: boolean,
     signal: AbortSignal,
   ): Promise<void> {
     try {
       const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated, signal})
       if (!access.allowed) return
+      // Read the CURRENT seed set at run time: coalesced schedules mean it may
+      // have grown since this pass was queued, and re-checking the projected
+      // workspace skips a pass whose workspace is no longer active/projected
+      // (closing the post-gate switch-away window too).
+      const registry = this._propertyDefinitionRegistry
+      if (!registry || registry.workspaceId !== workspaceId) return
+      const seeds = [...registry.seedsByKey.values()]
+      if (seeds.length === 0) return
       await materializePropertySeeds(this, workspaceId, seeds)
     } catch (err) {
       // A superseded generation (the user switched workspaces) aborts the parked
