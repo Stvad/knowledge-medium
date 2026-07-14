@@ -135,7 +135,7 @@
   <li><strong><code>properties_json</code> survives as a derived projection</strong> — <code>block.get(schema)</code> and <code>json_extract</code> queries stay correct and synchronous. A table reads the cell; it never walks field-row children on the read path.</li>
   <li><strong><code>tx.setProperty</code> dual-writes</strong> children + cell in one tx. A cell editor that writes through <code>setProperty</code> is correct in both worlds, unchanged.</li>
   <li><strong><code>tx.childrenOf</code> excludes field rows by default</strong> — children-as-rows tables see only content children, for free.</li>
-  <li><strong>Field identity is <code>fieldId</code></strong> — the schema block's id for user schemas, <code>property:&lt;name&gt;</code> for kernel/plugin schemas; renames touch <code>name</code> only.</li>
+  <li><strong>Field identity is <code>fieldId</code></strong> — the schema's definition block id (uniformly, post-unification; #288's original <code>property:&lt;name&gt;</code> class for kernel/plugin schemas is superseded by the seeded definition blocks — §2 below); renames touch <code>name</code> only.</li>
 </ul>
 
 <p>Two caveats the plan itself carries, inherited here rather than dropped:</p>
