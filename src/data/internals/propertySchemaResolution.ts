@@ -82,27 +82,45 @@ class IdentityUnavailablePropertySchemaResolver implements PropertySchemaResolve
 export const unavailablePropertySchemaResolver: PropertySchemaResolver =
   new IdentityUnavailablePropertySchemaResolver()
 
+/** Records each decode-fallback-wrapped schema against its strict pre-image, so
+ *  the WRITE seam can recover the un-degraded codec. WeakMap: entries evaporate
+ *  with the ephemeral per-resolution wrapper, and the wrapper is a fresh object
+ *  per `withDecodeFallback` call so keys never collide. */
+const strictSchemaByFallback = new WeakMap<
+  PropertySchema<unknown>,
+  PropertySchema<unknown>
+>()
+
 /** Wrap a schema so its codec's `decode` falls back to the schema default
  *  instead of throwing. Used for a PLUGIN handle read against a workspace whose
  *  faithful projection isn't loaded (the active workspace before it primes, or a
  *  genuinely foreign workspace): the stored value is almost always the plugin's
  *  own (decodes cleanly), but a rare pre-existing/synced user definition could
  *  shadow the name with a value the plugin's (strict) codec rejects — degrade
- *  that to the default rather than throw in a synchronous render. `encode` is
- *  unchanged, so a write still goes through the plugin's own codec. */
-const withDecodeFallback = <T>(schema: PropertySchema<T>): PropertySchema<T> => ({
-  ...schema,
-  codec: {
-    ...schema.codec,
-    decode: (value: unknown): T => {
-      try {
-        return schema.codec.decode(value)
-      } catch {
-        return schema.defaultValue
-      }
+ *  that to the default rather than throw in a synchronous render. This is a
+ *  READ affordance only: `encode` is unchanged, and the write seam
+ *  (`requireWritablePropertySchema`) strips the fallback back to the strict
+ *  codec, so a write never silently degrades a stored value it can't decode. */
+const withDecodeFallback = <T>(schema: PropertySchema<T>): PropertySchema<T> => {
+  const wrapped: PropertySchema<T> = {
+    ...schema,
+    codec: {
+      ...schema.codec,
+      decode: (value: unknown): T => {
+        try {
+          return schema.codec.decode(value)
+        } catch {
+          return schema.defaultValue
+        }
+      },
     },
-  },
-})
+  }
+  strictSchemaByFallback.set(
+    wrapped as PropertySchema<unknown>,
+    schema as PropertySchema<unknown>,
+  )
+  return wrapped
+}
 
 /** The fallback resolver for a workspace with no faithful registry snapshot —
  * either the boot window (stage-0, or the active workspace before its projection
@@ -373,6 +391,17 @@ export const requireWritablePropertySchema = <T>(
   resolver: PropertySchemaResolver,
 ): PropertySchema<T> => {
   const resolution = resolver.resolveBoundary(schema)
-  if (resolution.status === 'available') return resolution.schema
-  throw new PropertySchemaIdentityError(schema.name, resolution.reason)
+  if (resolution.status !== 'available') {
+    throw new PropertySchemaIdentityError(schema.name, resolution.reason)
+  }
+  // Writes must decode the current stored value with the STRICT codec. The
+  // read-only decode fallback (so a synchronous render can't throw on a
+  // cross-workspace shadowed value) would, in `setProperty`'s updater form,
+  // degrade an undecodable current value to the default and then overwrite it —
+  // silently clobbering a value the caller never saw. Recover the pre-fallback
+  // schema so an incompatible current value throws (preserving it) instead.
+  const strict = strictSchemaByFallback.get(
+    resolution.schema as PropertySchema<unknown>,
+  )
+  return (strict as PropertySchema<T> | undefined) ?? resolution.schema
 }

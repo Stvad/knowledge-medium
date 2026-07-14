@@ -403,6 +403,41 @@ describe('typed property identity boundary', () => {
     expect(repo.block('scope-target').get(seed)).toBe('ok')
   })
 
+  it('accepts a write whose resolved scope differs from the tx scope but shares its policy', async () => {
+    // The guard compares by POLICY (read-only behavior + undoability), NOT scope
+    // identity. BlockDefault and References share a policy, so a References tx
+    // writing a BlockDefault-scoped property is intentional and must succeed —
+    // this is what lets the references processor write a BlockDefault property
+    // under its own bucket. A regression to identity comparison would reject it,
+    // which the reject-case test above (differing scopes AND policies) can't catch.
+    const seed = seedProperty({
+      seedKey: 'system:test-plugin/property/policy-share',
+      revision: 1,
+      name: 'policy-share',
+      preset: 'string',
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'user-1'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId(WS)
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-policy-share', [seed])
+    await repo.tx(
+      tx => tx.create({id: 'policy-share-target', workspaceId: WS, parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await repo.tx(
+      tx => tx.setProperty('policy-share-target', seed, 'via-references'),
+      {scope: ChangeScope.References},
+    )
+    expect(repo.block('policy-share-target').get(seed)).toBe('via-references')
+  })
+
   it('accepts a resolved synthesized seed before its definition row exists', async () => {
     const {repo} = createTestRepo({
       db: sharedDb.db,
@@ -751,15 +786,59 @@ describe('typed property identity boundary', () => {
     // the schema default, never the foreign workspace's stored value.
     expect(repo.block('other-workspace-target').get(legacyLookalike)).toBe('legacy-default')
     expect(repo.block('other-workspace-target').get(registeredLegacy)).toBe('registered-default')
-    for (const schema of [legacyLookalike, registeredLegacy]) {
-      await expect(repo.tx(
-        tx => tx.setProperty('other-workspace-target', schema, 'changed'),
-        {scope: ChangeScope.BlockDefault},
-      )).rejects.toMatchObject({
-        name: 'PropertySchemaIdentityError',
-      })
-    }
+    // The two failures have DISTINCT reasons, and the test pins each: the
+    // lookalike squats on a seed name (shadowed); the registered plain name has
+    // no faithful winner in an unloaded foreign workspace (registry-not-keyed).
+    // Asserting only the error name would let a resolver that conflates the two
+    // branches pass silently.
+    await expect(repo.tx(
+      tx => tx.setProperty('other-workspace-target', legacyLookalike, 'changed'),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'shadowed',
+    })
+    await expect(repo.tx(
+      tx => tx.setProperty('other-workspace-target', registeredLegacy, 'changed'),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toMatchObject({
+      name: 'PropertySchemaIdentityError',
+      reason: 'registry-not-workspace-keyed',
+    })
     // The registered-legacy raw value is untouched.
     expect(repo.block('other-workspace-target').peek()!.properties[registeredLegacy.name]).toBe('before')
+  })
+
+  it('decodes strictly on an updater-form write, preserving a codec-incompatible foreign value', async () => {
+    const repo = await setup()
+    // A row in `ws-other` (foreign — neither active nor retained) whose stored
+    // `status` value is INCOMPATIBLE with the seed's string codec: the shape a
+    // pre-existing/synced user definition on that workspace could have left. The
+    // seed handle resolves there via a decode FALLBACK so a synchronous render
+    // can't throw — but a write must not silently degrade-then-overwrite it.
+    await repo.tx(
+      tx => tx.create({
+        id: 'foreign-incompatible-target',
+        workspaceId: 'ws-other',
+        parentId: null,
+        orderKey: 'a0',
+        properties: {[shadowed.name]: 42},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    // Read degrades to the seed default (render-safe).
+    expect(repo.block('foreign-incompatible-target').get(shadowed)).toBe('seed-default')
+
+    // An updater-form write decodes the CURRENT value strictly: it throws rather
+    // than feeding the updater the default and clobbering the stored value.
+    await expect(repo.tx(
+      tx => tx.setProperty('foreign-incompatible-target', shadowed, current => `${current ?? ''}!`),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow()
+
+    // The incompatible stored value is preserved, not overwritten with a
+    // default-derived value.
+    expect(repo.block('foreign-incompatible-target').peek()!.properties[shadowed.name]).toBe(42)
   })
 })

@@ -65,6 +65,25 @@ describe('runFreshInitialLoad', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
+  it('cancel() suppresses a late failure and schedules no retry', async () => {
+    // Mirror of the late-success case, but the in-flight load REJECTS after
+    // cancel — exercising the error handler's cancelled-guard. Without it, a
+    // cancelled load could still schedule a retry (or call onError) after
+    // teardown.
+    let rejectLoad: (error: unknown) => void = () => {}
+    const loadFresh = vi.fn(() => new Promise<string>((_, reject) => { rejectLoad = reject }))
+    const onLoaded = vi.fn()
+    const onError = vi.fn()
+    const cancel = runFreshInitialLoad(loadFresh, onLoaded, onError, {schedule: syncSchedule})
+    cancel()
+    rejectLoad(new Error('late'))
+    await flushMicrotasks()
+    expect(onError).not.toHaveBeenCalled()
+    expect(onLoaded).not.toHaveBeenCalled()
+    // No retry was scheduled after cancel — the single initial attempt stands.
+    expect(loadFresh).toHaveBeenCalledTimes(1)
+  })
+
   it('cancel() clears a pending retry so no further load is attempted', async () => {
     const loadFresh = vi.fn(() => Promise.reject(new Error('busy')))
     const onError = vi.fn()

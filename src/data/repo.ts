@@ -489,6 +489,14 @@ export class Repo {
    *  marker-gated once-per-workspace, so it can re-run on every seed-set change
    *  (a probe SELECT that short-circuits in steady state). */
   private readonly seedMaterializationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** The "trigger generation" the seed-materialization access gate references.
+   *  A deferred pass parks on the membership row before writing; the App defaults
+   *  a not-yet-synced role to writable, so on a workspace whose membership never
+   *  syncs that wait never resolves. Without an abort, every subsequent seed-set
+   *  change would park another job (and its members subscription), unbounded.
+   *  Aborted + renewed whenever the active workspace changes, so parked waits for
+   *  a workspace we've left terminate promptly. */
+  private seedMaterializationGeneration = new AbortController()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -1046,7 +1054,15 @@ export class Repo {
       workspaceId === this._activeWorkspaceId &&
       (!this.facetRuntime || workspaceId === this.projectors.workspaceId)
     ) return
+    const previousWorkspaceId = this._activeWorkspaceId
     this._activeWorkspaceId = workspaceId
+    if (workspaceId !== previousWorkspaceId) {
+      // Cancel any parked seed-materialization access waits bound to the
+      // workspace we just left, then open a fresh generation for the incoming
+      // one (a same-workspace projector re-pin keeps the current generation).
+      this.seedMaterializationGeneration.abort()
+      this.seedMaterializationGeneration = new AbortController()
+    }
     this.facetBridge.setActiveWorkspaceId(workspaceId)
     try {
       if (this.facetRuntime) {
@@ -2128,8 +2144,9 @@ export class Repo {
     if (!registry || registry.workspaceId !== workspaceId) return
     const seeds = [...registry.seedsByKey.values()]
     if (seeds.length === 0) return
+    const {signal} = this.seedMaterializationGeneration
     this.seedMaterializationJobs.schedule(() =>
-      this.runWorkspaceSeedMaterialization(workspaceId, seeds, freshlyCreated),
+      this.runWorkspaceSeedMaterialization(workspaceId, seeds, freshlyCreated, signal),
     )
   }
 
@@ -2137,12 +2154,16 @@ export class Repo {
     workspaceId: string,
     seeds: readonly AnyPropertySeedDeclaration[],
     freshlyCreated: boolean,
+    signal: AbortSignal,
   ): Promise<void> {
     try {
-      const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated})
+      const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated, signal})
       if (!access.allowed) return
       await materializePropertySeeds(this, workspaceId, seeds)
     } catch (err) {
+      // A superseded generation (the user switched workspaces) aborts the parked
+      // access wait — expected, not a failure to log or retry.
+      if (err instanceof Error && err.name === 'AbortError') return
       const reason = err instanceof Error ? err.message : String(err)
       console.error(
         `[seedMaterialization] workspace ${workspaceId} failed (will retry next open/seed change): ${reason}`,

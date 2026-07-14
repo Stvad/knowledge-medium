@@ -29,6 +29,10 @@ const highlightIdProp = seedProperty({
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
+// The optional-* seeds below default to `undefined`, not the old facet's
+// `null`. This is codec-forced (decode(encode(null)) === undefined) and inert
+// today (these handles are registration-only — never read via .get/.peek), but
+// keep it in mind if a future call site starts reading their default.
 const sourceUrlProp = seedProperty({
   seedKey: 'system:readwise-sync/property/url',
   revision: 1,
