@@ -2,7 +2,7 @@ import {
   actionsFacet, ActionContextTypes, appEffectsFacet, appMountsFacet,
   blockContentDecoratorsFacet,
   diagnosticsFacet,
-  ChangeScope, defineBlockType, seedProperty, definePropertyEditorOverride,
+  ChangeScope, defineBlockType, seedProperty, extensionPropertySeedKey, definePropertyEditorOverride,
   getPluginPrefsBlock, pluginBlockId, propertyEditorOverridesFacet, definitionSeedsFacet,
   showError, showInfo, showSuccess, showPropertiesProp, typesFacet, useRepo,
   type DiagnosticSnapshot,
@@ -84,7 +84,7 @@ const RESTART_EVENT = 'matrix:ingest:restart'
 // namespace — see matrixPromotionOptions below).
 
 const homeserverProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/homeserver',
+  seedKey: extensionPropertySeedKey('homeserver'),
   revision: 1,
   name: 'matrix:homeserver',
   preset: 'string',
@@ -92,7 +92,7 @@ const homeserverProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const roomIdProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/room-id',
+  seedKey: extensionPropertySeedKey('room-id'),
   revision: 1,
   name: 'matrix:roomId',
   preset: 'string',
@@ -100,7 +100,7 @@ const roomIdProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const autoStartProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/auto-start',
+  seedKey: extensionPropertySeedKey('auto-start'),
   revision: 1,
   name: 'matrix:autoStart',
   preset: 'boolean',
@@ -110,7 +110,7 @@ const autoStartProp = seedProperty({
 // UI hint mirrored onto the prefs block so the settings panel can render
 // connectivity without subscribing to localStorage or the poll loop.
 const connectedHintProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/connected',
+  seedKey: extensionPropertySeedKey('connected'),
   revision: 1,
   name: 'matrix:connected',
   preset: 'boolean',
@@ -120,7 +120,7 @@ const connectedHintProp = seedProperty({
 
 // Per-message event metadata. Reserved `matrix-event:*` namespace.
 const eventIdProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/event-id',
+  seedKey: extensionPropertySeedKey('event-id'),
   revision: 1,
   name: 'matrix-event:id',
   preset: 'string',
@@ -128,7 +128,7 @@ const eventIdProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const eventRoomProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/event-room',
+  seedKey: extensionPropertySeedKey('event-room'),
   revision: 1,
   name: 'matrix-event:room',
   preset: 'string',
@@ -136,7 +136,7 @@ const eventRoomProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const eventUrlProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/event-url',
+  seedKey: extensionPropertySeedKey('event-url'),
   revision: 1,
   name: 'matrix-event:url',
   preset: 'optional-string',
@@ -144,7 +144,7 @@ const eventUrlProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const eventAuthorProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/event-author',
+  seedKey: extensionPropertySeedKey('event-author'),
   revision: 1,
   name: 'matrix-event:author',
   preset: 'optional-string',
@@ -152,7 +152,7 @@ const eventAuthorProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const eventTimestampProp = seedProperty({
-  seedKey: 'system:matrix-chat-client/property/event-timestamp',
+  seedKey: extensionPropertySeedKey('event-timestamp'),
   revision: 1,
   name: 'matrix-event:timestamp',
   preset: 'optional-number',

@@ -2,12 +2,13 @@ import {
   ChangeScope,
   defineBlockType,
   seedProperty,
+  extensionPropertySeedKey,
 } from '@/extensions/api.js'
 
 import type {TargetPlatform} from './types'
 
 export const blueskyHandleProp = seedProperty({
-  seedKey: 'system:social-media-publisher/property/bluesky-handle',
+  seedKey: extensionPropertySeedKey('bluesky-handle'),
   revision: 1,
   name: 'socialPublisher:blueskyHandle',
   preset: 'string',
@@ -16,7 +17,7 @@ export const blueskyHandleProp = seedProperty({
 })
 
 export const corsProxyUrlProp = seedProperty({
-  seedKey: 'system:social-media-publisher/property/cors-proxy-url',
+  seedKey: extensionPropertySeedKey('cors-proxy-url'),
   revision: 1,
   name: 'socialPublisher:corsProxyUrl',
   preset: 'string',
@@ -27,7 +28,7 @@ export const corsProxyUrlProp = seedProperty({
 // Schema-only settings rows. Their editors derive device-local credential
 // status directly and never persist these values to synced user preferences.
 export const twitterConnectedHintProp = seedProperty({
-  seedKey: 'system:social-media-publisher/property/twitter-configured',
+  seedKey: extensionPropertySeedKey('twitter-configured'),
   revision: 1,
   name: 'socialPublisher:twitterConfigured',
   preset: 'boolean',
@@ -36,7 +37,7 @@ export const twitterConnectedHintProp = seedProperty({
 })
 
 export const blueskyConnectedHintProp = seedProperty({
-  seedKey: 'system:social-media-publisher/property/bluesky-configured',
+  seedKey: extensionPropertySeedKey('bluesky-configured'),
   revision: 1,
   name: 'socialPublisher:blueskyConfigured',
   preset: 'boolean',
@@ -45,7 +46,7 @@ export const blueskyConnectedHintProp = seedProperty({
 })
 
 export const lesswrongConnectedHintProp = seedProperty({
-  seedKey: 'system:social-media-publisher/property/lesswrong-configured',
+  seedKey: extensionPropertySeedKey('lesswrong-configured'),
   revision: 1,
   name: 'socialPublisher:lesswrongConfigured',
   preset: 'boolean',

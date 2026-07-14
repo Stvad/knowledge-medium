@@ -4,6 +4,7 @@ import {
   definitionSeedsFacet,
   ActionContextTypes,
   seedProperty,
+  extensionPropertySeedKey,
   ChangeScope,
 } from '@/extensions/api.js'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
@@ -59,7 +60,7 @@ const isCanvasMode = () => canvasMode
 // intent, `ChangeScope.UiState` is what the author meant; seedProperty
 // requires a valid ChangeScope so that's what's declared below.
 const canvasXProp = seedProperty({
-  seedKey: 'system:canvas-layout/property/x',
+  seedKey: extensionPropertySeedKey('x'),
   revision: 1,
   name: 'canvasX',
   preset: 'number',
@@ -67,7 +68,7 @@ const canvasXProp = seedProperty({
   changeScope: ChangeScope.UiState,
 })
 const canvasYProp = seedProperty({
-  seedKey: 'system:canvas-layout/property/y',
+  seedKey: extensionPropertySeedKey('y'),
   revision: 1,
   name: 'canvasY',
   preset: 'number',
@@ -75,7 +76,7 @@ const canvasYProp = seedProperty({
   changeScope: ChangeScope.UiState,
 })
 const canvasWProp = seedProperty({
-  seedKey: 'system:canvas-layout/property/w',
+  seedKey: extensionPropertySeedKey('w'),
   revision: 1,
   name: 'canvasW',
   preset: 'number',
@@ -83,7 +84,7 @@ const canvasWProp = seedProperty({
   changeScope: ChangeScope.UiState,
 })
 const canvasHProp = seedProperty({
-  seedKey: 'system:canvas-layout/property/h',
+  seedKey: extensionPropertySeedKey('h'),
   revision: 1,
   name: 'canvasH',
   preset: 'number',

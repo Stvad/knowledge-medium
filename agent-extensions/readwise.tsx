@@ -3,7 +3,7 @@ import {
   blockContentDecoratorsFacet, ChangeScope, defineBlockType,
   definePropertyEditorOverride, definitionSeedsFacet, getPluginPrefsBlock,
   keyBetween, keysBetween, pluginBlockId,
-  propertyEditorOverridesFacet, seedProperty,
+  propertyEditorOverridesFacet, seedProperty, extensionPropertySeedKey,
   showError, showInfo, showProgress, showPropertiesProp,
   showSuccess, typesFacet, useRepo,
   type ActionConfig,
@@ -95,7 +95,7 @@ const validateToken = async (candidate: string): Promise<boolean> => {
 // properties
 
 const lastSyncedAtProp = seedProperty({
-  seedKey: 'system:readwise/property/last-synced-at',
+  seedKey: extensionPropertySeedKey('last-synced-at'),
   revision: 1,
   name: 'readwise:lastSyncedAt',
   preset: 'optional-string',
@@ -103,7 +103,7 @@ const lastSyncedAtProp = seedProperty({
   changeScope: ChangeScope.UserPrefs,
 })
 const syncSinceProp = seedProperty({
-  seedKey: 'system:readwise/property/sync-since',
+  seedKey: extensionPropertySeedKey('sync-since'),
   revision: 1,
   name: 'readwise:syncSince',
   preset: 'date',
@@ -111,7 +111,7 @@ const syncSinceProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const pageTitleTemplateProp = seedProperty({
-  seedKey: 'system:readwise/property/page-title-template',
+  seedKey: extensionPropertySeedKey('page-title-template'),
   revision: 1,
   name: 'readwise:pageTitleTemplate',
   preset: 'string',
@@ -119,7 +119,7 @@ const pageTitleTemplateProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const bookTemplateProp = seedProperty({
-  seedKey: 'system:readwise/property/book-template',
+  seedKey: extensionPropertySeedKey('book-template'),
   revision: 1,
   name: 'readwise:bookTemplate',
   preset: 'string',
@@ -127,7 +127,7 @@ const bookTemplateProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const highlightTemplateProp = seedProperty({
-  seedKey: 'system:readwise/property/highlight-template',
+  seedKey: extensionPropertySeedKey('highlight-template'),
   revision: 1,
   name: 'readwise:highlightTemplate',
   preset: 'string',
@@ -135,7 +135,7 @@ const highlightTemplateProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const autoSyncIntervalProp = seedProperty({
-  seedKey: 'system:readwise/property/auto-sync-interval-min',
+  seedKey: extensionPropertySeedKey('auto-sync-interval-min'),
   revision: 1,
   name: 'readwise:autoSyncIntervalMin',
   preset: 'number',
@@ -143,7 +143,7 @@ const autoSyncIntervalProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const authorPageTypesProp = seedProperty({
-  seedKey: 'system:readwise/property/author-page-types',
+  seedKey: extensionPropertySeedKey('author-page-types'),
   revision: 1,
   name: 'readwise:authorPageTypes',
   preset: 'refList',
@@ -152,7 +152,7 @@ const authorPageTypesProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const documentPageTypesProp = seedProperty({
-  seedKey: 'system:readwise/property/document-page-types',
+  seedKey: extensionPropertySeedKey('document-page-types'),
   revision: 1,
   name: 'readwise:documentPageTypes',
   preset: 'refList',
@@ -161,7 +161,7 @@ const documentPageTypesProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const highlightTypesProp = seedProperty({
-  seedKey: 'system:readwise/property/highlight-types',
+  seedKey: extensionPropertySeedKey('highlight-types'),
   revision: 1,
   name: 'readwise:highlightTypes',
   preset: 'refList',
@@ -172,7 +172,7 @@ const highlightTypesProp = seedProperty({
 // purely a UI hint — the source of truth is localStorage. We mirror it so the
 // settings page can render a "Connected" pill without subscribing to storage.
 const connectedHintProp = seedProperty({
-  seedKey: 'system:readwise/property/connected-hint',
+  seedKey: extensionPropertySeedKey('connected-hint'),
   revision: 1,
   name: 'readwise:connectedHint',
   preset: 'boolean',
@@ -181,7 +181,7 @@ const connectedHintProp = seedProperty({
 })
 // per-block external ids on imported pages / highlights
 const userBookIdProp = seedProperty({
-  seedKey: 'system:readwise/property/user-book-id',
+  seedKey: extensionPropertySeedKey('user-book-id'),
   revision: 1,
   name: 'readwise:user_book_id',
   preset: 'optional-string',
@@ -189,7 +189,7 @@ const userBookIdProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const highlightIdProp = seedProperty({
-  seedKey: 'system:readwise/property/highlight-id',
+  seedKey: extensionPropertySeedKey('highlight-id'),
   revision: 1,
   name: 'readwise:highlight_id',
   preset: 'optional-string',
@@ -197,7 +197,7 @@ const highlightIdProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const titleProp = seedProperty({
-  seedKey: 'system:readwise/property/title',
+  seedKey: extensionPropertySeedKey('title'),
   revision: 1,
   name: 'readwise:title',
   preset: 'optional-string',
@@ -205,7 +205,7 @@ const titleProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const authorProp = seedProperty({
-  seedKey: 'system:readwise/property/author',
+  seedKey: extensionPropertySeedKey('author'),
   revision: 1,
   name: 'readwise:author',
   preset: 'ref',
@@ -214,7 +214,7 @@ const authorProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const categoryProp = seedProperty({
-  seedKey: 'system:readwise/property/category',
+  seedKey: extensionPropertySeedKey('category'),
   revision: 1,
   name: 'readwise:category',
   preset: 'optional-string',
@@ -222,7 +222,7 @@ const categoryProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const sourceProp = seedProperty({
-  seedKey: 'system:readwise/property/source',
+  seedKey: extensionPropertySeedKey('source'),
   revision: 1,
   name: 'readwise:source',
   preset: 'optional-string',
@@ -230,7 +230,7 @@ const sourceProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const sourceUrlProp = seedProperty({
-  seedKey: 'system:readwise/property/source-url',
+  seedKey: extensionPropertySeedKey('source-url'),
   revision: 1,
   name: 'readwise:source_url',
   preset: 'optional-string',
@@ -238,7 +238,7 @@ const sourceUrlProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const readwiseUrlProp = seedProperty({
-  seedKey: 'system:readwise/property/readwise-url',
+  seedKey: extensionPropertySeedKey('readwise-url'),
   revision: 1,
   name: 'readwise:readwise_url',
   preset: 'optional-string',
@@ -246,7 +246,7 @@ const readwiseUrlProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const coverImageUrlProp = seedProperty({
-  seedKey: 'system:readwise/property/cover-image-url',
+  seedKey: extensionPropertySeedKey('cover-image-url'),
   revision: 1,
   name: 'readwise:cover_image_url',
   preset: 'optional-string',
@@ -254,7 +254,7 @@ const coverImageUrlProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const documentNoteProp = seedProperty({
-  seedKey: 'system:readwise/property/document-note',
+  seedKey: extensionPropertySeedKey('document-note'),
   revision: 1,
   name: 'readwise:document_note',
   preset: 'optional-string',
@@ -262,7 +262,7 @@ const documentNoteProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const numHighlightsProp = seedProperty({
-  seedKey: 'system:readwise/property/num-highlights',
+  seedKey: extensionPropertySeedKey('num-highlights'),
   revision: 1,
   name: 'readwise:num_highlights',
   preset: 'optional-number',
@@ -270,7 +270,7 @@ const numHighlightsProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const lastHighlightAtProp = seedProperty({
-  seedKey: 'system:readwise/property/last-highlight-at',
+  seedKey: extensionPropertySeedKey('last-highlight-at'),
   revision: 1,
   name: 'readwise:last_highlight_at',
   preset: 'optional-string',
@@ -278,7 +278,7 @@ const lastHighlightAtProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const asinProp = seedProperty({
-  seedKey: 'system:readwise/property/asin',
+  seedKey: extensionPropertySeedKey('asin'),
   revision: 1,
   name: 'readwise:asin',
   preset: 'optional-string',
@@ -290,7 +290,7 @@ const asinProp = seedProperty({
 // `aliasesProp` in `@/data/properties`) so downstream consumers that build
 // and assign plain string[] arrays don't all need a readonly-array update.
 const tagsProp = seedProperty({
-  seedKey: 'system:readwise/property/tags',
+  seedKey: extensionPropertySeedKey('tags'),
   revision: 1,
   name: 'readwise:tags',
   preset: 'string-list',
@@ -298,7 +298,7 @@ const tagsProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 }) as PropertySeedDeclaration<string[]>
 const locationProp = seedProperty({
-  seedKey: 'system:readwise/property/location',
+  seedKey: extensionPropertySeedKey('location'),
   revision: 1,
   name: 'readwise:location',
   preset: 'optional-string',
@@ -306,7 +306,7 @@ const locationProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const locationTypeProp = seedProperty({
-  seedKey: 'system:readwise/property/location-type',
+  seedKey: extensionPropertySeedKey('location-type'),
   revision: 1,
   name: 'readwise:location_type',
   preset: 'optional-string',
@@ -314,7 +314,7 @@ const locationTypeProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const colorProp = seedProperty({
-  seedKey: 'system:readwise/property/color',
+  seedKey: extensionPropertySeedKey('color'),
   revision: 1,
   name: 'readwise:color',
   preset: 'optional-string',
@@ -322,7 +322,7 @@ const colorProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const highlightedAtProp = seedProperty({
-  seedKey: 'system:readwise/property/highlighted-at',
+  seedKey: extensionPropertySeedKey('highlighted-at'),
   revision: 1,
   name: 'readwise:highlighted_at',
   preset: 'optional-string',
@@ -330,7 +330,7 @@ const highlightedAtProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const updatedAtProp = seedProperty({
-  seedKey: 'system:readwise/property/updated-at',
+  seedKey: extensionPropertySeedKey('updated-at'),
   revision: 1,
   name: 'readwise:updated_at',
   preset: 'optional-string',
@@ -338,7 +338,7 @@ const updatedAtProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const createdAtProp = seedProperty({
-  seedKey: 'system:readwise/property/created-at',
+  seedKey: extensionPropertySeedKey('created-at'),
   revision: 1,
   name: 'readwise:created_at',
   preset: 'optional-string',
@@ -346,7 +346,7 @@ const createdAtProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const noteForHighlightIdProp = seedProperty({
-  seedKey: 'system:readwise/property/note-for-highlight-id',
+  seedKey: extensionPropertySeedKey('note-for-highlight-id'),
   revision: 1,
   name: 'readwise:note_for_highlight_id',
   preset: 'optional-string',
@@ -354,7 +354,7 @@ const noteForHighlightIdProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const reviewDateProp = seedProperty({
-  seedKey: 'system:readwise/property/review-date',
+  seedKey: extensionPropertySeedKey('review-date'),
   revision: 1,
   name: 'readwise:review_date',
   preset: 'ref',
@@ -363,7 +363,7 @@ const reviewDateProp = seedProperty({
   changeScope: ChangeScope.BlockDefault,
 })
 const reviewedProp = seedProperty({
-  seedKey: 'system:readwise/property/reviewed',
+  seedKey: extensionPropertySeedKey('reviewed'),
   revision: 1,
   name: 'readwise:reviewed',
   preset: 'boolean',
