@@ -20,13 +20,18 @@
           border-radius: 4px; margin: 1rem 0; }
   .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
              border-radius: 4px; margin: 1.5rem 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; font-size: 13px; }
+  th, td { border: 1px solid #d0d7de; padding: .45rem .6rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  td:first-child { white-space: nowrap; font-weight: 600; }
+  .tblwrap { overflow-x: auto; }
   small { color: #57606a; }
   .filepath { color: #57606a; font-size: 11.5px; }
 </style>
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam; URL rides the now-merged #338 matrix-param grammar; hiding is Activity-only (react-player v3 has no destructive effect cleanup); host = block renderer of the layout-sessions container. <strong>Last verified against code:</strong> 2026-07-14 (<code>src/</code> + <code>agent-extensions/window-management/</code> @ upstream <code>origin/master</code> post-#367, + <code>node_modules/react-player</code>).
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch); URL rides the now-merged #338 matrix-param grammar; hiding is Activity-only (react-player v3 has no destructive effect cleanup); host = block renderer of the layout-sessions container. <strong>Last verified against code:</strong> 2026-07-14 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
 </aside>
 
 <h1>Perspective keep-alive</h1>
@@ -112,6 +117,89 @@ the block-renderer override that already exists on the root, <em>that alone</em>
 perspectives: the extension supplies the provider, mounts N session blocks with keep-alive under its
 own renderer, and owns the hash. The session-swap store is then pure pluginland. This is the core
 ask — smaller and more general than a session API.</div>
+
+<h3>Audit: the non-injected globals that block it</h3>
+
+<p>The feature is gated by a chain of module-level globals, each read directly with no injection
+seam, all resolving the <em>same</em> single per-tab session — so overriding any one alone is
+insufficient. Ranked by how much each blocks multiple-sessions:</p>
+
+<div class="tblwrap"><table>
+<tr><th>Global</th><th>Where</th><th>Why it blocks override</th></tr>
+<tr><td><code>getLayoutSessionId()</code></td><td>layoutSessionId.ts:60</td>
+<td>Per-device id from session/localStorage, memoized, no param/context seam. Called directly from
+~9 sites (bootstrap, <code>data/globalState.ts</code> ×2, navigation, defaultShortcuts, +4 plugins).
+The seam exists one layer down (<code>getLayoutSessionBlock(uiState, id)</code> takes the id) but
+every caller hardcodes the global. <strong>Key sub-finding:</strong> <code>layoutSessionBlockId</code>
+is <em>already</em> a block-context field (<code>types.ts:100</code>) — the DI channel exists and is
+being bypassed.</td></tr>
+<tr><td><code>isInstalledAppDisplayMode()</code></td><td>layoutSessionId.ts:27</td>
+<td>Device-mode read that forks the session-id storage key (localStorage vs sessionStorage). No
+injection; can't override to share/split sessions across surfaces.</td></tr>
+<tr><td><code>new PanelLayoutProjection(…)</code></td><td>App.tsx:190</td>
+<td>The one projection owning the hash↔rows write path; concrete class imported, not facet-resolved.
+Even with a different id injected, this still owns writes. Its constructor already accepts injectable
+<code>getHash/pushHash/replaceHash/subscribeToUrl</code> (options at
+<code>panelLayoutProjection.ts:941</code>) — the URL layer is DI-ready; only the construction site is
+pinned to App.</td></tr>
+<tr><td><code>panelHistory</code> singleton</td><td>panelHistory.ts:237</td>
+<td>Process-wide store keyed by <code>panelId</code> only, imported directly. No per-session
+partition, so parallel perspectives can't get independent back/forward stacks.</td></tr>
+<tr><td>ui-state identity</td><td>stateBlocks.ts:43,367</td>
+<td><code>USER_PAGE_NS</code> (uuidv5 namespace) + <code>LAYOUT_SESSIONS_PATH_PART</code> pin the
+whole <code>user → ui-state → layout-sessions/&lt;id&gt;</code> tree from module-private constants;
+memoized accessors bake it. Can't point the machinery at a different root.</td></tr>
+</table></div>
+
+<p>Same pattern, lower stakes (non-layout): <code>lastWorkspace</code> localStorage accessors
+consumed by boot; <code>repoProvider</code>'s <code>getActiveUserId()</code> + module-mutable
+<code>activeUserId</code>/<code>dbsByUser</code>; <code>getClientId()</code>. Note the
+renderer-registry itself is <em>not</em> a bypass — every mount goes through <code>useRenderer</code>
+→ <code>blockRenderersFacet</code>, so the renderer is always overridable; direct
+<code>&lt;BlockComponent&gt;</code> mounts only pick <em>which block</em>, not how it renders.</p>
+
+<h3>What the provider looks like</h3>
+
+<p>It needs <strong>no new facet</strong> — the seam is "App mounts the root through the registry +
+projection ownership moves into that renderer," which is exactly the "delegate to a blockRenderer
+ASAP" intent (App.tsx has outgrown its boot role).</p>
+
+<ul>
+  <li><strong>Thin App.</strong> App shrinks to: resolve the root block, mount
+  <code>&lt;BlockComponent blockId={root.id}/&gt;</code> under <code>{layoutBoundary:true}</code>,
+  and keep <em>only</em> the always-on hashchange listener that must survive the no-layout states
+  (locked/waiting — <code>App.tsx:260</code> — where there's no projection yet to re-resolve the
+  workspace). Its projection effect (<code>App.tsx:188-220</code>) moves out.</li>
+  <li><strong>Default layout-root renderer.</strong> A <code>RendererContribution</code> matching
+  the root context that does what App's effect does today: resolve the single session via
+  <code>getLayoutSessionId()</code>, mount it, own one <code>PanelLayoutProjection</code> through a
+  <code>usePanelLayoutProjection(sessionBlock)</code> hook (construct/start/dispose, carrying the
+  StrictMode <code>disposed</code>-guard and workspace-switch teardown). Behavior identical to
+  today — a pure extraction, shippable on its own as the "App.tsx got too big" cleanup, independent
+  of perspectives.</li>
+  <li><strong>The override.</strong> An extension registers a higher-priority renderer for the root
+  block (or <code>rendererProp</code>-pins it) → <code>LayoutSessionHost</code>: mounts N session
+  children with keep-alive, owns the active-session store, runs one <code>usePanelLayoutProjection</code>
+  bound to the <em>active</em> session. Two enabling changes, both small because the channels exist:
+    <ul>
+      <li><strong>Session id via context, not the global</strong> — convert the ~9
+      <code>getLayoutSessionId()</code> callers to read <code>layoutSessionBlockId</code> from block
+      context (already a field). The host then provides a different id per session subtree; nested
+      consumers follow. The global stays as the default the thin App / default renderer seeds.</li>
+      <li><strong>Projection construction in the renderer</strong> — already injectable at the URL
+      layer; just constructed by whoever renders the root, not by App.</li>
+    </ul>
+  </li>
+</ul>
+
+<div class="note"><strong>The one structural tension.</strong> <code>AppRuntimeProvider</code> — where
+facets/renderers become available — currently sits <em>below</em> where App computes
+<code>layoutSessionBlock</code> and <em>above</em> the mounted block. Moving projection ownership
+into a renderer (below the runtime) means it needs <code>workspaceId</code> + the root block
+(computed above it) and must feed a version-bump back into App's <code>getInitialLayout</code> cache.
+So the extraction also nudges that boundary: App passes the resolved root + a re-resolve callback
+down through the runtime rather than owning the projection above it. Not hard, but it's the part
+that isn't a pure move.</div>
 
 <h2>Design: perspective = its own layout-session block</h2>
 
@@ -353,13 +441,19 @@ revealed. Free partial hydration for warm sessions.</p>
 <h2>Rollout sketch</h2>
 
 <ol>
-  <li>Core: active-session store + <code>LayoutSessionHost</code> (block renderer of the
-  layout-sessions container) behind a default-off switch; single-session behavior unchanged.
-  Includes the Activity spike: start a video, hide its session under
-  <code>&lt;Activity mode="hidden"&gt;</code>, confirm playback continues (falls back to
-  <code>display:none</code> per session if a provider misbehaves).</li>
-  <li>Core: projection rebinding + input gating; verify with two hand-made sessions in the sandbox
-  (video playing in one, switch away/back).</li>
+  <li>Core, stands alone: <strong>extract the default layout-root renderer</strong> — move App's
+  projection effect + root mount into a <code>RendererContribution</code> +
+  <code>usePanelLayoutProjection</code> hook; App shrinks to resolving + mounting the root. Behavior
+  identical (single session); this is the "App.tsx got too big" cleanup and needs no perspectives to
+  justify it.</li>
+  <li>Core: session id read from <code>layoutSessionBlockId</code> context instead of the
+  <code>getLayoutSessionId()</code> global at the ~9 call sites (global becomes the default seed);
+  projection construction fully owned by the renderer. This is what makes the root overridable.</li>
+  <li>Core: active-session store + <code>LayoutSessionHost</code> override behind a default-off
+  switch; single-session behavior unchanged. Includes the Activity spike: start a video, hide its
+  session under <code>&lt;Activity mode="hidden"&gt;</code>, confirm playback continues.</li>
+  <li>Core: input gating + DOM-selector disambiguation; verify with two hand-made sessions in the
+  sandbox (video playing in one, switch away/back).</li>
   <li>Extension: synced perspective registry + per-device deterministic session ids, migration from
   localStorage snapshots into the registry, expiry sweep deletes session subtrees, bar →
   <code>appMountsFacet</code>.</li>
