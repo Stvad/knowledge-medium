@@ -31,7 +31,7 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch); URL rides the now-merged #338 matrix-param grammar; hiding is Activity-only (react-player v3 has no destructive effect cleanup); host = block renderer of the layout-sessions container. <strong>Last verified against code:</strong> 2026-07-14 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review (2026-07-14) corrected three things:</strong> Activity <em>reveal</em> pauses native-play video (so hiding is <code>display:none</code> for media, Activity for the rest — not Activity-only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; and <code>panelHistory</code> is not actually a blocker. <strong>Last verified against code:</strong> 2026-07-14 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
 </aside>
 
 <h1>Perspective keep-alive</h1>
@@ -142,14 +142,21 @@ Even with a different id injected, this still owns writes. Its constructor alrea
 <code>getHash/pushHash/replaceHash/subscribeToUrl</code> (options at
 <code>panelLayoutProjection.ts:941</code>) — the URL layer is DI-ready; only the construction site is
 pinned to App.</td></tr>
-<tr><td><code>panelHistory</code> singleton</td><td>panelHistory.ts:237</td>
-<td>Process-wide store keyed by <code>panelId</code> only, imported directly. No per-session
-partition, so parallel perspectives can't get independent back/forward stacks.</td></tr>
 <tr><td>ui-state identity</td><td>stateBlocks.ts:43,367</td>
 <td><code>USER_PAGE_NS</code> (uuidv5 namespace) + <code>LAYOUT_SESSIONS_PATH_PART</code> pin the
 whole <code>user → ui-state → layout-sessions/&lt;id&gt;</code> tree from module-private constants;
 memoized accessors bake it. Can't point the machinery at a different root.</td></tr>
 </table></div>
+
+<div class="note"><strong>Correction (a review caught this):</strong> an earlier version of this
+audit listed the <code>panelHistory</code> singleton (<code>panelHistory.ts:237</code>) as a
+blocker "keyed by <code>panelId</code> only, so perspectives can't get independent back/forward
+stacks." That's wrong — <code>panelId</code> is the panel <em>row block id</em>
+(<code>PanelRenderer.tsx:161</code> <code>consumeRestore(block.id)</code>), and under
+sessions-per-perspective each perspective's rows are distinct blocks, so the stacks partition
+<em>automatically</em>. The store is fine as-is; the only real (smaller) concern is that
+evicted-session entries are never cleared (<code>clear(panelId)</code> exists but isn't wired to
+eviction) — a page-lifetime leak, not a blocker.</div>
 
 <p>Same pattern, lower stakes (non-layout): <code>lastWorkspace</code> localStorage accessors
 consumed by boot; <code>repoProvider</code>'s <code>getActiveUserId()</code> + module-mutable
@@ -239,7 +246,7 @@ strictly.</p>
 
 <ul>
   <li><strong>Two ids, kept distinct.</strong> <code>getLayoutSessionId()</code>
-  <span class="filepath">(src/utils/layoutSessionId.ts:54)</span> today yields the one live
+  <span class="filepath">(src/utils/layoutSessionId.ts:60)</span> today yields the one live
   per-device id (sessionStorage in a tab, localStorage installed). That id becomes the stable
   per-device <strong>base id</strong> — it never changes, and its storage key stays where it is.
   Alongside it, add a runtime-switchable <strong>active session id</strong> (module store à la
@@ -255,12 +262,27 @@ strictly.</p>
   <code>;active</code> key ↔ panel rows — so the active pane is URL-borne today, which folds neatly
   into per-session state (each session's hash carries its own active). Perspective is
   workspace-scoped context, not slot-scoped, so it wants to ride on the <em>workspace</em> segment:
-  <code>#ws;persp=work/a/b,c</code>. <strong>One honest gap:</strong> matrix context is parsed on
-  slots only; <code>parseLayout</code> still splits the workspace segment as a bare id
-  (<code>[workspaceId, …cols] = splitTopLevel(hash, '/')</code>), so <code>;persp=</code> there is
-  not parsed yet. Extending <code>parseContextEntries</code> to the ws segment is the same-shaped
-  small addition — and <code>;active</code> is the proof that a core-owned context key already
-  works end-to-end. With synced definitions the link is portable across devices (the receiver
+  <code>#ws;persp=work/a/b,c</code>. <strong>This is a bigger change than "extend the parser," and
+  getting it wrong defeats the feature</strong> (a review caught this). Today <code>parseLayout</code>
+  takes the workspace token raw (<code>[workspaceId, …cols] = splitTopLevel(hash, '/')</code>,
+  <span class="filepath">routing.ts:242</span>), and <code>layoutWorkspaceChanged</code> compares
+  <code>parseLayout(prev).workspaceId !== parseLayout(next).workspaceId</code>
+  (<span class="filepath">routing.ts:292</span>). If <code>;persp=</code> rides in that raw token,
+  then (a) <code>resolveWorkspace</code> receives <code>"ws;persp=work"</code> as the id and opens
+  the wrong workspace, and (b) every perspective switch changes that string → <code>layoutWorkspaceChanged</code>
+  returns true → App bumps <code>hashSnapshot.version</code> → busts <code>getInitialLayout</code>'s
+  cache → re-resolves the layout → new <code>layoutSessionBlock</code> → <strong>the whole tree
+  remounts</strong> (<code>App.tsx:186,188-220,309</code>) — precisely the remount keep-alive
+  exists to kill, reached through the URL. So the real change set: split <code>;persp</code>
+  <em>out</em> of the ws token in <code>parseLayout</code> (so <code>workspaceId</code> stays clean);
+  teach <code>layoutWorkspaceChanged</code> and <code>resolveWorkspace</code> to ignore it; emit it
+  on the build side (<code>buildLayoutFromSlots</code> only decorates slots today, so the pushed
+  hash currently drops the persp qualifier — the projection would lose the very lane attribution
+  Back relies on); and add a popstate/hashchange → active-session listener (nothing reads
+  <code>;persp=</code> back to flip the active-session store on browser Back — App's listener no-ops
+  on same-workspace, and the projection owns slots, not the ws-segment key). The <code>;active</code>
+  slot key proves a core-owned context key works end-to-end, but the ws-segment is a distinct,
+  larger seam. With synced definitions the link is portable across devices (the receiver
   materializes its own live session for that definition), and history entries become
   perspective-qualified — which settles Back-across-a-switch: Back returns to the prior
   perspective, because that's what the prior history entry encodes. The apparent duplication
@@ -284,14 +306,21 @@ strictly.</p>
   recently-active session blocks mounted (cap ~3, configurable), each under a stable
   <code>key={sessionBlockId}</code>, inactive ones hidden per the hiding policy below. Set
   membership stable → no remount → playback continues.</li>
-  <li><strong>URL projection binds to the active session only.</strong>
+  <li><strong>Exactly one live projection, always the active session's.</strong>
   <code>PanelLayoutProjection</code>
   <span class="filepath">(src/utils/panelLayoutProjection.ts:967; constructed at App.tsx:190)</span>
-  keeps rows ↔ URL hash in sync bidirectionally and pushes a hash entry on every layout change
-  (<code>pushHash</code>, :1105). Owning this is exactly the layout-root provider's job (b): hidden
-  sessions must not push; on switch, rebind (or select among per-session instances) and push the
-  new session's layout hash once. Keeps the maximize/restore <code>history.back()</code> leg
-  working.</li>
+  keeps rows ↔ URL hash in sync bidirectionally: on a structural slot change it
+  <em>pushes</em> a history entry, on an active-pane-only change it <em>replaces</em>
+  (<code>pushHash</code>/<code>replaceHash</code>, :1103–1105). Owning this is the layout-root
+  provider's job (b). <strong>Critical: hidden sessions must have NO live projection at all — not
+  just "must not push".</strong> The inbound direction is the trap: <code>start()</code> subscribes
+  each instance to the URL and <code>applyCurrentUrl</code> <em>writes rows</em> to reconcile that
+  session's subtree to the hash (<code>panelLayoutProjection.ts:1002</code> → reconcile). N live
+  projections would each reconcile their own session's rows to the single visible hash — so
+  switching to perspective B finds B's rows already overwritten to match A's URL, collapsing every
+  perspective to the active one's layout. So the host runs a single projection bound to the active
+  session and disposes/rebinds it on switch (NOT one-per-mounted-session). Keeps the maximize/restore
+  <code>history.back()</code> leg working.</li>
   <li><strong>Input isolation</strong> — the subtle correctness area, and it is wider than shortcut
   surfaces. Each session carries its own <code>activePanelIdProp</code>, so with N sessions
   mounted, N panels all believe they are active. Everything downstream of that belief must be
@@ -302,15 +331,19 @@ strictly.</p>
       dispatch/activations).</li>
       <li><strong>Action contexts</strong>: <code>PanelRenderer</code> registers
       <code>MULTI_SELECT_MODE</code> for its active panel via <code>useActionContext</code>
-      <span class="filepath">(src/components/renderer/PanelRenderer.tsx:203,
-      PanelMultiSelectActionContext)</span> — hidden sessions' active panels would each register
-      it too. All <code>useActionContext</code> registrations under a hidden session must be
-      suppressed (the same visibility flag, threaded through block context so it reaches every
-      registration site).</li>
+      (<code>PanelMultiSelectActionContext</code>, gated on <code>isActivePanel</code> at
+      <span class="filepath">src/components/renderer/PanelRenderer.tsx:268</span>) — hidden sessions'
+      active panels would each register it too. <strong>But under <code>&lt;Activity&gt;</code> this
+      solves itself</strong>: <code>useActionContext</code> registers in a <code>useEffect</code>
+      (<span class="filepath">src/shortcuts/useActionContext.ts:37</span>), and Activity-hide runs
+      the cleanup — so a hidden session's contexts deactivate automatically, reactivating on reveal.
+      No manual <code>sessionHidden</code> gating needed for the effect-registered half. (This is the
+      same "effects re-run at the visibility boundary" mechanism that causes the playback caveat
+      below — you can't get the free input isolation without it.)</li>
       <li><strong>DOM selectors</strong>: spatial navigation
-      <span class="filepath">(src/plugins/spatial-navigation/actions.ts:270, crossPanelFocus)</span>
+      <span class="filepath">(src/plugins/spatial-navigation/actions.ts:271, crossPanelFocus)</span>
       and window-management
-      <span class="filepath">(agent-extensions/window-management/index.tsx:236, panelElements)</span>
+      <span class="filepath">(agent-extensions/window-management/index.tsx:240, panelElements)</span>
       locate the layout via <code>document.querySelector('[data-layout-session-id]')</code> —
       first match wins, which becomes ambiguous with several sessions mounted. The host must make
       the active session unambiguously addressable (e.g. only the visible wrapper carries a
@@ -320,14 +353,12 @@ strictly.</p>
       <li>On reveal, re-assert DOM focus from the session's persisted focus state (the focus
       <em>class</em> survives — it's prop-driven; only DOM focus needs a nudge).</li>
     </ul>
-  <p><strong>Under <code>&lt;Activity mode="hidden"&gt;</code> the effect-registered half solves
-  itself</strong> (verified): <code>useActionContextActivations</code> registers through
-  <code>useEffect</code> <span class="filepath">(src/shortcuts/useActionContext.ts:37)</span>, so
-  hidden sessions' action contexts and effect-attached listeners deactivate on hide and re-activate
-  on reveal — no <code>sessionHidden</code> gating needed for those. What Activity does
-  <em>not</em> solve: the DOM-selector ambiguity (hidden DOM stays in the document) and the
-  reveal-time focus nudge — those two remain regardless of hiding mode. This is a major argument
-  for the Activity-first policy below.</p>
+  <p>What no hiding mode solves — remaining regardless: the DOM-selector ambiguity (hidden DOM
+  stays in the document either way) and the reveal-time focus nudge. And note the effect-registered
+  self-deactivation above is <em>Activity-specific</em>: a session hidden with
+  <code>display:none</code> keeps its effects mounted, so its action contexts stay registered and
+  DO need the explicit <code>sessionHidden</code> gating. Since the hiding policy below is
+  mixed (Activity for most, <code>display:none</code> for media), both paths must be handled.</p>
   </li>
 </ul>
 
@@ -340,12 +371,20 @@ strictly.</p>
   id + perspective id, same pattern as <span class="filepath">src/data/stateBlocks.ts</span>).</li>
   <li><strong>Switch = one store write</strong> (set active session id + repaint the bar),
   replacing the whole capture → <code>reconcilePanelRows</code> → repair-active-panel dance
-  (<code>performSwitch</code>, <span class="filepath">index.tsx:553</span>).</li>
+  (<code>performSwitch</code>, <span class="filepath">index.tsx:580</span>).</li>
   <li>The serialized-layout snapshot survives only as: (a) migration from the current localStorage
   format into the registry, (b) seed when a perspective's session block doesn't exist yet on this
   device, (c) the item-slot expiry sweep — which now must <strong>also delete the expired
   perspective's session block subtrees</strong> (sessions are UiState blocks that upload; leaked
-  sessions are synced garbage).</li>
+  sessions are synced garbage). <strong>Caveat the GC can't fully close:</strong> session ids are
+  <code>uuidv5(deviceBaseId + perspectiveId)</code> and the base id is per-device
+  (localStorage/sessionStorage), so device A cannot derive — hence cannot GC — device B's session
+  subtrees. A retired device, or one whose localStorage was cleared (base id regenerates), orphans
+  its sessions in the synced DB permanently; and numbered perspectives never expire, so their
+  per-device sessions persist per device × per perspective. The per-device scheme buys
+  race-freedom (A only ever deletes ids A holds) at the cost of fleet-wide completeness — a slow
+  synced-garbage growth, not data loss. A periodic "sessions with no matching definition or
+  device-liveness marker" sweep is the likely mitigation (open question).</li>
   <li>The bottom bar moves from imperative <code>document.body</code> DOM to an
   <strong><code>appMountsFacet</code> contribution</strong>
   <span class="filepath">(src/extensions/core.ts:218)</span> — React, app scope, outside the layout
@@ -355,50 +394,68 @@ strictly.</p>
   outcome; a LayoutRenderer override is heavier than the bar needs).</li>
 </ul>
 
-<h2>Hiding policy: <code>&lt;Activity&gt;</code></h2>
+<h2>Hiding policy: <code>display:none</code> for media, <code>&lt;Activity&gt;</code> for the rest</h2>
 
-<p>React 19.2.6 (installed) exports stable <code>&lt;Activity&gt;</code> — the official
-hide-with-state primitive. What it buys over a hand-rolled <code>display:none</code> wrapper:
-hidden subtrees' re-renders are deferred to background priority (they never block the visible
-perspective), state and DOM are preserved with official semantics, the effect-registered half of
-input isolation solves itself (above), and it's where React is investing (<code>mode="hidden"</code>
-pre-rendering could later give "warm up a perspective before first visit").</p>
+<p>Two ways to hide a mounted session, and the choice is not uniform — it splits on whether the
+subtree holds live media. React 19.2.6 (installed) exports stable <code>&lt;Activity&gt;</code>,
+the official hide-with-state primitive: it preserves state + DOM, defers hidden re-renders to
+background priority, and its effect-cleanup-on-hide is what makes the effect-registered half of
+input isolation free (above). The alternative, a plain <code>display:none</code> wrapper, keeps
+the subtree fully mounted — effects never clean up.</p>
 
-<p>The crux is effect semantics: <strong>hiding runs effect cleanups, revealing re-runs
-them</strong> — state and DOM are preserved throughout. An earlier revision of this doc assumed
-that kills playback; verifying against the installed react-player corrected it:</p>
+<div class="note"><strong>The blocker an earlier revision of this doc missed — Activity pauses
+native-play video on REVEAL.</strong> Activity's contract is: hide runs effect cleanups,
+<em>reveal re-runs them</em> (state + DOM preserved throughout). I checked only the hide direction
+before. react-player v3 has no destructive cleanup (verified: declarative <code>*-video-element</code>
+web components, the sole <code>.pause()</code> in <code>dist/Player.js</code> gated on
+<code>playing === false</code> in a <strong>no-deps, no-cleanup effect</strong> that re-runs every
+commit). But KM drives that <code>playing</code> prop from local state that is set true
+<em>only</em> inside <code>seekTo</code> and has no <code>onPlay</code>/<code>onPause</code> wiring
+(<span class="filepath">src/plugins/video-player/VideoPlayerRenderer.tsx:50,108,127</span>). So a
+video started with the native play button leaves <code>isPlaying === false</code>; it plays today
+only because nothing re-renders <code>Player</code>. On Activity <em>reveal</em>, that effect
+re-mounts, sees a still-playing <code>&lt;video&gt;</code> with <code>playing === false</code>, and
+calls <code>.pause()</code>. Net: audio continues <em>while hidden</em> and stops <em>the instant
+you return</em> — the exact opposite of the headline, on the common (native-play) path. Only
+<code>seekTo</code>-started (timestamp-link) playback survives.</div>
 
-<div class="note"><strong>react-player v3 has no destructive effect cleanup</strong> (verified
-against <code>node_modules/react-player/dist</code>): players render as declarative web components
-(<code>youtube-video-element</code> etc.), the only <code>.pause()</code> in the dist is gated on
-<code>playing === false</code> (<code>Player.js</code>), and the PiP effect has no cleanup. Under
-Activity-hidden the media element stays in the document and should keep playing. What degrades
-while hidden is only the effect-registered integrations: the <code>registerVideoPlayer</code>
-imperative handle <span class="filepath">(src/plugins/video-player/VideoPlayerRenderer.tsx:101)</span>
-unregisters (arguably correct — nothing should remote-control a hidden player; it re-registers on
-reveal), and the play/pause prop-sync effect sleeps until reveal. CodeMirror editors (created in
-effects) are destroyed on hide and recreated on reveal — acceptable; edit mode is transient.</div>
+<p>Consequences, and the corrected policy:</p>
+<ul>
+  <li><strong><code>display:none</code> for media-bearing sessions</strong> — the safe default here,
+  not a contingency. Effects never unmount, so nothing re-runs on reveal and native-play keeps
+  playing. (This inverts an earlier round's "Activity everywhere" call — for exactly the subtree the
+  feature exists to protect, <code>display:none</code> is what delivers it.)</li>
+  <li><strong><code>&lt;Activity&gt;</code> for everything else</strong> — cheaper hidden re-renders
+  and free input isolation, where there's no live media to pause.</li>
+  <li><strong>Or make Activity safe for media</strong> (then it can be uniform): wire
+  <code>onPlay</code>/<code>onPause</code> on the player so <code>isPlaying</code> tracks native
+  state — then the reveal re-run is a no-op. Small core change to the video plugin; listed as
+  required work if we want Activity for media.</li>
+  <li><strong>Editors are not "exactly as left" under Activity.</strong> CodeMirror is effect-created,
+  so Activity reveal drops cursor, selection, in-progress IME composition, editor-local undo, and
+  intra-editor scroll. Under <code>display:none</code> they survive. Honest scope: keep-alive
+  preserves mounted views and (with the right hiding mode) playback — it does not preserve in-editor
+  transient state unless the editor's session is <code>display:none</code>-hidden.</li>
+</ul>
 
-<p>Policy (upstream review outcome): <strong>wrap every inactive session in
-<code>&lt;Activity mode="hidden"&gt;</code></strong>, full stop — no parallel <code>display:none</code>
-path built. The deciding question is empirical, not architectural, so rollout step 1 includes a
-spike (start a video, hide the session under Activity, confirm audio continues). <em>Contingency,
-not planned work:</em> if that spike shows a specific provider can't survive Activity's effect
-unmount, the isolated fix is to wrap that one media subtree in a plain
-<code>&lt;div style="display:none"&gt;</code> (which keeps effects mounted) — same host, one-line
-escape hatch, revisited only if forced.</p>
+<p><strong>Fix the spike accordingly:</strong> rollout must assert playback continues <em>after
+reveal</em>, not while hidden — the naive "confirm audio continues while hidden" check passes even
+in the broken case, because the pause fires only on reveal.</p>
 
-<p>Background cost model: per warm session, retained DOM (bounded — see
-<code>LazyViewportMount</code> below) plus live query subscriptions that re-render the hidden tree
-on writes. A quiet workspace costs ≈ zero (handle-level structural-diff dedup); the real cost is
-write bursts (sync storms) re-rendering N hidden trees. Controls, in order: Activity's
-background-priority deferral of hidden re-renders (the default mode), the small LRU cap (2–3;
-eviction fully unmounts and releases everything), and item-perspective expiry deleting dead
-sessions.</p>
-
-<p><code>LazyViewportMount</code> composes well: it never unmounts once mounted, and while hidden
-its IntersectionObserver sees nothing — not-yet-seen blocks stay unmounted until the perspective is
-revealed. Free partial hydration for warm sessions.</p>
+<p>Background cost model: per warm session, retained DOM + live query subscriptions that re-render
+the hidden tree on writes. A quiet workspace costs ≈ zero (handle-level structural-diff dedup); the
+real cost is write bursts (sync storms) re-rendering N hidden trees, and Activity's
+background-priority deferral helps re-render latency but not memory/subscription count. <strong>The
+only real bound on retained DOM is the LRU cap</strong> (2–3; eviction fully unmounts and releases
+everything) — <em>not</em> <code>LazyViewportMount</code>, which never unmounts once mounted
+(<span class="filepath">src/components/util/LazyViewportMount.tsx:73</span>): it bounds initial
+<em>hydration</em>, not retention, so a warm perspective the user scrolled through keeps all its
+mounted rows and subscriptions (and agenda sections are non-virtualized with thousands of rows —
+the expensive warm case). One more leak: <code>LazyBlockComponent</code> keys its
+mounted-cache by block id in a module global
+(<span class="filepath">src/components/LazyBlockComponent.tsx:46</span>), so a block that appears in
+two perspectives, once mounted in the visible one, immediately hydrates its hidden copy too —
+"free partial hydration" doesn't hold for shared blocks.</p>
 
 <h2>Alternatives considered</h2>
 
@@ -424,8 +481,6 @@ revealed. Free partial hydration for warm sessions.</p>
 <ul>
   <li>Where exactly keybind dispatch resolves "the active panel" — the hidden-session gating design
   hangs on it.</li>
-  <li><code>PanelLayoutProjection</code>: one instance rebound on switch vs. one per mounted
-  session (hidden ones muted)?</li>
   <li>Mobile: <code>LayoutRenderer</code> already renders only the active panel there; keep-alive
   is likely desktop-only (warm cap = 1 on mobile).</li>
   <li>CodeMirror revealed from <code>display:none</code> may need a <code>requestMeasure</code>
@@ -450,10 +505,14 @@ revealed. Free partial hydration for warm sessions.</p>
   <code>getLayoutSessionId()</code> global at the ~9 call sites (global becomes the default seed);
   projection construction fully owned by the renderer. This is what makes the root overridable.</li>
   <li>Core: active-session store + <code>LayoutSessionHost</code> override behind a default-off
-  switch; single-session behavior unchanged. Includes the Activity spike: start a video, hide its
-  session under <code>&lt;Activity mode="hidden"&gt;</code>, confirm playback continues.</li>
-  <li>Core: input gating + DOM-selector disambiguation; verify with two hand-made sessions in the
-  sandbox (video playing in one, switch away/back).</li>
+  switch; single-session behavior unchanged. <code>display:none</code> for media-bearing sessions,
+  <code>&lt;Activity&gt;</code> for the rest. The media spike must confirm a <em>native-play</em>
+  video (not a <code>seekTo</code>-started one) still plays <strong>after switching back</strong> —
+  checking only while hidden gives a false pass (see hiding policy).</li>
+  <li>Core: input gating (incl. explicit <code>sessionHidden</code> for <code>display:none</code>
+  sessions, whose effects stay mounted) + DOM-selector disambiguation + single-active-projection
+  rebinding; verify with two hand-made sessions in the sandbox (native-play video in one, switch
+  away and back, confirm it's still playing and the other perspective's layout is intact).</li>
   <li>Extension: synced perspective registry + per-device deterministic session ids, migration from
   localStorage snapshots into the registry, expiry sweep deletes session subtrees, bar →
   <code>appMountsFacet</code>.</li>
