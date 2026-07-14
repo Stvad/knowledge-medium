@@ -502,13 +502,15 @@ describe('parseReferences — schema-swap reprojection', () => {
     )).toBeNull()
   })
 
-  it('uses the scheduled schema, not the live registry, when the workspace switched after scheduling', async () => {
+  it('skips the deferred scan for a workspace the user has left (isolation gate)', async () => {
     // A reprojection captures (names, scheduled schemas, workspaceId) atomically
-    // and runs deferred. If the user switches workspace before it fires,
-    // `this._propertySchemas` now reflects the OTHER workspace — reconciling the
-    // scan against it would let the other workspace's schema set strip refs from
-    // the captured workspace's blocks. The scan must fall back to its scheduled
-    // snapshot in that case.
+    // and runs deferred. If the user switches workspace before it fires, the scan
+    // must NOT touch the workspace they've left: reprojecting a non-active
+    // workspace's blocks — even correctly, from the frozen snapshot — violates
+    // workspace isolation. The scan skips instead (the runner's active gate),
+    // deferring WS's backfill to its next open. Skipping ALSO subsumes the older
+    // concern this test guarded — the other workspace's registry can't strip the
+    // captured workspace's refs, because the scan doesn't run at all.
     await env.repo.tx(
       tx => tx.create({
         id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0',
@@ -526,11 +528,9 @@ describe('parseReferences — schema-swap reprojection', () => {
     env.repo.setFacetRuntime(runtimeWithoutReviewer())
     await flush()
 
-    // The WS-scheduled scan still projects reviewer from its own snapshot — it
-    // does NOT read ws-2's empty registry and strip the ref.
-    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
-      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
-    ])
+    // The WS-scheduled scan skipped (WS is no longer active): `src` is neither
+    // backfilled (its ref waits for WS's next open) nor stripped.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([])
   })
 
   it('does not add a ref for a parked ref-typed backfill after the property is redefined non-ref', async () => {

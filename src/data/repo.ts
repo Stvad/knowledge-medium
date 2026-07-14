@@ -1859,6 +1859,16 @@ export class Repo {
     workspaceId: string,
   ): Promise<void> {
     if (this.isReadOnly || propertyNames.length === 0 || !workspaceId) return
+    // Workspace-isolation gate: only backfill the ACTIVE workspace's refs. This
+    // scan is deferred (deep-idle, up to ~30 s), so by the time it fires the user
+    // may have switched away — reprojecting a workspace they've left would write
+    // derived `references` into a non-open workspace's blocks. Skip it (leaving
+    // its marker unset) so it re-runs when that workspace is next opened
+    // (`scheduleWorkspaceRefBackfill` on bootstrap). This mirrors the
+    // seed-materialization access gate. A switch DURING the scan is still handled
+    // by the per-block frozen-snapshot fallback below and by `repo.tx`'s readiness
+    // gate, which cancels a tx parked across an active-workspace flip.
+    if (this._activeWorkspaceId !== workspaceId) return
     const t0 = performance.now()
     let blocksUpdated = 0
     let scanScheduled = false
