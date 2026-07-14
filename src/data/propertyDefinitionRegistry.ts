@@ -45,17 +45,21 @@ const indexSeeds = (seeds: readonly AnyPropertySeedDeclaration[]) => {
       throw new Error(`[property definitions] duplicate seed key ${JSON.stringify(seed.seedKey)}`)
     }
     // v1 no-shadowing: property values are keyed by name, so two seeds sharing a
-    // name is an inherent conflict (they would fight over one stored cell). Fail
-    // loudly at registration rather than resolving it ambiguously — a plugin
-    // must namespace its property names (e.g. "myplugin:title") instead of
-    // colliding with a kernel or another plugin's name.
+    // name is an inherent conflict (they would fight over one stored cell). Keep
+    // the first and DROP the collider — loudly, so a plugin author notices and
+    // namespaces (e.g. "myplugin:title"). We drop rather than throw: this runs on
+    // every workspace registry rebuild, and the dynamic-extension loader keeps
+    // the declared name while rewriting only the seedKey per block, so a
+    // duplicate install (or two extensions colliding) must not crash the whole
+    // workspace's schema registry.
     const existing = byName.get(seed.name)
     if (existing) {
-      throw new Error(
-        `[property definitions] duplicate seed name ${JSON.stringify(seed.name)} ` +
-        `(seed keys ${JSON.stringify(existing[0]!.seedKey)} and ${JSON.stringify(seed.seedKey)}); ` +
+      console.error(
+        `[property definitions] dropping seed ${JSON.stringify(seed.seedKey)}: its name ` +
+        `${JSON.stringify(seed.name)} collides with ${JSON.stringify(existing[0]!.seedKey)}; ` +
         `property names must be unique — namespace plugin seeds, e.g. "myplugin:name"`,
       )
+      continue
     }
     byKey.set(seed.seedKey, seed)
     pushGrouped(byName, seed.name, seed)

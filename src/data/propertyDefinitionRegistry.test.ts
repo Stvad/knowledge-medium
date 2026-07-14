@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest'
+import {describe, expect, it, vi} from 'vitest'
 import {ChangeScope, codecs, defineProperty} from '@/data/api'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
@@ -290,11 +290,23 @@ describe('property definition registry snapshot', () => {
     expect(() => build({seeds: [titleSeed, titleSeed]})).toThrow('duplicate seed key')
   })
 
-  it('rejects two seeds that declare the same name at registration', () => {
-    // v1: property names must be unique across seeds — a plugin declaring a
-    // kernel or other-plugin name must namespace instead of colliding, since
-    // both would otherwise fight over the same name-keyed stored cell.
-    expect(() => build({seeds: [titleSeed, competingTitleSeed]})).toThrow(/duplicate seed name/)
+  it('drops the second of two same-name seeds and keeps building (no crash)', () => {
+    // v1: property names must be unique across seeds. The first keeps the name;
+    // the collider is dropped LOUDLY (not resolvable) — but the registry still
+    // builds, so a duplicate dynamic-extension install can't brick the workspace.
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const snapshot = build({seeds: [titleSeed, competingTitleSeed]})
+      const resolver = createPropertySchemaResolver(snapshot)
+      expect(resolver.resolve(titleSeed).status).toBe('resolved')
+      expect(resolver.resolve(competingTitleSeed)).toEqual({
+        status: 'identity-unavailable',
+        reason: 'definition-unavailable',
+      })
+      expect(errors).toHaveBeenCalledWith(expect.stringContaining('must be unique'))
+    } finally {
+      errors.mockRestore()
+    }
   })
 
   it('keeps code behavior authoritative over a synced seed projector fallback', () => {

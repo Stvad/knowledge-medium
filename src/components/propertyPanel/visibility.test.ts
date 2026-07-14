@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/data/api'
 import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
@@ -93,7 +93,7 @@ describe('isPropertyPanelHiddenProperty', () => {
     )).toBe(true)
   })
 
-  it('hides a unique synthesized seed; rejects two same-name seeds at registration', () => {
+  it('hides a unique synthesized seed; drops a same-name collider without crashing', () => {
     const unique = hiddenSeed('plugin:one/property/secret')
     const uniqueSnapshot = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
@@ -104,13 +104,22 @@ describe('isPropertyPanelHiddenProperty', () => {
     expect(isPropertyPanelHiddenProperty(unique.name, uniqueSnapshot.schemas, new Map(), uniqueSnapshot))
       .toBe(true)
 
-    // v1: two seeds sharing a name are rejected at registration (no ambiguity).
-    expect(() => buildPropertyDefinitionRegistry({
-      workspaceId: 'ws',
-      legacySchemas: new Map(),
-      projectedDefinitions: new Map(),
-      seeds: [unique, hiddenSeed('plugin:two/property/secret')],
-    })).toThrow(/duplicate seed name/)
+    // v1: two seeds sharing a name — the collider is dropped loudly and the
+    // registry still builds (the first, hidden, seed keeps the name).
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const collidedSnapshot = buildPropertyDefinitionRegistry({
+        workspaceId: 'ws',
+        legacySchemas: new Map(),
+        projectedDefinitions: new Map(),
+        seeds: [unique, hiddenSeed('plugin:two/property/secret')],
+      })
+      expect(isPropertyPanelHiddenProperty(unique.name, collidedSnapshot.schemas, new Map(), collidedSnapshot))
+        .toBe(true)
+      expect(errors).toHaveBeenCalled()
+    } finally {
+      errors.mockRestore()
+    }
   })
 
   it('uses the declaration carried by stage-0 synthesis when no registry is bound', () => {
