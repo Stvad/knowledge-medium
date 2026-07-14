@@ -26,7 +26,7 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised after upstream review (PR #357 thread: synced definitions, URL param, status-bar facet; hiding policy flipped to Activity-first after verifying react-player v3 has no destructive effect cleanup; host = block renderer of the layout-sessions container). <strong>Last verified against code:</strong> 2026-07-13 (<code>src/</code> + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code> @ working tree).
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam; URL rides the now-merged #338 matrix-param grammar; hiding is Activity-only (react-player v3 has no destructive effect cleanup); host = block renderer of the layout-sessions container. <strong>Last verified against code:</strong> 2026-07-14 (<code>src/</code> + <code>agent-extensions/window-management/</code> @ upstream <code>origin/master</code> post-#367, + <code>node_modules/react-player</code>).
 </aside>
 
 <h1>Perspective keep-alive</h1>
@@ -48,22 +48,22 @@ keep-alive") that others could build tab-like UX on.</p>
 <p>A perspective switch never swaps trees — it <strong>rewrites the single live layout-session
 block in place</strong>. <code>applyPerspective</code>
 <span class="filepath">(agent-extensions/window-management/index.tsx)</span> calls
-<code>reconcilePanelRows</code> <span class="filepath">(src/utils/panelLayoutProjection.ts:405)</span>,
+<code>reconcilePanelRows</code> <span class="filepath">(src/utils/panelLayoutProjection.ts:677)</span>,
 which LCS-diffs panel rows by <code>topLevelBlockId</code>. Across perspectives the block ids are
 disjoint, so one of two things happens, and both destroy the mounted content:</p>
 
 <ol>
   <li><strong>Row reused, content rewritten</strong> (equal pane counts — the common case): the
   panel row id — the React <code>key</code> on the top-level slot list
-  <span class="filepath">(src/components/renderer/LayoutRenderer.tsx:193, slotsToRender.map)</span>
+  <span class="filepath">(src/components/renderer/LayoutRenderer.tsx:180, slotsToRender.map)</span>
   and on <code>PanelSlotView</code>'s context provider
-  <span class="filepath">(LayoutRenderer.tsx:92)</span> — stays stable. <code>LayoutRenderer</code>
+  <span class="filepath">(LayoutRenderer.tsx:85)</span> — stays stable. <code>LayoutRenderer</code>
   mounts the row's <code>&lt;BlockComponent blockId={slot.id}/&gt;</code>
-  <span class="filepath">(LayoutRenderer.tsx:100)</span>, which resolves to
+  <span class="filepath">(LayoutRenderer.tsx:91)</span>, which resolves to
   <code>PanelRenderer</code>; that reads <code>topLevelBlockIdProp</code>
-  <span class="filepath">(src/components/renderer/PanelRenderer.tsx:62)</span> and renders
+  <span class="filepath">(src/components/renderer/PanelRenderer.tsx:65)</span> and renders
   <code>&lt;BlockComponent blockId={topLevelBlockId}/&gt;</code>
-  <span class="filepath">(PanelRenderer.tsx:192, no key)</span>. When the perspective switch
+  <span class="filepath">(PanelRenderer.tsx:256, no key)</span>. When the perspective switch
   rewrites <code>topLevelBlockIdProp</code>, that inner element reconciles to a different block and
   the whole content subtree unmounts.</li>
   <li><strong>Row deleted/created</strong> (pane counts differ): <code>tx.delete</code> /
@@ -75,6 +75,43 @@ disjoint, so one of two things happens, and both destroy the mounted content:</p
 stores only content identity — a serialized layout hash of block ids + tree shape, plus
 <code>activeBlockId</code>. There is no handle to a live view to come back to. Keep-alive cannot be
 bolted onto this model; "one session, rewritten in place" is the specific thing defeating it.</p>
+
+<h2>The meta-seam: why this needs core at all</h2>
+
+<p>Worth stating precisely, because it defines the smallest possible core change. The extension
+rewrites one session's rows not by choice but because <strong>the layout root bypasses both
+extension mechanisms</strong>. Two couplings live in <code>App.tsx</code>, neither routed through a
+facet:</p>
+
+<ol>
+  <li><span class="filepath">App.tsx:309</span> hardcodes
+  <code>&lt;BlockComponent blockId={initial.layoutSessionBlock.id}/&gt;</code> as the
+  <code>layoutBoundary</code> root. Block <em>renderers</em> are a facet, so an extension can
+  override how that block renders — but not <em>which</em> block is the root, and not mount more
+  than one. The root id comes from <code>bootstrapWorkspace → getLayoutSessionId()</code>, fixed at
+  boot.</li>
+  <li><span class="filepath">App.tsx:190</span> constructs the one
+  <code>new PanelLayoutProjection({layoutSessionBlock, …})</code> in an effect and runs it — it owns
+  URL↔rows + history. No facet, no per-session instancing; App unconditionally owns it. The class
+  is exported/importable, but a second projection would just fight the first over the hash.</li>
+</ol>
+
+<p>So the missing seam is <em>not</em> "an affordance to replace <code>sessionId</code>" — that is
+the narrowest possible patch. Two things had to be true for a plugin to build this unaided:
+<strong>(a) the render tree</strong> — already reachable <em>in principle</em> via the
+block-renderer facet, since the root is a <code>BlockComponent</code>; the only gap is that App
+picks the root block id rather than resolving it through a seam, and mounts exactly one.
+<strong>(b) the URL/history projection</strong> — not reachable at all: App always constructs and
+runs exactly one, bound to that single block.</p>
+
+<div class="verdict"><strong>Minimal meta-seam — a "layout-root provider".</strong> A single
+contribution point that owns (a) what mounts at the layout boundary and (b) the projection/URL
+binding; App's current hardcoded mount + projection becomes its default implementation. When a
+contribution is present it suppresses App's default projection and provides the root. Combined with
+the block-renderer override that already exists on the root, <em>that alone</em> unlocks plugin-side
+perspectives: the extension supplies the provider, mounts N session blocks with keep-alive under its
+own renderer, and owns the hash. The session-swap store is then pure pluginland. This is the core
+ask — smaller and more general than a session API.</div>
 
 <h2>Design: perspective = its own layout-session block</h2>
 
@@ -123,26 +160,37 @@ strictly.</p>
   the <em>base</em> id (<code>uuidv5(baseId + ':' + perspectiveId)</code>), never from the
   currently active id — deriving from the active id would make session identity drift as you
   switch.</li>
-  <li><strong>Perspective in the URL.</strong> Perspective is workspace-scoped context, not
-  slot-scoped, so it rides as a matrix param on the workspace segment of PR #338's URL grammar:
-  <code>#ws;persp=work/a/b,c</code>. With synced definitions the link is portable across devices
-  (the receiving device materializes its own live session for that definition), and history entries
-  become perspective-qualified — which settles Back-across-a-switch semantics: Back returns to the
-  prior perspective, because that's what the prior history entry encodes. The apparent duplication
-  (a name that stands for a set of panes, plus the panes spelled out) is an identity+value pair,
-  each doing distinct work: <code>persp=</code> is identity (which live session / history lane),
-  slot tokens are value (the exact panes). <strong>Precedence on open:</strong> <code>persp</code>
-  selects/creates the local session; slot tokens, when present, reconcile that session's rows;
-  absent slot tokens (short-form link <code>#ws;persp=work</code>, the natural shape for sharing),
-  the session shows whatever state it's in. Persp-only URLs couldn't restore within-perspective
-  layout history; slots-only URLs lose the lane attribution — both parts earn their place.</li>
+  <li><strong>Perspective in the URL.</strong> PR #338's matrix-param + comma-stack grammar is now
+  <strong>merged</strong> <span class="filepath">(src/utils/routing.ts — LayoutSlot carries
+  viewMode/active/rest)</span>: slots take <code>;key=value</code> context, unknown keys round-trip
+  opaquely through <code>rest[]</code> (free forward-compat), and the projection already syncs the
+  <code>;active</code> key ↔ panel rows — so the active pane is URL-borne today, which folds neatly
+  into per-session state (each session's hash carries its own active). Perspective is
+  workspace-scoped context, not slot-scoped, so it wants to ride on the <em>workspace</em> segment:
+  <code>#ws;persp=work/a/b,c</code>. <strong>One honest gap:</strong> matrix context is parsed on
+  slots only; <code>parseLayout</code> still splits the workspace segment as a bare id
+  (<code>[workspaceId, …cols] = splitTopLevel(hash, '/')</code>), so <code>;persp=</code> there is
+  not parsed yet. Extending <code>parseContextEntries</code> to the ws segment is the same-shaped
+  small addition — and <code>;active</code> is the proof that a core-owned context key already
+  works end-to-end. With synced definitions the link is portable across devices (the receiver
+  materializes its own live session for that definition), and history entries become
+  perspective-qualified — which settles Back-across-a-switch: Back returns to the prior
+  perspective, because that's what the prior history entry encodes. The apparent duplication
+  (a name standing for a set of panes, plus the panes spelled out) is an identity+value pair:
+  <code>persp=</code> is identity (which live session / history lane), slot tokens are value (the
+  exact panes). <strong>Precedence on open:</strong> <code>persp</code> selects/creates the local
+  session; slot tokens, when present, reconcile that session's rows; absent slot tokens (short-form
+  link <code>#ws;persp=work</code>, the natural shape for sharing), the session shows whatever state
+  it's in. Persp-only URLs couldn't restore within-perspective layout history; slots-only URLs lose
+  the lane attribution — both parts earn their place.</li>
   <li><strong>Warm-set host — a block renderer, not app chrome.</strong>
-  <span class="filepath">src/App.tsx:306</span> mounts exactly one
+  <span class="filepath">src/App.tsx:309</span> mounts exactly one
   <code>&lt;BlockComponent blockId={layoutSessionBlock.id}/&gt;</code>; the layout-sessions
   <em>container</em> block (<code>user page → ui-state → layout-sessions</code>,
   <span class="filepath">src/data/stateBlocks.ts</span>) is never rendered. Instead, App mounts
   <code>&lt;BlockComponent blockId={container.id}/&gt;</code> and <code>LayoutSessionHost</code>
-  is the container's registered <strong>block renderer</strong> (upstream review outcome — keeps
+  is the container's registered <strong>block renderer</strong> — the concrete form of the
+  layout-root provider from the meta-seam above (keeps
   the block-display hierarchy renderer-overridable, so users can replace the multi-session policy
   surface like any renderer). It reads the active-session store + warm set and keeps an LRU set of
   recently-active session blocks mounted (cap ~3, configurable), each under a stable
@@ -150,10 +198,12 @@ strictly.</p>
   membership stable → no remount → playback continues.</li>
   <li><strong>URL projection binds to the active session only.</strong>
   <code>PanelLayoutProjection</code>
-  <span class="filepath">(src/utils/panelLayoutProjection.ts:584)</span> keeps rows ↔ URL hash in
-  sync bidirectionally and pushes a hash entry on every layout change. Hidden sessions must not
-  push; on switch, rebind (or select among per-session instances) and push the new session's
-  layout hash once. Keeps the maximize/restore <code>history.back()</code> leg working.</li>
+  <span class="filepath">(src/utils/panelLayoutProjection.ts:967; constructed at App.tsx:190)</span>
+  keeps rows ↔ URL hash in sync bidirectionally and pushes a hash entry on every layout change
+  (<code>pushHash</code>, :1105). Owning this is exactly the layout-root provider's job (b): hidden
+  sessions must not push; on switch, rebind (or select among per-session instances) and push the
+  new session's layout hash once. Keeps the maximize/restore <code>history.back()</code> leg
+  working.</li>
   <li><strong>Input isolation</strong> — the subtle correctness area, and it is wider than shortcut
   surfaces. Each session carries its own <code>activePanelIdProp</code>, so with N sessions
   mounted, N panels all believe they are active. Everything downstream of that belief must be
@@ -217,7 +267,7 @@ strictly.</p>
   outcome; a LayoutRenderer override is heavier than the bar needs).</li>
 </ul>
 
-<h2>Hiding policy: <code>&lt;Activity&gt;</code> first, <code>display:none</code> as per-session fallback</h2>
+<h2>Hiding policy: <code>&lt;Activity&gt;</code></h2>
 
 <p>React 19.2.6 (installed) exports stable <code>&lt;Activity&gt;</code> — the official
 hide-with-state primitive. What it buys over a hand-rolled <code>display:none</code> wrapper:
@@ -241,12 +291,14 @@ unregisters (arguably correct — nothing should remote-control a hidden player;
 reveal), and the play/pause prop-sync effect sleeps until reveal. CodeMirror editors (created in
 effects) are destroyed on hide and recreated on reveal — acceptable; edit mode is transient.</div>
 
-<p>Policy (upstream review outcome, revised): <strong><code>&lt;Activity&gt;</code> wrappers by
-default</strong>; <code>display:none</code> stays available as a per-session fallback for
-media-bearing sessions if some provider's playback does not survive Activity-hidden in practice.
-The deciding question is empirical, not architectural — rollout step 1 includes the spike (start a
-video, hide the session under Activity, confirm audio continues). Both modes fit the same host — a
-per-slot policy, not an architecture fork.</p>
+<p>Policy (upstream review outcome): <strong>wrap every inactive session in
+<code>&lt;Activity mode="hidden"&gt;</code></strong>, full stop — no parallel <code>display:none</code>
+path built. The deciding question is empirical, not architectural, so rollout step 1 includes a
+spike (start a video, hide the session under Activity, confirm audio continues). <em>Contingency,
+not planned work:</em> if that spike shows a specific provider can't survive Activity's effect
+unmount, the isolated fix is to wrap that one media subtree in a plain
+<code>&lt;div style="display:none"&gt;</code> (which keeps effects mounted) — same host, one-line
+escape hatch, revisited only if forced.</p>
 
 <p>Background cost model: per warm session, retained DOM (bounded — see
 <code>LazyViewportMount</code> below) plus live query subscriptions that re-render the hidden tree
