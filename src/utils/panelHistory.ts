@@ -25,6 +25,7 @@ import { ChangeScope, type Tx } from '@/data/api'
 import {
   focusedBlockLocationProp,
   type FocusedBlockLocation,
+  normalizeViewMode,
   panelViewModeProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -52,7 +53,8 @@ export interface HistoryEntry {
   /** Present when this entry was pushed by an enter-with-navigation
    *  (`navigateInPanel` with a `viewMode`): this entry is where the enter
    *  gesture left FROM — going back restores the pre-enter context. Only
-   *  recorded here; close-goes-back consumes it (slice 5).
+   *  recorded here; `closeVideoNotesView` (src/plugins/video-player/notes.ts)
+ *  consumes it.
    *
    *  Invariant: the marker rides the ENTRY PAIR across any number of
    *  back/forward round trips (chevron or browser-driven) — back() carries
@@ -264,8 +266,8 @@ export const writePanelContent = async (
   // engine's own write dedup compares ENCODED values, where absent ≠ null
   // (optionalString.encode(undefined) = null) — so an unguarded clear would
   // materialize panelViewMode:null on every never-moded pane.
-  const currentMode = await tx.getProperty(panelId, panelViewModeProp) || undefined
-  const nextMode = options.viewMode || undefined
+  const currentMode = normalizeViewMode(await tx.getProperty(panelId, panelViewModeProp))
+  const nextMode = normalizeViewMode(options.viewMode)
   await tx.setProperty(panelId, topLevelBlockIdProp, blockId)
   if (currentMode !== nextMode) {
     await tx.setProperty(panelId, panelViewModeProp, nextMode)
@@ -331,8 +333,8 @@ export const navigateInPanel = async (
     // Presence-gated: a plain same-block call preserves the mode; only an
     // explicit viewMode key (set OR undefined-to-clear) touches it.
     if (!('viewMode' in options)) return
-    const currentMode = panelBlock.peekProperty(panelViewModeProp) || undefined
-    const nextMode = options.viewMode || undefined
+    const currentMode = normalizeViewMode(panelBlock.peekProperty(panelViewModeProp))
+    const nextMode = normalizeViewMode(options.viewMode)
     if (currentMode === nextMode) return
     await panelBlock.repo.tx(async tx => {
       await tx.setProperty(panelBlock.id, panelViewModeProp, nextMode)
@@ -343,7 +345,7 @@ export const navigateInPanel = async (
     panelHistory.push(panelBlock.id, {
       blockId: prev,
       state: panelHistory.snapshot(panelBlock.id),
-      ...(options.viewMode ? {viewModeEnter: options.viewMode} : {}),
+      ...(normalizeViewMode(options.viewMode) ? {viewModeEnter: options.viewMode} : {}),
     })
   }
   await transactPanelContent(panelBlock, blockId, undefined, 'navigate in panel', {viewMode: options.viewMode})

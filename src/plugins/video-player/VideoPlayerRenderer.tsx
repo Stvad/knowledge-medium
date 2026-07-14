@@ -144,8 +144,8 @@ export const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
           className="absolute right-2 top-2 opacity-0 shadow-md transition-opacity group-hover/video-player:opacity-100 focus-visible:opacity-100"
           onClick={() => {
             // uiStateBlock IS the panel row in panel contexts — the enter
-            // gesture puts the PANE into the video-notes mode (slice 3's
-            // composed navigate+mode; same-block = mode-only tx).
+            // gesture puts the PANE into the video-notes mode via the composed
+            // navigateInPanel({viewMode}) (same-block = mode-only tx).
             void enterVideoNotesView(block, uiStateBlock)
           }}
         >

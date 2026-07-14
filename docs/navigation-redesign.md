@@ -84,7 +84,7 @@ Same shape IDEs / Emacs use for window layout. `stack`, `tabs`, and `split` are 
 
 **URL transport: inline grammar, current flat list is a strict subset.** Block ids are alnum+`-_`, so `,` `|` `:` `(` `)` are free as structural chars:
 
-*[Grammar superseded 2026-07: stacks are now bare comma lists (`b1,b2`), parens are reserved for nested sub-layouts, and `(s:` no longer parses — see the video-notes navigation PR (#338) and `src/utils/routing.ts`.]*
+*[Grammar superseded 2026-07: stacks are now bare comma lists (`b1,b2`), parens are reserved for nested sub-layouts, and `(s:` no longer parses — design PR #338, implementation PR #367; see `src/utils/routing.ts`.]*
 
 | What | Syntax | Example |
 |---|---|---|

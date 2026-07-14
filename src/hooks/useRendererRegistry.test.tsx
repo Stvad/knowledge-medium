@@ -37,7 +37,7 @@ beforeAll(async () => {
 afterAll(async () => { await db.cleanup() })
 
 // A probe renderer that opts in purely on the panelViewMode context field —
-// the shape the video-notes renderer (slice 5) will use.
+// the same shape VideoNotesRenderer uses.
 const Probe = () => null
 Probe.canRender = ({context}: BlockRendererProps) => context?.panelViewMode === 'video-notes'
 Probe.priority = () => 100

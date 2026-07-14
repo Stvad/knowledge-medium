@@ -5,8 +5,9 @@
 // column := cell (',' cell)*               a multi-cell column is a vertical
 //           stack: `#ws/a/b,c/d` puts b above c in the middle column
 // cell   := slot | '(' layout ')'          a parenthesized cell is a nested
-//           sub-layout; panel-row materialization of sub-layouts lands in
-//           a later slice (inbound URLs degrade them to stacks meanwhile)
+//           sub-layout; not implemented yet in the panel rows — parsed and
+//           round-tripped so deeper layouts become a data-model change
+//           later (inbound URLs degrade them to stacks meanwhile)
 // layout := column ('/' column)*           the grammar inside a paren cell
 // slot   := blockId (';' entry)*           matrix-style per-slot context:
 //           `;view=<value>` (percent-encoded viewMode), `;active` /
@@ -47,10 +48,16 @@ export type LayoutSlot =
   // a leaf, or a stack when the column has multiple cells.
   | {kind: 'sublayout'; columns: LayoutSlot[]}
 
-export const flattenSlots = (slots: readonly LayoutSlot[]): string[] =>
+type LeafLayoutSlot = Extract<LayoutSlot, {kind: 'leaf'}>
+
+/** All leaf slots in pre-order (stacks and sublayouts flattened). */
+export const collectLeafSlots = (slots: readonly LayoutSlot[]): LeafLayoutSlot[] =>
   slots.flatMap(slot => slot.kind === 'leaf'
-    ? [slot.blockId]
-    : flattenSlots(slot.kind === 'stack' ? slot.children : slot.columns))
+    ? [slot]
+    : collectLeafSlots(slot.kind === 'stack' ? slot.children : slot.columns))
+
+export const flattenSlots = (slots: readonly LayoutSlot[]): string[] =>
+  collectLeafSlots(slots).map(leaf => leaf.blockId)
 
 export const splitHashRouteAndParams = (hash: string | undefined | null) => {
   const raw = hash ?? ''
@@ -153,6 +160,8 @@ const parseContextEntries = (segments: readonly string[]): SlotContext => {
     if (key === 'view') {
       if (!hasValue) continue
       const decoded = decodeContextValue(value)
+      // local '' ≡ absent fold — see normalizeViewMode (properties.ts);
+      // routing stays import-free of the data layer.
       if (!decoded) continue
       viewMode = decoded
       seen.add(key)
@@ -251,7 +260,7 @@ const encodeContextValue = (value: string): string =>
 const buildContextSuffix = (slot: SlotContext): string => {
   const entries: {key: string; text: string}[] = []
   if (slot.active) entries.push({key: 'active', text: 'active'})
-  // Empty viewMode is meaningless (parse drops `view=` too) — treat as absent.
+  // local '' ≡ absent fold — see normalizeViewMode (properties.ts).
   if (slot.viewMode) entries.push({key: 'view', text: `view=${encodeContextValue(slot.viewMode)}`})
   for (const raw of slot.rest ?? []) {
     // Guard programmatically constructed slots: drop malformed entries

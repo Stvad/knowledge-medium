@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Write-side integration for the video-notes view mode (slice 5): entering
+ * Write-side integration for the video-notes view mode: entering
  * rides navigateInPanel (same-block = mode-only tx, nested = navigate+mode
  * in ONE tx with a viewModeEnter-stamped history entry), and closing either
  * goes BACK (marker present — restores the pre-enter content) or clears the

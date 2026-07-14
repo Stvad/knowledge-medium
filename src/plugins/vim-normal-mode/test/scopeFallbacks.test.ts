@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Pins the per-pane render-scope FALLBACKS (slice 4): when a handler runs
+ * Pins the per-pane render-scope FALLBACKS: when a handler runs
  * without an ambient rendered scope (deps.renderScopeId undefined), the
  * written focus location must still land in the pane's scope namespace —
  * `uiStateRenderScopeId` derives it from the ui-state block (panel rows are

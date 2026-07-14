@@ -4,8 +4,8 @@ import {
   focusBlock,
   requestEditorFocus,
   topLevelBlockIdProp,
-  uiStateRenderScopeId,
 } from '@/data/properties.js'
+import { panelRenderScopeId } from '@/utils/renderScope'
 import { goBackInPanel, navigateInPanel, panelHistory } from '@/utils/panelHistory'
 import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
 
@@ -90,7 +90,9 @@ export const enterVideoNotesView = async (
     uiStateBlock,
     // The pane now renders the video top-level — focus the note in the
     // pane's own scope, not whatever scope the enter gesture came from.
-    uiStateRenderScopeId(uiStateBlock, videoBlock.id),
+    // Derived directly (panel id + the block we just navigated to), with no
+    // temporal dependency on the freshly-committed topLevelBlockIdProp peek.
+    panelRenderScopeId(uiStateBlock.id, videoBlock.id),
   )
 }
 

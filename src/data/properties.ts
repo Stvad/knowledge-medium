@@ -80,6 +80,14 @@ export const panelViewModeProp = defineProperty<string | undefined>('panelViewMo
   changeScope: ChangeScope.UiState,
 })
 
+/** '' ≡ absent, canonically: the URL grammar drops an empty `view=` value,
+ *  so every reader/writer of a panel view mode folds '' to undefined through
+ *  this ONE helper — a stray empty-string write must never make two
+ *  otherwise-identical layouts compare unequal. (routing.ts keeps its own
+ *  local folds: it must not import the data layer.) */
+export const normalizeViewMode = (value: string | undefined): string | undefined =>
+  value || undefined
+
 /** Editor-selection state for the active block. Object-typed; the
  *  `unsafeIdentity` codec is appropriate because the shape is engine-
  *  controlled and not exposed for plugin extension. The optional

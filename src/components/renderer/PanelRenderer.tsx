@@ -243,8 +243,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
     // panelViewMode rides the context so renderer resolution (useRenderer /
     // canRender) can pick a mode-specific renderer for the top-level block.
     // NOTE: NestedBlockContextProvider children INHERIT context, so nested
-    // BlockComponents see the field too unless a renderer clears it — the
-    // video-notes renderer does exactly that (slice 5).
+    // BlockComponents see the field too unless a renderer clears it —
+    // VideoNotesLayout does exactly that around its notes region.
     <NestedBlockContextProvider
       overrides={{
         layoutBoundary: false,

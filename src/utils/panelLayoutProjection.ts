@@ -6,6 +6,7 @@ import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
+  normalizeViewMode,
   panelViewModeProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -15,6 +16,7 @@ import { keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
 import { keysImmediatelyAfter } from '@/data/orderKeyPlacement'
 import {
   buildLayoutFromSlots,
+  collectLeafSlots,
   flattenSlots,
   parseLayout,
   preserveHashQueryParams,
@@ -51,11 +53,7 @@ export const panelBlockId = (row: BlockData): string | undefined => {
 const panelViewMode = (row: BlockData): string | undefined => {
   const stored = row.properties[panelViewModeProp.name]
   if (stored === undefined) return undefined
-  const value = panelViewModeProp.codec.decode(stored)
-  // '' is not a mode (the URL grammar treats an empty view value as absent);
-  // normalize so a buggy empty-string write can't make rows and hash compare
-  // permanently unequal (which would flip every activation into a push).
-  return value === '' ? undefined : value
+  return normalizeViewMode(panelViewModeProp.codec.decode(stored))
 }
 
 const sessionActivePanelId = (row: BlockData | undefined): string | undefined => {
@@ -217,7 +215,8 @@ const activePanelIdAfterReconcile = (
 }
 
 // URL-borne sublayout columns (the parenthesized grammar) can't be
-// materialized as panel rows yet — that lands in a later slice. Degrade
+// materialized as panel rows yet — not implemented; the grammar parses and
+// round-trips them so deeper layouts become a data-model change later. Degrade
 // them at the URL boundary to their flattened leaves so an inbound hash
 // like `#ws/(a/b)` never crashes bootstrap: a sublayout inside a column
 // splices its leaves into that column's stack; a column that IS a
@@ -227,13 +226,8 @@ const hasSublayoutSlots = (slots: readonly LayoutSlot[]): boolean =>
     slot.kind === 'sublayout' ||
     (slot.kind === 'stack' && hasSublayoutSlots(slot.children)))
 
-const collectLeafSlots = (slots: readonly LayoutSlot[]): LayoutSlot[] =>
-  slots.flatMap(slot => slot.kind === 'leaf'
-    ? [slot]
-    : collectLeafSlots(slot.kind === 'stack' ? slot.children : slot.columns))
-
 const degradeSublayoutSlots = (slots: readonly LayoutSlot[]): LayoutSlot[] =>
-  slots.flatMap(slot => {
+  slots.flatMap((slot): LayoutSlot[] => {
     if (slot.kind === 'leaf') return [slot]
     const leaves = collectLeafSlots([slot])
     if (leaves.length === 0) return []
@@ -241,29 +235,33 @@ const degradeSublayoutSlots = (slots: readonly LayoutSlot[]): LayoutSlot[] =>
     return [{kind: 'stack' as const, children: leaves}]
   })
 
-// Leaves compare blockId + viewMode + active. `ignoreActive` classifies an
-// active-only diff (replace-not-push in the projection); `ignoreContext`
-// subsumes it and compares TOPOLOGY only (kind + blockId) — used to route
-// context-only inbound diffs away from destructive materialization.
+// Leaves compare blockId + viewMode + active, per `strictness`:
+// - 'exact' (default): full context equality.
+// - 'ignore-active': everything but the active flag — classifies an
+//   active-only diff (replace-not-push in the projection).
+// - 'topology': kind + blockId only — routes context-only inbound diffs
+//   away from destructive materialization.
 // `rest` deliberately never participates: rows have nowhere to store
 // unknown context entries, so they live in the URL only and must never
 // make two otherwise-identical layouts compare unequal.
+type SlotComparisonStrictness = 'exact' | 'ignore-active' | 'topology'
+
 const sameLayoutSlots = (
   left: readonly LayoutSlot[],
   right: readonly LayoutSlot[],
-  options: {ignoreActive?: boolean; ignoreContext?: boolean} = {},
+  strictness: SlotComparisonStrictness = 'exact',
 ): boolean =>
   left.length === right.length && left.every((slot, index) => {
     const other = right[index]
     if (!other || slot.kind !== other.kind) return false
     if (slot.kind === 'leaf' && other.kind === 'leaf') {
       if (slot.blockId !== other.blockId) return false
-      if (options.ignoreContext === true) return true
+      if (strictness === 'topology') return true
       return slot.viewMode === other.viewMode &&
-        (options.ignoreActive === true || (slot.active === true) === (other.active === true))
+        (strictness === 'ignore-active' || (slot.active === true) === (other.active === true))
     }
-    if (slot.kind === 'stack' && other.kind === 'stack') return sameLayoutSlots(slot.children, other.children, options)
-    if (slot.kind === 'sublayout' && other.kind === 'sublayout') return sameLayoutSlots(slot.columns, other.columns, options)
+    if (slot.kind === 'stack' && other.kind === 'stack') return sameLayoutSlots(slot.children, other.children, strictness)
+    if (slot.kind === 'sublayout' && other.kind === 'sublayout') return sameLayoutSlots(slot.columns, other.columns, strictness)
     return false
   })
 
@@ -706,7 +704,7 @@ export const reconcilePanelRows = async (
     const currentLeafRows = panelRowsInLayoutOrder(layoutSessionBlock.id, currentRows)
       .filter(row => panelBlockId(row) !== undefined)
     if (
-      sameLayoutSlots(currentLayoutSlots, targetSlots, {ignoreContext: true}) &&
+      sameLayoutSlots(currentLayoutSlots, targetSlots, 'topology') &&
       currentLeafRows.length === targetLeaves.length
     ) {
       let wrote = false
@@ -1054,9 +1052,15 @@ export class PanelLayoutProjection {
             // event was processed after drain (its rows are newer).
             const generationAtDrain = this.outboundGeneration
             const rows = await this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id}).load()
-            this.outboundSuppressed = false
-            if (this.outboundGeneration === generationAtDrain) {
-              this.handleRowsChanged(rows)
+            // Re-check after the await: a NEW inbound may have queued during
+            // the load (and rows events suppressed under it re-set the flag).
+            // Bail WITHOUT clearing — that inbound's own drain owns the flag
+            // now; clearing here would strand its suppressed divergence.
+            if (this.pendingInbound === 0) {
+              this.outboundSuppressed = false
+              if (this.outboundGeneration === generationAtDrain) {
+                this.handleRowsChanged(rows)
+              }
             }
           }
         }
@@ -1093,7 +1097,7 @@ export class PanelLayoutProjection {
 
     const outboundSlots = sameWorkspace ? withRestFromUrl(current.slots, slots) : slots
     const nextHash = buildLayoutFromSlots(this.workspaceId, outboundSlots)
-    if (sameWorkspace && sameLayoutSlots(current.slots, slots, {ignoreActive: true})) {
+    if (sameWorkspace && sameLayoutSlots(current.slots, slots, 'ignore-active')) {
       // Active-only diff: which pane is focused is not a history entry —
       // rewrite the current one instead of pushing.
       this.replaceHash(nextHash)
