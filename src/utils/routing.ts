@@ -1,17 +1,34 @@
-// URL hash format: #<workspaceId>/<slot1>/<slot2>/...
+// URL hash format: #<workspaceId>/<column1>/<column2>/...
 //
-// A slot is either a bare block id or a sidebar stack:
-//   #ws/a/b/c          flat horizontal panels
-//   #ws/a/(s:x,b)/c    x stacked above b in the second horizontal column
+// hash   := '#' workspaceId ('/' column)*  (+ optional '?query' — see
+//           splitHashRouteAndParams / preserveHashQueryParams, unchanged)
+// column := cell (',' cell)*               a multi-cell column is a vertical
+//           stack: `#ws/a/b,c/d` puts b above c in the middle column
+// cell   := slot | '(' layout ')'          a parenthesized cell is a nested
+//           sub-layout; not implemented yet in the panel rows — parsed and
+//           round-tripped so deeper layouts become a data-model change
+//           later (inbound URLs degrade them to stacks meanwhile)
+// layout := column ('/' column)*           the grammar inside a paren cell
+// slot   := blockId (';' entry)*           matrix-style per-slot context:
+//           `;view=<value>` (percent-encoded viewMode), `;active` /
+//           `;active=true` / `;active=false`, any other well-formed `key`/`key=value`
+//           preserved verbatim as an opaque context entry (see REST_ENTRY_RE)
+//
+// Malformed input follows two rules: OUTSIDE parens, salvage what you can
+// (invalid cells/columns are dropped individually, the rest of the layout
+// survives); a PAREN GROUP is atomic — any invalid content inside it drops
+// the whole group.
 //
 // Ids are UUIDs (text). An empty hash means "use the user's last-active
 // workspace from localStorage, falling back to the first synced workspace".
 // A hash with only a workspace id (no `/`) means "restore or create the
 // workspace's layout-session panel layout".
 //
-// Phase 2 drops support for legacy hashes (`#<blockId>` without a workspace
-// id). The previous data is disposable per the workspace migration, so any
-// bookmarked legacy URL won't resolve to a real block anyway.
+// Phase 2 dropped support for legacy hashes (`#<blockId>` without a
+// workspace id). This rewrite retires the old `(s:a,b)` stack prefix in
+// favor of the plain comma grammar above — `(s:` tokens are deliberately
+// NOT recognized any more (their inner content fails the blockId charset,
+// so a whole `(s:…)` group parses out cleanly).
 
 export interface AppRoute {
   workspaceId?: string
@@ -25,13 +42,24 @@ export interface AppLayoutRoute {
 }
 
 export type LayoutSlot =
-  | {kind: 'leaf'; blockId: string}
+  | {kind: 'leaf'; blockId: string; viewMode?: string; active?: boolean; rest?: string[]}
   | {kind: 'stack'; children: LayoutSlot[]}
+  // Each sublayout column is represented exactly like a top-level column:
+  // a leaf, or a stack when the column has multiple cells.
+  | {kind: 'sublayout'; columns: LayoutSlot[]}
 
-const flattenSlots = (slots: readonly LayoutSlot[]): string[] =>
-  slots.flatMap(slot => slot.kind === 'leaf' ? [slot.blockId] : flattenSlots(slot.children))
+type LeafLayoutSlot = Extract<LayoutSlot, {kind: 'leaf'}>
 
-const splitHashRouteAndParams = (hash: string | undefined | null) => {
+/** All leaf slots in pre-order (stacks and sublayouts flattened). */
+export const collectLeafSlots = (slots: readonly LayoutSlot[]): LeafLayoutSlot[] =>
+  slots.flatMap(slot => slot.kind === 'leaf'
+    ? [slot]
+    : collectLeafSlots(slot.kind === 'stack' ? slot.children : slot.columns))
+
+export const flattenSlots = (slots: readonly LayoutSlot[]): string[] =>
+  collectLeafSlots(slots).map(leaf => leaf.blockId)
+
+export const splitHashRouteAndParams = (hash: string | undefined | null) => {
   const raw = hash ?? ''
   const trimmed = raw.startsWith('#') ? raw.slice(1) : raw
   const queryIndex = trimmed.indexOf('?')
@@ -80,19 +108,130 @@ const splitTopLevel = (input: string, separator: string): string[] => {
   return out
 }
 
-const parseSlot = (raw: string): LayoutSlot | null => {
-  const token = raw.trim()
-  if (!token) return null
-  if (token.startsWith('(s:') && token.endsWith(')')) {
-    const inner = token.slice(3, -1)
-    return {
-      kind: 'stack',
-      children: splitTopLevel(inner, ',')
-        .map(parseSlot)
-        .filter((slot): slot is LayoutSlot => Boolean(slot)),
+// True only when `token` starts with '(' and that SAME paren's matching ')'
+// is the very last character — i.e. the whole token is one balanced group,
+// not (e.g.) "(a)/(b)" sitting next to something else.
+const isFullyParenWrapped = (token: string): boolean => {
+  if (token.length < 2 || token[0] !== '(' || token[token.length - 1] !== ')') return false
+  let depth = 0
+  for (let index = 0; index < token.length; index++) {
+    if (token[index] === '(') depth++
+    else if (token[index] === ')') {
+      depth--
+      if (depth === 0) return index === token.length - 1
     }
   }
-  return {kind: 'leaf', blockId: token}
+  return false
+}
+
+const BLOCK_ID_RE = /^[A-Za-z0-9._-]+$/
+const CONTEXT_ENTRY_RE = /^([a-z][a-z0-9-]*)(=(.*))?$/
+
+// An unknown (rest) entry must be a well-formed percent-encoded segment on
+// BOTH sides: parse only keeps entries matching this, and build re-checks
+// programmatically constructed slots — keeping parse and build symmetric so
+// no entry can survive a parse only to vanish on the next normalization.
+const REST_ENTRY_RE = /^[a-z][a-z0-9-]*(=[A-Za-z0-9%._~-]*)?$/
+
+const decodeContextValue = (raw: string): string | null => {
+  try {
+    return decodeURIComponent(raw)
+  } catch {
+    return null
+  }
+}
+
+type SlotContext = {viewMode?: string; active?: boolean; rest?: string[]}
+
+const parseContextEntries = (segments: readonly string[]): SlotContext => {
+  const seen = new Set<string>()
+  let viewMode: string | undefined
+  let active = false
+  const rest: {key: string; raw: string}[] = []
+
+  for (const raw of segments) {
+    const match = CONTEXT_ENTRY_RE.exec(raw)
+    if (!match) continue
+    const key = match[1]
+    if (seen.has(key)) continue
+    const hasValue = match[2] !== undefined
+    const value = match[3] ?? ''
+
+    if (key === 'view') {
+      if (!hasValue) continue
+      const decoded = decodeContextValue(value)
+      // local '' ≡ absent fold — see normalizeViewMode (properties.ts);
+      // routing stays import-free of the data layer.
+      if (!decoded) continue
+      viewMode = decoded
+      seen.add(key)
+    } else if (key === 'active') {
+      if (!hasValue || value === 'true') {
+        active = true
+        seen.add(key)
+      } else if (value === 'false') {
+        seen.add(key)
+      } // else malformed value: drop, and don't consume the dedup slot
+    } else {
+      // Malformed unknown entry (extra '=', unsafe value chars): drop it
+      // without consuming the dedup slot, same as a malformed known value.
+      if (!REST_ENTRY_RE.test(raw)) continue
+      rest.push({key, raw})
+      seen.add(key)
+    }
+  }
+
+  // Canonicalize at PARSE time (sorted by key) so parse(x) is already a
+  // fixed point of parse∘build∘parse regardless of the URL's entry order.
+  rest.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+
+  return {
+    ...(viewMode !== undefined ? {viewMode} : {}),
+    ...(active ? {active: true} : {}),
+    ...(rest.length > 0 ? {rest: rest.map(entry => entry.raw)} : {}),
+  }
+}
+
+// Column parsing carries the header's two malformed-input rules: with
+// `strict: false` (outside parens) invalid cells are dropped individually
+// and the survivors keep the column alive; with `strict: true` (inside a
+// paren group) ANY invalid cell voids the column, and parseSublayout
+// propagates that to drop the whole group atomically.
+// 0 cells -> no column; 1 -> that slot directly; >=2 -> a stack.
+const parseColumn = (text: string, strict: boolean): LayoutSlot | null => {
+  const cells: LayoutSlot[] = []
+  for (const raw of splitTopLevel(text, ',')) {
+    const slot = parseSlotCell(raw)
+    if (!slot) {
+      if (strict) return null
+      continue
+    }
+    cells.push(slot)
+  }
+  if (cells.length === 0) return null
+  if (cells.length === 1) return cells[0]
+  return {kind: 'stack', children: cells}
+}
+
+const parseSublayout = (inner: string): LayoutSlot | null => {
+  const columns: LayoutSlot[] = []
+  for (const text of splitTopLevel(inner, '/')) {
+    const column = parseColumn(text, true)
+    if (!column) return null
+    columns.push(column)
+  }
+  return {kind: 'sublayout', columns}
+}
+
+const parseSlotCell = (raw: string): LayoutSlot | null => {
+  const token = raw.trim()
+  if (!token) return null
+
+  if (isFullyParenWrapped(token)) return parseSublayout(token.slice(1, -1))
+
+  const [blockId, ...contextSegments] = splitTopLevel(token, ';')
+  if (!blockId || !BLOCK_ID_RE.test(blockId)) return null
+  return {kind: 'leaf', blockId, ...parseContextEntries(contextSegments)}
 }
 
 export const parseLayout = (hash: string | undefined | null): AppLayoutRoute => {
@@ -100,9 +239,9 @@ export const parseLayout = (hash: string | undefined | null): AppLayoutRoute => 
   const trimmed = splitHashRouteAndParams(hash).route
   if (!trimmed) return {slots: [], blockIds: []}
 
-  const [workspaceId, ...slotTokens] = splitTopLevel(trimmed, '/')
-  const slots = slotTokens
-    .map(parseSlot)
+  const [workspaceId, ...columnTokens] = splitTopLevel(trimmed, '/')
+  const slots = columnTokens
+    .map(token => parseColumn(token, false))
     .filter((slot): slot is LayoutSlot => Boolean(slot))
   return {
     workspaceId: workspaceId || undefined,
@@ -114,9 +253,33 @@ export const parseLayout = (hash: string | undefined | null): AppLayoutRoute => 
 export const buildLayout = (workspaceId: string, blockIds: readonly string[] = []): string =>
   blockIds.length > 0 ? `#${workspaceId}/${blockIds.join('/')}` : `#${workspaceId}`
 
+const UNSAFE_ENCODE_RE = /[!'()*]/g
+const encodeContextValue = (value: string): string =>
+  encodeURIComponent(value).replace(UNSAFE_ENCODE_RE, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+
+const buildContextSuffix = (slot: SlotContext): string => {
+  const entries: {key: string; text: string}[] = []
+  if (slot.active) entries.push({key: 'active', text: 'active'})
+  // local '' ≡ absent fold — see normalizeViewMode (properties.ts).
+  if (slot.viewMode) entries.push({key: 'view', text: `view=${encodeContextValue(slot.viewMode)}`})
+  for (const raw of slot.rest ?? []) {
+    // Guard programmatically constructed slots: drop malformed entries
+    // (REST_ENTRY_RE, same rule as parse) and entries squatting on the
+    // reserved keys — viewMode/active own those; a rest duplicate would
+    // emit the key twice.
+    if (!REST_ENTRY_RE.test(raw)) continue
+    const key = CONTEXT_ENTRY_RE.exec(raw)![1]  // REST_ENTRY_RE-validated above, so the key group always matches
+    if (key === 'view' || key === 'active') continue
+    entries.push({key, text: raw})
+  }
+  entries.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+  return entries.map(entry => `;${entry.text}`).join('')
+}
+
 const buildLayoutSlot = (slot: LayoutSlot): string => {
-  if (slot.kind === 'leaf') return slot.blockId
-  return `(s:${slot.children.map(buildLayoutSlot).join(',')})`
+  if (slot.kind === 'leaf') return `${slot.blockId}${buildContextSuffix(slot)}`
+  if (slot.kind === 'stack') return slot.children.map(buildLayoutSlot).join(',')
+  return `(${slot.columns.map(buildLayoutSlot).join('/')})`
 }
 
 export const buildLayoutFromSlots = (workspaceId: string, slots: readonly LayoutSlot[] = []): string =>

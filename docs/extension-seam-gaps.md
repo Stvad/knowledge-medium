@@ -124,7 +124,7 @@ Correctly **substrate** (leave closed unless concrete demand): repo/data-backend
 - **Algebra:** same `navigationFacet` with a "global" intent tag.
 
 ### N6 — URL serialization format *(MED)*
-- **Where:** `src/utils/routing.ts` (`parseLayout`/`buildLayout`, the `#ws/a/(s:x,b)/c` grammar).
+- **Where:** `src/utils/routing.ts` (`parseLayout`/`buildLayout`, the `#ws/a/(s:x,b)/c` grammar). *[Grammar superseded 2026-07: comma-stacks (`#ws/a/x,b/c`) + parens reserved for sub-layouts; `(s:` retired — design PR #338, implementation PR #367.]*
 - **Existing/planned:** `urlSerializerFacet` — doc-only (`navigation-redesign.md:349`).
 - **Algebra:** Replace (one serializer wins). Power-user/fork axis — defer.
 

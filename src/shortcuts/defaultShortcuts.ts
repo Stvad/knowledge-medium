@@ -84,7 +84,7 @@ import { WipeLocalDataDialog } from '@/shortcuts/WipeLocalDataDialog.js'
 import { dialogAppMountExtension } from '@/extensions/dialogAppMount.js'
 import { focusPropertyRow } from '@/utils/propertyNavigation.js'
 import { reloadInSafeMode } from '@/utils/safeMode.js'
-import { outlineRenderScopeId } from '@/utils/renderScope.js'
+import { panelRenderScopeId } from '@/utils/renderScope.js'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -187,7 +187,7 @@ const createNodeInActivePanelFromGlobalContext = async (
   })
   await focusBlock(repo.block(activePanelRow.id), newId, {
     edit: true,
-    renderScopeId: outlineRenderScopeId(activeTopLevelBlockId),
+    renderScopeId: panelRenderScopeId(activePanelRow.id, activeTopLevelBlockId),
   })
 }
 

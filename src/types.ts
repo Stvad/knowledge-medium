@@ -98,6 +98,12 @@ export interface BlockContextType {
     }
     panelId?: string
     layoutSessionBlockId?: string
+    /** The pane's view mode (`panelViewModeProp` on the panel row), threaded
+     *  by `PanelRenderer` around the top-level block render so renderer
+     *  resolution (`canRender`) can select a mode-specific renderer. Children
+     *  inherit it like any context field; a mode renderer that embeds normal
+     *  block content clears it in its own `NestedBlockContextProvider`. */
+    panelViewMode?: string
     /** Stable semantic identity for the rendered outline-like scope that
      *  contains this block. A logical block id plus this scope identifies
      *  one rendered occurrence of that block, even when the same block is

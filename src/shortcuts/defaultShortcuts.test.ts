@@ -33,7 +33,7 @@ import {
   panelBlockId,
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
-import { outlineRenderScopeId } from '@/utils/renderScope'
+import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -433,12 +433,12 @@ describe('default CodeMirror shortcuts', () => {
     expect(peekFocusedBlockLocation(panelBlock)?.blockId).toBe(newNodeId)
     expect(panelBlock.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: newNodeId,
-      renderScopeId: outlineRenderScopeId('root'),
+      renderScopeId: panelRenderScopeId(panelId, 'root'),
     })
     expect(panelBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
-  it('defaults cross-block focus to the panel outline scope instead of preserving stale nested scope', async () => {
+  it('defaults cross-block focus to the per-pane scope instead of preserving stale nested scope', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
       await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
@@ -455,9 +455,11 @@ describe('default CodeMirror shortcuts', () => {
 
     await focusBlock(uiStateBlock, 'next')
 
+    // 'ui' carries topLevelBlockIdProp, so focusBlock treats it as a panel
+    // row and defaults to the per-pane scope.
     expect(uiStateBlock.peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'next',
-      renderScopeId: outlineRenderScopeId('root'),
+      renderScopeId: panelRenderScopeId('ui', 'root'),
     })
   })
 
