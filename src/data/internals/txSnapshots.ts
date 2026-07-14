@@ -61,6 +61,59 @@ export const mergeSnapshotsInto = (
   }
 }
 
+/** Order snapshot targets for undo/redo replay so the row-level
+ *  parent-liveness trigger passes at every intermediate statement, not
+ *  just in the end state. The end state (all rows at `before`, resp.
+ *  `after`) is a previously-observed valid state, but `applyRaw` writes
+ *  one row at a time and `blocks_parent_not_deleted_check_update` sees
+ *  each intermediate state — so a live-target child must be applied
+ *  AFTER the entry-internal parent it lands under is itself live.
+ *
+ *  Ordering rule: live-target rows first, parents before children
+ *  (topological over the target forest, restricted to ids in the
+ *  entry); tombstone/remove targets last (their writes have
+ *  `NEW.deleted = 1` or don't touch `parent_id`, so the trigger's WHEN
+ *  clause exempts them). A live-target row whose parent is outside the
+ *  entry needs no ordering: the parent was live in the target state
+ *  and untouched by this tx, so it is live now.
+ *
+ *  Before this, safety leaned on each mutator's first-touch order
+ *  (e.g. softDeleteSubtree visiting the root first). core.merge broke
+ *  that implicit obligation — it rehomes children before tombstoning
+ *  the merged-from block, so undo restored the children under a
+ *  still-tombstoned parent and the whole undo tx aborted with
+ *  ParentDeletedError (found by repoMutators.fuzz). Centralizing the
+ *  order here removes the per-mutator obligation entirely. */
+export const replayApplicationOrder = (
+  snapshots: SnapshotsMap,
+  direction: 'before' | 'after',
+): Array<[string, BlockData | null]> => {
+  const live = new Map<string, BlockData>()
+  const exempt: Array<[string, BlockData | null]> = []
+  for (const [id, snap] of snapshots) {
+    const target = snap[direction]
+    if (target === null || target.deleted) exempt.push([id, target])
+    else live.set(id, target)
+  }
+  const depth = new Map<string, number>()
+  const depthOf = (id: string): number => {
+    const cached = depth.get(id)
+    if (cached !== undefined) return cached
+    // Pre-seed 0 so a malformed (cyclic) target graph degrades to
+    // insertion order instead of infinite recursion.
+    depth.set(id, 0)
+    const parentId = live.get(id)?.parentId
+    const d = parentId != null && live.has(parentId) ? depthOf(parentId) + 1 : 0
+    depth.set(id, d)
+    return d
+  }
+  const ordered = [...live.keys()].sort((a, b) => depthOf(a) - depthOf(b))
+  return [
+    ...ordered.map(id => [id, live.get(id)!] as [string, BlockData | null]),
+    ...exempt,
+  ]
+}
+
 /** Look up an own-write for a given id. Used by `tx.peek` to see this
  *  tx's pending writes before the cache. */
 export const peekSnapshot = (

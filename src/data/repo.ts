@@ -106,6 +106,7 @@ import {
   type ParsedAliasCollision,
 } from './internals/raiseProtocol'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
+import { replayApplicationOrder } from './internals/txSnapshots'
 import { CallbackSet } from '@/utils/callbackSet'
 import { scheduleDeepIdle, CATCHUP_DEEP_IDLE } from '@/utils/scheduleIdle'
 import type { TxImpl } from './internals/txEngine'
@@ -1550,8 +1551,12 @@ export class Repo {
       : action
     await this._runAndDispatch(async (tx) => {
       const txImpl = tx as TxImpl
-      for (const [id, snap] of entry.snapshots) {
-        await txImpl.applyRaw(id, snap[direction])
+      // Trigger-safe application order (parents before live children) —
+      // map insertion order is first-touch order of the original tx,
+      // which core.merge (children rehomed before the from-block's
+      // tombstone) shows is not safe to replay verbatim.
+      for (const [id, target] of replayApplicationOrder(entry.snapshots, direction)) {
+        await txImpl.applyRaw(id, target)
       }
     }, {scope: entry.scope, description}, true)
   }

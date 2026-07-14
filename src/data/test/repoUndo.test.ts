@@ -333,6 +333,36 @@ describe('repo.undo / redo on empty stack', () => {
   })
 })
 
+describe('replay ordering vs parent-liveness trigger', () => {
+  // core.merge touches the rehomed children before tombstoning the
+  // merged-from block, so a first-touch-order replay would restore the
+  // children under a still-tombstoned parent and abort on the
+  // blocks_parent_not_deleted trigger. `replayApplicationOrder` must
+  // make the whole round-trip work regardless of touch order.
+  // Found by repoMutators.fuzz.test.ts.
+  it('undoes and redoes a merge of a block that has children', async () => {
+    await seedRoot(env.repo, 'root')
+    const a = await env.repo.mutate.createChild({parentId: 'root', content: 'A'})
+    const b = await env.repo.mutate.createChild({parentId: a, content: 'B'})
+    env.repo.undoManager.clear()
+
+    await env.repo.mutate.merge({intoId: 'root', fromId: a})
+    expect(await isBlockDeleted(env.repo, a)).toBe(true)
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, a)).toBe(false)
+    const bRow = await env.repo.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [b])
+    expect(bRow.parent_id).toBe(a)
+
+    expect(await env.repo.redo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, a)).toBe(true)
+    const bRow2 = await env.repo.db.get<{parent_id: string}>(
+      'SELECT parent_id FROM blocks WHERE id = ?', [b])
+    expect(bRow2.parent_id).toBe('root')
+  })
+})
+
 describe('undo replay uploads (source = user)', () => {
   it('writes to ps_crud just like the original tx did', async () => {
     await seedRoot(env.repo, 'a', 'v0')
