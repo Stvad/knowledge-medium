@@ -56,6 +56,8 @@ const hasSelectorProperty = (node) =>
   )
 
 const getSelectorNode = (node) => {
+  // One-arg useHandle(handle) calls have no options node at all.
+  if (!node) return null
   if (node.type !== 'ObjectExpression') return null
   const property = node.properties.find(property =>
     property.type === 'Property' && keyName(property.key) === 'selector',

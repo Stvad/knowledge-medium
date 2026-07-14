@@ -3,8 +3,11 @@ import {
   editorSelection,
   focusBlock,
   requestEditorFocus,
+  topLevelBlockIdProp,
+  uiStateRenderScopeId,
 } from '@/data/properties.js'
-import { videoPlayerViewProp } from './view.ts'
+import { goBackInPanel, navigateInPanel, panelHistory } from '@/utils/panelHistory'
+import { VIDEO_NOTES_VIEW_MODE } from './view.ts'
 
 const focusVideoNoteChild = async (
   noteId: string,
@@ -64,11 +67,58 @@ export const ensureEditableVideoNoteChild = async (
   return newId
 }
 
+/** Enter the video-notes view: put the PANE into the mode. Same-block enter
+ *  (the pane already shows the video) is a mode-only tx; a nested-video
+ *  enter navigates the pane to the video AND sets the mode in one tx — one
+ *  projection push, one history entry stamped `viewModeEnter` (which is what
+ *  lets `closeVideoNotesView` go BACK instead of stranding the pane).
+ *
+ *  The gesture also seeds the first note child (gesture-side only — the
+ *  RENDERER never writes; its empty-state affordance calls
+ *  `ensureEditableVideoNoteChild` on activation instead).
+ *
+ *  `uiStateBlock` is the panel row in panel contexts (`getUIStateBlock`);
+ *  on a non-panel surface there is no pane to put into the mode → no-op. */
 export const enterVideoNotesView = async (
   videoBlock: Block,
   uiStateBlock: Block,
-  renderScopeId?: string,
 ): Promise<void> => {
-  await videoBlock.set(videoPlayerViewProp, 'notes')
-  await ensureEditableVideoNoteChild(videoBlock, uiStateBlock, renderScopeId)
+  if (uiStateBlock.peekProperty(topLevelBlockIdProp) === undefined) return
+  await navigateInPanel(uiStateBlock, videoBlock.id, {viewMode: VIDEO_NOTES_VIEW_MODE})
+  await ensureEditableVideoNoteChild(
+    videoBlock,
+    uiStateBlock,
+    // The pane now renders the video top-level — focus the note in the
+    // pane's own scope, not whatever scope the enter gesture came from.
+    uiStateRenderScopeId(uiStateBlock, videoBlock.id),
+  )
+}
+
+/** Close the video-notes view. If the top back entry carries the
+ *  `viewModeEnter` marker, this pane ENTERED via a navigation — go back,
+ *  restoring the pre-enter content (the entry's VisitState clears the
+ *  mode). Otherwise (same-block enter, or a URL-borne mode) just clear the
+ *  mode in place. */
+// Re-entry guard: a double-activation of close (double-click, repeated key)
+// must not step back twice. Keyed per panel; cleared when the first close
+// settles.
+const closingPanels = new Set<string>()
+
+export const closeVideoNotesView = async (panelBlock: Block): Promise<void> => {
+  if (closingPanels.has(panelBlock.id)) return
+  closingPanels.add(panelBlock.id)
+  try {
+    const backTop = panelHistory.getSnapshot(panelBlock.id).back.at(-1)
+    if (backTop?.viewModeEnter === VIDEO_NOTES_VIEW_MODE) {
+      await goBackInPanel(panelBlock)
+      return
+    }
+    const current = panelBlock.peekProperty(topLevelBlockIdProp)
+    if (!current) return
+    // Same-block with an EXPLICIT undefined mode: navigateInPanel's
+    // same-block branch is presence-gated, so this is the clear-only tx.
+    await navigateInPanel(panelBlock, current, {viewMode: undefined})
+  } finally {
+    closingPanels.delete(panelBlock.id)
+  }
 }
