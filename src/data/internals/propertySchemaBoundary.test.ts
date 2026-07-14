@@ -203,7 +203,14 @@ describe('typed property identity boundary', () => {
     expect(repo.block('target').get(resolution.schema)).toBe(7)
   })
 
-  it('keeps an unclaimed legacy schema usable during the B2-to-B4 transition', async () => {
+  it('resolves a legacy propertySchemasFacet schema alongside seeds — the transitional dual-path (removed in B′)', async () => {
+    // MIGRATION GUARDRAIL (schema-unification rev 5): Slice B exposes seeds
+    // while the old `propertySchemasFacet.of` registration path stays live, so a
+    // second user's dynamic extensions keep resolving until they migrate. This
+    // `setup()` already contributes a seed (`shadowed`) + a projected winner, so
+    // this asserts an old-facet legacy schema resolves for read AND write in a
+    // seed-present registry. The B′ deletion slice removes this path; if that
+    // lands before the migration is confirmed, this test is the tripwire.
     const repo = await setup()
     const legacy = defineProperty('legacy-only', {
       codec: codecs.string,
