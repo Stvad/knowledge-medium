@@ -1102,6 +1102,12 @@ export class Repo {
       const restoredWorkspaceId = this.projectors.workspaceId
       this._activeWorkspaceId = restoredWorkspaceId
       this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
+      // The failed switch already aborted the outgoing seed-materialization
+      // generation. Open a fresh one and re-arm the restored workspace so its
+      // aborted parked pass isn't stranded until the next seed change (a no-op
+      // if the pinned registry isn't the restored workspace's).
+      this.seedMaterializationGeneration = new AbortController()
+      if (restoredWorkspaceId) this.scheduleWorkspaceSeedMaterialization(restoredWorkspaceId, false)
       throw error
     }
   }
