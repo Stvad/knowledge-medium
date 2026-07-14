@@ -256,6 +256,21 @@ const sameSeedKeySet = (
   return true
 }
 
+/** The one-deep "active-or-retained-previous" retain rule, expressed once.
+ *  Serve `workspaceId` from the active snapshot, or the immediately-previous one
+ *  still retained across a switch; any other (genuinely foreign) workspace
+ *  resolves null (fail closed). Used both live and over a tx's frozen capture. */
+const registryForWorkspace = (
+  active: PropertyDefinitionRegistrySnapshot | null,
+  previous: PropertyDefinitionRegistrySnapshot | null,
+  workspaceId: string,
+): PropertyDefinitionRegistrySnapshot | null =>
+  active?.workspaceId === workspaceId
+    ? active
+    : previous?.workspaceId === workspaceId
+      ? previous
+      : null
+
 export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
@@ -568,11 +583,11 @@ export class Repo {
     // for a workspace whose definitions aren't loaded (which could resolve a
     // shadowed seed as a winner). The stage-0/active boot window (null snapshot +
     // allow-plain) still uses the transitional resolver.
-    const snapshot = this._propertyDefinitionRegistry?.workspaceId === workspaceId
-      ? this._propertyDefinitionRegistry
-      : this._previousPropertyDefinitionRegistry?.workspaceId === workspaceId
-        ? this._previousPropertyDefinitionRegistry
-        : null
+    const snapshot = registryForWorkspace(
+      this._propertyDefinitionRegistry,
+      this._previousPropertyDefinitionRegistry,
+      workspaceId,
+    )
     return propertySchemaResolverForWorkspace(
       snapshot,
       workspaceId,
@@ -1430,11 +1445,11 @@ export class Repo {
         // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
         // resolution for the workspace the tx is operating on.
         propertyDefinitionRegistryForWorkspace:
-          workspaceId => capturedActivePropertyDefinitions?.workspaceId === workspaceId
-            ? capturedActivePropertyDefinitions
-            : capturedPreviousPropertyDefinitions?.workspaceId === workspaceId
-              ? capturedPreviousPropertyDefinitions
-              : null,
+          workspaceId => registryForWorkspace(
+            capturedActivePropertyDefinitions,
+            capturedPreviousPropertyDefinitions,
+            workspaceId,
+          ),
         propertySchemaWorkspaceId: this._activeWorkspaceId,
         propertySeedNameCounts: this._propertySeedNameCounts,
         // Undo/redo replays skip the same-tx processor pass so a
