@@ -1,0 +1,2 @@
+var e=new class{resolve(e){return{status:`identity-unavailable`,reason:`registry-not-workspace-keyed`}}};export{e as unavailablePropertySchemaResolver};
+//# sourceMappingURL=propertySchemaResolution.js.map
