@@ -19,6 +19,7 @@ import {
 } from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
+  isPanelStackRow,
   layoutSlotsFromRows,
   panelBlockId,
   panelRowsInLayoutOrder,
@@ -105,19 +106,21 @@ describe('dailyNotesActions', () => {
     expect(env.repo.block(newBlockId).peek()?.content).toBe('')
 
     const layoutRows = await env.repo.query.subtree({id: layoutSession.id}).load()
+    // The slot projection collapses a singleton stack to its leaf, so the
+    // stacked placement is asserted structurally below (the new panel row's
+    // parent is a panel-stack row), not via the slot shape.
     expect(layoutSlotsFromRows(layoutSession.id, layoutRows)).toEqual([
       {kind: 'leaf', blockId: 'main-block'},
-      {
-        kind: 'stack',
-        children: [
-          {kind: 'leaf', blockId: newBlockId},
-        ],
-      },
+      // The action activates the new stacked panel (activePanelIdProp is
+      // asserted directly below), so its slot carries the active flag.
+      {kind: 'leaf', blockId: newBlockId, active: true},
     ])
 
     const newPanel = panelRowsInLayoutOrder(layoutSession.id, layoutRows)
       .find(row => panelBlockId(row) === newBlockId)
     expect(newPanel).toBeTruthy()
+    const newPanelParent = layoutRows.find(row => row.id === newPanel!.parentId)
+    expect(newPanelParent && isPanelStackRow(newPanelParent)).toBe(true)
     await env.repo.block(newPanel!.id).load()
     await layoutSession.load()
 

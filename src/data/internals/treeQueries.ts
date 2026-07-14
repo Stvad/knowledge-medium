@@ -30,7 +30,18 @@
 
 /** Returns the rooted subtree, ordered by path (i.e. depth-first, with
  *  siblings sorted by `(order_key, id)` via the path encoding). Filters
- *  `deleted = 0`. */
+ *  `deleted = 0`.
+ *
+ *  The `INDEXED BY` on the recursive join is load-bearing: SQLite has no
+ *  cardinality estimate for a recursive CTE, so whether it uses
+ *  `idx_blocks_parent_order` or builds a transient AUTOMATIC index over
+ *  every live row — O(table) per execution, ~190ms on a 117k-row DB even
+ *  for a 3-row subtree — is a per-database coin flip decided by whatever
+ *  `sqlite_stat1` happens to hold (a fresh ANALYZE does not reliably fix
+ *  it). The hint pins the good plan; it errors at prepare time if the
+ *  index is ever renamed or dropped, which is the loud failure we want.
+ *  The query's own `deleted = 0` filter satisfies the partial-index
+ *  predicate. See docs/subtree-cte-planner-perf.html. */
 export const SUBTREE_SQL = `
   WITH RECURSIVE subtree AS (
     SELECT *,
@@ -43,7 +54,8 @@ export const SUBTREE_SQL = `
            subtree.path || child.order_key || '!' || hex(child.id) || '/',
            subtree.depth + 1
       FROM subtree
-      JOIN blocks AS child ON child.parent_id = subtree.id
+      JOIN blocks AS child INDEXED BY idx_blocks_parent_order
+        ON child.parent_id = subtree.id
      WHERE child.deleted = 0
        AND subtree.depth < 100
        AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0

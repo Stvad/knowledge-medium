@@ -31,15 +31,15 @@ const hiddenKernelPropertyNames = new Set([
 
 const uiStatePropertyNames = new Set([
   'system:showProperties', 'isEditing', 'topLevelBlockId',
-  'focusedBlockLocation', 'activePanelId', 'scrollTop', 'editorSelection',
-  'editorFocusRequest', 'blockSelectionState',
+  'focusedBlockLocation', 'activePanelId', 'scrollTop', 'panelViewMode',
+  'editorSelection', 'editorFocusRequest', 'blockSelectionState',
 ])
 
 describe('kernel property seed conversion', () => {
-  it('defines all 32 kernel properties as valid, unique seeds', () => {
+  it('defines all 33 kernel properties as valid, unique seeds', () => {
     const seeds = KERNEL_PROPERTY_SEEDS
 
-    expect(seeds).toHaveLength(32)
+    expect(seeds).toHaveLength(33)
     expect(new Set(seeds.map(seed => seed.seedKey))).toHaveLength(seeds.length)
     expect(new Set(seeds.map(seed => seed.name))).toHaveLength(seeds.length)
     expect(seeds.every(isPropertySeedDeclaration)).toBe(true)

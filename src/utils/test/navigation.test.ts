@@ -183,7 +183,9 @@ describe('navigate', () => {
       {
         kind: 'stack',
         children: [
-          {kind: 'leaf', blockId: 'b-x'},
+          // The freshly stacked panel is activated by the navigation, so
+          // the slot projection surfaces it as the active leaf.
+          {kind: 'leaf', blockId: 'b-x', active: true},
           {kind: 'leaf', blockId: 'b-b'},
         ],
       },

@@ -87,7 +87,6 @@ import {
 import {videoPlayerPlugin} from '@/plugins/video-player'
 import {
   videoNotesPaneRatioProp,
-  videoPlayerViewProp,
 } from '@/plugins/video-player/view'
 
 interface SeedRegistrationCase {
@@ -152,7 +151,7 @@ const registrationCases: readonly SeedRegistrationCase[] = [
   {
     label: 'video player',
     extension: videoPlayerPlugin,
-    declarations: [videoPlayerViewProp, videoNotesPaneRatioProp],
+    declarations: [videoNotesPaneRatioProp],
   },
 ]
 
@@ -175,8 +174,8 @@ describe('static plugin property seeds', () => {
   })
 
   it('covers the complete static inventory with collision-free seed keys', () => {
-    expect(allDeclarations).toHaveLength(44)
-    expect(new Set(allDeclarations.map(declaration => declaration.seedKey))).toHaveProperty('size', 44)
+    expect(allDeclarations).toHaveLength(43)
+    expect(new Set(allDeclarations.map(declaration => declaration.seedKey))).toHaveProperty('size', 43)
   })
 
   it('keeps fixed code enums strict on write and lenient for historical reads', () => {
@@ -184,7 +183,6 @@ describe('static plugin property seeds', () => {
       charScopeProp,
       statusProp,
       roamTodoStateProp,
-      videoPlayerViewProp,
     ]
     for (const declaration of declarations) {
       expect(declaration.presetId).toBe('strict-enum')

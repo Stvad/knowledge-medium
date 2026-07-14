@@ -5,7 +5,7 @@ import type { Block } from '@/data/block'
 import { makeBlockData } from '@/data/test/factories.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
 import { videoPlayerPlugin } from '../index.ts'
-import { videoNotesPaneRatioProp, videoPlayerViewProp } from '../view.ts'
+import { videoNotesPaneRatioProp } from '../view.ts'
 import { VideoPlayerRenderer } from '../VideoPlayerRenderer.tsx'
 
 const blockWithContent = (content: string): Block => ({
@@ -25,10 +25,10 @@ describe('videoPlayerPlugin', () => {
     const runtime = resolveFacetRuntimeSync(videoPlayerPlugin)
     const seeds = runtime.read(definitionSeedsFacet)
 
-    expect(seeds).toEqual(expect.arrayContaining([
-      videoPlayerViewProp,
-      videoNotesPaneRatioProp,
-    ]))
+    expect(seeds).toEqual(expect.arrayContaining([videoNotesPaneRatioProp]))
+    // video:playerView is retired — the pane mode (panelViewModeProp) owns
+    // the notes view now; stale per-block values are ignored dead data.
+    expect(seeds.some(seed => seed.name === 'video:playerView')).toBe(false)
     expect(videoNotesPaneRatioProp.changeScope).toBe(ChangeScope.UserPrefs)
   })
 

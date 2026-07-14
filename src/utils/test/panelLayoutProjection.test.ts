@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, type User } from '@/data/api'
+import { ChangeScope, type BlockData, type User } from '@/data/api'
+import type { Block } from '@/data/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -9,24 +10,34 @@ import { keysBetween } from '@/data/orderKey'
 import {
   activePanelIdProp,
   focusedBlockLocationProp,
+  panelViewModeProp,
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { outlineRenderScopeId } from '@/utils/renderScope'
+import { buildLayoutFromSlots } from '@/utils/routing'
+import { panelRenderScopeId } from '@/utils/renderScope'
 import {
   PanelLayoutProjection,
   activatePanelRow,
   applyCurrentLayoutUrl,
   createPanelRowInTx,
+  createPanelStackRowInTx,
   deletePanelRow,
   insertPanelRow,
   layoutBlockIdsFromRows,
   layoutSlotsFromRows,
   panelBlockIds,
   panelBlockId,
+  panelRowsInLayoutOrder,
+  reconcilePanelRows,
   retargetPanelBlockIds,
 } from '@/utils/panelLayoutProjection'
-import { panelHistory } from '@/utils/panelHistory'
+import {
+  goBackInPanel,
+  goForwardInPanel,
+  navigateInPanel,
+  panelHistory,
+} from '@/utils/panelHistory'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -78,6 +89,54 @@ const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
 const rows = async () => layoutSessionBlock().children.load()
 const layoutRows = async () => env.repo.query.subtree({id: env.layoutSessionBlockId}).load()
 
+const startProjection = (initialHash: string) => {
+  let currentHash = initialHash
+  const pushes: string[] = []
+  const replaces: string[] = []
+  const projection = new PanelLayoutProjection({
+    repo: env.repo,
+    workspaceId: WS,
+    layoutSessionBlock: layoutSessionBlock(),
+    getHash: () => currentHash,
+    pushHash: hash => {
+      pushes.push(hash)
+      currentHash = hash
+    },
+    replaceHash: hash => {
+      replaces.push(hash)
+      currentHash = hash
+    },
+    subscribeToUrl: () => () => {},
+  })
+  return {
+    projection,
+    pushes,
+    replaces,
+    hash: () => currentHash,
+    setHash: (hash: string) => { currentHash = hash },
+  }
+}
+
+// Deterministic interleaving needs direct delivery of a rows event —
+// real subscription timing is not controllable from a test.
+const deliverRowsEvent = (projection: PanelLayoutProjection, rows: readonly BlockData[]) => {
+  (projection as unknown as {handleRowsChanged(rows: readonly BlockData[]): void}).handleRowsChanged(rows)
+}
+
+const applyUrl = (hash: string, replaceHash?: (hash: string) => void) => applyCurrentLayoutUrl({
+  repo: env.repo,
+  workspaceId: WS,
+  layoutSessionBlock: layoutSessionBlock(),
+  hash,
+  replaceHash,
+})
+
+const rowFor = async (blockId: string) => {
+  const rowId = (await rowIdsByBlock()).get(blockId)
+  if (!rowId) throw new Error(`missing ${blockId} row`)
+  return rowId
+}
+
 const rowIdsByBlock = async (): Promise<Map<string, string>> =>
   new Map((await layoutRows())
     .map(row => [panelBlockId(row), row.id] as const)
@@ -85,24 +144,14 @@ const rowIdsByBlock = async (): Promise<Map<string, string>> =>
 
 describe('applyCurrentLayoutUrl', () => {
   it('creates panel rows for an explicit layout URL', async () => {
-    const result = await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/b',
-    })
+    const result = await applyUrl('#ws-1/a/b')
 
     expect(result.kind).toBe('applied')
     expect(panelBlockIds(await rows())).toEqual(['a', 'b'])
   })
 
   it('creates a sidebar stack for stack layout URLs', async () => {
-    const result = await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/(s:x,b)/c',
-    })
+    const result = await applyUrl('#ws-1/a/x,b/c')
 
     expect(result.kind).toBe('applied')
     const treeRows = await layoutRows()
@@ -121,23 +170,13 @@ describe('applyCurrentLayoutUrl', () => {
   })
 
   it('repairs active panel when URL reconciliation deletes the active row', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/b/c',
-    })
+    await applyUrl('#ws-1/a/b/c')
     const beforeByBlock = await rowIdsByBlock()
     const rowB = beforeByBlock.get('b')
     if (!rowB) throw new Error('missing panel row b')
     await layoutSessionBlock().set(activePanelIdProp, rowB)
 
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/c',
-    })
+    await applyUrl('#ws-1/a/c')
 
     const afterRows = await layoutRows()
     const activePanelId = layoutSessionBlock().peekProperty(activePanelIdProp)
@@ -147,20 +186,10 @@ describe('applyCurrentLayoutUrl', () => {
   })
 
   it('clears stale active panel when the URL already matches the layout', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/c',
-    })
+    await applyUrl('#ws-1/a/c')
     await layoutSessionBlock().set(activePanelIdProp, 'deleted-panel-b')
 
-    const result = await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/c',
-    })
+    const result = await applyUrl('#ws-1/a/c')
 
     expect(result.kind).toBe('noop')
     expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBeUndefined()
@@ -170,12 +199,7 @@ describe('applyCurrentLayoutUrl', () => {
     await createPanelRows(['a', 'c'])
     const before = await rowIdsByBlock()
 
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/b/c',
-    })
+    await applyUrl('#ws-1/a/b/c')
 
     const afterRows = await rows()
     const after = await rowIdsByBlock()
@@ -194,26 +218,21 @@ describe('applyCurrentLayoutUrl', () => {
     panelHistory.push(rowB, {
       blockId: 'x',
       state: {
-        focusedLocation: {blockId: 'x-child', renderScopeId: outlineRenderScopeId('x')},
+        focusedLocation: {blockId: 'x-child', renderScopeId: panelRenderScopeId(rowB, 'x')},
         scrollTop: 42,
       },
     })
 
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/x',
-    })
+    await applyUrl('#ws-1/a/x')
 
     const after = await rowIdsByBlock()
     expect(after.get('x')).toBe(rowB)
     expect(env.repo.block(rowB).peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'x-child',
-      renderScopeId: outlineRenderScopeId('x'),
+      renderScopeId: panelRenderScopeId(rowB, 'x'),
     })
     expect(panelHistory.consumeRestore(rowB)).toEqual({
-      focusedLocation: {blockId: 'x-child', renderScopeId: outlineRenderScopeId('x')},
+      focusedLocation: {blockId: 'x-child', renderScopeId: panelRenderScopeId(rowB, 'x')},
       scrollTop: 42,
     })
     expect(panelHistory.getSnapshot(rowB).forward.map(entry => entry.blockId)).toEqual(['b'])
@@ -223,12 +242,7 @@ describe('applyCurrentLayoutUrl', () => {
     await createPanelRows(['a', 'b', 'c'])
     const before = await rowIdsByBlock()
 
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/c/a/b',
-    })
+    await applyUrl('#ws-1/c/a/b')
 
     const after = await rowIdsByBlock()
     expect(panelBlockIds(await rows())).toEqual(['c', 'a', 'b'])
@@ -241,13 +255,7 @@ describe('applyCurrentLayoutUrl', () => {
     await createPanelRows(['a', 'b'])
     let replaced = ''
 
-    const result = await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1',
-      replaceHash: hash => { replaced = hash },
-    })
+    const result = await applyUrl('#ws-1', hash => { replaced = hash })
 
     expect(result.kind).toBe('normalized')
     expect(replaced).toBe('#ws-1/a/b')
@@ -258,40 +266,533 @@ describe('applyCurrentLayoutUrl', () => {
     await createPanelRows(['a', 'b'])
     let replaced = ''
 
-    const result = await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1?agent-runtime-secret=secret&agent-runtime-open-tokens=1',
-      replaceHash: hash => { replaced = hash },
-    })
+    const result = await applyUrl('#ws-1?agent-runtime-secret=secret&agent-runtime-open-tokens=1', hash => { replaced = hash })
 
     expect(result.kind).toBe('normalized')
     expect(replaced).toBe('#ws-1/a/b?agent-runtime-secret=secret&agent-runtime-open-tokens=1')
     expect(panelBlockIds(await rows())).toEqual(['a', 'b'])
   })
 
+  it('degrades a URL-borne sublayout column to a stack and normalizes the hash', async () => {
+    let replaced = ''
+    const result = await applyUrl('#ws-1/(a/b)/c', hash => { replaced = hash })
+
+    expect(result.kind).toBe('normalized')
+    expect(replaced).toBe('#ws-1/a,b/c')
+    const treeRows = await layoutRows()
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, treeRows)).toEqual([
+      {
+        kind: 'stack',
+        children: [
+          {kind: 'leaf', blockId: 'a'},
+          {kind: 'leaf', blockId: 'b'},
+        ],
+      },
+      {kind: 'leaf', blockId: 'c'},
+    ])
+  })
+
+  it('degrades a single-leaf sublayout column to a plain leaf', async () => {
+    let replaced = ''
+    const result = await applyUrl('#ws-1/(a)/c', hash => { replaced = hash })
+
+    expect(result.kind).toBe('normalized')
+    expect(replaced).toBe('#ws-1/a/c')
+    expect(panelBlockIds(await rows())).toEqual(['a', 'c'])
+  })
+
   it('ignores URLs for another workspace', async () => {
-    const result = await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#other/a',
-    })
+    const result = await applyUrl('#other/a')
 
     expect(result.kind).toBe('ignored')
     expect(panelBlockIds(await rows())).toEqual([])
   })
 })
 
+describe('reconcilePanelRows failure safety', () => {
+  it('keeps panel history for rows whose delete is rolled back by a mid-tx throw', async () => {
+    await createPanelRows(['a', 'b'])
+    const rowB = (await rowIdsByBlock()).get('b')
+    if (!rowB) throw new Error('missing b row')
+    panelHistory.push(rowB, {
+      blockId: 'prev',
+      state: {scrollTop: 7},
+    })
+
+    // A sublayout slot reaching reconcilePanelRows directly is an internal
+    // error (the URL boundary degrades them) — it throws mid-tx AFTER the
+    // delete of row b was staged. The tx rolls back; row b's in-memory
+    // history must survive with it.
+    await expect(reconcilePanelRows(env.repo, layoutSessionBlock(), [
+      {kind: 'sublayout', columns: [{kind: 'leaf', blockId: 'x'}]},
+    ])).rejects.toThrow()
+
+    expect(panelBlockIds(await rows())).toEqual(['a', 'b'])
+    expect(panelHistory.getSnapshot(rowB).back.map(entry => entry.blockId)).toEqual(['prev'])
+  })
+})
+
+describe('panel history clears run after the tx commits', () => {
+  // Pin the ORDER by making clear itself throw: if clear ran before (or
+  // inside) the tx, the row write would never commit; committed rows +
+  // a rejected call prove clear happened strictly after the commit.
+  it('deletePanelRow: the row is already deleted when clear runs', async () => {
+    await createPanelRows(['a', 'b'])
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    const clearSpy = vi.spyOn(panelHistory, 'clear').mockImplementation(() => {
+      throw new Error('boom: clear after commit probe')
+    })
+    try {
+      await expect(deletePanelRow(env.repo, rowA)).rejects.toThrow('clear after commit probe')
+      expect(clearSpy).toHaveBeenCalledWith(rowA)
+    } finally {
+      clearSpy.mockRestore()
+    }
+    expect(panelBlockIds(await rows())).toEqual(['b']) // delete committed before clear ran
+  })
+
+  it('reconcilePanelRows: deletes are already committed when clear runs', async () => {
+    await createPanelRows(['a', 'b'])
+    const clearSpy = vi.spyOn(panelHistory, 'clear').mockImplementation(() => {
+      throw new Error('boom: clear after commit probe')
+    })
+    try {
+      await expect(reconcilePanelRows(env.repo, layoutSessionBlock(), ['a']))
+        .rejects.toThrow('clear after commit probe')
+    } finally {
+      clearSpy.mockRestore()
+    }
+    expect(panelBlockIds(await rows())).toEqual(['a']) // reconcile committed before clear ran
+  })
+})
+
+describe('layoutSlotsFromRows normalization', () => {
+  const seedStack = async (childBlockIds: readonly string[]): Promise<string> => {
+    const parent = layoutSessionBlock()
+    let stackId = ''
+    await env.repo.tx(async tx => {
+      const parentData = await tx.get(parent.id)
+      if (!parentData) throw new Error('missing layout session block')
+      const [keyLeaf, keyStack] = keysBetween(null, null, 2)
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: parentData.workspaceId,
+        parentId: parent.id,
+        orderKey: keyLeaf,
+        blockId: 'a',
+      })
+      stackId = await createPanelStackRowInTx(env.repo, tx, {
+        workspaceId: parentData.workspaceId,
+        parentId: parent.id,
+        orderKey: keyStack,
+      })
+      const childKeys = keysBetween(null, null, Math.max(childBlockIds.length, 1))
+      for (let index = 0; index < childBlockIds.length; index++) {
+        await createPanelRowInTx(env.repo, tx, {
+          workspaceId: parentData.workspaceId,
+          parentId: stackId,
+          orderKey: childKeys[index],
+          blockId: childBlockIds[index],
+        })
+      }
+    }, {scope: ChangeScope.UiState, description: 'seed stack rows'})
+    return stackId
+  }
+
+  it('collapses a singleton stack to its leaf', async () => {
+    await seedStack(['x'])
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      {kind: 'leaf', blockId: 'a'},
+      {kind: 'leaf', blockId: 'x'},
+    ])
+  })
+
+  it('drops an empty stack entirely', async () => {
+    await seedStack([])
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      {kind: 'leaf', blockId: 'a'},
+    ])
+  })
+
+  it('makes a reload round with a singleton stack a noop that keeps all row ids', async () => {
+    const stackId = await seedStack(['x'])
+    const rowsBefore = await layoutRows()
+    const idsBefore = rowsBefore.map(row => row.id).sort()
+    expect(idsBefore).toContain(stackId)
+
+    // '#ws-1/a/x' is what buildLayoutFromSlots emits for the collapsed slots
+    const result = await applyUrl('#ws-1/a/x')
+
+    expect(result.kind).toBe('noop')
+    const idsAfter = (await layoutRows()).map(row => row.id).sort()
+    expect(idsAfter).toEqual(idsBefore) // the stack row silently survives
+  })
+})
+
+describe('slot context on panel rows', () => {
+  const seedContext = async (viewModeRowId: string, activeRowId: string) => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty(viewModeRowId, panelViewModeProp, 'video-notes')
+      await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, activeRowId)
+    }, {scope: ChangeScope.UiState, description: 'seed slot context'})
+  }
+
+  it('layoutSlotsFromRows emits viewMode and active from the row/session props', async () => {
+    await createPanelRows(['a', 'b'])
+    const byBlock = await rowIdsByBlock()
+    await seedContext(byBlock.get('a')!, byBlock.get('b')!)
+
+    const slots = layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())
+    expect(slots).toEqual([
+      {kind: 'leaf', blockId: 'a', viewMode: 'video-notes'},
+      {kind: 'leaf', blockId: 'b', active: true},
+    ])
+    // Single slots→hash integration checkpoint (encoding itself is pinned
+    // in the routing tests).
+    expect(buildLayoutFromSlots(WS, slots)).toBe('#ws-1/a;view=video-notes/b;active')
+  })
+
+  it('inbound ;view sets panelViewMode on the SAME row; inbound without it clears', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    await applyUrl('#ws-1/a;view=m/b')
+    expect((await rowIdsByBlock()).get('a')).toBe(rowA)
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('m')
+
+    await applyUrl('#ws-1/a/b')
+    expect((await rowIdsByBlock()).get('a')).toBe(rowA)
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBeUndefined()
+  })
+
+  it('an unknown mode value round-trips opaquely through the prop', async () => {
+    await applyUrl('#ws-1/a;view=some%20unknown%2Fmode')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('some unknown/mode')
+  })
+
+  it('inbound ;active coerces activePanelIdProp to that slot row', async () => {
+    await applyUrl('#ws-1/a/b;active')
+    const byBlock = await rowIdsByBlock()
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(byBlock.get('b'))
+  })
+
+  it('inbound with two ;active — first wins', async () => {
+    await applyUrl('#ws-1/a;active/b;active')
+    const byBlock = await rowIdsByBlock()
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(byBlock.get('a'))
+  })
+
+  it('inbound without ;active leaves activePanelIdProp untouched', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    await layoutSessionBlock().set(activePanelIdProp, rowA)
+
+    await applyUrl('#ws-1/a;view=m/b') // real diff (mode), but no active entry
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(rowA)
+  })
+
+  it('an empty-string viewMode prop reads as absent', async () => {
+    await createPanelRows(['a'])
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    await env.repo.tx(async tx => {
+      await tx.setProperty(rowA, panelViewModeProp, '')
+    }, {scope: ChangeScope.UiState, description: 'write empty mode'})
+
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual([
+      {kind: 'leaf', blockId: 'a'},
+    ])
+  })
+
+  it('a mode-only inbound diff updates the prop in place: row id, focus, scroll untouched', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    const focusedLocation = {blockId: 'a-child', renderScopeId: panelRenderScopeId(rowA, 'a')}
+    await env.repo.tx(async tx => {
+      await tx.setProperty(rowA, focusedBlockLocationProp, focusedLocation)
+      await tx.setProperty(rowA, scrollTopProp, 42)
+    }, {scope: ChangeScope.UiState, description: 'seed panel state'})
+
+    await applyUrl('#ws-1/a;view=m/b')
+
+    expect((await rowIdsByBlock()).get('a')).toBe(rowA)
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('m')
+    expect(env.repo.block(rowA).peekProperty(focusedBlockLocationProp)).toEqual(focusedLocation)
+    expect(env.repo.block(rowA).peekProperty(scrollTopProp)).toBe(42)
+  })
+})
+
+describe('per-pane render scopes', () => {
+  it('two panes showing the SAME block get distinct per-pane focus scopes', async () => {
+    await applyUrl('#ws-1/same/same')
+
+    const panelRows = panelRowsInLayoutOrder(env.layoutSessionBlockId, await layoutRows())
+    expect(panelRows.map(row => panelBlockId(row))).toEqual(['same', 'same'])
+    const [first, second] = panelRows
+    const firstLocation = env.repo.block(first.id).peekProperty(focusedBlockLocationProp)
+    const secondLocation = env.repo.block(second.id).peekProperty(focusedBlockLocationProp)
+
+    expect(firstLocation?.renderScopeId).toBe(panelRenderScopeId(first.id, 'same'))
+    expect(secondLocation?.renderScopeId).toBe(panelRenderScopeId(second.id, 'same'))
+    expect(firstLocation?.renderScopeId).not.toBe(secondLocation?.renderScopeId)
+  })
+
+  it('in-panel navigation writes the per-pane scope', async () => {
+    await applyUrl('#ws-1/a')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    await navigateInPanel(env.repo.block(rowA), 'b')
+    panelHistory.clear(rowA) // before assertions: generated row ids repeat across tests
+
+    expect(env.repo.block(rowA).peekProperty(focusedBlockLocationProp)).toEqual({
+      blockId: 'b',
+      renderScopeId: panelRenderScopeId(rowA, 'b'),
+    })
+  })
+})
+
+describe('view-mode navigation semantics', () => {
+  const panelBlock = (rowId: string) => env.repo.block(rowId)
+  // Mirrors PanelRenderer's snapshotter: capture the live mode at push time.
+  const registerLiveSnapshotter = (rowId: string) =>
+    panelHistory.registerSnapshotter(rowId, () => ({
+      viewMode: env.repo.block(rowId).peekProperty(panelViewModeProp),
+      scrollTop: 7,
+    }))
+
+  it('navigateInPanel with viewMode: one viewModeEnter-stamped entry, ONE push carrying both changes', async () => {
+    await applyUrl('#ws-1/a')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(rowA), 'video-block', {viewMode: 'video-notes'})
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/video-block;view=video-notes']))
+    expect(replaces).toEqual([])
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('video-notes')
+    expect(panelHistory.getSnapshot(rowA).back).toEqual([
+      {blockId: 'a', viewModeEnter: 'video-notes'},
+    ])
+    panelHistory.clear(rowA)
+    projection.dispose()
+  })
+
+  it('plain navigateInPanel away from a moded pane clears the mode: ONE push without ;view, no viewModeEnter', async () => {
+    await applyUrl('#ws-1/a;view=m')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a;view=m')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(rowA), 'b')
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+    expect(replaces).toEqual([])
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBeUndefined()
+    // strict: the entry must not even carry a viewModeEnter KEY
+    expect(panelHistory.getSnapshot(rowA).back).toStrictEqual([
+      {blockId: 'a', state: undefined},
+    ])
+    panelHistory.clear(rowA)
+    projection.dispose()
+  })
+
+  it('same-block enter: mode-only tx, ONE push with ;view, no history entry', async () => {
+    await applyUrl('#ws-1/a')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(rowA), 'a', {viewMode: 'm'})
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m']))
+    expect(replaces).toEqual([])
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('m')
+    expect(env.repo.block(rowA).peekProperty(topLevelBlockIdProp)).toBe('a')
+    // not a navigation: no entry, no viewModeEnter stamp anywhere
+    expect(panelHistory.getSnapshot(rowA)).toStrictEqual({back: [], forward: []})
+    projection.dispose()
+  })
+
+  it('same-block re-enter with the same mode is a true no-op (no push)', async () => {
+    await applyUrl('#ws-1/a;view=m')
+    const rowA = await rowFor('a')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a;view=m')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(rowA), 'a', {viewMode: 'm'})
+
+    // fence: a real change must still push, and it must be the ONLY push
+    await navigateInPanel(panelBlock(rowA), 'b')
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+    expect(replaces).toEqual([])
+    panelHistory.clear(rowA)
+    projection.dispose()
+  })
+
+  it('same-block plain navigate preserves the mode; explicit undefined clears it', async () => {
+    await applyUrl('#ws-1/a;view=m')
+    const rowA = await rowFor('a')
+    const {projection, pushes} = startProjection('#ws-1/a;view=m')
+    await projection.start()
+
+    // Plain re-navigation to the open block (zoom-in, re-click) is a pure
+    // no-op: the mode belongs to the (pane, block) pair and neither changed.
+    await navigateInPanel(panelBlock(rowA), 'a')
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('m')
+    expect(pushes).toEqual([])
+
+    // The explicit clear-only form (slice-5 close) removes the mode without
+    // a panelHistory entry; the browser-level entry comes from the push.
+    await navigateInPanel(panelBlock(rowA), 'a', {viewMode: undefined})
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a']))
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBeUndefined()
+    expect(panelHistory.getSnapshot(rowA)).toStrictEqual({back: [], forward: []})
+    projection.dispose()
+  })
+
+  it('chevron forward across the enter boundary re-applies the mode', async () => {
+    await applyUrl('#ws-1/plain')
+    const row = await rowFor('plain')
+    const unregister = registerLiveSnapshotter(row)
+
+    await navigateInPanel(panelBlock(row), 'video', {viewMode: 'm'}) // enter
+    await goBackInPanel(panelBlock(row))
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('plain')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
+
+    await goForwardInPanel(panelBlock(row))
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('video')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBe('m')
+    // the enter marker survived the round trip (back-stack top re-stamped)
+    expect(panelHistory.getSnapshot(row).back.at(-1)?.viewModeEnter).toBe('m')
+
+    unregister()
+    panelHistory.clear(row)
+  })
+
+  it('one URL applies a blockId+mode change to pane 1 and a mode-only change to pane 2', async () => {
+    await applyUrl('#ws-1/a/b')
+    const byBlock = await rowIdsByBlock()
+    const rowA = byBlock.get('a')
+    const rowB = byBlock.get('b')
+    if (!rowA || !rowB) throw new Error('missing rows')
+
+    await applyUrl('#ws-1/x;view=k/b;view=m')
+
+    expect((await rowIdsByBlock()).get('x')).toBe(rowA) // reused across the content swap
+    expect(env.repo.block(rowA).peekProperty(panelViewModeProp)).toBe('k')
+    expect(env.repo.block(rowB).peekProperty(panelViewModeProp)).toBe('m')
+  })
+
+  it('chevron back restores the moded visit, forward re-clears — one push per step', async () => {
+    await applyUrl('#ws-1/video;view=m')
+    const row = await rowFor('video')
+    const unregister = registerLiveSnapshotter(row)
+    const {projection, pushes} = startProjection('#ws-1/video;view=m')
+    await projection.start()
+
+    await navigateInPanel(panelBlock(row), 'plain')
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain']))
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
+
+    await goBackInPanel(panelBlock(row))
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('video')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBe('m')
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain', '#ws-1/video;view=m']))
+
+    await goForwardInPanel(panelBlock(row))
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('plain')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/plain', '#ws-1/video;view=m', '#ws-1/plain']))
+
+    unregister()
+    panelHistory.clear(row)
+    projection.dispose()
+  })
+
+  it('URL-driven back ignores a conflicting VisitState viewMode — the hash is authoritative', async () => {
+    await applyUrl('#ws-1/video;view=m')
+    const row = await rowFor('video')
+    const unregister = registerLiveSnapshotter(row)
+    await navigateInPanel(panelBlock(row), 'plain')
+    // history now holds {video, state:{viewMode:'m'}} — but the browser-Back
+    // hash carries NO mode, and the URL wins over the remembered VisitState.
+    await applyUrl('#ws-1/video')
+
+    expect(env.repo.block(row).peekProperty(topLevelBlockIdProp)).toBe('video')
+    expect(env.repo.block(row).peekProperty(panelViewModeProp)).toBeUndefined()
+    // reconciled as a back-step, not a fresh visit:
+    expect(panelHistory.getSnapshot(row).forward.map(entry => entry.blockId)).toEqual(['plain'])
+
+    unregister()
+    panelHistory.clear(row)
+  })
+})
+
+describe('context-only inbound diffs take the targeted pass', () => {
+  const rowShapes = async () =>
+    (await layoutRows()).map(row => ({id: row.id, parentId: row.parentId, orderKey: row.orderKey}))
+
+  it('inbound without ;active over a stacked layout: all rows untouched, one replace adds ;active', async () => {
+    await applyUrl('#ws-1/a/b,c')
+    const byBlock = await rowIdsByBlock()
+    await layoutSessionBlock().set(activePanelIdProp, byBlock.get('b')!)
+    const before = await rowShapes()
+
+    let replaced = ''
+    const result = await applyUrl('#ws-1/a/b,c', h => { replaced = h })
+
+    expect(result.kind).toBe('normalized')
+    expect(replaced).toBe('#ws-1/a/b;active,c')
+    expect(await rowShapes()).toEqual(before) // ids, parents, order keys — stack row intact
+  })
+
+  it('flat layout, inbound without ;active: no moves, one replace', async () => {
+    await applyUrl('#ws-1/a/b')
+    const byBlock = await rowIdsByBlock()
+    await layoutSessionBlock().set(activePanelIdProp, byBlock.get('b')!)
+    const before = await rowShapes()
+
+    let replaced = ''
+    const result = await applyUrl('#ws-1/a/b', h => { replaced = h })
+
+    expect(result.kind).toBe('normalized')
+    expect(replaced).toBe('#ws-1/a/b;active')
+    expect(await rowShapes()).toEqual(before)
+  })
+
+  it('inbound ;active coerces onto the REUSED row when topology matches', async () => {
+    await applyUrl('#ws-1/a/b')
+    const byBlock = await rowIdsByBlock()
+    await layoutSessionBlock().set(activePanelIdProp, byBlock.get('a')!)
+
+    await applyUrl('#ws-1/a/b;active')
+
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(byBlock.get('b'))
+    expect((await rowIdsByBlock()).get('b')).toBe(byBlock.get('b')) // reused, not recreated
+  })
+
+  it('URL-active wins outright over repair when the old active row is deleted', async () => {
+    await applyUrl('#ws-1/a/b/c')
+    const byBlock = await rowIdsByBlock()
+    await layoutSessionBlock().set(activePanelIdProp, byBlock.get('b')!)
+
+    await applyUrl('#ws-1/a;active/c') // deletes b; repair would remap b→c, the URL says a
+
+    expect(layoutSessionBlock().peekProperty(activePanelIdProp)).toBe(byBlock.get('a'))
+  })
+})
+
 describe('retargetPanelBlockIds', () => {
   it('retargets every panel currently showing the merged source block', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/source/(s:other,source)',
-    })
+    await applyUrl('#ws-1/source/other,source')
 
     const beforeRows = await layoutRows()
     const sourceRows = beforeRows.filter(row => panelBlockId(row) === 'source')
@@ -318,7 +819,7 @@ describe('retargetPanelBlockIds', () => {
     for (const row of sourceRows) {
       expect(env.repo.block(row.id).peekProperty(focusedBlockLocationProp)).toEqual({
         blockId: 'target',
-        renderScopeId: outlineRenderScopeId('target'),
+        renderScopeId: panelRenderScopeId(row.id, 'target'),
       })
       expect(env.repo.block(row.id).peekProperty(scrollTopProp)).toBe(0)
     }
@@ -332,7 +833,7 @@ describe('retargetPanelBlockIds', () => {
       state: {
         focusedLocation: {
           blockId: 'target-child',
-          renderScopeId: outlineRenderScopeId('target'),
+          renderScopeId: panelRenderScopeId(row.id, 'target'),
         },
         scrollTop: 42,
       },
@@ -343,13 +844,13 @@ describe('retargetPanelBlockIds', () => {
     expect(env.repo.block(row.id).peekProperty(topLevelBlockIdProp)).toBe('target')
     expect(env.repo.block(row.id).peekProperty(focusedBlockLocationProp)).toEqual({
       blockId: 'target-child',
-      renderScopeId: outlineRenderScopeId('target'),
+      renderScopeId: panelRenderScopeId(row.id, 'target'),
     })
     expect(env.repo.block(row.id).peekProperty(scrollTopProp)).toBe(42)
     expect(panelHistory.consumeRestore(row.id)).toEqual({
       focusedLocation: {
         blockId: 'target-child',
-        renderScopeId: outlineRenderScopeId('target'),
+        renderScopeId: panelRenderScopeId(row.id, 'target'),
       },
       scrollTop: 42,
     })
@@ -383,12 +884,7 @@ describe('insertPanelRow', () => {
 
 describe('deletePanelRow', () => {
   it('activates the next sibling in a stack when closing the active stacked panel', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/(s:x,b,y)/c',
-    })
+    await applyUrl('#ws-1/a/x,b,y/c')
     const byBlock = await rowIdsByBlock()
     const rowB = byBlock.get('b')
     const rowY = byBlock.get('y')
@@ -407,12 +903,7 @@ describe('deletePanelRow', () => {
   })
 
   it('falls back to the previous sibling before leaving the stack', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/(s:x,b,y)/c',
-    })
+    await applyUrl('#ws-1/a/x,b,y/c')
     const byBlock = await rowIdsByBlock()
     const rowB = byBlock.get('b')
     const rowY = byBlock.get('y')
@@ -431,12 +922,47 @@ describe('deletePanelRow', () => {
   })
 
   it('keeps climbing out of nested stacks to find the next panel', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/(s:(s:b))/c',
-    })
+    // A stack nested inside a stack can no longer be expressed via a URL hash
+    // under the comma grammar (stacks don't nest directly — see routing.ts);
+    // seed the row structure directly to exercise deletePanelRow's climb-out
+    // behavior through two stack levels.
+    const parent = layoutSessionBlock()
+    await env.repo.tx(async tx => {
+      const parentData = await tx.get(parent.id)
+      if (!parentData) throw new Error('missing layout session block')
+      const [keyA, keyOuter, keyC] = keysBetween(null, null, 3)
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: parentData.workspaceId,
+        parentId: parent.id,
+        orderKey: keyA,
+        blockId: 'a',
+      })
+      const outerStackId = await createPanelStackRowInTx(env.repo, tx, {
+        workspaceId: parentData.workspaceId,
+        parentId: parent.id,
+        orderKey: keyOuter,
+      })
+      const [innerKey] = keysBetween(null, null, 1)
+      const innerStackId = await createPanelStackRowInTx(env.repo, tx, {
+        workspaceId: parentData.workspaceId,
+        parentId: outerStackId,
+        orderKey: innerKey,
+      })
+      const [leafKey] = keysBetween(null, null, 1)
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: parentData.workspaceId,
+        parentId: innerStackId,
+        orderKey: leafKey,
+        blockId: 'b',
+      })
+      await createPanelRowInTx(env.repo, tx, {
+        workspaceId: parentData.workspaceId,
+        parentId: parent.id,
+        orderKey: keyC,
+        blockId: 'c',
+      })
+    }, {scope: ChangeScope.UiState, description: 'seed nested stack rows'})
+
     const byBlock = await rowIdsByBlock()
     const rowB = byBlock.get('b')
     if (!rowB) throw new Error('missing nested stack row')
@@ -457,12 +983,7 @@ describe('deletePanelRow', () => {
 
 describe('activatePanelRow', () => {
   it('ignores activation for deleted panel rows', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/b',
-    })
+    await applyUrl('#ws-1/a/b')
     const byBlock = await rowIdsByBlock()
     const rowA = byBlock.get('a')
     const rowB = byBlock.get('b')
@@ -479,12 +1000,7 @@ describe('activatePanelRow', () => {
   })
 
   it('rejects already-active rows moved out of the layout session', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/b',
-    })
+    await applyUrl('#ws-1/a/b')
     const byBlock = await rowIdsByBlock()
     const rowB = byBlock.get('b')
     if (!rowB) throw new Error('missing panel row b')
@@ -532,13 +1048,8 @@ describe('PanelLayoutProjection', () => {
   })
 
   it('pushes a stack URL when nested panel rows change', async () => {
-    await applyCurrentLayoutUrl({
-      repo: env.repo,
-      workspaceId: WS,
-      layoutSessionBlock: layoutSessionBlock(),
-      hash: '#ws-1/a/(s:x,b)',
-    })
-    let currentHash = '#ws-1/a/(s:x,b)'
+    await applyUrl('#ws-1/a/x,b')
+    let currentHash = '#ws-1/a/x,b'
     let pushed = ''
     const projection = new PanelLayoutProjection({
       repo: env.repo,
@@ -560,7 +1071,323 @@ describe('PanelLayoutProjection', () => {
       await tx.setProperty(rowB, topLevelBlockIdProp, 'y')
     }, {scope: ChangeScope.UiState, description: 'navigate nested panel'})
 
-    await vi.waitFor(() => expect(pushed).toBe('#ws-1/a/(s:x,y)'))
+    await vi.waitFor(() => expect(pushed).toBe('#ws-1/a/x,y'))
+    projection.dispose()
+  })
+
+  // Await the rows event on OUR OWN subscription to the same handle: the
+  // projection subscribed first, so once we observe the intermediate rows
+  // state the projection's handler has seen it too.
+  const observeRows = () => {
+    const seen: string[][] = []
+    const unsubscribe = env.repo.query.subtree({id: env.layoutSessionBlockId}).subscribe(rows => {
+      seen.push(layoutBlockIdsFromRows(env.layoutSessionBlockId, rows))
+    })
+    return {
+      waitFor: (ids: readonly string[]) => vi.waitFor(() => {
+        expect(seen.some(entry => entry.join('/') === ids.join('/'))).toBe(true)
+      }),
+      unsubscribe,
+    }
+  }
+
+  const navigatePanel = async (panelRowId: string, blockId: string) => {
+    await env.repo.tx(async tx => {
+      await tx.setProperty(panelRowId, topLevelBlockIdProp, blockId)
+    }, {scope: ChangeScope.UiState, description: 'navigate panel'})
+  }
+
+  it('URL slot context round-trips through rows and the echo stays quiescent', async () => {
+    // Slice-2 semantics: `;view=m` is no longer merely PRESERVED in the
+    // hash — inbound it lands on the panel row, so the rows event that
+    // follows carries the same context and the echo guard sees equality.
+    await createPanelRows(['a'])
+    const {projection, pushes, replaces, hash} = startProjection('#ws-1/b;view=m')
+    await projection.start()
+    const observer = observeRows()
+
+    await projection.applyCurrentUrl() // inbound: row reused a→b, prop set
+    const rowB = (await rowIdsByBlock()).get('b')
+    if (!rowB) throw new Error('missing b row')
+    expect(env.repo.block(rowB).peekProperty(panelViewModeProp)).toBe('m')
+
+    await observer.waitFor(['b']) // the reconcile's rows event was delivered
+    expect(pushes).toEqual([])
+    expect(replaces).toEqual([])
+    expect(hash()).toBe('#ws-1/b;view=m') // context retained via rows, not merely skipped
+
+    // Fence: a REAL layout change must push. (Whether viewMode survives
+    // in-panel navigation is slice-3's semantic — only pin the block id.)
+    await navigatePanel(rowB, 'c')
+    await vi.waitFor(() => expect(pushes.length).toBe(1))
+    expect(pushes[0]).toMatch(/^#ws-1\/c/)
+    observer.unsubscribe()
+    projection.dispose()
+  })
+
+  it('an active-only diff replaces the hash exactly once and stabilizes', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowB = (await rowIdsByBlock()).get('b')
+    if (!rowB) throw new Error('missing b row')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a/b')
+    await projection.start()
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, rowB)
+    }, {scope: ChangeScope.UiState, description: 'activate pane b'})
+
+    await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/a/b;active']))
+    expect(pushes).toEqual([])
+
+    // Full-cycle stabilization: inbound the corrected hash is a noop —
+    // no row writes, no further outbound replaces/pushes.
+    await projection.applyCurrentUrl()
+    expect(replaces).toEqual(['#ws-1/a/b;active'])
+    expect(pushes).toEqual([])
+    projection.dispose()
+  })
+
+  it('a viewMode change pushes (history entry by design)', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a/b')
+    await projection.start()
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(rowA, panelViewModeProp, 'm')
+    }, {scope: ChangeScope.UiState, description: 'switch view mode'})
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m/b']))
+    expect(replaces).toEqual([])
+    projection.dispose()
+  })
+
+  it('a combined active+viewMode change pushes', async () => {
+    await applyUrl('#ws-1/a/b')
+    const byBlock = await rowIdsByBlock()
+    const rowA = byBlock.get('a')
+    const rowB = byBlock.get('b')
+    if (!rowA || !rowB) throw new Error('missing rows')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a/b')
+    await projection.start()
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(rowA, panelViewModeProp, 'm')
+      await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, rowB)
+    }, {scope: ChangeScope.UiState, description: 'switch mode and activate'})
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/a;view=m/b;active']))
+    expect(replaces).toEqual([])
+    projection.dispose()
+  })
+
+  it('pushes exactly once for a real layout change under a context-bearing hash', async () => {
+    await createPanelRows(['a'])
+    const {projection, pushes} = startProjection('#ws-1/a;view=m')
+    await projection.start()
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    await navigatePanel(rowA, 'b')
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/b']))
+    projection.dispose()
+  })
+
+  it('does not double-push when the hash carries query params and rows echo the layout', async () => {
+    await createPanelRows(['a'])
+    const {projection, pushes} = startProjection('#ws-1/b?agent-runtime-secret=s')
+    await projection.start()
+    const observer = observeRows()
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    await navigatePanel(rowA, 'b') // echoes the hash's route despite the ?param
+    await observer.waitFor(['b'])
+    expect(pushes).toEqual([])
+
+    await navigatePanel(rowA, 'c') // fence
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
+    observer.unsubscribe()
+    projection.dispose()
+  })
+
+  it('outbound writes preserve rest entries from the current hash', async () => {
+    await applyUrl('#ws-1/a/b')
+    const rowB = (await rowIdsByBlock()).get('b')
+    if (!rowB) throw new Error('missing b row')
+    const {projection, pushes, replaces} = startProjection('#ws-1/a;foo=1/b')
+    await projection.start()
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(env.layoutSessionBlockId, activePanelIdProp, rowB)
+    }, {scope: ChangeScope.UiState, description: 'activate pane b'})
+
+    await vi.waitFor(() => expect(replaces).toEqual(['#ws-1/a;foo=1/b;active']))
+    expect(pushes).toEqual([])
+    projection.dispose()
+  })
+
+  it('suppresses outbound writes while an inbound apply is pending (Back is not clobbered)', async () => {
+    await createPanelRows(['a'])
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    const {projection, pushes, replaces, hash, setHash} = startProjection('#ws-1/a')
+    await projection.start()
+
+    // A pane-activation rows event exists but hasn't reached the projection.
+    // Synthesize it (no DB write — keeps the interleaving deterministic).
+    const staleRows = (await layoutRows()).map(row => row.id === env.layoutSessionBlockId
+      ? {...row, properties: {...row.properties, [activePanelIdProp.name]: activePanelIdProp.codec.encode(rowA)}}
+      : row)
+
+    setHash('#ws-1/b') // Back landed on b
+    const pending = projection.applyCurrentUrl()
+    deliverRowsEvent(projection, staleRows) // the stale event arrives mid-flight
+
+    // Without suppression this replaces/pushes '#ws-1/a;active', clobbering
+    // the Back target before its reconcile runs.
+    expect(pushes).toEqual([])
+    expect(replaces).toEqual([])
+
+    await pending
+    expect(pushes).toEqual([])
+    expect(replaces).toEqual([])
+    expect(hash()).toBe('#ws-1/b') // Back target survived…
+    expect(panelBlockIds(await rows())).toEqual(['b']) // …and was applied
+
+    // Outbound still lives after the drain (the suppression is not sticky).
+    await navigatePanel(rowA, 'c')
+    await vi.waitFor(() => expect(pushes.length).toBe(1))
+    expect(pushes[0]).toMatch(/^#ws-1\/c/)
+    projection.dispose()
+  })
+
+  it('a divergence suppressed during a SECOND inbound (queued mid-drain) still projects', async () => {
+    // The lost-divergence interleaving: inbound A's deferred drain awaits its
+    // subtree load; while it is held, a live rows event bumps the outbound
+    // generation, inbound B queues, and a suppressed divergence re-sets the
+    // flag. A's drain must NOT clear the flag then (B's own drain owns it) —
+    // clearing loses the divergence until some unrelated later rows event.
+    await createPanelRows(['a'])
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+
+    // Facade over the layout-session block whose subtree loads can be held.
+    const real = layoutSessionBlock()
+    let loadCalls = 0
+    let holdAt = Number.POSITIVE_INFINITY
+    let heldResolve: (() => void) | undefined
+    const held = new Promise<void>(resolve => { heldResolve = resolve })
+    let releaseGate: (() => void) | undefined
+    const gate = new Promise<void>(resolve => { releaseGate = resolve })
+    const facade = {
+      id: real.id,
+      repo: {
+        query: {
+          subtree: (args: {id: string}) => {
+            const handle = env.repo.query.subtree(args)
+            return {
+              load: async () => {
+                loadCalls++
+                if (loadCalls === holdAt) {
+                  heldResolve?.()
+                  await gate
+                }
+                return handle.load()
+              },
+              subscribe: (listener: (rows: readonly BlockData[]) => void) => handle.subscribe(listener),
+            }
+          },
+        },
+      },
+    } as unknown as Block
+
+    let currentHash = '#ws-1/a'
+    const pushes: string[] = []
+    const projection = new PanelLayoutProjection({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: facade,
+      getHash: () => currentHash,
+      pushHash: hash => {
+        pushes.push(hash)
+        currentHash = hash
+      },
+      replaceHash: hash => { currentHash = hash },
+      subscribeToUrl: () => () => {},
+    })
+    await projection.start()
+    const preNavigateRows = await layoutRows()
+
+    // Inbound A (noop apply: hash matches rows): 1 apply load, then the
+    // drain load — hold the drain load (call #2 from here).
+    holdAt = loadCalls + 2
+    const inboundA = projection.applyCurrentUrl()
+    deliverRowsEvent(projection, preNavigateRows) // pending>0 → suppressed
+    await held // A is now inside its drain, load held
+
+    // Live event while nothing is pending: bumps the outbound generation.
+    deliverRowsEvent(projection, preNavigateRows)
+    // Inbound B queues (foreign hash → applies nothing, holds the queue)…
+    currentHash = '#other-ws/z'
+    const inboundB = projection.applyCurrentUrl()
+    // …and a REAL divergence commits; its events land suppressed (pending>0).
+    await navigatePanel(rowA, 'c')
+
+    releaseGate?.()
+    await inboundA
+    await inboundB
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
+    projection.dispose()
+  })
+
+  it('a rows divergence during a pending inbound still projects after the drain', async () => {
+    await createPanelRows(['a'])
+    const rowA = (await rowIdsByBlock()).get('a')
+    if (!rowA) throw new Error('missing a row')
+    const {projection, pushes, setHash} = startProjection('#ws-1/a')
+    await projection.start()
+
+    // Inbound for a foreign-workspace hash applies nothing but holds the
+    // queue; the concurrent navigate's rows event lands either during the
+    // pending window (suppressed → deferred flush) or after it (normal
+    // outbound) — both must end in exactly one push of the diverged layout.
+    setHash('#other-ws/z')
+    const pending = projection.applyCurrentUrl()
+    await navigatePanel(rowA, 'c')
+    await pending
+
+    await vi.waitFor(() => expect(pushes).toEqual(['#ws-1/c']))
+    projection.dispose()
+  })
+
+  it('applies a sublayout hash arriving via the URL subscription without rejecting', async () => {
+    await createPanelRows(['a'])
+    let currentHash = '#ws-1/a'
+    let listener: (() => void) | null = null
+    const projection = new PanelLayoutProjection({
+      repo: env.repo,
+      workspaceId: WS,
+      layoutSessionBlock: layoutSessionBlock(),
+      getHash: () => currentHash,
+      pushHash: hash => { currentHash = hash },
+      replaceHash: hash => { currentHash = hash },
+      subscribeToUrl: l => {
+        listener = l
+        return () => {}
+      },
+    })
+    await projection.start()
+
+    currentHash = '#ws-1/(x/y)'
+    listener!() // must not produce an unhandled rejection
+
+    await vi.waitFor(async () => {
+      expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, await layoutRows())).toEqual(['x', 'y'])
+    })
+    await vi.waitFor(() => expect(currentHash).toBe('#ws-1/x,y'))
     projection.dispose()
   })
 

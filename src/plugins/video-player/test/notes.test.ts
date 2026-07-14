@@ -6,8 +6,7 @@ import {
   focusedBlockLocationProp,
   isEditingProp,
 } from '@/data/properties.js'
-import { enterVideoNotesView } from '../notes.ts'
-import { videoPlayerViewProp } from '../view.ts'
+import { ensureEditableVideoNoteChild } from '../notes.ts'
 
 const makeBlocks = ({
   childIds = [],
@@ -67,13 +66,12 @@ const makeBlocks = ({
   }
 }
 
-describe('video notes view', () => {
+describe('video note child seeding (gesture-side only)', () => {
   it('creates and focuses an editable first note in the current render scope', async () => {
-    const {createChild, setUiProperty, setVideoProperty, uiStateBlock, videoBlock} = makeBlocks()
+    const {createChild, setUiProperty, uiStateBlock, videoBlock} = makeBlocks()
 
-    await enterVideoNotesView(videoBlock, uiStateBlock, 'embed:source:video-1:0')
+    await ensureEditableVideoNoteChild(videoBlock, uiStateBlock, 'embed:source:video-1:0')
 
-    expect(setVideoProperty).toHaveBeenCalledWith(videoPlayerViewProp, 'notes')
     expect(createChild).toHaveBeenCalledWith({
       parentId: 'video-1',
       position: {kind: 'first'},
@@ -99,7 +97,7 @@ describe('video notes view', () => {
       videoBlock,
     } = makeBlocks({childIds: ['existing-note']})
 
-    await enterVideoNotesView(videoBlock, uiStateBlock)
+    await ensureEditableVideoNoteChild(videoBlock, uiStateBlock)
 
     expect(loadChildIds).toHaveBeenCalled()
     expect(createChild).not.toHaveBeenCalled()
@@ -115,7 +113,7 @@ describe('video notes view', () => {
       videoBlock,
     } = makeBlocks({readOnly: true})
 
-    await enterVideoNotesView(videoBlock, uiStateBlock)
+    await ensureEditableVideoNoteChild(videoBlock, uiStateBlock)
 
     expect(loadChildIds).not.toHaveBeenCalled()
     expect(createChild).not.toHaveBeenCalled()
