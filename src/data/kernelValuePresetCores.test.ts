@@ -82,6 +82,26 @@ describe('kernel value preset split', () => {
     expect(replacedPreset?.Editor).toBe(stringPreset?.Editor)
   })
 
+  it('joins the strict-enum presentation so code-union seeds render their options', () => {
+    // Regression: the strict-enum CORE shipped with no matching presentation, so
+    // materialized seeds using it (property-schema:change-scope, todo status,
+    // char scope) rendered as "strict-enum (unknown)" and lost the options UI.
+    // The presentation is hidden from the user's preset picker but must still
+    // join to its core for display.
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+    ])
+    const core = runtime.read(valuePresetCoresFacet).get('strict-enum')
+    const preset = readValuePresets(runtime).get('strict-enum')
+
+    expect(core).toBeDefined()
+    expect(preset?.build).toBe(core?.build)
+    expect(preset?.Editor).toBeTypeOf('function')
+    expect(preset?.ConfigEditor).toBeTypeOf('function')
+    expect(preset?.hideFromPicker).toBe(true)
+  })
+
   it('rejects a presentation joined to the wrong core id', () => {
     const runtime = resolveFacetRuntimeSync(kernelDataExtension)
     const core = runtime.read(valuePresetCoresFacet).get('string')!

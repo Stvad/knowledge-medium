@@ -31,6 +31,7 @@ import {
   optionalStringValuePresetCore,
   refListValuePresetCore,
   refValuePresetCore,
+  strictEnumValuePresetCore,
   stringValuePresetCore,
   stringListValuePresetCore,
   urlValuePresetCore,
@@ -115,6 +116,19 @@ export const kernelValuePresetPresentations: readonly AnyValuePresetPresentation
     Glyph: ChevronDownSquare,
     Editor: asEditor<string>(SelectPropertyEditor),
     ConfigEditor: EnumOptionsConfigEditor,
+  }),
+  kernelPresetPresentation(strictEnumValuePresetCore, {
+    // Code-declared fixed unions (todo status, char scope,
+    // property-schema:change-scope). Same editor/config as Choice, but hidden
+    // from the user's preset picker — these are code-owned, not user-created.
+    // Registered so materialized seed definitions render their options instead
+    // of "strict-enum (unknown)".
+    id: 'strict-enum',
+    label: 'Choice (fixed)',
+    Glyph: ChevronDownSquare,
+    Editor: asEditor<string>(SelectPropertyEditor),
+    ConfigEditor: EnumOptionsConfigEditor,
+    hideFromPicker: true,
   }),
   kernelPresetPresentation(refValuePresetCore, {
     id: 'ref',
