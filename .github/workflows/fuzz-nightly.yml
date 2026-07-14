@@ -79,7 +79,7 @@ jobs:
             "Nightly fuzz run failed: $RUN_URL (full log in the run's fuzz-output artifact)." \
             "$tail_log" \
             "Reproduce: find the \`seed\`/\`path\` in fast-check's failure report above, then run" \
-            '`FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file>` (see docs/fuzzing.md).')
+            '`FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file> -t "<failing test>"` (see docs/fuzzing.md).')
           existing=$(gh issue list --label fuzz-failure --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"

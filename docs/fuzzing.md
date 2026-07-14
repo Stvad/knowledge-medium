@@ -34,11 +34,14 @@ fast-check's failure report includes `seed`, `path`, and the shrunk
 counterexample. Replay it:
 
 ```sh
-FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file>
+FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file> -t '<failing test name>'
 ```
 
-`FUZZ_PATH` jumps straight to the counterexample; omit it to re-run the
-whole sequence from the seed. `FUZZ_RUNS=<n>` forces a run count
+The `-t` filter matters: the env vars apply to every property in the
+file, and a path only fits the property that produced it — other tests
+in the file will fail with "Unable to replay". `FUZZ_PATH` jumps
+straight to the counterexample; omit it to re-run the whole sequence
+from the seed. `FUZZ_RUNS=<n>` forces a run count
 instead of a time budget. The stateful suite pins its only other
 nondeterminism (order-key jitter) through a seeded PRNG, so replays are
 exact.
