@@ -140,15 +140,6 @@ export const bootstrapWorkspace = async ({
   // own rows. Marker-gated once per workspace, deferred off this critical path.
   repo.scheduleWorkspaceRefBackfill(workspaceId)
 
-  // Materialize the code-declared property seeds into block-backed definitions
-  // for this workspace (schema-unification §4.3). At bootstrap the installed
-  // runtime is the static-data one, so only its seeds land here; the post-paint
-  // app-runtime install (and dynamic-extension loads) re-fire the pass from the
-  // registry-apply path as plugin seeds appear. Deferred + create/restore-only;
-  // `freshlyCreated` lets a fresh workspace skip the membership-row wait its
-  // access gate otherwise performs.
-  repo.scheduleWorkspaceSeedMaterialization(workspaceId, freshlyCreated)
-
   // One-time post-upgrade recovery for the deterministic-id shadow: clients that
   // skip-staled the server's authoritative row under the old reconcile gate
   // consumed its change-queue entry, so a normal startup never re-evaluates it.
@@ -230,6 +221,23 @@ export const bootstrapWorkspace = async ({
   // rather than racing it the way these kernel pages used to (each is
   // idempotent + deterministic-id, so on a warm start it's just a cached read).
   await repo.ensureSystemPages(workspaceId)
+
+  // Materialize the code-declared property seeds into block-backed definitions
+  // for this workspace (schema-unification §4.3). At bootstrap the installed
+  // runtime is the static-data one, so only its seeds land here; the post-paint
+  // app-runtime install (and dynamic-extension loads) re-fire the pass from the
+  // registry-apply path as plugin seeds appear. Deferred + create/restore-only;
+  // `freshlyCreated` lets a fresh workspace skip the membership-row wait its
+  // access gate otherwise performs.
+  //
+  // MUST run after `ensureSystemPages`: the materializer creates each definition
+  // block parented to `propertiesPageBlockId(workspaceId)`, and `tx.create`
+  // enforces `requireParentInWorkspace`. On a fresh workspace in a runtime with no
+  // `requestIdleCallback` (Node/jsdom, some webviews) the deferred pass falls back
+  // to `setTimeout(0)`, so scheduling it before the Properties page exists would
+  // let it fire mid-bootstrap and throw on the missing parent (retrying only on
+  // the next open/seed change). Scheduling here means the page is already created.
+  repo.scheduleWorkspaceSeedMaterialization(workspaceId, freshlyCreated)
 
   const layoutSessionBlock = await resolveLayoutSession()
   return layoutSessionBlock

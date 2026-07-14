@@ -184,6 +184,7 @@ const SAFE_INSTANCE_FIELDS: Record<string, string> = {
   reprojectionJobs: 'shared job queue',
   seedMaterializationGeneration: 'data field (AbortController; reassigned only via the delegated setActiveWorkspaceId)',
   pendingSeedMaterializationWorkspaces: 'shared Set (facade never mutates — schedule* overrides)',
+  dirtySeedMaterializationWorkspaces: 'shared Set (facade never mutates — schedule* overrides)',
   seedMaterializationJobs: 'shared job queue (facade never enqueues — schedule* overrides)',
   reprojectionMarkers: 'shared object',
   reprojectionMetrics: 'shared object',

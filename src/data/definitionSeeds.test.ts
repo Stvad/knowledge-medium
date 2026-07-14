@@ -401,4 +401,41 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
       expect(row?.deleted).toBe(0)
     }
   })
+
+  it('re-runs once when a seed-set change coalesces mid-flight (dirty re-run)', async () => {
+    await insertEditorMembership()
+    await repo.whenPropertyDefinitionsReady(WS)
+    const [firstSeedKey] = [...(repo.propertyDefinitions?.seedsByKey.keys() ?? [])]
+    expect(firstSeedKey).toBeTruthy()
+    // Settle the registry-priming auto-schedule (drain does NOT advance the idle
+    // timer, so poll until its pass has actually materialized) — the spy below
+    // then only counts our scenario's passes.
+    await vi.waitFor(async () => {
+      await repo.awaitSeedMaterialization()
+      const row = await sharedDb.db.get('SELECT id FROM blocks WHERE id = ?',
+        [propertyDefinitionBlockId(WS, firstSeedKey!)])
+      expect(row).toBeTruthy()
+    })
+
+    type WithRun = {runWorkspaceSeedMaterialization: (...a: unknown[]) => Promise<void>}
+    const original = (repo as unknown as WithRun).runWorkspaceSeedMaterialization.bind(repo)
+    let calls = 0
+    vi.spyOn(repo as unknown as WithRun, 'runWorkspaceSeedMaterialization')
+      .mockImplementation(async (...args: unknown[]) => {
+        calls += 1
+        // A seed-set change (e.g. a newly enabled extension) lands while THIS first
+        // pass is in flight: it coalesces onto the running pass, which has already
+        // snapshotted its seeds. Only a dirty re-run picks it up — a plain coalesce
+        // drops it, leaving the new seed unmaterialized until the next change.
+        if (calls === 1) repo.scheduleWorkspaceSeedMaterialization(WS, false)
+        await original(...args)
+      })
+
+    repo.scheduleWorkspaceSeedMaterialization(WS, false)
+    await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(2))
+    await repo.awaitSeedMaterialization()
+    // Exactly one dirty re-run (2 total): the mid-flight change is honored and the
+    // loop terminates once no further change is pending — no unbounded re-running.
+    expect(calls).toBe(2)
+  })
 })

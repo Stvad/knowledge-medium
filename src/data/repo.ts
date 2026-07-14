@@ -517,6 +517,13 @@ export class Repo {
    *  a job + a `workspace_members` subscription each; the pending pass reads the
    *  LATEST seed set when it runs, so nothing is missed. Cleared when it settles. */
   private readonly pendingSeedMaterializationWorkspaces = new Set<string>()
+  /** Workspaces whose seed set changed while a pass was already in flight AND had
+   *  already snapshotted its seeds (or was aborted mid-flight). Coalescing onto the
+   *  running pass would drop that change — the pass materializes only its old
+   *  snapshot. Instead we mark the workspace dirty and re-schedule ONE more pass
+   *  once the running one settles, so a newly-enabled extension's definitions land
+   *  without waiting for the next unrelated seed change or a workspace reopen. */
+  private readonly dirtySeedMaterializationWorkspaces = new Set<string>()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -2167,14 +2174,40 @@ export class Repo {
     // Coalesce: one pending pass per workspace. Repeated seed-set changes while a
     // pass is parked on the membership wait would otherwise stack a job + a
     // `workspace_members` subscription each; the pending pass reads the latest
-    // seed set at run time, so a coalesced change is still materialized.
-    if (this.pendingSeedMaterializationWorkspaces.has(workspaceId)) return
+    // seed set at run time, so a coalesced change is still materialized — UNLESS
+    // the change lands after the pass snapshotted its seeds (or under an aborted
+    // signal), which the running pass can't pick up. Mark dirty so the running
+    // job re-runs once more rather than silently dropping it.
+    if (this.pendingSeedMaterializationWorkspaces.has(workspaceId)) {
+      this.dirtySeedMaterializationWorkspaces.add(workspaceId)
+      return
+    }
     this.pendingSeedMaterializationWorkspaces.add(workspaceId)
-    const {signal} = this.seedMaterializationGeneration
-    this.seedMaterializationJobs.schedule(() =>
-      this.runWorkspaceSeedMaterialization(workspaceId, freshlyCreated, signal)
-        .finally(() => this.pendingSeedMaterializationWorkspaces.delete(workspaceId)),
-    )
+    this.seedMaterializationJobs.schedule(async () => {
+      try {
+        // Re-run while dirty: a seed-set change that coalesced onto this pass
+        // after it snapshotted its seeds — or a switch-away that aborted it — sets
+        // the dirty bit; loop so the change materializes without waiting for the
+        // next unrelated change or a workspace reopen. The bit is cleared BEFORE
+        // each run so a change landing during the run re-arms it. Re-fetch the
+        // live generation each iteration: a switch-away aborts the prior one, so a
+        // re-run for a (now re-active) workspace must use the current signal, not
+        // the stale aborted one. `runWorkspaceSeedMaterialization` re-checks the
+        // active/projected workspace and reads the latest seeds, so a run whose
+        // workspace has gone away is a cheap no-op rather than a wrong write.
+        // Kept inside ONE scheduled job (not a re-schedule) so the drain barrier's
+        // single pending promise still covers the whole cascade.
+        do {
+          this.dirtySeedMaterializationWorkspaces.delete(workspaceId)
+          await this.runWorkspaceSeedMaterialization(
+            workspaceId, freshlyCreated, this.seedMaterializationGeneration.signal,
+          )
+        } while (this.dirtySeedMaterializationWorkspaces.has(workspaceId))
+      } finally {
+        this.pendingSeedMaterializationWorkspaces.delete(workspaceId)
+        this.dirtySeedMaterializationWorkspaces.delete(workspaceId)
+      }
+    })
   }
 
   private async runWorkspaceSeedMaterialization(
