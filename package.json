@@ -32,6 +32,7 @@
     "db:runtime:apple": "node scripts/container-runtime.mjs apple",
     "check:db": "node scripts/check-db.mjs",
     "check": "node scripts/check.mjs",
+    "fuzz": "node scripts/fuzz.mjs",
     "agent:server": "node packages/agent-cli/dist/server.js",
     "agent": "node packages/agent-cli/dist/cli.js",
     "agent-dispatch": "node packages/agent-dispatch/dist/daemon.js"

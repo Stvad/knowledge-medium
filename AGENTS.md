@@ -22,6 +22,7 @@ secret handling:
 
 testing:
 - don't add tests that just re-state the code (like testing what is our default shortcut binding is. this just duplicates the shortcut string for no benefit)
+- fuzz suites (`*.fuzz.test.ts`, fast-check) run as a small fixed-seed smoke tier inside the normal gate and as random-seed deep runs via `yarn fuzz` + the nightly `fuzz-nightly.yml` workflow. Reproduce failures with `FUZZ_SEED`/`FUZZ_PATH`; conventions + oracle discipline in `docs/fuzzing.md`. Never weaken a failing property to make it pass — diagnose (real bug vs wrong oracle) first.
 - share one DB per test file: open with `createTestDb()` once in module scope / `beforeAll`, reset with `resetTestDb()` in `beforeEach`. Don't call `createTestDb()` per test.
 - don't `await new Promise(r => setTimeout(r, N))` to wait on a DB/subscription/BroadcastChannel round-trip — it's slow and flaky. Poll the outcome with `vi.waitFor`.
 - proving a write does NOT fire/invalidate:

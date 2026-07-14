@@ -1,0 +1,91 @@
+# Nightly deep fuzz run (see docs/fuzzing.md).
+#
+# The *.fuzz.test.ts suites already run in the PR gate as a small
+# fixed-seed smoke tier; this job is the deep tier — fresh random seeds
+# and a real time budget per property, so new input territory gets
+# explored every night. Two passes: a budget across every suite, then a
+# long dedicated pass on the stateful data-layer fuzzer (highest
+# bug-yield per minute, so it gets the lion's share).
+#
+# On failure: the vitest log (which contains fast-check's failing seed +
+# path + shrunk counterexample) is uploaded as an artifact, and an issue
+# is filed (or a comment added to the existing open one) with the log
+# tail and repro instructions.
+name: Nightly Fuzz
+
+on:
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+    inputs:
+      time_ms:
+        description: 'Per-property time budget in ms (all-suites pass)'
+        default: '15000'
+      stateful_time_ms:
+        description: 'Time budget in ms for the dedicated stateful pass'
+        default: '1200000'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Deep fuzz — all suites
+        shell: bash
+        env:
+          FUZZ_TIME_MS: ${{ inputs.time_ms || '15000' }}
+        run: yarn fuzz 2>&1 | tee fuzz-output.log
+
+      - name: Deep fuzz — stateful data-layer suite (long pass)
+        shell: bash
+        env:
+          FUZZ_TIME_MS: ${{ inputs.stateful_time_ms || '1200000' }}
+        run: yarn fuzz src/data/test/repoMutators.fuzz.test.ts 2>&1 | tee -a fuzz-output.log
+
+      - name: Upload fuzz log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-output
+          path: fuzz-output.log
+          retention-days: 30
+
+      - name: File or update failure issue
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          tail_log=$(tail -c 5000 fuzz-output.log || echo '(no log captured)')
+          body=$(printf '%s\n\n```\n%s\n```\n\n%s\n%s\n' \
+            "Nightly fuzz run failed: $RUN_URL (full log in the run's fuzz-output artifact)." \
+            "$tail_log" \
+            "Reproduce: find the \`seed\`/\`path\` in fast-check's failure report above, then run" \
+            '`FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file>` (see docs/fuzzing.md).')
+          existing=$(gh issue list --label fuzz-failure --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create \
+              --title "Nightly fuzz failure ($(date -u +%Y-%m-%d))" \
+              --label bug,fuzz-failure,P2,ci \
+              --body "$body"
+          fi
