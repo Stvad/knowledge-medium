@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
-import { defineBlocksAction, multiSelectActionId } from '../utils.ts'
+import { applyToAllBlocksInSelection, defineBlocksAction, multiSelectActionId } from '../utils.ts'
 import { ActionContextTypes } from '../types.ts'
 
 const fakeBlock = (id: string): Block => ({id} as unknown as Block)
@@ -23,7 +23,7 @@ describe('defineBlocksAction', () => {
 
     const block = fakeBlock('a')
     await pair.block.handler(
-      {block, uiStateBlock: block},
+      {block, uiStateBlock: block, renderVisibilityPolicy: {}},
       new CustomEvent('test'),
     )
     expect(flow).toHaveBeenCalledTimes(1)
@@ -51,7 +51,7 @@ describe('defineBlocksAction', () => {
     const selectedBlocks = [fakeBlock('a'), fakeBlock('b')]
     const uiStateBlock = fakeBlock('ui')
     await pair.blocks.handler(
-      {selectedBlocks, anchorBlock: null, uiStateBlock},
+      {selectedBlocks, anchorBlock: null, uiStateBlock, renderVisibilityPolicy: {}},
       new CustomEvent('test'),
     )
     expect(flow).toHaveBeenCalledTimes(1)
@@ -82,20 +82,20 @@ describe('defineBlocksAction', () => {
     const no = fakeBlock('no')
 
     // NORMAL_MODE — predicate runs against the focused block.
-    expect(pair.block.isVisible!({block: yes, uiStateBlock: yes})).toBe(true)
-    expect(pair.block.isVisible!({block: no, uiStateBlock: no})).toBe(false)
+    expect(pair.block.isVisible!({block: yes, uiStateBlock: yes, renderVisibilityPolicy: {}})).toBe(true)
+    expect(pair.block.isVisible!({block: no, uiStateBlock: no, renderVisibilityPolicy: {}})).toBe(false)
 
     // MULTI_SELECT_MODE — true when at least one selected block
     // applies; false for empty selections; false when nothing in
     // the selection applies.
     expect(
-      pair.blocks.isVisible!({selectedBlocks: [yes, no], anchorBlock: null, uiStateBlock: yes}),
+      pair.blocks.isVisible!({selectedBlocks: [yes, no], anchorBlock: null, uiStateBlock: yes, renderVisibilityPolicy: {}}),
     ).toBe(true)
     expect(
-      pair.blocks.isVisible!({selectedBlocks: [no, no], anchorBlock: null, uiStateBlock: no}),
+      pair.blocks.isVisible!({selectedBlocks: [no, no], anchorBlock: null, uiStateBlock: no, renderVisibilityPolicy: {}}),
     ).toBe(false)
     expect(
-      pair.blocks.isVisible!({selectedBlocks: [], anchorBlock: null, uiStateBlock: no}),
+      pair.blocks.isVisible!({selectedBlocks: [], anchorBlock: null, uiStateBlock: no, renderVisibilityPolicy: {}}),
     ).toBe(false)
   })
 
@@ -111,6 +111,7 @@ describe('defineBlocksAction', () => {
         selectedBlocks: [],
         anchorBlock: null,
         uiStateBlock: fakeBlock('ui'),
+        renderVisibilityPolicy: {},
       }),
     ).toBe(false)
     expect(
@@ -118,7 +119,48 @@ describe('defineBlocksAction', () => {
         selectedBlocks: [fakeBlock('a')],
         anchorBlock: null,
         uiStateBlock: fakeBlock('ui'),
+        renderVisibilityPolicy: {},
       }),
     ).toBe(true)
+  })
+})
+
+describe('applyToAllBlocksInSelection', () => {
+  it('forwards the surface visibility policy to every block action', async () => {
+    const handler = vi.fn(async () => undefined)
+    const action = applyToAllBlocksInSelection({
+      id: 'test.op',
+      context: ActionContextTypes.NORMAL_MODE,
+      description: 'do the thing',
+      handler,
+    })
+    const selectedBlocks = [fakeBlock('a'), fakeBlock('b')]
+    const renderVisibilityPolicy = {forceOpenBlockIds: ['ancestor']}
+    const uiStateBlock = {
+      id: 'ui',
+      repo: {facetRuntime: undefined},
+    } as unknown as Block
+
+    await action.handler({
+      selectedBlocks,
+      anchorBlock: selectedBlocks[0],
+      uiStateBlock,
+      scopeRootId: 'root',
+      renderVisibilityPolicy,
+    }, new CustomEvent('test'))
+
+    expect(handler).toHaveBeenCalledTimes(2)
+    expect(handler).toHaveBeenNthCalledWith(1, {
+      block: selectedBlocks[0],
+      uiStateBlock,
+      scopeRootId: 'root',
+      renderVisibilityPolicy,
+    }, expect.any(CustomEvent))
+    expect(handler).toHaveBeenNthCalledWith(2, {
+      block: selectedBlocks[1],
+      uiStateBlock,
+      scopeRootId: 'root',
+      renderVisibilityPolicy,
+    }, expect.any(CustomEvent))
   })
 })

@@ -2,10 +2,11 @@ import { MouseEvent } from 'react'
 import { Block } from '@/data/block'
 import { BlockContextType } from '@/types.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { RenderSurfaceProvider, useBlockContext } from '@/context/block.js'
 import { buildAppHash } from '@/utils/routing.js'
 import { cn } from '@/lib/utils.js'
 import { breadcrumbRenderScopeId } from '@/utils/renderScope.js'
+import { EMPTY_RENDER_VISIBILITY_POLICY } from '@/utils/renderVisibility.js'
 
 interface BreadcrumbListProps {
   parents: readonly Block[]
@@ -72,7 +73,7 @@ export const BreadcrumbList = ({
             }}
           >
             <span className={INNER_CLASS}>
-              <NestedBlockContextProvider
+              <RenderSurfaceProvider
                 overrides={{
                   ...overrides,
                   scopeRootId: parent.id,
@@ -81,10 +82,11 @@ export const BreadcrumbList = ({
                     parent.id,
                     String(index),
                   ),
+                  renderVisibilityPolicy: EMPTY_RENDER_VISIBILITY_POLICY,
                 }}
               >
                 <BlockComponent blockId={parent.id}/>
-              </NestedBlockContextProvider>
+              </RenderSurfaceProvider>
             </span>
           </a>
           <span className={separatorClassName}>›</span>

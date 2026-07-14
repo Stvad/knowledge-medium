@@ -61,6 +61,7 @@ describe('vim normal mode interactions', () => {
         block: {id: 'b'} as Block,
         uiStateBlock: {id: 'panel'} as Block,
         targetElement: document.createElement('div'),
+        renderVisibilityPolicy: {},
         renderScopeId: 'scope-a',
       }
       enterBlockEditModeOnGestureAction.handler(
@@ -76,6 +77,7 @@ describe('vim normal mode interactions', () => {
         block: {id: 'b'} as Block,
         uiStateBlock: {id: 'panel'} as Block,
         targetElement: document.createElement('div'),
+        renderVisibilityPolicy: {},
       }
       enterBlockEditModeOnGestureAction.handler(
         deps,
@@ -102,6 +104,7 @@ describe('vim normal mode interactions', () => {
       block: {id: 'block-1'} as Block,
       uiStateBlock: {id: 'panel'} as Block,
       targetElement: document.createElement('div'),
+      renderVisibilityPolicy: {},
       renderScopeId: 'scope-a',
     }
 

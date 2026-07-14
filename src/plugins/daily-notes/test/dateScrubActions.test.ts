@@ -73,7 +73,8 @@ describe('dateScrubActions', () => {
     const dispatch = fakeDispatch()
     const block = fakeBlock('b-1')
     const uiStateBlock = fakeBlock('ui-1')
-    const deps: BlockShortcutDependencies = {block, uiStateBlock}
+    const renderVisibilityPolicy = {forceOpenBlockIds: ['b-1']}
+    const deps: BlockShortcutDependencies = {block, uiStateBlock, renderVisibilityPolicy}
 
     enter.handler(deps, fakeEvent(), dispatch)
 
@@ -82,7 +83,7 @@ describe('dateScrubActions', () => {
     }))
     expect(dispatch.activate).toHaveBeenCalledWith(
       DATE_SCRUB_CONTEXT,
-      {block, uiStateBlock},
+      {block, uiStateBlock, renderVisibilityPolicy},
     )
   })
 
@@ -92,7 +93,11 @@ describe('dateScrubActions', () => {
     const dispatch = fakeDispatch()
 
     enter.handler(
-      {block: fakeBlock('b-1'), uiStateBlock: fakeBlock('ui-1')},
+      {
+        block: fakeBlock('b-1'),
+        uiStateBlock: fakeBlock('ui-1'),
+        renderVisibilityPolicy: {},
+      },
       fakeEvent(),
       dispatch,
     )
@@ -108,7 +113,11 @@ describe('dateScrubActions', () => {
   ] as const)('movement action %s applies %i days via update', (id, delta) => {
     const enter = findAction(ENTER_DATE_SCRUB_ACTION_ID)
     enter.handler(
-      {block: fakeBlock('b-1'), uiStateBlock: fakeBlock('ui-1')},
+      {
+        block: fakeBlock('b-1'),
+        uiStateBlock: fakeBlock('ui-1'),
+        renderVisibilityPolicy: {},
+      },
       fakeEvent(),
       fakeDispatch(),
     )
@@ -125,7 +134,11 @@ describe('dateScrubActions', () => {
   it('movement actions accumulate deltas into the running scrub', () => {
     const enter = findAction(ENTER_DATE_SCRUB_ACTION_ID)
     enter.handler(
-      {block: fakeBlock('b-1'), uiStateBlock: fakeBlock('ui-1')},
+      {
+        block: fakeBlock('b-1'),
+        uiStateBlock: fakeBlock('ui-1'),
+        renderVisibilityPolicy: {},
+      },
       fakeEvent(),
       fakeDispatch(),
     )
@@ -147,7 +160,11 @@ describe('dateScrubActions', () => {
   it('commit action: ends with commit=true and deactivates the context', () => {
     const enter = findAction(ENTER_DATE_SCRUB_ACTION_ID)
     enter.handler(
-      {block: fakeBlock('b-1'), uiStateBlock: fakeBlock('ui-1')},
+      {
+        block: fakeBlock('b-1'),
+        uiStateBlock: fakeBlock('ui-1'),
+        renderVisibilityPolicy: {},
+      },
       fakeEvent(),
       fakeDispatch(),
     )
@@ -165,7 +182,11 @@ describe('dateScrubActions', () => {
   it('cancel action: ends with commit=false and deactivates the context', () => {
     const enter = findAction(ENTER_DATE_SCRUB_ACTION_ID)
     enter.handler(
-      {block: fakeBlock('b-1'), uiStateBlock: fakeBlock('ui-1')},
+      {
+        block: fakeBlock('b-1'),
+        uiStateBlock: fakeBlock('ui-1'),
+        renderVisibilityPolicy: {},
+      },
       fakeEvent(),
       fakeDispatch(),
     )

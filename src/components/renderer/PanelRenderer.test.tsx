@@ -290,6 +290,7 @@ describe('PanelRenderer', () => {
       expect.objectContaining({
         selectedBlocks: [env.repo.block('page-a')],
         anchorBlock: env.repo.block('page-a'),
+        renderVisibilityPolicy: {forceOpenBlockIds: ['page-a']},
       }),
       true,
     )

@@ -14,6 +14,7 @@ import type {
 } from '@/extensions/continuousGestures.js'
 import type { BlockResolveContext } from '@/extensions/blockInteraction.js'
 import type { Block } from '@/data/block'
+import { EMPTY_RENDER_VISIBILITY_POLICY } from '@/utils/renderVisibility.js'
 
 const fakeBlock = (id: string): Block =>
   ({id, peekProperty: vi.fn(() => undefined)} as unknown as Block)
@@ -29,6 +30,7 @@ const context = (): BlockResolveContext =>
     repo: {} as never,
     types: [],
     isTopLevel: false,
+    blockContext: {renderVisibilityPolicy: EMPTY_RENDER_VISIBILITY_POLICY},
   } as unknown as BlockResolveContext)
 
 const pointer = (pointerId: number, x: number, y: number): GesturePointer =>

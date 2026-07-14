@@ -11,6 +11,10 @@ import { dispatchActionWithDeps } from '@/shortcuts/runAction.js'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.js'
 import { topLevelBlockIdProp } from '@/data/properties.js'
 import {
+  EMPTY_RENDER_VISIBILITY_POLICY,
+  forceOpenScopeRootPolicy,
+} from '@/utils/renderVisibility.js'
+import {
   quickActionItemsFacet,
   type QuickActionItem,
 } from './actions.ts'
@@ -236,6 +240,12 @@ export const SwipeActionMenu = () => {
   const repo = uiStateBlock.repo
   const runtime = useAppRuntime()
   const [topLevelBlockId] = usePropertyValue(uiStateBlock, topLevelBlockIdProp)
+  const renderVisibilityPolicy = useMemo(
+    () => topLevelBlockId
+      ? forceOpenScopeRootPolicy(topLevelBlockId)
+      : EMPTY_RENDER_VISIBILITY_POLICY,
+    [topLevelBlockId],
+  )
   const [activeBlockId, setActiveBlockId] = useState<string | undefined>(undefined)
   const [activeRenderScopeId, setActiveRenderScopeId] = useState<string | undefined>(undefined)
   // Inline anchor placed inside the panel; we walk upward to find the
@@ -347,9 +357,9 @@ export const SwipeActionMenu = () => {
     // scopeRootId isn't injected by useShortcutSurfaceActivations. The menu is
     // panel-scoped and operates on the main outline, so the panel's top-level
     // block is the scope root — the same value the structural handlers need
-    // (delete/indent/move) — and it's a focal surface, so scopeRootForcesOpen is
-    // true. renderScopeId comes from the swipe event (undefined for the normal
-    // outline, set for an embedded/backlink instance).
+    // (delete/indent/move) — and its explicit render visibility policy matches
+    // the focal surface. renderScopeId comes from the swipe event (undefined
+    // for the normal outline, set for an embedded/backlink instance).
     //
     // These deps are the COMPLETE set for the swiped action: resolveDeps treats
     // supplied deps as standalone (it does not merge the active context's deps
@@ -364,11 +374,11 @@ export const SwipeActionMenu = () => {
       block,
       uiStateBlock,
       scopeRootId: topLevelBlockId,
-      scopeRootForcesOpen: true,
+      renderVisibilityPolicy,
       renderScopeId,
     }
     return dispatchActionWithDeps(actionId, deps, trigger)
-  }, [repo, uiStateBlock, topLevelBlockId])
+  }, [repo, renderVisibilityPolicy, uiStateBlock, topLevelBlockId])
   const actionItems = runtime.read(quickActionItemsFacet)
   // Filter via the referenced action's `isVisible` (the swipe surface is
   // presentational — semantic availability lives on the action). The
@@ -383,7 +393,13 @@ export const SwipeActionMenu = () => {
     if (!blockId) return actionItems
     const block = repo.block(blockId)
     if (!block.peek()) return actionItems
-    const deps = {block, uiStateBlock, scopeRootId: topLevelBlockId, ...(renderScopeId ? {renderScopeId} : {})}
+    const deps = {
+      block,
+      uiStateBlock,
+      scopeRootId: topLevelBlockId,
+      renderVisibilityPolicy,
+      ...(renderScopeId ? {renderScopeId} : {}),
+    }
     return actionItems.filter(item => {
       const action = allActions.find(a => a.id === item.actionId)
       if (!action) return true
@@ -394,7 +410,7 @@ export const SwipeActionMenu = () => {
     actionItems, allActions,
     activeBlockId, activeRenderScopeId,
     previewBlockId, previewRenderScopeId,
-    repo, uiStateBlock, topLevelBlockId,
+    renderVisibilityPolicy, repo, uiStateBlock, topLevelBlockId,
   ])
   const [primaryRows, overflowItems] = useMemo(() => {
     const rows = new Map<number, QuickActionItem[]>()

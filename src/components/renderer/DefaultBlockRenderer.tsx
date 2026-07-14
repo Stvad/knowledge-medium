@@ -62,6 +62,9 @@ import {
 } from '@/extensions/blockInteraction.js'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.js'
 import { useContinuousGestures } from '@/extensions/continuousGestures.js'
+import {
+  getEffectiveChildrenVisibility,
+} from '@/utils/renderVisibility.js'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -113,9 +116,15 @@ export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicat
 
 const BlockBullet = ({block}: { block: Block }) => {
   const repo = useRepo()
-  const {panelId} = useBlockContext()
+  const blockContext = useBlockContext()
+  const {panelId} = blockContext
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const effectiveVisibility = getEffectiveChildrenVisibility(
+    blockContext.renderVisibilityPolicy,
+    block.id,
+    Boolean(isCollapsed),
+  )
 
   const hasChildren = useHasChildren(block)
 
@@ -132,7 +141,7 @@ const BlockBullet = ({block}: { block: Block }) => {
           className="bullet-link flex items-center justify-center h-6 w-5"
           onClick={onClick}
         >
-          <BulletDot withChildrenIndicator={hasChildren && isCollapsed}/>
+          <BulletDot withChildrenIndicator={hasChildren && !effectiveVisibility.open}/>
         </a>
       </ContextMenuTrigger>
       <ContextMenuPortal>
@@ -183,9 +192,15 @@ const BlockBullet = ({block}: { block: Block }) => {
  *  `isCollapsedProp` is the source of truth, and the layout's
  *  Collapsible (if any) reads it via its `open` prop. */
 const ExpandButton = ({block}: { block: Block }) => {
+  const blockContext = useBlockContext()
   const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
   const isMobile = useIsMobile()
   const hasChildren = useHasChildren(block)
+  const effectiveVisibility = getEffectiveChildrenVisibility(
+    blockContext.renderVisibilityPolicy,
+    block.id,
+    Boolean(isCollapsed),
+  )
 
   // - mobile: always visible (touch UIs have no hover affordance)
   // - desktop with children: hidden until the parent block-group is hovered
@@ -206,6 +221,7 @@ const ExpandButton = ({block}: { block: Block }) => {
   // is registered, before the synthetic click bubbles. The redundant
   // `onClick.stopPropagation` covers the desktop mouse path.
   const toggle = () => {
+    if (effectiveVisibility.reason !== 'stored') return
     void withMoveTransition(async () => {
       await setIsCollapsed(!isCollapsed)
     })
@@ -216,6 +232,10 @@ const ExpandButton = ({block}: { block: Block }) => {
       variant="ghost"
       size="sm"
       type="button"
+      disabled={effectiveVisibility.reason !== 'stored'}
+      title={effectiveVisibility.reason === 'stored'
+        ? undefined
+        : 'Visibility is controlled by this view'}
       data-block-interaction="ignore"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {
@@ -225,7 +245,7 @@ const ExpandButton = ({block}: { block: Block }) => {
       className={cn('expand-collapse-button p-0 hover:bg-none transition-opacity duration-200', visibilityClass, isMobile ? 'h-8 w-8' : 'h-6 w-3')}
     >
       <span className="text-lg text-muted-foreground">
-        {isCollapsed ? '▸' : '▾'}
+        {effectiveVisibility.open ? '▾' : '▸'}
       </span>
     </Button>
   )
@@ -252,6 +272,12 @@ export const DefaultBlockLayout: BlockLayout = ({
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const blockContext = useBlockContext()
+  const effectiveVisibility = getEffectiveChildrenVisibility(
+    blockContext.renderVisibilityPolicy,
+    block.id,
+    Boolean(isCollapsed),
+  )
 
   // No per-block `view-transition-name`. Tried it (commit b1bfa4ef,
   // reverted): the slide-between-positions effect was barely
@@ -280,7 +306,7 @@ export const DefaultBlockLayout: BlockLayout = ({
           return (
             <Collapsible
               {...collapsibleProps}
-              open={!isCollapsed || isTopLevel}
+              open={effectiveVisibility.open}
               className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
             >
               <Controls/>
@@ -397,9 +423,9 @@ function BlockShell({
 }) {
   const runtime = useAppRuntime()
   const {block} = resolveContext
-  // Always defined in practice (the parent passes `useBlockContext()`); the
-  // `?? {}` keeps the type honest and returns the same stable object.
-  const blockContext = resolveContext.blockContext ?? {}
+  const renderScopeId = typeof resolveContext.blockContext?.renderScopeId === 'string'
+    ? resolveContext.blockContext.renderScopeId
+    : undefined
   const inEditMode = useInEditMode(block.id)
 
   const resolveBlockClickHandler = runtime.read(blockClickHandlersFacet)
@@ -414,16 +440,14 @@ function BlockShell({
   // rather than being hardcoded on the wrapper.
   const shellProps = useMemo<BlockShellProps>(() => ({
     'data-block-id': block.id,
-    'data-render-scope-id': typeof blockContext.renderScopeId === 'string'
-      ? blockContext.renderScopeId
-      : undefined,
+    'data-render-scope-id': renderScopeId,
     'data-editing': inEditMode ? 'true' : 'false',
     tabIndex: 0,
     ref: shellRef,
     onClick: handleBlockClick
       ? (event) => { void handleBlockClick(event) }
       : undefined,
-  }), [block.id, blockContext.renderScopeId, inEditMode, handleBlockClick, shellRef])
+  }), [block.id, renderScopeId, inEditMode, handleBlockClick, shellRef])
 
   const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
   const shellDecorators = useMemo(

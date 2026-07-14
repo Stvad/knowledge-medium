@@ -24,13 +24,14 @@ export const extendBlockSelectionAction: ActionConfig<typeof ActionContextTypes.
   description: 'Extend block selection to the clicked block',
   context: ActionContextTypes.BLOCK_POINTER,
   pointerBinding: {kind: 'mouse', mods: ['Shift'], phase: 'click'},
-  handler: async ({block, uiStateBlock, scopeRootId, scopeRootForcesOpen, renderScopeId}) => {
+  handler: async (deps) => {
+    const {block, uiStateBlock, scopeRootId, renderScopeId} = deps
     await extendSelection(
       block.id,
       uiStateBlock,
       uiStateBlock.repo,
       scopeRootId,
-      scopeRootForcesOpen ?? true,
+      deps.renderVisibilityPolicy,
     )
     void focusBlock(uiStateBlock, block.id, renderScopeId ? {renderScopeId} : undefined)
   },

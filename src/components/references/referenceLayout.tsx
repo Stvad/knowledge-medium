@@ -35,7 +35,7 @@ const ReferenceLayout: BlockLayout = ({block, RawContent}: BlockLayoutSlots) => 
 )
 
 /**
- * Self-gates on `isReference` (set by `BlockRef` via `NestedBlockContextProvider`).
+ * Self-gates on `isReference` (set by `BlockRef` via `RenderSurfaceProvider`).
  * The layout renders no `Children`, but `RawContent` is the block's markdown,
  * which CAN contain a nested `!((id))` embed; that embed clears `isReference`
  * (see `BlockEmbed`), so it renders as an embed rather than inheriting this

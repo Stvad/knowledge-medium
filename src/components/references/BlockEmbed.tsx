@@ -1,10 +1,11 @@
 import { BlockComponent } from '@/components/BlockComponent'
-import { NestedBlockContextProvider, useBlockContext } from '@/context/block.js'
+import { RenderSurfaceProvider, useBlockContext } from '@/context/block.js'
 import { useRepo } from '@/context/repo'
 import { useBlockExists } from '@/hooks/block'
 import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
 import { embedRenderScopeId, outlineRenderScopeId } from '@/utils/renderScope.js'
+import { EMPTY_RENDER_VISIBILITY_POLICY } from '@/utils/renderVisibility.js'
 
 // `isReference: false` CLEARS an inherited reference flag: a reference renders
 // its raw markdown content, which can itself contain a `!((id))` embed. Without
@@ -67,9 +68,16 @@ export function BlockEmbed({
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
       <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">
-        <NestedBlockContextProvider overrides={{...EMBED_CONTEXT_OVERRIDES, renderScopeId, scopeRootId: blockId}}>
+        <RenderSurfaceProvider
+          overrides={{
+            ...EMBED_CONTEXT_OVERRIDES,
+            renderScopeId,
+            scopeRootId: blockId,
+            renderVisibilityPolicy: EMPTY_RENDER_VISIBILITY_POLICY,
+          }}
+        >
           <BlockComponent blockId={blockId}/>
-        </NestedBlockContextProvider>
+        </RenderSurfaceProvider>
       </div>
     </BlockRefAncestorsProvider>
   )

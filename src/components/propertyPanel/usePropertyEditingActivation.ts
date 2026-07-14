@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, type FocusEvent } from 'react'
 import { usePropertyEditingShortcuts } from '@/shortcuts/useActionContext.js'
 import { Block } from '@/data/block'
+import { useBlockContext } from '@/context/block.js'
 
 interface PropertyEditingFocusHandlers {
   onFocus: (event: FocusEvent<HTMLInputElement>) => void
@@ -23,14 +24,15 @@ interface PropertyEditingFocusHandlers {
  * with these handlers — call both, the order doesn't matter.
  */
 export function usePropertyEditingActivation(block: unknown): PropertyEditingFocusHandlers {
+  const {renderVisibilityPolicy} = useBlockContext()
   const targetBlock = block instanceof Block ? block : null
   const [input, setInput] = useState<HTMLInputElement | null>(null)
   // `targetBlock!` / `input!` are lies when either is null, but `enabled`
   // is false in that case so `useActionContextActivations` filters the
   // activation out before any dependency read.
   const dependencies = useMemo(
-    () => ({block: targetBlock!, input: input!}),
-    [targetBlock, input],
+    () => ({block: targetBlock!, input: input!, renderVisibilityPolicy}),
+    [targetBlock, input, renderVisibilityPolicy],
   )
   usePropertyEditingShortcuts(dependencies, targetBlock !== null && input !== null)
 

@@ -47,7 +47,7 @@ beforeEach(async () => {
 })
 
 const jump = (from: string, count: number, direction: 'up' | 'down') =>
-  jumpVisibleBlocks(repo.block(from), ROOT, count, direction)
+  jumpVisibleBlocks(repo.block(from), ROOT, count, direction, {})
 
 describe('jumpVisibleBlocks', () => {
   it('lands exactly `count` visible blocks down', async () => {

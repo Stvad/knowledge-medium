@@ -8,6 +8,7 @@ import { Block } from '../data/block';
 import { EditorView } from '@codemirror/view'
 import type { PointerBindingSpec } from './canonicalizeChord.js'
 import type { GestureBindingSpec } from './gestureBinding.js'
+import type { RenderVisibilityPolicy } from '@/types.js'
 
 /** Action icon — same SVG-component shape lucide-react emits, so the
  *  default action set can use those directly without an adapter. The
@@ -128,16 +129,14 @@ export interface BaseShortcutDependencies {
    *  surfaces by `useShortcutSurfaceActivations`; defaults to the
    *  panel's zoom root for the main outline. */
   scopeRootId?: string;
-  /** Whether the surface force-opens its scope root regardless of the
-   *  root's own collapse flag (true for focal panel/top-level roots,
-   *  false for nested surface roots that honour collapse). Navigation
-   *  primitives use it so they don't descend into a collapsed nested
-   *  root whose children aren't rendered. Defaults to true (focal). */
-  scopeRootForcesOpen?: boolean;
+  /** Surface-scoped child visibility policy. Block-surface activations supply
+   *  this explicitly so traversal follows the same rendered tree as layout. */
+  renderVisibilityPolicy?: RenderVisibilityPolicy;
 }
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
   block: Block;
+  renderVisibilityPolicy: RenderVisibilityPolicy;
   renderScopeId?: string;
 }
 
@@ -152,6 +151,7 @@ export interface PropertyEditingDependencies extends BlockShortcutDependencies {
 export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
   selectedBlocks: Block[];
   anchorBlock: Block | null; // The block that started a shift-selection range
+  renderVisibilityPolicy: RenderVisibilityPolicy;
 }
 
 /**

@@ -29,7 +29,7 @@ import type {
   GestureSession,
 } from '@/extensions/continuousGestures.js'
 import { GESTURE_CANCEL, GESTURE_IDLE } from '@/extensions/continuousGestures.js'
-import { isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
+import { blockPointerDepsForTarget, isInteractiveContentEvent } from '@/extensions/blockInteraction.js'
 import { isEditingProp, isFocusedBlock } from '@/data/properties.js'
 import type { Block } from '@/data/block'
 import type { BlockPointerDependencies } from '@/shortcuts/types.js'
@@ -113,14 +113,8 @@ export const dateScrubRecognizer: BlockGestureRecognizerContribution = context =
   // `block-pointer` action validates `BlockPointerDependencies`. The actions
   // drive the module-singleton overlay, so they only read `block`, but the full
   // shape keeps the deps valid for dispatch (mirrors the swipe recognizer).
-  const depsFor = (ctx: GestureEventContext): BlockPointerDependencies => ({
-    block,
-    uiStateBlock,
-    scopeRootId: context.scopeRootId,
-    scopeRootForcesOpen: !context.blockContext?.isNestedSurface,
-    targetElement: ctx.element,
-    ...(renderScopeId ? { renderScopeId } : {}),
-  })
+  const depsFor = (ctx: GestureEventContext): BlockPointerDependencies =>
+    blockPointerDepsForTarget(context, ctx.element)
 
   const progressTick = (
     dx: number,

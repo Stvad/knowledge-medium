@@ -200,9 +200,9 @@ export const resolve = (
  *
  * Standalone (rather than `{...base, ...supplied}`) is deliberate and the safer
  * contract. A merge lets any field a caller OMITS silently inherit an unrelated
- * active instance's value — e.g. a focused embed's `renderScopeId` /
- * `scopeRootForcesOpen` leaking into a swipe action and making it focus/open as
- * if from that embed. No call site can defend against that without exhaustively
+ * active instance's value — e.g. a focused embed's `renderScopeId` leaking into
+ * a swipe action and making it focus/open as if from that embed. No call site
+ * can defend against that without exhaustively
  * restating every field on every dispatch; making supplied deps standalone
  * retires the whole class at the boundary instead. This is a behaviour change
  * only when `action.context` is coincidentally active (the leak case): pointer

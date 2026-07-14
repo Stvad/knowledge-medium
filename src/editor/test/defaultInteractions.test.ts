@@ -37,6 +37,7 @@ const context = {
   inEditMode: false,
   isSelected: false,
   isTopLevel: false,
+  blockContext: {renderVisibilityPolicy: {}},
   contentRenderers: [],
 } satisfies BlockInteractionContext
 
@@ -141,13 +142,17 @@ describe('default editor interactions', () => {
   })
 
   it('supplies scope + render-scope deps derived from a nested surface context', () => {
-    // The deps the pointer actions consume — scopeRootId, scopeRootForcesOpen
-    // (= !isNestedSurface), renderScopeId — must be forwarded faithfully, not
-    // just block/uiStateBlock/targetElement.
+    // The deps the pointer actions consume — scopeRootId, render visibility
+    // policy, renderScopeId — must be forwarded faithfully, not just
+    // block/uiStateBlock/targetElement.
     const nestedContext = {
       ...context,
       scopeRootId: 'scope-root',
-      blockContext: {isNestedSurface: true, renderScopeId: 'scope-z'},
+      blockContext: {
+        isNestedSurface: true,
+        renderScopeId: 'scope-z',
+        renderVisibilityPolicy: {},
+      },
     } as unknown as BlockInteractionContext
     const target = document.createElement('span')
     const event = selectionMouseEvent(target, {
@@ -162,7 +167,7 @@ describe('default editor interactions', () => {
     const [, supplied] = mockDispatchPointerAction.mock.calls[0]!
     expect(supplied).toMatchObject({
       scopeRootId: 'scope-root',
-      scopeRootForcesOpen: false,
+      renderVisibilityPolicy: {},
       renderScopeId: 'scope-z',
     })
   })

@@ -1,7 +1,21 @@
 import { createContext, useContext, useMemo, useState, ReactNode } from 'react'
-import { BlockContextType } from '@/types.js'
+import type { BlockContextType, RenderVisibilityPolicy } from '@/types.js'
+import { EMPTY_RENDER_VISIBILITY_POLICY } from '@/utils/renderVisibility.js'
 
-export const BlockContext = createContext<BlockContextType>({})
+export type ResolvedBlockContext = BlockContextType & {
+  renderVisibilityPolicy: RenderVisibilityPolicy
+}
+
+export const BlockContext = createContext<ResolvedBlockContext>({
+  renderVisibilityPolicy: EMPTY_RENDER_VISIBILITY_POLICY,
+})
+
+export type RenderSurfaceOverrides =
+  Omit<Partial<BlockContextType>, 'scopeRootId' | 'renderScopeId' | 'renderVisibilityPolicy'> &
+  Required<Pick<BlockContextType, 'scopeRootId' | 'renderScopeId' | 'renderVisibilityPolicy'>>
+
+export type NestedBlockContextOverrides =
+  Omit<Partial<BlockContextType>, 'scopeRootId' | 'renderScopeId' | 'renderVisibilityPolicy'>
 
 const shallowEqual = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
   if (Object.is(a, b)) return true
@@ -36,7 +50,11 @@ const useStableShallow = <T extends Record<string, unknown>>(next: T): T => {
 }
 
 export const BlockContextProvider = ({ children, initialValue}: { children: ReactNode, initialValue: BlockContextType }) => {
-  const stable = useStableShallow(initialValue)
+  const normalizedValue: ResolvedBlockContext = {
+    ...initialValue,
+    renderVisibilityPolicy: initialValue.renderVisibilityPolicy ?? EMPTY_RENDER_VISIBILITY_POLICY,
+  }
+  const stable = useStableShallow(normalizedValue)
   return (
     <BlockContext value={stable}>
       {children}
@@ -44,7 +62,7 @@ export const BlockContextProvider = ({ children, initialValue}: { children: Reac
   )
 }
 
-export const NestedBlockContextProvider = (
+const MergedBlockContextProvider = (
   {children, overrides}: { children: ReactNode, overrides: Partial<BlockContextType> },
 ) => {
   const context = useContext(BlockContext)
@@ -52,8 +70,12 @@ export const NestedBlockContextProvider = (
   // inline `{layoutBoundary: false, ...}` literals without
   // re-rendering every BlockComponent on every parent render.
   const stableOverrides = useStableShallow(overrides)
-  const value = useMemo(() =>
-    ({...context, ...stableOverrides}), [context, stableOverrides])
+  const value = useMemo<ResolvedBlockContext>(() => ({
+    ...context,
+    ...stableOverrides,
+    renderVisibilityPolicy:
+      stableOverrides.renderVisibilityPolicy ?? context.renderVisibilityPolicy,
+  }), [context, stableOverrides])
 
   return (
     <BlockContext value={value}>
@@ -61,6 +83,26 @@ export const NestedBlockContextProvider = (
     </BlockContext>
   )
 }
+
+/** Inherit the current render surface while overriding ordinary block context. */
+export const NestedBlockContextProvider = (
+  {children, overrides}: {children: ReactNode, overrides: NestedBlockContextOverrides},
+) => (
+  <MergedBlockContextProvider overrides={overrides}>
+    {children}
+  </MergedBlockContextProvider>
+)
+
+/** Establish a new rendered block surface. The caller must explicitly provide
+ *  identity, scope boundary, and the complete visibility policy so occurrence-
+ *  local reveal state cannot leak in from the parent surface. */
+export const RenderSurfaceProvider = (
+  {children, overrides}: {children: ReactNode, overrides: RenderSurfaceOverrides},
+) => (
+  <MergedBlockContextProvider overrides={overrides}>
+    {children}
+  </MergedBlockContextProvider>
+)
 
 export const useBlockContext = () => {
   const context = useContext(BlockContext)

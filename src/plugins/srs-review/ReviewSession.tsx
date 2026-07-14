@@ -22,11 +22,12 @@ import {
 } from 'lucide-react'
 import type { Block } from '@/data/block'
 import type { BlockData } from '@/data/api'
+import type { RenderVisibilityPolicy } from '@/types.js'
 import { useRepo } from '@/context/repo.js'
 import { useManyParents, useProperty } from '@/hooks/block.js'
 import { usePluginUIStateChildBlock } from '@/data/globalState.js'
 import { getBlockTypes } from '@/data/properties.js'
-import { NestedBlockContextProvider } from '@/context/block.js'
+import { RenderSurfaceProvider } from '@/context/block.js'
 import { BlockComponent } from '@/components/BlockComponent.js'
 import { Button } from '@/components/ui/button.js'
 import { cn } from '@/lib/utils.js'
@@ -53,6 +54,7 @@ import { reviewDeckStartedProp, reviewProgressProp, srsReviewProgressType } from
 import { localDayKey, reconcileRestoredQueue, restoreSavedSession } from './reviewProgress.ts'
 import { SRS_REVIEW_CONTEXT, type SrsReviewController } from './actions.ts'
 import { SRS_REVIEW_CARD_ID, SRS_REVIEW_REVEALED } from './reviewCardLayout.tsx'
+import { promotedRevealPathIds } from '@/plugins/breadcrumbs/promotionPath.js'
 
 /** Breadcrumb context overrides — mirrors the breadcrumbs plugin's own
  *  header renderer so the in-review chain renders identically. */
@@ -318,6 +320,17 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     const cut = currentParents.findIndex(p => p.id === shownId)
     return cut >= 0 ? currentParents.slice(0, cut) : currentParents
   }, [shownId, currentId, currentParents])
+  const renderVisibilityPolicy = useMemo<RenderVisibilityPolicy>(() => {
+    const revealPath = currentId
+      ? promotedRevealPathIds(currentParents, shownId, currentId)
+      : []
+    return {
+      forceOpenBlockIds: revealed && currentId
+        ? [...revealPath, currentId]
+        : revealPath,
+      forceClosedBlockIds: currentId && !revealed ? [currentId] : [],
+    }
+  }, [currentId, currentParents, revealed, shownId])
 
   const grade = useCallback(
     async (signal: SrsSignal) => {
@@ -449,6 +462,17 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
   }, [revealed])
 
   const deckLabel = tagName.trim() ? tagName.trim() : 'All due cards'
+  const surfaceId = shownId
+  const reviewContextOverrides = useMemo(() => ({
+    [SRS_REVIEW_CARD_ID]: currentId,
+    [SRS_REVIEW_REVEALED]: revealed,
+    isNestedSurface: true,
+    scopeRootId: surfaceId,
+    renderScopeId: surfaceId === currentId
+      ? `srs-review:${currentId}`
+      : `srs-review:${currentId}:${surfaceId}`,
+    renderVisibilityPolicy,
+  }), [currentId, revealed, renderVisibilityPolicy, surfaceId])
 
   const header = (
     <div className="mb-4 flex items-center justify-between gap-3">
@@ -514,11 +538,6 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
     )
   }
 
-  // currentId is non-null past the guards above, so the shown surface id
-  // is always a concrete block id (the card, or a promoted ancestor).
-  const surfaceId = shownId
-  const showingCard = surfaceId === currentId
-
   return (
     <div
       ref={focusSessionSurface}
@@ -546,26 +565,16 @@ export const ReviewSession = ({deck, tagName}: {deck: Block; tagName: string}) =
       )}
 
       <div className="rounded-xl border bg-card p-4 shadow-sm">
-        <NestedBlockContextProvider
-          // While the card itself is shown, gate its answer with the review
-          // layout context. A promoted ancestor renders its full subtree
-          // normally (the card sits within it, in context).
-          overrides={showingCard ? {
-            [SRS_REVIEW_CARD_ID]: currentId,
-            [SRS_REVIEW_REVEALED]: revealed,
-            isNestedSurface: true,
-            scopeRootId: currentId,
-            renderScopeId: `srs-review:${currentId}`,
-          } : {
-            isNestedSurface: true,
-            scopeRootId: surfaceId,
-            renderScopeId: `srs-review:${currentId}:${surfaceId}`,
-          }}
+        <RenderSurfaceProvider
+          // Gate the active card's answer wherever it appears in this
+          // review surface. Promoted ancestors force-open the path to the
+          // card, while the card itself is force-open only once revealed.
+          overrides={reviewContextOverrides}
         >
           {/* keyed by the shown id so switching cards (or promoting) remounts
               the subtree rather than diffing one outline into the next */}
           <BlockComponent key={surfaceId} blockId={surfaceId} />
-        </NestedBlockContextProvider>
+        </RenderSurfaceProvider>
       </div>
 
       <div className="mt-4">
