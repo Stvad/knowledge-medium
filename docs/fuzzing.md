@@ -79,6 +79,11 @@ regression test in the same PR (#371):
   `WorkspaceNotPinnedError` (now a retry-safe no-op).
 - `mergeProperties` silently dropped source-only keys shadowing
   `Object.prototype` members (`key in out` walked the prototype chain).
+- `parseBlockRefs` made empty-label aliased refs (`[](((id)))`)
+  indistinguishable from plain refs, so `rewriteBlockRefs` silently
+  degraded the aliased form (id-fallback display) to a plain ref
+  (target-content display). Caught by the nightly-style random-seed
+  sweep — the fixed smoke seed had missed it.
 
 ## Adding a suite
 

@@ -177,14 +177,13 @@ const plainTextArb = fc
 
 // Aliased-blockref labels: the parser's label group excludes `]` and
 // newlines; also keep `(`/`)` out so a label can't smuggle in a nested
-// mark, and pre-trim since the parser trims. Non-empty only: an
-// empty-label `[](((id)))` parses with no `label` at all, and the
-// rewriters then degrade it to a plain `((id))` — a known quirk that
-// would otherwise fail the fragment model.
+// mark, and pre-trim since the parser trims. Empty labels included on
+// purpose: `[](((id)))` must keep its aliased form through rewrites
+// (label presence ⇔ form — a truthy gate here once degraded it to a
+// plain ref; found by this suite's span-soundness property).
 const labelArb = fc
-  .string({minLength: 1, maxLength: 8})
+  .string({maxLength: 8})
   .map(s => s.replace(/[[\]()!\n]/g, '.').trim())
-  .filter(s => s !== '')
 
 const fragmentArb = (ids: readonly string[]): fc.Arbitrary<Fragment> =>
   fc.oneof(
@@ -259,7 +258,7 @@ describe('block-ref parsing and rewriting', () => {
           .map(f => ({
             id: f.id.toLowerCase(),
             embed: f.kind === 'embed',
-            label: f.kind === 'aliased' && f.label !== '' ? f.label : undefined,
+            label: f.kind === 'aliased' ? f.label : undefined,
           }))
         expect(
           marks.map(m => ({id: m.blockId, embed: m.embed, label: m.label})),
@@ -278,7 +277,10 @@ describe('block-ref parsing and rewriting', () => {
         const expected = fragments
           .map(f => {
             if (f.kind === 'plain' || f.id.toLowerCase() !== target.toLowerCase()) return renderFragment(f)
-            return f.kind === 'aliased' ? f.label : inline
+            // Aliased marks degrade to what they displayed: the label,
+            // or the id when the label is empty.
+            if (f.kind === 'aliased') return f.label !== '' ? f.label : f.id.toLowerCase()
+            return inline
           })
           .join('')
         expect(result).toBe(expected)

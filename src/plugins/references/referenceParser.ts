@@ -31,7 +31,11 @@ export interface ParsedBlockRef {
   startIndex: number;
   endIndex: number;
   embed: boolean;  // true for !((id)), false for plain ((id))
-  label?: string;  // display label from [label](((id)))
+  /** Display label from `[label](((id)))`. Present (possibly `''` —
+   *  the renderer falls back to displaying the id) iff the mark used
+   *  the aliased form; absent for plain/embed marks. Rewriters key on
+   *  presence to preserve the mark's form. */
+  label?: string;
 }
 
 // UUIDv4 shape — anchors what counts as a block-ref id. We deliberately keep
@@ -174,13 +178,17 @@ export function parseBlockRefs(content: string): ParsedBlockRef[] {
   while ((match = ALIASED_BLOCK_REF_RE.exec(content)) !== null) {
     const start = match.index
     const end = start + match[0].length
-    const label = match[1].trim()
     found.push({
       blockId: match[2].toLowerCase(),
       startIndex: start,
       endIndex: end,
       embed: false,
-      ...(label ? {label} : {}),
+      // Always present for the aliased form, even when '' — a truthy
+      // gate here made `[](((id)))` indistinguishable from `((id))`,
+      // so rewriteBlockRefs silently degraded the aliased form to a
+      // plain ref (changing display semantics from id-fallback to
+      // target content). Found by referenceParser.fuzz.
+      label: match[1].trim(),
     })
     consumed.push([start, end])
   }
@@ -310,7 +318,13 @@ export const inlineBlockRefs = (
     if (mark.startIndex < cursor) continue
     if (mark.blockId !== normalizedId) continue
     result += content.slice(cursor, mark.startIndex)
-    result += mark.label !== undefined ? mark.label : inlineContent
+    // Degrade to what the mark DISPLAYED: the label for aliased marks
+    // (an empty label displays the id — keep that), the target's
+    // content for plain/embed marks.
+    result +=
+      mark.label === undefined ? inlineContent
+      : mark.label !== '' ? mark.label
+      : mark.blockId
     cursor = mark.endIndex
   }
   return cursor === 0 ? content : result + content.slice(cursor)
