@@ -2177,8 +2177,9 @@ export class Repo {
       await materializePropertySeeds(this, workspaceId, seeds)
     } catch (err) {
       // A superseded generation (the user switched workspaces) aborts the parked
-      // access wait — expected, not a failure to log or retry.
-      if (err instanceof Error && err.name === 'AbortError') return
+      // access wait — expected, not a failure to log or retry. Gate on OUR signal
+      // so an unrelated AbortError-named failure inside the pass still surfaces.
+      if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
       const reason = err instanceof Error ? err.message : String(err)
       console.error(
         `[seedMaterialization] workspace ${workspaceId} failed (will retry next open/seed change): ${reason}`,
