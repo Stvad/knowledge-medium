@@ -22,7 +22,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ChangeScope,
-  PropertySchemaIdentityError,
   defineProperty,
   codecs,
   type BlockData,
@@ -177,7 +176,7 @@ describe('repo.activeWorkspaceId', () => {
     repo.setActiveWorkspaceId(null)
   })
 
-  it('keeps seed identity unavailable until the schema projector primes each workspace', async () => {
+  it('resolves the seed per workspace, unshadowed by a same-name stored definition', async () => {
     const declaration = seedProperty({
       seedKey: 'system:kernel-data/property/test-synthesized',
       revision: 1,
@@ -207,6 +206,7 @@ describe('repo.activeWorkspaceId', () => {
       }),
       {scope: ChangeScope.BlockDefault},
     )
+    // A same-name USER definition (a stored winner) in ws-synthesis-a.
     await repo.tx(
       tx => tx.create({
         id: 'stored-winner-a',
@@ -224,52 +224,28 @@ describe('repo.activeWorkspaceId', () => {
 
     repo.setActiveWorkspaceId('ws-synthesis-a')
     expect(repo.propertyDefinitions).toBeNull()
-    await expect(repo.tx(
-      tx => tx.setProperty('synthesis-target-a', declaration, 'too-early'),
-      {scope: ChangeScope.BlockDefault},
-    )).rejects.toMatchObject({
-      name: PropertySchemaIdentityError.name,
-      reason: 'shadowed',
-    })
-
     await repo.whenPropertyDefinitionsReady('ws-synthesis-a')
+    // The stored winner exists by field id, but v1 makes a code-owned seed
+    // unshadowable, so it resolves to its own per-workspace field.
     expect(repo.propertyDefinitions?.definitionsByFieldId.has('stored-winner-a')).toBe(true)
-    const resolvedA = repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)
-    expect(resolvedA).toEqual({
-      status: 'identity-unavailable',
-      reason: 'shadowed',
-    })
-
-    repo.setActiveWorkspaceId('ws-synthesis-b')
-    expect(repo.propertyDefinitions).toBeNull()
-    await repo.whenPropertyDefinitionsReady('ws-synthesis-b')
-    expect(repo.propertyDefinitions).toMatchObject({workspaceId: 'ws-synthesis-b'})
-    const resolvedB = repo.propertySchemaResolverFor('ws-synthesis-b').resolve(declaration)
-    expect(resolvedB).toEqual({
-      status: 'resolved',
-      schema: expect.objectContaining({
-        fieldId: propertyDefinitionBlockId('ws-synthesis-b', declaration.seedKey),
-        workspaceId: 'ws-synthesis-b',
-      }),
-    })
-    await repo.tx(async tx => {
-      const stored = await tx.get('stored-winner-a')
-      if (!stored) throw new Error('expected stored winner')
-      await tx.update('stored-winner-a', {
-        properties: {
-          ...stored.properties,
-          'property-schema:name': 'renamed-while-inactive',
-        },
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    repo.setActiveWorkspaceId('ws-synthesis-a')
-    await repo.whenPropertyDefinitionsReady('ws-synthesis-a')
     expect(repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)).toEqual({
       status: 'resolved',
       schema: expect.objectContaining({
         fieldId: propertyDefinitionBlockId('ws-synthesis-a', declaration.seedKey),
         workspaceId: 'ws-synthesis-a',
+      }),
+    })
+
+    // A different workspace (no stored winner) resolves the seed to ITS field.
+    repo.setActiveWorkspaceId('ws-synthesis-b')
+    expect(repo.propertyDefinitions).toBeNull()
+    await repo.whenPropertyDefinitionsReady('ws-synthesis-b')
+    expect(repo.propertyDefinitions).toMatchObject({workspaceId: 'ws-synthesis-b'})
+    expect(repo.propertySchemaResolverFor('ws-synthesis-b').resolve(declaration)).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-synthesis-b', declaration.seedKey),
+        workspaceId: 'ws-synthesis-b',
       }),
     })
     repo.setActiveWorkspaceId(null)

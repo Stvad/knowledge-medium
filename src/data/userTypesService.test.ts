@@ -277,7 +277,7 @@ describe('UserTypesService subscription', () => {
     }
   })
 
-  it('omits a metadata-only seed definition shadowed by an earlier user definition', async () => {
+  it('keeps a seed the name winner over an earlier same-name user definition (no shadowing)', async () => {
     env = await setup()
     const userSchema = await env.repo.userSchemas.addSchema({
       name: 'shadowed-metadata-only',
@@ -308,16 +308,24 @@ describe('UserTypesService subscription', () => {
       await materializePropertySeeds(env.repo, WS, [seed])
       await vi.waitFor(() => {
         const definitions = env.repo.propertyDefinitions
-        expect(definitions?.definitionsByName.get(seed.name)?.[0]?.fieldId).toBe(userFieldId)
+        // v1 no-shadowing: the seed wins its name; the earlier same-name user
+        // schema is excluded from name selection.
+        const winnerFieldId = definitions?.definitionsByName.get(seed.name)?.[0]?.fieldId
+        expect(winnerFieldId).toBe(seedFieldId)
+        expect(winnerFieldId).not.toBe(userFieldId)
         expect(definitions?.definitionsByFieldId.get(seedFieldId)?.seedKey).toBe(seed.seedKey)
         expect(definitions?.schemasByFieldId.has(seedFieldId)).toBe(false)
       }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
 
       const typeId = await createBlockTypeBlock(env.repo, {
-        label: 'Shadowed seeded type',
+        label: 'Seeded type over a same-name user schema',
         properties: [seedFieldId],
       })
-      expect(env.repo.types.get(typeId)?.properties).toEqual([])
+      // The seed wins its name, so the type's ref to the seed's field resolves
+      // through the seed declaration's behavior and the property is included.
+      const typeProps = env.repo.types.get(typeId)?.properties
+      expect(typeProps).toHaveLength(1)
+      expect(typeProps?.[0]?.name).toBe(seed.name)
     } finally {
       warn.mockRestore()
     }

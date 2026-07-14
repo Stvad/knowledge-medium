@@ -221,7 +221,7 @@ describe('property definition registry snapshot', () => {
     })
   })
 
-  it('keeps ambient and resolved behavior on a behavior-backed user winner over a seed', () => {
+  it('keeps the seed authoritative over an earlier same-name user definition (no shadowing)', () => {
     const seedFieldId = propertyDefinitionBlockId(WS, titleSeed.seedKey)
     const earlierUser = metadata('user-title', titleSeed.name, 1)
     const userSchema = defineProperty(titleSeed.name, {
@@ -240,23 +240,26 @@ describe('property definition registry snapshot', () => {
       ]),
     })
 
+    // v1: a code-owned seed is unshadowable. The earlier same-name user block
+    // still exists by field id, but it never competes for the name, so the
+    // ambient map and both resolve paths select the seed's declared behavior.
     expect(snapshot.schemasByFieldId.get(earlierUser.fieldId)).toBe(userSchema)
-    expect(snapshot.schemas.get(titleSeed.name)).toBe(userSchema)
+    expect(snapshot.schemas.get(titleSeed.name)).toBe(titleSeed)
     expect(createPropertySchemaResolver(snapshot).resolve(titleSeed.name)).toEqual({
       status: 'resolved',
       schema: expect.objectContaining({
-        fieldId: earlierUser.fieldId,
-        codec: userSchema.codec,
-        defaultValue: userSchema.defaultValue,
+        fieldId: seedFieldId,
+        codec: titleSeed.codec,
+        defaultValue: titleSeed.defaultValue,
       }),
     })
     expect(createPropertySchemaResolver(snapshot).resolve(titleSeed)).toEqual({
-      status: 'identity-unavailable',
-      reason: 'shadowed',
+      status: 'resolved',
+      schema: expect.objectContaining({fieldId: seedFieldId}),
     })
   })
 
-  it('does not fall through to seed behavior when its same-name winner is metadata-only', () => {
+  it('resolves to the seed when an earlier same-name user winner is metadata-only (no shadowing)', () => {
     const seedFieldId = propertyDefinitionBlockId(WS, titleSeed.seedKey)
     const earlierUser = metadata('user-title', titleSeed.name, 1)
     const laterSeed = metadata(seedFieldId, titleSeed.name, 2, {
@@ -270,14 +273,16 @@ describe('property definition registry snapshot', () => {
       ]),
     })
 
-    expect(snapshot.schemas.has(titleSeed.name)).toBe(false)
+    // A metadata-only same-name user winner no longer blocks the seed — it's
+    // excluded from name selection, so the seed's declared behavior is published.
+    expect(snapshot.schemas.get(titleSeed.name)).toBe(titleSeed)
     expect(createPropertySchemaResolver(snapshot).resolve(titleSeed.name)).toEqual({
-      status: 'identity-unavailable',
-      reason: 'definition-unavailable',
+      status: 'resolved',
+      schema: expect.objectContaining({fieldId: seedFieldId, codec: titleSeed.codec}),
     })
     expect(createPropertySchemaResolver(snapshot).resolve(titleSeed)).toEqual({
-      status: 'identity-unavailable',
-      reason: 'shadowed',
+      status: 'resolved',
+      schema: expect.objectContaining({fieldId: seedFieldId}),
     })
   })
 
@@ -409,7 +414,7 @@ describe('property definition registry snapshot', () => {
     })
   })
 
-  it('treats a wrong-provenance deterministic-id occupant as an ordinary winner', () => {
+  it('excludes a wrong-provenance occupant of a seed id from the seed name (no shadowing)', () => {
     const fieldId = propertyDefinitionBlockId(WS, titleSeed.seedKey)
     const ordinary = metadata(fieldId, titleSeed.name, 10)
     const ordinarySchema = defineProperty(titleSeed.name, {
@@ -425,10 +430,14 @@ describe('property definition registry snapshot', () => {
     })
     const resolver = createPropertySchemaResolver(snapshot)
 
-    expect(snapshot.schemas.get(titleSeed.name)).toBe(ordinarySchema)
+    // A non-seed block squatting a seed's deterministic id can neither shadow
+    // the seed's name (it's excluded from name selection) nor let the seed
+    // materialize there (the id carries the wrong provenance), so the name is
+    // simply unresolvable until the collision is cleared.
+    expect(snapshot.schemas.has(titleSeed.name)).toBe(false)
     expect(resolver.resolve(titleSeed.name)).toEqual({
-      status: 'resolved',
-      schema: expect.objectContaining({fieldId, codec: ordinarySchema.codec, origin: 'user'}),
+      status: 'identity-unavailable',
+      reason: 'definition-unavailable',
     })
     expect(resolver.resolve(titleSeed)).toEqual({
       status: 'identity-unavailable',

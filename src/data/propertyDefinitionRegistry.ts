@@ -88,7 +88,17 @@ export const buildPropertyDefinitionRegistry = (
     const definition = declared && declared.name !== raw.name ? {...raw, name: declared.name} : raw
     definitionsByFieldId.set(definition.fieldId, definition)
     if (projected.schema) schemasByFieldId.set(definition.fieldId, projected.schema)
-    pushGrouped(definitionsByNameMutable, definition.name, definition)
+    // v1: code-owned seeds are unshadowable. A non-seed (user/imported)
+    // definition whose name collides with a seed's declared name never competes
+    // as a name winner, so `resolve`/`resolveName` always select the seed for
+    // that name — its handle never resolves `shadowed`, and structural fields
+    // like `types` stay on the seed even when an older same-name block predates
+    // it. The colliding block still lives in `definitionsByFieldId` (resolvable
+    // by field id, itself now shadowed BY the seed); its stored values are read
+    // under the seed's codec (a codec-incompatible leftover surfaces loudly).
+    if (definition.seedKey || !seedsByDeclarationName.has(definition.name)) {
+      pushGrouped(definitionsByNameMutable, definition.name, definition)
+    }
   }
   for (const definitions of definitionsByNameMutable.values()) {
     definitions.sort((a, b) => {

@@ -5,7 +5,6 @@ import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet'
 import {
   BlockNotFoundForTypeError,
   ChangeScope,
-  PropertySchemaIdentityError,
   codecs,
   defineBlockType,
   defineProperty,
@@ -174,7 +173,7 @@ describe('Repo type membership orchestration', () => {
     expect(repo.block('b1').get(statusProp)).toBe('open')
   })
 
-  it('rejects a shadowed type-declared schema before adding membership or initial values', async () => {
+  it('applies a seed-declared type property despite an older same-name user def (no shadowing)', async () => {
     const shadowed = seedProperty({
       seedKey: 'system:test/property/status',
       revision: 1,
@@ -206,31 +205,16 @@ describe('Repo type membership orchestration', () => {
       schema: winner,
     }], {workspaceId: 'ws-1'})
     await createBlock('b1')
-    await createBlock('caught')
 
-    await expect(repo.addType('b1', 'todo', {status: 7}))
-      .rejects.toBeInstanceOf(PropertySchemaIdentityError)
-    expect(getBlockTypes(repo.block('b1').data)).toEqual([])
-    expect(repo.block('b1').peek()!.properties.status).toBeUndefined()
-
-    await repo.tx(async tx => {
-      try {
-        await repo.addTypeInTx(
-          tx,
-          'caught',
-          'todo',
-          {status: 7},
-          repo.snapshotTypeRegistries(),
-        )
-      } catch (error) {
-        expect(error).toBeInstanceOf(PropertySchemaIdentityError)
-      }
-    }, {scope: ChangeScope.BlockDefault})
-    expect(getBlockTypes(repo.block('caught').data)).toEqual([])
-    expect(repo.block('caught').peek()!.properties.status).toBeUndefined()
+    // v1: the seed `status` wins its name (the earlier same-name user def is
+    // excluded by the no-shadowing rule), so adding the type applies the
+    // seed-declared property's initial value instead of rejecting as shadowed.
+    await repo.addType('b1', 'todo', {status: 'seven'})
+    expect(getBlockTypes(repo.block('b1').data)).toEqual(['todo'])
+    expect(repo.block('b1').peek()!.properties.status).toBe('seven')
   })
 
-  it('gates add, remove, toggle, and set writes to the types membership cell', async () => {
+  it('applies type-membership writes through the kernel types seed despite an older same-name user def (no shadowing)', async () => {
     const winner = defineProperty('types', {
       codec: codecs.string,
       defaultValue: 'winner-default',
@@ -252,20 +236,24 @@ describe('Repo type membership orchestration', () => {
       },
       schema: winner,
     }], {workspaceId: 'ws-1'})
-    await createBlock('add', {types: 'winner-add'})
-    await createBlock('remove', {types: 'winner-remove'})
-    await createBlock('toggle', {types: 'winner-toggle'})
-    await createBlock('set', {types: 'winner-set'})
+    // Blocks whose `types` cell already holds a valid list (compatible with the
+    // kernel seed's string-list codec).
+    await createBlock('add', {types: []})
+    await createBlock('remove', {types: ['todo']})
+    await createBlock('toggle', {types: []})
+    await createBlock('set', {types: []})
 
-    await expect(repo.addType('add', 'todo')).rejects.toBeInstanceOf(PropertySchemaIdentityError)
-    await expect(repo.removeType('remove', 'todo')).rejects.toBeInstanceOf(PropertySchemaIdentityError)
-    await expect(repo.toggleType('toggle', 'todo')).rejects.toBeInstanceOf(PropertySchemaIdentityError)
-    await expect(repo.setBlockTypes('set', [])).rejects.toBeInstanceOf(PropertySchemaIdentityError)
+    // The kernel `types` seed wins over the excluded same-name user def, so
+    // membership operations resolve and mutate the cell normally.
+    await repo.addType('add', 'todo')
+    await repo.removeType('remove', 'todo')
+    await repo.toggleType('toggle', 'todo')
+    await repo.setBlockTypes('set', ['todo'])
 
-    expect(repo.block('add').peek()!.properties.types).toBe('winner-add')
-    expect(repo.block('remove').peek()!.properties.types).toBe('winner-remove')
-    expect(repo.block('toggle').peek()!.properties.types).toBe('winner-toggle')
-    expect(repo.block('set').peek()!.properties.types).toBe('winner-set')
+    expect(getBlockTypes(repo.block('add').data)).toEqual(['todo'])
+    expect(getBlockTypes(repo.block('remove').data)).toEqual([])
+    expect(getBlockTypes(repo.block('toggle').data)).toEqual(['todo'])
+    expect(getBlockTypes(repo.block('set').data)).toEqual(['todo'])
   })
 
   it('pins a divergent-named type-property seed to its declared name and preserves an existing value', async () => {

@@ -55,7 +55,7 @@ describe('isPropertyPanelHiddenProperty', () => {
     expect(isPropertyPanelHiddenProperty('system:internal', schemas, new Map())).toBe(true)
   })
 
-  it('uses the projected definition winner before seed metadata', () => {
+  it('prefers the seed over a same-name user definition, else the createdAt winner', () => {
     const schema = prop('secret', ChangeScope.BlockDefault)
     const visibleWinner = metadata('first', schema.name, 1, false)
     const hiddenLoser = metadata('second', schema.name, 2, true)
@@ -69,9 +69,13 @@ describe('isPropertyPanelHiddenProperty', () => {
       seeds: [hiddenSeed('plugin:test/property/secret')],
     })
 
+    // v1 no-shadowing: the hidden seed owns `secret`; the same-name user defs are
+    // excluded from name selection, so the panel follows the seed's hidden flag.
     expect(isPropertyPanelHiddenProperty(schema.name, snapshot.schemas, new Map(), snapshot))
-      .toBe(false)
+      .toBe(true)
 
+    // With no seed colliding on the name, the earliest-createdAt user winner
+    // decides — here the hidden one.
     const hiddenWinnerSnapshot = buildPropertyDefinitionRegistry({
       workspaceId: 'ws',
       legacySchemas: new Map([[schema.name, schema]]),

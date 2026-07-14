@@ -158,49 +158,53 @@ describe('typed property identity boundary', () => {
     expect(repo.block('pre-pin-target').peek()!.properties.status).toBe('foreign')
   })
 
-  it('degrades shadowed Block reads without decoding the winner cell', async () => {
+  it('surfaces a codec error reading a seed cell that holds an incompatible leftover value', async () => {
     const repo = await setup()
     const block = repo.block('target')
 
-    expect(block.get(shadowed)).toBe('seed-default')
-    expect(block.peekProperty(shadowed)).toBeUndefined()
+    // The seed (string) now wins `status`, but `target` holds a number left by
+    // an earlier same-name definition. v1 is loud: decoding it under the seed's
+    // codec throws rather than silently degrading to the default.
+    expect(() => block.get(shadowed)).toThrow(/expected string/)
   })
 
-  it('rejects shadowed Block writes before invoking an updater', async () => {
+  it('rejects an updater write over an incompatible leftover before invoking the updater', async () => {
     const repo = await setup()
     const updater = vi.fn(() => 'changed')
 
-    await expect(repo.block('target').set(shadowed, updater)).rejects.toMatchObject({
-      name: 'PropertySchemaIdentityError',
-      schemaName: shadowed.name,
-      reason: 'shadowed',
-    })
+    // The updater form decodes the current (incompatible) value first, so the
+    // write throws and the updater never runs; the stored value is preserved.
+    await expect(repo.block('target').set(shadowed, updater)).rejects.toThrow(/expected string/)
     expect(updater).not.toHaveBeenCalled()
     expect(repo.block('target').peek()!.properties.status).toBe(42)
   })
 
-  it('degrades shadowed Tx reads and rejects shadowed Tx writes', async () => {
+  it('surfaces a codec error on a tx read of an incompatible leftover value', async () => {
     const repo = await setup()
 
     await expect(repo.tx(async tx => {
-      expect(await tx.getProperty('target', shadowed)).toBe('seed-default')
-      await tx.setProperty('target', shadowed, 'changed')
-    }, {scope: ChangeScope.BlockDefault})).rejects.toBeInstanceOf(PropertySchemaIdentityError)
+      await tx.getProperty('target', shadowed)
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(/expected string/)
 
     expect(repo.block('target').peek()!.properties.status).toBe(42)
   })
 
-  it('accepts the resolved winner and uses its canonical codec', async () => {
+  it('resolves the seed for its name and round-trips a compatible value (no shadowing)', async () => {
     const repo = await setup()
-    const resolution = repo.propertySchemaResolverFor(WS).resolve(winner.name)
-    if (resolution.status !== 'resolved') throw new Error('expected winner to resolve')
+    const resolution = repo.propertySchemaResolverFor(WS).resolve(shadowed.name)
+    if (resolution.status !== 'resolved') throw new Error('expected the seed to resolve')
+    // It's the seed's own deterministic identity, not the excluded user def.
+    expect(resolution.schema.fieldId).toBe(propertyDefinitionBlockId(WS, shadowed.seedKey))
 
-    expect(repo.block('target').get(resolution.schema)).toBe(42)
     await repo.tx(
-      tx => tx.setProperty('target', resolution.schema, 7),
+      tx => tx.create({id: 'compat-target', workspaceId: WS, parentId: null, orderKey: 'a1'}),
       {scope: ChangeScope.BlockDefault},
     )
-    expect(repo.block('target').get(resolution.schema)).toBe(7)
+    await repo.tx(
+      tx => tx.setProperty('compat-target', resolution.schema, 'ok'),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(repo.block('compat-target').get(resolution.schema)).toBe('ok')
   })
 
   it('resolves a legacy propertySchemasFacet schema alongside seeds — the transitional dual-path (removed in B′)', async () => {
@@ -467,10 +471,12 @@ describe('typed property identity boundary', () => {
     expect(repo.block('synthesized-target').get(resolution.schema)).toBe('stored')
   })
 
-  it('uses canonical behavior after a resolved entry is replaced', async () => {
+  it('keeps the seed canonical even when an excluded same-name user schema changes', async () => {
     const repo = await setup()
-    const oldResolution = repo.propertySchemaResolverFor(WS).resolve(winner.name)
-    if (oldResolution.status !== 'resolved') throw new Error('expected winner to resolve')
+    const resolution = repo.propertySchemaResolverFor(WS).resolve(shadowed.name)
+    if (resolution.status !== 'resolved') throw new Error('expected the seed to resolve')
+    // Replacing the excluded same-name user definition's schema must not affect
+    // the seed, which owns the name.
     const replacement = defineProperty(winner.name, {
       codec: codecs.number,
       defaultValue: 5,
@@ -492,29 +498,47 @@ describe('typed property identity boundary', () => {
       {scope: ChangeScope.BlockDefault},
     )
 
-    expect(repo.block('empty-target').get(oldResolution.schema)).toBe(5)
-    await expect(repo.tx(
-      tx => tx.getProperty('empty-target', oldResolution.schema),
-      {scope: ChangeScope.BlockDefault},
-    )).resolves.toBe(5)
+    // An empty block reads the SEED default (string), not the user schema's 5.
+    expect(repo.block('empty-target').get(resolution.schema)).toBe('seed-default')
   })
 
   it('revalidates a resolved entry by durable field id after a rename', async () => {
     const repo = await setup()
-    const oldResolution = repo.propertySchemaResolverFor(WS).resolve(winner.name)
-    if (oldResolution.status !== 'resolved') throw new Error('expected winner to resolve')
-    const renamed = 'renamed-status'
+    // A user definition whose name does NOT collide with a seed, so it's a real
+    // winner (not excluded by the no-shadowing rule). Resolve it, then rename it:
+    // the captured resolution follows its durable field id to the new name.
+    const userSchema = defineProperty('user-status', {
+      codec: codecs.number,
+      defaultValue: 0,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const userMetadata = {
+      fieldId: 'user-status-field',
+      workspaceId: WS,
+      createdAt: 1,
+      name: 'user-status',
+      changeScope: ChangeScope.BlockDefault,
+      hidden: false,
+      origin: 'user' as const,
+    }
     repo.setRuntimeContributions(
       projectedPropertyDefinitionsFacet,
-      'test-winning-definition',
-      [{
-        metadata: {...winnerMetadata, name: renamed},
-        schema: winner,
-      }],
+      'test-user-status',
+      [{metadata: userMetadata, schema: userSchema}],
+      {workspaceId: WS},
+    )
+    const oldResolution = repo.propertySchemaResolverFor(WS).resolve('user-status')
+    if (oldResolution.status !== 'resolved') throw new Error('expected the user def to resolve')
+
+    const renamed = 'renamed-user-status'
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-user-status',
+      [{metadata: {...userMetadata, name: renamed}, schema: userSchema}],
       {workspaceId: WS},
     )
     await repo.tx(
-      tx => tx.update('target', {properties: {status: 42, [renamed]: 9}}),
+      tx => tx.update('target', {properties: {[renamed]: 9}}),
       {scope: ChangeScope.BlockDefault},
     )
 
@@ -523,7 +547,7 @@ describe('typed property identity boundary', () => {
       tx => tx.setProperty('target', oldResolution.schema, 10),
       {scope: ChangeScope.BlockDefault},
     )
-    expect(repo.block('target').peek()!.properties).toMatchObject({status: 42, [renamed]: 10})
+    expect(repo.block('target').peek()!.properties[renamed]).toBe(10)
   })
 
   it('pins a seed to its declared name, ignoring the row stored name', async () => {
