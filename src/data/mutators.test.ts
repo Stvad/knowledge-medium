@@ -1074,6 +1074,24 @@ describe('core.merge', () => {
     expect(await env.childIds('x')).toEqual(['c'])
   })
 
+  it('treats merging an already-deleted source as a no-op (retry-safe)', async () => {
+    // A re-fired merge (e.g. the alias-collision "Merge into…" flow
+    // retrying, #188) hands in a `from` that the first run already
+    // tombstoned. Empty-content tombstones used to elide every write in
+    // the tx and then abort on emitEvent's workspace-pin requirement
+    // (WorkspaceNotPinnedError). Found by repoMutators.fuzz.
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'a', content: 'keep'})
+    await env.repo.mutate.createChild({parentId: 'p', id: 'b', content: ''})
+    await env.repo.mutate.delete({id: 'b'})
+    await env.repo.mutate.merge({intoId: 'a', fromId: 'b'})
+    expect(env.read('a')!.content).toBe('keep')
+    expect(env.read('b')!.deleted).toBe(true)
+  })
+
   it('rejects merging into a descendant with a typed precondition error, not a raw CycleError (#188)', async () => {
     // ancestor → mid → leaf. Merging the ancestor INTO the leaf would
     // re-home `mid` (an ancestor of leaf) under leaf and trip the cycle
