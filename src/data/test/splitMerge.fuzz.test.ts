@@ -3,7 +3,7 @@
  * Stateful fuzz suite for content conservation across `repo.mutate.split`
  * and `repo.mutate.merge` — see `src/test/fuzz.ts` for the smoke/deep tier
  * mechanics and `docs/fuzzing.md` §6 for the shared-DB interrupt hazard
- * this file also has to guard against (`inFlightCase` barrier below).
+ * this file also has to guard against (`statefulFuzzGuard`, below).
  *
  * ──── Semantics grounding (read from `src/data/mutators.ts` /
  * `src/data/blockMerge.ts` before writing any oracle here) ────
@@ -91,23 +91,19 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
-  BlockNotFoundError,
-  ChangeScope,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  ProcessorRejection,
-  WorkspaceMismatchError,
-} from '@/data/api'
-import { cycleScanSql, SUBTREE_SQL } from '@/data/internals/treeQueries'
+  assertLegalKernelRejection,
+  drain,
+  liveSnapshot,
+  pick,
+  pickNonRoot,
+  sweepStructuralInvariants,
+} from '@/data/test/fuzzKernelHarness'
+import { ChangeScope } from '@/data/api'
+import { SUBTREE_SQL } from '@/data/internals/treeQueries'
 import type { Repo } from '@/data/repo'
 
 const WS = 'ws-1'
@@ -115,12 +111,8 @@ const ROOT = 'root'
 
 const text = fc.string({maxLength: 8})
 
-// ──── shared helpers (subset of repoMutators.fuzz.test.ts's) ────
-
-const pick = (index: number, ids: readonly string[]): string => ids[index % ids.length]
-/** Skips the seed root — see the docblock for why. */
-const pickNonRoot = (index: number, ids: readonly string[]): string =>
-  ids.length === 1 ? ids[0] : ids[1 + (index % (ids.length - 1))]
+// ──── local helpers (see `@/data/test/fuzzKernelHarness` for the shared
+// pick/pickNonRoot/drain/sweep this file uses) ────
 
 const preorderContent = async (db: TestDb['db'], rootId: string): Promise<string> => {
   const rows = await db.getAll<{content: string}>(SUBTREE_SQL, [rootId])
@@ -155,27 +147,14 @@ const isDeleted = async (db: TestDb['db'], id: string): Promise<boolean> => {
 }
 
 /** Minimal structural invariants — cycles, live orphans, order-key
- *  collisions among live siblings. The derived-index mirror sweeps in
- *  repoMutators.fuzz.test.ts aren't included: split/merge never write
- *  non-default properties/references in this file, so those indexes stay
- *  empty throughout and a mirror check would add cost without coverage. */
-const sweepInvariants = async (db: TestDb['db'], ids: readonly string[]): Promise<void> => {
-  const cycles = await db.getAll<{start_id: string}>(cycleScanSql(ids.length), [...ids])
-  expect(cycles, 'structural cycle').toEqual([])
-
-  const orphans = await db.getAll<{id: string}>(
-    `SELECT b.id FROM blocks b
-      WHERE b.deleted = 0 AND b.parent_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM blocks p WHERE p.id = b.parent_id AND p.deleted = 0)`,
-  )
-  expect(orphans, 'live block under missing/deleted parent').toEqual([])
-
-  const collisions = await db.getAll<{parent_id: string | null; order_key: string; n: number}>(
-    `SELECT parent_id, order_key, COUNT(*) AS n FROM blocks
-      WHERE deleted = 0 GROUP BY parent_id, order_key HAVING n > 1`,
-  )
-  expect(collisions, 'order-key collision among live siblings').toEqual([])
-}
+ *  collisions among live siblings, via the shared
+ *  `sweepStructuralInvariants` (`@/data/test/fuzzKernelHarness`). The
+ *  derived-index mirror sweeps in repoMutators.fuzz.test.ts aren't
+ *  included: split/merge never write non-default properties/references
+ *  in this file, so those indexes stay empty throughout and a mirror
+ *  check would add cost without coverage. */
+const sweepInvariants = (db: TestDb['db'], ids: readonly string[]): Promise<void> =>
+  sweepStructuralInvariants(db, {ws: WS, ids})
 
 const seedSpecArb = fc.array(
   fc.record({parent: fc.nat(31), content: text}),
@@ -203,42 +182,16 @@ const seedRoot = async (repo: Repo): Promise<void> => {
   }, {scope: ChangeScope.BlockDefault})
 }
 
-const withPinnedRandom = async <T>(prngSeed: number, fn: () => Promise<T>): Promise<T> => {
-  let lcg = prngSeed
-  const realRandom = Math.random
-  Math.random = () => {
-    lcg = (lcg * 48271) % 2147483647
-    return lcg / 2147483647
-  }
-  try {
-    return await fn()
-  } finally {
-    Math.random = realRandom
-  }
-}
-
-const drain = async (fn: () => Promise<boolean>): Promise<void> => {
-  for (let n = 0; n < 300; n++) {
-    if (!(await fn())) return
-  }
-  throw new Error('undo/redo did not bottom out after 300 steps')
-}
-
-// ──── deep-tier interrupt barrier (docs/fuzzing.md §6) ────
-//
-// Shared across all four properties below: fast-check's
-// `interruptAfterTimeLimit` resolves `fc.assert` WITHOUT awaiting the case
-// currently executing, so an abandoned case can keep writing to `sharedDb`
-// after its `it` block returns — racing the next property's reset/seed
-// (and `afterAll`'s cleanup) unless barriered first.
-let inFlightCase: Promise<void> | null = null
-
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await inFlightCase?.catch(() => {})
+  await guard.barrier()
   await sharedDb.cleanup()
 })
+
+/** Interrupt-barrier + Math.random pin shared across all four properties
+ *  below — see `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). */
+const guard = statefulFuzzGuard()
 
 // ──── property 1: split-then-merge identity ────
 
@@ -249,14 +202,9 @@ const p1CaseArb = fc.record({
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 })
 
-const runP1 = async ({seed, targetIx, offsetSeed, prngSeed}: {
-  seed: Array<{parent: number; content: string}>; targetIx: number; offsetSeed: number; prngSeed: number
+const runP1 = async ({seed, targetIx, offsetSeed}: {
+  seed: Array<{parent: number; content: string}>; targetIx: number; offsetSeed: number
 }): Promise<void> => {
-  // Barrier BEFORE pinning: an interrupted deep-tier case keeps running
-  // after fc.assert resolves, and its finally would restore Math.random
-  // over the pin taken here (Codex review on PR #371).
-  await inFlightCase?.catch(() => {})
-  return withPinnedRandom(prngSeed, async () => {
   const {db} = sharedDb
   await resetTestDb(db)
   const {repo} = createTestRepo({db, user: {id: 'user-1'}})
@@ -296,17 +244,13 @@ const runP1 = async ({seed, targetIx, offsetSeed, prngSeed}: {
   expect(await isDeleted(db, targetId), 'original block tombstoned by merge').toBe(true)
   expect(await childrenIds(db, newId), 'surviving block re-adopts original children in order').toEqual(originalChildren)
   await sweepInvariants(db, ids)
-})
 }
 
 describe('split-then-merge identity', () => {
   it('reconstructs content, count, and children', async () => {
     await fc.assert(
-      fc.asyncProperty(p1CaseArb, async args => {
-        const run = runP1(args)
-        inFlightCase = run
-        await run
-      }),
+      fc.asyncProperty(p1CaseArb, ({seed, targetIx, offsetSeed, prngSeed}) =>
+        guard.run(prngSeed, () => runP1({seed, targetIx, offsetSeed}))),
       fuzzParams(15),
     )
   }, fuzzTestTimeout())
@@ -321,16 +265,10 @@ const p2CaseArb = fc.record({
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 })
 
-const runP2 = async ({seed, ops, prngSeed}: {
+const runP2 = async ({seed, ops}: {
   seed: Array<{parent: number; content: string}>
   ops: Array<{idIx: number; offsetSeed: number}>
-  prngSeed: number
 }): Promise<void> => {
-  // Barrier BEFORE pinning: an interrupted deep-tier case keeps running
-  // after fc.assert resolves, and its finally would restore Math.random
-  // over the pin taken here (Codex review on PR #371).
-  await inFlightCase?.catch(() => {})
-  return withPinnedRandom(prngSeed, async () => {
   const {db} = sharedDb
   await resetTestDb(db)
   const {repo} = createTestRepo({db, user: {id: 'user-1'}})
@@ -363,17 +301,13 @@ const runP2 = async ({seed, ops, prngSeed}: {
 
     await sweepInvariants(db, ids)
   }
-})
 }
 
 describe('split conservation', () => {
   it('conserves whole-tree content and places the new block correctly, over a sequence', async () => {
     await fc.assert(
-      fc.asyncProperty(p2CaseArb, async args => {
-        const run = runP2(args)
-        inFlightCase = run
-        await run
-      }),
+      fc.asyncProperty(p2CaseArb, ({seed, ops, prngSeed}) =>
+        guard.run(prngSeed, () => runP2({seed, ops}))),
       fuzzParams(10),
     )
   }, fuzzTestTimeout())
@@ -386,17 +320,11 @@ const siblingSpecArb = fc.array(
   {minLength: 2, maxLength: 5},
 )
 
-const runP3 = async ({specs, intoIdx, fromIdx, prngSeed}: {
+const runP3 = async ({specs, intoIdx, fromIdx}: {
   specs: Array<{content: string; child: string | undefined}>
   intoIdx: number
   fromIdx: number
-  prngSeed: number
 }): Promise<void> => {
-  // Barrier BEFORE pinning: an interrupted deep-tier case keeps running
-  // after fc.assert resolves, and its finally would restore Math.random
-  // over the pin taken here (Codex review on PR #371).
-  await inFlightCase?.catch(() => {})
-  return withPinnedRandom(prngSeed, async () => {
   const {db} = sharedDb
   await resetTestDb(db)
   const {repo} = createTestRepo({db, user: {id: 'user-1'}})
@@ -439,7 +367,6 @@ const runP3 = async ({specs, intoIdx, fromIdx, prngSeed}: {
     .toBe(allContentBefore)
 
   await sweepInvariants(db, ids)
-})
 }
 
 describe('merge conservation', () => {
@@ -454,11 +381,8 @@ describe('merge conservation', () => {
           }),
         ).filter(({intoIdx, fromIdx}) => intoIdx !== fromIdx),
         fc.integer({min: 1, max: 2 ** 31 - 2}),
-        async ({specs, intoIdx, fromIdx}, prngSeed) => {
-          const run = runP3({specs, intoIdx, fromIdx, prngSeed})
-          inFlightCase = run
-          await run
-        },
+        ({specs, intoIdx, fromIdx}, prngSeed) =>
+          guard.run(prngSeed, () => runP3({specs, intoIdx, fromIdx})),
       ),
       fuzzParams(15),
     )
@@ -482,53 +406,19 @@ const p4CaseArb = fc.record({
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 })
 
-// Domain rejections legal for incoherent split/merge pairs — same
+// Domain rejections legal for incoherent split/merge pairs, via
+// `assertLegalKernelRejection` (`@/data/test/fuzzKernelHarness`) — same
 // allowlist as repoMutators.fuzz.test.ts (this file targets a subset of
 // the same mutator surface, so reuses its proven-correct set rather than
 // re-deriving a narrower one that risks missing a reachable case, e.g.
 // ParentDeletedError once a prior merge tombstones a block a later split
-// still targets).
-const LEGAL_ERRORS = [
-  BlockNotFoundError,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  WorkspaceMismatchError,
-]
+// still targets). `liveSnapshot` (undo/redo oracle) also comes from the
+// harness — byte-identical to what this file used to define locally.
 
-const assertLegalRejection = (e: unknown, opDesc: string): void => {
-  if (LEGAL_ERRORS.some(cls => e instanceof cls)) return
-  if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
-  // Placement anchors resolve by id under the TARGET parent — the one
-  // legal plain-Error rejection (mutators.ts:118/431). Anything else is
-  // a bug (Codex review on PR #371: the previous blanket branch accepted
-  // every plain Error).
-  if (e instanceof Error && /^(position\.(before|after) )?sibling .* not found under /.test(e.message)) return
-  throw new Error(`illegal error from ${opDesc}: ${String(e)}`, {cause: e})
-}
-
-const liveSnapshot = async (db: TestDb['db']): Promise<string> => {
-  const rows = await db.getAll(
-    `SELECT id, parent_id, order_key, content, properties_json, references_json
-       FROM blocks WHERE deleted = 0 ORDER BY id`,
-  )
-  return JSON.stringify(rows)
-}
-
-const runP4 = async ({seed, ops, prngSeed}: {
+const runP4 = async ({seed, ops}: {
   seed: Array<{parent: number; content: string}>
   ops: Op4[]
-  prngSeed: number
 }): Promise<void> => {
-  // Barrier BEFORE pinning: an interrupted deep-tier case keeps running
-  // after fc.assert resolves, and its finally would restore Math.random
-  // over the pin taken here (Codex review on PR #371).
-  await inFlightCase?.catch(() => {})
-  return withPinnedRandom(prngSeed, async () => {
   const {db} = sharedDb
   await resetTestDb(db)
   const {repo} = createTestRepo({db, user: {id: 'user-1'}})
@@ -554,7 +444,7 @@ const runP4 = async ({seed, ops, prngSeed}: {
         await repo.mutate.merge({intoId: pickNonRoot(op.intoIx, ids), fromId: pickNonRoot(op.fromIx, ids)})
       }
     } catch (e) {
-      assertLegalRejection(e, JSON.stringify(op))
+      assertLegalKernelRejection(e, JSON.stringify(op))
     }
     await sweepInvariants(db, ids)
   }
@@ -568,17 +458,13 @@ const runP4 = async ({seed, ops, prngSeed}: {
   await drain(() => repo.redo())
   expect(await liveSnapshot(db), 'redo-all returns to final state').toBe(finalSnap)
   await sweepInvariants(db, ids)
-})
 }
 
 describe('split/merge undo round-trip', () => {
   it('undo-all and redo-all restore exact snapshots', async () => {
     await fc.assert(
-      fc.asyncProperty(p4CaseArb, async args => {
-        const run = runP4(args)
-        inFlightCase = run
-        await run
-      }),
+      fc.asyncProperty(p4CaseArb, ({seed, ops, prngSeed}) =>
+        guard.run(prngSeed, () => runP4({seed, ops}))),
       fuzzParams(10),
     )
   }, fuzzTestTimeout())

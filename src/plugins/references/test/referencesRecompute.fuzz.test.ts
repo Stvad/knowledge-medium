@@ -64,7 +64,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
@@ -299,14 +299,13 @@ const auditOrFail = async (db: TestDb['db'], repo: Repo): Promise<void> => {
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await inFlightCase?.catch(() => {})
+  await guard.barrier()
   await sharedDb.cleanup()
 })
 
-/** fc's `interruptAfterTimeLimit` abandons the executing case without
- *  awaiting it (docs/fuzzing.md §6) — everything after the property
- *  that touches the shared DB barriers on this. */
-let inFlightCase: Promise<void> | null = null
+/** Interrupt-barrier + Math.random pin for the shared DB — see
+ *  `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). */
+const guard = statefulFuzzGuard()
 
 type CaseArgs = {batches: OpSpec[][]; prngSeed: number}
 
@@ -360,20 +359,15 @@ const buildEnv = async (): Promise<Env> => {
   return {repo, flush}
 }
 
-const runCase = async ({batches, prngSeed}: CaseArgs): Promise<void> => {
-  let lcg = prngSeed
-  const realRandom = Math.random
-  Math.random = () => {
-    lcg = (lcg * 48271) % 2147483647
-    return lcg / 2147483647
-  }
+const runCase = async ({batches}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => {
   // Fake timers so the 4s orphan-cleanup delay is drivable in-case and
   // can never leak a live timeout into a later case (cleared below).
   // No `shouldAdvanceTime`: that option auto-advances fake time in step
   // with the wall clock, so the 4s orphan-cleanup timer could fire at a
   // wall-clock-dependent point — weakening exact shrink/replay. `flush`
   // advances fake time explicitly via `advanceTimersByTimeAsync`, which
-  // doesn't need it.
+  // doesn't need it. Installed inside the guarded body so the barrier
+  // (which may await a still-running prior case) precedes it.
   vi.useFakeTimers()
   let env: Env | null = null
   try {
@@ -405,18 +399,14 @@ const runCase = async ({batches, prngSeed}: CaseArgs): Promise<void> => {
     }
     vi.clearAllTimers()
     vi.useRealTimers()
-    Math.random = realRandom
   }
 }
 
 describe('references pipeline sequences', () => {
   it('reach a content/property ↔ references fixpoint the full audit certifies', async () => {
     await fc.assert(
-      fc.asyncProperty(caseArb, async args => {
-        const run = runCase(args)
-        inFlightCase = run
-        await run
-      }),
+      fc.asyncProperty(caseArb, ({batches, prngSeed}) =>
+        guard.run(prngSeed, () => runCase({batches}))),
       fuzzParams(8),
     )
   }, fuzzTestTimeout())
@@ -427,7 +417,7 @@ describe('references pipeline sequences', () => {
   // rewriting, delete inlining, and orphan cleanup all observably fire
   // under the harness (fake timers + flush) this suite uses.
   it('op set drives every pipeline stage', async () => {
-    await inFlightCase?.catch(() => {})
+    await guard.barrier()
     vi.useFakeTimers({shouldAdvanceTime: true})
     try {
       const env = await buildEnv()

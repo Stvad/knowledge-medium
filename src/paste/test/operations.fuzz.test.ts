@@ -68,6 +68,7 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
+import { lineFragmentArb } from '@/test/arbitraries/markdownSoup'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser'
 import {
   pasteChordIntent,
@@ -77,24 +78,12 @@ import {
 } from '../operations'
 
 // ──── Shared pasted-text generator: line soup incl. bullets/headers/fences,
-// mixed line endings, unicode, blank/empty — adapted from the corpus in
-// `src/utils/test/markdownParser.fuzz.test.ts` (not imported: that file's
-// generators aren't exported). ────
-
-const indentArb = fc.integer({min: 0, max: 6}).map(n => ' '.repeat(n))
-const bulletMarkerArb = fc.constantFrom('- ', '* ', '+ ')
-const headerMarkerArb = fc.integer({min: 1, max: 6}).map(n => '#'.repeat(n) + ' ')
-const fenceMarkerArb = fc.constantFrom('```', '~~~', '````')
-const wordArb = fc.oneof(fc.string({maxLength: 8}), fc.string({maxLength: 8, unit: 'grapheme-composite'}))
-
-const lineFragmentArb = fc.oneof(
-  {arbitrary: fc.constant(''), weight: 2}, // blank line
-  {arbitrary: fc.tuple(indentArb, bulletMarkerArb, wordArb).map(([i, m, w]) => i + m + w), weight: 3},
-  {arbitrary: fc.tuple(indentArb, headerMarkerArb, wordArb).map(([i, m, w]) => i + m + w), weight: 2},
-  {arbitrary: fc.tuple(indentArb, fenceMarkerArb, wordArb).map(([i, f, w]) => i + f + w), weight: 1},
-  {arbitrary: fc.tuple(indentArb, wordArb).map(([i, w]) => i + w), weight: 3},
-  {arbitrary: fc.string({maxLength: 15}), weight: 2}, // unconstrained, may embed \r/\n/control chars
-)
+// mixed line endings, unicode, blank/empty. Fragment-level generators
+// (indentArb/bulletMarkerArb/headerMarkerArb/fenceMarkerArb/wordArb/
+// lineFragmentArb) live in `src/test/arbitraries/markdownSoup.ts`, shared
+// with `markdownParser.fuzz.test.ts` — see that module's docblock for why
+// sharing the corpus is a coverage feature, not just dedup. Mixed line
+// endings (below) is this suite's own top-level composition. ────
 
 const lineEndingArb = fc.constantFrom('\n', '\r\n', '\r')
 

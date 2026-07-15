@@ -75,3 +75,75 @@ export const fuzzParams = <T>(smokeRuns: number): fc.Parameters<T> => {
     interruptAfterTimeLimit: timeMs,
   }
 }
+
+/**
+ * Seeded-LCG pin over `Math.random`, try/finally restored. The only
+ * nondeterminism most stateful suites' target code has (order-key jitter
+ * via `fractional-indexing-jittered`) — pinning it makes fast-check's
+ * shrinking and seed replay sound. Same constants (48271 / 2147483647)
+ * every suite has hand-rolled; kept here so replays of pre-existing
+ * seeds produce the identical sequence.
+ */
+export const withPinnedRandom = async <T>(seed: number, fn: () => Promise<T>): Promise<T> => {
+  let lcg = seed
+  const realRandom = Math.random
+  Math.random = () => {
+    lcg = (lcg * 48271) % 2147483647
+    return lcg / 2147483647
+  }
+  try {
+    return await fn()
+  } finally {
+    Math.random = realRandom
+  }
+}
+
+/**
+ * Interrupt-barrier + pin for a stateful fuzz suite sharing mutable state
+ * (a DB, patched `Math.random`) across fast-check cases — see
+ * docs/fuzzing.md §6. fast-check's `interruptAfterTimeLimit` resolves
+ * `fc.assert` WITHOUT awaiting the case currently executing, so an
+ * abandoned case can keep running — and writing to the shared state —
+ * after the property (or even the whole file) "finishes".
+ *
+ * Two structural guarantees this owns so suites don't have to re-derive
+ * them per file:
+ *  - barrier-before-pin: `run()` always awaits the previous in-flight
+ *    case BEFORE pinning `Math.random` for the new one, so an abandoned
+ *    case's `finally` (which restores `Math.random`) can never land
+ *    after — and clobber — the next case's pin. This matters even
+ *    within a single suite whenever more than one property or a
+ *    non-property test can touch the shared state (multiple `fc.assert`
+ *    properties in one file; a canary `it` after the fuzzed one).
+ *  - last-case leak: a suite's `afterAll` must call `guard.barrier()` so
+ *    an interrupted FINAL case can't leave `Math.random` patched (or
+ *    still writing to a shared DB) after the file's tests finish.
+ *
+ * `seed: null` skips the pin (for cases with no nondeterminism to pin —
+ * e.g. a suite with no DB/order-key jitter in its op set); the barrier
+ * still applies.
+ */
+export const statefulFuzzGuard = (): {
+  barrier: () => Promise<void>
+  run: <T>(seed: number | null, body: () => Promise<T>) => Promise<T>
+} => {
+  let inFlightCase: Promise<unknown> | null = null
+  const barrier = async (): Promise<void> => {
+    await inFlightCase?.catch(() => {})
+  }
+  const run = <T>(seed: number | null, body: () => Promise<T>): Promise<T> => {
+    // Register the new case SYNCHRONOUSLY, with the previous-case wait
+    // folded inside it: if this case is itself abandoned while still
+    // waiting on its predecessor, a later `barrier()` must await it too —
+    // registering only after the wait would let it slip past the barrier
+    // and resume against shared state during cleanup.
+    const prev = inFlightCase
+    const casePromise = (async () => {
+      await prev?.catch(() => {})
+      return seed === null ? body() : withPinnedRandom(seed, body)
+    })()
+    inFlightCase = casePromise
+    return casePromise
+  }
+  return {barrier, run}
+}

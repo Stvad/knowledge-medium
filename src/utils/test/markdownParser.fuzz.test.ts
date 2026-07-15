@@ -39,40 +39,17 @@
 import { describe, it, expect } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
+import { lineFragmentArb } from '@/test/arbitraries/markdownSoup'
 import { parseMarkdownToBlocks, type ParsedBlock } from '../markdownParser'
 
 // ──── Property 1: never throws + valid forest on adversarial soup ────
-
-const indentSpacesArb = fc.integer({min: 0, max: 8}).map(n => ' '.repeat(n))
-const indentTabsArb = fc.integer({min: 0, max: 3}).map(n => '\t'.repeat(n))
-const indentArb = fc.oneof(indentSpacesArb, indentTabsArb)
-
-const bulletMarkerArb = fc.constantFrom('- ', '* ', '+ ')
-const headerMarkerArb = fc.integer({min: 1, max: 6}).map(n => '#'.repeat(n) + ' ')
-const fenceMarkerArb = fc.constantFrom('```', '~~~', '````', '~~~~~')
-const wordArb = fc.string({maxLength: 8})
-
-// Line fragments biased toward the grammar's meta tokens (indentation,
-// bullets, headers, fences), plus a slice of totally unconstrained
-// strings (may themselves embed \n / control chars / tabs) so the corpus
-// isn't limited to "one arbitrary token per line".
-const lineFragmentArb = fc.oneof(
-  {arbitrary: fc.constant(''), weight: 2}, // empty line
-  {
-    arbitrary: fc.tuple(indentArb, bulletMarkerArb, wordArb).map(([i, m, w]) => i + m + w),
-    weight: 3,
-  },
-  {
-    arbitrary: fc.tuple(indentArb, headerMarkerArb, wordArb).map(([i, m, w]) => i + m + w),
-    weight: 2,
-  },
-  {
-    arbitrary: fc.tuple(indentArb, fenceMarkerArb, wordArb).map(([i, f, w]) => i + f + w),
-    weight: 2,
-  },
-  {arbitrary: fc.tuple(indentArb, wordArb).map(([i, w]) => i + w), weight: 3},
-  {arbitrary: fc.string({maxLength: 15}), weight: 2}, // totally random string
-)
+//
+// Fragment-level generators (indentArb/bulletMarkerArb/headerMarkerArb/
+// fenceMarkerArb/wordArb/lineFragmentArb) live in
+// `src/test/arbitraries/markdownSoup.ts`, shared with
+// `operations.fuzz.test.ts` — see that module's docblock for why sharing
+// the corpus is a coverage feature, not just dedup. Composing fragments
+// into a document (below) is this suite's own concern.
 
 const soupArb = fc.array(lineFragmentArb, {maxLength: 15}).map(lines => lines.join('\n'))
 

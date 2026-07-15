@@ -61,25 +61,13 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import {
-  BlockNotFoundError,
-  ChangeScope,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  ParentWorkspaceMismatchError,
-  ProcessorRejection,
-  WorkspaceMismatchError,
-} from '@/data/api'
+import { assertLegalKernelRejection, drain, sweepStructuralInvariants } from '@/data/test/fuzzKernelHarness'
+import { ChangeScope } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
-import { cycleScanSql, SUBTREE_SQL } from '@/data/internals/treeQueries'
+import { SUBTREE_SQL } from '@/data/internals/treeQueries'
 import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
 import type { Repo } from '@/data/repo'
 
@@ -170,9 +158,10 @@ const caseArb = fc.record({
 })
 
 // Domain rejections the mutator surface throws for incoherent op
-// combinations — legal fuzz outcomes. A plain `Error` (exactly, not a
-// subclass like TypeError) is also accepted as a message-carrying
-// domain rejection; anything else fails the property.
+// combinations — legal fuzz outcomes, checked via
+// `assertLegalKernelRejection` (`@/data/test/fuzzKernelHarness`), which
+// includes `ParentWorkspaceMismatchError` in its union specifically for
+// this suite's two-workspace universe.
 //
 // WorkspaceMismatchError / ParentWorkspaceMismatchError are reachable
 // now that a second workspace (ws-2) is seeded and op args occasionally
@@ -184,39 +173,6 @@ const caseArb = fc.record({
 // tx pins on `delete(from)`'s workspace, then `update(into)` mismatches)
 // — see `checkWorkspace` / `requireParentInWorkspace` in
 // `src/data/internals/txEngine.ts`.
-const LEGAL_ERRORS = [
-  BlockNotFoundError,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  ParentWorkspaceMismatchError,
-  WorkspaceMismatchError,
-]
-
-const assertLegalRejection = (e: unknown, op: OpSpec): void => {
-  if (LEGAL_ERRORS.some(cls => e instanceof cls)) return
-  // Claiming an alias another live block owns is a legal user-facing
-  // rejection (block_aliases_workspace_alias_unique). Only that code —
-  // any other ProcessorRejection from the kernel-only runtime is a bug.
-  if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
-  // Placement anchors resolve by id under the TARGET parent: an op whose
-  // anchor sibling lives elsewhere (including in the other workspace) is
-  // a legal incoherent-op rejection — mutators.ts throws plain Error for
-  // it (mutators.ts:118 for `position.before/after`, used by
-  // createChild/move/createSibling*/insertChildren's shared
-  // `orderKeyForInsert` helper, and mutators.ts:431 for insertChildren's
-  // own anchor lookup — NOT split; split's `ix < 0` case silently falls
-  // back to `keyBetween(null, self.orderKey)` around mutators.ts:741-743
-  // rather than throwing). Only these exact messages — any other plain
-  // Error is a bug (Codex review on PR #371: the previous
-  // `e.constructor === Error` branch accepted them all).
-  if (e instanceof Error && /^(position\.(before|after) )?sibling .* not found under /.test(e.message)) return
-  throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
-}
 
 // ──── execution ────
 
@@ -453,28 +409,21 @@ const sweepSubtreeForWorkspace = async (
   expect(subtree.map(r => ({id: r.id, depth: r.depth})), `SUBTREE_SQL vs JS walk (${workspaceId})`).toEqual(expected)
 }
 
-const sweepInvariants = async (db: TestDb['db'], ids: readonly string[]): Promise<void> => {
-  const cycles = await db.getAll<{start_id: string}>(cycleScanSql(ids.length), [...ids])
-  expect(cycles, 'structural cycle').toEqual([])
-
-  const orphans = await db.getAll<{id: string}>(
-    `SELECT b.id FROM blocks b
-      WHERE b.deleted = 0 AND b.parent_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM blocks p WHERE p.id = b.parent_id AND p.deleted = 0)`,
-  )
-  expect(orphans, 'live block under missing/deleted parent').toEqual([])
-
-  // Grouped by (workspace_id, parent_id, order_key): for any non-root
-  // block workspace_id is already implied by parent_id (children share
-  // their live parent's workspace, enforced by
-  // ParentWorkspaceMismatchError), so this only matters at the root
-  // level — where BOTH seeded workspace roots share parent_id = NULL
-  // and would otherwise look like colliding siblings of each other.
-  const collisions = await db.getAll<{workspace_id: string; parent_id: string | null; order_key: string; n: number}>(
-    `SELECT workspace_id, parent_id, order_key, COUNT(*) AS n FROM blocks
-      WHERE deleted = 0 GROUP BY workspace_id, parent_id, order_key HAVING n > 1`,
-  )
-  expect(collisions, 'order-key collision among live siblings').toEqual([])
+/** Cycles/orphans/collisions come from the shared
+ *  `sweepStructuralInvariants` (`@/data/test/fuzzKernelHarness`), called
+ *  once per seeded workspace — scoping the collision check to one
+ *  workspace at a time sidesteps the cross-workspace-root false positive
+ *  the old combined `(workspace_id, parent_id, order_key)` grouping
+ *  worked around, and splitting the cycle scan's `ids` by pool doesn't
+ *  lose detection power (a cycle reachable from any known id is still
+ *  found from whichever call includes that id — the recursive walk
+ *  isn't itself workspace-scoped). The rest — the "outside the seeded
+ *  workspaces" allowlist check, the SUBTREE_SQL differential, and the
+ *  derived-index mirrors — stays local (see the harness's own docblock
+ *  for why the allowlist check doesn't fold into the shared `ws` param). */
+const sweepInvariants = async (db: TestDb['db'], pools: IdPools): Promise<void> => {
+  await sweepStructuralInvariants(db, {ws: WS, ids: pools[0]})
+  await sweepStructuralInvariants(db, {ws: WS2, ids: pools[1]})
 
   const foreign = await db.getAll<{id: string}>(
     'SELECT id FROM blocks WHERE workspace_id NOT IN (?, ?)', [WS, WS2],
@@ -549,13 +498,6 @@ const expectUndoneToSeed = async (db: TestDb['db'], seedRows: readonly SnapRow[]
   }
 }
 
-const drain = async (fn: () => Promise<boolean>): Promise<number> => {
-  for (let n = 0; n < 300; n++) {
-    if (!(await fn())) return n
-  }
-  throw new Error('undo/redo did not bottom out after 300 steps')
-}
-
 /** Undo (or redo) is per-workspace by product design (issue #186):
  *  `repo.undo()`/`repo.redo()` only ever act on the ACTIVE workspace's
  *  manager. A tx pinned to ws-2 records into ws-2's own manager, so
@@ -573,97 +515,76 @@ const drainAllWorkspaces = async (repo: Repo, direction: 'undo' | 'redo'): Promi
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await inFlightCase?.catch(() => {})
+  await guard.barrier()
   await sharedDb.cleanup()
 })
 
-/** Deep-tier hazard: fast-check's `interruptAfterTimeLimit` resolves
- *  `fc.assert` WITHOUT awaiting the case that's currently executing
- *  (verified empirically — the abandoned case keeps running and writing
- *  to the shared DB afterwards). Anything that touches the DB after the
- *  property — later tests in this file, `afterAll` cleanup — must
- *  barrier on this first. The abandoned case's own verdict is
- *  deliberately discarded (that's what interrupt means), hence the
- *  swallowed rejection. */
-let inFlightCase: Promise<void> | null = null
+/** Interrupt-barrier + Math.random pin for the shared DB — see
+ *  `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). */
+const guard = statefulFuzzGuard()
 
-type CaseArgs = {ops: OpSpec[]; withUndoRedo: boolean; prngSeed: number}
+type CaseArgs = {ops: OpSpec[]; withUndoRedo: boolean}
 
-const runCase = async ({ops, withUndoRedo, prngSeed}: CaseArgs): Promise<void> => {
-  // Seeded LCG over Math.random: the only nondeterminism in the
-  // stack is order-key jitter; pinning it makes shrink/replay sound.
-  let lcg = prngSeed
-  const realRandom = Math.random
-  Math.random = () => {
-    lcg = (lcg * 48271) % 2147483647
-    return lcg / 2147483647
+const runCase = async ({ops, withUndoRedo}: CaseArgs): Promise<void> => {
+  await resetTestDb(sharedDb.db)
+  const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
+  repo.setActiveWorkspaceId(WS)
+  await repo.tx(async tx => {
+    await tx.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0'})
+  }, {scope: ChangeScope.BlockDefault})
+  // Separate tx: each tx pins to the workspace of its first write, so
+  // seeding both roots in one tx would itself throw
+  // WorkspaceMismatchError.
+  await repo.tx(async tx => {
+    await tx.create({id: ROOT2, workspaceId: WS2, parentId: null, orderKey: 'a0'})
+  }, {scope: ChangeScope.BlockDefault})
+  // The seed txs record their own undo entries — ONE PER WORKSPACE
+  // (each tx's undo entry lands in the manager for the workspace it
+  // pinned to, not the "active" one) — so both must be dropped
+  // explicitly; `repo.undoManager` alone only resolves to the
+  // active workspace's manager and would leave ws-2's seed entry
+  // sitting in its stack, which `drainAllWorkspaces` would then
+  // undo PAST the seed state (deleting ROOT2 itself).
+  repo.undoManagerFor(WS).clear()
+  repo.undoManagerFor(WS2).clear()
+
+  const seedRows = await fullSnapshotRows(sharedDb.db)
+  const pools: [string[], string[]] = [[ROOT], [ROOT2]]
+  let ranUndoRedo = false
+  for (const op of ops) {
+    if ((op.op === 'undo' || op.op === 'redo') && !withUndoRedo) continue
+    if (op.op === 'undo' || op.op === 'redo') ranUndoRedo = true
+    try {
+      const created = await applyOp(repo, op, pools)
+      for (const {id, pool} of created) pools[pool].push(id)
+    } catch (e) {
+      assertLegalKernelRejection(e, JSON.stringify(op))
+    }
+    await sweepInvariants(sharedDb.db, pools)
   }
-  try {
-          await resetTestDb(sharedDb.db)
-          const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
-          repo.setActiveWorkspaceId(WS)
-          await repo.tx(async tx => {
-            await tx.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0'})
-          }, {scope: ChangeScope.BlockDefault})
-          // Separate tx: each tx pins to the workspace of its first write, so
-          // seeding both roots in one tx would itself throw
-          // WorkspaceMismatchError.
-          await repo.tx(async tx => {
-            await tx.create({id: ROOT2, workspaceId: WS2, parentId: null, orderKey: 'a0'})
-          }, {scope: ChangeScope.BlockDefault})
-          // The seed txs record their own undo entries — ONE PER WORKSPACE
-          // (each tx's undo entry lands in the manager for the workspace it
-          // pinned to, not the "active" one) — so both must be dropped
-          // explicitly; `repo.undoManager` alone only resolves to the
-          // active workspace's manager and would leave ws-2's seed entry
-          // sitting in its stack, which `drainAllWorkspaces` would then
-          // undo PAST the seed state (deleting ROOT2 itself).
-          repo.undoManagerFor(WS).clear()
-          repo.undoManagerFor(WS2).clear()
 
-          const seedRows = await fullSnapshotRows(sharedDb.db)
-          const pools: [string[], string[]] = [[ROOT], [ROOT2]]
-          let ranUndoRedo = false
-          for (const op of ops) {
-            if ((op.op === 'undo' || op.op === 'redo') && !withUndoRedo) continue
-            if (op.op === 'undo' || op.op === 'redo') ranUndoRedo = true
-            try {
-              const created = await applyOp(repo, op, pools)
-              for (const {id, pool} of created) pools[pool].push(id)
-            } catch (e) {
-              assertLegalRejection(e, op)
-            }
-            await sweepInvariants(sharedDb.db, [...pools[0], ...pools[1]])
-          }
+  const finalSnap = await fullSnapshot(sharedDb.db)
+  await drainAllWorkspaces(repo, 'undo')
+  await expectUndoneToSeed(sharedDb.db, seedRows)
+  await sweepInvariants(sharedDb.db, pools)
 
-          const finalSnap = await fullSnapshot(sharedDb.db)
-          await drainAllWorkspaces(repo, 'undo')
-          await expectUndoneToSeed(sharedDb.db, seedRows)
-          await sweepInvariants(sharedDb.db, [...pools[0], ...pools[1]])
-
-          await drainAllWorkspaces(repo, 'redo')
-          if (!ranUndoRedo) {
-            expect(await fullSnapshot(sharedDb.db), 'redo-all returns to final state').toBe(finalSnap)
-          }
-          await sweepInvariants(sharedDb.db, [...pools[0], ...pools[1]])
-
-          const auditWs1 = await runConsistencyAudit(sharedDb.db, WS, 0)
-          expect(auditWs1.anomalies, `consistency audit (${WS}): ${JSON.stringify(auditWs1.checks)}`).toBe(0)
-          const auditWs2 = await runConsistencyAudit(sharedDb.db, WS2, 0)
-          expect(auditWs2.anomalies, `consistency audit (${WS2}): ${JSON.stringify(auditWs2.checks)}`).toBe(0)
-  } finally {
-    Math.random = realRandom
+  await drainAllWorkspaces(repo, 'redo')
+  if (!ranUndoRedo) {
+    expect(await fullSnapshot(sharedDb.db), 'redo-all returns to final state').toBe(finalSnap)
   }
+  await sweepInvariants(sharedDb.db, pools)
+
+  const auditWs1 = await runConsistencyAudit(sharedDb.db, WS, 0)
+  expect(auditWs1.anomalies, `consistency audit (${WS}): ${JSON.stringify(auditWs1.checks)}`).toBe(0)
+  const auditWs2 = await runConsistencyAudit(sharedDb.db, WS2, 0)
+  expect(auditWs2.anomalies, `consistency audit (${WS2}): ${JSON.stringify(auditWs2.checks)}`).toBe(0)
 }
 
 describe('kernel mutator sequences', () => {
   it('preserve structural invariants and undo/redo round-trips', async () => {
     await fc.assert(
-      fc.asyncProperty(caseArb, async args => {
-        const run = runCase(args)
-        inFlightCase = run
-        await run
-      }),
+      fc.asyncProperty(caseArb, ({ops, withUndoRedo, prngSeed}) =>
+        guard.run(prngSeed, () => runCase({ops, withUndoRedo}))),
       fuzzParams(10),
     )
   }, fuzzTestTimeout())
@@ -674,11 +595,7 @@ describe('kernel mutator sequences', () => {
   // references_json — this pins each index non-empty under a crafted
   // sequence so that failure mode can't silently return.
   it('op set populates every trigger-maintained derived index', async () => {
-    // Barrier against a deep-tier interrupt's abandoned case — see the
-    // inFlightCase docblock. Without this, that case's writes race this
-    // test's reset/seed on the shared DB (observed as DuplicateIdError on
-    // the seed root and phantom rows in the subtree sweep).
-    await inFlightCase?.catch(() => {})
+    await guard.barrier()
     await resetTestDb(sharedDb.db)
     const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
     repo.setActiveWorkspaceId(WS)
@@ -701,6 +618,6 @@ describe('kernel mutator sequences', () => {
       const rows = await sharedDb.db.getAll<{n: number}>(`SELECT COUNT(*) AS n FROM ${table}`)
       expect(rows[0].n, `${table} populated by the op set`).toBeGreaterThan(0)
     }
-    await sweepInvariants(sharedDb.db, [...pools[0], ...pools[1]])
+    await sweepInvariants(sharedDb.db, pools)
   })
 })

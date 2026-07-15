@@ -56,14 +56,15 @@
  *    every pool declaration to its deterministic field id (the stateful
  *    layer must land in states the resolver layer accepts).
  *
- * Shared-DB discipline: each case resets the shared DB; the module-level
- * `inFlightCase` barrier (docs/fuzzing.md §6) protects later tests/cleanup
- * from a deep-tier interrupt's abandoned case.
+ * Shared-DB discipline: each case resets the shared DB; `statefulFuzzGuard`
+ * (`@/test/fuzz`, docs/fuzzing.md §6) protects later tests/cleanup from a
+ * deep-tier interrupt's abandoned case.
  */
 import {afterAll, beforeAll, describe, expect, it} from 'vitest'
 import fc from 'fast-check'
-import {fuzzParams, fuzzTestTimeout} from '@/test/fuzz'
+import {fuzzParams, fuzzTestTimeout, statefulFuzzGuard} from '@/test/fuzz'
 import {ChangeScope, SeededDefinitionWriteError} from '@/data/api'
+import {parseBlockRow, type BlockRow} from '@/data/blockSchema'
 import {
   canonicalPropertySeedProperties,
   materializePropertySeeds,
@@ -78,7 +79,7 @@ import {seedProperty, type AnyPropertySeedDeclaration} from '@/data/propertySeed
 import {createTestDb, resetTestDb, type TestDb} from '@/data/test/createTestDb'
 import {createTestRepo} from '@/data/test/createTestRepo'
 import type {Repo} from '@/data/repo'
-import type {BlockData, PropertyHandle} from '@/data/api'
+import type {PropertyHandle} from '@/data/api'
 
 const WS = 'ws-seed-fuzz'
 
@@ -200,14 +201,15 @@ const verifyModel = async (db: TestDb['db'], model: readonly SeedModel[]): Promi
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await inFlightCase?.catch(() => {})
+  await guard.barrier()
   await sharedDb.cleanup()
 })
 
-/** See docs/fuzzing.md §6 — the deep tier's `interruptAfterTimeLimit`
- * abandons the executing case without awaiting it; everything that touches
- * the shared DB afterwards must barrier on this. */
-let inFlightCase: Promise<void> | null = null
+/** Interrupt-barrier for the shared DB — see `statefulFuzzGuard`
+ * (`@/test/fuzz`, docs/fuzzing.md §6). This suite has no order-key
+ * jitter to pin (every op resolves ids via `IDS`/`POOL` indices, not
+ * fractional-indexing placement), so it always calls `guard.run(null, …)`. */
+const guard = statefulFuzzGuard()
 
 const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
   await resetTestDb(sharedDb.db)
@@ -511,29 +513,9 @@ const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
   // propertyDefinitionRegistry.fuzz.test.ts).
   const projected = new Map<string, ProjectedPropertyDefinition>()
   for (const id of IDS) {
-    const row = await sharedDb.db.getOptional<{
-      id: string; workspace_id: string; parent_id: string | null; order_key: string
-      content: string; properties_json: string; references_json: string
-      created_at: number; updated_at: number; user_updated_at: number
-      created_by: string; updated_by: string; deleted: number
-    }>('SELECT * FROM blocks WHERE id = ?', [id])
+    const row = await sharedDb.db.getOptional<BlockRow>('SELECT * FROM blocks WHERE id = ?', [id])
     if (!row) continue
-    const data: BlockData = {
-      id: row.id,
-      workspaceId: row.workspace_id,
-      parentId: row.parent_id,
-      orderKey: row.order_key,
-      content: row.content,
-      properties: JSON.parse(row.properties_json) as Record<string, unknown>,
-      references: JSON.parse(row.references_json) as BlockData['references'],
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      userUpdatedAt: row.user_updated_at,
-      createdBy: row.created_by,
-      updatedBy: row.updated_by,
-      deleted: row.deleted === 1,
-    }
-    const metadata = parsePropertyDefinitionMetadata(data)
+    const metadata = parsePropertyDefinitionMetadata(parseBlockRow(row))
     if (metadata) projected.set(metadata.fieldId, {metadata})
   }
   const snapshot = buildPropertyDefinitionRegistry({
@@ -553,11 +535,7 @@ const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
 describe('seed materialization + write-guard interleavings', () => {
   it('keep materialized definition bags code-owned under any op order', async () => {
     await fc.assert(
-      fc.asyncProperty(opsArb, async ops => {
-        const run = runCase(ops)
-        inFlightCase = run
-        await run
-      }),
+      fc.asyncProperty(opsArb, ops => guard.run(null, () => runCase(ops))),
       fuzzParams(8),
     )
   }, fuzzTestTimeout())
@@ -569,7 +547,7 @@ describe('seed materialization + write-guard interleavings', () => {
   // one legal structural op for both `repo.mutate.delete` (subtree) and
   // `repo.mutate.merge` (both merge directions).
   it('op set reaches create, reject, tombstone, restore, poison-abort, and structural reject/accept', async () => {
-    await inFlightCase?.catch(() => {})
+    await guard.barrier()
     await runCase([
       {op: 'forgeCreate', idx: 0},
       {op: 'materialize', mask: [0, 1]},

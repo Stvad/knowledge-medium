@@ -76,7 +76,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
@@ -360,16 +360,13 @@ const settleAndVerify = async (handles: readonly Handle<unknown>[], probes: read
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await inFlightCase?.catch(() => {})
+  await guard.barrier()
   await sharedDb.cleanup()
 })
 
-/** Deep-tier hazard: fast-check's `interruptAfterTimeLimit` resolves
- *  `fc.assert` WITHOUT awaiting the case that's currently executing — see
- *  docs/fuzzing.md §6 and repoMutators.fuzz.test.ts's `inFlightCase`
- *  docblock. This suite shares `sharedDb.db` across cases the same way,
- *  so it needs the identical barrier. */
-let inFlightCase: Promise<void> | null = null
+/** Interrupt-barrier + Math.random pin for the shared DB — see
+ *  `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). */
+const guard = statefulFuzzGuard()
 
 type CaseArgs = {ops: OpSpec[]; probeTargets: number[]; prngSeed: number}
 
@@ -384,16 +381,7 @@ const caseArb = fc.record({
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 })
 
-const runCase = async ({ops, probeTargets, prngSeed}: CaseArgs): Promise<void> => {
-  // Seeded LCG over Math.random — order-key jitter is the only other
-  // nondeterminism in the mutator stack; pinning it keeps shrink/replay
-  // sound (see repoMutators.fuzz.test.ts).
-  let lcg = prngSeed
-  const realRandom = Math.random
-  Math.random = () => {
-    lcg = (lcg * 48271) % 2147483647
-    return lcg / 2147483647
-  }
+const runCase = async ({ops, probeTargets}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => {
   const unsubs: Array<() => void> = []
   try {
     await resetTestDb(sharedDb.db)
@@ -429,18 +417,14 @@ const runCase = async ({ops, probeTargets, prngSeed}: CaseArgs): Promise<void> =
     await settleAndVerify(handles, probes)
   } finally {
     for (const unsub of unsubs) unsub()
-    Math.random = realRandom
   }
 }
 
 describe('query handle soundness', () => {
   it('every subscribed handle converges to an independent fresh read after a mutation sequence', async () => {
     await fc.assert(
-      fc.asyncProperty(caseArb, async args => {
-        const run = runCase(args)
-        inFlightCase = run
-        await run
-      }),
+      fc.asyncProperty(caseArb, ({ops, probeTargets, prngSeed}) =>
+        guard.run(prngSeed, () => runCase({ops, probeTargets}))),
       fuzzParams(8),
     )
   }, fuzzTestTimeout())
@@ -457,7 +441,7 @@ describe('query handle soundness', () => {
   // dependency axis is already touched by one of them (documented
   // inline below).
   it('every probed query value provably changes across a deterministic sequence', async () => {
-    await inFlightCase?.catch(() => {})
+    await guard.barrier()
     await resetTestDb(sharedDb.db)
     const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'user-1'}})
     repo.setActiveWorkspaceId(WS)

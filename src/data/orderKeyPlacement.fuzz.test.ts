@@ -35,14 +35,14 @@
  *
  * The underlying key generator (`fractional-indexing-jittered`, wrapped by
  * `orderKey.ts`) draws on `Math.random` for jitter — the only nondeterminism
- * in this stack — so it's pinned via the same seeded-LCG try/finally pattern
- * as `runCase` in `repoMutators.fuzz.test.ts`, making fast-check's
- * shrink/seed-replay sound.
+ * in this stack — so it's pinned per case via `statefulFuzzGuard`
+ * (`@/test/fuzz`), making fast-check's shrink/seed-replay sound.
  */
 import { afterAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, statefulFuzzGuard } from '@/test/fuzz'
 import type { BlockData, Tx } from '@/data/api'
+import { makeBlockData } from '@/data/test/factories'
 import { keysImmediatelyAfter, keysImmediatelyBefore } from './orderKeyPlacement'
 import { keyBetween } from './orderKey'
 
@@ -65,21 +65,12 @@ const makeFakeTx = (moves: RecordedMove[]): Tx => ({
 
 // ──── sibling model ────
 
-const mkSibling = (id: string, parentId: string | null, orderKey: string): BlockData => ({
-  id,
-  workspaceId: 'ws',
-  parentId,
-  orderKey,
-  content: '',
-  properties: {},
-  references: [],
-  createdAt: 0,
-  updatedAt: 0,
-  userUpdatedAt: 0,
-  createdBy: 'u',
-  updatedBy: 'u',
-  deleted: false,
-})
+// Deliberate overrides vs the factory defaults: workspaceId 'ws' (factory
+// requires it explicitly anyway) and createdBy/updatedBy 'u' (factory
+// defaults to 'test-user') — this suite doesn't care about the actor id,
+// just keeps it short and distinct from block ids in failure output.
+const mkSibling = (id: string, parentId: string | null, orderKey: string): BlockData =>
+  makeBlockData({id, workspaceId: 'ws', parentId, orderKey, createdBy: 'u', updatedBy: 'u'})
 
 /** Builds a sibling list as a sequence of "buckets", each sharing one REAL
  *  fractional-indexing key (so `keysBetween`'s internal arithmetic — called
@@ -115,22 +106,6 @@ const caseArb = fc.record({
   parentId: fc.constantFrom(null, 'parent-a'),
   prngSeed: fc.integer({min: 1, max: 2147483646}),
 })
-
-/** Seeded LCG over `Math.random` — same recipe as the pinned-LCG pattern
- *  in `runCase`, repoMutators.fuzz.test.ts. */
-const withPinnedRandom = async <T>(seed: number, fn: () => Promise<T>): Promise<T> => {
-  let lcg = seed
-  const realRandom = Math.random
-  Math.random = () => {
-    lcg = (lcg * 48271) % 2147483647
-    return lcg / 2147483647
-  }
-  try {
-    return await fn()
-  } finally {
-    Math.random = realRandom
-  }
-}
 
 /** `(order_key, id)` order — orderKey.ts backs every key with plain base62
  *  strings compared via plain `<`/`>` (orderKey.test.ts's assertions all
@@ -223,50 +198,39 @@ const checkOracles = (
   }
 }
 
-/** Deep-tier interrupt barrier (docs/fuzzing.md §6): fast-check's
- * `interruptAfterTimeLimit` resolves `fc.assert` without awaiting the
- * executing case. The shared state here is global `Math.random` — an
- * abandoned case's `finally` would restore it over the next property's
- * pin, breaking seeded replay (Codex review on PR #371). Each case
- * records itself and barriers before pinning. */
-let inFlightCase: Promise<void> | null = null
-
-// The LAST property has no subsequent pre-case barrier, so an
-// interrupted final case could leave Math.random patched while vitest
-// moves on within the worker (Codex review on PR #371).
-afterAll(async () => { await inFlightCase?.catch(() => {}) })
+/** Interrupt-barrier + Math.random pin, shared across both properties
+ *  below — see `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6).
+ *  The shared state here is global `Math.random` (no DB), but the
+ *  barrier-before-pin ordering matters just the same: an abandoned
+ *  case's `finally` would otherwise restore it over the next property's
+ *  pin, breaking seeded replay. `afterAll` covers the LAST property's
+ *  final case, which has no subsequent pre-case barrier of its own. */
+const guard = statefulFuzzGuard()
+afterAll(async () => { await guard.barrier() })
 
 describe('orderKeyPlacement fuzz', () => {
   it('keysImmediatelyBefore: never throws; new keys ascending with no ties; ids preserved; land immediately before the anchor', async () => {
     await fc.assert(
-      fc.asyncProperty(caseArb, async ({bucketSizes, anchorRaw, n, parentId, prngSeed}) => {
-        await inFlightCase?.catch(() => {})
-        const run = withPinnedRandom(prngSeed, async () => {
+      fc.asyncProperty(caseArb, ({bucketSizes, anchorRaw, n, parentId, prngSeed}) =>
+        guard.run(prngSeed, async () => {
           const siblings = buildSiblings(bucketSizes, parentId)
           const anchor = anchorRaw % siblings.length
           const {returned, moves} = await runPlacement('before', siblings, parentId, anchor, n)
           checkOracles('before', siblings, parentId, anchor, n, returned, moves)
-        })
-        inFlightCase = run
-        await run
-      }),
+        })),
       fuzzParams(150),
     )
   })
 
   it('keysImmediatelyAfter: never throws; new keys ascending with no ties; ids preserved; land immediately after the anchor', async () => {
     await fc.assert(
-      fc.asyncProperty(caseArb, async ({bucketSizes, anchorRaw, n, parentId, prngSeed}) => {
-        await inFlightCase?.catch(() => {})
-        const run = withPinnedRandom(prngSeed, async () => {
+      fc.asyncProperty(caseArb, ({bucketSizes, anchorRaw, n, parentId, prngSeed}) =>
+        guard.run(prngSeed, async () => {
           const siblings = buildSiblings(bucketSizes, parentId)
           const anchor = anchorRaw % siblings.length
           const {returned, moves} = await runPlacement('after', siblings, parentId, anchor, n)
           checkOracles('after', siblings, parentId, anchor, n, returned, moves)
-        })
-        inFlightCase = run
-        await run
-      }),
+        })),
       fuzzParams(150),
     )
   })

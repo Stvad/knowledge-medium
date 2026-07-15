@@ -66,7 +66,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import type { EditorView } from '@codemirror/view'
-import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
@@ -272,12 +272,13 @@ const sweepInvariants = async (db: TestDb['db']): Promise<void> => {
 let sharedDb: TestDb
 beforeAll(async () => { sharedDb = await createTestDb() })
 afterAll(async () => {
-  await inFlightCase?.catch(() => {})
+  await guard.barrier()
   await sharedDb.cleanup()
 })
 
-/** docs/fuzzing.md §6 — barrier for the fc-interrupt abandoned case. */
-let inFlightCase: Promise<void> | null = null
+/** Interrupt-barrier + Math.random pin for the shared DB — see
+ *  `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). */
+const guard = statefulFuzzGuard()
 
 interface Env {
   repo: Repo
@@ -348,92 +349,79 @@ const resolvePool = (repo: Repo): ActionConfig[] => {
 }
 
 const runCase = async (
-  {seed, ops, prngSeed}: {seed: Array<{parent: number; content: string}>; ops: OpSpec[]; prngSeed: number},
+  {seed, ops}: {seed: Array<{parent: number; content: string}>; ops: OpSpec[]},
 ): Promise<void> => {
-  let lcg = prngSeed
-  const realRandom = Math.random
-  Math.random = () => {
-    lcg = (lcg * 48271) % 2147483647
-    return lcg / 2147483647
-  }
-  try {
-    const env = await buildEnv(seed)
-    const {repo, ids} = env
-    const uiStateBlock = repo.block(UI)
-    const pool = resolvePool(repo)
-    const runtime = resolveFacetRuntimeSync([])
+  const env = await buildEnv(seed)
+  const {repo, ids} = env
+  const uiStateBlock = repo.block(UI)
+  const pool = resolvePool(repo)
+  const runtime = resolveFacetRuntimeSync([])
 
-    for (const op of ops) {
-      if (op.op === 'focus') {
-        await focusBlock(uiStateBlock, pick(op.id, ids), {edit: op.edit})
-      } else {
-        const {id, context} = POOL[op.action]
-        const action = pool[op.action]
+  for (const op of ops) {
+    if (op.op === 'focus') {
+      await focusBlock(uiStateBlock, pick(op.id, ids), {edit: op.edit})
+    } else {
+      const {id, context} = POOL[op.action]
+      const action = pool[op.action]
 
-        // Resolve the focused block, recovering to a live one when a
-        // prior op deleted it (see the deps-synthesis docblock).
-        let focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId ?? ROOT
-        const focusedRow = await sharedDb.db.getAll<{deleted: number}>(
-          'SELECT deleted FROM blocks WHERE id = ?', [focusedId])
-        if (focusedRow.length === 0 || focusedRow[0].deleted === 1) {
-          focusedId = await env.firstLive()
-          await focusBlock(uiStateBlock, focusedId)
-        }
-        const block = repo.block(focusedId)
+      // Resolve the focused block, recovering to a live one when a
+      // prior op deleted it (see the deps-synthesis docblock).
+      let focusedId = peekFocusedBlockLocation(uiStateBlock)?.blockId ?? ROOT
+      const focusedRow = await sharedDb.db.getAll<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [focusedId])
+      if (focusedRow.length === 0 || focusedRow[0].deleted === 1) {
+        focusedId = await env.firstLive()
+        await focusBlock(uiStateBlock, focusedId)
+      }
+      const block = repo.block(focusedId)
 
-        const base = {uiStateBlock, scopeRootId: ROOT}
-        // Deps are per-context supersets of BaseShortcutDependencies
-        // (ShortcutDependenciesMap); the handler downcasts internally.
-        const deps = (context === ActionContextTypes.EDIT_MODE_CM
+      const base = {uiStateBlock, scopeRootId: ROOT}
+      // Deps are per-context supersets of BaseShortcutDependencies
+      // (ShortcutDependenciesMap); the handler downcasts internally.
+      const deps = (context === ActionContextTypes.EDIT_MODE_CM
+        ? {
+            ...base,
+            block,
+            editorView: fakeEditorView(
+              (await sharedDb.db.getAll<{content: string}>(
+                'SELECT content FROM blocks WHERE id = ?', [focusedId]))[0]?.content ?? '',
+              op.cursorSeed,
+            ),
+          }
+        : context === ActionContextTypes.MULTI_SELECT_MODE
           ? {
               ...base,
-              block,
-              editorView: fakeEditorView(
-                (await sharedDb.db.getAll<{content: string}>(
-                  'SELECT content FROM blocks WHERE id = ?', [focusedId]))[0]?.content ?? '',
-                op.cursorSeed,
-              ),
+              selectedBlocks: (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds ?? [])
+                .map(selectedId => repo.block(selectedId)),
+              anchorBlock: null,
             }
-          : context === ActionContextTypes.MULTI_SELECT_MODE
-            ? {
-                ...base,
-                selectedBlocks: (uiStateBlock.peekProperty(selectionStateProp)?.selectedBlockIds ?? [])
-                  .map(selectedId => repo.block(selectedId)),
-                anchorBlock: null,
-              }
-            : context === ActionContextTypes.NORMAL_MODE
-              ? {...base, block}
-              : base) as BaseShortcutDependencies
+          : context === ActionContextTypes.NORMAL_MODE
+            ? {...base, block}
+            : base) as BaseShortcutDependencies
 
-        const trigger = {
-          preventDefault: () => {},
-          stopPropagation: () => {},
-        } as unknown as ActionTrigger
+      const trigger = {
+        preventDefault: () => {},
+        stopPropagation: () => {},
+      } as unknown as ActionTrigger
 
-        try {
-          const result = invokeAction(runtime, {action, deps, trigger})
-          if (result instanceof Promise) await result
-        } catch (e) {
-          assertLegalRejection(e, `${id} (${context})`)
-        }
+      try {
+        const result = invokeAction(runtime, {action, deps, trigger})
+        if (result instanceof Promise) await result
+      } catch (e) {
+        assertLegalRejection(e, `${id} (${context})`)
       }
-      await env.fence()
-      await sweepInvariants(sharedDb.db)
     }
     await env.fence()
-  } finally {
-    Math.random = realRandom
+    await sweepInvariants(sharedDb.db)
   }
+  await env.fence()
 }
 
 describe('default-action dispatch sequences', () => {
   it('preserve structural invariants and scope-root protection', async () => {
     await fc.assert(
-      fc.asyncProperty(caseArb, async args => {
-        const run = runCase(args)
-        inFlightCase = run
-        await run
-      }),
+      fc.asyncProperty(caseArb, ({seed, ops, prngSeed}) =>
+        guard.run(prngSeed, () => runCase({seed, ops}))),
       fuzzParams(8),
     )
   }, fuzzTestTimeout())
@@ -443,7 +431,7 @@ describe('default-action dispatch sequences', () => {
   // observable effects for the main handler families under exactly the
   // deps this harness synthesizes.
   it('dispatched actions observably reach the handlers', async () => {
-    await inFlightCase?.catch(() => {})
+    await guard.barrier()
     const env = await buildEnv([
       {parent: 0, content: 'alpha'},
       {parent: 0, content: 'beta'},
