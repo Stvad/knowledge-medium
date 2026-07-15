@@ -186,41 +186,42 @@ export const buildPropertyDefinitionRegistry = (
   }
 }
 
-/** The seed identity a property name resolves to for the editor-override join
- * (B′ §8). Mirrors the winner→ambiguous-seed→stage-0 resolution the panel's
- * hidden-flag join uses:
- *   - a winning definition carries the answer (its `seedKey`, or none for a
- *     user row → no override);
- *   - before a workspace is pinned (or a snapshot briefly lagging a swap), the
- *     ambient schema entry may itself be the seed declaration. */
-const resolveSeedKeyForName = (
+/** The definition metadata or ambient seed declaration a property name resolves
+ * to for the panel's identity-scoped joins (editor override + hidden flag,
+ * B′ §8). One source of truth for the winner→single-seed→stage-0 walk both
+ * joins share — keeping the subtle ambiguity + stage-0-lag rules from drifting
+ * apart:
+ *   - the winning definition's metadata when the projector has one (a user row
+ *     is a valid winner but carries no `seedKey` → no override);
+ *   - else a lone unambiguous seed declaration for the name;
+ *   - else, before a workspace is pinned (or a snapshot briefly lagging a
+ *     swap), the ambient schema entry when it is itself a seed declaration. */
+export const resolveDefinitionSource = (
   name: string,
   definitions: PropertyDefinitionRegistrySnapshot | null,
   schema: AnyPropertySchema | undefined,
-): string | undefined => {
+): PropertyDefinitionMetadata | AnyPropertySeedDeclaration | undefined => {
   if (definitions) {
     const winner = definitions.definitionsByName.get(name)?.[0]
-    if (winner) return winner.seedKey
+    if (winner) return winner
     // No winner yet: only an unambiguous single seed declaration names it.
     const seeds = definitions.seedsByName.get(name)
-    if (seeds !== undefined) return seeds.length === 1 ? seeds[0]!.seedKey : undefined
+    if (seeds !== undefined) return seeds.length === 1 ? seeds[0] : undefined
   }
-  return schema !== undefined && isPropertySeedDeclaration(schema)
-    ? schema.seedKey
-    : undefined
+  return schema !== undefined && isPropertySeedDeclaration(schema) ? schema : undefined
 }
 
 /** Resolve the editor override for a property name by joining through seed
- * identity (B′ §8): the name's winning definition (or ambient seed
- * declaration) yields a `seedKey` that keys the seedKey-keyed override map.
- * Returns undefined when the name has no seed identity — user-authored rows
- * carry no override. Replaces the former name-key `uis.get(name)` join. */
+ * identity (B′ §8): the name's resolved definition source yields a `seedKey`
+ * that keys the seedKey-keyed override map. Returns undefined when the name has
+ * no seed identity — user-authored rows carry no override. Replaces the former
+ * name-key `uis.get(name)` join. */
 export const resolveEditorOverride = (
   name: string,
   definitions: PropertyDefinitionRegistrySnapshot | null,
   overridesBySeedKey: ReadonlyMap<string, AnyPropertyEditorOverride>,
   schema: AnyPropertySchema | undefined,
 ): AnyPropertyEditorOverride | undefined => {
-  const seedKey = resolveSeedKeyForName(name, definitions, schema)
+  const seedKey = resolveDefinitionSource(name, definitions, schema)?.seedKey
   return seedKey === undefined ? undefined : overridesBySeedKey.get(seedKey)
 }

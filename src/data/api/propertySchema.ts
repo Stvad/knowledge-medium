@@ -157,16 +157,23 @@ export const definePropertyEditorOverride = <T>(
       '(from seedProperty); the name-keyed override shape was removed in B′',
     )
   }
-  return {seedKey: handle.seedKey, ...override}
+  // The handle's seedKey is authoritative: spread the body first so a stray
+  // `seedKey` from a types-stripped dynamic extension can't clobber it.
+  return {...override, seedKey: handle.seedKey}
 }
 
 /** Runtime guard for dynamic-extension override contributions (the loader
- *  binds their seedKey to the owning block before registration). */
+ *  binds their seedKey to the owning block before registration). Rejects a
+ *  seed declaration mis-contributed to the override facet — it also carries a
+ *  string `seedKey`, but only seeds carry `revision`/`presetId`. */
 export const isPropertyEditorOverride = (
   value: unknown,
-): value is AnyPropertyEditorOverride =>
-  typeof value === 'object' && value !== null &&
-  typeof (value as {seedKey?: unknown}).seedKey === 'string'
+): value is AnyPropertyEditorOverride => {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as {seedKey?: unknown; revision?: unknown; presetId?: unknown}
+  return typeof v.seedKey === 'string' && v.seedKey.length > 0 &&
+    v.revision === undefined && v.presetId === undefined
+}
 
 /** Variance-erased schema type for storage in heterogeneous collections
  *  (the merged registry, type-lifted `TypeContribution.properties`, etc.).

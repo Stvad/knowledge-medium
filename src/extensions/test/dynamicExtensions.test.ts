@@ -396,6 +396,46 @@ describe('dynamicExtensionsExtension — property seed identity', () => {
       errorSpy.mockRestore()
     }
   })
+
+  it('rejects a seed declaration mis-contributed to the override facet', async () => {
+    // A seed handle structurally satisfies PropertyEditorOverride (both carry a
+    // string seedKey), so a misrouted `propertyEditorOverridesFacet.of(seed)`
+    // type-checks; the runtime guard must reject it (it carries revision/presetId)
+    // and fail the block loudly rather than pollute the override registry.
+    const blocks = [blockData({id: 'ext-misroute', content: 'misroute'})]
+    const seed = seedProperty({
+      seedKey: extensionPropertySeedKey('status'),
+      revision: 1,
+      name: 'example:status',
+      preset: 'boolean',
+      defaultValue: false,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const restore = stubCompileByBlockId({
+      misroute: {default: propertyEditorOverridesFacet.of(seed)},
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(propertyEditorOverridesFacet).size).toBe(0)
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-misroute',
+        expect.objectContaining({
+          message: 'Dynamic property editor override contribution is malformed',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
 })
 
 describe('dynamicExtensionsExtension — gate 1 (intent / overrides)', () => {
