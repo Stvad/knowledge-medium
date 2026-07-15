@@ -1158,8 +1158,13 @@ per row: "this row is a field instance", "of this schema", and for exact block-r
     <code>childBacked</code> machinery checks the workspace's encryption mode and
     behaves as if every schema were cell-backed. Zero leak, zero new code beyond the
     gate. E2EE users keep today's behavior. <em>Recommended for the first ship.</em></li>
-  <li><strong>Derive locally, never upload.</strong> Exclude the column from
-    <code>BLOCK_UPLOAD_COLUMNS</code> for e2ee workspaces and run the derive pass
+  <li><strong>Derive locally, never upload.</strong> The exclusion cannot live in
+    <code>BLOCK_UPLOAD_COLUMNS</code> — that is a static, trigger-generated list with
+    no per-workspace variance (PR-review P2). Strip the column at the upload
+    <em>connector</em> instead, keyed by workspace mode, when assembling envelopes
+    (suppressing column-only PATCHes outright): otherwise a local re-derive in an e2ee
+    workspace enqueues an envelope the slice-A server trigger rejects into the upload
+    quarantine. Run the derive pass
     on sync arrival (the observer materializes decrypted plaintext locally, so content
     is available; <code>onRowsAccepted</code> is the hook). Needs a first-sync full
     derivation pass per device (marker-gated, same pattern as the backfill). This is the
@@ -1222,12 +1227,16 @@ for those rows then travels only as ordinary encrypted child-row content.
 
 <p>
 Two server-surface items move out of "verify later" into hard slice-A deliverables
-(§11): <strong>extend the <code>apply_block_patches</code> whitelist</strong> — today
-the RPC silently drops unknown keys, so while a fresh field row propagates fine (creates
-go through the PUT/upsert path, which carries all columns), any <em>later</em> change to
-<code>reference_target_id</code> on an existing row ships as a PATCH and is dropped
+(§11): <strong>extend <em>both</em> server write RPCs</strong> (PR-review P1) — creates
+now batch through <code>apply_block_creates</code>
+(<code>20260709000000</code>, postdating this paragraph's first draft; its SQL inserts
+an explicit column list, superseding the carries-all-columns PostgREST upsert), and
+later changes ship as PATCHes through <code>apply_block_patches</code>, which silently
+drops unknown keys. Left unextended, a newly created field row reaches the server with
+<code>reference_target_id</code> NULL — peers never recognize it until some later
+PATCH — and a change to an existing row is dropped
 server-side, with no client-side re-derive on arrival to compensate; the synced
-detection column would be insert-only over sync. The extension must also be
+detection column would be broken over sync in both directions. The extension must also be
 <strong>null-aware</strong> (PR-review P2): the column must be <em>clearable</em> —
 a row edited back to ordinary content, or stripped by the e2ee/move paths, must stop
 being a field row on peers — so the RPC needs the presence-based handling used for
@@ -1252,6 +1261,18 @@ skill while at it.
     fieldId-resolvable). Unresolvable
     targets render as plain reference blocks — a pasted field from another workspace
     degrades to a visible, honest "unknown field" row.</dd>
+
+  <dt><strong>Cross-workspace copies re-derive the column, never carry it.</strong></dt>
+  <dd>Seeded fieldIds are workspace-scoped (unification §4.2), so <em>every</em> field
+    row copied or moved across workspaces — kernel schemas included — carries a
+    foreign <code>reference_target_id</code> (PR-review P2). The structural copy/move
+    path must clear the column and let <code>core.deriveReferenceTarget</code>
+    re-derive from the <code>[[name]]</code> content against the <em>destination's</em>
+    name-winner map, same tx — the seam where the unification already strips
+    <code>seed:*</code>/type-id props on paste (its §12). Without the strip, §7's
+    resolve-by-name promise silently fails: detection never parses content, so the
+    copied rows degrade to unresolvable reference blocks. The e2ee de-structure rule
+    (§8) covers encrypted destinations; this is the plaintext general case.</dd>
 
   <dt><strong>Orphan keys — the backstop schema unification leans on.</strong></dt>
   <dd>A cell key with no definition block of <em>any</em> origin (historic residue,
@@ -1470,12 +1491,25 @@ implementation</strong> and keep it open until its content is fully accounted fo
         <code>BlockData.referenceTargetId</code>; regenerate sync-config),
         <code>referenceBlock.ts</code> grammar, <code>core.deriveReferenceTarget</code>,
         the partial index, and the §8 items: the e2ee gate (derive skips e2ee
-        workspaces, column excluded from their upload), the server-side trigger
+        workspaces; their uploads strip the column at the connector — the static
+        trigger-generated <code>BLOCK_UPLOAD_COLUMNS</code> can't vary per workspace,
+        §8), the server-side trigger
         extension (<code>reference_target_id IS NULL</code> enforced for e2ee rows —
-        client gates alone are not a guarantee), and the
-        <code>apply_block_patches</code> whitelist extension — null-aware, per §8:
+        client gates alone are not a guarantee), and <em>both</em> §8 server RPC
+        extensions (PR-review P1): the <code>apply_block_creates</code> column list
+        (creates batch through it — unextended, every new field row lands server-side
+        with a NULL column and peers never recognize it) and the
+        <code>apply_block_patches</code> whitelist — null-aware, per §8:
         clears must propagate (presence-based handling, as for nullable
-        <code>parent_id</code>). Two hard-won requirements
+        <code>parent_id</code>). "All layers" also includes the history/undo seam
+        (PR-review P2): <code>row_events</code> snapshot serialization
+        (<code>blockJsonObjectSql</code>) and undo replay's write column list are
+        hand-maintained parallels of <code>BLOCK_STORAGE_COLUMNS</code> — extend both
+        (or generate them from it), else undoing a field-row edit back to plain text
+        restores the content but keeps the stale <code>reference_target_id</code>, and
+        the row stays classified as a field row (same-tx processors are deliberately
+        skipped on undo replay, §12 — the snapshot itself must carry the column).
+        Two hard-won requirements
         from the spike's own review history: the <strong>existing-install local
         migration must ALTER both <code>blocks</code> and
         <code>blocks_synced</code></strong> (copy the spike's
@@ -1725,9 +1759,11 @@ sequence, each step gated on the one before:
     flipped, and plugin props like todo <code>status</code> live on ordinary
     content blocks — freezing those rows would orphan the plugin's only synced store);
     and keys with <em>no definition block to classify them</em> — historic orphan keys
-    and unconverted dynamic-extension schemas. (An <em>uninstalled</em> plugin's keys
-    are no longer in this bucket: schema unification syncs its definition blocks to
-    every client, so classification works without the plugin — its §5.3.) Practical
+    and unconverted dynamic-extension schemas. (An <em>uninstalled</em> plugin's
+    kernel-preset keys are no longer in this bucket: schema unification syncs its
+    definition blocks to every client and the kernel-preset fallback rebuilds the
+    codec — its §5.3. Custom-codec plugin keys stay: undecodable without the plugin —
+    see step 5's buildability rule.) Practical
     consequence: flipping the content-block plugin schemas
     is effectively a prerequisite for this step delivering much.
     <em>Semantics for rows that stop:</em> the server copy freezes — and because
@@ -1758,16 +1794,21 @@ sequence, each step gated on the one before:
     (natural home: maintained by the same projection that stamps the checksum),
     consumed fail-safe: only rows explicitly marked fully-child-backed leave the
     stream; unmarked rows keep the column. And because the marker is global server
-    state, it may only be set where every key belongs to a schema <em>every</em>
-    client can classify. Schema unification widened that set from "kernel and user
-    schemas only" to <strong>every key that resolves to a definition block</strong> —
-    plugin keys included, since a plugin-less client classifies them from the synced
-    definition (its §5.3 definition-metadata surface); this matters because the
-    previous restriction excluded exactly the content-block plugin schemas whose
-    flip step 4 calls "effectively a prerequisite for this step delivering much".
+    state, it may only be set where every key's schema is <strong>buildable on every
+    client, not merely classifiable</strong> (PR-review P2 ×2 — the widening and its
+    limit): schema unification syncs identity <em>metadata</em> fleet-wide, but
+    behavior only where a kernel preset can rebuild the codec off the bag (its §5.3
+    fallback). Keys riding kernel presets qualify — kernel, user, and (after the
+    unification's preset audit) 37 of 44 plugin schemas, which is what makes the
+    content-block plugin schemas markable at all, the widening the old "kernel and
+    user only" rule lacked. The handful of custom-codec plugin schemas do
+    <em>not</em>: without the plugin they are declaration-only — the client can
+    classify the key but cannot decode child values or re-project the cell, so the
+    downloaded cell is its only usable copy; rows carrying such keys are never
+    marked (and those schemas are poor flip candidates in the first place — §6).
     Rows carrying keys with <em>no</em> definition block — historic orphan keys, and
     dynamic-extension schemas not yet converted to seeds during the unification's
-    transitional window — are never marked (PR-review P2, re-scoped post-unification).
+    transitional window — are never marked either.
     Or keep downloading the column
     fleet-wide and consume it only where the composition rule says it is live; the
     download bytes are the smallest of the wins. Fresh
@@ -1875,7 +1916,15 @@ later server snapshots, which the acceptance path would then reject — and its 
 triggers would re-ship the very cell channel step 4 removed. The projection rewrites
 <code>properties_json</code> through the same sanctioned raw path the sync
 materializer uses (source-null, no upload enqueue, metadata untouched); it borrows
-the backfill's harness for gating and chunking, not its write path.
+the backfill's harness for gating and chunking, not its write path. And the raw
+write needs an <strong>explicit invalidation fan-out</strong> (PR-review P2):
+precisely because <code>updated_at</code> is preserved, the row-version never
+advances — the cache/hydrate LWW gate (<code>applyIfNewer</code>) sees nothing newer
+and raw SQL emits no invalidations — so a block already hydrated or query-cached
+before the pass reaches it would keep serving the stale cell until an unrelated
+edit. The pass must evict-or-force-refresh the touched blocks' handles per chunk
+(the observer's invalidation fan-out pointed at the projected ids), never rely on
+row-version deltas to propagate its repairs.
 </p>
 
 <h2 id="s12">12. Risks to monitor</h2>
