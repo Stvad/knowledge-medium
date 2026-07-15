@@ -27,6 +27,7 @@ import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
 import type { Repo } from './repo.ts'
 import {isPropertySeedDeclaration} from './propertySeeds.ts'
+import {isTypeSeedDeclaration, type TypeSeedDeclaration} from './typeSeeds.ts'
 
 export interface LocalSchemaDb {
   execute: (sql: string) => Promise<unknown>
@@ -158,6 +159,18 @@ export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedProperty
 )
 
 export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.id)
+
+/** Code-owned block-type definitions. The declaration object is also the
+ * `TypeContribution` returned by `seedType`. A list facet (not a last-wins map)
+ * for the same reason as `definitionSeedsFacet`: a duplicate seed id/key is an
+ * authoring error the materializer must observe and reject before any write. */
+export const typeSeedsFacet = defineFacet<
+  TypeSeedDeclaration,
+  readonly TypeSeedDeclaration[]
+>({
+  id: 'data.type-seeds',
+  validate: isTypeSeedDeclaration,
+})
 
 export const propertyEditorOverridesFacet = keyedMapFacet<AnyPropertyEditorOverride>('data.property-editor-overrides', c => c.seedKey)
 

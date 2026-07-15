@@ -17,11 +17,20 @@ import {propertiesPageBlockId} from '@/data/propertiesPage'
 import type {Repo} from '@/data/repo'
 import {awaitLocalMemberRole} from '@/data/workspaces'
 
-/** Namespace for every deterministic code-owned definition block. Identity is
- * always workspace-scoped: uuidv5(`${workspaceId}:${seedKey}`, namespace). */
+/** Namespace for every deterministic code-owned definition block — property
+ * AND type seeds. Identity is always workspace-scoped:
+ * uuidv5(`${workspaceId}:${seedKey}`, namespace). Property (`/property/`) and
+ * type (`/type/`) seed keys share this namespace safely: their key grammars are
+ * disjoint, so `${workspaceId}:${seedKey}` can never collide across kinds. */
 export const DEFINITION_SEED_NS = '737c2e9d-f3e9-4c99-94ef-e1cbec920e30'
 
 export const propertyDefinitionBlockId = (workspaceId: string, seedKey: string): string =>
+  uuidv5(`${workspaceId}:${seedKey}`, DEFINITION_SEED_NS)
+
+/** Deterministic per-workspace backing-block id for a code-owned block type.
+ * The type analog of `propertyDefinitionBlockId`; this is what a total
+ * `getTypeBlockId` returns for a code type (Slice C). */
+export const typeDefinitionBlockId = (workspaceId: string, seedKey: string): string =>
   uuidv5(`${workspaceId}:${seedKey}`, DEFINITION_SEED_NS)
 
 type SeedIdentityRow = Pick<BlockData, 'id' | 'workspaceId' | 'properties'>
