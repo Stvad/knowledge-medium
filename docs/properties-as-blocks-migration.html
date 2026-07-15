@@ -901,8 +901,14 @@ arrived row:
     arriving cell applies, and this client's own projections never cover it (no codec
     ⇒ it can neither decode children nor re-project; ignoring the cell would replace
     its only usable value with an empty local projection). Fleet-wide the key stays
-    child-backed — peers with the behavior project it, and the checksum's
-    self-describing <code>coveredKeys</code> keeps the skew harmless. A child-backed
+    child-backed — peers with the behavior project it — but the skew is <em>not</em>
+    harmless by default (PR-review P2): this client still uploads the whole bag, so
+    editing any <em>other</em> property ships its stale copy of the unbuildable key
+    under a fresh parent timestamp, and on a plugin-bearing peer that key would be
+    present, actionable, and uncovered — the old-client materialize branch, whose
+    per-child clock guard has only the arrived bag's timestamp to compare against,
+    would let the stale value overwrite a newer value child. The checksum's
+    <em>preserved</em> class (callout below) exists to close exactly this. A child-backed
     key with
     <em>no local child rows at all</em> is left untouched as pending materialization —
     children-in-flight from the writer's dual-write, landing next drain (under the
@@ -949,7 +955,8 @@ arrived row:
       non-projecting edit breaks it. <em>Id-bound:</em> the block id is hashed in, so
       a wholesale-copied bag mismatches on the new block and takes the old-client
       branch instead of being mis-certified. <em>Self-describing:</em> the stored
-      record is <code>{hash, coveredKeys}</code>, and verification recomputes over
+      record is <code>{hash, coveredKeys, preservedKeys}</code> (the third element
+      defined with the containment rule below), and verification recomputes over
       exactly the listed keys — never over "what this client's registry considers
       child-backed", which varies with plugin/version skew and would let a client
       missing a plugin mis-classify a peer's fresh projection as an old-client bag
@@ -964,9 +971,29 @@ arrived row:
       current-client branch and sits pending forever (readable from the cell, but
       never materialized until the sweep) instead of materializing on arrival. The
       containment check classifies bag keys by this client's <em>actionable</em> set —
-      a key it cannot build is cell-backed for it (per-client rule above) and exempt —
-      so skewed clients reach compatible outcomes: the plugin-bearing client
-      materializes; the plugin-less one keeps the cell authoritative.
+      a key it cannot build is cell-backed for it (per-client rule above) and exempt.
+      That exemption protects the reader's own branch but not its <em>uploads</em>
+      (PR-review P2): a plugin-less current client re-ships the whole bag on every
+      unrelated edit, carrying its stale copy of the unbuildable key under a fresh
+      parent timestamp — and on a plugin-bearing peer that key is actionable,
+      present, uncovered, and would take the materialize branch through the per-child
+      clock guard. The record therefore carries a third element,
+      <code>preservedKeys</code>: keys this client carries <em>verbatim</em> because
+      they are child-backed but not locally buildable. Enumeration needs no codec —
+      recognition is synced metadata (the definition's <code>childBacked</code> flag
+      plus <code>reference_target_id</code> on live field rows), so even the
+      plugin-less client knows which bag keys, and which live field-row identities its
+      bag has gone stale on, to stamp. Preserved keys are hashed exactly like covered
+      ones (hashing needs values, not codecs) and are <strong>never a merge
+      input</strong> — a peer re-projects them from its own children the same as
+      covered keys, so its newer value child survives the stale carry. The
+      carry-forward is <em>verify-gated</em>: on re-stamp a key stays preserved only
+      while the prior record still verifies for it — a legacy cell edit to that key
+      (this client's own raw-panel write to a schema it can't build, or an old
+      client's) breaks that verification and drops the key to uncovered, which is
+      correct: that edit genuinely is its writer's newest truth, and uncovered is what
+      licenses the materialize direction for it. Containment becomes: present
+      child-backed ⊆ covered ∪ preserved.
       Match (hash <em>and</em> containment) ⇒ a current client's projection ⇒ never a
       merge input. Mismatch or absent ⇒ last modified by a non-projecting writer ⇒ the
       full materialize direction (set / update / clear) is licensed for that row's
@@ -1430,14 +1457,31 @@ skill while at it.
   <dt><strong>Field-row recognition.</strong></dt>
   <dd>A child of P is a field row iff <code>reference_target_id</code> equals a
     definition block's id — a fieldId-keyed lookup the unified registry ships
-    (<code>resolveField</code>) — <em>and P is not itself a field row</em>. The parent
+    (<code>resolveField</code>) — <em>that definition is flagged
+    <code>childBacked</code></em> (PR-review P2: recognition off the raw column alone
+    activates the moment slice A/B starts stamping — an ordinary whole-block
+    <code>[[some property schema]]</code> link would be hidden and reinterpreted even
+    while production defaults keep every schema cell-only, breaking the "machinery
+    lands dormant" claim and swallowing genuine reference rows for cell-backed
+    schemas forever; the flag is a synced definition field, so the gate is
+    fleet-consistent and rides the same <code>resolveField</code> lookup) — <em>and P
+    is a content block</em>: not itself a field row and not inside a property subtree.
+    The subtree half generalizes the direct-parent guard (PR-review P2): a
+    <code>[[status]]</code> link written as a comment <em>below a value child</em> has
+    a parent that is no field row, yet it is user content, not a field of the value
+    block. Role is positional and inherits: children of field rows are values;
+    everything beneath a value child is ordinary content; recognition rejects any row
+    whose ancestry passes through a field row. Renderers and traversals get the walk
+    free from context (they arrive from above and already know they're inside a
+    property subtree); SQL callers bind the same recursive rule. The parent
     guard is load-bearing (PR-review P2): a ref-typed <em>value</em> pointing at a
     definition block gets stamped with that definition's id by the derive processor
     exactly as a field row would (<code>block-type:properties</code> values are the
     standing example — a refList whose targets are all property-schema blocks);
     without the guard, render/filter/projection would hide or reinterpret those
     values as nested fields. Children of field rows are values and comments, never
-    field rows, whatever their target. Column read, no content parse. Classification
+    field rows, whatever their target. Column read plus flag read, no content
+    parse. Classification
     needs
     the definition, not the owning plugin (an uninstalled plugin's definitions sync
     like any block), and works for shadowed definitions too (§6 — losers stay
@@ -1455,7 +1499,18 @@ skill while at it.
     <code>seed:*</code>/type-id props on paste (its §12). Without the strip, §7's
     resolve-by-name promise silently fails: detection never parses content, so the
     copied rows degrade to unresolvable reference blocks. The e2ee de-structure rule
-    (§8) covers encrypted destinations; this is the plaintext general case.</dd>
+    (§8) covers encrypted destinations; this is the plaintext general case.
+    One arrival-order hole in the re-derive (PR-review P2): if the destination's
+    definition hasn't synced or been imported yet, the same-tx re-derive clears the
+    foreign id and resolves nothing — honest degradation to a plain reference row —
+    but <code>core.deriveReferenceTarget</code> watches <em>content</em>, so the
+    definition's later arrival never revisits the unchanged <code>[[name]]</code>
+    rows, and a no-cell copy's fields would stay unprojected forever. Two repairs,
+    both cheap: definition-block arrival/creation enqueues a targeted re-derive over
+    NULL-column whole-block-wikilink rows matching the new name, and the §5
+    consistency sweep carries the same rule as the backstop. Matching by name is
+    sound because rename-retitle keeps field-row content in lock-step with schema
+    names (§7).</dd>
 
   <dt><strong>Orphan keys — the backstop schema unification leans on.</strong></dt>
   <dd>A cell key with no definition block of <em>any</em> origin (historic residue,
@@ -1797,8 +1852,11 @@ implementation</strong> and keep it open until its content is fully accounted fo
         user-defined property write is child-backed. The production flip waits for
         slice C. Rollback:
         flip the user-schema default to cell-only <em>and run the drain</em> — one final
-        children→cell projection pass over affected blocks, then hide or delete the
-        children. "Children stay inert but convergent" is not a coherent state: if the
+        children→cell projection pass over affected blocks, then <em>delete</em> the
+        children ("hide" stopped being an option once recognition became
+        <code>childBacked</code>-gated (§9): clearing the flag un-recognizes surviving
+        field rows, so they would surface as ordinary outline rows — the drain must
+        remove them, not rely on filtering that no longer sees them). "Children stay inert but convergent" is not a coherent state: if the
         processors are flag-gated off, nothing keeps inert children convergent, and the
         tree UI would render stale values. Rollback = drain + freeze, not flip and
         hope.</p>
@@ -1819,8 +1877,8 @@ implementation</strong> and keep it open until its content is fully accounted fo
         cell is never a merge input); materialize direction runs only for genuinely
         old-client cells, gated on the §5 projection-checksum discriminator — which
         this slice introduces (current clients embed the self-describing
-        <code>{hash, coveredKeys}</code> record when they project; a mismatched or
-        absent checksum marks an old-client bag) — never on cell shape (mismatched
+        <code>{hash, coveredKeys, preservedKeys}</code> record when they project; a
+        mismatched or absent checksum marks an old-client bag) — never on cell shape (mismatched
         bags get the full set/update/clear materialize, clock-guarded per child and
         soft-delete-aware — no resurrection past a newer deletion; the deletion diff
         must not ship without the checksum); child-backed keys with <em>no child rows
@@ -1959,7 +2017,12 @@ sequence, each step gated on the one before:
     informs it), but it is required regardless of the step-5 decision.</em></li>
   <li><strong>Stop uploading the cell — per row, by key composition, never
     globally.</strong> <em>The rule</em> (PR-review P1): a row's cell stops uploading
-    only when every key in its bag is <em>known child-backed and fleet-buildable</em> —
+    only when every key in <em>the union of its bag and the block's live field-row
+    identities</em> is <em>known child-backed and fleet-buildable</em> — the union, not
+    the bag alone (PR-review P2): by this step the bag is explicitly allowed to be a
+    stale hint and can be missing a live custom-codec field outright (column-LWW
+    aftermath, or a plugin-less writer's carry), so a bag-only test passes vacuously
+    and freezes the very cell that field's plugin-less readers depend on. It is
     the same eligibility predicate as step 5's marker (PR-review P2): a custom-codec
     key's plugin-less readers live off the downloaded cell, so freezing its upload
     starves them even while downloads continue; and the predicate is per-definition,
@@ -2199,9 +2262,11 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
     </tr>
     <tr>
       <td><strong>The checksum binds content, identity, and enumeration — both
-        directions.</strong> <code>{hash, coveredKeys}</code> over block id + covered
-        values; verification = the hash over exactly the listed keys <em>plus</em>
-        containment (present child-backed ⊆ covered); never the local registry.</td>
+        directions.</strong> <code>{hash, coveredKeys, preservedKeys}</code> over
+        block id + covered <em>and preserved</em> values; verification = the hash over
+        exactly the listed keys <em>plus</em> containment (present child-backed ⊆
+        covered ∪ preserved); preserved keys are verify-gated verbatim carries, never
+        merge inputs; never the local registry.</td>
       <td><a href="#s5">§5</a> discriminator</td>
       <td>Arrival classification, sweep classification, checksum storage choice</td>
       <td>A copied bag mismatches (id); an old-client added key mismatches
@@ -2211,17 +2276,19 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
       <td><strong>Buildability gates every cell-independence decision.</strong>
         Per-client at arrival (locally-unbuildable keys are cell-backed on that
         client); fleet-wide for the sync-off (steps 4 and 5 share one
-        child-backed-and-fleet-buildable predicate, per-definition not
-        per-origin).</td>
+        child-backed-and-fleet-buildable predicate, per-definition not per-origin,
+        ranging over the union of bag keys and live field-row identities).</td>
       <td><a href="#s5">§5</a>, <a href="#cell-endstate">§11 steps 4–5</a></td>
       <td>Reconcile branches, coveredKeys stamping, upload stop, download marker</td>
       <td>A plugin-less client keeps cell authority for a custom-codec key; rows
         carrying such keys never stop syncing the cell (C; 4–5)</td>
     </tr>
     <tr>
-      <td><strong>Recognition = column + parent role.</strong> A field row's
-        <code>reference_target_id</code> is a definition id <em>and</em> its parent is
-        not itself a field row; children of field rows are never field rows.</td>
+      <td><strong>Recognition = column + flag + subtree role.</strong> A field row's
+        <code>reference_target_id</code> is a definition id, that definition is
+        flagged <code>childBacked</code>, <em>and</em> its parent is a content block —
+        no ancestor is a field row; everything beneath a value child is ordinary
+        content.</td>
       <td><a href="#s9">§9</a></td>
       <td>Rendering, hidden filtering, <code>childrenOf</code> + outline-query
         exclusion, projection, dedup walk</td>
