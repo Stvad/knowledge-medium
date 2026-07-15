@@ -1,5 +1,14 @@
 # row_events: storage + retention
 
+> **Status:** superseded — absorbed into `docs/row-events-optimization.html`
+> (compact events + sampled anchors; history is KEPT, the prune design below is
+> dead). Also stale against code: `src/data/internals/rowEventsTail.ts` and the
+> `local-ephemeral` source no longer exist (the Layout-B sync observer replaced
+> the tail; nothing reads `row_events` at runtime), and the file path cited
+> below is `src/data/internals/clientSchema.ts`. Kept for the problem framing
+> and the scale numbers (§Problem) only. **Last verified against code:**
+> 2026-07-15 (master `b581e60b`).
+
 ## Problem
 
 `row_events` on ff-vlad-dev: ~1.17M rows, ~2 KB JSON per event, grows monotonically. The hot path it lives on is every block write — the trigger inlines a full domain-shape snapshot of the block in both `before_json` AND `after_json` (`blockJsonObjectSql`, [clientSchema.ts:238](src/data/internals/clientSchema.ts:238)), so write-tx tail latency tracks the JSON-build + insert cost.
