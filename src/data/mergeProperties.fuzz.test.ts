@@ -5,9 +5,11 @@
  *
  * Oracles (each checked against mergeProperties.ts, not assumed):
  * - purity: inputs never mutated (raw-JSON snapshot, same technique as the
- *   example test at mergeProperties.test.ts:118-126).
+ *   example test at mergeProperties.test.ts:134).
  * - identities: merge(x, {}) is a shallow copy of x; merge({}, x) copies
- *   source values VERBATIM — `out[key] = fromVal` (mergeProperties.ts:31)
+ *   source values VERBATIM — the define-not-assign copy writes `fromVal`
+ *   untouched (`Object.defineProperty(..., {value: fromVal, ...})`,
+ *   mergeProperties.ts:36-44)
  *   does no array canonicalization/dedup on the way in, so both identities
  *   hold up to raw JSON form.
  * - associativity holds only on KIND-CONSISTENT bags (each key is array-typed
@@ -16,14 +18,15 @@
  *     x = {k: ['a']}, y = {k: 's'}, z = {k: ['b']}
  *     merge(merge(x,y),z) = {k: ['a','b']}  vs  merge(x,merge(y,z)) = {k: ['a']}
  *   because an array/non-array collision takes the documented "otherwise →
- *   target wins" fallback (mergeProperties.ts:35-41; exercised as intended
+ *   target wins" fallback (the fallthrough at mergeProperties.ts:50-51;
+ *   exercised as intended
  *   behavior by mergeProperties.test.ts:72-76), which discards the source
  *   array that the other association order would have unioned. That fallback
  *   is the spec, so the associativity oracle is scoped, not weakened.
  * - array union: first-occurrence dedup of target++source, keyed by the
  *   persisted-JSON form. The model below re-derives expected output from the
  *   documented equivalence (`JSON.stringify(stableJsonValue([item]))`,
- *   mergeProperties.ts:57-70) — key-order-insensitive, NaN/undefined
+ *   `dedupeKey`, mergeProperties.ts:68-81) — key-order-insensitive, NaN/undefined
  *   collapsing to null exactly as the stored array does.
  * - idempotence: merge(x, x) ≡ x is FALSE when an array in x carries internal
  *   duplicates (union dedups them); the true law is merge(x, x) = x with each
@@ -86,7 +89,7 @@ const itemObjArb = fc
   .map(([obj, reverse]) => (reverse ? reversedKeys(obj) : obj))
 
 // NaN/undefined appear as array items only: their dedup key collapses to
-// null (mergeProperties.ts:57-70), which the model below must reproduce.
+// null (`dedupeKey`, mergeProperties.ts:68-81), which the model below must reproduce.
 const itemArb = fc.oneof(
   {arbitrary: scalarArb, weight: 4},
   {arbitrary: itemObjArb, weight: 2},
@@ -114,7 +117,7 @@ const consistentBagArb = fc.record(
 
 // ──── Reference model for the array union ────
 
-/** The documented persisted-JSON dedup key (mergeProperties.ts:57-70). */
+/** The documented persisted-JSON dedup key (`dedupeKey`, mergeProperties.ts:68-81). */
 const canonKey = (item: unknown): string => JSON.stringify(stableJsonValue([item]))
 
 const dedupeFirstOccurrence = (items: readonly unknown[]): unknown[] => {
@@ -159,7 +162,8 @@ describe('mergeProperties fuzz', () => {
       fc.property(bagArb, x => {
         // Left: `{...intoProps}` (mergeProperties.ts:27) preserves order+values.
         expect(JSON.stringify(mergeProperties(x, {}))).toBe(JSON.stringify(x))
-        // Right: source values are copied verbatim (mergeProperties.ts:31);
+        // Right: source values are copied verbatim (define-not-assign,
+        // mergeProperties.ts:36-44);
         // arrays are NOT deduped on the way in, so this holds even when x's
         // arrays contain internal duplicates.
         expect(JSON.stringify(mergeProperties({}, x))).toBe(JSON.stringify(x))
@@ -185,7 +189,8 @@ describe('mergeProperties fuzz', () => {
         const into = {...x, [k]: tv}
         const from = {...y, [k]: sv}
         // Collision with a non-array on the target side is never rewritten
-        // (mergeProperties.ts:35-41) — the reference survives, covering both
+        // (the target-wins fallthrough, mergeProperties.ts:50-51) — the
+        // reference survives, covering both
         // "deep-equal → keep target" and "otherwise → target wins".
         expect(Object.is(mergeProperties(into, from)[k], tv)).toBe(true)
       }),
@@ -210,7 +215,8 @@ describe('mergeProperties fuzz', () => {
     // NOT merge(x,x) ≡ x: the union dedups internal duplicates the identity
     // would have to keep. And merge is NOT idempotent on its own image
     // either: union runs only for keys present in BOTH bags
-    // (mergeProperties.ts:30-36), so single-sided arrays pass through
+    // (the source-only copy path, mergeProperties.ts:36-44), so
+    // single-sided arrays pass through
     // verbatim and the image can carry internal duplicates — e.g.
     // m = merge({a: ['b','b']}, {}) = {a: ['b','b']}, merge(m, m) = {a: ['b']}
     // (found by an earlier draft of this property). The law below is the one
