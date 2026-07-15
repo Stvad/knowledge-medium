@@ -1,7 +1,13 @@
 // @vitest-environment node
 
 import {describe, expect, it, vi} from 'vitest'
-import {ChangeScope, codecs, defineProperty, type AnyPropertySchema} from '@/data/api'
+import {
+  ChangeScope,
+  codecs,
+  defineProperty,
+  PropertySchemaScopeMismatchError,
+  type AnyPropertySchema,
+} from '@/data/api'
 import type {Block} from '@/data/block'
 import {seedKeyProp, seedRevisionProp} from '@/data/properties'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
@@ -197,5 +203,51 @@ describe('property panel action visibility guards', () => {
 
     expect(tx).not.toHaveBeenCalled()
     expect(addSchema).not.toHaveBeenCalled()
+  })
+
+  // A UserPrefs (allow, non-hidden) captured scope is the reachable case: a
+  // UiState capture would be filtered as hidden before reaching the tx.
+  const scopeDriftBlock = (resolvedScope: ChangeScope) => {
+    const captured = defineProperty<string>('pref:foo', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.UserPrefs,
+    })
+    const update = vi.fn()
+    const resolvePropertySchema = vi.fn(async () => ({...captured, changeScope: resolvedScope}))
+    const tx = vi.fn(async (cb: (t: unknown) => Promise<void>) => {
+      await cb({resolvePropertySchema, update})
+    })
+    const block = {
+      id: 'block-1',
+      repo: {propertyDefinitions: null, propertySchemas: new Map(), tx},
+    } as unknown as Block
+    return {captured, update, block}
+  }
+
+  it('rejects a delete whose captured scope policy differs from the live resolved scope', async () => {
+    // Captured UserPrefs (allow) but the definition now resolves BlockDefault
+    // (reject): raw tx.update would bypass the read-only gate without this check.
+    const {captured, update, block} = scopeDriftBlock(ChangeScope.BlockDefault)
+    await expect(deleteProperty({
+      block,
+      properties: {[captured.name]: 'v'},
+      schemas: new Map([[captured.name, captured]]),
+      uis: new Map(),
+      name: captured.name,
+    })).rejects.toThrow(PropertySchemaScopeMismatchError)
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('deletes when the captured and resolved scope policies match', async () => {
+    const {captured, update, block} = scopeDriftBlock(ChangeScope.UserPrefs)
+    await deleteProperty({
+      block,
+      properties: {[captured.name]: 'v'},
+      schemas: new Map([[captured.name, captured]]),
+      uis: new Map(),
+      name: captured.name,
+    })
+    expect(update).toHaveBeenCalledWith('block-1', {properties: {}})
   })
 })

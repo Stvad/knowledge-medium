@@ -1,5 +1,7 @@
 import {
   ChangeScope,
+  PropertySchemaScopeMismatchError,
+  scopePoliciesEquivalent,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
 } from '@/data/api'
@@ -130,6 +132,22 @@ export const deleteProperty = async (args: {
   const schema = args.schemas.get(args.name)
 
   await args.block.repo.tx(async tx => {
+    if (schema) {
+      // `args.schemas` is a render-time snapshot; the property's change-scope may
+      // have changed (e.g. synced from another client) since. This delete opens
+      // the tx under that captured scope and writes via raw `tx.update`, which —
+      // unlike `tx.setProperty` — skips the scope-consistency check. Mirror it:
+      // re-resolve against the live row and reject if the current scope's policy
+      // differs from the one this tx was admitted under, so a stale allow-scope
+      // can't delete a now-reject-scope property in a read-only session (nor
+      // misroute the undo entry).
+      const resolved = await tx.resolvePropertySchema(args.block.id, schema)
+      if (!scopePoliciesEquivalent(resolved.changeScope, schema.changeScope)) {
+        throw new PropertySchemaScopeMismatchError(
+          args.name, schema.changeScope, resolved.changeScope,
+        )
+      }
+    }
     await tx.update(args.block.id, {properties: next})
   }, {
     scope: schema?.changeScope ?? ChangeScope.BlockDefault,

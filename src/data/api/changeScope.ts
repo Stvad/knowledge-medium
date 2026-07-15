@@ -83,6 +83,20 @@ export const CHANGE_SCOPE_POLICIES = {
 export const policyForScope = (scope: ChangeScope): ChangeScopePolicy =>
   CHANGE_SCOPE_POLICIES[scope]
 
+/** Two scopes are policy-equivalent when they share read-only behavior and
+ *  undoability — the only axes a write is admitted and gated on. Scope IDENTITY
+ *  (undo bucket, semantic label) may still differ, and that difference is
+ *  intentional (e.g. the references processor writing a BlockDefault property
+ *  under its own References bucket). A write admitted under one scope may only
+ *  touch a property whose resolved scope is policy-equivalent — otherwise it
+ *  would bypass the read-only gate or misroute its undo entry. Used by the
+ *  typed write seam (`tx.setProperty`) and the raw property-delete path. */
+export const scopePoliciesEquivalent = (a: ChangeScope, b: ChangeScope): boolean => {
+  const pa = policyForScope(a)
+  const pb = policyForScope(b)
+  return pa.readOnly === pb.readOnly && pa.undoable === pb.undoable
+}
+
 export const scopeAllowedInReadOnly = (scope: ChangeScope): boolean =>
   policyForScope(scope).readOnly !== 'reject'
 

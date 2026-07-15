@@ -60,7 +60,7 @@ import {
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
   normalizeReferences,
-  policyForScope,
+  scopePoliciesEquivalent,
 } from '@/data/api'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import {
@@ -530,13 +530,9 @@ export class TxImpl implements Tx {
     // difference (e.g. the references processor writing a BlockDefault property
     // under its own `References` bucket) is intentional and harmless, while a
     // policy difference (a stale UiState schema writing a now-BlockDefault
-    // property) is exactly the bypass/misroute this guards.
-    const resolvedPolicy = policyForScope(resolvedSchema.changeScope)
-    const txPolicy = policyForScope(this.meta.scope)
-    if (
-      resolvedPolicy.readOnly !== txPolicy.readOnly ||
-      resolvedPolicy.undoable !== txPolicy.undoable
-    ) {
+    // property) is exactly the bypass/misroute this guards. The raw
+    // property-delete path shares this check via `scopePoliciesEquivalent`.
+    if (!scopePoliciesEquivalent(resolvedSchema.changeScope, this.meta.scope)) {
       throw new PropertySchemaScopeMismatchError(
         resolvedSchema.name, this.meta.scope, resolvedSchema.changeScope,
       )
