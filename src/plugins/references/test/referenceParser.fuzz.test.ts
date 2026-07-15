@@ -277,9 +277,10 @@ describe('block-ref parsing and rewriting', () => {
         const expected = fragments
           .map(f => {
             if (f.kind === 'plain' || f.id.toLowerCase() !== target.toLowerCase()) return renderFragment(f)
-            // Aliased marks degrade to what they displayed: the label,
-            // or the id when the label is empty.
-            if (f.kind === 'aliased') return f.label !== '' ? f.label : f.id.toLowerCase()
+            // Aliased marks degrade to what they displayed: the label
+            // when non-empty; an empty-label mark renders like a plain
+            // ref, so it degrades to inlineContent too.
+            if (f.kind === 'aliased' && f.label !== '') return f.label
             return inline
           })
           .join('')

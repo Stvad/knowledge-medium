@@ -221,8 +221,11 @@ Another [[normal-ref]]
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({blockId: id, embed: false, label: ''})
       expect(rewriteBlockRefs(`[](((${id})))`, id, id2)).toBe(`[](((${id2})))`)
-      // Inlining degrades to what the mark displayed: the id text.
-      expect(inlineBlockRefs(`[](((${id})))`, id, 'target content')).toBe(id)
+      // Inlining degrades to what the mark displayed. An empty-label
+      // mark renders like a plain ref (remark-blockrefs emits no
+      // display children for '', so BlockRef shows target content) —
+      // it takes the inlineContent path.
+      expect(inlineBlockRefs(`[](((${id})))`, id, 'target content')).toBe('target content')
     })
 
     it('parses an aliased [label](((uuid))) ref as one block ref span', () => {

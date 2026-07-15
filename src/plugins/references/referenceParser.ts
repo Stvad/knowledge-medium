@@ -258,7 +258,11 @@ export const renderWikilink = (alias: string): string => {
 /** Render an aliased blockref `[label](((id)))`. Strips `]` and
  *  newlines from `label` because the parser's regex rejects them in
  *  the label segment (see `ALIASED_BLOCK_REF_RE`). `id` is assumed
- *  to be a UUID — already safe. */
+ *  to be a UUID — already safe. An empty label (also after stripping)
+ *  is allowed — the parser matches `[]` (zero-length label) and the
+ *  live renderer then displays the target's content, exactly like a
+ *  plain `((id))` (remark-blockrefs emits no display children for an
+ *  empty label; only unresolved targets fall back to the short id). */
 export const renderAliasedBlockref = (label: string, id: string): string => {
   // Parser regex: `\[([^\]\n]*)\]\(\(\((UUID)\)\)\)`. Anything in `]`
   // or `\n` would break the match; drop them. Empty label after
@@ -321,13 +325,12 @@ export const inlineBlockRefs = (
     if (mark.startIndex < cursor) continue
     if (mark.blockId !== normalizedId) continue
     result += content.slice(cursor, mark.startIndex)
-    // Degrade to what the mark DISPLAYED: the label for aliased marks
-    // (an empty label displays the id — keep that), the target's
-    // content for plain/embed marks.
-    result +=
-      mark.label === undefined ? inlineContent
-      : mark.label !== '' ? mark.label
-      : mark.blockId
+    // Degrade to what the mark DISPLAYED: the label for labeled marks;
+    // the target's content otherwise. An EMPTY-label aliased mark
+    // renders like a plain ref (remark-blockrefs emits no display
+    // children for it, so BlockRef falls back to target content) —
+    // it takes the inlineContent path too.
+    result += mark.label ? mark.label : inlineContent
     cursor = mark.endIndex
   }
   return cursor === 0 ? content : result + content.slice(cursor)
