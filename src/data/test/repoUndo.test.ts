@@ -24,6 +24,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, ReadOnlyError } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo, isBlockDeleted } from '@/data/test/createTestRepo'
+import { aliasesProp } from '@/data/properties'
 import { Repo } from '../repo'
 
 const WS = 'ws-1'
@@ -360,6 +361,40 @@ describe('replay ordering vs parent-liveness trigger', () => {
     const bRow2 = await env.repo.db.get<{parent_id: string}>(
       'SELECT parent_id FROM blocks WHERE id = ?', [b])
     expect(bRow2.parent_id).toBe('root')
+  })
+})
+
+describe('replay ordering vs alias-uniqueness trigger', () => {
+  // Merging two alias-carrying blocks hands the source's alias to the
+  // target (mergeProperties array union). Undo must restore the source
+  // (re-claiming its alias) AND revert the target (releasing it) in the
+  // same replay tx — a fixed application order can deadlock on the
+  // block_aliases_workspace_alias_unique trigger when the source is
+  // applied while the target still owns the merged alias. The replay
+  // worklist retries constraint-aborted rows after the releasing row
+  // lands. (Codex review find on PR #371.)
+  it('undoes and redoes a merge where both blocks own aliases', async () => {
+    await seedRoot(env.repo, 'root')
+    const a = await env.repo.mutate.createChild({parentId: 'root', content: 'A'})
+    const b = await env.repo.mutate.createChild({parentId: 'root', content: 'B'})
+    await env.repo.mutate.setProperty({id: a, schema: aliasesProp, value: ['alias-a']})
+    await env.repo.mutate.setProperty({id: b, schema: aliasesProp, value: ['alias-b']})
+    env.repo.undoManager.clear()
+
+    await env.repo.mutate.merge({intoId: a, fromId: b})
+    expect(await isBlockDeleted(env.repo, b)).toBe(true)
+
+    expect(await env.repo.undo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, b)).toBe(false)
+    const claim = await env.repo.db.getAll<{block_id: string}>(
+      'SELECT block_id FROM block_aliases WHERE alias = ? ORDER BY block_id', ['alias-b'])
+    expect(claim).toEqual([{block_id: b}])
+
+    expect(await env.repo.redo()).toBe(true)
+    expect(await isBlockDeleted(env.repo, b)).toBe(true)
+    const claimAfterRedo = await env.repo.db.getAll<{block_id: string}>(
+      'SELECT block_id FROM block_aliases WHERE alias = ? ORDER BY block_id', ['alias-b'])
+    expect(claimAfterRedo).toEqual([{block_id: a}])
   })
 })
 

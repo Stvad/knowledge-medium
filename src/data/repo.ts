@@ -1551,12 +1551,38 @@ export class Repo {
       : action
     await this._runAndDispatch(async (tx) => {
       const txImpl = tx as TxImpl
-      // Trigger-safe application order (parents before live children) —
-      // map insertion order is first-touch order of the original tx,
-      // which core.merge (children rehomed before the from-block's
-      // tombstone) shows is not safe to replay verbatim.
-      for (const [id, target] of replayApplicationOrder(entry.snapshots, direction)) {
-        await txImpl.applyRaw(id, target)
+      // Trigger-safe application: start from the topological order
+      // (parents before live children — map insertion order is
+      // first-touch order of the original tx, which core.merge shows
+      // is not safe to replay verbatim), then worklist-retry rows a
+      // row-level trigger rejects. The topo sort can't express
+      // RESOURCE constraints between equal-depth rows — undoing a
+      // merge of two alias-carrying blocks must revert the target
+      // (releasing the merged alias) before restoring the source
+      // (re-claiming it). A statement-level RAISE(ABORT) only rolls
+      // back that statement, so deferring the aborted row and applying
+      // the rest is safe; the replay's end state is a
+      // previously-observed valid state, so every constraint-blocked
+      // row eventually unblocks — a full pass with zero progress means
+      // the entry itself is inconsistent, and we rethrow.
+      let pending = replayApplicationOrder(entry.snapshots, direction)
+      while (pending.length > 0) {
+        const deferred: typeof pending = []
+        let lastError: unknown = null
+        for (const [id, target] of pending) {
+          try {
+            await txImpl.applyRaw(id, target)
+          } catch (err) {
+            if (parseAliasCollisionError(err) !== null || parseParentDeletedError(err) !== null) {
+              deferred.push([id, target])
+              lastError = err
+            } else {
+              throw err
+            }
+          }
+        }
+        if (deferred.length === pending.length) throw lastError
+        pending = deferred
       }
     }, {scope: entry.scope, description}, true)
   }

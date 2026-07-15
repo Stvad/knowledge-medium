@@ -42,8 +42,10 @@ import {
   NotDeletedError,
   ParentDeletedError,
   ParentNotFoundError,
+  ProcessorRejection,
   WorkspaceMismatchError,
 } from '@/data/api'
+import { aliasesProp } from '@/data/properties'
 import { cycleScanSql, SUBTREE_SQL } from '@/data/internals/treeQueries'
 import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
 import type { Repo } from '@/data/repo'
@@ -69,7 +71,13 @@ type OpSpec =
   | {op: 'moveVertical'; id: number; direction: -1 | 1}
   | {op: 'split'; id: number; before: string; after: string}
   | {op: 'merge'; into: number; from: number}
+  | {op: 'setAlias'; id: number; alias: number; clear: boolean}
   | {op: 'undo'} | {op: 'redo'}
+
+// Tiny alias pool so collisions (and merge-then-undo alias handoffs —
+// the block_aliases_workspace_alias_unique replay interaction) happen
+// constantly rather than by generation accident.
+const ALIAS_POOL = ['ax', 'ay', 'az'] as const
 
 const sel = fc.nat(31)
 const text = fc.string({maxLength: 8})
@@ -90,6 +98,7 @@ const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
   {weight: 2, arbitrary: fc.record({op: fc.constant('moveVertical' as const), id: sel, direction: fc.constantFrom(-1 as const, 1 as const)})},
   {weight: 2, arbitrary: fc.record({op: fc.constant('split' as const), id: sel, before: text, after: text})},
   {weight: 2, arbitrary: fc.record({op: fc.constant('merge' as const), into: sel, from: sel})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('setAlias' as const), id: sel, alias: fc.nat(ALIAS_POOL.length - 1), clear: fc.boolean()})},
   {weight: 1, arbitrary: fc.constant({op: 'undo'} as OpSpec)},
   {weight: 1, arbitrary: fc.constant({op: 'redo'} as OpSpec)},
 )
@@ -120,6 +129,10 @@ const LEGAL_ERRORS = [
 
 const assertLegalRejection = (e: unknown, op: OpSpec): void => {
   if (LEGAL_ERRORS.some(cls => e instanceof cls)) return
+  // Claiming an alias another live block owns is a legal user-facing
+  // rejection (block_aliases_workspace_alias_unique). Only that code —
+  // any other ProcessorRejection from the kernel-only runtime is a bug.
+  if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
   if (e instanceof Error && e.constructor === Error) return
   throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
 }
@@ -179,6 +192,13 @@ const applyOp = async (repo: Repo, op: OpSpec, ids: readonly string[]): Promise<
       return [await repo.mutate.split({id: pickNonRoot(op.id, ids), before: op.before, after: op.after})]
     case 'merge':
       await repo.mutate.merge({intoId: pick(op.into, ids), fromId: pickNonRoot(op.from, ids)})
+      return []
+    case 'setAlias':
+      await repo.mutate.setProperty({
+        id: pick(op.id, ids),
+        schema: aliasesProp,
+        value: op.clear ? [] : [ALIAS_POOL[op.alias]],
+      })
       return []
     case 'undo':
       await repo.undo()
