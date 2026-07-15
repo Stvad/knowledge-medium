@@ -251,8 +251,12 @@ const p1CaseArb = fc.record({
 
 const runP1 = async ({seed, targetIx, offsetSeed, prngSeed}: {
   seed: Array<{parent: number; content: string}>; targetIx: number; offsetSeed: number; prngSeed: number
-}): Promise<void> => withPinnedRandom(prngSeed, async () => {
+}): Promise<void> => {
+  // Barrier BEFORE pinning: an interrupted deep-tier case keeps running
+  // after fc.assert resolves, and its finally would restore Math.random
+  // over the pin taken here (Codex review on PR #371).
   await inFlightCase?.catch(() => {})
+  return withPinnedRandom(prngSeed, async () => {
   const {db} = sharedDb
   await resetTestDb(db)
   const {repo} = createTestRepo({db, user: {id: 'user-1'}})
@@ -293,6 +297,7 @@ const runP1 = async ({seed, targetIx, offsetSeed, prngSeed}: {
   expect(await childrenIds(db, newId), 'surviving block re-adopts original children in order').toEqual(originalChildren)
   await sweepInvariants(db, ids)
 })
+}
 
 describe('split-then-merge identity', () => {
   it('reconstructs content, count, and children', async () => {
@@ -320,8 +325,12 @@ const runP2 = async ({seed, ops, prngSeed}: {
   seed: Array<{parent: number; content: string}>
   ops: Array<{idIx: number; offsetSeed: number}>
   prngSeed: number
-}): Promise<void> => withPinnedRandom(prngSeed, async () => {
+}): Promise<void> => {
+  // Barrier BEFORE pinning: an interrupted deep-tier case keeps running
+  // after fc.assert resolves, and its finally would restore Math.random
+  // over the pin taken here (Codex review on PR #371).
   await inFlightCase?.catch(() => {})
+  return withPinnedRandom(prngSeed, async () => {
   const {db} = sharedDb
   await resetTestDb(db)
   const {repo} = createTestRepo({db, user: {id: 'user-1'}})
@@ -355,6 +364,7 @@ const runP2 = async ({seed, ops, prngSeed}: {
     await sweepInvariants(db, ids)
   }
 })
+}
 
 describe('split conservation', () => {
   it('conserves whole-tree content and places the new block correctly, over a sequence', async () => {
@@ -381,8 +391,12 @@ const runP3 = async ({specs, intoIdx, fromIdx, prngSeed}: {
   intoIdx: number
   fromIdx: number
   prngSeed: number
-}): Promise<void> => withPinnedRandom(prngSeed, async () => {
+}): Promise<void> => {
+  // Barrier BEFORE pinning: an interrupted deep-tier case keeps running
+  // after fc.assert resolves, and its finally would restore Math.random
+  // over the pin taken here (Codex review on PR #371).
   await inFlightCase?.catch(() => {})
+  return withPinnedRandom(prngSeed, async () => {
   const {db} = sharedDb
   await resetTestDb(db)
   const {repo} = createTestRepo({db, user: {id: 'user-1'}})
@@ -426,6 +440,7 @@ const runP3 = async ({specs, intoIdx, fromIdx, prngSeed}: {
 
   await sweepInvariants(db, ids)
 })
+}
 
 describe('merge conservation', () => {
   it('concatenates content and adopts children for two distinct siblings', async () => {
@@ -504,8 +519,12 @@ const runP4 = async ({seed, ops, prngSeed}: {
   seed: Array<{parent: number; content: string}>
   ops: Op4[]
   prngSeed: number
-}): Promise<void> => withPinnedRandom(prngSeed, async () => {
+}): Promise<void> => {
+  // Barrier BEFORE pinning: an interrupted deep-tier case keeps running
+  // after fc.assert resolves, and its finally would restore Math.random
+  // over the pin taken here (Codex review on PR #371).
   await inFlightCase?.catch(() => {})
+  return withPinnedRandom(prngSeed, async () => {
   const {db} = sharedDb
   await resetTestDb(db)
   const {repo} = createTestRepo({db, user: {id: 'user-1'}})
@@ -546,6 +565,7 @@ const runP4 = async ({seed, ops, prngSeed}: {
   expect(await liveSnapshot(db), 'redo-all returns to final state').toBe(finalSnap)
   await sweepInvariants(db, ids)
 })
+}
 
 describe('split/merge undo round-trip', () => {
   it('undo-all and redo-all restore exact snapshots', async () => {

@@ -148,7 +148,14 @@ const assertLegalRejection = (e: unknown, op: OpSpec): void => {
   // rejection (block_aliases_workspace_alias_unique). Only that code —
   // any other ProcessorRejection from the kernel-only runtime is a bug.
   if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
-  if (e instanceof Error && e.constructor === Error) return
+  // Placement anchors resolve by id under the TARGET parent: an op whose
+  // anchor sibling lives elsewhere is a legal incoherent-op rejection —
+  // mutators.ts throws plain Error for it (mutators.ts:118 for
+  // `position.before/after`, mutators.ts:431 for the split path). Only
+  // these exact messages — any other plain Error is a bug (Codex review
+  // on PR #371: the previous `e.constructor === Error` branch accepted
+  // them all).
+  if (e instanceof Error && /^(position\.(before|after) )?sibling .* not found under /.test(e.message)) return
   throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
 }
 

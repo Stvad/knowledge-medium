@@ -223,16 +223,27 @@ const checkOracles = (
   }
 }
 
+/** Deep-tier interrupt barrier (docs/fuzzing.md §6): fast-check's
+ * `interruptAfterTimeLimit` resolves `fc.assert` without awaiting the
+ * executing case. The shared state here is global `Math.random` — an
+ * abandoned case's `finally` would restore it over the next property's
+ * pin, breaking seeded replay (Codex review on PR #371). Each case
+ * records itself and barriers before pinning. */
+let inFlightCase: Promise<void> | null = null
+
 describe('orderKeyPlacement fuzz', () => {
   it('keysImmediatelyBefore: never throws; new keys ascending with no ties; ids preserved; land immediately before the anchor', async () => {
     await fc.assert(
       fc.asyncProperty(caseArb, async ({bucketSizes, anchorRaw, n, parentId, prngSeed}) => {
-        await withPinnedRandom(prngSeed, async () => {
+        await inFlightCase?.catch(() => {})
+        const run = withPinnedRandom(prngSeed, async () => {
           const siblings = buildSiblings(bucketSizes, parentId)
           const anchor = anchorRaw % siblings.length
           const {returned, moves} = await runPlacement('before', siblings, parentId, anchor, n)
           checkOracles('before', siblings, parentId, anchor, n, returned, moves)
         })
+        inFlightCase = run
+        await run
       }),
       fuzzParams(150),
     )
@@ -241,12 +252,15 @@ describe('orderKeyPlacement fuzz', () => {
   it('keysImmediatelyAfter: never throws; new keys ascending with no ties; ids preserved; land immediately after the anchor', async () => {
     await fc.assert(
       fc.asyncProperty(caseArb, async ({bucketSizes, anchorRaw, n, parentId, prngSeed}) => {
-        await withPinnedRandom(prngSeed, async () => {
+        await inFlightCase?.catch(() => {})
+        const run = withPinnedRandom(prngSeed, async () => {
           const siblings = buildSiblings(bucketSizes, parentId)
           const anchor = anchorRaw % siblings.length
           const {returned, moves} = await runPlacement('after', siblings, parentId, anchor, n)
           checkOracles('after', siblings, parentId, anchor, n, returned, moves)
         })
+        inFlightCase = run
+        await run
       }),
       fuzzParams(150),
     )

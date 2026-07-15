@@ -228,8 +228,13 @@ const fakeEditorView = (content: string, cursor: number): EditorView => {
 
 // ──── invariant sweep ────
 
-const sweepInvariants = async (db: TestDb['db'], ids: readonly string[]): Promise<void> => {
-  const cycles = await db.getAll<{start_id: string}>(cycleScanSql(ids.length), [...ids])
+const sweepInvariants = async (db: TestDb['db']): Promise<void> => {
+  // Scan ALL rows, not just the seed ids: actions create blocks
+  // (split_block_cm & co.) and later actions operate on them, so a cycle
+  // through a created id would otherwise escape the sweep (Codex review
+  // on PR #371).
+  const liveIds = (await db.getAll<{id: string}>('SELECT id FROM blocks')).map(row => row.id)
+  const cycles = await db.getAll<{start_id: string}>(cycleScanSql(liveIds.length), liveIds)
   expect(cycles, 'structural cycle').toEqual([])
 
   const orphans = await db.getAll<{id: string}>(
@@ -409,7 +414,7 @@ const runCase = async (
         }
       }
       await env.fence()
-      await sweepInvariants(sharedDb.db, ids)
+      await sweepInvariants(sharedDb.db)
     }
     await env.fence()
   } finally {
@@ -506,6 +511,6 @@ describe('default-action dispatch sequences', () => {
     await env.fence()
     expect((await row(beta)).deleted, 'undo action restored the block').toBe(0)
 
-    await sweepInvariants(sharedDb.db, ids)
+    await sweepInvariants(sharedDb.db)
   })
 })
