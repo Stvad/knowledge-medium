@@ -109,7 +109,23 @@ export const createOrRestoreTargetBlock = async (
       // BlockDataPatch, so we can refresh content in the same UPDATE.
       // Property writes that need codec encoding still go through
       // tx.setProperty inside the callback.
-      await tx.restore(args.id, {content: args.freshContent})
+      //
+      // The stored bag's ALIASES are stripped in the same UPDATE: a
+      // tombstoned seat can carry a stale claim — e.g. a daily seat
+      // whose alias was overwritten, then merged away (merge hands the
+      // alias to the merge target and tombstones the seat with its bag
+      // intact). Restoring that bag as-is would resurrect the stale
+      // claim and trip the alias-uniqueness trigger against the current
+      // legitimate claimant BEFORE onInsertedOrRestored can correct it,
+      // rolling back the caller's whole tx (for parseReferences: a
+      // permanently stripped source; found by
+      // referencesRecompute.fuzz.test.ts). The callback then writes the
+      // correct alias via tx.setProperty — its target alias is either
+      // unclaimed (the caller lookup-first'ed) or this row's own.
+      const tombstone = await tx.get(args.id)
+      const restoredProperties = {...(tombstone?.properties ?? {})}
+      delete restoredProperties[aliasesProp.name]
+      await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
       if (args.onInsertedOrRestored) {
         await args.onInsertedOrRestored(tx, args.id)
       }

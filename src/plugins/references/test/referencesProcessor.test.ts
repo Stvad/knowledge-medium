@@ -1127,6 +1127,52 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     const seat = await env.read(dailyNoteBlockId(WS, '2026-02-03'))
     expect(seat, 'no daily seat minted when the literal alias is claimed').toBeNull()
   })
+
+  it('restores a merged-away daily seat whose tombstone carries a stale alias claim', async () => {
+    // A tombstoned seat's stored bag can hold an alias that now belongs
+    // to someone else: overwrite the seat's alias, merge the seat away
+    // (merge hands the alias to the target and tombstones the seat with
+    // its bag intact), then re-reference the date. Pre-fix the restore
+    // resurrected the stale claim, tripped the alias-uniqueness trigger
+    // against the merge target, and rolled back the whole parse tx —
+    // permanently stripped refs for the new source (found by
+    // referencesRecompute.fuzz.test.ts, seed -453708417). The restore
+    // now strips the aliases key in the same UPDATE and the callback
+    // re-writes the correct one.
+    const seatId = dailyNoteBlockId(WS, '2026-01-05')
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'src-a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'on [[2026-01-05]]'})
+      await tx.create({id: 'absorber', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'B'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await env.read(seatId), 'daily seat materialized').not.toBeNull()
+
+    await env.repo.tx(
+      tx => tx.setProperty(seatId, aliasesProp, ['zz-stale']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    await env.repo.mutate.merge({intoId: 'absorber', fromId: seatId})
+    await flush()
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src-b', workspaceId: WS, parentId: null, orderKey: 'a2', content: 'also [[2026-01-05]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const row = await env.read('src-b')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === '2026-01-05' && ref.id === seatId),
+      `date ref derived, not stripped (refs: ${row!.references_json})`,
+    ).toBe(true)
+    const seat = await env.read(seatId)
+    expect(seat!.deleted).toBe(0)
+    expect(JSON.parse(seat!.properties_json)[aliasesProp.name]).toEqual(['2026-01-05'])
+    const absorber = await env.read('absorber')
+    expect(JSON.parse(absorber!.properties_json)[aliasesProp.name]).toEqual(['zz-stale'])
+  })
 })
 
 describe('parseReferences — idempotent comparison', () => {

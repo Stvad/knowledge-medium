@@ -254,6 +254,15 @@ found one more within its first minute:
   INSIDE the write tx and `applySourcePlan` retargets the planned
   entries to the claimant — converging to what a fresh re-parse would
   produce.
+- A third rollback variant, minutes later: a tombstoned seat's stored
+  bag can carry a STALE alias claim (overwrite the seat's alias, then
+  merge the seat away — merge hands the alias to the target and
+  tombstones the seat with its bag intact). Re-referencing the date
+  restored that bag as-is, resurrecting the stale claim and tripping
+  the uniqueness trigger against the merge target — same
+  whole-tx-rollback strip. `createOrRestoreTargetBlock` now strips the
+  aliases key in the same restore UPDATE; the domain callback re-writes
+  the correct one.
 
 ## Adding a suite
 

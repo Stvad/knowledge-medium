@@ -89,18 +89,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # `cancelled()` (not just `failure()`) so a job-timeout cancellation
-      # — e.g. the stateful pass running long enough to hit the job's
-      # timeout-minutes — still files/comments instead of going silent.
+      # Step failures only. A job-timeout cancellation is reported by the
+      # separate `report-cancellation` job below — post-cancel steps inside
+      # THIS job aren't a reliable place to run (GitHub cancels the job).
+      # The timeout path is also remote by construction: scripts/fuzz.mjs
+      # caps vitest's own testTimeout well below timeout-minutes, so vitest
+      # is the killer for a hung case, which lands here as failure().
       - name: File or update failure issue
-        if: failure() || cancelled()
+        if: failure()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SWEEP_OUTCOME: ${{ steps.sweep.outcome }}
           STATEFUL_OUTCOME: ${{ steps.stateful.outcome }}
-          JOB_STATUS: ${{ job.status }}
         run: |
           # Best-effort: pull fast-check's failure block (seed/path/shrunk
           # counterexample usually sit within a few lines of "seed:") out of
@@ -129,7 +131,7 @@ jobs:
           [ "$STATEFUL_OUTCOME" = "failure" ] && failing+=("Deep fuzz — stateful data-layer suite (long pass)|fuzz-stateful.log")
 
           if [ ${#failing[@]} -eq 0 ]; then
-            excerpt=$'\n(no step reported failure — the job was cancelled, most likely by the 90-minute job timeout; see whichever of fuzz-sweep.log / fuzz-stateful.log made it into the fuzz-output artifact.)\n'
+            excerpt=$'\n(no step reported failure — see the fuzz-output artifact.)\n'
           else
             excerpt=""
             for entry in "${failing[@]}"; do
@@ -139,11 +141,7 @@ jobs:
             done
           fi
 
-          if [ "$JOB_STATUS" = "cancelled" ]; then
-            headline="Nightly fuzz run timed out or was cancelled — see artifact: $RUN_URL"
-          else
-            headline="Nightly fuzz run failed: $RUN_URL (full logs in the run's fuzz-output artifact)."
-          fi
+          headline="Nightly fuzz run failed: $RUN_URL (full logs in the run's fuzz-output artifact)."
 
           body=$(printf '%s\n%s\n\n%s\n%s\n' \
             "$headline" \
@@ -156,6 +154,40 @@ jobs:
           else
             gh issue create \
               --title "Nightly fuzz failure ($(date -u +%Y-%m-%d))" \
+              --label bug,fuzz-failure,P2,ci \
+              --body "$body"
+          fi
+
+  # Separate dependent job: a job-timeout CANCELS the fuzz job, and
+  # post-cancel steps inside it aren't guaranteed to run — this job is
+  # scheduled independently, so a hung/overlong nightly can't go silent.
+  # No log excerpt here (the logs live on the cancelled job's runner;
+  # the artifact only exists if its upload step got to run) — just the
+  # run URL.
+  report-cancellation:
+    runs-on: ubuntu-latest
+    needs: fuzz
+    # needs.fuzz.result, not cancelled(): a job-level timeout cancels the
+    # JOB; workflow-level cancelled() stays false unless the whole run was
+    # cancelled. always() lets this job be scheduled despite the upstream
+    # cancellation; the result check narrows it to the cancel case.
+    if: ${{ always() && needs.fuzz.result == 'cancelled' }}
+    timeout-minutes: 5
+    steps:
+      - name: File or update timeout/cancellation issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="Nightly fuzz run was cancelled — most likely the 90-minute job timeout (a hung case that vitest's own testTimeout failed to kill). Logs, if captured, are in the run's fuzz-output artifact: $RUN_URL"
+          existing=$(gh issue list --label fuzz-failure --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create \
+              --title "Nightly fuzz timeout/cancellation ($(date -u +%Y-%m-%d))" \
               --label bug,fuzz-failure,P2,ci \
               --body "$body"
           fi
