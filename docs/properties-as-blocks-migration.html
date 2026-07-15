@@ -1608,7 +1608,10 @@ implementation</strong> and keep it open until its content is fully accounted fo
       <p>
         Sequence the first production run deliberately: it's an upload burst of 2 rows
         per (block, property) — run workspace-by-workspace, watch <code>ps_crud</code>
-        drain. Before flipping it on, size it: run
+        drain — and it presupposes the <code>row_events</code> retention prerequisite
+        (§12): without the prune + backfill exemption, the burst also writes ~650k
+        permanent full-row history snapshots per device. Before flipping it on, size
+        it: run
         <code>select count(*) from blocks where properties_json != '{}' and deleted = 0</code>
         (and a key histogram) against production via <code>yarn agent sql</code> /
         Supabase — filtered to plaintext workspaces (PR-review P2: e2ee cells are
@@ -1892,6 +1895,25 @@ the backfill's harness for gating and chunking, not its write path.
     catch-up never visits the shared parent); slice C's parent-dedup fix plus the
     hold-until-first-sync-drained requirement close this. Gate slice C on a two-client
     concurrent-backfill test.
+  </li>
+  <li>
+    <strong>Local history storage multiplies — prune <code>row_events</code> before
+    slice C.</strong> <code>row_events</code> is an unbounded, write-only audit log
+    (full before+after row snapshots per update, trigger-maintained for local
+    <em>and</em> sync-applied writes; no runtime consumer, no prune, and no
+    client-side VACUUM to reclaim space — <code>clientSchema.ts</code>) already at
+    ~1.17M rows × ~2&nbsp;KB on a dev instance. The backfill's ~650k creates would
+    append a snapshot each on the authoring device <em>and again per receiving
+    device</em> as the rows sync down, and steady-state property edits become 2–3
+    logged writes instead of one. Prerequisite, as its own small PR: implement the
+    prune designed in <code>docs/row-events-retention.md</code> (re-stamp it first —
+    it references the deleted <code>rowEventsTail</code> path), exempt the backfill's
+    system writes at the source (<code>tx_context</code>-gated trigger condition;
+    the backfill is already undo-free), reconsider logging <code>source='sync'</code>
+    events at all, and wire an idle VACUUM so pruning returns bytes. The
+    <code>blocks_synced</code>/<code>ps_oplog</code> full copies tripling with row
+    count are separate — load-bearing sync machinery, priced by the tier-4
+    measurement, not a prune target.
   </li>
   <li>
     <strong>Schema-registry timing.</strong> Derivation quality depends on which schemas
