@@ -25,6 +25,18 @@ export const extensionPropertySeedKey = (key: string): string => {
   return `${DYNAMIC_EXTENSION_PROPERTY_PREFIX}${key}`
 }
 
+/** Rewrite a reserved dynamic seedKey (`@extension/property/<key>`) to its
+ *  block-scoped form (`<encodeURIComponent(blockId)>/property/<key>`). Callers
+ *  guarantee the reserved prefix is present before calling. */
+const bindReservedSeedKey = (seedKey: string, blockId: string): string => {
+  const owner = encodeURIComponent(blockId)
+  if (owner.length === 0) {
+    throw new Error('Dynamic extension block id must be non-empty')
+  }
+  const key = seedKey.slice(DYNAMIC_EXTENSION_PROPERTY_PREFIX.length)
+  return `${owner}/property/${key}`
+}
+
 const boundOwners = new WeakMap<AnyPropertySeedDeclaration, string>()
 
 /** Loader-only: bind a declaration's reserved dynamic owner to its block. */
@@ -52,12 +64,7 @@ export const bindExtensionPropertySeed = (
     )
   }
 
-  const owner = encodeURIComponent(blockId)
-  if (owner.length === 0) {
-    throw new Error('Dynamic extension block id must be non-empty')
-  }
-  const key = value.seedKey.slice(DYNAMIC_EXTENSION_PROPERTY_PREFIX.length)
-  ;(value as {seedKey: string}).seedKey = `${owner}/property/${key}`
+  ;(value as {seedKey: string}).seedKey = bindReservedSeedKey(value.seedKey, blockId)
   boundOwners.set(value, blockId)
   return value
 }
@@ -81,10 +88,5 @@ export const bindExtensionPropertyOverride = (
   if (!value.seedKey.startsWith(DYNAMIC_EXTENSION_PROPERTY_PREFIX)) {
     return value
   }
-  const owner = encodeURIComponent(blockId)
-  if (owner.length === 0) {
-    throw new Error('Dynamic extension block id must be non-empty')
-  }
-  const key = value.seedKey.slice(DYNAMIC_EXTENSION_PROPERTY_PREFIX.length)
-  return {...value, seedKey: `${owner}/property/${key}`}
+  return {...value, seedKey: bindReservedSeedKey(value.seedKey, blockId)}
 }
