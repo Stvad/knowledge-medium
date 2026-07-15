@@ -497,10 +497,20 @@ already uses, <code>clientSchema.ts:542-544</code>) but emits domain keys.
 Column-granular only: a changed <code>properties_json</code> stores the whole
 new cell value, not a sub-key diff — see §15 for why, and note the
 props-as-blocks migration shrinks that very column structurally.
-One v1 nuance carries over: <code>userUpdatedAt</code> is serialized as
-<code>coalesce(user_updated_at, updated_at)</code> (<code>clientSchema.ts:397</code>);
-v2 keeps that projection for the field and accepts that a (never-occurring
-today) explicit clear is not distinguishable.
+One v1 nuance carries over with a v2-specific consequence (review finding):
+<code>userUpdatedAt</code> is serialized as
+<code>coalesce(user_updated_at, updated_at)</code> (<code>clientSchema.ts:397</code>),
+and <strong>for a projected field the diff must be projected too</strong> —
+when <code>user_updated_at</code> is NULL, an update that changes only
+<code>updated_at</code> changes the domain value while the storage column is
+untouched, so a storage-only <code>OLD.x IS NOT NEW.x</code> key set would
+omit <code>userUpdatedAt</code> and replay would reconstruct it stale. The v2
+trigger keys this field on <code>coalesce(OLD.user_updated_at,
+OLD.updated_at) IS NOT coalesce(NEW.user_updated_at, NEW.updated_at)</code>
+and emits the coalesced value (the shared column spec carries an optional
+domain-projection expression used for both the diff and the emit). The
+projection still accepts that a (never-occurring today) explicit clear is not
+distinguishable.
 </p>
 
 <p>Index change — <strong>the add moves to slice A</strong> (review finding;
@@ -518,10 +528,15 @@ violation. To avoid a boot stall (a synchronous CREATE INDEX over the ~1.17M-row
 stock is a seconds-scale single-worker pause), slice A builds the index as a
 marker-gated idle job and only then swaps the v2 trigger bodies in — trigger
 recreation is cheap and can run mid-session; until the marker is set, boots
-keep installing the v1 bodies. Retiring the old
-<code>(block_id, created_at DESC)</code> index stays a slice-C decision, and
-may resolve to "keep both": per-block time-seek ("latest event ≤ T") wants it —
-see the subtree reader row in <a href="#s10">§10</a>.
+keep installing the v1 bodies. The old
+<code>(block_id, created_at DESC)</code> index is <strong>retained</strong>
+(review finding): per-block time-seek ("latest event ≤ T") has no sound
+substitute — <code>id</code> order is insertion order, and
+<code>created_at</code> is not reliably monotone in <code>id</code> under
+wall-clock steps, so bisecting <code>created_at</code> over the
+<code>(block_id, id)</code> index can pick a wrong event or degrade to a scan
+(see the subtree reader row in <a href="#s10">§10</a>). Slice C may revisit
+with real measurements, but the default is keep-both.
 <code>(created_at DESC)</code> and <code>(tx_id)</code> stay for time-scoped
 and tx-join forensics.</p>
 
@@ -954,8 +969,7 @@ block with any <code>v IS NULL</code> event:
     are self-describingly done, unrewritten rows self-describingly not — no
     cursor to corrupt. A <code>client_schema_state</code> marker
     (<code>row_events_compact_migration_v1</code>) records only overall
-    completion, gating the §9 VACUUM and the old-index retirement decision
-    (§3).</li>
+    completion, gating the §9 VACUUM and any §3 index revisit.</li>
   <li><strong>Chunking:</strong> a few hundred blocks (or ~2–5k events) per write
     tx, scheduled via <code>PendingIdleJobs</code> +
     <code>scheduleDeepIdle</code> (<code>idleMarkerJobs.ts</code>) like the other
@@ -972,9 +986,10 @@ block with any <code>v IS NULL</code> event:
     loop recreates triggers referencing them — same constraint and same slot as
     <code>ensureUndoGroupIdColumns</code> (<code>repoProvider.ts:352-357</code>
     area; documented footgun at <code>clientSchema.ts:1384-1391</code>).</li>
-  <li><strong>The old-index retirement decision (§3) runs after the rewrite
-    completes</strong> (the <code>(block_id, id)</code> add itself happened in
-    slice A), then one explicit <code>ANALYZE</code>: the automatic drift check
+  <li><strong>One explicit <code>ANALYZE</code> after the rewrite
+    completes</strong> (the <code>(block_id, id)</code> add happened in slice
+    A; <code>(block_id, created_at DESC)</code> is retained per §3 — any
+    measurement-driven revisit also lands here): the automatic drift check
     keys on <code>blocks</code> counts only (<code>analyzeIsWarranted</code>,
     <code>clientSchema.ts:1438-1455</code>) and would never notice
     row_events index changes.</li>
@@ -1070,19 +1085,23 @@ costs more moving parts, bounds memory, never touches the live file.
         log, built lazily when the history UI ships; explicitly out of scope
         for these slices). Per-member state is §4.3 <code>stateAt</code>;
         deleted-at-T members reconstruct fine (delete events carry full
-        before). Per-block time-seek: binary-search <code>created_at</code>
-        over the <code>(block_id, id)</code> index (per-block id order is
-        created_at-monotone up to clock steps), or retain
-        <code>(block_id, created_at DESC)</code> alongside it — decide in
-        slice C (§3).</td>
+        before). Per-block time-seek: the retained
+        <code>(block_id, created_at DESC)</code> index (§3 — bisecting
+        <code>created_at</code> over the id index was considered and rejected:
+        created_at is not reliably monotone in id under clock steps).</td>
     </tr>
     <tr>
       <td>Drift-tolerant undo (<code>undoManager.ts:26-28</code>,
         <code>user.ts:17-21</code>)</td>
       <td>My tx's writes (<code>tx_id</code>, <code>group_id</code>); the state
         to restore to; detection that someone else changed the field since</td>
-      <td>Restore state = <code>stateAt</code>(event before my tx's first event)
-        — O(W); drift check = my after vs live <code>blocks</code> row.
+      <td>Restore state = <code>stateBefore</code>(my tx's first event): for a
+        compact event, <code>stateAt</code>(its predecessor) — O(W); for a
+        <code>chain_pos = 0</code> update/soft-delete anchor, the event's
+        <em>own</em> <code>before_json</code> (review finding — this is exactly
+        the I1 case: the first edit after an unlogged gap has no predecessor
+        event, and the pre-edit state lives on the anchor itself). Drift check
+        = my after vs live <code>blocks</code> row.
         <code>before_json</code>-per-event was never required, only
         reconstructable-before — which anchors guarantee.</td>
     </tr>
@@ -1202,10 +1221,10 @@ into is smaller).
     <tr>
       <td><strong>C — stock migration</strong></td>
       <td>§8 idle rewriter (per-block, discontinuity-anchoring), partial work
-        index, completion marker, retire-or-retain decision for
-        <code>(block_id, created_at DESC)</code> (§3; §10 subtree reader) +
-        explicit ANALYZE; equivalence test (I5) + resumability test (interrupt
-        mid-chunk, rerun, byte-identical outcome).</td>
+        index, completion marker, explicit ANALYZE
+        (<code>(block_id, created_at DESC)</code> is retained per §3 —
+        revisit only with measurements); equivalence test (I5) + resumability
+        test (interrupt mid-chunk, rerun, byte-identical outcome).</td>
       <td>Requires A. Gates D.</td>
     </tr>
     <tr>
