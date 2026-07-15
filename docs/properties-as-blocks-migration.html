@@ -358,7 +358,7 @@
       read-modify-write <em>preserves</em> them; no-children keys are pending
       materialization, never deleted (§5).</li>
     <li><strong>Materialize everything — no scope carve-outs</strong>: kernel, plugin,
-      and user schemas alike, all four <code>ChangeScope</code>s, with system/machine
+      and user schemas alike, all five <code>ChangeScope</code>s, with system/machine
       field rows hidden by default; orphan keys get synthesized definitions so no
       permanent cell-backed category remains (§6, §9).</li>
     <li><strong>Rollout is one flip:</strong> slices A–B land dormant behind a
@@ -1131,8 +1131,12 @@ section still kept the three non-document scopes (UiState, UserPrefs, Automation
 permanent cell-backed carve-out. That carve-out is now removed too (owner decision,
 stated repeatedly across design rounds and finally landed here — the split had
 survived on drafting inertia plus review-loop entrenchment, not argument).
-<strong>Decision: materialize everything — kernel, plugin, and user schemas, all four
-<code>ChangeScope</code>s — with system and machine field rows hidden by default
+<strong>Decision: materialize everything — kernel, plugin, and user schemas, all five
+<code>ChangeScope</code>s (<code>BlockDefault</code>, <code>UiState</code>,
+<code>UserPrefs</code>, <code>Automation</code>, <code>References</code> — the count
+is enumerated deliberately; PR-review P2 caught "all four" leaving
+<code>References</code>-scoped schemas outside the backfill and blocking the column
+drop) — with system and machine field rows hidden by default
 behind the existing per-schema <code>hidden</code> override and "Show Hidden Fields"
 toggle. No schema category stays cell-backed permanently.</strong> Two reasons, both
 structural. First, §5's own argument admits no boundary: whatever stays cell-synced
@@ -1220,11 +1224,33 @@ default — not in anyone's document tree.
   eventually <code>'cell-off'</code>, the <code>encryption_mode</code> pattern:
   operator-written, synced to every client, synchronously readable after workspace
   sync, and <em>server-visible</em>, which is precisely what the §11 sync-rules split
-  needs). The predicate every consumer shares — recognition (§9), dual-write,
-  projection, reconcile — is <strong>child-backed(key) = workspace flipped ∧ a
-  definition block resolves for the key</strong>. Nothing else: no scope term (§6
-  migrates all scopes), no per-schema stamp, no buildability term at flip time (§5's
-  unbuildable-writer note is fleet policy). This deletes outright: the reserved
+  needs). The states are <em>ordered</em>, and "flipped" everywhere in this doc means
+  <strong>at or past <code>'children'</code></strong> —
+  <code>IN ('children','cell-off')</code>, never an equality test (PR-review P2: an
+  equality gate would un-recognize every field row the moment a workspace advances to
+  <code>'cell-off'</code> — exactly when the cell is no longer a synced fallback).
+  And "operator-written" is enforced server-side, not by convention (PR-review P2):
+  the <code>workspaces</code> table is directly updatable by workspace writers — the
+  e2ee migration added <code>workspaces_prevent_e2ee_field_change</code> for exactly
+  this exposure — so the column ships with the same trigger family: client writes
+  rejected, transitions forward-only, advanced only through a
+  <code>SECURITY DEFINER</code> operator RPC that can refuse
+  <code>'cell-off'</code> until the backfill/sweep gates have been attested. The predicate every consumer shares — recognition (§9), dual-write,
+  projection, reconcile — is <strong>child-backed = workspace flipped</strong>.
+  Nothing else: no scope term (§6 migrates all scopes), no per-schema stamp, no
+  buildability term at flip time (§5's unbuildable-writer note is fleet policy), and
+  no per-key definition-existence term either — "every key resolves a definition" is
+  an <em>invariant</em>, not a predicate branch: established before the flip by §9's
+  orphan synthesis, maintained after it by <code>addSchema</code> (the only normal
+  key-minting path creates the definition), and repaired by the sweep, which
+  synthesizes on encountering a definition-less key from a raw writer or import. Two
+  runbook consequences: synthesis runs <em>before</em> the flip, and unconverted
+  dynamic extensions convert to seeds before it too — otherwise synthesis mints a
+  user-origin definition for their keys and the later seed conversion collides with
+  it in the winner machinery, stranding field rows on the loser's fieldId. (A key
+  that momentarily lacks a definition anyway is mechanically inert, not wrong: no
+  field row can exist for it — recognition points at definition ids — so it rides
+  the cell until the sweep promotes it.) This deletes outright: the reserved
   <code>property-schema:child-backed</code> definition field (schema unification
   reserved it for this doc — record the divergence there), the slice-C bulk stamp
   across user definitions and its idempotent re-run rule, the consistency-sweep
@@ -1254,12 +1280,12 @@ workspace column), so the slices here consume them rather than build them:
   <li><strong>The lever must be durable and fleet-consistent where it can vary —
     met.</strong> The workspace column is one synced server-side value — a
     code-constant fork between client versions is not expressible, and every device
-    reads the same bit after workspace sync. The per-key half of the predicate ("a
-    definition block resolves") is synced data for every origin since unification;
-    a dynamic extension not yet converted to seed declarations (the transitional
-    dual-path, until its B′ deletion slice) has no definition block and its keys stay
-    cell-backed until conversion <em>or</em> until §9's orphan synthesis promotes
-    them — the safe default either way. What remains ours: moving the column in
+    reads the same bit after workspace sync. The definitions-exist invariant rides
+    synced data for every origin since unification; a dynamic extension not yet
+    converted to seed declarations (the transitional dual-path, until its B′ deletion
+    slice) has no definition block — the runbook converts it before the flip, and a
+    straggler's keys are inert-until-swept (callout above) — the safe default either
+    way. What remains ours: moving the column in
     either direction is a <em>migration</em> — run a final projection pass, then
     materialize or delete children under the new regime (rollback: drain then
     <em>delete</em>, §11 slice B) — never a silent payload change.</li>
@@ -1355,11 +1381,16 @@ per row: "this row is a field instance", "of this schema", and for exact block-r
 <p>Options, in increasing effort:</p>
 
 <ol>
-  <li><strong>Gate: e2ee workspaces stay cell-only for now.</strong> An e2ee
-    workspace's <code>properties_migration</code> column simply never leaves
-    <code>'cell'</code> (§6 — the gate and the flip ride the same lever), so the
-    machinery behaves as if every schema were cell-backed. Zero leak, zero new code beyond the
-    gate. E2EE users keep today's behavior. <em>Recommended for the first ship.</em></li>
+  <li><strong>Gate: e2ee workspaces flip later — sequencing, not an endpoint.</strong>
+    An e2ee workspace's <code>properties_migration</code> column stays at
+    <code>'cell'</code> until option 2 below is built (§6 — the gate and the flip
+    ride the same lever), so the machinery behaves as if every schema were
+    cell-backed. Zero leak, zero new code beyond the gate; e2ee users keep today's
+    behavior <em>for now</em>. <em>Recommended for the first ship</em> — but option 2
+    is required work, not optional: §11's column drop needs <em>every</em> workspace
+    at <code>'cell-off'</code>, e2ee included, so a permanently-gated e2ee workspace
+    would keep the column alive exactly the way §6's rejected carve-outs would
+    have.</li>
   <li><strong>Derive locally, never upload.</strong> The exclusion cannot live in
     <code>BLOCK_UPLOAD_COLUMNS</code> — that is a static, trigger-generated list with
     no per-workspace variance (PR-review P2). Strip the column at the upload
@@ -1467,7 +1498,8 @@ skill while at it.
   <dd>A child of P is a field row iff <code>reference_target_id</code> equals a
     definition block's id — a fieldId-keyed lookup the unified registry ships
     (<code>resolveField</code>) — <em>the workspace is flipped</em>
-    (<code>properties_migration = 'children'</code>, §6; PR-review P2: recognition off
+    (<code>properties_migration</code> at or past <code>'children'</code>, §6;
+    PR-review P2: recognition off
     the raw column alone activates the moment slice A/B starts stamping — an ordinary
     whole-block <code>[[some property schema]]</code> link would be hidden and
     reinterpreted even while the workspace is still cell-only, breaking the
@@ -1533,8 +1565,19 @@ skill while at it.
     <code>hidden</code> by default until triaged. From that point they are ordinary
     schemas riding the normal machinery. Until the flip runs (and for keys a
     still-unconverted dynamic extension owns), definition-less keys retain today's
-    cell semantics — a transitional state, not an end state. The unification doc
-    counts disabled-plugin residue as this problem's easy sub-case (its §4.3);
+    cell semantics — a transitional state, not an end state. Synthesized definitions
+    carry a provenance marker, because a synthesized key's <em>real</em> owner can
+    arrive later (PR-review P2): re-enabling or converting a plugin seeds an
+    unshadowable code-owned definition under the same name, the synthesized
+    definition drops to shadowed loser — excluded from the name map and cell
+    projection — and the already-backfilled field rows still point at the synthetic
+    fieldId, so the migrated values would vanish from <code>block.get</code>/queries
+    under the real schema. The plan therefore includes a <em>retarget pass</em>: on a
+    seed claiming a name held by a marker-carrying synthesized definition, re-point
+    that definition's field rows to the seed's fieldId (the §7 rename-reproject
+    machinery is the precedent — same re-stamp + re-project shape), then retire the
+    synthesized block; the sweep carries the same rule as backstop. The unification
+    doc counts disabled-plugin residue as this problem's easy sub-case (its §4.3);
     e2ee workspaces synthesize client-side at their own (option-2) flip, since the
     server can never enumerate their keys.</dd>
 
@@ -1997,8 +2040,10 @@ implementation</strong> and keep it open until its content is fully accounted fo
       <p>
         When the in-tree surface has clearly won: delete
         <code>BlockProperties.tsx</code>, <code>propertyPanel/*</code>,
-        <code>AddPropertyForm</code>. E2EE derive-locally path (§8 option 2) lands here
-        or earlier if e2ee users want child-backed fields sooner.
+        <code>AddPropertyForm</code>. The e2ee derive-locally path (§8 option 2) lands
+        here at the latest — earlier if e2ee users want child-backed fields sooner —
+        and it is required, not optional: the §11 column drop needs e2ee workspaces
+        at <code>'cell-off'</code> too.
       </p>
       <p class="deliv">One rendering surface. The processors stay — they're the
         convergence machinery, not scaffolding.</p>
@@ -2113,7 +2158,14 @@ step gated on the one before:
     Under §6's no-carve-out decision plus orphan synthesis the column is genuinely
     droppable once every workspace reaches <code>'cell-off'</code> — the end this
     project actually aims at; before that point it survives only as the transitional
-    carrier for un-flipped workspaces.</li>
+    carrier for un-flipped workspaces. The drop has its own prerequisite (PR-review
+    P2): the create path still binds the column — <code>apply_block_creates</code>
+    binds an explicit NOT NULL <code>properties_json</code>, and the client's
+    generated storage/upload column lists include it — so before any server-side
+    drop, rework creates end-to-end (RPC signature, upload payloads,
+    <code>BLOCK_STORAGE_COLUMNS</code>-derived lists) to omit the column while the
+    local table keeps it as a derived, never-uploaded column. Dropping first would
+    fail every new-block create in <code>'cell-off'</code> workspaces.</li>
 </ol>
 
 <p>
@@ -2268,7 +2320,7 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
     </tr>
     <tr>
       <td><strong>The checksum binds content, identity, and enumeration — both
-        directions.</strong> <code>{hash, coveredKeys, preservedKeys}</code> over
+        directions.</strong> <code>{hash, coveredKeys}</code> over
         block id + covered values; verification = the hash over
         exactly the listed keys <em>plus</em> containment (present child-backed ⊆
         covered); never the local registry.</td>
@@ -2290,7 +2342,8 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
     <tr>
       <td><strong>Recognition = column + workspace flip + subtree role.</strong> A
         field row's <code>reference_target_id</code> is a definition id, the
-        workspace is flipped (<code>properties_migration = 'children'</code>),
+        workspace is flipped (<code>properties_migration</code> at or past
+        <code>'children'</code> — never an equality test),
         <em>and</em> its parent is a content block —
         no ancestor is a field row; everything beneath a value child is ordinary
         content.</td>
