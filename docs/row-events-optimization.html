@@ -181,8 +181,9 @@
 <header class="doc-header">
   <h1>row_events: compact local history with sampled anchors</h1>
   <p class="subtitle">
-    Keep the full per-row history log, shrink it ~4&times;: changed-columns
-    events with periodic full-snapshot anchors, provenance-gated logging for
+    Keep the full per-row history log, shrink it ~3&times;: invertible
+    changed-columns events (before + after per changed field) with sampled
+    full-snapshot anchors, provenance-gated logging for
     bulk derivation bursts, sync-applied events kept (compact) for local
     self-sufficiency, and a reconstruction-lossless migration of the existing
     ~1.17M full-snapshot events — followed by the VACUUM that actually returns
@@ -222,7 +223,9 @@
   names, and it gates that project's slice C.
   Supersedes the prune-based design in <code>docs/row-events-retention.md</code>
   (re-stamped in this PR). Direction fixed by the user: history is <em>kept</em>,
-  never pruned; events shrink.
+  never pruned; events shrink. Two format decisions revised 2026-07-15 per user
+  calls: sync events kept for every workspace (§6, former O1), and invertible
+  patches + sampled anchors adopted over the deterministic probe (§4, O5).
   <strong>Last verified against code:</strong> 2026-07-15.
 </aside>
 
@@ -243,16 +246,18 @@
 <div class="callout">
   <strong>Decisions made in this doc</strong> (each argued in its section):
   <ul>
-    <li><strong>Compact updates, column-granular</strong>: an update event stores
-      only the changed domain fields' <em>after</em> values; identical updates are
-      not logged (§3).</li>
-    <li><strong>Deterministic per-block anchors every W=50 events, cadence carried
-      in the log itself</strong> (<code>chain_pos</code>), not in an auxiliary
-      counter and not probabilistic. Anchors carry full before+after (§4).
-      <em>Cadence mechanism under re-review — <a href="#s16">O5</a>.</em></li>
-    <li><strong>Every chain starts full</strong>: a compact update whose
-      predecessor is missing — or is a legacy-v1 event — promotes itself to an
-      anchor (§4, inherited from PR #288's invariants index).</li>
+    <li><strong>Compact updates are invertible, column-granular patches</strong>:
+      an update event stores the changed domain fields' <em>before and after</em>
+      values (equal key sets); identical updates are not logged (§3).</li>
+    <li><strong>Anchors are sampled — one in-trigger coin flip at p = 1/64, no
+      write-path reads</strong> (adopted per <a href="#s16">O5</a>, superseding
+      a deterministic probe + counter design, §15). Anchors carry full
+      before+after and are pure read-acceleration + corruption-bounding: no
+      correctness property depends on them (§4).</li>
+    <li><strong>Every event is self-restoring; reconstruction never leans on a
+      predecessor</strong>: walks terminate on the newer side unconditionally —
+      live row, delete event, or anchor (§4.3). The old "every chain starts
+      full" promotion machinery is unnecessary (§4.1).</li>
     <li><strong>Derived writes log normally in compact form; only enumerated
       one-shot bulk bursts skip</strong>, via a tx-scoped
       <code>tx_context.history_mode</code> opt-in — provenance-keyed, never
@@ -461,14 +466,13 @@ trigger-recreation ordering):
         apart, and how the migration finds unrewritten rows.</td>
     </tr>
     <tr>
-      <td><code>chain_pos INTEGER</code></td>
-      <td>Position since the last <em>full</em> event of this block.
-        <code>0</code> = this event carries complete row state (create, anchor,
-        delete); <code>k&gt;0</code> = compact event, k-th since the last full
-        one. <code>NULL</code> on v1 rows (every v1 row is full by
-        construction). One column serves as both the anchor marker and the
-        cadence counter — the log describes itself; there is no auxiliary
-        state to drift or migrate.</td>
+      <td><code>full INTEGER</code></td>
+      <td><code>1</code> = the payload sides present carry <em>complete</em>
+        row state (create, hard delete, sampled anchor, migration anchor);
+        <code>0</code> = compact invertible patch (changed fields only, both
+        sides). <code>NULL</code> on v1 rows — every v1 row is full by
+        construction, so readers treat <code>v IS NULL</code> as full. There
+        is no cadence state anywhere — the log stays self-describing.</td>
     </tr>
   </tbody>
 </table>
@@ -479,12 +483,12 @@ trigger-recreation ordering):
 
 <div class="table-scroll">
 <table>
-  <thead><tr><th>kind</th><th>chain_pos</th><th>before_json</th><th>after_json</th></tr></thead>
+  <thead><tr><th>kind</th><th>full</th><th>before_json</th><th>after_json</th></tr></thead>
   <tbody>
-    <tr><td><code>create</code></td><td>0</td><td>NULL</td><td>full snapshot (unchanged from v1 — creates are inherently full)</td></tr>
-    <tr><td><code>update</code> / <code>soft-delete</code>, compact</td><td>k&gt;0</td><td>NULL</td><td><strong>changed domain fields only</strong>: JSON object, key present ⇔ column changed, value = new value (JSON <code>null</code> = cleared). The key set <em>is</em> the changed-columns list — no separate column.</td></tr>
-    <tr><td><code>update</code> / <code>soft-delete</code>, <strong>anchor</strong></td><td>0</td><td>full snapshot</td><td>full snapshot</td></tr>
-    <tr><td><code>delete</code> (hard purge)</td><td>0</td><td>full snapshot</td><td>NULL</td></tr>
+    <tr><td><code>create</code></td><td>1</td><td>NULL</td><td>full snapshot (unchanged from v1 — creates are inherently full)</td></tr>
+    <tr><td><code>update</code> / <code>soft-delete</code>, compact</td><td>0</td><td><strong>changed domain fields only, old values</strong> — same key set as after_json</td><td><strong>changed domain fields only, new values</strong>: JSON object, key present ⇔ column changed (JSON <code>null</code> = cleared). The shared key set <em>is</em> the changed-columns list — no separate column — and the equal-key-set pair makes every event an invertible patch (§4.1).</td></tr>
+    <tr><td><code>update</code> / <code>soft-delete</code>, <strong>anchor</strong> (sampled, §4)</td><td>1</td><td>full snapshot</td><td>full snapshot</td></tr>
+    <tr><td><code>delete</code> (hard purge)</td><td>1</td><td>full snapshot</td><td>NULL</td></tr>
     <tr><td><em>identical update (no column changed)</em></td><td colspan="3"><em>no event written</em> — mirrors the server trigger's skip (<code>20260522062437_add_blocks_history.sql:120-125</code>). The v1 trigger has no such gate; this alone deletes a class of pure-noise 4&nbsp;KB events (LWW echoes, clamp no-ops).</td></tr>
   </tbody>
 </table>
@@ -513,90 +517,76 @@ projection still accepts that a (never-occurring today) explicit clear is not
 distinguishable.
 </p>
 
-<p>Index change — <strong>the add moves to slice A</strong> (review finding;
-originally bundled with the §8 migration): a new <code>(block_id, id)</code>
-index. <code>id</code> is AUTOINCREMENT-monotonic and is the authoritative
-per-block order (same-millisecond events in one tx tie on
-<code>created_at</code>); the trigger's predecessor probe (§4) and every reader
-walk need exactly this ordering, and the entries are smaller. The probe runs on
-<em>every logged update</em> from the first v2 write, and the existing
-<code>(block_id, created_at DESC)</code> index cannot serve
-<code>ORDER BY id DESC LIMIT 1</code> — without the new index, a hot block pays
-a per-write sort over its whole event history <em>inside the write trigger</em>,
-during exactly the window (slices A/B) that must precede the #288 burst: an I6
-violation. To avoid a boot stall (a synchronous CREATE INDEX over the ~1.17M-row
-stock is a seconds-scale single-worker pause), slice A builds the index as a
-marker-gated idle job and only then swaps the v2 trigger bodies in — trigger
-recreation is cheap and can run mid-session; until the marker is set, boots
-keep installing the v1 bodies. The old
-<code>(block_id, created_at DESC)</code> index is <strong>retained</strong>
-(review finding): per-block time-seek ("latest event ≤ T") has no sound
-substitute — <code>id</code> order is insertion order, and
+<p>Index changes — <strong>none on the write path</strong>: the v2 trigger
+reads nothing (§4.1), so slice A ships no index work at all. Slice C adds
+<code>(block_id, id)</code> for reader walks and the §8 rewriter —
+<code>id</code> is AUTOINCREMENT-monotonic and is the authoritative per-block
+order (same-millisecond events in one tx tie on <code>created_at</code>). The
+existing <code>(block_id, created_at DESC)</code> index is
+<strong>retained</strong> (review finding): per-block time-seek ("latest event
+≤ T") has no sound substitute — <code>id</code> order is insertion order, and
 <code>created_at</code> is not reliably monotone in <code>id</code> under
-wall-clock steps, so bisecting <code>created_at</code> over the
-<code>(block_id, id)</code> index can pick a wrong event or degrade to a scan
-(see the subtree reader row in <a href="#s10">§10</a>). Slice C may revisit
-with real measurements, but the default is keep-both.
-<code>(created_at DESC)</code> and <code>(tx_id)</code> stay for time-scoped
-and tx-join forensics.</p>
+wall-clock steps, so bisecting <code>created_at</code> over an id-ordered
+index can pick a wrong event or degrade to a scan (see the subtree reader row
+in <a href="#s10">§10</a>). <code>(created_at DESC)</code> and
+<code>(tx_id)</code> stay for time-scoped and tx-join forensics. (Two earlier
+revisions of this paragraph — moving the id-index add into slice A as an idle
+job gating the trigger swap — existed solely for the deterministic probe's
+benefit; moot since O5's adoption.)</p>
 
-<h2 id="s4">4. Anchors: cadence, promotion, reconstruction</h2>
+<h2 id="s4">4. Anchors: invertible payloads, sampled full snapshots</h2>
 
-<h3>4.1 Cadence and keying — decision</h3>
+<h3>4.1 Decision — invertible compact events; anchors by coin flip</h3>
 
 <p>
-On every logged update, the trigger probes the block's most recent event —
-one <code>O(log n)</code> seek on the new <code>(block_id, id)</code> index:
+Adopted 2026-07-15 (user call; decision record in <a href="#s16">O5</a>,
+superseding the deterministic predecessor-probe design — its record is in
+<a href="#s15">§15</a>). Two properties define the format:
 </p>
 
-<pre><code>SELECT v, chain_pos FROM row_events
- WHERE block_id = NEW.id ORDER BY id DESC LIMIT 1</code></pre>
-
-<p>and decides:</p>
-
 <ul>
-  <li><strong>No prior event</strong> → this chain has no base: <strong>promote to
-    anchor</strong> (full before+after, <code>chain_pos = 0</code>). This is PR
-    #288's "every history chain starts full" invariant (<a href="#invariants">I1</a>) —
-    it is what makes every §5 exemption safe: OLD is always available to
-    the trigger, so the first logged edit of an unlogged row rebuilds a complete
-    base no matter why earlier events are absent.</li>
-  <li><strong>Prior event is v1</strong> (<code>v IS NULL</code>) → also promote
-    to anchor. v2 chains never count a v1 event as their base — this decouples
-    the live log from the §8 migration entirely: the rewriter may compact
-    <em>any</em> v1 event without checking whether some live chain leans on it.
-    Cost: one anchor per block on its first post-deploy edit, only for blocks
-    edited at all.</li>
-  <li><strong><code>prev.chain_pos ≥ W−1</code></strong> → anchor
-    (<code>chain_pos = 0</code>).</li>
-  <li>Otherwise → compact event, <code>chain_pos = prev.chain_pos + 1</code>.</li>
+  <li><strong>Every compact event is invertible.</strong>
+    <code>before_json</code> and <code>after_json</code> carry the <em>same key
+    set</em> — the changed fields — with old and new values respectively.
+    Applying <code>after_json</code> onto the pre-state, or un-applying
+    <code>before_json</code> from the post-state, are both single-object
+    merges. No event's interpretation or inverse depends on any other row
+    existing (invariant <a href="#invariants">I1</a>).</li>
+  <li><strong>Anchors are sampled, not scheduled.</strong> On each logged
+    update the trigger flips one coin (<code>random()</code>, p = 1/64 —
+    argued in <a href="#s4-4">§4.4</a>); a hit writes the event full (complete
+    before + after, <code>full = 1</code>) instead of compact. No probe, no
+    counter, <em>no reads of any kind on the write path</em> (invariant
+    <a href="#invariants">I6</a>). Creates and hard deletes are full by
+    nature.</li>
 </ul>
 
-<div class="callout good">
-  <strong>Decision — deterministic per-block window W = 50, position carried in
-  the event row itself.</strong> Alternatives and why not:
-  <ul>
-    <li><em>Probabilistic (1-in-50 by <code>random()</code>)</em>: stateless, but
-      the window is unbounded in the tail (P(no anchor in n events) =
-      0.98<sup>n</sup>; the 99th-percentile gap is ~228 events) — which makes
-      both reconstruction cost and the corruption blast radius unbounded.
-      Rejected.</li>
-    <li><em>Per-block counter side-table</em>: O(1), but introduces mutable state
-      that can drift from the log, costs an extra B-tree upsert on every write,
-      and needs its own backfill/repair story. Rejected.</li>
-    <li><em>Byte-budget (anchor after ≥X bytes of compact payloads)</em>: bounds
-      replay <em>bytes</em> rather than replay <em>count</em>, but needs an
-      accumulator (same drawbacks as the counter) or an O(W) SUM per write.
-      Deferred — W bounds bytes well enough in practice (worst case W &times;
-      largest column value), and cadence is a constant we can revisit
-      (§4.4).</li>
-  </ul>
-  The chosen probe keeps the log self-describing: cadence state cannot be lost,
-  corrupted, or skewed independently of the history it describes, and the
-  migration + live trigger share one rule.
-  <br><em>Note: this mechanism (probe + deterministic cadence) is under
-  re-review — see <a href="#s16">O5</a> for a probe-free candidate that also
-  changes the compact payload shape.</em>
+<p>What the deleted probe machinery used to buy, and why it is no longer
+needed:</p>
+
+<ul>
+  <li><em>Chain-start promotion (the old I1, "every chain starts full")</em> —
+    chains no longer have bases: reconstruction walks from the newer side,
+    which always terminates (§4.3), and every event restores its own fields by
+    itself. The first edit after any unlogged gap (§5 skip, trigger-suspended
+    window) is fully usable the moment it lands, including for undo.</li>
+  <li><em>v1-predecessor promotion</em> — v2 events never reference
+    predecessors, so the §8 rewriter keeps its zero-coordination property with
+    the machinery deleted rather than because of it.</li>
+  <li><em>The deterministic walk bound W</em> — replaced by an expected bound
+    with a geometric tail (§4.4). Acceptable because walks cost microseconds
+    per event, anchors carry no correctness weight, and the current state is
+    never at risk.</li>
+</ul>
+
+<div class="callout warn">
+  <strong>Implementation trap — one coin per event.</strong> The trigger body
+  needs the anchor decision in three places (before side, after side, the
+  <code>full</code> column); three separate <code>random()</code> calls would
+  disagree (e.g. a full before paired with a compact after). Compute the flip
+  once and reference it — e.g. <code>INSERT INTO row_events ... SELECT ...
+  FROM (SELECT (abs(random()) % 64) = 0 AS anchor)</code>. Pin with a shape
+  test: both payload sides of every event agree on key set / fullness.
 </div>
 
 <h3>4.2 Anchor content — decision</h3>
@@ -612,61 +602,91 @@ Anchors carry <strong>full before + full after</strong> (not after-only):
     checkpoint at every anchor.</li>
   <li><em>One-sided recovery</em>: if the run before an anchor is lost, the
     anchor's before still yields the state just prior to it.</li>
-  <li><em>Cost is noise</em>: one extra ~1&nbsp;KB side per W=50 events ≈
-    +20&nbsp;B amortized per event.</li>
+  <li><em>Symmetric bases</em>: a full event serves forward walks (its after
+    side) and backward walks (its before side) equally — §4.3 picks whichever
+    full state is nearer.</li>
+  <li><em>Cost is noise</em>: one extra full pair per 1/p events ≈
+    +25&nbsp;B amortized per update at p = 1/64 (§4.4).</li>
 </ul>
 
-<h3>4.3 Reconstruction algorithm</h3>
+<h3>4.3 Reconstruction: bidirectional, the newer side always terminates</h3>
 
-<pre><code>stateAt(blockId, eventId):                  # row state just after event E
+<pre><code>stateAt(blockId, eventId):                # row state just after event E
   E = event(eventId)
-  if E.v is NULL:      return per-kind full side (v1 events are all full)
-  if E.chain_pos == 0: return per-kind full side (create/anchor: after; delete: gone/before)
+  if E.v is NULL or E.full:
+      return per-kind full side           # create/anchor: after; delete: before
 
-  # compact: walk back to the chain base — at most W−1 steps, contiguous
-  # in the (block_id, id) index
-  patches = [E]
-  for ev in events(blockId, id &lt; E.id, ORDER BY id DESC):
-      if ev.v is NULL or ev.chain_pos == 0:
-          base = fullAfterOf(ev); break
-      patches.prepend(ev)
-  if no base: raise ChainBroken            # bounded loss — see below
-
-  state = base
-  for ev in patches: state = {...state, ...parse(ev.after_json)}
-  return state</code></pre>
+  # nearest full state on EITHER side, whichever is closer:
+  #   older side: newest event ≤ E with a full after (create, anchor)
+  #               → walk FORWARD applying after_json patches
+  #   newer side: oldest event ≥ E with a full before (anchor, delete),
+  #               or the live blocks row itself
+  #               → walk BACKWARD un-applying before_json patches
+  #
+  # The newer side ALWAYS terminates: a live block ends at its blocks row,
+  # a purged block at its delete event (full before). ChainBroken can only
+  # mean corruption inside the log — see the failure bound.</code></pre>
 
 <p>
-Complexity: <code>O(log n)</code> seek + <code>O(W)</code> contiguous index
-scan + <code>O(W·c)</code> field merges (c = mean changed fields, ~3) —
-microseconds-scale per point lookup at W=50. A whole-block timeline
-streams forward once, carrying the running state: <code>O(events of block)</code>.
-Workspace-wide time-travel to time T: per touched block, binary-search the
-event ≤ T, then <code>stateAt</code> — <code>O(B·(log n + W))</code>.
+Complexity: expected walk = distance to the nearest full state on either side
+— E[one-sided gap] = 1/p = 64 events, so expected walk ≲ 32, p99 one-sided
+≈ 4.6/p ≈ 295 (§4.4); each step is one ~0.4&nbsp;KB JSON parse + ~3-field
+merge, microseconds. A whole-block timeline streams once carrying running
+state, either direction: <code>O(events of block)</code>. Recent history —
+the common UI case — is effectively free <em>and exact</em>: it walks backward
+from the live row through trigger-recorded OLD values, so it is correct even
+across unlogged gaps (§5 skips); a gap only degrades states <em>older</em>
+than itself, back to the next-older full state.
 </p>
 
 <p>
-<strong>Failure bound.</strong> <code>ChainBroken</code> can only arise from
-row loss/corruption inside the log itself. The damage is confined to the
-compact run between two full events — at most W−1 states; everything at or
-after the next full event reconstructs normally, and the <em>current</em> state
-is never at risk (it lives in <code>blocks</code>). This is the property the
-sampled anchors buy: reconstruction is "nearest anchor + short replay", never
-full-chain replay to the insert, and an interrupted chain loses at most one
-window.
+<strong>Failure bound.</strong> Corruption severing the log confines damage to
+states older than the break, back to the next-older full state — expected
+~1/p events, p99 ≈ 4.6/p. Everything at or newer than the break reconstructs
+from the live side, and the <em>current</em> state is never at risk (it lives
+in <code>blocks</code>). Anchor before-sides double as integrity checkpoints:
+replaying the span between two full states must reproduce the newer one's
+<code>before_json</code>.
 </p>
 
-<h3 id="s4-4">4.4 W is a tunable constant, not a schema property</h3>
+<h3 id="s4-4">4.4 Choosing p — a checkpoint-spacing problem</h3>
 
 <p>
-W lives in the trigger SQL, which re-installs from source on every boot
-(<code>clientSchema.ts:1170-1175</code>). Changing it needs no migration and no
-version bump: <code>chain_pos</code> makes each chain self-describing, so
-mixed cadences coexist — readers never assume W, they walk to
-<code>chain_pos = 0</code>. Amortized anchor overhead ≈ (full-pair size −
-compact size)/W ≈ (2048−200)/50 ≈ +37&nbsp;B per update (~+18% of compact-update
-bytes); W=100 would halve that at double the replay bound. 50 is the starting
-point (matching the frame's 1-in-50 suggestion), revisit with real telemetry.
+Under this format anchors carry <em>no correctness weight</em> — every
+property in §4.3 holds with zero anchors — so p is chosen economically, as in
+the classic checkpoint-interval tradeoff:
+</p>
+
+<ul>
+  <li><strong>Cost is linear in p.</strong> An anchor adds Δ ≈ 1.6&nbsp;KB over
+    a compact event (~2&nbsp;KB full pair vs ~0.4&nbsp;KB patch pair).
+    Per-update overhead = p·Δ: ~64&nbsp;B (+16%) at 1/25, ~25&nbsp;B (+6%) at
+    1/64, ~13&nbsp;B (+3%) at 1/128.</li>
+  <li><strong>Read latency does not bind.</strong> Expected point-lookup walk
+    ~1/(2p) events at microseconds each; even 1/p in the several hundreds
+    keeps far-past lookups sub-millisecond, and the common recent-history
+    reads walk from the live row and touch no anchor at all. Optimizing p for
+    reads would push it toward zero — the user's "plausibly rarer" instinct is
+    right.</li>
+  <li><strong>The binding constraint is the loss window</strong> (and with it,
+    integrity-checkpoint granularity): how much of a block's <em>older</em>
+    history may become unreconstructable when corruption severs its chain, and
+    how tightly an integrity sweep can localize a divergence (one inter-anchor
+    span). Gaps are geometric, so to guarantee a p99 window ≤ L events, set
+    <strong>p ≈ ln(100)/L ≈ 4.6/L</strong>.</li>
+</ul>
+
+<p>
+<strong>Default: p = 1/64</strong> — expected gap 64, p99 ≈ 295, +6% update
+bytes: "99% of corruption-loss windows and far-past walks stay under ~300
+events" at byte cost that is noise against the creates dominating §12. Rarer
+is defensible (1/128 → p99 ≈ 590, still microseconds to walk, still bounded
+per block by its create); denser buys only checkpoint granularity. The
+constant lives in the trigger SQL, re-installed every boot
+(<code>clientSchema.ts:1170-1175</code>); mixed rates coexist freely since
+readers key on <code>full</code>, never on cadence. Revisit with history-UI
+telemetry — observed walk lengths are the one number that settles this
+empirically.
 </p>
 
 <h2 id="s5">5. Derived-write logging — analysis and recommendation</h2>
@@ -697,7 +717,7 @@ machinery misbehaves. Options considered:
   <ul>
     <li><strong>Steady-state derived writes log normally</strong> (option d):
       projection, sweep repairs, per-row catch-up. In compact form a 2–3-write
-      fan-out per property edit costs ~0.5&nbsp;KB total — affordable, and this
+      fan-out per property edit costs ~1&nbsp;KB total — affordable, and this
       is precisely the record convergence debugging needs ("which pass rewrote
       the cell, from what, to what, when"). No new provenance column:
       every local event already carries <code>tx_id</code>, and
@@ -882,7 +902,7 @@ an open write tx, so an app-layer event writer could be atomic. What decides it:
     <tr><td>Coverage</td><td><strong>Catch-all</strong>: every writer including raw paths and any future one; a write cannot dodge history silently — and "who wrote this without going through the API" is itself the forensic question</td><td>Two parallel writers to build and keep in lockstep (tx engine + observer); raw paths uncovered; a forgotten future path = silent gap</td></tr>
     <tr><td>Diff verbosity</td><td>Per-column CASE — <strong>already proven in-tree</strong>: the upload PATCH trigger builds changed-columns-only JSON in pure SQLite (<code>blockUploadPatchJsonSql</code>, <code>clientSchema.ts:552-563</code>, <code>json_set</code>/CASE/<code>json_remove('$.__noop')</code>)</td><td>Simpler TS diff, easier unit tests</td></tr>
     <tr><td>Upgrades</td><td>Free fleet-wide via boot-time recreation (<code>:1170-1175</code>)</td><td>Ordinary code deploy (also fine)</td></tr>
-    <tr><td>Cadence probe</td><td>Scalar subquery, O(log n)</td><td>Same query from JS</td></tr>
+    <tr><td>Anchor sampling</td><td>One in-trigger <code>random()</code> — zero reads</td><td>Same coin from JS</td></tr>
   </tbody>
 </table>
 </div>
@@ -897,7 +917,9 @@ an open write tx, so an app-layer event writer could be atomic. What decides it:
   hand-maintained parallel of <code>BLOCK_STORAGE_COLUMNS</code> that must be
   extended in lockstep (its §11 slice A, "history/undo seam").
   Per-write cost of v2: the same JSON build machinery as today minus one full
-  snapshot side, plus one O(log n) predecessor probe —
+  snapshot side per non-anchor update (changed-field patches on both sides
+  instead of two full snapshots), plus one <code>random()</code> — zero reads
+  on the write path —
   strictly less work than v1 for every non-anchor update (invariant
   <a href="#invariants">I6</a>).
 </div>
@@ -923,15 +945,20 @@ block with any <code>v IS NULL</code> event:
 <ol>
   <li>Stream its v1 events ascending. Maintain <code>runningState</code> (the
     reconstructed after of the previous kept event) and <code>pos</code> (compact
-    count since the last full event).</li>
+    count since the last full event — a rewriter-local counter; nothing in the
+    output encodes it).</li>
   <li><code>create</code>/<code>delete</code>: stamp <code>v=2,
-    chain_pos=0</code>, payload unchanged. Reset <code>pos</code>.</li>
+    full=1</code>, payload unchanged. Reset <code>pos</code>.</li>
   <li><code>update</code>/<code>soft-delete</code>: compute changed fields by
     comparing the event's <em>own</em> before/after JSON (exact — no cross-event
-    inference), then keep it <strong>full (anchor)</strong> if any of:
+    inference), then keep it <strong>full (anchor, <code>full=1</code>)</strong>
+    if any of:
     <ul>
-      <li><em>chain start</em> — no prior event for the block (I1);</li>
-      <li><em>cadence</em> — <code>pos ≥ W−1</code>;</li>
+      <li><em>no <code>runningState</code></em> — the block's history doesn't
+        open with a create (pre-log era, historical gaps);</li>
+      <li><em>cadence</em> — <code>pos ≥ 63</code> (deterministic every-64th in
+        the rewriter — it runs offline, no coin needed, and readers key on
+        <code>full</code>, never on spacing);</li>
       <li><em>discontinuity</em> — the event's <code>before_json</code> ≠
         <code>runningState</code>. This is the load-bearing sampling rule: v1
         <code>before</code> is normally redundant with the previous event's
@@ -940,8 +967,9 @@ block with any <code>v IS NULL</code> event:
         it is <em>not</em> — anchoring exactly at discontinuities keeps those
         seams reconstructable and visible instead of silently splicing them.</li>
     </ul>
-    Otherwise rewrite compact: <code>after_json</code> = changed fields,
-    <code>before_json = NULL</code>, <code>v=2, chain_pos=++pos</code>. An
+    Otherwise rewrite compact: <code>before_json</code> = changed fields' old
+    values, <code>after_json</code> = changed fields' new values (equal key
+    sets — the invertible-patch shape of §3), <code>v=2, full=0</code>. An
     all-fields-identical v1 update (the v1 trigger logged no-ops) becomes an
     empty compact event — kept, ~60&nbsp;B, preserving "an UPDATE happened"
     timing.</li>
@@ -976,11 +1004,12 @@ block with any <code>v IS NULL</code> event:
     catch-up passes — never on the boot or first-paint path. Each chunk holds
     the single writer briefly; live writes queue behind it, as they do behind
     any tx.</li>
-  <li><strong>Live-write coexistence is free by construction:</strong> §4's
-    trigger anchors whenever the predecessor is v1, so no live v2 chain ever
-    references a v1 base — the rewriter may compact any v1 event without
-    coordination. Within a block, all v1 events predate all v2 events (v1 stops
-    being written the moment slice A deploys).</li>
+  <li><strong>Live-write coexistence is free by construction:</strong> v2
+    events never reference predecessors at all (§4.1), so the rewriter may
+    compact any v1 event without coordination — and I5 preserves
+    <code>stateAt</code> for every event, so a reader walking across the v1/v2
+    boundary mid-migration stays sound. Within a block, all v1 events predate
+    all v2 events (v1 stops being written the moment slice A deploys).</li>
   <li><strong>Ordering with the ALTERs:</strong> the column adds run in
     <code>initializePowerSyncDb</code> before the <code>CLIENT_SCHEMA_STATEMENTS</code>
     loop recreates triggers referencing them — same constraint and same slot as
@@ -1059,7 +1088,8 @@ costs more moving parts, bounds memory, never touches the live file.
       <td>Block history / time-travel UI</td>
       <td>Per-block timeline; state at any event; actor + kind labels; cheap
         "what changed here"</td>
-      <td><code>(block_id, id)</code> index; <code>stateAt</code> O(W); compact
+      <td><code>(block_id, id)</code> index; <code>stateAt</code> (§4.3 —
+        recent states walk backward from the live row and are exact); compact
         key set = changed-columns list; <code>updatedBy</code> appears in the
         diff whenever it changed — a forward-streaming timeline carries it (and
         any field) between events. Note for a merged local+server view:
@@ -1095,15 +1125,13 @@ costs more moving parts, bounds memory, never touches the live file.
         <code>user.ts:17-21</code>)</td>
       <td>My tx's writes (<code>tx_id</code>, <code>group_id</code>); the state
         to restore to; detection that someone else changed the field since</td>
-      <td>Restore state = <code>stateBefore</code>(my tx's first event): for a
-        compact event, <code>stateAt</code>(its predecessor) — O(W); for a
-        <code>chain_pos = 0</code> update/soft-delete anchor, the event's
-        <em>own</em> <code>before_json</code> (review finding — this is exactly
-        the I1 case: the first edit after an unlogged gap has no predecessor
-        event, and the pre-edit state lives on the anchor itself). Drift check
-        = my after vs live <code>blocks</code> row.
-        <code>before_json</code>-per-event was never required, only
-        reconstructable-before — which anchors guarantee.</td>
+      <td>My tx's events carry their own before values (§4.1) — restore =
+        un-apply my events' <code>before_json</code> patches directly; no
+        reconstruction at all. (A round-2 review finding — undo of the first
+        edit after an unlogged gap — needed special <code>stateBefore</code>
+        handling under the probe design; under invertible patches it is the
+        ordinary case.) Drift check = my after vs live <code>blocks</code>
+        row.</td>
     </tr>
     <tr>
       <td>Forensics / incident recovery (backlink-wipe class)</td>
@@ -1142,11 +1170,14 @@ costs more moving parts, bounds memory, never touches the live file.
     unacceptable, the exemption must be #288-side (an enumerated arrival-burst
     skip keyed on markers #288 controls). G2 weakens from "zero rows" to
     "priced, optionally exemptable by #288".</li>
-  <li><strong>G3 — no stranded chains:</strong> the first later edit of any
-    exempted row promotes to a full anchor (I1) — "every history chain starts
-    full" holds under every exemption above.</li>
+  <li><strong>G3 — no stranded chains, trivially:</strong> v2 events are
+    self-restoring and never lean on a predecessor (I1) — the first later edit
+    of a skip-exempted row is immediately usable (it stores its own befores),
+    and full state around it reconstructs from the live row (§4.3). The
+    promotion machinery this guarantee used to require is gone; the guarantee
+    itself is strictly stronger.</li>
   <li><strong>G4 — steady-state fan-out priced:</strong> a property edit's 2–3
-    row writes log as compact events (~0.5&nbsp;KB total), not 2–3 full snapshot
+    row writes log as compact events (~1&nbsp;KB total), not 2–3 full snapshot
     pairs (~4–6&nbsp;KB).</li>
   <li><strong>G5 — ordering:</strong> #288 slice C requires this project's
     slices A+B only (format + provenance/sync policy). The §8 migration and §9
@@ -1161,8 +1192,9 @@ Worked against the dev instance (~1.17M events ≈ ~2.2&nbsp;GB at ~2&nbsp;KB
 mean; ~350k blocks). Event-mix assumption, stated not measured: ~30% create
 (first sync + organic), ~65% update, ~5% delete — consistency check:
 0.35M&times;1&nbsp;KB + 0.76M&times;2&nbsp;KB + 0.06M&times;1&nbsp;KB ≈
-1.9&nbsp;GB ≈ observed. Compact update sizes assume ~3 changed fields ≈
-200&nbsp;B (content edits: content + stamps + author).
+1.9&nbsp;GB ≈ observed. Compact update sizes assume ~3 changed fields ×
+two sides (invertible patches, §4.1) ≈ 400&nbsp;B (content edits: content +
+stamps + author).
 </p>
 
 <div class="table-scroll">
@@ -1170,14 +1202,14 @@ mean; ~350k blocks). Event-mix assumption, stated not measured: ~30% create
   <thead><tr><th>Component</th><th>Today (v1)</th><th>After (v2)</th></tr></thead>
   <tbody>
     <tr><td>Existing creates (0.35M — full by nature)</td><td>~350&nbsp;MB</td><td>~350&nbsp;MB (unchanged)</td></tr>
-    <tr><td>Existing updates (0.76M)</td><td>~1.5&nbsp;GB</td><td>~150&nbsp;MB compact + ~30&nbsp;MB sampled/discontinuity anchors ≈ <strong>180&nbsp;MB</strong></td></tr>
+    <tr><td>Existing updates (0.76M)</td><td>~1.5&nbsp;GB</td><td>~300&nbsp;MB compact (invertible patches) + ~30&nbsp;MB sampled/discontinuity anchors ≈ <strong>330&nbsp;MB</strong></td></tr>
     <tr><td>Existing deletes (0.06M)</td><td>~60&nbsp;MB</td><td>~60&nbsp;MB</td></tr>
-    <tr><td><strong>Stock total</strong></td><td><strong>~1.9–2.2&nbsp;GB</strong></td><td><strong>~0.6&nbsp;GB → ~1.3–1.6&nbsp;GB reclaimed at VACUUM (~3.5&times;)</strong></td></tr>
+    <tr><td><strong>Stock total</strong></td><td><strong>~1.9–2.2&nbsp;GB</strong></td><td><strong>~0.75&nbsp;GB → ~1.2–1.5&nbsp;GB reclaimed at VACUUM (~3&times;)</strong></td></tr>
     <tr><td>Fresh device, first sync (350k blocks)</td><td>~350&nbsp;MB</td><td>~350&nbsp;MB (kept — §6 revised; creates are full in v2 too)</td></tr>
     <tr><td>#288 backfill, authoring device (~650k creates)</td><td>~230&nbsp;MB</td><td><strong>0</strong> (§5/G1)</td></tr>
     <tr><td>#288 backfill, per receiving device</td><td>~230&nbsp;MB</td><td>~230&nbsp;MB unless #288 adds an arrival exemption (§11 G2)</td></tr>
-    <tr><td>Ongoing: one content edit</td><td>~4&nbsp;KB</td><td>~0.25&nbsp;KB incl. amortized anchor (~16&times;)</td></tr>
-    <tr><td>Ongoing: property edit in props-world (2–3 writes)</td><td>~4–6&nbsp;KB</td><td>~0.5&nbsp;KB</td></tr>
+    <tr><td>Ongoing: one content edit</td><td>~4&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~9&times;)</td></tr>
+    <tr><td>Ongoing: property edit in props-world (2–3 writes)</td><td>~4–6&nbsp;KB</td><td>~0.9&nbsp;KB</td></tr>
   </tbody>
 </table>
 </div>
@@ -1198,14 +1230,12 @@ into is smaller).
   <tbody>
     <tr>
       <td><strong>A — format</strong></td>
-      <td>ALTER adds (<code>v</code>, <code>chain_pos</code>; ordering per §8.2);
-        <code>(block_id, id)</code> index built as a marker-gated idle job (§3 —
-        the probe needs it before any v2 body installs);
-        v2 trigger bodies generated from the shared column spec (compact updates,
-        identical-update skip, anchor cadence, v1/missing-predecessor promotion),
-        swapped in once the index marker is set;
-        <code>stateAt</code> reader utility; tests pinning I1/I2/I4/I6. All new
-        events compact from here. <em>Shape depends on the O5 call (§16).</em></td>
+      <td>ALTER adds (<code>v</code>, <code>full</code>; ordering per §8.2);
+        v2 trigger bodies generated from the shared column spec (invertible
+        changed-field patches on both sides, projected-field diffs,
+        identical-update skip, one-coin p=1/64 anchor sampling — no probe, no
+        index prerequisite, §4.1); <code>stateAt</code> reader utility (§4.3);
+        tests pinning I1/I2/I4/I6. All new events compact from here.</td>
       <td>—</td>
     </tr>
     <tr>
@@ -1221,7 +1251,8 @@ into is smaller).
     <tr>
       <td><strong>C — stock migration</strong></td>
       <td>§8 idle rewriter (per-block, discontinuity-anchoring), partial work
-        index, completion marker, explicit ANALYZE
+        index, completion marker, <code>(block_id, id)</code> reader/rewriter
+        index add + explicit ANALYZE
         (<code>(block_id, created_at DESC)</code> is retained per §3 —
         revisit only with measurements); equivalence test (I5) + resumability
         test (interrupt mid-chunk, rerun, byte-identical outcome).</td>
@@ -1246,23 +1277,30 @@ into is smaller).
   <tbody>
     <tr>
       <td>I1</td>
-      <td><strong>Every chain starts full.</strong> A compact update whose
-        predecessor is missing or v1 promotes to a full before+after anchor —
-        no exemption (§5 skip, trigger-suspended windows) strands a later edit
-        without a base. (Inherited from PR #288's invariants index.)</td>
+      <td><strong>Every event is self-restoring.</strong> A v2 compact event
+        carries equal-key-set before and after patches; a full event carries
+        complete sides. No event's read or inverse depends on another row
+        existing — which is what makes every §5 exemption and any unlogged gap
+        safe. (Subsumes PR #288's "every chain starts full": chains no longer
+        have bases to strand.)</td>
       <td><a href="#s4">§4.1</a></td>
-      <td>v2 trigger; every §5/§6 exemption</td>
-      <td>Test: first edit of a skip-exempted row logs full before+after.</td>
+      <td>v2 trigger; §8 rewriter; every §5 exemption</td>
+      <td>Property test: apply(pre-state, after_json) = post-state AND
+        un-apply(post-state, before_json) = pre-state for every generated
+        event; shape test: both sides always agree on key set / fullness.</td>
     </tr>
     <tr>
       <td>I2</td>
-      <td><strong>Full-within-W.</strong> Every compact event reaches a full
-        event within W−1 predecessors on its block; readers never assume W,
-        only <code>chain_pos → 0</code>.</td>
-      <td><a href="#s4">§4.1/4.4</a></td>
-      <td>Trigger cadence; §8 rewriter</td>
-      <td>Property test: random edit sequences; every <code>stateAt</code>
-        equals the actually-written state; walk length ≤ W.</td>
+      <td><strong>A newer-side full state always exists.</strong> Every
+        reconstruction walk terminates: at the live <code>blocks</code> row, a
+        hard-delete event (full before), or an anchor. Readers never assume a
+        cadence — only the <code>full</code> flag; anchors bound the expected
+        walk/loss window (~1/p, p99 ≈ 4.6/p) without carrying correctness.</td>
+      <td><a href="#s4">§4.3/4.4</a></td>
+      <td>Readers; §8 rewriter</td>
+      <td>Property test: random edit sequences incl. hard-deletes and
+        skip-created rows; every <code>stateAt</code> equals the
+        actually-written state.</td>
     </tr>
     <tr>
       <td>I3</td>
@@ -1302,10 +1340,12 @@ into is smaller).
     <tr>
       <td>I6</td>
       <td><strong>The log never gets slower than today.</strong> v2 per-write
-        work = v1 minus one full snapshot side, plus O(log n) probes — no
-        trigger body may scan unbounded history on the write path.</td>
+        work = v1 minus the full snapshot sides, plus changed-field patches and
+        one <code>random()</code> — <em>no trigger body may read
+        <code>row_events</code> or scan history on the write path</em> (the
+        only reads are the existing 1-row <code>tx_context</code> probes).</td>
       <td><a href="#s7">§7</a></td>
-      <td>v2 trigger; cadence mechanism</td>
+      <td>v2 trigger</td>
       <td>Bench note in slice A (write-tx tail latency before/after); review
         rule for trigger SQL.</td>
     </tr>
@@ -1332,9 +1372,24 @@ into is smaller).
     per-write cost that motivated that doc.</li>
   <li><strong>Server-shape adoption without anchors</strong> (changed-cols
     diffs, full bookends only — exactly <code>blocks_history</code>'s Option B).
-    Reconstruction becomes full-chain replay back to the create; a single lost
-    row poisons everything after it. Anchors cost ~2% of rows and bound both.</li>
-  <li><strong>Probabilistic or counter-table cadence</strong> — §4.1 callout.</li>
+    Reconstruction becomes full-chain replay, and a single lost row poisons
+    every state beyond it on the walk side. Sampled anchors cost ~1.5% of rows
+    and bound both.</li>
+  <li><strong>Deterministic probe + <code>chain_pos</code> cadence</strong> —
+    the original §4 design (superseded 2026-07-15 by O5's adoption): a
+    per-write predecessor probe fed a deterministic anchor window W=50 and
+    promotion rules for missing/v1 predecessors. It bought deterministic walk
+    bounds and "every chain starts full" — machinery that exists only because
+    after-only compact events made chains base-dependent. Invertible payloads
+    delete the dependence itself, at ~2&times; compact-update bytes. Full
+    tradeoff record in <a href="#s16">O5</a>.</li>
+  <li><strong>Counter side-table cadence</strong> — mutable state that can
+    drift from the log, an extra B-tree upsert per write, its own
+    backfill/repair story; rejected under both cadence designs.</li>
+  <li><strong>Naive probabilistic anchors over after-only payloads</strong> —
+    unsafe: without invertible patches, chain-start and gap cases splice
+    silently or strand undo (O5 record). A create-only-skip variant was
+    examined and set aside with the format change.</li>
   <li><strong>App-layer event writer</strong> — §7 table; loses the catch-all
     property that is the log's reason to exist.</li>
   <li><strong>Values-free or sampled logging for the bulk bursts</strong> —
@@ -1376,8 +1431,10 @@ into is smaller).
     minutes-long single-worker stall triggered by a heuristic is the riskiest UX
     moment in this design. Lean: ship the manual command in slice D, enable the
     deep-idle one-shot a release later once the manual path has telemetry.</li>
-  <li><strong>O3 — W=50 confirmation</strong> — §4.4 has the tradeoff curve;
-    changing it later is free. Default stands unless someone objects.</li>
+  <li><strong>O3 — RESOLVED with O5:</strong> W is gone. The sampling
+    probability p defaults to 1/64; §4.4 has the principled derivation
+    (p ≈ 4.6/L for a target p99 loss window L) — non-load-bearing,
+    boot-tunable, revisit with history-UI walk-length telemetry.</li>
   <li><strong>O4 — RESOLVED (2026-07-15, user): framing corrected.</strong>
     "Local-only e2ee history" was wrong — server <code>blocks_history</code>
     records e2ee workspaces too, as ciphertext, so e2ee history durability is
@@ -1385,43 +1442,26 @@ into is smaller).
     <em>readable</em> copy today (§6.1). With §6 revised, first-sync full
     creates apply to every workspace symmetrically and are owned there;
     nothing e2ee-specific remains open.</li>
-  <li><strong>O5 — cadence mechanism under challenge: probe vs probabilistic
-    (and with it, the compact payload shape).</strong> Post-review user
-    position: W=50 was an arbitrary starting point, and a per-write history
-    probe feels like write-path work we shouldn't pay — a probabilistic
-    ~1-in-25 anchor would probably be good enough. Assessment: against the §3
-    index the probe is genuinely cheap (one covering point-seek, microseconds
-    next to the JSON build), so performance alone doesn't decide this — but
-    naively swapping §4.1 for <code>random()</code> is <em>not</em> safe: the
-    probe is also what detects missing/v1 predecessors, so I1 ("every chain
-    starts full") and the #288 G3 guarantee die with it. The coherent
-    probe-free variant changes the payload instead: compact events carry
-    changed-field <strong>before AND after</strong> values (invertible
-    patches), reconstruction runs <em>backward from the live row</em> (or from
-    the nearest full event in either direction), anchors demote to pure
-    read-acceleration + corruption bounding at probabilistic ~1-in-25, and
-    <code>chain_pos</code>, the predecessor probe, the v1-lean rule, and slice
-    A's index-timing dependency (§3) all disappear. Bonus: undo's restore
-    values become directly stored rather than reconstructed.
-    <br><em>Impact of the §6 revision (sync events kept, 2026-07-15):</em> the
-    variant's strongest soundness argument is largely mooted. It rested on
-    §6's designed gaps — after an unlogged sync write, forward replay silently
-    splices stale pre-sync values into reconstructed states until the next
-    anchor, while invertible events reconstruct exactly at and after every
-    gap. With sync writes logged, that systematic gap source is gone; forward
-    replay only risks splicing around the enumerated §5 skip-bursts, and only
-    where such a burst UPDATEs rows that already have a live chain (the #288
-    bursts are almost entirely creates, which I1 handles — worth a review rule
-    on future skip-bursts, either way). The cost side also grows in absolute
-    terms: sync updates now log too, so doubling compact-update bytes applies
-    to a larger event population. Net: the decision is now simplification +
-    directly-stored undo befores + no write-path probe, versus ~2&times;
-    compact-update bytes (~400&nbsp;B vs ~200&nbsp;B; §12 stock-update row
-    ~180&nbsp;MB → ~330&nbsp;MB — still ~10&times; under v1) + probabilistic
-    bounds (p99 anchor gap ≈ 113 events at 1/25) instead of deterministic W.
-    Assessment downgraded from a clear recommendation to a mild lean toward
-    the variant. Needs a user call; on adoption §3/§4/§8/§12 get rewritten
-    around it.</li>
+  <li><strong>O5 — RESOLVED (2026-07-15, user): adopted the invertible-patch +
+    sampled-anchor format.</strong> §3/§4/§7/§8/§12 now describe it; the
+    superseded deterministic-probe design is recorded in §15. Decision record:
+    the user challenged the per-write predecessor probe (W=50 was arbitrary;
+    probabilistic ~1-in-25 "good enough"). Assessment established that the
+    probe itself was cheap (one covering point-seek) but that a naive
+    <code>random()</code> swap was unsafe — the probe also detected missing/v1
+    predecessors, carrying "every chain starts full" and #288's G3. The
+    adopted variant deletes the dependence instead: compact events carry
+    changed-field before AND after values (invertible patches), reconstruction
+    walks from whichever full state is nearer with the newer side always
+    terminating (live row / delete event / anchor), and anchors demote to
+    sampled read-acceleration + corruption bounding. Costs accepted: ~2&times;
+    compact-update bytes (~400&nbsp;B vs ~200&nbsp;B; stock updates ~180 →
+    ~330&nbsp;MB — still ~10&times; under v1) and probabilistic instead of
+    deterministic walk bounds. Wins: zero write-path reads, no
+    <code>chain_pos</code>/promotion machinery, no slice-A index dependency,
+    undo befores stored directly, unconditional soundness under every gap
+    class. Sampling probability: O3 → §4.4 (default p = 1/64, rarer than the
+    original 1-in-50 frame, per the loss-window derivation).</li>
 </ol>
 
 <hr>
