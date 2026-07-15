@@ -977,7 +977,17 @@ arrived row:
       synthetic property. Two sound homes, slice C picks: a <em>reserved, filtered
       bag key</em> (atomic with the bag by construction — it rides the same column
       through LWW and e2ee envelopes — but every enumerator must filter the reserved
-      namespace through one shared helper), or a <em>dedicated synced column</em>
+      namespace through one shared helper, and filtering a namespace is only sound
+      once no real schema name can occupy it (PR-review P2): bag keys are schema
+      names and users pick those freely, so a colliding name would either vanish
+      from every property surface or be misread as checksum metadata. Choose the
+      reserved key from the space §7's name-validity rule already forbids — a key
+      containing <code>]]</code> cannot round-trip the wikilink grammar, so
+      <code>addSchema</code>/rename can never mint it — and the same slice-B
+      preflight that sweeps existing names for round-trip violations doubles as the
+      occupancy proof for pre-existing names: a schema found squatting in the
+      reserved space is rejected/renamed there, before any filter ships), or a
+      <em>dedicated synced column</em>
       (invisible to property consumers by construction; atomicity holds because
       current clients write bag + checksum in the same patch, so per-column LWW picks
       both from the same winner, while an old client's bag-only patch leaves the
@@ -1752,7 +1762,15 @@ implementation</strong> and keep it open until its content is fully accounted fo
         <code>core.materializePropertyChildren</code> gated on the flag <em>and on the
         §8 e2ee workspace gate</em> (the write path and both processors are off in e2ee
         workspaces, not just the derive column), <code>childrenOf</code> option
-        (default-exclude, per <code>f4d0b447</code>), the ref double-count check and
+        (default-exclude, per <code>f4d0b447</code>) <em>and its query-layer twin</em>
+        (PR-review P2): the outline reads <code>core.childIds</code> /
+        <code>core.children</code> (<code>useChildIds</code>/<code>useHasChildren</code>),
+        whose SQL filters only <code>deleted = 0</code> — the tx-layer exclusion never
+        touches it. Default-exclude field rows there too (machinery queries opt in,
+        same option), or C's backfill renders every property as an ordinary outline
+        row for production users until D's tree UI lands. This is the
+        <em>negative</em> (invisibility) half of the in-tree work and it gates the C
+        flip; only the positive surface stays in D. Then the ref double-count check and
         the §5 invariant code comments.
         <strong>B2 (schema-change migrations):</strong> the rename-reproject hook —
         moved up from the old slice E because renames break silently without it
@@ -1829,8 +1847,11 @@ implementation</strong> and keep it open until its content is fully accounted fo
         burst also writes ~650k permanent full-row history snapshots per device.
         Before flipping it on, size it: run
         <code>select count(*) from blocks where properties_json != '{}' and deleted = 0</code>
-        (and a key histogram) against production via <code>yarn agent sql</code> /
-        Supabase — filtered to plaintext workspaces (PR-review P2: e2ee cells are
+        (and a key histogram) against production via <code>yarn agent sql</code>, or
+        the same against Supabase with <code>deleted = false</code> —
+        <code>public.blocks.deleted</code> is a Postgres <code>boolean</code>
+        (consolidated initial migration), so the SQLite integer form errors there
+        (PR-review P2) — filtered to plaintext workspaces (PR-review P2: e2ee cells are
         ciphertext envelopes, never <code>'{}'</code> and unparsable for the
         histogram; join on the workspace's encryption mode, and remember e2ee
         workspaces are gated out of the backfill anyway).
@@ -1850,9 +1871,13 @@ implementation</strong> and keep it open until its content is fully accounted fo
       <div class="name">In-tree UI</div>
       <p>
         <code>FieldBlockRenderer</code> / <code>PropertyValueBlockRenderer</code>,
-        hidden-field filtering, ghost rows for type-expected fields (replacing the
-        spike's materialized slots), add-field affordance on the block (slash command →
-        schema autocomplete → field row + value in one tx). Panel stays.
+        the per-schema hidden toggle, ghost rows for type-expected fields (replacing
+        the spike's materialized slots), add-field affordance on the block (slash
+        command → schema autocomplete → field row + value in one tx). The baseline
+        field-row <em>invisibility</em> is not here — the outline query-layer
+        default-exclude ships in B1 and gates the C flip (PR-review P2); D is the
+        positive surface that makes field rows deliberately visible and editable.
+        Panel stays.
       </p>
       <p class="deliv">Users see and edit user-defined properties in the tree. Panel
         remains the fallback; no flag needed since both surfaces coexist.</p>
@@ -1978,7 +2003,18 @@ sequence, each step gated on the one before:
     explicit <code>NULL</code> and fails the insert before the materializer can act.
     Make the column nullable in the same migration, or bind a non-null placeholder in
     the put itself — a column <code>DEFAULT</code> alone does nothing, since SQLite
-    never applies defaults to explicitly-bound NULLs). The split's predicate must
+    never applies defaults to explicitly-bound NULLs. And nullable staging alone only
+    moves the failure one hop (PR-review P2): the materializer's
+    <code>UPSERT_BLOCK_SQL</code> binds every storage column into <code>blocks</code>,
+    whose <code>properties_json</code> is equally <code>TEXT NOT NULL DEFAULT
+    '{}'</code> (<code>blockSchema.ts</code>), so the staged NULL fails at the live
+    table before the first-sync projection can repair anything. Choosing nullable
+    staging therefore also extends the step-4 materializer seam: a NULL staged cell
+    <em>is</em> the "column stopped" case — preserve the local
+    <code>properties_json</code> / re-project instead of writing the NULL through.
+    The placeholder bind avoids the cascade entirely, at the cost of making '{}'
+    ambiguous between "empty bag" and "column stopped" — fine only because the
+    checksum, not cell shape, licenses merge decisions). The split's predicate must
     also be <em>server-visible</em> (PR-review P2): sync rules select over
     <code>public.blocks</code> and can see neither a client's registry nor, for e2ee
     rows, any plaintext keys — so eligibility must be a durable client-written marker
@@ -2187,8 +2223,8 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
         <code>reference_target_id</code> is a definition id <em>and</em> its parent is
         not itself a field row; children of field rows are never field rows.</td>
       <td><a href="#s9">§9</a></td>
-      <td>Rendering, hidden filtering, <code>childrenOf</code> exclusion, projection,
-        dedup walk</td>
+      <td>Rendering, hidden filtering, <code>childrenOf</code> + outline-query
+        exclusion, projection, dedup walk</td>
       <td><code>block-type:properties</code> ref values render as values, not nested
         fields (B)</td>
     </tr>
