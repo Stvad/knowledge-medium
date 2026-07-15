@@ -982,7 +982,15 @@ arrived row:
       current clients write bag + checksum in the same patch, so per-column LWW picks
       both from the same winner, while an old client's bag-only patch leaves the
       checksum column behind — exactly the mismatch signal; costs a migration and an
-      upload-whitelist entry).</p>
+      upload-whitelist entry). One e2ee constraint on the column option (PR-review
+      P2): it must never carry plaintext for e2ee rows — <code>coveredKeys</code>
+      names the schemas present on an encrypted row, and hashes over low-cardinality
+      values invite guessing; exactly the edge metadata §8 encrypts. Under the §8
+      option-1 gate this is moot (e2ee rows run no child machinery and stamp no
+      checksum); if option 2 later child-backs e2ee workspaces, their checksum rides
+      the encrypted reserved-bag-key form — the column, if it exists, stays NULL for
+      e2ee rows, enforced by the same server-trigger family as
+      <code>reference_target_id</code>.</p>
       <p><em>Residual and fallback:</em> an old-client bag is a whole-bag write, so
       accepting it can carry stale copies of <em>other</em> keys on that block —
       inherent to mixed-version operation (the old client has no per-key channel),
@@ -1061,7 +1069,13 @@ arrived row:
   <code>updated_at</code>/<code>updated_by</code> on the parent, and those columns
   sync), still well under re-shipping the whole bag, i.e. <em>cheaper on the wire than
   today</em> — but that step is deliberately staged and gated on the hydration
-  measurements (§11).
+  measurements (§11). One column is deliberately untouched by all of this:
+  <code>references_json</code> (PR-review P2). Ref-typed property edits re-project the
+  <em>parent's</em> by-field backlinks (<code>sourceField</code> = the schema name)
+  from the locally-derived cell, and that column keeps uploading through and beyond
+  the cell sync-off — existing parent/sourceField backlink queries ride it unchanged,
+  and the value child's own reference row (<code>sourceField: ''</code>) is not a
+  substitute for it. Only <code>properties_json</code> ever leaves the channel.
 </div>
 
 <h2 id="s6">6. The scope decision: which schemas get children</h2>
@@ -1163,7 +1177,12 @@ sync-off scoping.
   <code>property-schema:child-backed: true</code> across existing user definition
   blocks by the rollout tooling, with <code>addSchema</code> stamping it at creation
   thereafter — without the bulk write, slice C's "100% of user-defined data
-  child-backed" silently fails on every pre-existing schema. <em>Plugin</em> schemas
+  child-backed" silently fails on every pre-existing schema. The stamp is
+  idempotent and re-runnable, because a pre-C client can still create a flag-less
+  schema <em>during</em> the upgrade window (its <code>addSchema</code> writes only
+  name/preset/config; absent → false): the §5 consistency sweep inherits
+  "re-stamp absent user <code>BlockDefault</code> definitions" as a repair rule,
+  closing the gap without blocking old-client schema creation (PR-review P2). <em>Plugin</em> schemas
   default
   <code>false</code> and flip per-schema — a flip is a <em>seed-revision bump</em> on
   the plugin's definition block (unification §6.2), durable and synced by
@@ -1266,7 +1285,15 @@ shape:
     winner map (§6), replacing the spike-era per-client "registered map wins by load
     order". And the exact-reference grammar is scoped to
     whole-block content so prose containing <code>((…))</code> never becomes a field
-    (implemented in <code>referenceBlock.ts</code>).</li>
+    (implemented in <code>referenceBlock.ts</code>). A second cost surfaced late
+    (PR-review P2): schema names must <em>round-trip the wikilink grammar</em> — a
+    name containing <code>]]</code> renders lossy (<code>renderWikilink</code>
+    documents <code>foo]]bar</code> → <code>foo] ]bar</code>), and every
+    re-derive-by-content path (§9 cross-workspace copy, §8 de-structure, markdown
+    round-trip) then binds the wrong schema or none. <code>addSchema</code> and the
+    rename flow reject non-round-trippable names; existing names get checked in the
+    slice-B preflight (one more entry alongside the unification's §7 name
+    preflight).</li>
 </ul>
 
 <h2 id="s8">8. E2EE workspaces — new constraint</h2>
@@ -1311,8 +1338,10 @@ columns and would happily accept a plaintext <code>reference_target_id</code> fr
 stale client, a missed hook, or a direct PostgREST write — exactly the untrusted paths
 that trigger exists to stop. Slice A must extend it to also require
 <code>reference_target_id IS NULL</code> for e2ee-workspace rows (same migration as
-the column add; the plaintext→e2ee flip already nulls the column in its bulk rewrite,
-so mode transitions pass the check). The rest of the gate is client-side:
+the column add; note <code>encryption_mode</code> is immutable server-side today —
+<code>workspaces_prevent_e2ee_field_change</code> rejects flips — so no transition
+path exists to race the check; a future flip flow's bulk rewrite nulls the column
+and passes). The rest of the gate is client-side:
 </p>
 
 <ul>
@@ -1340,7 +1369,14 @@ so mode transitions pass the check). The rest of the gate is client-side:
     otherwise render as a plain <code>[[name]]</code> block with its values as loose
     children, fleet-wide. The cell is authoritative post-flip; the rows must not
     linger as clutter. Flipping e2ee → plaintext re-enables the machinery; the
-    ordinary backfill covers materialization. (Owner: the workspace-encryption flip
+    ordinary backfill covers materialization. And the flip must be
+    <em>history-safe</em> (PR-review P2): today <code>encryption_mode</code> is
+    immutable by trigger, and <code>blocks_history</code> retains full plaintext
+    INSERT rows and UPDATE diffs — a live-row rewrite alone would leave every
+    pre-flip <code>reference_target_id</code> and plaintext column readable in
+    history after the flip. Either the mode stays immutable, or the transition is a
+    SECURITY DEFINER migration that also purges/encrypts the affected history rows.
+    (Owner: the workspace-encryption flip
     flow itself — these requirements gate that feature, not the §11 slices.)</li>
 </ul>
 
@@ -1516,12 +1552,16 @@ skill while at it.
     seats; panel-layout projection ignores field rows; and <code>tx.childrenOf</code>
     now <em>excludes</em> field rows by default (structural callers must see only
     visible siblings — the machinery opts in with
-    <code>includePropertyChildren</code>). Copy, export, and import traversals count
-    as machinery, not outline callers (PR-review P2): they opt in with
+    <code>includePropertyChildren</code>). Copy, export, import, <em>and
+    delete/purge</em> traversals count
+    as machinery, not outline callers (PR-review P2 ×2): they opt in with
     <code>includePropertyChildren</code> — markdown round-trip is a headline
     motivation (§7), and a copied subtree missing its field/value rows silently
     loses the properties wherever the destination path doesn't rebuild them from the
-    carried bag. Under the §6 scoping these special cases
+    carried bag; and <code>softDeleteSubtree</code> discovers descendants via
+    <code>tx.childrenOf</code> (verified, <code>mutators.ts</code>), so under the
+    default exclusion a delete would strand live field/value rows attached beneath a
+    deleted parent. Under the §6 scoping these special cases
     apply <em>everywhere</em> — kernel props materialize too, so hidden field rows
     exist on most blocks and the exclusion rules get more load-bearing, not less.
     Field rows, user and kernel alike, must not be reparented as content.</dd>
