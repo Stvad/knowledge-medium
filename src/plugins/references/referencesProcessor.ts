@@ -85,30 +85,35 @@ const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
   LIMIT 1
 `
 
+/** Parse-basis fingerprint of a row's parse-relevant columns (content,
+ *  properties, references), serialized together so the write phase can
+ *  compare "has anything the parse depends on moved" with one equality
+ *  check. Adding a new parse-relevant column is a single-edit change here. */
+const planBasisOf = (row: BlockData): string =>
+  JSON.stringify([row.content, row.properties, row.references])
+
 /** Per-source plan built during the read phase. The write phase consumes
  *  this and issues all writes in a single tx. */
 interface SourcePlan {
   sourceId: string
   workspaceId: string
-  /** Parse basis observed at read time. The write phase re-reads the
-   *  source and skips the plan when ANY of the three has moved — mirrors
-   *  renameProcessor.applyPlan's stale-plan guard. Safe to skip: the
-   *  write that moved the source re-fires this processor (all three
-   *  fields are watched) with a fresh plan, so the LAST write's event
-   *  always applies. Without the content/properties half, a concurrent
-   *  rewriter (e.g. the rename backlink rewriter fired by the same
-   *  properties commit) can land first and have its result clobbered by
-   *  this stale plan (found by referencesRecompute.fuzz.test.ts:
+  /** Parse basis observed at read time, from `planBasisOf`. The write
+   *  phase re-reads the source and skips the plan when the fingerprint has
+   *  moved — mirrors renameProcessor.applyPlan's stale-plan guard. Safe to
+   *  skip: the write that moved the source re-fires this processor (all
+   *  three underlying fields are watched) with a fresh plan, so the LAST
+   *  write's event always applies. Without the content/properties portion,
+   *  a concurrent rewriter (e.g. the rename backlink rewriter fired by the
+   *  same properties commit) can land first and have its result clobbered
+   *  by this stale plan (found by referencesRecompute.fuzz.test.ts:
    *  self-referencing block whose alias is renamed ends with content
    *  `[[new]]` but a stored ref still carrying `old`). The references
-   *  half covers writers that touch ONLY the references column — the
+   *  portion covers writers that touch ONLY the references column — the
    *  ref-backfill reprojection on schema load, raw bridge writes: their
-   *  entries would otherwise be silently dropped by a plan built from
-   *  the pre-write row, with no watched-field change left to re-derive
-   *  them (Codex review on PR #371). */
-  basisContent: string
-  basisPropertiesJson: string
-  basisReferencesJson: string
+   *  entries would otherwise be silently dropped by a plan built from the
+   *  pre-write row, with no watched-field change left to re-derive them
+   *  (Codex review on PR #371). */
+  basis: string
   /** Resolved-or-to-be-created refs the source's `references` column
    *  should end up with. The id may name a non-yet-existing target if
    *  the write phase will create it (alias case below). */
@@ -151,44 +156,35 @@ const buildSourcePlan = async (
     if (seenAliases.has(mark.alias)) continue
     seenAliases.add(mark.alias)
     const dailyTitle = parseLiteralDailyPageTitle(mark.alias)
+    // Lookup-first for both date and non-date aliases, before either
+    // miss path below: when a live block ALREADY owns this alias (e.g.
+    // an imported page aliased "2026-01-05" on a non-seat id, or typing
+    // `[[Inbox]]` for an Inbox someone else made via the create-page UI;
+    // §7.5 race), bind to it rather than minting a fresh target. For the
+    // date path this also sidesteps a guaranteed collision: minting the
+    // deterministic seat instead would have `ensureDailyNoteTarget` set
+    // the same alias on the new seat, trip the alias-uniqueness trigger,
+    // and roll back the whole write tx — permanently stripped references
+    // for the source (found by referencesRecompute.fuzz.test.ts).
+    // Convergent either way: alias uniqueness means every client
+    // resolves the same owner, and on a lookup miss every client mints
+    // the same deterministic id (daily seat or alias-seat probe, below).
+    const existing = await ctx.repo.query
+      .aliasLookup({workspaceId: source.workspaceId, alias: mark.alias})
+      .load()
+    if (existing !== null) {
+      (dailyTitle !== null ? dateRefs : aliasRefs).push({id: existing.id, alias: mark.alias})
+      continue
+    }
     if (dailyTitle !== null) {
       // Daily note path — distinct deterministic id, never feeds cleanup.
       // Store the user's literal alias on the source reference, but
       // materialise the canonical ISO daily-note target. `parseLiteral...`
       // accepts ISO and Roam long-form titles while rejecting relative
       // words like "today", "friday", and "may" so those remain aliases.
-      //
-      // Lookup-first, same as the non-date branch below: when a live
-      // block ALREADY owns this date-shaped alias (e.g. an imported page
-      // aliased "2026-01-05" on a non-seat id), bind to it. Minting the
-      // deterministic seat instead would have `ensureDailyNoteTarget` set
-      // the same alias on the new seat, trip the alias-uniqueness
-      // trigger, and roll back the whole write tx — permanently stripped
-      // references for the source (found by
-      // referencesRecompute.fuzz.test.ts). Convergent either way: alias
-      // uniqueness means every client resolves the same owner, and on a
-      // lookup miss every client mints the same deterministic seat id.
-      const existingOwner = await ctx.repo.query
-        .aliasLookup({workspaceId: source.workspaceId, alias: mark.alias})
-        .load()
-      if (existingOwner !== null) {
-        dateRefs.push({id: existingOwner.id, alias: mark.alias})
-        continue
-      }
       const id = dailyNoteBlockId(source.workspaceId, dailyTitle.iso)
       dateRefs.push({id, alias: mark.alias})
       datesToEnsure.push(dailyTitle.iso)
-      continue
-    }
-    // Non-date alias — try lookup-first to skip the deterministic-id
-    // codec round-trip when an existing target already carries the
-    // alias (e.g. typing `[[Inbox]]` for an Inbox someone else made
-    // via the create-page UI; §7.5 race).
-    const existing = await ctx.repo.query
-      .aliasLookup({workspaceId: source.workspaceId, alias: mark.alias})
-      .load()
-    if (existing !== null) {
-      aliasRefs.push({id: existing.id, alias: mark.alias})
       continue
     }
     // Will be created by ensureAliasTarget in the write phase. The
@@ -271,9 +267,7 @@ const buildSourcePlan = async (
   return {
     sourceId: source.id,
     workspaceId: source.workspaceId,
-    basisContent: source.content,
-    basisPropertiesJson: JSON.stringify(source.properties),
-    basisReferencesJson: JSON.stringify(source.references),
+    basis: planBasisOf(source),
     references,
     aliasesToEnsure,
     datesToEnsure,
@@ -292,14 +286,10 @@ const applySourcePlan = async (
   plan: SourcePlan,
   typeSnapshot: TypeRegistrySnapshot,
 ): Promise<string[]> => {
-  // Stale-plan guard — see the SourcePlan basis fields' docblock.
+  // Stale-plan guard — see the SourcePlan.basis docblock.
   const current = await tx.get(plan.sourceId)
   if (current === null || current.deleted) return []
-  if (
-    current.content !== plan.basisContent
-    || JSON.stringify(current.properties) !== plan.basisPropertiesJson
-    || JSON.stringify(current.references) !== plan.basisReferencesJson
-  ) return []
+  if (planBasisOf(current) !== plan.basis) return []
   const newlyInserted: string[] = []
   // The read phase's target predictions (seat/daily ids) can go stale:
   // a live block claiming the alias between plan build and apply makes

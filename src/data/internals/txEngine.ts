@@ -780,7 +780,13 @@ export class TxImpl implements Tx {
    *  `Repo._replay`). `applyRaw`'s write is still a field change in the
    *  replay tx, so without that gate a value-deriving same-tx processor
    *  would re-derive and override the restore — leaving the row at a
-   *  derived value, not `target` (#187). */
+   *  derived value, not `target` (#187).
+   *
+   *  The row-level triggers (e.g. the parent-liveness check) still fire
+   *  per statement and can reject an intermediate replay state even
+   *  though the target state is valid — `applyRaw` itself does no
+   *  ordering or retry around that; callers own it (see
+   *  `replayApplicationOrder` in txSnapshots.ts). */
   async applyRaw(id: string, target: BlockData | null): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)

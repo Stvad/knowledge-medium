@@ -20,6 +20,7 @@ import {
   rewriteWikilinks,
 } from './referenceParser.ts'
 import { inlineDeletedBlockRefsProcessor } from './inlineDeletedBlockRefsProcessor.ts'
+import { projectedIdOf } from './referenceProjection.ts'
 
 export const RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR =
   'references.retargetMergedBlockReferences'
@@ -65,24 +66,27 @@ const retargetReference = (
  *  `[into, into]`) and any pre-existing `intoId` duplicate already in
  *  the list; both are benign canonicalizations. String rewrites also
  *  drop surrounding whitespace padding around a matched `fromId`
- *  (`raw.trim() === fromId` matches, but the replacement is the bare
- *  `intoId`) — same reasoning. */
+ *  (element matching goes through `projectedIdOf`, the same trim/empty
+ *  normalization `appendPropertyRef` uses, so `raw.trim() === fromId`
+ *  matches, but the replacement is the bare `intoId`) — same reasoning. */
 const rewriteRefValue = (
   raw: unknown,
   fromId: string,
   intoId: string,
 ): {value: unknown; changed: boolean} => {
   if (typeof raw === 'string') {
-    return raw.trim() === fromId ? {value: intoId, changed: true} : {value: raw, changed: false}
+    return projectedIdOf(raw) === fromId
+      ? {value: intoId, changed: true}
+      : {value: raw, changed: false}
   }
   if (Array.isArray(raw)) {
     let changed = false
     const mapped = raw.map(el =>
-      typeof el === 'string' && el.trim() === fromId ? (changed = true, intoId) : el)
+      projectedIdOf(el) === fromId ? (changed = true, intoId) : el)
     if (!changed) return {value: raw, changed: false}
     let seenInto = false
     const deduped = mapped.filter(el => {
-      if (typeof el === 'string' && el.trim() === intoId) {
+      if (projectedIdOf(el) === intoId) {
         if (seenInto) return false
         seenInto = true
       }
