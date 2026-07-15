@@ -1,8 +1,54 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import {afterAll, beforeAll, beforeEach, describe, expect, it} from 'vitest'
+import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
 import {acquirePidfile, releasePidfile} from '../src/pidfile'
+
+/**
+ * Seeded jitter injected before every fs op (mock below). The two-winner
+ * races in acquirePidfile live in the gaps BETWEEN fs calls (recheck→rm vs
+ * a rival's create); at native speed those gaps are microseconds and a
+ * bare Promise.allSettled race almost never lands in them. Millisecond
+ * jitter makes the schedule space the test explores dominated by the
+ * seed, so a run that kills a regression kills it on every run.
+ */
+const jitter = vi.hoisted(() => ({
+  active: false,
+  state: 1,
+  seed(value: number) {
+    this.state = value >>> 0 || 1
+  },
+  /** mulberry32 — tiny seeded PRNG, uniform in [0, 1). */
+  next() {
+    this.state = (this.state + 0x6d2b79f5) >>> 0
+    let t = this.state
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  },
+}))
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const real = await importOriginal<typeof import('node:fs/promises')>()
+  const wrap = <Args extends unknown[], Result>(fn: (...args: Args) => Promise<Result>) =>
+    async (...args: Args): Promise<Result> => {
+      if (jitter.active) await new Promise(resolve => setTimeout(resolve, Math.floor(jitter.next() * 3)))
+      return fn(...args)
+    }
+  const wrapped = {
+    ...real,
+    mkdir: wrap(real.mkdir),
+    writeFile: wrap(real.writeFile),
+    readFile: wrap(real.readFile),
+    link: wrap(real.link),
+    rename: wrap(real.rename),
+    rm: wrap(real.rm),
+    rmdir: wrap(real.rmdir),
+    stat: wrap(real.stat),
+    unlink: wrap(real.unlink),
+  } as typeof real
+  return {...wrapped, default: wrapped}
+})
 
 let dir: string
 let file: string
@@ -14,8 +60,8 @@ afterAll(async () => {
   await fs.rm(dir, {recursive: true, force: true})
 })
 beforeEach(async () => {
-  await fs.rm(file, {force: true})
-  await fs.rm(`${file}.takeover`, {recursive: true, force: true})
+  jitter.active = false
+  for (const entry of await fs.readdir(dir)) await fs.rm(path.join(dir, entry), {recursive: true, force: true})
 })
 
 const DEAD_PID = 999_999
@@ -55,5 +101,38 @@ describe('acquirePidfile', () => {
     expect(winners).toHaveLength(1)
     const holder = (await fs.readFile(file, 'utf8')).trim()
     expect(['111', '222']).toContain(holder)
+  })
+
+  it('stale takeover admits exactly ONE daemon across adversarial schedules', {timeout: 60_000}, async () => {
+    // Every round races CONTENDERS acquirers over one stale pidfile under
+    // a fresh seeded-jitter schedule. Regressions this exists to catch
+    // (both produced TWO fulfilled acquires): (1) create via
+    // writeFile(wx) — create-then-write, so a rival reading the empty
+    // window gets pid 0 = "stale" and steals a live daemon's file;
+    // (2) rm under the takeover gate after a recheck that saw ABSENCE —
+    // the rm lands on a rival's fresh ungated create.
+    const CONTENDERS = 6
+    const ROUNDS = 120
+    for (let round = 0; round < ROUNDS; round += 1) {
+      for (const entry of await fs.readdir(dir)) await fs.rm(path.join(dir, entry), {recursive: true, force: true})
+      await fs.writeFile(file, `${DEAD_PID}\n`)
+      jitter.seed(round + 1)
+      jitter.active = true
+      try {
+        const pids = Array.from({length: CONTENDERS}, (_, i) => 1000 + i)
+        const results = await Promise.allSettled(pids.map(pid => acquirePidfile({file, pid, isAlive: alive})))
+        const winners = pids.filter((_, i) => results[i].status === 'fulfilled')
+        expect(winners, `round ${round}: winners [${winners.join(', ')}]`).toHaveLength(1)
+        const holder = Number((await fs.readFile(file, 'utf8')).trim())
+        expect(holder, `round ${round}: pidfile holder`).toBe(winners[0])
+        for (const result of results) {
+          if (result.status === 'rejected') {
+            expect(String(result.reason)).toMatch(/already running|lost a startup race/)
+          }
+        }
+      } finally {
+        jitter.active = false
+      }
+    }
   })
 })
