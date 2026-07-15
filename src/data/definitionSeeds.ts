@@ -73,9 +73,15 @@ const validSeedKeyForRow = (row: SeedIdentityRow): string | undefined => {
 
 /** A seed:key property alone proves nothing. A row is code-seeded only when
  * the key has property- OR type-declaration grammar and its id satisfies the
- * deterministic equation for that row's own workspace. */
+ * deterministic equation for that row's own workspace. `seededDefinitionKey`
+ * returns that validated key so a caller can distinguish PROPERTY from TYPE
+ * provenance by its grammar (`isPropertySeedKey`/`isTypeSeedKey`);
+ * `isValidSeededDefinition` is the boolean form. */
+export const seededDefinitionKey = (row: SeedIdentityRow): string | undefined =>
+  validSeedKeyForRow(row)
+
 export const isValidSeededDefinition = (row: SeedIdentityRow): boolean =>
-  validSeedKeyForRow(row) !== undefined
+  seededDefinitionKey(row) !== undefined
 
 /** The one canonical block-property bag for a property seed. All values pass
  * through their metadata schema codecs; a per-schema default key is omitted

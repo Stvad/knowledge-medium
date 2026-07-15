@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import type {BlockData} from '@/data/api'
 import {BLOCK_TYPE_TYPE} from '@/data/blockTypes'
-import {typeDefinitionBlockId} from '@/data/definitionSeeds'
+import {propertyDefinitionBlockId, typeDefinitionBlockId} from '@/data/definitionSeeds'
 import {parseTypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
 import {
   addBlockTypeToProperties,
@@ -133,5 +133,47 @@ describe('parseTypeDefinitionMetadata', () => {
 
     expect(parseTypeDefinitionMetadata(row)).toMatchObject({typeId: row.id})
     expect(parseTypeDefinitionMetadata(row)).not.toHaveProperty('seedKey')
+  })
+
+  it('keeps the type when a display-only field is malformed, degrading it to its default', () => {
+    // A bad color / hide-flag from a raw import/sync/bridge write must not drop
+    // the whole type from registries and pickers (mirrors tryBuildType).
+    const row = typeDefinitionRow({
+      [blockTypeLabelProp.name]: 'Recipe',
+      [blockTypeHideFromBlockDisplayProp.name]: {bad: 'value'},
+    })
+    expect(parseTypeDefinitionMetadata(row)).toMatchObject({
+      typeId: row.id,
+      label: 'Recipe',
+      hideFromBlockDisplay: false,
+    })
+  })
+
+  it('ignores a malformed optional type-id claim on an unseeded row instead of dropping the type', () => {
+    const row = typeDefinitionRow({
+      [blockTypeLabelProp.name]: 'Recipe',
+      [blockTypeTypeIdProp.name]: {bad: 'claim'},
+    })
+    const parsed = parseTypeDefinitionMetadata(row)
+    expect(parsed).toMatchObject({typeId: row.id, label: 'Recipe'})
+    expect(parsed).not.toHaveProperty('seedKey')
+  })
+
+  it('does not honor a type-id claim backed by /property/ seed provenance', () => {
+    // isValidSeededDefinition accepts either grammar; a block-type row that is
+    // ALSO a valid property-definition row (property seed key at its
+    // deterministic property id) must not read as a seeded type or surface a
+    // property seed key as type metadata.
+    const PROP_KEY = 'system:kernel-data/property/foo'
+    const id = propertyDefinitionBlockId(WS, PROP_KEY)
+    const row = typeDefinitionRow({
+      [blockTypeLabelProp.name]: 'Page',
+      [seedKeyProp.name]: PROP_KEY,
+      [blockTypeTypeIdProp.name]: 'page',
+    }, {id})
+
+    const parsed = parseTypeDefinitionMetadata(row)
+    expect(parsed).toMatchObject({typeId: id, blockId: id})
+    expect(parsed).not.toHaveProperty('seedKey')
   })
 })
