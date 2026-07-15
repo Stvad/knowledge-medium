@@ -2225,34 +2225,35 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
     consumer, no client-side VACUUM (<code>clientSchema.ts</code>) — already at
     ~1.17M rows × ~2&nbsp;KB on a dev instance. Unmitigated, the backfill's ~650k
     creates would append a snapshot each on the authoring device <em>and again per
-    receiving device</em> as the rows sync down. Decided direction (its own small PR;
-    no pruning — history stays complete for primary edits):
-    <em>(1) compact encoding</em> — drop <code>before_json</code> (derivable: the
-    block's previous event's <code>after</code>; the per-block log is complete since
-    sync writes are logged) and store only changed columns for updates; old events
-    keep the old format, reconstruction bottoms out at the format boundary. One
-    invariant makes the exemptions below safe (PR-review P2): <em>every chain starts
-    full</em> — a compact update targeting a row with no prior event (a
-    backfill-exempted row's first later edit, a row predating the format, a
-    sync-exempted row under (3)) promotes itself to a full <code>after</code>
+    receiving device</em> as the rows sync down. Direction (no pruning — history
+    stays; a dedicated design task owns the full spec, this bullet records the
+    constraints #288 needs):
+    <em>(1) compact encoding with sampled anchors</em> — store only changed columns
+    for updates; <code>before_json</code> becomes an <em>optional</em> field written
+    periodically (~1-in-50) as a full-snapshot recovery anchor, so reconstruction is
+    anchored rather than full-chain replay back to the insert. One
+    invariant stands regardless (PR-review P2): <em>every chain starts
+    full</em> — a compact update targeting a row with no prior event
+    promotes itself to a full <code>after</code>
     snapshot, so no exemption ever leaves a later edit without a base.
-    <em>(2) provenance exemptions, not column exemptions</em> — derived-machinery
-    writes (backfill, children→cell projection, consistency sweep, arrival catch-up)
-    skip logging via a <code>tx_context</code>-gated trigger condition: they are
-    deterministic functions of logged primary edits, so their history is pure
-    redundancy — the backfill's ~650k events are the poster case. Skipping the
-    <code>properties_json</code> <em>column</em> wholesale would instead lose primary
-    history for carve-out/un-flipped/orphan keys and the whole pre-flip period; the
-    provenance rule converges to column-skipping naturally once a row is fully
-    child-backed (all its cell writes become projection-sourced) — and makes
-    post-migration history <em>cheaper</em> per edit (tiny value-child rows vs
-    whole-bag snapshots).
+    <em>(2) derived-write logging level — open, owned by the design task.</em>
+    Skipping derived-machinery writes (backfill, children→cell projection, sweep,
+    catch-up) entirely may be too harsh — derived-write history is exactly what
+    debugging the reconcile wants; the task weighs skip vs compact-log vs sample.
+    Two constraints are firm: the backfill burst must not write ~650k full
+    snapshots per device (the slice-C gate), and any exemption is by
+    <em>provenance</em>, never by column — skipping
+    <code>properties_json</code> wholesale would lose primary
+    history for carve-out/un-flipped/orphan keys and the whole pre-flip period.
     <em>(3) sync-source logging decided per workspace mode</em> — redundant with the
     server-side <code>blocks_history</code> for plaintext workspaces; the only
     plaintext history for e2ee ones (starting position: drop for plaintext, keep
-    compact for e2ee).
-    <em>(4) one-time format migration</em> of the existing events + idle VACUUM to
-    reclaim the bytes (needed for the rewrite, not for discarding).
+    compact for e2ee; the design task verifies <code>blocks_history</code>'s
+    coverage before relying on it).
+    <em>(4) migration of the existing ~1.17M events into the new format</em> —
+    chunked, resumable, idle-scheduled, with old <code>before_json</code> values
+    sampled into anchors rather than dropped wholesale — plus idle VACUUM to
+    reclaim the bytes.
     Re-stamp <code>docs/row-events-retention.md</code> when touching this — it
     references the deleted <code>rowEventsTail</code> path, and its prune design is
     superseded by this direction. The <code>blocks_synced</code>/<code>ps_oplog</code>
