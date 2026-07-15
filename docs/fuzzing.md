@@ -63,10 +63,38 @@ exact.
   strict-decode totality (only `CodecError`), lenient-path
   never-throws, `normalizeReferences` laws, row-parser round-trip.
 - `src/data/test/repoMutators.fuzz.test.ts` — the stateful one: random
-  `repo.mutate.*` sequences against a real test repo with per-op
-  invariant sweeps (cycles, live orphans, order-key collisions,
-  `SUBTREE_SQL` vs a JS reference walk, workspace uniformity), a
-  consistency audit, and undo-all/redo-all round-trip oracles.
+  `repo.mutate.*` sequences (incl. alias/type property writes and raw
+  `references` writes) against a real test repo with per-op invariant
+  sweeps (cycles, live orphans, order-key collisions, `SUBTREE_SQL` vs
+  a JS reference walk, workspace uniformity, and
+  incremental-vs-recompute mirrors for every trigger-maintained derived
+  index: `block_aliases`, `block_types`, `block_references`,
+  `blocks_fts` + rowid map), a consistency audit, undo-all/redo-all
+  round-trip oracles, and a non-vacuity canary pinning each derived
+  index populated by the op set.
+- `src/sync/crypto/cryptoCodecs.fuzz.test.ts` — round-trips + decode
+  totality for base64url/base32/hex, the `enc:v1:`/`encb:v1:`
+  envelopes, workspace-key format (incl. whitespace/case tolerance),
+  content-hash digests; AAD length-prefix injectivity and cross-builder
+  disjointness.
+- `src/data/internals/syncObserver/test/reconcile.fuzz.test.ts` — the
+  LWW reconcile gate: case analysis + an independent I1/I2 reference
+  model as an exact differential, and a sequence model against a fake
+  server implementing the monotonic clamp (convergence, idempotent
+  redelivery, zero-stamp exemption).
+- `src/services/powersync.fuzz.test.ts` — upload queue:
+  `compactBlockCrudEntries` differential replay over
+  contiguous-transaction batches, same-tx PATCH fusion, DELETE
+  cancellation, order-anchor re-derivation; `orderedBlockUpserts`
+  permutation + parents-first + exactly-one-reversed-edge-per-cycle.
+- `src/paste/test/operations.fuzz.test.ts` — paste planners: selection
+  clamping, branch-exact prefix/suffix reconstruction, parsed-content
+  conservation, fenced-code body preservation, chord-intent totality.
+- `src/data/orderKeyPlacement.fuzz.test.ts` — tie-breaking placement
+  via a fake-Tx harness: strictly-ascending keys, minimal re-key with
+  no id dropped/duplicated, new ids contiguously adjacent to the anchor
+  under `(order_key, id)` sort — the #198/#182/#188 tie-collision
+  class.
 
 ## Found so far
 
