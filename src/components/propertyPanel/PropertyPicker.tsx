@@ -33,7 +33,10 @@ import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
 import { usePropertyEditingActivation } from './usePropertyEditingActivation'
 import type { Block } from '@/data/block'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  resolveEditorOverride,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 import {isPropertyPanelHiddenProperty} from './visibility'
 
 export const DEFAULT_PRESET_ID = 'ref'
@@ -318,7 +321,7 @@ export function PropertyPicker({
             >
               <PropertyShapeGlyph
                 shape={s.schema.codec.type}
-                Glyph={uis.get(s.schema.name)?.Glyph ?? s.preset?.Glyph}
+                Glyph={resolveEditorOverride(s.schema.name, propertyDefinitions, uis, s.schema)?.Glyph ?? s.preset?.Glyph}
                 className="text-muted-foreground"
               />
               <span className="flex-1 truncate">{s.schema.name}</span>

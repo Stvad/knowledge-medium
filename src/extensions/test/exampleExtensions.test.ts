@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as Babel from '@babel/standalone'
 import { exampleExtensions } from '@/extensions/exampleExtensions'
 import * as extensionApi from '@/extensions/api'
-import {definitionSeedsFacet, propertySchemasFacet} from '@/data/facets'
+import {definitionSeedsFacet} from '@/data/facets'
 import {resolveFacetRuntimeSync, type AppExtension} from '@/facets/facet'
 
 const evaluateApiOnlySource = (source: string, filename: string): AppExtension => {
@@ -94,7 +94,6 @@ describe('exampleExtensions — templated sources', () => {
           encodedDefaultValue: expected.encodedDefaultValue,
         })
       }
-      expect(runtime.read(propertySchemasFacet).size).toBe(0)
     }
   })
 })

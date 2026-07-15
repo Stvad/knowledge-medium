@@ -13,7 +13,10 @@ import {
   type PropertyPanelSection,
 } from '@/components/propertyPanelSections'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  resolveEditorOverride,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 import {
   isPropertyPanelHiddenProperty,
   isPropertyPanelReadOnlyProperty,
@@ -132,11 +135,17 @@ const resolveModelRow = (
     blockIsSeededDefinition: boolean
   },
 ): PropertyPanelModelRow | null => {
+  const ui = resolveEditorOverride(
+    row.name,
+    args.definitions,
+    args.uis,
+    args.schemas.get(row.name),
+  )
   const display = resolvePropertyDisplay({
     name: row.name,
     encodedValue: row.isSet ? row.encodedValue : undefined,
     schemas: args.schemas,
-    uis: args.uis,
+    override: ui,
     presets: args.presets,
   })
   const declarationOnly = declarationOnlyDefinitionForName(
@@ -158,7 +167,6 @@ const resolveModelRow = (
       : row.encodedValue
     : display.schema.defaultValue
   const decodeFailed = row.isSet && display.isKnown && decodedValue === DECODE_FAILED
-  const ui = args.uis.get(row.name)
   const isTypeMembershipRow = row.name === typesProp.name
 
   return {

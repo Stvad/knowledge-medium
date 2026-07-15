@@ -3,7 +3,6 @@ import {describe, expect, it} from 'vitest'
 import type {RefCodec, RefLikeCodec} from '@/data/api'
 import {
   definitionSeedsFacet,
-  propertySchemasFacet,
   valuePresetCoresFacet,
 } from '@/data/facets'
 import type {AnyPropertySeedDeclaration} from '@/data/propertySeeds'
@@ -158,19 +157,14 @@ const registrationCases: readonly SeedRegistrationCase[] = [
 const allDeclarations = registrationCases.flatMap(({declarations}) => declarations)
 
 describe('static plugin property seeds', () => {
-  it.each(registrationCases)('$label contributes declarations, not ambient schemas', ({
+  it.each(registrationCases)('$label contributes definition seeds', ({
     extension,
     declarations,
   }) => {
     const runtime = resolveFacetRuntimeSync(extension)
     const seeds = runtime.read(definitionSeedsFacet)
-    const ambientSchemas = runtime.read(propertySchemasFacet)
 
     expect(seeds).toEqual(expect.arrayContaining([...declarations]))
-    expect(ambientSchemas.size).toBe(0)
-    for (const declaration of declarations) {
-      expect(ambientSchemas.has(declaration.name)).toBe(false)
-    }
   })
 
   it('covers the complete static inventory with collision-free seed keys', () => {

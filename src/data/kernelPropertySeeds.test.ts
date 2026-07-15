@@ -57,7 +57,8 @@ describe('kernel property seed conversion', () => {
 
     expect(new Set(seeds.filter(seed => seed.hidden).map(seed => seed.name)))
       .toEqual(hiddenKernelPropertyNames)
-    expect([...uiRuntime.read(propertyEditorOverridesFacet).keys()]).toEqual([typesProp.name])
+    // The override facet is keyed by seed identity (B′ §8), not name.
+    expect([...uiRuntime.read(propertyEditorOverridesFacet).keys()]).toEqual([typesProp.seedKey])
   })
 
   it('persists only defaults that differ from their preset core', () => {

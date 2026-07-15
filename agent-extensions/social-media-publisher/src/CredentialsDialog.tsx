@@ -249,30 +249,25 @@ const LessWrongConnectedHintEditor = (props: PropertyEditorProps<boolean>) => (
   <ConnectedHintEditor {...props} platform='lesswrong' />
 )
 
-export const blueskyHandleEditor = definePropertyEditorOverride<string>({
-  name: blueskyHandleProp.name,
+export const blueskyHandleEditor = definePropertyEditorOverride(blueskyHandleProp, {
   label: 'Bluesky handle',
 })
 
-export const corsProxyUrlEditor = definePropertyEditorOverride<string>({
-  name: corsProxyUrlProp.name,
+export const corsProxyUrlEditor = definePropertyEditorOverride(corsProxyUrlProp, {
   label: 'CORS proxy URL',
 })
 
-export const twitterConnectedEditor = definePropertyEditorOverride<boolean>({
-  name: twitterConnectedHintProp.name,
+export const twitterConnectedEditor = definePropertyEditorOverride(twitterConnectedHintProp, {
   label: 'X / Twitter',
   Editor: TwitterConnectedHintEditor,
 })
 
-export const blueskyConnectedEditor = definePropertyEditorOverride<boolean>({
-  name: blueskyConnectedHintProp.name,
+export const blueskyConnectedEditor = definePropertyEditorOverride(blueskyConnectedHintProp, {
   label: 'Bluesky',
   Editor: BlueskyConnectedHintEditor,
 })
 
-export const lesswrongConnectedEditor = definePropertyEditorOverride<boolean>({
-  name: lesswrongConnectedHintProp.name,
+export const lesswrongConnectedEditor = definePropertyEditorOverride(lesswrongConnectedHintProp, {
   label: 'LessWrong',
   Editor: LessWrongConnectedHintEditor,
 })

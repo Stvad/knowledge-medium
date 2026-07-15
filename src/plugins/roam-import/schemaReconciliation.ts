@@ -18,6 +18,7 @@
 
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
+import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {
   ROAM_PAGE_ALIAS_PROP,
   collectAliasesFromRoamSemanticRefListValue,
@@ -236,8 +237,10 @@ export const collectSchemaReconciliationPlan = (
       continue
     }
 
-    // Reserved kernel-internal slot (per §6 collision rule).
-    if (overrides.get(name)?.hidden === true) {
+    // Reserved kernel-internal slot (per §6 collision rule). The override
+    // join is by seed identity (B′ §8), so a `hidden` override is matched
+    // through the name's winning definition rather than by raw name.
+    if (resolveEditorOverride(name, repo.propertyDefinitions, overrides, existingSchema)?.hidden === true) {
       skippedReserved.push(name)
       continue
     }

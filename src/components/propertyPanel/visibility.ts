@@ -3,7 +3,10 @@ import {
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
 } from '@/data/api'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  resolveEditorOverride,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 import {isPropertySeedDeclaration} from '@/data/propertySeeds'
 import {seedKeyProp, seedRevisionProp} from '@/data/properties'
 
@@ -52,7 +55,7 @@ export const isPropertyPanelHiddenProperty = (
   definitions: PropertyDefinitionRegistrySnapshot | null = null,
 ): boolean => {
   const schema = schemas.get(name)
-  const ui = uis.get(name)
+  const ui = resolveEditorOverride(name, definitions, uis, schema)
   return isPropertyPanelReadOnlyProperty(name) ||
     ui?.hidden === true ||
     isDefinitionHidden(name, schema, definitions) ||

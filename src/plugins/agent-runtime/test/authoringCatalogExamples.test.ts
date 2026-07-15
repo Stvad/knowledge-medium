@@ -1,7 +1,7 @@
 import * as Babel from '@babel/standalone'
 import {describe, expect, it} from 'vitest'
 import * as extensionApi from '@/extensions/api'
-import {definitionSeedsFacet, propertySchemasFacet} from '@/data/facets'
+import {definitionSeedsFacet} from '@/data/facets'
 import {resolveFacetRuntimeSync, type AppExtension} from '@/facets/facet'
 import {
   describeAuthoringCatalog,
@@ -221,7 +221,6 @@ describe('authoring catalog example drift guard', () => {
         changeScope: extensionApi.ChangeScope.UserPrefs,
       }),
     ])
-    expect(runtime.read(propertySchemasFacet).size).toBe(0)
   })
 
   it('parseNamedImportsFromApi extracts runtime imports across syntaxes (skipping types)', () => {

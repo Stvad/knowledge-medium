@@ -49,7 +49,6 @@ import {
   mutatorsFacet,
   postCommitProcessorsFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   projectedPropertyDefinitionsFacet,
   queriesFacet,
   sameTxProcessorsFacet,
@@ -59,7 +58,7 @@ import {
   workspaceBackfillsFacet,
   type WorkspaceBackfill,
 } from './facets'
-import { changedRefSchemaNames, mergeLiftedSchemas } from './internals/refProjection'
+import { changedRefSchemaNames, liftTypeSchemas } from './internals/refProjection'
 import {readValuePresetRegistry} from './valuePresetRegistry'
 
 /** A named rebuild step. Declares which facets it reads via `inputs` so
@@ -314,12 +313,11 @@ export class FacetBridge {
         },
       },
       {
-        // Reads typesFacet AND propertySchemasFacet — both inputs feed
-        // mergeLiftedSchemas, so a change to either re-runs the merge.
+        // Reads typesFacet for the transitional type-lift (Slice C removes it);
+        // the former direct `propertySchemasFacet` input was removed in B′.
         id: 'propertySchemas',
         inputs: [
           typesFacet as Facet<unknown, unknown>,
-          propertySchemasFacet as Facet<unknown, unknown>,
           projectedPropertyDefinitionsFacet as Facet<unknown, unknown>,
           definitionSeedsFacet as Facet<unknown, unknown>,
         ],
@@ -327,7 +325,7 @@ export class FacetBridge {
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
           const types = rt.read(typesFacet)
-          const legacySchemas = mergeLiftedSchemas(rt.read(propertySchemasFacet), types)
+          const legacySchemas = liftTypeSchemas(types)
           const seeds = rt.read(definitionSeedsFacet)
           const propertySeedNameCounts = new Map<string, number>()
           for (const seed of seeds) {

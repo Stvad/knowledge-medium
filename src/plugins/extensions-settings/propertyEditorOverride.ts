@@ -13,8 +13,7 @@ import {ExtensionsOverridesEditor} from './ExtensionsOverridesEditor.tsx'
 const ExtensionsOverridesEditorEntry = (props: PropertyEditorProps<Overrides>) =>
   createElement(ExtensionsOverridesEditor, props)
 
-export const extensionsOverridesUi = definePropertyEditorOverride<Overrides>({
-  name: extensionsOverridesProp.name,
+export const extensionsOverridesUi = definePropertyEditorOverride(extensionsOverridesProp, {
   label: 'Extensions',
   Editor: ExtensionsOverridesEditorEntry,
 })

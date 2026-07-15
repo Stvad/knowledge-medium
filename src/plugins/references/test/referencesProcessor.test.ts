@@ -22,14 +22,14 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data/api'
+import { ChangeScope, codecs, defineBlockType, defineProperty, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { typesFacet } from '@/data/facets.js'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/facets/facet.js'
 import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { referencesDataExtension } from '../dataExtension.ts'
@@ -183,9 +183,7 @@ describe('parseReferences — ref-typed properties', () => {
     changeScope: ChangeScope.BlockDefault,
   })
   const refSchemaExtension = [
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-    propertySchemasFacet.of(relatedProp, {source: 'test'}),
-    propertySchemasFacet.of(malformedProp, {source: 'test'}),
+    typesFacet.of(defineBlockType({id: 'test:ref-schemas', properties: [reviewerProp, relatedProp, malformedProp]}), {source: 'test'}),
   ]
 
   beforeEach(async () => {
@@ -276,20 +274,19 @@ describe('parseReferences — schema-swap reprojection', () => {
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+    typesFacet.of(defineBlockType({id: 'test:ref-reviewer', properties: [reviewerProp]}), {source: 'test'}),
   ])
   const runtimeWithReviewerAsString = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    propertySchemasFacet.of(reviewerStringProp, {source: 'test'}),
+    typesFacet.of(defineBlockType({id: 'test:ref-reviewer-string', properties: [reviewerStringProp]}), {source: 'test'}),
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
     referencesDataExtension,
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-    propertySchemasFacet.of(approverProp, {source: 'test'}),
+    typesFacet.of(defineBlockType({id: 'test:ref-reviewer-approver', properties: [reviewerProp, approverProp]}), {source: 'test'}),
   ])
   const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -1157,7 +1154,7 @@ describe('parseReferences — workspace-switch reprojection', () => {
     await env.h.cleanup()
     // `reviewer` is an unscoped static schema → ref-typed in EVERY workspace,
     // so switching between two workspaces produces an empty ref-ness diff.
-    env = await setup([propertySchemasFacet.of(reviewerProp, {source: 'test'})])
+    env = await setup([typesFacet.of(defineBlockType({id: 'test:ref-reviewer-ws-switch', properties: [reviewerProp]}), {source: 'test'})])
   })
 
   it('backfills a newly-opened workspace sharing a ref-typed name with the prior one', async () => {

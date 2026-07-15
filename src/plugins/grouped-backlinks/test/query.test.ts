@@ -115,12 +115,12 @@ describe('groupedBacklinksDataExtension query', () => {
     const schemas = new Map([[groupedBacklinksDefaultsProp.name, groupedBacklinksDefaultsProp]])
     const uis = runtime.read(propertyEditorOverridesFacet)
 
-    expect(uis.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsUi)
+    expect(uis.get(groupedBacklinksDefaultsProp.seedKey)).toBe(groupedBacklinksDefaultsUi)
     expect(resolvePropertyDisplay({
       name: groupedBacklinksDefaultsProp.name,
       encodedValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
       schemas,
-      uis,
+      override: uis.get(groupedBacklinksDefaultsProp.seedKey),
       presets: readValuePresets(runtime),
     }).Editor).toBe(groupedBacklinksDefaultsUi.Editor)
   })

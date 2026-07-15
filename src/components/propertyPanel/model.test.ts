@@ -19,7 +19,7 @@ const schemasMap = (schemas: readonly AnyPropertySchema[]) =>
   new Map(schemas.map(schema => [schema.name, schema]))
 
 const uisMap = (uis: readonly AnyPropertyEditorOverride[]) =>
-  new Map(uis.map(ui => [ui.name, ui]))
+  new Map(uis.map(ui => [ui.seedKey, ui]))
 
 describe('buildPropertyPanelModel', () => {
   it('pins type membership outside loose property sections', () => {
@@ -56,8 +56,13 @@ describe('buildPropertyPanelModel', () => {
       defaultValue: '',
       changeScope: ChangeScope.BlockDefault,
     })
-    const internalProp = defineProperty<string>('plugin:internal', {
-      codec: codecs.string,
+    // A seed handle: overrides join by seed identity (B′ §8), so the property
+    // an override hides must carry a seedKey.
+    const internalProp = seedProperty({
+      seedKey: 'system:test-plugin/property/internal',
+      revision: 1,
+      name: 'plugin:internal',
+      preset: 'string',
       defaultValue: '',
       changeScope: ChangeScope.BlockDefault,
     })
@@ -73,8 +78,7 @@ describe('buildPropertyPanelModel', () => {
       schemas: schemasMap([visibleProp, internalProp]),
       propertyDefinitions: null,
       uis: uisMap([
-        definePropertyEditorOverride<string>({
-          name: internalProp.name,
+        definePropertyEditorOverride(internalProp, {
           label: 'Internal',
           hidden: true,
         }),

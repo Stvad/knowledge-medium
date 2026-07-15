@@ -2,6 +2,10 @@ import {
   isPropertySeedDeclaration,
   type AnyPropertySeedDeclaration,
 } from '@/data/propertySeeds.js'
+import {
+  isPropertyEditorOverride,
+  type AnyPropertyEditorOverride,
+} from '@/data/api'
 
 const DYNAMIC_EXTENSION_SEED_OWNER = '@extension'
 const DYNAMIC_EXTENSION_PROPERTY_PREFIX = `${DYNAMIC_EXTENSION_SEED_OWNER}/property/`
@@ -56,4 +60,31 @@ export const bindExtensionPropertySeed = (
   ;(value as {seedKey: string}).seedKey = `${owner}/property/${key}`
   boundOwners.set(value, blockId)
   return value
+}
+
+/**
+ * Loader-only: bind a dynamic editor override to its block so its `seedKey`
+ * matches the block-bound key its property seed received. Returns a fresh
+ * bound override (the source object is shared across installs; unlike a seed
+ * declaration it is not mutated in place). An override targeting a
+ * non-dynamic seed (a kernel/other-plugin seedKey without the reserved
+ * prefix) passes through unchanged, so a dynamic extension can still override
+ * another owner's editor.
+ */
+export const bindExtensionPropertyOverride = (
+  value: unknown,
+  blockId: string,
+): AnyPropertyEditorOverride => {
+  if (!isPropertyEditorOverride(value)) {
+    throw new Error('Dynamic property editor override contribution is malformed')
+  }
+  if (!value.seedKey.startsWith(DYNAMIC_EXTENSION_PROPERTY_PREFIX)) {
+    return value
+  }
+  const owner = encodeURIComponent(blockId)
+  if (owner.length === 0) {
+    throw new Error('Dynamic extension block id must be non-empty')
+  }
+  const key = value.seedKey.slice(DYNAMIC_EXTENSION_PROPERTY_PREFIX.length)
+  return {...value, seedKey: `${owner}/property/${key}`}
 }

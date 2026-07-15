@@ -229,7 +229,7 @@ export type {
   ResolvedPropertySchema,
   TypeContribution,
 } from '@/data/api'
-export { definitionSeedsFacet, propertyEditorOverridesFacet, propertySchemasFacet, typesFacet } from '@/data/facets.js'
+export { definitionSeedsFacet, propertyEditorOverridesFacet, typesFacet } from '@/data/facets.js'
 export { extensionPropertySeedKey } from '@/extensions/dynamicExtensionSeeds.js'
 export {
   // System UI-state props extensions might want to read/write

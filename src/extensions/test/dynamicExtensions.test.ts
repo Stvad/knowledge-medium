@@ -24,8 +24,8 @@ import { getBoundary } from '@/facets/togglable'
 import type { Overrides } from '@/facets/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
-import {ChangeScope} from '@/data/api'
-import {definitionSeedsFacet} from '@/data/facets'
+import {ChangeScope, definePropertyEditorOverride} from '@/data/api'
+import {definitionSeedsFacet, propertyEditorOverridesFacet} from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
 import {extensionPropertySeedKey} from '@/extensions/dynamicExtensionSeeds'
 
@@ -319,6 +319,43 @@ describe('dynamicExtensionsExtension — property seed identity', () => {
         'ext%2Fone/property/status',
         'ext-two/property/status',
       ])
+    } finally {
+      restore()
+    }
+  })
+
+  it('binds a dynamic editor override to the block so its seedKey matches its seed', async () => {
+    // The override must join its seed by the SAME block-scoped seedKey the seed
+    // received, or the seed-identity join silently misses (B′ §8).
+    const blocks = [blockData({id: 'ext-ovr', content: 'with-override'})]
+    const restore = __setCompileImplForTest(async () => {
+      const declaration = seedProperty({
+        seedKey: extensionPropertySeedKey('status'),
+        revision: 1,
+        name: 'example:status',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const override = definePropertyEditorOverride(declaration, {label: 'Status'})
+      return {default: [
+        definitionSeedsFacet.of(declaration),
+        propertyEditorOverridesFacet.of(override),
+      ]}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      const seeds = runtime.read(definitionSeedsFacet)
+      const overrides = runtime.read(propertyEditorOverridesFacet)
+      expect(seeds[0]?.seedKey).toBe('ext-ovr/property/status')
+      // Bound to the same block-scoped key, so it keys the override map there.
+      expect(overrides.get('ext-ovr/property/status')?.label).toBe('Status')
+      expect(overrides.has(extensionPropertySeedKey('status'))).toBe(false)
     } finally {
       restore()
     }

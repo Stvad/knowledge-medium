@@ -1698,48 +1698,38 @@ const autoSyncEffect = {
 // ---------------------------------------------------------------------------
 // editor overrides
 
-const connectedEditor = definePropertyEditorOverride<boolean>({
-  name: connectedHintProp.name,
+const connectedEditor = definePropertyEditorOverride(connectedHintProp, {
   label: 'Readwise',
   Editor: ConnectedEditor,
 })
-const lastSyncedEditor = definePropertyEditorOverride<string | undefined>({
-  name: lastSyncedAtProp.name,
+const lastSyncedEditor = definePropertyEditorOverride(lastSyncedAtProp, {
   label: 'Last synced',
   Editor: LastSyncedEditor,
 })
-const syncSinceEditor = definePropertyEditorOverride<Date | undefined>({
-  name: syncSinceProp.name,
+const syncSinceEditor = definePropertyEditorOverride(syncSinceProp, {
   label: 'Initial sync start date',
 })
-const pageTitleEditor = definePropertyEditorOverride<string>({
-  name: pageTitleTemplateProp.name,
+const pageTitleEditor = definePropertyEditorOverride(pageTitleTemplateProp, {
   label: 'Page title template',
 })
-const bookTemplateEditor = definePropertyEditorOverride<string>({
-  name: bookTemplateProp.name,
+const bookTemplateEditor = definePropertyEditorOverride(bookTemplateProp, {
   label: 'Document supplemental template',
 })
-const highlightTemplateEditor = definePropertyEditorOverride<string>({
-  name: highlightTemplateProp.name,
+const highlightTemplateEditor = definePropertyEditorOverride(highlightTemplateProp, {
   label: 'Highlight template',
   Editor: TextareaEditor,
 })
-const autoSyncEditor = definePropertyEditorOverride<number>({
-  name: autoSyncIntervalProp.name,
+const autoSyncEditor = definePropertyEditorOverride(autoSyncIntervalProp, {
   label: 'Auto-sync interval (minutes; 0 = off)',
   Editor: NumberEditor,
 })
-const authorPageTypesEditor = definePropertyEditorOverride<readonly string[]>({
-  name: authorPageTypesProp.name,
+const authorPageTypesEditor = definePropertyEditorOverride(authorPageTypesProp, {
   label: 'New author page types',
 })
-const documentPageTypesEditor = definePropertyEditorOverride<readonly string[]>({
-  name: documentPageTypesProp.name,
+const documentPageTypesEditor = definePropertyEditorOverride(documentPageTypesProp, {
   label: 'Document page types',
 })
-const highlightTypesEditor = definePropertyEditorOverride<readonly string[]>({
-  name: highlightTypesProp.name,
+const highlightTypesEditor = definePropertyEditorOverride(highlightTypesProp, {
   label: 'Highlight types',
 })
 

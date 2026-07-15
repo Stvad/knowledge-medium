@@ -6,9 +6,10 @@ import type { ChangeScope } from './changeScope'
  *  CLI, headless tests, future non-React UIs). React presentation lives
  *  separately: most properties pick up an editor from a future
  *  ValuePreset (codec-type → editor) and never need anything more.
- *  Per-name *outlier* overrides — type-aware autocompletes, singleton
+ *  Per-definition *outlier* overrides — type-aware autocompletes, singleton
  *  config editors, hidden kernel-internal state — go on
- *  `PropertyEditorOverride<T>` (joined to schemas by `name`). See spec §5.6. */
+ *  `PropertyEditorOverride<T>` (joined to definitions by seed identity).
+ *  See spec §5.6, §8. */
 export interface PropertySchemaEntry<T> {
   readonly name: string
   /** Storage codec; runs at the four boundary call sites only. */
@@ -77,20 +78,23 @@ export interface PropertySchema<T> extends PropertySchemaEntry<T> {}
  *  Most properties don't need an override — leave them alone and the
  *  codec/preset chain renders them. See spec §5.6 + §6. */
 export interface PropertyEditorOverride<T = unknown> {
-  /** Must match a registered `PropertySchema.name`. Multiple overrides
-   *  for the same name log a warning and last-wins (facet convention). */
-  readonly name: string
-  /** Display name (defaults to `name` when absent). */
+  /** The `seedKey` of the definition this override presents. The join
+   *  resolves seedKey → the workspace's winning definition at render time,
+   *  so it is immune to display-name changes. Multiple overrides for the same
+   *  seedKey log a warning and last-wins (facet convention). B′ replaced the
+   *  former name key with this. */
+  readonly seedKey: string
+  /** Display name (defaults to the definition name when absent). */
   readonly label?: string
   /** Hide from the normal property panel. Hidden rows can still be
    *  revealed in the debug/metadata section; this affects placement and
    *  destructive capabilities, not value editability. */
   readonly hidden?: boolean
   readonly Editor?: PropertyEditor<T>
-  /** Optional per-name glyph override. Defaults to the matching
-   *  `ValuePreset.Glyph` when absent. Use sparingly — most properties
-   *  pick up the codec-type-keyed glyph from the preset and don't
-   *  need a per-name shape. See user-defined-properties §1-ui. */
+  /** Optional glyph override. Defaults to the matching `ValuePreset.Glyph`
+   *  when absent. Use sparingly — most properties pick up the codec-type-keyed
+   *  glyph from the preset and don't need a per-definition shape.
+   *  See user-defined-properties §1-ui. */
   readonly Glyph?: ComponentType<{className?: string}>
 }
 
@@ -136,18 +140,39 @@ export const defineProperty = <T>(
   schema: Omit<PropertySchema<T>, 'name'>,
 ): PropertySchema<T> => ({ name, ...schema })
 
-/** Helper for the rare property that needs a per-name editor override.
- *  Most plugins should NOT reach for this — registering an override is
- *  the outlier path. The common path is a codec-type-based ValuePreset. */
+/** Helper for the rare property that needs a per-definition editor override.
+ *  Pass the seed handle the override presents; its `seedKey` is the join key
+ *  (name-independent, immune to renames). Most plugins should NOT reach for
+ *  this — registering an override is the outlier path. The common path is a
+ *  codec-type-based ValuePreset. */
 export const definePropertyEditorOverride = <T>(
-  override: PropertyEditorOverride<T>,
-): PropertyEditorOverride<T> => override
+  handle: PropertyHandle<T>,
+  override: Omit<PropertyEditorOverride<T>, 'seedKey'>,
+): PropertyEditorOverride<T> => {
+  // Fail loud on a stale caller passing the pre-B′ `{name, …}` object shape:
+  // without a seed handle there is no identity to join on.
+  if (typeof handle?.seedKey !== 'string') {
+    throw new Error(
+      '[definePropertyEditorOverride] first argument must be a seed handle ' +
+      '(from seedProperty); the name-keyed override shape was removed in B′',
+    )
+  }
+  return {seedKey: handle.seedKey, ...override}
+}
+
+/** Runtime guard for dynamic-extension override contributions (the loader
+ *  binds their seedKey to the owning block before registration). */
+export const isPropertyEditorOverride = (
+  value: unknown,
+): value is AnyPropertyEditorOverride =>
+  typeof value === 'object' && value !== null &&
+  typeof (value as {seedKey?: unknown}).seedKey === 'string'
 
 /** Variance-erased schema type for storage in heterogeneous collections
- *  (`propertySchemasFacet`'s contributions, etc.). `PropertySchema<T>`
- *  is invariant in `T` through `defaultValue` and `codec`, so typed
- *  plugin schemas can't widen to `PropertySchema<unknown>`. The `any`
- *  escape mirrors `AnyMutator` / `AnyPostCommitProcessor`. */
+ *  (the merged registry, type-lifted `TypeContribution.properties`, etc.).
+ *  `PropertySchema<T>` is invariant in `T` through `defaultValue` and
+ *  `codec`, so typed plugin schemas can't widen to `PropertySchema<unknown>`.
+ *  The `any` escape mirrors `AnyMutator` / `AnyPostCommitProcessor`. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPropertySchema = PropertySchema<any>
 

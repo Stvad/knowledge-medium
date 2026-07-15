@@ -1,9 +1,10 @@
 import {describe, expect, it, vi} from 'vitest'
-import {ChangeScope, codecs, defineProperty} from '@/data/api'
+import {ChangeScope, codecs, defineProperty, type AnyPropertyEditorOverride} from '@/data/api'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {
   buildPropertyDefinitionRegistry,
+  resolveEditorOverride,
 } from '@/data/propertyDefinitionRegistry'
 import {createPropertySchemaResolver} from '@/data/internals/propertySchemaResolution'
 import {seedProperty} from '@/data/propertySeeds'
@@ -406,5 +407,68 @@ describe('property definition registry snapshot', () => {
       status: 'identity-unavailable',
       reason: 'definition-unavailable',
     })
+  })
+})
+
+describe('resolveEditorOverride (seed-identity join, B′ §8)', () => {
+  const overrideFor = (seedKey: string): AnyPropertyEditorOverride => ({seedKey, label: 'X'})
+
+  it('joins a name to its winning definition’s seedKey', () => {
+    const fieldId = propertyDefinitionBlockId(WS, titleSeed.seedKey)
+    const snapshot = build({
+      projectedDefinitions: new Map([[
+        fieldId,
+        {metadata: metadata(fieldId, titleSeed.name, 1, {seedKey: titleSeed.seedKey})},
+      ]]),
+    })
+    const ui = overrideFor(titleSeed.seedKey)
+    const overrides = new Map([[titleSeed.seedKey, ui]])
+    expect(resolveEditorOverride(
+      titleSeed.name, snapshot, overrides, snapshot.schemas.get(titleSeed.name),
+    )).toBe(ui)
+  })
+
+  it('uses a lone unmaterialized seed declaration when no row is projected yet', () => {
+    const snapshot = build()
+    expect(snapshot.definitionsByName.has(titleSeed.name)).toBe(false)
+    const ui = overrideFor(titleSeed.seedKey)
+    const overrides = new Map([[titleSeed.seedKey, ui]])
+    expect(resolveEditorOverride(
+      titleSeed.name, snapshot, overrides, snapshot.schemas.get(titleSeed.name),
+    )).toBe(ui)
+  })
+
+  it('returns undefined for a user row — its winner carries no seedKey', () => {
+    const userSchema = defineProperty('notes', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    const snapshot = build({
+      seeds: [],
+      projectedDefinitions: new Map([[
+        'field-user-notes',
+        {metadata: metadata('field-user-notes', 'notes', 1), schema: userSchema},
+      ]]),
+    })
+    const overrides = new Map([['some/property/x', overrideFor('some/property/x')]])
+    expect(resolveEditorOverride('notes', snapshot, overrides, userSchema)).toBeUndefined()
+  })
+
+  it('falls back to the ambient seed declaration before a workspace is pinned', () => {
+    const ui = overrideFor(titleSeed.seedKey)
+    const overrides = new Map([[titleSeed.seedKey, ui]])
+    // definitions=null (stage 0); the ambient schema entry is the seed itself.
+    expect(resolveEditorOverride(titleSeed.name, null, overrides, titleSeed)).toBe(ui)
+  })
+
+  it('returns undefined when the name has no seed identity', () => {
+    const plain = defineProperty('plain', {
+      codec: codecs.string, defaultValue: '', changeScope: ChangeScope.BlockDefault,
+    })
+    const overrides = new Map([[titleSeed.seedKey, overrideFor(titleSeed.seedKey)]])
+    expect(resolveEditorOverride('plain', null, overrides, plain)).toBeUndefined()
+  })
+
+  it('returns undefined when the seedKey resolves but no override is registered', () => {
+    expect(resolveEditorOverride(titleSeed.name, null, new Map(), titleSeed)).toBeUndefined()
   })
 })

@@ -1104,21 +1104,17 @@ const ConnectedEditor = ({value, onChange}: PropertyEditorProps<boolean>) => {
   )
 }
 
-const connectedEditor = definePropertyEditorOverride<boolean>({
-  name: connectedHintProp.name,
+const connectedEditor = definePropertyEditorOverride(connectedHintProp, {
   label: 'Matrix',
   Editor: ConnectedEditor,
 })
-const homeserverEditor = definePropertyEditorOverride<string>({
-  name: homeserverProp.name,
+const homeserverEditor = definePropertyEditorOverride(homeserverProp, {
   label: 'Homeserver URL',
 })
-const roomIdEditor = definePropertyEditorOverride<string>({
-  name: roomIdProp.name,
+const roomIdEditor = definePropertyEditorOverride(roomIdProp, {
   label: 'Room ID',
 })
-const autoStartEditor = definePropertyEditorOverride<boolean>({
-  name: autoStartProp.name,
+const autoStartEditor = definePropertyEditorOverride(autoStartProp, {
   label: 'Auto-start ingest',
 })
 

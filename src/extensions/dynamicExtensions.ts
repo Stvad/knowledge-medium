@@ -25,8 +25,11 @@ import {
 } from '@/extensions/extensionToggles.js'
 import { Repo } from '../data/repo'
 import { BlockData } from '@/types.js'
-import {definitionSeedsFacet} from '@/data/facets.js'
-import {bindExtensionPropertySeed} from '@/extensions/dynamicExtensionSeeds.js'
+import {definitionSeedsFacet, propertyEditorOverridesFacet} from '@/data/facets.js'
+import {
+  bindExtensionPropertySeed,
+  bindExtensionPropertyOverride,
+} from '@/extensions/dynamicExtensionSeeds.js'
 
 export interface ExtensionLoadErrorReporter {
   (blockId: string, error: Error): void
@@ -309,6 +312,8 @@ const prefixContributionSource = (
     : blockSource
   const value = contribution.facet.id === definitionSeedsFacet.id
     ? bindExtensionPropertySeed(contribution.value, blockId)
+    : contribution.facet.id === propertyEditorOverridesFacet.id
+    ? bindExtensionPropertyOverride(contribution.value, blockId)
     : contribution.value
   const result: FacetContribution<unknown> = {
     ...contribution,

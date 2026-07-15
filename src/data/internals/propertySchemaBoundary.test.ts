@@ -5,11 +5,12 @@ import {
   ChangeScope,
   PropertySchemaIdentityError,
   codecs,
+  defineBlockType,
   defineProperty,
 } from '@/data/api'
 import {
   definitionSeedsFacet,
-  propertySchemasFacet,
+  typesFacet,
   projectedPropertyDefinitionsFacet,
 } from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
@@ -127,7 +128,9 @@ describe('typed property identity boundary', () => {
       installKernelRuntime: false,
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
-    repo.setRuntimeContributions(propertySchemasFacet, 'test-pre-pin-legacy', [legacyLookalike])
+    repo.setRuntimeContributions(typesFacet, 'test-pre-pin-legacy', [
+      defineBlockType({id: 'test:pre-pin-legacy', properties: [legacyLookalike]}),
+    ])
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-pre-pin-seed', [shadowed])
     await repo.tx(
       tx => tx.create({
@@ -207,32 +210,6 @@ describe('typed property identity boundary', () => {
     expect(repo.block('compat-target').get(resolution.schema)).toBe('ok')
   })
 
-  it('resolves a legacy propertySchemasFacet schema alongside seeds — the transitional dual-path (removed in B′)', async () => {
-    // MIGRATION GUARDRAIL (schema-unification rev 5): Slice B exposes seeds
-    // while the old `propertySchemasFacet.of` registration path stays live, so a
-    // second user's dynamic extensions keep resolving until they migrate. This
-    // `setup()` already contributes a seed (`shadowed`) + a projected winner, so
-    // this asserts an old-facet legacy schema resolves for read AND write in a
-    // seed-present registry. The B′ deletion slice removes this path; if that
-    // lands before the migration is confirmed, this test is the tripwire.
-    const repo = await setup()
-    const legacy = defineProperty('legacy-only', {
-      codec: codecs.string,
-      defaultValue: 'legacy-default',
-      changeScope: ChangeScope.BlockDefault,
-    })
-    repo.setRuntimeContributions(propertySchemasFacet, 'test-legacy-only', [legacy])
-    const ambient = repo.propertySchemas.get(legacy.name)
-    if (!ambient) throw new Error('expected transitional legacy schema')
-    expect(ambient).toBe(legacy)
-
-    await repo.tx(
-      tx => tx.setProperty('target', legacy, 'legacy-value'),
-      {scope: ChangeScope.BlockDefault},
-    )
-    expect(repo.block('target').get(legacy)).toBe('legacy-value')
-  })
-
   it('allows an unregistered plain schema for an unclaimed active-workspace name', async () => {
     const repo = await setup()
     const unregistered = defineProperty('active-unregistered', {
@@ -264,7 +241,9 @@ describe('typed property identity boundary', () => {
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([]))
     repo.setActiveWorkspaceId(WS)
-    repo.setRuntimeContributions(propertySchemasFacet, 'test-ambient-handle-only', [handle])
+    repo.setRuntimeContributions(typesFacet, 'test-ambient-handle-only', [
+      defineBlockType({id: 'test:ambient-handle-only', properties: [handle]}),
+    ])
     await repo.tx(
       tx => tx.create({
         id: 'ambient-handle-only-target',
@@ -316,7 +295,9 @@ describe('typed property identity boundary', () => {
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([]))
     repo.setActiveWorkspaceId(WS)
-    repo.setRuntimeContributions(propertySchemasFacet, 'test-renamed-seed-legacy', [legacy])
+    repo.setRuntimeContributions(typesFacet, 'test-renamed-seed-legacy', [
+      defineBlockType({id: 'test:renamed-seed-legacy', properties: [legacy]}),
+    ])
     repo.setRuntimeContributions(definitionSeedsFacet, 'test-renamed-seed', [declared])
     repo.setRuntimeContributions(
       projectedPropertyDefinitionsFacet,
@@ -772,9 +753,9 @@ describe('typed property identity boundary', () => {
       changeScope: ChangeScope.BlockDefault,
     })
     repo.setRuntimeContributions(
-      propertySchemasFacet,
+      typesFacet,
       'test-cross-workspace-registered-legacy',
-      [registeredLegacy],
+      [defineBlockType({id: 'test:cross-workspace-registered-legacy', properties: [registeredLegacy]})],
     )
     // A row in `ws-other`, a workspace that is neither active nor the retained
     // previous one — its projected definitions are not loaded. A code-owned seed
