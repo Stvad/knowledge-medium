@@ -40,10 +40,11 @@ export interface SeedTypeArgs {
   readonly properties?: ReadonlyArray<AnyPropertySchema>
 }
 
-/** Runtime boundary for public/dynamic type-seed contributions. Mirrors the
- * constructor invariants so one malformed contribution is dropped before it can
- * abort a shared materialization pass (`isPropertySeedDeclaration`'s type
- * twin). */
+/** Runtime boundary for public/dynamic type-seed contributions. Enforces the
+ * constructor's required-field invariants (and additionally type-checks the
+ * optional fields `seedType` itself leaves unvalidated) so one malformed
+ * contribution is dropped before it can abort a shared materialization pass
+ * (`isPropertySeedDeclaration`'s type twin). */
 export const isTypeSeedDeclaration = (value: unknown): value is TypeSeedDeclaration =>
   isRecord(value) &&
   typeof value.id === 'string' && value.id.trim().length > 0 &&
@@ -59,10 +60,15 @@ export const isTypeSeedDeclaration = (value: unknown): value is TypeSeedDeclarat
 /** Define a seeded block type. Unlike `seedProperty` there is no codec/preset to
  * round-trip, so validation is purely structural. The returned declaration is a
  * `TypeContribution` (its `id` is the membership token) carrying stable code
- * provenance (`seedKey`/`revision`) for identity + materialization. Optional
- * fields are omitted rather than stored as `undefined`, so the resulting
- * contribution is byte-identical to the hand-written `defineBlockType({…})` it
- * replaces. */
+ * provenance (`seedKey`/`revision`) for identity + materialization. Absent
+ * optional `TypeContribution` fields (`description`, `hideFromCompletion`, …) are
+ * omitted rather than stored as `undefined`, matching the presence/absence a
+ * hand-written `defineBlockType({…})` call would have for those same fields — but
+ * the seed ALWAYS additionally carries `seedKey`/`revision`, two provenance keys
+ * a bare `defineBlockType` never has. So the `TypeContribution` *subset* is a
+ * drop-in match; the whole returned object is NOT byte-identical, and any
+ * full-object structural compare during the `typesFacet.of` migration (C4) must
+ * ignore `seedKey`/`revision`. */
 export const seedType = (args: SeedTypeArgs): TypeSeedDeclaration => {
   if (!isTypeSeedKey(args.seedKey)) {
     throw new Error('[seedType] seedKey must match <owner>/type/<stable-key>')

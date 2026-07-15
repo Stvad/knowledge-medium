@@ -6,6 +6,7 @@ import {
   seedType,
   type TypeSeedDeclaration,
 } from '@/data/typeSeeds'
+import {isPropertySeedKey} from '@/data/propertySeeds'
 import {typeSeedsFacet} from '@/data/facets'
 import {propertyDefinitionBlockId, typeDefinitionBlockId} from '@/data/definitionSeeds'
 import {resolveFacetRuntimeSync} from '@/facets/facet'
@@ -21,8 +22,10 @@ describe('seedType', () => {
     expect(decl.revision).toBe(1)
   })
 
-  it('omits absent optional fields (byte-identical to defineBlockType)', () => {
+  it('omits absent optional TypeContribution fields (leaving id/label + provenance)', () => {
     const decl = seedType({seedKey: KEY, revision: 1, id: 'page', label: 'Page'})
+    // The TypeContribution subset matches a bare defineBlockType({id, label}); the
+    // seed additionally always carries seedKey + revision.
     expect(Object.keys(decl).sort()).toEqual(['id', 'label', 'revision', 'seedKey'])
   })
 
@@ -73,6 +76,27 @@ describe('isTypeSeedKey', () => {
     expect(isTypeSeedKey('page')).toBe(false)
     expect(isTypeSeedKey('owner/type/a/b')).toBe(false)
     expect(isTypeSeedKey(42)).toBe(false)
+  })
+
+  it('is mutually exclusive with the property grammar (shared-namespace safety)', () => {
+    // typeDefinitionBlockId and propertyDefinitionBlockId hash the SAME formula
+    // into the SAME namespace; cross-kind non-collision holds ONLY because no
+    // string can satisfy both grammars. Assert that mechanism directly (the
+    // determinism test below only checks two already-distinct literals) so a
+    // regex regression that made the grammars overlap fails here.
+    const adversarial = [
+      'system:kernel-data/type/page',
+      'system:kernel-data/property/page',
+      'owner/type/property/x',
+      'x/property/type/y',
+      'a/type/b',
+      'a/property/b',
+      'owner/type/',
+      '/type/x',
+    ]
+    for (const key of adversarial) {
+      expect(isTypeSeedKey(key) && isPropertySeedKey(key)).toBe(false)
+    }
   })
 })
 
@@ -127,5 +151,11 @@ describe('typeDefinitionBlockId', () => {
     // Disjoint key grammars (/type/ vs /property/) guarantee non-collision.
     expect(typeDefinitionBlockId('ws-1', 'system:kernel-data/type/page'))
       .not.toBe(propertyDefinitionBlockId('ws-1', 'system:kernel-data/property/page'))
+  })
+
+  it('throws on a non-type seed key (grammar invariant enforced at the call site)', () => {
+    expect(() => typeDefinitionBlockId('ws-1', 'system:kernel-data/property/page'))
+      .toThrow(/not a type seed key/)
+    expect(() => typeDefinitionBlockId('ws-1', 'malformed')).toThrow(/not a type seed key/)
   })
 })

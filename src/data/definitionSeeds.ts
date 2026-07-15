@@ -1,6 +1,7 @@
 import {v5 as uuidv5} from 'uuid'
 import {ChangeScope, type BlockData} from '@/data/api'
 import {isPropertySeedKey, type AnyPropertySeedDeclaration} from '@/data/propertySeeds'
+import {isTypeSeedKey} from '@/data/typeSeeds'
 import {
   presetConfigProp,
   presetIdProp,
@@ -21,17 +22,37 @@ import {awaitLocalMemberRole} from '@/data/workspaces'
  * AND type seeds. Identity is always workspace-scoped:
  * uuidv5(`${workspaceId}:${seedKey}`, namespace). Property (`/property/`) and
  * type (`/type/`) seed keys share this namespace safely: their key grammars are
- * disjoint, so `${workspaceId}:${seedKey}` can never collide across kinds. */
+ * disjoint, so `${workspaceId}:${seedKey}` can never collide across kinds — and
+ * the two public id functions below ENFORCE that grammar (throwing on a
+ * wrong-kind key) so the disjointness is a checked invariant, not just a
+ * convention a caller could break by passing the wrong-kind key to the wrong
+ * function. (The non-collision proof also assumes `workspaceId` never contains
+ * `:`, so the delimiter can't shift between the two interpolated fields — true
+ * for the UUID workspace ids this codebase mints.) */
 export const DEFINITION_SEED_NS = '737c2e9d-f3e9-4c99-94ef-e1cbec920e30'
 
-export const propertyDefinitionBlockId = (workspaceId: string, seedKey: string): string =>
+/** The raw deterministic formula, shared by both kinds. Private and unguarded:
+ * the grammar checks live in the two public entry points so there is exactly one
+ * hash expression to keep in sync. */
+const definitionBlockId = (workspaceId: string, seedKey: string): string =>
   uuidv5(`${workspaceId}:${seedKey}`, DEFINITION_SEED_NS)
+
+export const propertyDefinitionBlockId = (workspaceId: string, seedKey: string): string => {
+  if (!isPropertySeedKey(seedKey)) {
+    throw new Error(`[propertyDefinitionBlockId] not a property seed key: ${JSON.stringify(seedKey)}`)
+  }
+  return definitionBlockId(workspaceId, seedKey)
+}
 
 /** Deterministic per-workspace backing-block id for a code-owned block type.
  * The type analog of `propertyDefinitionBlockId`; this is what a total
  * `getTypeBlockId` returns for a code type (Slice C). */
-export const typeDefinitionBlockId = (workspaceId: string, seedKey: string): string =>
-  uuidv5(`${workspaceId}:${seedKey}`, DEFINITION_SEED_NS)
+export const typeDefinitionBlockId = (workspaceId: string, seedKey: string): string => {
+  if (!isTypeSeedKey(seedKey)) {
+    throw new Error(`[typeDefinitionBlockId] not a type seed key: ${JSON.stringify(seedKey)}`)
+  }
+  return definitionBlockId(workspaceId, seedKey)
+}
 
 type SeedIdentityRow = Pick<BlockData, 'id' | 'workspaceId' | 'properties'>
 
