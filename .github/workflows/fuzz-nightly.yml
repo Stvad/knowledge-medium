@@ -62,6 +62,10 @@ jobs:
           yarn fuzz 2>&1 | tee fuzz-output.log
 
       - name: Deep fuzz — stateful data-layer suite (long pass)
+        # Run even when the sweep above failed — a sweep failure should
+        # not cost us the night's stateful signal (both failures land in
+        # the same issue via the log artifact).
+        if: ${{ !cancelled() }}
         shell: bash
         env:
           FUZZ_TIME_MS: ${{ inputs.stateful_time_ms || '1200000' }}

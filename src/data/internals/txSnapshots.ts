@@ -96,16 +96,31 @@ export const replayApplicationOrder = (
     else live.set(id, target)
   }
   const depth = new Map<string, number>()
-  const depthOf = (id: string): number => {
-    const cached = depth.get(id)
-    if (cached !== undefined) return cached
-    // Pre-seed 0 so a malformed (cyclic) target graph degrades to
-    // insertion order instead of infinite recursion.
-    depth.set(id, 0)
-    const parentId = live.get(id)?.parentId
-    const d = parentId != null && live.has(parentId) ? depthOf(parentId) + 1 : 0
-    depth.set(id, d)
-    return d
+  // Iterative memoized walk — a single entry can hold an arbitrarily
+  // deep chain (undoing a big subtree delete), and recursing per parent
+  // hop would overflow the stack there. Walk up collecting the uncached
+  // path, then fill depths back down. A malformed (cyclic) target graph
+  // bottoms out at depth 0 for the re-entered node, same as the old
+  // recursive pre-seed guard.
+  const depthOf = (start: string): number => {
+    const path: string[] = []
+    const onPath = new Set<string>()
+    let id: string | undefined = start
+    let base = -1
+    while (id !== undefined) {
+      const cached = depth.get(id)
+      if (cached !== undefined) { base = cached; break }
+      if (onPath.has(id)) { base = 0; break }
+      path.push(id)
+      onPath.add(id)
+      const parentId = live.get(id)?.parentId
+      id = parentId != null && live.has(parentId) ? parentId : undefined
+    }
+    for (let i = path.length - 1; i >= 0; i--) {
+      base += 1
+      depth.set(path[i], base)
+    }
+    return depth.get(start)!
   }
   const ordered = [...live.keys()].sort((a, b) => depthOf(a) - depthOf(b))
   return [
