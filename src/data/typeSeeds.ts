@@ -13,6 +13,12 @@ import type {TypeContribution} from './api/blockType'
  * deterministic per-workspace backing block is `typeDefinitionBlockId(ws,
  * seedKey)`. So `id` is NEVER the block id — same split as name vs fieldId. */
 export interface TypeSeedDeclaration extends TypeContribution {
+  /** Required here though optional on `TypeContribution`: a seeded type always
+   * has a label (both `seedType` and the `isTypeSeedDeclaration` guard enforce
+   * it), and requiring it statically stops a hand-built `{id, seedKey, revision}`
+   * from type-checking as a contribution yet being dropped at runtime by the
+   * guard. */
+  readonly label: string
   readonly seedKey: string
   readonly revision: number
 }
