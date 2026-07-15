@@ -212,8 +212,9 @@
 
 <aside class="doc-status">
   <strong>Status: proposed design (this PR — no implementation).</strong>
-  Grounded against master <code>b581e60b</code>; every code claim carries a
-  file:line reference verified at that commit. The companion constraint record
+  Grounded against master <code>b581e60b</code>, re-verified at
+  <code>10079dc1</code> (master merged into this branch 2026-07-15); every code
+  claim carries a file:line reference verified at those commits. The companion constraint record
   lives in <code>docs/properties-as-blocks-migration.html</code> §12 (PR #288
   branch <code>claude/properties-as-blocks-migration-4b60xg</code>, verified at
   <code>a6407ed4</code>) — this doc is the "dedicated design task" that bullet
@@ -246,7 +247,8 @@
       not logged (§3).</li>
     <li><strong>Deterministic per-block anchors every W=50 events, cadence carried
       in the log itself</strong> (<code>chain_pos</code>), not in an auxiliary
-      counter and not probabilistic. Anchors carry full before+after (§4).</li>
+      counter and not probabilistic. Anchors carry full before+after (§4).
+      <em>Cadence mechanism under re-review — <a href="#s16">O5</a>.</em></li>
     <li><strong>Every chain starts full</strong>: a compact update whose
       predecessor is missing — or is a legacy-v1 event — promotes itself to an
       anchor (§4, inherited from PR #288's invariants index).</li>
@@ -255,7 +257,8 @@
       <code>tx_context.history_mode</code> opt-in — provenance-keyed, never
       column-keyed (§5).</li>
     <li><strong>Sync-applied events drop for plaintext workspaces, stay (compact)
-      for e2ee</strong>; unknown mode logs. The redundancy claim against
+      for e2ee</strong>; unknown mode logs; the drop gate keys on an explicit
+      sync-apply marker, so raw/unknown writers always keep logging. The redundancy claim against
       server-side <code>blocks_history</code> is verified with caveats stated (§6).</li>
     <li><strong>Triggers remain the writer</strong>; bodies are generated from a
       single column spec shared with the existing snapshot/upload projections (§7).</li>
@@ -342,8 +345,8 @@ UPDATE still logs two full snapshots.
     <tr>
       <td>All <code>repo.tx</code> writes — mutators, same-tx processors, undo/redo
         replay via <code>applyRaw</code></td>
-      <td><code>commitPipeline.ts:255-370</code> (context set <code>:261-264</code>,
-        cleared <code>:365-367</code>; replay is a normal tx with
+      <td><code>commitPipeline.ts:255-385</code> (context set <code>:261-265</code>,
+        cleared <code>:375-383</code>; replay is a normal tx with
         <code>isReplay</code>, <code>:166-176</code>)</td>
       <td><code>'user'</code> — the only assignable value
         (<code>changeScope.ts:37-42</code>)</td>
@@ -361,18 +364,27 @@ UPDATE still logs two full snapshots.
     </tr>
     <tr>
       <td>Bootstrap column backfills</td>
-      <td><code>clientSchema.ts:1361-1370</code>, bracketed by
-        <code>withTriggerSuspended</code> (<code>:1174-1197</code>)</td>
+      <td><code>clientSchema.ts:1364-1373</code>, bracketed by
+        <code>withTriggerSuspended</code> (<code>:1187-1200</code>)</td>
       <td>NULL</td>
       <td><em>No event</em> — trigger deliberately dropped for the bracket
         (bootstrap-only; safe because no other write is served in that window)</td>
     </tr>
     <tr>
       <td>Raw out-of-band SQL (agent bridge <code>sql execute</code>, dev tools)</td>
-      <td>forbidden as a third write path; the schema-statement class throws via
-        <code>guardSyncedTableWrites</code> (<code>repoProvider.ts:390-397</code>)</td>
+      <td>a live, unguarded path (review finding — this row previously
+        overclaimed "forbidden"): <code>guardSyncedTableWrites</code> wraps only
+        the LocalSchema backfill execute (<code>repoProvider.ts:390-397</code>);
+        the agent bridge calls <code>repo.db.execute</code> directly
+        (<code>src/plugins/agent-runtime/commands.ts:172</code>). Such writes
+        also never upload — the upload triggers gate on
+        <code>source IS NOT NULL</code> (<code>clientSchema.ts:575</code>,
+        <code>:592</code>) — so their row_event is the only record of them
+        <em>anywhere</em>, local or server.</td>
       <td>NULL</td>
-      <td><code>source='sync'</code> (the COALESCE catch-all — logged, mislabeled)</td>
+      <td><code>source='sync'</code> (the COALESCE catch-all — logged,
+        mislabeled; v2 relabels these <code>'raw'</code> and always logs them,
+        §6.2)</td>
     </tr>
   </tbody>
 </table>
@@ -396,10 +408,10 @@ which has no row_events triggers. Only the observer moves data into
     <code>block.ts:118</code>).</li>
   <li><strong>Trigger bodies self-upgrade.</strong> Every boot re-applies
     <code>DROP TRIGGER</code> + <code>CREATE TRIGGER</code> from source
-    (<code>withTriggerRecreate</code>, <code>clientSchema.ts:1151-1172</code>) —
+    (<code>withTriggerRecreate</code>, <code>clientSchema.ts:1170-1175</code>) —
     a trigger-body change ships fleet-wide with no per-change migration.</li>
   <li><strong>ALTER-based column adds have precedent and a footgun.</strong>
-    <code>ensureUndoGroupIdColumns</code> (<code>clientSchema.ts:1373-1407</code>)
+    <code>ensureUndoGroupIdColumns</code> (<code>clientSchema.ts:1375-1410</code>)
     added <code>group_id</code> to <code>row_events</code> and documents the
     ordering constraint: the ALTER must run before any trigger re-creation
     references the new column.</li>
@@ -407,14 +419,14 @@ which has no row_events triggers. Only the observer moves data into
     (<code>clientSchema.ts:99-113</code>) records one row per
     <code>repo.tx</code> — scope, description, <code>mutator_calls</code> —
     keyed by the same <code>tx_id</code> the events carry
-    (<code>commitPipeline.ts:339-357</code>). It is small (one row per tx) and
+    (<code>commitPipeline.ts:348-368</code>). It is small (one row per tx) and
     also unbounded; out of scope here beyond this note.</li>
   <li><strong>Idle machinery exists.</strong> Marker-gated one-shot jobs
     (<code>client_schema_state</code>, <code>clientSchema.ts:182-187</code>),
     <code>MarkerStore</code>/<code>PendingIdleJobs</code>
     (<code>idleMarkerJobs.ts</code>), deep-idle scheduling
     (<code>scheduleIdle.ts</code>), and the idle ANALYZE pattern
-    (<code>repoProvider.ts:415-433</code>).</li>
+    (<code>repoProvider.ts:412-431</code>).</li>
   <li><strong>DB config that matters for §9:</strong> rollback journal, not WAL
     (<code>repoProvider.ts:312-316</code>); <code>temp_store = MEMORY</code> and a
     256&nbsp;MiB page cache (<code>:338-339</code>); single SQLite worker.</li>
@@ -486,14 +498,27 @@ v2 keeps that projection for the field and accepts that a (never-occurring
 today) explicit clear is not distinguishable.
 </p>
 
-<p>Index change, bundled with the §8 migration: replace
-<code>idx_row_events_block (block_id, created_at DESC)</code> with
-<code>(block_id, id)</code>. <code>id</code> is AUTOINCREMENT-monotonic and is
-the authoritative per-block order (same-millisecond events in one tx tie on
+<p>Index change — <strong>the add moves to slice A</strong> (review finding;
+originally bundled with the §8 migration): a new <code>(block_id, id)</code>
+index. <code>id</code> is AUTOINCREMENT-monotonic and is the authoritative
+per-block order (same-millisecond events in one tx tie on
 <code>created_at</code>); the trigger's predecessor probe (§4) and every reader
-walk need exactly this ordering, and the entries are smaller. No runtime reader
-uses the old index (nothing reads the table); <code>(created_at DESC)</code> and
-<code>(tx_id)</code> stay for time-scoped and tx-join forensics.</p>
+walk need exactly this ordering, and the entries are smaller. The probe runs on
+<em>every logged update</em> from the first v2 write, and the existing
+<code>(block_id, created_at DESC)</code> index cannot serve
+<code>ORDER BY id DESC LIMIT 1</code> — without the new index, a hot block pays
+a per-write sort over its whole event history <em>inside the write trigger</em>,
+during exactly the window (slices A/B) that must precede the #288 burst: an I6
+violation. To avoid a boot stall (a synchronous CREATE INDEX over the ~1.17M-row
+stock is a seconds-scale single-worker pause), slice A builds the index as a
+marker-gated idle job and only then swaps the v2 trigger bodies in — trigger
+recreation is cheap and can run mid-session; until the marker is set, boots
+keep installing the v1 bodies. Retiring the old
+<code>(block_id, created_at DESC)</code> index stays a slice-C decision, and
+may resolve to "keep both": per-block time-seek ("latest event ≤ T") wants it —
+see the subtree reader row in <a href="#s10">§10</a>.
+<code>(created_at DESC)</code> and <code>(tx_id)</code> stay for time-scoped
+and tx-join forensics.</p>
 
 <h2 id="s4">4. Anchors: cadence, promotion, reconstruction</h2>
 
@@ -549,6 +574,9 @@ one <code>O(log n)</code> seek on the new <code>(block_id, id)</code> index:
   The chosen probe keeps the log self-describing: cadence state cannot be lost,
   corrupted, or skewed independently of the history it describes, and the
   migration + live trigger share one rule.
+  <br><em>Note: this mechanism (probe + deterministic cadence) is under
+  re-review — see <a href="#s16">O5</a> for a probe-free candidate that also
+  changes the compact payload shape.</em>
 </div>
 
 <h3>4.2 Anchor content — decision</h3>
@@ -612,7 +640,7 @@ window.
 
 <p>
 W lives in the trigger SQL, which re-installs from source on every boot
-(<code>clientSchema.ts:1151-1172</code>). Changing it needs no migration and no
+(<code>clientSchema.ts:1170-1175</code>). Changing it needs no migration and no
 version bump: <code>chain_pos</code> makes each chain self-describing, so
 mixed cadences coexist — readers never assume W, they walk to
 <code>chain_pos = 0</code>. Amortized anchor overhead ≈ (full-pair size −
@@ -654,7 +682,7 @@ machinery misbehaves. Options considered:
       the cell, from what, to what, when"). No new provenance column:
       every local event already carries <code>tx_id</code>, and
       <code>command_events</code> (scope, description,
-      <code>mutator_calls</code>; <code>commitPipeline.ts:339-357</code>)
+      <code>mutator_calls</code>; <code>commitPipeline.ts:348-368</code>)
       identifies the writer — provenance is a join, and a later compaction pass
       could target it by that join if the volume ever warrants.</li>
     <li><strong>Enumerated one-shot bulk bursts skip</strong> (option a): the
@@ -673,8 +701,8 @@ machinery misbehaves. Options considered:
 Add a nullable <code>history_mode TEXT</code> column to <code>tx_context</code>
 (<code>clientSchema.ts:38-48</code>), set by the commit pipeline from a new
 optional <code>RepoTxOptions.historyMode</code> (<code>tx.ts:269-277</code>) in
-step 1 (<code>commitPipeline.ts:261-264</code>) and cleared with the rest in
-step 5 (<code>:365-367</code>, rollback-safe inside the tx). One value:
+step 1 (<code>commitPipeline.ts:261-265</code>) and cleared with the rest in
+step 5 (<code>:375-383</code>, rollback-safe inside the tx). One value:
 <code>'skip'</code>. The row_events triggers add
 <code>COALESCE((SELECT history_mode FROM tx_context WHERE id = 1), 'full') != 'skip'</code>
 to their WHEN clause. NULL/absent means full logging — the default cannot
@@ -688,7 +716,7 @@ would lose primary history for carve-out/un-flipped/orphan keys, per PR #288
 
 <p>
 This is the tx-scoped, concurrency-safe generalization of the existing
-<code>withTriggerSuspended</code> bracket (<code>clientSchema.ts:1174-1197</code>) —
+<code>withTriggerSuspended</code> bracket (<code>clientSchema.ts:1187-1200</code>) —
 which stays bootstrap-only, because dropping a trigger is DB-global and would
 also unlog concurrent writers mid-session.
 </p>
@@ -753,9 +781,12 @@ records those changes. Read against
   fragile, worth a line in e2ee docs. The comment at
   <code>clientSchema.ts:55-69</code> ("the ONLY place an INCOMING sync change is
   durably recorded") becomes conditional and must be updated in the same PR.
-  Raw out-of-band local writes (already forbidden as a write path, §2.1) stop
-  being logged in plaintext workspaces — acceptable for a forbidden path;
-  noted, not mourned.
+  Raw out-of-band local writes (agent-bridge <code>sql execute</code>, dev
+  tools — a live path, §2.1) <strong>keep logging</strong> under this policy
+  (review finding — an earlier draft dropped them as "forbidden anyway"): the
+  drop gate keys on the explicit sync-apply marker (§6.2), never on
+  <code>source IS NULL</code>, precisely because a raw write never uploads —
+  its row_event is the only record of it anywhere, local or server.
 </div>
 
 <h3>6.2 Mechanism: a local policy side-table</h3>
@@ -778,15 +809,52 @@ The materializer writes the row at the top of its Phase-2 write tx for each
 workspace in the batch (mode 'copy' → 'drop', 'decrypt' → 'log'; 'defer' writes
 nothing — deferred rows aren't materialized anyway), so the policy is committed
 before the first upsert of that workspace in the same transaction — no ordering
-race with first sync. The trigger WHEN clause gates:
-<code>NOT ((SELECT source FROM tx_context WHERE id=1) IS NULL AND
-(SELECT sync_events FROM workspace_history_policy WHERE workspace_id =
-NEW.workspace_id) = 'drop')</code> — one PK probe per sync write; local writes
-(<code>source IS NOT NULL</code>) short-circuit past it. Absent row ⇒ the
-comparison is NULL ⇒ logs. Mode pins are immutable per workspace
-(<code>modePin.ts:104-124</code>), so the row never flips in normal operation;
-a debugging escape hatch (force-log) is a one-row UPDATE documented in the
-implementation PR.
+race with first sync.
+</p>
+
+<p>
+Sync-apply must also be distinguishable from the <em>other</em> NULL-source
+writers (the raw path, §2.1) — the drop policy applies only to the former. The
+materializer's Phase-2 bracket, which today sets <code>source = NULL</code>
+(<code>materialize.ts:344</code>), additionally sets a new nullable
+<code>tx_context.apply_kind = 'sync'</code>, cleared with the bracket. The
+upload and workspace-invariant trigger gates key on <code>source</code> and are
+untouched (they must keep skipping sync-apply); only the row_events triggers
+read <code>apply_kind</code>. Their WHEN clause gains:
+</p>
+
+<pre><code>NOT (    (SELECT apply_kind FROM tx_context WHERE id = 1) IS 'sync'
+     AND COALESCE((SELECT sync_events FROM workspace_history_policy
+                    WHERE workspace_id = NEW.workspace_id), 'log') = 'drop')</code></pre>
+
+<p>
+— one PK probe per sync write; local writes short-circuit on the
+<code>IS 'sync'</code> test. Both probes are NULL-safe by construction, and
+they have to be (review finding): under SQLite's three-valued logic a bare
+<code>(SELECT sync_events ...) = 'drop'</code> against a missing policy row
+yields NULL, <code>NOT (TRUE AND NULL)</code> is still NULL, and a NULL WHEN
+does not fire — silently <em>dropping</em> the first sync events of an
+unknown/unmigrated workspace, the exact I3 violation the fail-safe default
+exists to prevent. Hence <code>IS</code> (null-safe equality) for the marker
+and <code>COALESCE(..., 'log')</code> for the policy row. The row reference is
+per-trigger (review finding): insert/update triggers read
+<code>NEW.workspace_id</code>, but <code>blocks_row_event_delete</code> is
+<code>AFTER DELETE</code> (<code>clientSchema.ts:471-488</code>) where no NEW
+row exists — its predicate reads <code>OLD.workspace_id</code>, so plaintext
+stream-exit deletes follow the same policy instead of raising
+<code>no such column: NEW.workspace_id</code>.
+</p>
+
+<p>
+With the marker in place, the v1 label projection
+<code>COALESCE(source, 'sync')</code> (<code>clientSchema.ts:422</code>)
+retires in favor of a truthful three-way <code>source</code> tag:
+<code>'user'</code> (repo.tx), <code>'sync'</code> (marker present),
+<code>'raw'</code> (neither — always logged, I3). Existing v1 rows keep their
+historical 'sync' ambiguity. Mode pins are immutable per workspace
+(<code>modePin.ts:104-124</code>), so the policy row never flips in normal
+operation; a debugging escape hatch (force-log) is a one-row UPDATE documented
+in the implementation PR.
 </p>
 
 <h2 id="s7">7. Write path: triggers stay</h2>
@@ -805,7 +873,7 @@ an open write tx, so an app-layer event writer could be atomic. What decides it:
   <tbody>
     <tr><td>Coverage</td><td><strong>Catch-all</strong>: every writer including raw paths and any future one; a write cannot dodge history silently — and "who wrote this without going through the API" is itself the forensic question</td><td>Two parallel writers to build and keep in lockstep (tx engine + observer); raw paths uncovered; a forgotten future path = silent gap</td></tr>
     <tr><td>Diff verbosity</td><td>Per-column CASE — <strong>already proven in-tree</strong>: the upload PATCH trigger builds changed-columns-only JSON in pure SQLite (<code>blockUploadPatchJsonSql</code>, <code>clientSchema.ts:552-563</code>, <code>json_set</code>/CASE/<code>json_remove('$.__noop')</code>)</td><td>Simpler TS diff, easier unit tests</td></tr>
-    <tr><td>Upgrades</td><td>Free fleet-wide via boot-time recreation (<code>:1151-1172</code>)</td><td>Ordinary code deploy (also fine)</td></tr>
+    <tr><td>Upgrades</td><td>Free fleet-wide via boot-time recreation (<code>:1170-1175</code>)</td><td>Ordinary code deploy (also fine)</td></tr>
     <tr><td>Cadence probe</td><td>Scalar subquery, O(log n)</td><td>Same query from JS</td></tr>
   </tbody>
 </table>
@@ -893,7 +961,8 @@ block with any <code>v IS NULL</code> event:
     are self-describingly done, unrewritten rows self-describingly not — no
     cursor to corrupt. A <code>client_schema_state</code> marker
     (<code>row_events_compact_migration_v1</code>) records only overall
-    completion, gating the §9 VACUUM and the index swap.</li>
+    completion, gating the §9 VACUUM and the old-index retirement decision
+    (§3).</li>
   <li><strong>Chunking:</strong> a few hundred blocks (or ~2–5k events) per write
     tx, scheduled via <code>PendingIdleJobs</code> +
     <code>scheduleDeepIdle</code> (<code>idleMarkerJobs.ts</code>) like the other
@@ -909,11 +978,12 @@ block with any <code>v IS NULL</code> event:
     <code>initializePowerSyncDb</code> before the <code>CLIENT_SCHEMA_STATEMENTS</code>
     loop recreates triggers referencing them — same constraint and same slot as
     <code>ensureUndoGroupIdColumns</code> (<code>repoProvider.ts:352-357</code>
-    area; documented footgun at <code>clientSchema.ts:1381-1394</code>).</li>
-  <li><strong>Index swap (§3) runs after the rewrite completes</strong>, then one
-    explicit <code>ANALYZE</code>: the automatic drift check keys on
-    <code>blocks</code> counts only (<code>analyzeIsWarranted</code>,
-    <code>clientSchema.ts:1436-1453</code>) and would never notice
+    area; documented footgun at <code>clientSchema.ts:1384-1391</code>).</li>
+  <li><strong>The old-index retirement decision (§3) runs after the rewrite
+    completes</strong> (the <code>(block_id, id)</code> add itself happened in
+    slice A), then one explicit <code>ANALYZE</code>: the automatic drift check
+    keys on <code>blocks</code> counts only (<code>analyzeIsWarranted</code>,
+    <code>clientSchema.ts:1438-1455</code>) and would never notice
     row_events index changes.</li>
 </ul>
 
@@ -943,10 +1013,19 @@ tool.
       OPFS speeds blocks every query. Run only at deep idle
       (<code>scheduleDeepIdle</code>), gated on the §8 completion marker, a
       one-shot <code>client_schema_state</code> marker of its own, and a
-      free-space check (<code>navigator.storage.estimate()</code> ≥ ~1.2&times;
-      the post-compaction data size — VACUUM needs the temp copy + journal;
-      rollback-journal mode makes an interrupted VACUUM safely roll back,
-      <code>repoProvider.ts:312-316</code>).</li>
+      free-space check sized against the <em>worst case, not the target</em>
+      (review finding): SQLite documents VACUUM as needing up to twice the size
+      of the <em>original</em> database file (the temp rebuild plus the
+      rollback journal protecting the overwrite), so gate on
+      <code>navigator.storage.estimate()</code> headroom ≥ ~2&times; the
+      <em>current</em> file size. Gating on ~1.2&times; the post-compaction
+      size would greenlight a 2+&nbsp;GB→0.6&nbsp;GB VACUUM with a few hundred
+      MB of quota, stall for minutes, and die with SQLITE_FULL. If quota can't
+      cover 2&times;-current, skip in-place VACUUM and take the
+      <code>VACUUM INTO</code> route below — it needs only ~the compacted size
+      and never journals the live file. (Rollback-journal mode makes an
+      interrupted VACUUM roll back safely either way,
+      <code>repoProvider.ts:312-316</code>.)</li>
   </ul>
 </div>
 
@@ -978,6 +1057,31 @@ costs more moving parts, bounds memory, never touches the live file.
         any field) between events. Note for a merged local+server view:
         <code>blocks_history</code> uses storage column names,
         <code>row_events</code> domain names — the UI maps once.</td>
+    </tr>
+    <tr>
+      <td>Subtree-at-time view (a subtree at T, not one block at T — the
+        likelier UI shape)</td>
+      <td>The member set of the subtree <em>as of T</em> — children are an
+        inverse <code>parentId</code> lookup, including blocks that have since
+        moved away or been deleted; then per-member state at T; per-block
+        time-seek (latest event ≤ T)</td>
+      <td>Structure is <code>parentId</code> + <code>orderKey</code>
+        (<code>blockJsonObjectSql</code>, <code>clientSchema.ts:390-391</code> —
+        there is no childIds column), so child-set-at-T is an inverse question
+        the per-block log answers but cannot enumerate cheaply. The format
+        keeps it answerable: every parentId transition is logged
+        column-granularly, and in v2 a parent move is a compact event whose key
+        set contains <code>parentId</code> — cheap to identify without parsing
+        full snapshots. Enumeration needs a derived <em>parent-edge index</em>
+        ((parent_id, block_id, event-id interval) — fully rebuildable from the
+        log, built lazily when the history UI ships; explicitly out of scope
+        for these slices). Per-member state is §4.3 <code>stateAt</code>;
+        deleted-at-T members reconstruct fine (delete events carry full
+        before). Per-block time-seek: binary-search <code>created_at</code>
+        over the <code>(block_id, id)</code> index (per-block id order is
+        created_at-monotone up to clock steps), or retain
+        <code>(block_id, created_at DESC)</code> alongside it — decide in
+        slice C (§3).</td>
     </tr>
     <tr>
       <td>Drift-tolerant undo (<code>undoManager.ts:26-28</code>,
@@ -1067,7 +1171,7 @@ mean; ~350k blocks). Event-mix assumption, stated not measured: ~30% create
 <p>
 The bound that does <em>not</em> improve: creates and e2ee first-sync remain
 full snapshots — inherent to "history is kept" (a create <em>is</em> its
-snapshot). Indexes also shrink with the §3 swap (smaller entries, and
+snapshot). Indexes also shrink with the §3 change (smaller entries, and
 <code>(created_at DESC)</code> entries are unchanged but the table they point
 into is smaller).
 </p>
@@ -1081,26 +1185,34 @@ into is smaller).
     <tr>
       <td><strong>A — format</strong></td>
       <td>ALTER adds (<code>v</code>, <code>chain_pos</code>; ordering per §8.2);
+        <code>(block_id, id)</code> index built as a marker-gated idle job (§3 —
+        the probe needs it before any v2 body installs);
         v2 trigger bodies generated from the shared column spec (compact updates,
-        identical-update skip, anchor cadence, v1/missing-predecessor promotion);
+        identical-update skip, anchor cadence, v1/missing-predecessor promotion),
+        swapped in once the index marker is set;
         <code>stateAt</code> reader utility; tests pinning I1/I2/I4/I6. All new
-        events compact from here.</td>
+        events compact from here. <em>Shape depends on the O5 call (§16).</em></td>
       <td>—</td>
     </tr>
     <tr>
       <td><strong>B — provenance + sync policy</strong></td>
       <td><code>tx_context.history_mode</code> + <code>RepoTxOptions.historyMode</code>
-        plumbing; <code>workspace_history_policy</code> + materializer writes +
-        trigger gates; update the <code>clientSchema.ts:55-69</code> comment;
-        tests pinning I1-under-exemption and I3.</td>
+        plumbing; <code>tx_context.apply_kind</code> sync marker + the truthful
+        three-way <code>source</code> tag (§6.2);
+        <code>workspace_history_policy</code> + materializer writes + NULL-safe
+        trigger gates (NEW/OLD row ref per trigger, §6.2); update the
+        <code>clientSchema.ts:55-69</code> comment; tests pinning
+        I1-under-exemption and I3 (incl. absent-policy-row and raw-write
+        logging).</td>
       <td><strong>Unblocks #288 slice C</strong> (G1–G3)</td>
     </tr>
     <tr>
       <td><strong>C — stock migration</strong></td>
       <td>§8 idle rewriter (per-block, discontinuity-anchoring), partial work
-        index, completion marker, index swap + explicit ANALYZE; equivalence test
-        (I5) + resumability test (interrupt mid-chunk, rerun, byte-identical
-        outcome).</td>
+        index, completion marker, retire-or-retain decision for
+        <code>(block_id, created_at DESC)</code> (§3; §10 subtree reader) +
+        explicit ANALYZE; equivalence test (I5) + resumability test (interrupt
+        mid-chunk, rerun, byte-identical outcome).</td>
       <td>Requires A. Gates D.</td>
     </tr>
     <tr>
@@ -1146,12 +1258,15 @@ into is smaller).
       <td>I3</td>
       <td><strong>Absent policy means log.</strong> NULL
         <code>history_mode</code>, missing <code>workspace_history_policy</code>
-        row, or undecided mode ⇒ full logging. No default ever drops
-        history.</td>
+        row, undecided mode, or a write with neither a repo.tx source nor the
+        sync-apply marker (<code>'raw'</code>, §6.2) ⇒ full logging. No default
+        ever drops history — and every gate predicate must be NULL-safe under
+        SQLite three-valued logic (§6.2): a NULL WHEN silently drops.</td>
       <td><a href="#s5">§5.1</a>/<a href="#s6">§6.2</a></td>
       <td>Trigger WHEN gates; materializer policy writes</td>
       <td>Test: sync write to a workspace with no policy row produces an
-        event.</td>
+        event; a raw (no-tx, no-marker) write produces a <code>'raw'</code>
+        event even under a 'drop' policy.</td>
     </tr>
     <tr>
       <td>I4</td>
@@ -1257,6 +1372,34 @@ into is smaller).
     device is the price of local-only e2ee history (§6); confirm that's the
     intended product posture (it also means e2ee history has per-device
     durability only).</li>
+  <li><strong>O5 — cadence mechanism under challenge: probe vs probabilistic
+    (and with it, the compact payload shape).</strong> Post-review user
+    position: W=50 was an arbitrary starting point, and a per-write history
+    probe feels like write-path work we shouldn't pay — a probabilistic
+    ~1-in-25 anchor would probably be good enough. Assessment: against the §3
+    index the probe is genuinely cheap (one covering point-seek, microseconds
+    next to the JSON build), so performance alone doesn't decide this — but
+    naively swapping §4.1 for <code>random()</code> is <em>not</em> safe: the
+    probe is also what detects missing/v1 predecessors, so I1 ("every chain
+    starts full") and the #288 G3 guarantee die with it. The coherent
+    probe-free variant changes the payload instead: compact events carry
+    changed-field <strong>before AND after</strong> values (invertible
+    patches), reconstruction runs <em>backward from the live row</em> (or from
+    the nearest full event in either direction), anchors demote to pure
+    read-acceleration + corruption bounding at probabilistic ~1-in-25, and
+    <code>chain_pos</code>, the predecessor probe, the v1-lean rule, and slice
+    A's index-timing dependency (§3) all disappear. It also fixes a soundness
+    gap the forward design has under §6's own drops: after an unlogged sync
+    write, forward replay silently splices stale pre-sync values into
+    reconstructed states until the next anchor, while backward-from-live is
+    exact at and after every gap (staleness is confined to states <em>older</em>
+    than the gap — where plaintext workspaces defer to server history anyway).
+    Bonus: undo's restore values become directly stored rather than
+    reconstructed. Cost: ~2&times; compact-update bytes (~400&nbsp;B vs
+    ~200&nbsp;B; §12 stock-update row ~180&nbsp;MB → ~330&nbsp;MB — still ~10&times;
+    under v1), and deterministic walk/corruption bounds become probabilistic
+    (p99 anchor gap ≈ 113 events at 1/25). Needs a user call; on adoption
+    §3/§4/§8/§12 get rewritten around it.</li>
 </ol>
 
 <hr>
