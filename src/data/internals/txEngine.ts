@@ -288,6 +288,12 @@ export class TxImpl implements Tx {
     await this.requireParentInWorkspace(data.parentId, data.workspaceId)
     const id = data.id ?? this.ctx.newId()
     const row = this.buildNewBlockRow(id, data, opts)
+    // The deterministic seed id is publicly computable (uuidv5 of
+    // `workspaceId:seedKey`), so a user-scope create carrying a
+    // provenance-valid bag would FORGE a code-owned definition that
+    // materialization then trusts forever (live row → skipped, bag never
+    // repaired). Authoring one is as much a seed-bag write as editing one.
+    this.assertSeedDefinitionMutable(row)
     try {
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
     } catch (e) {
@@ -349,11 +355,15 @@ export class TxImpl implements Tx {
    *  outline delete key. Only USER writes are blocked (`BlockDefault` scope):
    *  materialization and the §13 revision-upgrade step run under `Automation`,
    *  and synced-in changes never pass through this engine at all, so neither is
-   *  affected. Provenance is read off the PERSISTED row — a caller can't forge
-   *  it, since a valid seed id must equal `uuidv5(workspaceId:seedKey)`. */
-  private assertSeedDefinitionMutable(before: BlockData): void {
-    if (this.meta.scope === ChangeScope.BlockDefault && isValidSeededDefinition(before)) {
-      throw new SeededDefinitionWriteError(before.id)
+   *  affected. Provenance is validated by the id equation — a valid seed id
+   *  must equal `uuidv5(workspaceId:seedKey)` — which holds for the persisted
+   *  row on the mutate/delete/restore paths AND for the candidate row on
+   *  `create` (the equation's inputs are public, so authoring a
+   *  provenance-valid row is itself a forgery attempt and is rejected the
+   *  same way; found by definitionSeeds.fuzz). */
+  private assertSeedDefinitionMutable(row: BlockData): void {
+    if (this.meta.scope === ChangeScope.BlockDefault && isValidSeededDefinition(row)) {
+      throw new SeededDefinitionWriteError(row.id)
     }
   }
 
@@ -381,6 +391,11 @@ export class TxImpl implements Tx {
     if (before.deleted === 0) throw new NotDeletedError(id)
     const beforeData = parseBlockRow(before)
     this.checkWorkspace(beforeData.workspaceId)
+    // Mirrors `update`: only a bag patch touches the seed-owned fields —
+    // a plain restore (or content/references patch) leaves the code-owned
+    // definition intact, and materialization's own restore runs under
+    // Automation anyway.
+    if (patch?.properties !== undefined) this.assertSeedDefinitionMutable(beforeData)
     const after: BlockData = {
       ...beforeData,
       deleted: false,

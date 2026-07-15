@@ -485,6 +485,59 @@ describe('seed definition write guard (tx layer)', () => {
     expect(JSON.parse(row.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
   })
 
+  it('rejects a user-scope create that forges a provenance-valid seed row', async () => {
+    // The deterministic id is publicly computable (uuidv5 of
+    // `workspaceId:seedKey`), so without a create-side guard a user-scope
+    // caller could author the row BEFORE materialization runs — and the
+    // materialization probe would then trust the forged bag forever (live
+    // row → skipped, payloads never repaired). Found by definitionSeeds.fuzz.
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await expect(repo.tx(async tx => {
+      await tx.create({
+        id,
+        workspaceId: WS,
+        parentId: propertiesPageBlockId(WS),
+        orderKey: 'a0',
+        content: seed.name,
+        properties: canonicalPropertySeedProperties(seed),
+      })
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?', [id])).toBeNull()
+  })
+
+  it('rejects a user-scope restore that rewrites a tombstoned seed bag', async () => {
+    // `restore` accepts a properties patch — without a guard it was the one
+    // bag-write path a user-scope caller could still reach (tombstone the
+    // row via Automation/sync, then resurrect it with a forged bag). A
+    // PLAIN restore stays allowed: it keeps the code-owned bag intact.
+    // Found by definitionSeeds.fuzz.
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await repo.tx(tx => tx.delete(id), {scope: ChangeScope.Automation})
+
+    await expect(repo.tx(
+      tx => tx.restore(id, {
+        properties: {
+          ...canonicalPropertySeedProperties(seed),
+          [propertyNameProp.name]: 'forged',
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+    const tampered = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(tampered.deleted).toBe(1)
+    expect(JSON.parse(tampered.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+
+    await repo.tx(tx => tx.restore(id), {scope: ChangeScope.BlockDefault})
+    const restored = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(restored.deleted).toBe(0)
+    expect(JSON.parse(restored.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+  })
+
   it('allows system (Automation) bag writes so materialization/upgrades work', async () => {
     await materializePropertySeeds(repo, WS, [seed])
     const id = propertyDefinitionBlockId(WS, seed.seedKey)

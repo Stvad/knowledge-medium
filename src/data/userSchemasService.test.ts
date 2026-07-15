@@ -445,7 +445,10 @@ describe('UserSchemasService subscription', () => {
             [seedKeyProp.name]: seedKey,
           },
         })
-      }, {scope: ChangeScope.BlockDefault})
+        // Automation scope: a provenance-valid seed row is code-owned, so
+        // authoring one is a system write (user-scope creates are rejected
+        // by the tx-layer forge guard).
+      }, {scope: ChangeScope.Automation})
     })
 
     await vi.waitFor(() => {
