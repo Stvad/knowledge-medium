@@ -787,7 +787,15 @@ row</em>, which syncs per-row and re-projects on arrival like any other child ch
 Sync-applied rows never pass through <code>repo.tx</code>, so processors don't fire on
 them. The spike hooks the Layout-B observer: <code>onRowsAccepted(snapshots)</code> fires
 once per drain window after <code>applySyncInvalidation</code>, and the repo schedules a
-row-targeted pass over the accepted rows through the serialized backfill queue. As built
+row-targeted pass over the accepted rows through the serialized backfill queue. One
+ordering requirement that hook placement misses (PR-review P2): firing <em>after</em>
+invalidation means the raw column-LWW bag is reader-visible between materialization
+and the pass's repair — a stale-read window on every concurrent remote edit among
+current clients, not just step 4's frozen-cell case. The <em>cell repair</em> for
+child-backed keys (re-project from local children) therefore runs inside the
+materializer seam, before the affected invalidations fan out — the same single
+sync-write seam step 4 already modifies; the heavier reconcile work below (dedup,
+checksum branches, the materialize direction) stays in the async pass. As built
 in the spike that pass runs <em>materialize</em> (cell-authoritative — wrong per the
 callout above). As specified here it becomes a <strong>reconcile pass</strong>, per
 arrived row:
@@ -800,7 +808,16 @@ arrived row:
   <li>Arrived <em>parent cells</em> → classify the cell first (the discriminator in
     the callout below). A <em>current-client</em> cell (projection checksum matches)
     is never a merge input: re-project child-backed keys from local children; apply
-    the cell only for keys that are <em>not</em> child-backed. A child-backed key with
+    the cell only for keys that are <em>not</em> child-backed. Child-backed is
+    <em>per-client actionable</em> here (PR-review P2): a key whose schema this client
+    cannot build — a custom-codec plugin schema without its plugin, a user schema on
+    an absent plugin preset — is treated as cell-backed <em>on this client</em>: the
+    arriving cell applies, and this client's own projections never cover it (no codec
+    ⇒ it can neither decode children nor re-project; ignoring the cell would replace
+    its only usable value with an empty local projection). Fleet-wide the key stays
+    child-backed — peers with the behavior project it, and the checksum's
+    self-describing <code>coveredKeys</code> keeps the skew harmless. A child-backed
+    key with
     <em>no local child rows at all</em> is left untouched as pending materialization —
     children-in-flight from the writer's dual-write, landing next drain (under the
     id-bound checksum a copied bag can't reach this branch: it mismatches and
@@ -851,9 +868,22 @@ arrived row:
       child-backed", which varies with plugin/version skew and would let a client
       missing a plugin mis-classify a peer's fresh projection as an old-client bag
       (PR-review P1). The registry decides what to <em>re-project</em>; it plays no
-      part in classification. Match ⇒ a current client's projection ⇒ never a merge
-      input. Mismatch or absent ⇒ last modified by a non-projecting writer ⇒ the full
-      materialize direction (set / update / clear) is licensed for that row's
+      part in classification. A <em>containment rule</em> completes verification
+      (PR-review P1): a child-backed key <em>present in the bag but missing from
+      <code>coveredKeys</code></em> is itself a mismatch. On a current client's
+      projection, present-child-backed ⊆ covered always holds — projection stamps
+      exactly what it covers, in the same tx — so an uncovered present key proves a
+      non-projecting writer added it after the stamp; without the rule, an old
+      client's <em>added</em> key rides the still-matching checksum into the
+      current-client branch and sits pending forever (readable from the cell, but
+      never materialized until the sweep) instead of materializing on arrival. The
+      containment check classifies bag keys by this client's <em>actionable</em> set —
+      a key it cannot build is cell-backed for it (per-client rule above) and exempt —
+      so skewed clients reach compatible outcomes: the plugin-bearing client
+      materializes; the plugin-less one keeps the cell authoritative.
+      Match (hash <em>and</em> containment) ⇒ a current client's projection ⇒ never a
+      merge input. Mismatch or absent ⇒ last modified by a non-projecting writer ⇒ the
+      full materialize direction (set / update / clear) is licensed for that row's
       child-backed keys, clock-guarded per child (previous list).</p>
       <p><em>Storage</em> (PR-review P2): the record must be invisible to every
       generic property surface — the panel's unregistered-keys section,
@@ -1039,8 +1069,16 @@ sync-off scoping.
   as a definition field (its §3 — synced, on the definition block, absent → false),
   landing with the first slice here that consumes it (B1) and joining
   <code>ResolvedPropertySchema</code> so classification rides the same resolution path
-  as identity. End-state defaults, stamped in the seeds: <code>true</code> for kernel
-  and user <code>BlockDefault</code> schemas; <em>plugin</em> schemas default
+  as identity. End-state defaults: <code>true</code> for kernel and user
+  <code>BlockDefault</code> schemas — but reached by different writes (PR-review P2):
+  kernel defaults are stamped in the seeds and flipped by revision bump, while user
+  definition blocks are <em>not</em> seeds and their stored bags predate the field
+  (absent → false), so the slice-C user flip is an <em>explicit bulk stamp</em> of
+  <code>property-schema:child-backed: true</code> across existing user definition
+  blocks by the rollout tooling, with <code>addSchema</code> stamping it at creation
+  thereafter — without the bulk write, slice C's "100% of user-defined data
+  child-backed" silently fails on every pre-existing schema. <em>Plugin</em> schemas
+  default
   <code>false</code> and flip per-schema — a flip is a <em>seed-revision bump</em> on
   the plugin's definition block (unification §6.2), durable and synced by
   construction, so the code-constant data fork this callout used to forbid can no
@@ -1126,7 +1164,12 @@ shape:
     value. Mass silent unset. The rename-reproject pass
     (<code>reprojectPropertyValueChildren</code>, built in the spike, currently
     untriggered) is therefore part of slice B2, not polish — or renames must be blocked
-    until it lands.</li>
+    until it lands. And it rewrites field-row <em>content</em> too (PR-review P2):
+    field rows store <code>[[Schema Name]]</code>, so the pass retitles
+    <code>[[old]]</code> → <code>[[new]]</code> across the schema's field rows
+    (indexed by <code>reference_target_id</code> — one targeted sweep); left stale,
+    markdown export and the §9 cross-workspace re-derive — which resolves by content —
+    would bind the dead name or a wrong same-named schema.</li>
   <li><strong>Typing a field by hand works.</strong> A user (or an importer, or an
     agent) can type <code>[[status]]</code> as a child and put a value under it; the
     derive processor resolves the alias to the schema and the project processor folds it
@@ -1255,7 +1298,15 @@ skill while at it.
   <dt><strong>Field-row recognition.</strong></dt>
   <dd>A child of P is a field row iff <code>reference_target_id</code> equals a
     definition block's id — a fieldId-keyed lookup the unified registry ships
-    (<code>resolveField</code>). Column read, no content parse. Classification needs
+    (<code>resolveField</code>) — <em>and P is not itself a field row</em>. The parent
+    guard is load-bearing (PR-review P2): a ref-typed <em>value</em> pointing at a
+    definition block gets stamped with that definition's id by the derive processor
+    exactly as a field row would (<code>block-type:properties</code> values are the
+    standing example — a refList whose targets are all property-schema blocks);
+    without the guard, render/filter/projection would hide or reinterpret those
+    values as nested fields. Children of field rows are values and comments, never
+    field rows, whatever their target. Column read, no content parse. Classification
+    needs
     the definition, not the owning plugin (an uninstalled plugin's definitions sync
     like any block), and works for shadowed definitions too (§6 — losers stay
     fieldId-resolvable). Unresolvable
@@ -1379,7 +1430,12 @@ skill while at it.
     seats; panel-layout projection ignores field rows; and <code>tx.childrenOf</code>
     now <em>excludes</em> field rows by default (structural callers must see only
     visible siblings — the machinery opts in with
-    <code>includePropertyChildren</code>). Under the §6 scoping these special cases
+    <code>includePropertyChildren</code>). Copy, export, and import traversals count
+    as machinery, not outline callers (PR-review P2): they opt in with
+    <code>includePropertyChildren</code> — markdown round-trip is a headline
+    motivation (§7), and a copied subtree missing its field/value rows silently
+    loses the properties wherever the destination path doesn't rebuild them from the
+    carried bag. Under the §6 scoping these special cases
     apply <em>everywhere</em> — kernel props materialize too, so hidden field rows
     exist on most blocks and the exclusion rules get more load-bearing, not less.
     Field rows, user and kernel alike, must not be reparented as content.</dd>
@@ -1752,7 +1808,16 @@ sequence, each step gated on the one before:
     informs it), but it is required regardless of the step-5 decision.</em></li>
   <li><strong>Stop uploading the cell — per row, by key composition, never
     globally.</strong> <em>The rule</em> (PR-review P1): a row's cell stops uploading
-    only when every key in its bag is <em>known to be child-backed</em>. Three kinds
+    only when every key in its bag is <em>known child-backed and fleet-buildable</em> —
+    the same eligibility predicate as step 5's marker (PR-review P2): a custom-codec
+    key's plugin-less readers live off the downloaded cell, so freezing its upload
+    starves them even while downloads continue; and the predicate is per-definition,
+    not per-origin — a user schema riding a plugin-only preset fails it the same way.
+    "Stops uploading" also means the per-edit PATCH channel only (PR-review P2):
+    <em>creates keep sending the projected bag</em> — <code>apply_block_creates</code>
+    binds an explicit <code>properties_json</code> into a NOT NULL server column, so a
+    bagless create would bind NULL and fail the insert; the one-time create payload
+    was never the wire cost this step chases. Three kinds
     of key therefore keep a row on the channel: §6 carve-out-scope keys (UiState,
     UserPrefs, Automation — cell-backed permanently); cell-backed plugin
     <code>BlockDefault</code> keys (§6 defaults plugins <code>false</code> until
@@ -1958,7 +2023,12 @@ row-version deltas to propagate its repairs.
     <em>(1) compact encoding</em> — drop <code>before_json</code> (derivable: the
     block's previous event's <code>after</code>; the per-block log is complete since
     sync writes are logged) and store only changed columns for updates; old events
-    keep the old format, reconstruction bottoms out at the format boundary.
+    keep the old format, reconstruction bottoms out at the format boundary. One
+    invariant makes the exemptions below safe (PR-review P2): <em>every chain starts
+    full</em> — a compact update targeting a row with no prior event (a
+    backfill-exempted row's first later edit, a row predating the format, a
+    sync-exempted row under (3)) promotes itself to a full <code>after</code>
+    snapshot, so no exemption ever leaves a later edit without a base.
     <em>(2) provenance exemptions, not column exemptions</em> — derived-machinery
     writes (backfill, children→cell projection, consistency sweep, arrival catch-up)
     skip logging via a <code>tx_context</code>-gated trigger condition: they are
