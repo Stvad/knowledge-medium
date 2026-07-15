@@ -959,7 +959,17 @@ arrived row:
       <em>survives</em> the old client's edit untouched, and column-narrow upload
       means a separate stamp column is never touched either; a marker masks exactly
       the writes it must expose. The discriminator is therefore a
-      <strong>projection checksum</strong> with three properties.
+      <strong>projection checksum</strong> with three properties — and a bounded
+      lifetime: the discriminator referees the era when synced cells and multiple
+      writer generations coexist, and it <em>retires with the cell channel</em> — at
+      <code>'cell-off'</code> nothing arrives to classify (the cell is a local
+      derived column; the sweep compares children against a deterministic local
+      projection, no writer ambiguity). Unlike the processor pair, which is permanent
+      convergence machinery, this is sync-era machinery. Within it,
+      <code>coveredKeys</code> is what keeps the record honest while coverage can be
+      <em>partial</em> — mid-backfill (keys whose children don't exist yet) and a
+      buildability-degraded client (projects what it can build, must not claim it
+      verified the rest); a whole-bag hash would misclassify both.
       <em>Content-bound:</em> a canonical hash over the covered keys' values, so any
       non-projecting edit breaks it. <em>Id-bound:</em> the block id is hashed in, so
       a wholesale-copied bag mismatches on the new block and takes the old-client
