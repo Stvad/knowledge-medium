@@ -107,3 +107,14 @@ regression test in the same PR (#371):
 5. If the target has nondeterminism (randomness, clocks), pin it inside
    the property (seeded PRNG over `Math.random`, injected `now`) or
    shrinking and seed replay stop being sound.
+6. Shared mutable state (e.g. one `createTestDb` per file) + a deep-tier
+   time budget don't compose for free: fast-check's
+   `interruptAfterTimeLimit` resolves `fc.assert` WITHOUT awaiting the
+   case that's currently executing, so the abandoned case keeps running
+   — and writing — after the property "finishes". Any test or cleanup
+   that touches the shared state afterwards must barrier on the
+   in-flight case first: capture each case's promise in a module-level
+   `let`, then `await inFlightCase?.catch(() => {})` before proceeding
+   (see `repoMutators.fuzz.test.ts`). Symptom if you skip this:
+   deep-tier-only, order-dependent flakes in whatever runs after the
+   property (phantom rows, duplicate-id errors).
