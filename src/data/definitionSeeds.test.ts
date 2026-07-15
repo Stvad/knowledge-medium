@@ -505,6 +505,34 @@ describe('seed definition write guard (tx layer)', () => {
     expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?', [id])).toBeNull()
   })
 
+  it('rejects a user-scope update that makes an occupant row provenance-valid', async () => {
+    // The third forge direction: create a PLAIN row at the deterministic id
+    // (legal — it is just a block), then write the canonical bag onto it.
+    // The old per-primitive guards checked only the `before` row and let
+    // this through; the commit-time check over the snapshots map rejects a
+    // row BECOMING a valid seeded definition under user scope.
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await repo.tx(async tx => {
+      await tx.create({
+        id,
+        workspaceId: WS,
+        parentId: propertiesPageBlockId(WS),
+        orderKey: 'a0',
+        content: 'innocent occupant',
+        properties: {},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.tx(
+      tx => tx.update(id, {properties: canonicalPropertySeedProperties(seed)}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(JSON.parse(row.properties_json)).toEqual({})
+  })
+
   it('rejects a user-scope restore that rewrites a tombstoned seed bag', async () => {
     // `restore` accepts a properties patch — without a guard it was the one
     // bag-write path a user-scope caller could still reach (tombstone the

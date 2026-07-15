@@ -19,14 +19,18 @@
  *    row without valid seed provenance aborts the WHOLE pass with no rows
  *    written (definitionSeeds.ts:193-229 — "one poisoned id intentionally
  *    aborts the whole batch");
- *  - user-scope writes targeting an EXISTING provenance-valid seed row
- *    (live or tombstoned) throw SeededDefinitionWriteError and leave the
- *    row byte-identical — via update-with-properties (txEngine.ts:419),
- *    setProperty (txEngine.ts:522), delete (txEngine.ts:363), AND the two
- *    forge paths this fuzzer was written to probe: restore-with-properties
- *    and create-at-deterministic-id with a provenance-valid bag (provenance
- *    is publicly computable — uuidv5(workspaceId:seedKey) — so "a caller
- *    can't forge it" must be enforced, not assumed);
+ *  - user-scope writes violating the seed invariant throw
+ *    SeededDefinitionWriteError and leave the row byte-identical. The
+ *    invariant is ONE commit-time check over the tx snapshots map
+ *    (`assertNoSeedDefinitionWrites`, enforced in commitPipeline): a row
+ *    may not BECOME provenance-valid (forgeCreate / forgeUpdate — the id
+ *    is publicly computable, uuidv5(workspaceId:seedKey)), and a
+ *    provenance-valid row's bag may not change nor the row be tombstoned
+ *    (userTamperUpdate / userSetProperty / userRestoreTamper /
+ *    userDelete-on-live). This suite found the create and
+ *    restore-with-properties forge paths under the older per-primitive
+ *    guards; the update-INTO-validity path surfaced when the per-site
+ *    design was probed, motivating the commit-time consolidation;
  *  - Automation-scope writes succeed (materialization and the §13
  *    revision-upgrade path run under Automation, txEngine.ts:346-353);
  *  - restore preserves a tombstone's existing bag (definitionSeeds.ts:267-270
@@ -109,6 +113,7 @@ type OpSpec =
   | {readonly op: 'automationDelete'; readonly idx: number}
   | {readonly op: 'poison'; readonly idx: number}
   | {readonly op: 'forgeCreate'; readonly idx: number}
+  | {readonly op: 'forgeUpdate'; readonly idx: number}
 
 const idxArb = fc.nat(POOL.length - 1)
 const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
@@ -122,6 +127,7 @@ const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
   {arbitrary: fc.record({op: fc.constant('automationDelete' as const), idx: idxArb}), weight: 2},
   {arbitrary: fc.record({op: fc.constant('poison' as const), idx: idxArb}), weight: 1},
   {arbitrary: fc.record({op: fc.constant('forgeCreate' as const), idx: idxArb}), weight: 1},
+  {arbitrary: fc.record({op: fc.constant('forgeUpdate' as const), idx: idxArb}), weight: 1},
 )
 const opsArb = fc.array(opArb, {maxLength: 14})
 
@@ -238,9 +244,14 @@ const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
       case 'userSetProperty': {
         const entry = model[op.idx]!
         if (entry.status !== 'live' && entry.status !== 'tombstone') break
+        // Flip hidden so the write CHANGES the bag: the commit-time guard
+        // deliberately allows a value-equal write (nothing changed, so
+        // code-ownership isn't violated — a semantics change from the old
+        // per-primitive guard, which rejected before looking at the value;
+        // caught by this suite's deep tier when the op wrote a constant).
         const before = await snapshotRows(sharedDb.db)
         await expect(repo.tx(
-          tx => tx.setProperty(IDS[op.idx]!, propertyHiddenProp, false),
+          tx => tx.setProperty(IDS[op.idx]!, propertyHiddenProp, !POOL[op.idx]!.hidden),
           {scope: ChangeScope.BlockDefault},
         )).rejects.toThrow(SeededDefinitionWriteError)
         expect(await snapshotRows(sharedDb.db), 'rejected setProperty wrote nothing').toBe(before)
@@ -248,14 +259,35 @@ const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
       }
       case 'userDelete': {
         const entry = model[op.idx]!
-        if (entry.status !== 'live' && entry.status !== 'tombstone') break
-        // The guard runs before the tombstone no-op check, so user deletes
-        // are rejected for live AND already-tombstoned seed rows
-        // (txEngine.ts:361-365).
+        if (entry.status === 'live') {
+          // Live seed rows may not be tombstoned by a user write
+          // (assertNoSeedDefinitionWrites' deleted-transition rule).
+          await expect(repo.tx(
+            tx => tx.delete(IDS[op.idx]!),
+            {scope: ChangeScope.BlockDefault},
+          )).rejects.toThrow(SeededDefinitionWriteError)
+        } else if (entry.status === 'tombstone') {
+          // Deleting an already-tombstoned row writes nothing (txEngine's
+          // delete no-ops), so the commit-time guard has nothing to
+          // reject — a legal no-op.
+          await repo.tx(tx => tx.delete(IDS[op.idx]!), {scope: ChangeScope.BlockDefault})
+        }
+        break
+      }
+      case 'forgeUpdate': {
+        const entry = model[op.idx]!
+        if (entry.status !== 'poisoned') break
+        // The update-INTO-validity direction: a plain occupant of the
+        // deterministic id may not have the provenance-valid bag written
+        // onto it — that would forge a code-owned definition just like
+        // forgeCreate (the per-site guards checked only the `before` row
+        // and missed this; the commit-time check covers both directions).
+        const before = await snapshotRows(sharedDb.db)
         await expect(repo.tx(
-          tx => tx.delete(IDS[op.idx]!),
+          tx => tx.update(IDS[op.idx]!, {properties: canonicalPropertySeedProperties(POOL[op.idx]!)}),
           {scope: ChangeScope.BlockDefault},
         )).rejects.toThrow(SeededDefinitionWriteError)
+        expect(await snapshotRows(sharedDb.db), 'rejected forge-update wrote nothing').toBe(before)
         break
       }
       case 'userRestorePlain': {
@@ -426,6 +458,7 @@ describe('seed materialization + write-guard interleavings', () => {
       {op: 'userRestoreTamper', idx: 1},
       {op: 'userRestorePlain', idx: 1},
       {op: 'poison', idx: 2},
+      {op: 'forgeUpdate', idx: 2},
       {op: 'materialize', mask: [2, 3]},
       {op: 'materialize', mask: [3]},
     ])

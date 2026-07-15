@@ -108,6 +108,51 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
   return false
 }
 
+/** v1 invariant (schema-unification §5.1): a materialized seed definition is
+ *  wholly code-owned — its bag and lifecycle belong to materialization and
+ *  the §13 revision-upgrade step (both `Automation` scope); synced-in
+ *  changes never pass through this engine at all. The schema editor and
+ *  property panel already render seed rows read-only; this is the
+ *  data-layer backstop for the agent bridge, the importer, and the outline
+ *  delete key.
+ *
+ *  ONE commit-time check over the tx's snapshots map — the single
+ *  convergence point for everything a tx wrote — rather than per-primitive
+ *  guards. The per-site form needed every current and future write path to
+ *  remember a call and missed three: `create` (forge a provenance-valid row
+ *  at the publicly computable uuidv5 id before materialization runs),
+ *  `restore` with a properties patch, and `update` that makes an occupant
+ *  row BECOME provenance-valid (per-site guards checked only the `before`
+ *  row). Checking (before, after) pairs here covers both directions for
+ *  every primitive at once.
+ *
+ *  Rules, under `BlockDefault` scope only:
+ *   - a row may not BECOME a valid seeded definition (forgery);
+ *   - a valid seeded definition's bag may not change (which also covers
+ *     stripping its provenance) and it may not be tombstoned or
+ *     hard-deleted. Content/references edits and plain restores stay
+ *     allowed — they don't touch the code-owned fields, and
+ *     materialization itself restores tombstones. */
+export const assertNoSeedDefinitionWrites = (
+  snapshots: SnapshotsMap,
+  scope: ChangeScope,
+): void => {
+  if (scope !== ChangeScope.BlockDefault) return
+  for (const [id, {before, after}] of snapshots) {
+    const beforeSeed = before !== null && isValidSeededDefinition(before)
+    if (!beforeSeed && after !== null && isValidSeededDefinition(after)) {
+      throw new SeededDefinitionWriteError(id)
+    }
+    if (beforeSeed && (
+      after === null
+      || !jsonValuesEqual(before.properties, after.properties)
+      || (!before.deleted && after.deleted)
+    )) {
+      throw new SeededDefinitionWriteError(id)
+    }
+  }
+}
+
 /** Per-tx scheduling record produced by `tx.afterCommit`. The commit
  *  pipeline picks these up post-commit; rollback discards them. */
 export interface AfterCommitJob {
@@ -288,12 +333,6 @@ export class TxImpl implements Tx {
     await this.requireParentInWorkspace(data.parentId, data.workspaceId)
     const id = data.id ?? this.ctx.newId()
     const row = this.buildNewBlockRow(id, data, opts)
-    // The deterministic seed id is publicly computable (uuidv5 of
-    // `workspaceId:seedKey`), so a user-scope create carrying a
-    // provenance-valid bag would FORGE a code-owned definition that
-    // materialization then trusts forever (live row → skipped, bag never
-    // repaired). Authoring one is as much a seed-bag write as editing one.
-    this.assertSeedDefinitionMutable(row)
     try {
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
     } catch (e) {
@@ -348,29 +387,9 @@ export class TxImpl implements Tx {
     return {id: data.id, inserted: false}
   }
 
-  /** v1 invariant (schema-unification §5.1): a materialized seed definition's
-   *  bag is wholly code-owned — no user-editable fields. The schema editor and
-   *  property panel already render it read-only; this is the data-layer backstop
-   *  so the invariant also holds for the agent bridge, the importer, and the
-   *  outline delete key. Only USER writes are blocked (`BlockDefault` scope):
-   *  materialization and the §13 revision-upgrade step run under `Automation`,
-   *  and synced-in changes never pass through this engine at all, so neither is
-   *  affected. Provenance is validated by the id equation — a valid seed id
-   *  must equal `uuidv5(workspaceId:seedKey)` — which holds for the persisted
-   *  row on the mutate/delete/restore paths AND for the candidate row on
-   *  `create` (the equation's inputs are public, so authoring a
-   *  provenance-valid row is itself a forgery attempt and is rejected the
-   *  same way; found by definitionSeeds.fuzz). */
-  private assertSeedDefinitionMutable(row: BlockData): void {
-    if (this.meta.scope === ChangeScope.BlockDefault && isValidSeededDefinition(row)) {
-      throw new SeededDefinitionWriteError(row.id)
-    }
-  }
-
   async delete(id: string): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    this.assertSeedDefinitionMutable(before)
     if (before.deleted) return  // already a tombstone — no-op, no second snapshot
     const after: BlockData = {
       ...before,
@@ -391,11 +410,6 @@ export class TxImpl implements Tx {
     if (before.deleted === 0) throw new NotDeletedError(id)
     const beforeData = parseBlockRow(before)
     this.checkWorkspace(beforeData.workspaceId)
-    // Mirrors `update`: only a bag patch touches the seed-owned fields —
-    // a plain restore (or content/references patch) leaves the code-owned
-    // definition intact, and materialization's own restore runs under
-    // Automation anyway.
-    if (patch?.properties !== undefined) this.assertSeedDefinitionMutable(beforeData)
     const after: BlockData = {
       ...beforeData,
       deleted: false,
@@ -429,9 +443,6 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     if (!updatePatchChangesBlock(before, patch)) return
-    // Only a bag mutation touches the seed-owned fields; a content/reference
-    // update leaves the code-owned definition intact.
-    if (patch.properties !== undefined) this.assertSeedDefinitionMutable(before)
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
@@ -534,7 +545,6 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    this.assertSeedDefinitionMutable(before)
     const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
     // Scope-consistency: the tx was admitted under `this.meta.scope`, chosen from
     // the CALLER's schema.changeScope. If the definition's change-scope was edited

@@ -43,6 +43,7 @@ import {
   sourceForScope,
 } from '@/data/api'
 import {
+  assertNoSeedDefinitionWrites,
   newTxMeta,
   TxImpl,
   type AfterCommitJob,
@@ -331,6 +332,14 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         )
       }
     }
+
+    // Step 3.6: seed-definition write guard — one choke point over
+    // everything this tx (user fn + same-tx processors) wrote, still
+    // inside the writeTransaction so a violation rolls the whole tx
+    // back atomically. Replays are exempt like the same-tx pass: they
+    // restore previously-observed states, and guarded txs can't have
+    // produced seed-row entries in the first place.
+    if (!isReplay) assertNoSeedDefinitionWrites(snapshots, scope)
 
     // Step 4: write command_events row — one per repo.tx invocation
     // (per §4.4). workspace_id is the pinned value (or NULL on
