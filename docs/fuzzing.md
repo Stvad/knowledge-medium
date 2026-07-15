@@ -115,6 +115,21 @@ exact.
   contiguous endpoint-order-independent ranges, anchor-index contract,
   `validateSelectionHierarchy` vs an independent ancestor walk +
   idempotence.
+- `src/data/test/queryHandles.fuzz.test.ts` — query-handle soundness:
+  a pool of subscribed `repo.query.*` handles (subtree, children,
+  childIds, ancestors, byType, aliasLookup, searchByContent) must
+  converge, after random mutator sequences, to an INDEPENDENT fresh
+  read taken through a throwaway Repo over the same db (a same-handle
+  `load()` would be tautological — it short-circuits to the peeked
+  value). `searchByContent` compares id-sets only: its
+  `declareRowDeps:false` under-invalidation is a documented, tested
+  tradeoff.
+- `src/shortcuts/test/defaultActions.fuzz.test.ts` — the interaction
+  layer (jsdom): random default-action dispatches (normal-mode
+  structural actions, edit-mode CM actions over a headless fake editor
+  view, multi-select wrappers, undo/redo) through `invokeAction` with
+  UI-shaped deps; oracles = structural invariants + scope-root
+  boundary protection.
 
 ## Found so far
 
@@ -155,6 +170,14 @@ The references-pipeline fuzzer found four more within its first hours
   checking the source had moved — the rename rewriter's concurrent
   update could be clobbered by the stale plan (marks `[[new]]`, stored
   ref `old`). It now carries the rename processor's stale-plan guard.
+
+The interaction fuzzer found one more:
+
+- `delete_block` was the only structural handler with no scope-root
+  guard: Delete with the zoomed page focused tombstoned the entire
+  rendered surface out from under the panel. The boundary rule now
+  lives in `StructuralEditPolicy.canDelete` (scope-less callers like
+  the agent bridge remain free to delete).
 
 ## Adding a suite
 

@@ -47,17 +47,27 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
+      # An explicit `shell: bash` already runs `bash -eo pipefail` (GitHub
+      # Actions docs, "Exit codes and error action preference"), so a fuzz
+      # failure is not masked by `tee`. The `set -o pipefail` below is
+      # belt-and-suspenders: it keeps the invariant local, so removing the
+      # (seemingly redundant on Linux) `shell:` line can't silently green
+      # the nightly.
       - name: Deep fuzz — all suites
         shell: bash
         env:
           FUZZ_TIME_MS: ${{ inputs.time_ms || '15000' }}
-        run: yarn fuzz 2>&1 | tee fuzz-output.log
+        run: |
+          set -o pipefail
+          yarn fuzz 2>&1 | tee fuzz-output.log
 
       - name: Deep fuzz — stateful data-layer suite (long pass)
         shell: bash
         env:
           FUZZ_TIME_MS: ${{ inputs.stateful_time_ms || '1200000' }}
-        run: yarn fuzz src/data/test/repoMutators.fuzz.test.ts 2>&1 | tee -a fuzz-output.log
+        run: |
+          set -o pipefail
+          yarn fuzz src/data/test/repoMutators.fuzz.test.ts 2>&1 | tee -a fuzz-output.log
 
       - name: Upload fuzz log
         if: always()
