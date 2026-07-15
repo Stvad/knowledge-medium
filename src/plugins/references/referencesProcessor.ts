@@ -126,8 +126,12 @@ interface SourcePlan {
    *  `id` and retargets the planned references on divergence (see
    *  applySourcePlan). */
   aliasesToEnsure: Array<{alias: string; id: string}>
-  /** ISO dates to be created via `ensureDailyNoteTarget` in the write phase. */
-  datesToEnsure: string[]
+  /** Date marks to be materialized via `ensureDailyNoteTarget` in the
+   *  write phase — one entry per distinct mark alias, carrying the
+   *  LITERAL alias so the write phase can recheck it for a mid-plan
+   *  claimant (long-form date aliases don't equal the ISO the seat
+   *  claims). */
+  datesToEnsure: Array<{iso: string; alias: string}>
   /** True iff the planned `references` differ from what's currently on
    *  the row — used to skip a no-op write that would re-fire the
    *  field-watcher and produce a useless row_events / ps_crud entry. */
@@ -149,7 +153,7 @@ const buildSourcePlan = async (
   const aliasRefs: BlockReference[] = []
   const dateRefs: BlockReference[] = []
   const aliasesToEnsure: Array<{alias: string; id: string}> = []
-  const datesToEnsure: string[] = []
+  const datesToEnsure: Array<{iso: string; alias: string}> = []
   const seenAliases = new Set<string>()
 
   for (const mark of aliasMarks) {
@@ -184,7 +188,7 @@ const buildSourcePlan = async (
       // words like "today", "friday", and "may" so those remain aliases.
       const id = dailyNoteBlockId(source.workspaceId, dailyTitle.iso)
       dateRefs.push({id, alias: mark.alias})
-      datesToEnsure.push(dailyTitle.iso)
+      datesToEnsure.push({iso: dailyTitle.iso, alias: mark.alias})
       continue
     }
     // Will be created by ensureAliasTarget in the write phase. The
@@ -264,6 +268,15 @@ const buildSourcePlan = async (
     JSON.stringify(source.references)
     !== JSON.stringify(normalizeReferences(references))
 
+  console.error('[DIAG buildSourcePlan]', JSON.stringify({
+    sourceId: source.id,
+    content: source.content,
+    priorRefs: source.references,
+    plannedRefs: references,
+    aliasesToEnsure,
+    datesToEnsure,
+    referencesChanged,
+  }))
   return {
     sourceId: source.id,
     workspaceId: source.workspaceId,
@@ -288,8 +301,22 @@ const applySourcePlan = async (
 ): Promise<string[]> => {
   // Stale-plan guard — see the SourcePlan.basis docblock.
   const current = await tx.get(plan.sourceId)
-  if (current === null || current.deleted) return []
-  if (planBasisOf(current) !== plan.basis) return []
+  console.error('[DIAG applySourcePlan] entry', JSON.stringify({
+    sourceId: plan.sourceId,
+    currentNull: current === null,
+    currentDeleted: current?.deleted,
+    currentContent: current?.content,
+    currentRefs: current?.references,
+    basisMatches: current !== null && planBasisOf(current) === plan.basis,
+  }))
+  if (current === null || current.deleted) {
+    console.error('[DIAG applySourcePlan] SKIP null/deleted', plan.sourceId)
+    return []
+  }
+  if (planBasisOf(current) !== plan.basis) {
+    console.error('[DIAG applySourcePlan] SKIP stale basis', plan.sourceId)
+    return []
+  }
   const newlyInserted: string[] = []
   // The read phase's target predictions (seat/daily ids) can go stale:
   // a live block claiming the alias between plan build and apply makes
@@ -313,9 +340,24 @@ const applySourcePlan = async (
         : ref,
     )
   }
-  for (const date of plan.datesToEnsure) {
-    const ensured = await ensureDailyNoteTarget(tx, ctx.repo, date, plan.workspaceId, typeSnapshot)
-    retarget(dailyNoteBlockId(plan.workspaceId, date), ensured.id)
+  // Per-mark alias recheck for dates: the mark's LITERAL alias (possibly
+  // long-form, e.g. "May 20th, 2026") can be claimed mid-plan too —
+  // ensureDailyNoteTarget's internal lookup-first only rechecks the ISO,
+  // so a long-form claimant would otherwise be missed and the entry left
+  // bound to the daily seat where a fresh parse would bind the claimant
+  // (Codex review on PR #371).
+  const isosStillNeedingSeat = new Set<string>()
+  for (const {iso, alias} of plan.datesToEnsure) {
+    const claimant = await tx.aliasLookup(alias, plan.workspaceId)
+    if (claimant !== null) {
+      retarget(dailyNoteBlockId(plan.workspaceId, iso), claimant.id, alias)
+      continue
+    }
+    isosStillNeedingSeat.add(iso)
+  }
+  for (const iso of isosStillNeedingSeat) {
+    const ensured = await ensureDailyNoteTarget(tx, ctx.repo, iso, plan.workspaceId, typeSnapshot)
+    retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id)
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
@@ -329,8 +371,14 @@ const applySourcePlan = async (
   const referencesChanged = references === plan.references
     ? plan.referencesChanged
     : JSON.stringify(current.references) !== JSON.stringify(normalizeReferences(references))
+  console.error('[DIAG applySourcePlan] write-decision', JSON.stringify({
+    sourceId: plan.sourceId,
+    referencesChanged,
+    references,
+  }))
   if (referencesChanged) {
     await tx.update(plan.sourceId, {references}, {skipMetadata: true})
+    console.error('[DIAG applySourcePlan] WROTE', plan.sourceId)
   }
   return newlyInserted
 }
@@ -377,8 +425,13 @@ export const parseReferencesProcessor = definePostCommitProcessor({
     }
     if (!plans.some(planNeedsWrite)) return
 
+    console.error('[DIAG apply] opening write tx for event', JSON.stringify({
+      txId: event.txId,
+      sourceIds: plans.filter(planNeedsWrite).map(p => p.sourceId),
+    }))
     // Write phase — single tx, atomic for refs + targets + afterCommit.
     const typeSnapshot = ctx.repo.snapshotTypeRegistries()
+    try {
     await ctx.repo.tx(async tx => {
       const allNewlyInserted: string[] = []
       let workspaceForCleanup: string | null = null
@@ -404,6 +457,11 @@ export const parseReferencesProcessor = definePostCommitProcessor({
       scope: ChangeScope.References,
       description: `processor: ${PARSE_REFERENCES_PROCESSOR}`,
     })
+    console.error('[DIAG apply] write tx COMMITTED for event', event.txId)
+    } catch (err) {
+      console.error('[DIAG apply] write tx THREW/ROLLED BACK for event', event.txId, err)
+      throw err
+    }
   },
 })
 

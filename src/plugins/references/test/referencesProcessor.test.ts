@@ -1086,6 +1086,47 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     const seat = await env.read(dailyNoteBlockId(WS, '2026-02-03'))
     expect(seat, 'no daily seat minted for a claimed date alias').toBeNull()
   })
+
+  it('binds a LONG-FORM date mark to the block that claimed the literal alias mid-plan', async () => {
+    // ensureDailyNoteTarget's internal lookup-first only rechecks the
+    // ISO; the mark's literal alias ("February 3rd, 2026") is a distinct
+    // claimable name, so the write phase must recheck it per mark
+    // (Codex review on PR #371). Pre-fix this didn't strip — the seat
+    // mint doesn't collide — but the ref bound to the daily seat where
+    // a fresh parse would bind the claimant, with nothing to re-fire.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'lf-claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'LF'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    const park = parkLookupOf('ParkZ')
+    try {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'lf-race-src', workspaceId: WS, parentId: null, orderKey: 'a1',
+          content: 'due [[February 3rd, 2026]] and [[ParkZ]]',
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.tx(
+        tx => tx.setProperty('lf-claimant', aliasesProp, ['February 3rd, 2026']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      park.release()
+    } finally {
+      park.restore()
+    }
+    await flush()
+
+    const row = await env.read('lf-race-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'February 3rd, 2026' && ref.id === 'lf-claimant'),
+      `long-form date mark binds to the claimant (refs: ${row!.references_json})`,
+    ).toBe(true)
+    const seat = await env.read(dailyNoteBlockId(WS, '2026-02-03'))
+    expect(seat, 'no daily seat minted when the literal alias is claimed').toBeNull()
+  })
 })
 
 describe('parseReferences — idempotent comparison', () => {

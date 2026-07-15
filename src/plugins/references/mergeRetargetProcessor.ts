@@ -4,6 +4,7 @@ import {
   isRefCodec,
   isRefListCodec,
   normalizeReferences,
+  scopePoliciesEquivalent,
   type AnyPropertySchema,
   type AnySameTxProcessor,
   type BlockData,
@@ -137,12 +138,27 @@ const retargetSource = async (
     if (retargetableFields.has(ref.sourceField)) continue
     const schema = propertySchemas.get(ref.sourceField)
     if (!schema || !(isRefCodec(schema.codec) || isRefListCodec(schema.codec))) continue
+    // The value lands via the raw `properties` patch below, in THIS tx's
+    // scope — bypassing setProperty's per-field scope routing. A field
+    // whose declared scope isn't policy-equivalent to the merge tx's
+    // (e.g. a UiState/UserPrefs ref pointer) must not be mutated by a
+    // document-scoped merge: leave value AND entry alone, like the
+    // absent-schema branch (the entry stays value-tied and re-parses
+    // consistently).
+    if (!scopePoliciesEquivalent(schema.changeScope, tx.meta.scope)) continue
+    // Eligible (schema-present, ref-typed, scope-equivalent) fields
+    // ALWAYS retarget their entries, whether or not the value needed
+    // rewriting: a sync-applied row can carry a stale entry whose value
+    // already names intoId (rewriteRefValue reports no change there),
+    // and skipping it would leave a backlink to the tombstoned fromId —
+    // exactly the stale state this processor cleans up (Codex review on
+    // PR #371). The value write stays conditional on an actual change.
+    retargetableFields.add(ref.sourceField)
     const {value, changed} = rewriteRefValue(
       nextProperties[ref.sourceField], event.fromId, event.intoId)
     if (changed) {
       nextProperties[ref.sourceField] = value
       propertiesChanged = true
-      retargetableFields.add(ref.sourceField)
     }
   }
 

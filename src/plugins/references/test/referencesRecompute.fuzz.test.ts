@@ -116,7 +116,10 @@ const refSchemaExtension = [
 // 'ax'/'Inbox' exercise plain + case-carrying aliases; the ISO date
 // routes through the daily-note path (deterministic dailyNoteBlockId,
 // exempt from orphan cleanup — the daily branch, referencesProcessor.ts:146-172).
-const ALIAS_POOL = ['ax', 'ay', 'Inbox', '2026-01-05'] as const
+// 'January 5th, 2026' is the LONG-FORM daily title: its literal alias is a
+// distinct claimable name from the ISO the daily seat claims, covering the
+// per-mark write-phase recheck in applySourcePlan (Codex round 3).
+const ALIAS_POOL = ['ax', 'ay', 'Inbox', '2026-01-05', 'January 5th, 2026'] as const
 
 // Bracket shrapnel: content the parser must treat as inert (or not —
 // either way the processor and the audit share one parser, so the

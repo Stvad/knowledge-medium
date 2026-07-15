@@ -253,5 +253,109 @@ describe('references.retargetMergedBlockReferences', () => {
         {id: 'into', alias: 'into', sourceField: 'related'},
       ]))
     })
+
+    it('retargets a stale entry whose value ALREADY points at the merge target', async () => {
+      // Stale derived data (value updated to intoId, entry still naming
+      // fromId, no pending parse event): rewriteRefValue reports no
+      // change, but the ENTRY must still be retargeted — otherwise the
+      // merge leaves a backlink to a tombstone in exactly the stale
+      // states this processor exists to clean up (Codex review on
+      // PR #371).
+      await resetTestDb(sharedDb.db)
+      const {repo} = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        extensions: [
+          referencesDataExtension,
+          aliasDataExtension,
+          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+        ],
+      })
+      await repo.tx(async tx => {
+        await tx.create({id: 'into', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        await tx.create({id: 'from', workspaceId: WS, parentId: null, orderKey: 'a1'})
+        await tx.create({
+          id: 'ref',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a2',
+          properties: {reviewer: 'into'},
+          references: [{id: 'into', alias: 'into', sourceField: 'reviewer'}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+      // The stale state is NOT constructible through the tx path — any
+      // write that could create it re-fires parseReferences (references
+      // is watched) and the authoritative recompute heals it. It arrives
+      // only via sync-applied rows, which bypass TxEngine — simulate
+      // that with a raw column swap.
+      await sharedDb.db.execute(
+        `UPDATE blocks SET references_json = ? WHERE id = 'ref'`,
+        [JSON.stringify([{id: 'from', alias: 'from', sourceField: 'reviewer'}])],
+      )
+
+      await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+      await repo.awaitProcessors()
+
+      const ref = await repo.load('ref')
+      expect(ref!.properties.reviewer).toBe('into')
+      expect(
+        ref!.references.some(r => r.id === 'from'),
+        `no entry may keep pointing at the tombstoned merge source (refs: ${JSON.stringify(ref!.references)})`,
+      ).toBe(false)
+    })
+
+    it('skips value AND entry for a ref field whose scope is not policy-equivalent to the merge tx', async () => {
+      // The value rewrite lands via the raw `properties` patch in the
+      // merge tx (BlockDefault), bypassing setProperty's per-field scope
+      // routing — so a UiState-scoped ref pointer must be left alone
+      // entirely (value AND entry, like the absent-schema branch), not
+      // silently mutated inside an undoable document merge (Codex
+      // review on PR #371).
+      const pinnedProp = defineProperty<string>('pinned-view', {
+        codec: codecs.ref(),
+        defaultValue: '',
+        changeScope: ChangeScope.UiState,
+      })
+      await resetTestDb(sharedDb.db)
+      const {repo, cache} = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        extensions: [
+          referencesDataExtension,
+          aliasDataExtension,
+          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+          propertySchemasFacet.of(pinnedProp, {source: 'test'}),
+        ],
+      })
+      await repo.tx(async tx => {
+        await tx.create({id: 'into', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        await tx.create({id: 'from', workspaceId: WS, parentId: null, orderKey: 'a1'})
+        await tx.create({
+          id: 'ref',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a2',
+          properties: {reviewer: 'from', 'pinned-view': 'from'},
+          references: [
+            {id: 'from', alias: 'from', sourceField: 'reviewer'},
+            {id: 'from', alias: 'from', sourceField: 'pinned-view'},
+          ],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+
+      await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+
+      const ref = cache.getSnapshot('ref')!
+      // Policy-equivalent field: rewritten as usual.
+      expect(ref.properties.reviewer).toBe('into')
+      // UiState field: value AND entry untouched.
+      expect(ref.properties['pinned-view']).toBe('from')
+      expect(ref.references).toEqual(normalizeReferences([
+        {id: 'into', alias: 'into', sourceField: 'reviewer'},
+        {id: 'from', alias: 'from', sourceField: 'pinned-view'},
+      ]))
+    })
   })
 })

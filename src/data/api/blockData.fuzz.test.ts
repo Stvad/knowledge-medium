@@ -36,9 +36,16 @@ import type { BlockData } from './blockData'
 
 // ──── normalizeReferences ────
 
+// NUL is excluded EXPLICITLY (not just by fc.string's default
+// grapheme-ascii unit, verified to emit no control chars over 50k
+// samples): normalizeReferences keys tuples by a NUL join
+// (blockData.ts:89), so NUL-bearing fields would make two distinct
+// tuples collide by construction — out of the supported domain, per the
+// docblock above. The filter keeps that exclusion true even if fc's
+// default charset ever widens.
 const fieldArb = fc.oneof(
   {arbitrary: fc.constantFrom('', ' ', '  ', '\t', 'related', 'reviewer'), weight: 2},
-  {arbitrary: fc.string({maxLength: 10}), weight: 3},
+  {arbitrary: fc.string({maxLength: 10}).filter(s => !s.includes('\0')), weight: 3},
 )
 
 const refArb: fc.Arbitrary<BlockReference> = fc.record(
