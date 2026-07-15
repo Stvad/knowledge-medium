@@ -268,15 +268,6 @@ const buildSourcePlan = async (
     JSON.stringify(source.references)
     !== JSON.stringify(normalizeReferences(references))
 
-  console.error('[DIAG buildSourcePlan]', JSON.stringify({
-    sourceId: source.id,
-    content: source.content,
-    priorRefs: source.references,
-    plannedRefs: references,
-    aliasesToEnsure,
-    datesToEnsure,
-    referencesChanged,
-  }))
   return {
     sourceId: source.id,
     workspaceId: source.workspaceId,
@@ -301,22 +292,8 @@ const applySourcePlan = async (
 ): Promise<string[]> => {
   // Stale-plan guard — see the SourcePlan.basis docblock.
   const current = await tx.get(plan.sourceId)
-  console.error('[DIAG applySourcePlan] entry', JSON.stringify({
-    sourceId: plan.sourceId,
-    currentNull: current === null,
-    currentDeleted: current?.deleted,
-    currentContent: current?.content,
-    currentRefs: current?.references,
-    basisMatches: current !== null && planBasisOf(current) === plan.basis,
-  }))
-  if (current === null || current.deleted) {
-    console.error('[DIAG applySourcePlan] SKIP null/deleted', plan.sourceId)
-    return []
-  }
-  if (planBasisOf(current) !== plan.basis) {
-    console.error('[DIAG applySourcePlan] SKIP stale basis', plan.sourceId)
-    return []
-  }
+  if (current === null || current.deleted) return []
+  if (planBasisOf(current) !== plan.basis) return []
   const newlyInserted: string[] = []
   // The read phase's target predictions (seat/daily ids) can go stale:
   // a live block claiming the alias between plan build and apply makes
@@ -371,14 +348,8 @@ const applySourcePlan = async (
   const referencesChanged = references === plan.references
     ? plan.referencesChanged
     : JSON.stringify(current.references) !== JSON.stringify(normalizeReferences(references))
-  console.error('[DIAG applySourcePlan] write-decision', JSON.stringify({
-    sourceId: plan.sourceId,
-    referencesChanged,
-    references,
-  }))
   if (referencesChanged) {
     await tx.update(plan.sourceId, {references}, {skipMetadata: true})
-    console.error('[DIAG applySourcePlan] WROTE', plan.sourceId)
   }
   return newlyInserted
 }
@@ -425,13 +396,8 @@ export const parseReferencesProcessor = definePostCommitProcessor({
     }
     if (!plans.some(planNeedsWrite)) return
 
-    console.error('[DIAG apply] opening write tx for event', JSON.stringify({
-      txId: event.txId,
-      sourceIds: plans.filter(planNeedsWrite).map(p => p.sourceId),
-    }))
     // Write phase — single tx, atomic for refs + targets + afterCommit.
     const typeSnapshot = ctx.repo.snapshotTypeRegistries()
-    try {
     await ctx.repo.tx(async tx => {
       const allNewlyInserted: string[] = []
       let workspaceForCleanup: string | null = null
@@ -457,11 +423,6 @@ export const parseReferencesProcessor = definePostCommitProcessor({
       scope: ChangeScope.References,
       description: `processor: ${PARSE_REFERENCES_PROCESSOR}`,
     })
-    console.error('[DIAG apply] write tx COMMITTED for event', event.txId)
-    } catch (err) {
-      console.error('[DIAG apply] write tx THREW/ROLLED BACK for event', event.txId, err)
-      throw err
-    }
   },
 })
 
