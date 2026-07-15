@@ -1608,10 +1608,10 @@ implementation</strong> and keep it open until its content is fully accounted fo
       <p>
         Sequence the first production run deliberately: it's an upload burst of 2 rows
         per (block, property) — run workspace-by-workspace, watch <code>ps_crud</code>
-        drain — and it presupposes the <code>row_events</code> retention prerequisite
-        (§12): without the prune + backfill exemption, the burst also writes ~650k
-        permanent full-row history snapshots per device. Before flipping it on, size
-        it: run
+        drain — and it presupposes the <code>row_events</code> optimization
+        prerequisite (§12): without the compact encoding + provenance exemptions, the
+        burst also writes ~650k permanent full-row history snapshots per device.
+        Before flipping it on, size it: run
         <code>select count(*) from blocks where properties_json != '{}' and deleted = 0</code>
         (and a key histogram) against production via <code>yarn agent sql</code> /
         Supabase — filtered to plaintext workspaces (PR-review P2: e2ee cells are
@@ -1897,23 +1897,41 @@ the backfill's harness for gating and chunking, not its write path.
     concurrent-backfill test.
   </li>
   <li>
-    <strong>Local history storage multiplies — prune <code>row_events</code> before
-    slice C.</strong> <code>row_events</code> is an unbounded, write-only audit log
-    (full before+after row snapshots per update, trigger-maintained for local
-    <em>and</em> sync-applied writes; no runtime consumer, no prune, and no
-    client-side VACUUM to reclaim space — <code>clientSchema.ts</code>) already at
-    ~1.17M rows × ~2&nbsp;KB on a dev instance. The backfill's ~650k creates would
-    append a snapshot each on the authoring device <em>and again per receiving
-    device</em> as the rows sync down, and steady-state property edits become 2–3
-    logged writes instead of one. Prerequisite, as its own small PR: implement the
-    prune designed in <code>docs/row-events-retention.md</code> (re-stamp it first —
-    it references the deleted <code>rowEventsTail</code> path), exempt the backfill's
-    system writes at the source (<code>tx_context</code>-gated trigger condition;
-    the backfill is already undo-free), reconsider logging <code>source='sync'</code>
-    events at all, and wire an idle VACUUM so pruning returns bytes. The
-    <code>blocks_synced</code>/<code>ps_oplog</code> full copies tripling with row
-    count are separate — load-bearing sync machinery, priced by the tier-4
-    measurement, not a prune target.
+    <strong>Local history storage multiplies — optimize <code>row_events</code>
+    before slice C (history is kept; events shrink).</strong> <code>row_events</code>
+    is an unbounded, write-only audit log — full before+after row snapshots per
+    update, trigger-maintained for local <em>and</em> sync-applied writes, no runtime
+    consumer, no client-side VACUUM (<code>clientSchema.ts</code>) — already at
+    ~1.17M rows × ~2&nbsp;KB on a dev instance. Unmitigated, the backfill's ~650k
+    creates would append a snapshot each on the authoring device <em>and again per
+    receiving device</em> as the rows sync down. Decided direction (its own small PR;
+    no pruning — history stays complete for primary edits):
+    <em>(1) compact encoding</em> — drop <code>before_json</code> (derivable: the
+    block's previous event's <code>after</code>; the per-block log is complete since
+    sync writes are logged) and store only changed columns for updates; old events
+    keep the old format, reconstruction bottoms out at the format boundary.
+    <em>(2) provenance exemptions, not column exemptions</em> — derived-machinery
+    writes (backfill, children→cell projection, consistency sweep, arrival catch-up)
+    skip logging via a <code>tx_context</code>-gated trigger condition: they are
+    deterministic functions of logged primary edits, so their history is pure
+    redundancy — the backfill's ~650k events are the poster case. Skipping the
+    <code>properties_json</code> <em>column</em> wholesale would instead lose primary
+    history for carve-out/un-flipped/orphan keys and the whole pre-flip period; the
+    provenance rule converges to column-skipping naturally once a row is fully
+    child-backed (all its cell writes become projection-sourced) — and makes
+    post-migration history <em>cheaper</em> per edit (tiny value-child rows vs
+    whole-bag snapshots).
+    <em>(3) sync-source logging decided per workspace mode</em> — redundant with the
+    server-side <code>blocks_history</code> for plaintext workspaces; the only
+    plaintext history for e2ee ones (starting position: drop for plaintext, keep
+    compact for e2ee).
+    <em>(4) one-time format migration</em> of the existing events + idle VACUUM to
+    reclaim the bytes (needed for the rewrite, not for discarding).
+    Re-stamp <code>docs/row-events-retention.md</code> when touching this — it
+    references the deleted <code>rowEventsTail</code> path, and its prune design is
+    superseded by this direction. The <code>blocks_synced</code>/<code>ps_oplog</code>
+    full copies tripling with row count are separate — load-bearing sync machinery,
+    priced by the tier-4 measurement, not an optimization target here.
   </li>
   <li>
     <strong>Schema-registry timing.</strong> Derivation quality depends on which schemas
