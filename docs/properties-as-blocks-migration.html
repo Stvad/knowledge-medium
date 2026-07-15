@@ -297,19 +297,37 @@
       read-modify-write <em>preserves</em> them; no-children keys are pending
       materialization, never deleted (§5).</li>
     <li><strong>Materialize everything in <code>BlockDefault</code></strong>: kernel
-      and user schemas default child-backed; plugin schemas default cell-backed until
-      a durable per-schema opt-in; UiState/UserPrefs/Automation are permanent
-      cell-backed carve-outs (§6).</li>
+      and user schemas default child-backed; plugin schemas default cell-backed and
+      flip per-schema (the durable flip mechanism — a seed-revision bump on the
+      definition block — landed with schema unification);
+      UiState/UserPrefs/Automation are permanent cell-backed carve-outs (§6).</li>
     <li><strong>Rollout:</strong> slice B lands dormant, the first flip rides with
       slice C's reconcile, and the kernel flip (end-state step 3) is required
       correctness, not optimization (§11).</li>
     <li><strong>The cell sync-off is measurement-gated and composition-scoped</strong>:
       a row leaves the cell channel only when every key on it is known child-backed;
       steps 4+5 go together, the fallback is step 3, and the column survives as the
-      carrier for carve-out, un-flipped-plugin, and unclassifiable keys (§11).</li>
+      carrier for carve-out, un-flipped-plugin, and definition-less (orphan) keys
+      (§11).</li>
   </ul>
-  <strong>Last verified against code:</strong> 2026-07-01 (spot-verifications through
-  2026-07-09).
+  <strong>Re-grounded 2026-07-15 against schema unification</strong>
+  (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
+  merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
+  is now a definition block, so <code>fieldId</code> is a real block id everywhere
+  (deterministic per-workspace <code>uuidv5(workspaceId:seedKey)</code> for seeded
+  schemas), identity flows only through its tx/workspace-bound resolution primitive
+  (<code>Repo.propertySchemaResolverFor</code> → branded
+  <code>ResolvedPropertySchema</code>), the synthetic <code>property:&lt;name&gt;</code>
+  scheme never ships, plugin <code>childBacked</code> flips have their durable
+  mechanism (seed-revision bumps), and name collisions resolve deterministically
+  fleet-wide. §2, §6, §7, §10, §11, and §12 are trimmed against it — the largest
+  simplifications: both §6 hard requirements are met upstream, §11's step-4/5
+  classifiability restriction widens to definition-block coverage, and the two-phase
+  bootstrap's hard half dissolves into a pure computation. Types are <em>not</em> yet
+  seeded (unification slice C pending) — nothing here depends on them.
+  <strong>Last verified against code:</strong> 2026-07-15 (initial rewrite 2026-07-01
+  against <code>8a6f22cd</code>; spot-verifications through 07-09; unification
+  re-ground 07-15 against post-#364 master).
 </aside>
 
 <div class="callout">
@@ -320,10 +338,11 @@
       children (per-row LWW = per-key merge). The cell survives as local read surface,
       bootstrap hint, and carrier for non-child-backed keys (<a href="#s5">§5</a>).</li>
     <li><strong>Materialize everything in <code>BlockDefault</code></strong> — kernel,
-      plugin (behind the durable opt-in), and user schemas — with system field rows
-      hidden by default; the non-document scopes (UiState, UserPrefs, Automation)
-      stay cell-backed. The per-schema <code>childBacked</code> flag survives as the
-      rollout lever and non-document carve-out (<a href="#s6">§6</a>).</li>
+      plugin (flipped per-schema via seed-revision bumps), and user schemas — with
+      system field rows hidden by default; the non-document scopes (UiState,
+      UserPrefs, Automation) stay cell-backed. The per-schema <code>childBacked</code>
+      flag survives as the rollout lever and non-document carve-out
+      (<a href="#s6">§6</a>).</li>
     <li>Field-row shape: <code>[[Schema Name]]</code> content + derived synced
       <code>reference_target_id</code>, as the spike built it (<a href="#s7">§7</a>).</li>
     <li><code>setProperty</code> dual-writes children and cell in one tx; the
@@ -350,8 +369,10 @@
 <h2 id="s1">1. Why move</h2>
 
 <p>
-Property <em>schemas</em> are blocks (<code>'property-schema'</code> type, projected into
-the schema registry by <code>userSchemasProjector</code>). Property <em>values</em> are
+Property <em>schemas</em> are blocks — since schema unification, <em>all</em> of them:
+user-authored <code>'property-schema'</code> blocks projected into the registry, and
+kernel/plugin schemas seeded as definition blocks with deterministic per-workspace
+ids. Property <em>values</em> are
 entries in a JSON cell — the <code>properties_json</code> column on the consuming block,
 read through <code>block.get(schema)</code> and written through
 <code>tx.setProperty</code>. Schemas get the full block treatment — refs, comments,
@@ -439,9 +460,16 @@ are themselves block references. Same primitive everywhere.
     processor.
   </li>
   <li>
-    <strong>Identity is <code>PropertySchema.fieldId</code></strong>: the
-    <code>'property-schema'</code> block's row id for user-defined schemas, a
-    deterministic <code>property:&lt;name&gt;</code> string for kernel/plugin schemas.
+    <strong>Identity is the definition block id.</strong> <code>fieldId</code> = the
+    <code>'property-schema'</code> block's row id for <em>every</em> schema, kernel and
+    plugin included: schema unification seeds code-declared schemas as definition
+    blocks with deterministic per-workspace ids
+    (<code>uuidv5(workspaceId:seedKey)</code>), and identity reaches write paths only
+    through its tx/workspace-bound resolution primitive
+    (<code>Repo.propertySchemaResolverFor(workspaceId)</code> → branded
+    <code>ResolvedPropertySchema</code>; code handles carry <code>seedKey</code>, never
+    a fieldId). The spike's synthetic <code>property:&lt;name&gt;</code> ids are
+    superseded and never ship — extraction swaps them for resolved ids (§11, slice B).
     <code>name</code> stays the display label and the projection key in the cell; renames
     change <code>name</code> without touching stored children.
   </li>
@@ -465,7 +493,11 @@ Rev 1 was written against May's data layer. Master rewrote most of the subsystem
 plan touches, and the spike (PR #285) already implements a large portion of the plan on
 top of the new subsystems. Anyone reading rev 1: these claims are dead. (Implementing a
 slice and never read rev 1? Skip this section — the as-built spec starts at
-<a href="#s5">§5</a>.)
+<a href="#s5">§5</a>.) One layer moved <em>again</em> after this table was written:
+schema unification (seeded definition blocks, the workspace-bound resolver — merged
+2026-07, post-dating both rev 1 and the spike). The affected sections (§2, §6, §7,
+§10–§12) carry that update inline; this table still contrasts rev 1 against the
+2026-07-01 baseline.
 </p>
 
 <table>
@@ -725,9 +757,8 @@ which converge per-row. The cell's roles shrink to exactly three, none of them m
   <li><strong>Carrier for non-child-backed keys</strong> — any schema left cell-backed
     keeps today's cell-LWW semantics. Per §6 that means the three non-document scopes
     (UiState / UserPrefs / Automation — per-user or machine-authored, effectively
-    uncontended) and plugin <code>BlockDefault</code> schemas that haven't yet made
-    their durable opt-in, for which cell-LWW is simply today's semantics retained
-    until the flip.</li>
+    uncontended) and plugin <code>BlockDefault</code> schemas not yet flipped (§6),
+    for which cell-LWW is simply today's semantics retained until the flip.</li>
 </ul>
 
 <p>
@@ -908,7 +939,7 @@ arrived row:
   large workspace is a real upload burst (§11, slice C). The end state goes further:
   once children are the fleet-wide source, the cell can stop syncing <em>for fully
   child-backed rows</em> and become a locally-derived column there (the §11
-  composition rule — rows carrying carve-out, un-flipped-plugin, or unclassifiable
+  composition rule — rows carrying carve-out, un-flipped-plugin, or definition-less
   keys keep the channel) — at which point a property update is a small
   value-child PATCH plus the parent's metadata PATCH (<code>setProperty</code> bumps
   <code>updated_at</code>/<code>updated_by</code> on the parent, and those columns
@@ -928,7 +959,8 @@ the <code>property-schema:*</code> config props on schema blocks themselves. An 
 draft of this doc argued for restoring the A+D boundary as a per-schema flag; the §5
 merge-semantics analysis reversed that. <strong>Decision: materialize everything in
 <code>ChangeScope.BlockDefault</code> — kernel, plugin, and user schemas alike
-(plugins per-schema, behind the durable opt-in below) — with system field rows hidden
+(plugins per-schema, flipped by seed-revision bump — the durability requirement below
+is met by schema unification) — with system field rows hidden
 by default behind the existing per-schema <code>hidden</code> override and "Show
 Hidden Fields" toggle. The non-document scopes (UiState, UserPrefs, Automation) stay
 cell-backed.</strong>
@@ -955,11 +987,13 @@ decides the flip.
 <p>
 The costs the spike surfaced are real but turned out to be presentation-layer, and the
 spike itself has since built the answers: hidden-field filtering in the outline
-(per-schema <code>hidden</code> + toggle — though the spike's hidden set is a curated
-list that must grow to cover every system schema at the kernel flip; §10),
+(per-schema <code>hidden</code> + toggle — since schema unification a synced
+definition field, not a curated code list, though §10's outline-vs-panel question
+remains open for the kernel flip),
 <code>tx.childrenOf</code> default-excluding
 field rows so structural callers see only visible siblings (<code>f4d0b447</code>), and
-panel-layout/orphan-alias special cases. Two genuine residuals to carry, eyes open:
+panel-layout/orphan-alias special cases. One genuine residual to carry, eyes open —
+plus one that schema unification has since dissolved:
 </p>
 
 <ul>
@@ -968,12 +1002,14 @@ panel-layout/orphan-alias special cases. Two genuine residuals to carry, eyes op
     design. Note the failure list predates the <code>childrenOf</code> default-exclude
     flip — re-run the spike suite to get the true residual set before porting
     (several of the 8 may already pass).</li>
-  <li><strong>Synthetic fieldIds leak into references.</strong> Kernel schemas'
-    <code>property:&lt;name&gt;</code> pseudo-ids aren't block ids, but the references
-    processor's exact-reference branch projects them into <code>references_json</code>,
-    putting non-existent target ids into the backlink index. Slice B must special-case
-    non-block fieldIds out of reference projection (or give kernel schemas real
-    definition blocks).</li>
+  <li><strong>Resolved — synthetic fieldIds no longer exist.</strong> The spike's
+    kernel/plugin <code>property:&lt;name&gt;</code> pseudo-ids would have leaked
+    non-block ids into <code>references_json</code>, and slice B would have had to
+    special-case them out of reference projection. Schema unification took the
+    parenthetical alternative — real definition blocks for every schema — so a field
+    row's <code>reference_target_id</code> is always a valid block id and the backlink
+    entry is <em>correct</em>: "where is this field used?" backlinks for kernel/plugin
+    fields come free instead of needing a guard.</li>
 </ul>
 
 <p>
@@ -997,47 +1033,62 @@ sync-off scoping.
 </p>
 
 <div class="callout">
-  <strong>Mechanism: keep the per-schema <code>childBacked</code> flag — as rollout
-  gate and UiState carve-out, not as a kernel/user boundary.</strong> Add
-  <code>childBacked: boolean</code> to <code>PropertySchema</code> (alongside
-  <code>fieldId</code>). End-state defaults: <code>true</code> for kernel and user
-  <code>BlockDefault</code> schemas; <em>plugin</em> schemas default
-  <code>false</code> and flip per-schema only once the opt-in is durably persisted
-  (below) — defaulting them true from code would flip before any synced decision
-  exists, which is the data fork this callout forbids (PR-review P2);
-  <code>false</code> — permanently — for <code>UiState</code>,
+  <strong>Mechanism: the per-schema <code>childBacked</code> flag — as rollout
+  gate and UiState carve-out, not as a kernel/user boundary.</strong> Its durable home
+  already exists: schema unification reserved <code>property-schema:child-backed</code>
+  as a definition field (its §3 — synced, on the definition block, absent → false),
+  landing with the first slice here that consumes it (B1) and joining
+  <code>ResolvedPropertySchema</code> so classification rides the same resolution path
+  as identity. End-state defaults, stamped in the seeds: <code>true</code> for kernel
+  and user <code>BlockDefault</code> schemas; <em>plugin</em> schemas default
+  <code>false</code> and flip per-schema — a flip is a <em>seed-revision bump</em> on
+  the plugin's definition block (unification §6.2), durable and synced by
+  construction, so the code-constant data fork this callout used to forbid can no
+  longer be expressed; <code>false</code> — permanently — for <code>UiState</code>,
   <code>UserPrefs</code>, and <code>Automation</code>. During rollout the flag is the
   staging lever: user schemas flip first, kernel props follow at the §11 kernel flip
   (tier-4-informed and test-ported, but required regardless of the sync-off
   decision). All read/write machinery branches on the flag in exactly one
   place each; one write model (<code>setProperty</code>), one detection rule, one
-  projection. (Sourcing the flag <em>durably</em> where it can vary, and migrating data
-  when it flips, is separate plumbing — the requirements below.)
+  projection. One window this rollout must tolerate (and already does — flips are
+  coordinated events here): a flip propagates via sync plus the unification's
+  operator upgrade step, not atomically, so clients can briefly disagree about a
+  flipped schema (its §6.1).
 </div>
 
 <p>
-Two hard requirements the flag carries, both from adversarial review:
+Two hard requirements the flag carries, both from adversarial review — <strong>both
+now met upstream by schema unification</strong>, so the slices here consume them
+rather than build them:
 </p>
 
 <ul>
-  <li><strong>The flag must be durable where it can vary.</strong> For user schemas it
-    is: it derives from the <code>'property-schema'</code> block, which syncs, so every
-    client agrees. A <em>plugin</em> opt-in expressed only as a code constant is a data
-    fork waiting to happen — two clients on different plugin versions would disagree on
-    whether schema S is child-backed, one maintaining children the other ignores.
-    Plugin opt-ins must persist the decision in synced data (the natural home: the same
-    projector-fed registry mechanism user schemas use), and flipping the flag in either
-    direction is a <em>migration</em> — run a final projection pass, then materialize or
-    delete children under the new regime — never a silent constant change.</li>
-  <li><strong>Name collisions become a hard error.</strong> The registry is a
-    last-wins <code>Map&lt;name, schema&gt;</code> with a <code>console.warn</code>
-    (<code>mergeLiftedSchemas</code>). That was tolerable when a collision meant one
-    codec silently won; under child-backing, <code>name</code> is the cell key but
-    <code>fieldId</code> is the child identity, so a user schema and a plugin schema
-    sharing a name strand the loser's field rows (unrecognized fieldId) while both
-    fight over one cell key — and which side wins can differ per client with load
-    order. Slice B must make cross-source name collisions fail loudly (or namespace
-    them), not warn-and-proceed.</li>
+  <li><strong>The flag must be durable where it can vary — met.</strong> Every schema
+    now has a synced definition block, so the flag derives from synced data for every
+    origin: user schemas from their own block, kernel/plugin schemas from their seeded
+    definition (flipped by seed-revision bump — a code-constant fork between plugin
+    versions is no longer expressible). The one carve-out: a dynamic extension not yet
+    converted to seed declarations (the unification's transitional dual-path, until
+    its B′ deletion slice) has no definition block — it simply <em>cannot</em> flip,
+    which coincides with the safe default (cell-backed). What remains ours: flipping
+    the flag in either direction is a <em>migration</em> — run a final projection
+    pass, then materialize or delete children under the new regime — never a silent
+    payload change; the flip's data migration rides the seed upgrade (unification
+    §6.2).</li>
+  <li><strong>Name collisions become a hard error — met.</strong> The old registry
+    resolved collisions last-wins-by-load-order with a <code>console.warn</code> —
+    per-client, exactly what child-backing can't tolerate (<code>name</code> is the
+    cell key, <code>fieldId</code> the child identity; a per-client winner strands the
+    loser's field rows). The unified registry resolves names deterministically
+    fleet-wide and enforces it centrally: code-owned seeds are unshadowable in v1, the
+    rest resolve by a deterministic order over synced state, and every cell-writing
+    boundary resolves through the one resolution primitive, which returns a structured
+    <code>shadowed</code>/<code>ambiguous</code> status instead of touching the
+    winner's key (unification §7; <code>buildPropertyDefinitionRegistry</code> +
+    <code>SnapshotPropertySchemaResolver</code>). A shadowed definition stays
+    resolvable by <code>fieldId</code> — its child rows keep classifying and its
+    backlinks keep resolving; it is excluded from the name map and the cell
+    projection. Slice B inherits this instead of building collision handling.</li>
 </ul>
 
 <p>
@@ -1080,8 +1131,11 @@ shape:
     agent) can type <code>[[status]]</code> as a child and put a value under it; the
     derive processor resolves the alias to the schema and the project processor folds it
     into the cell. That's the "it's just blocks" promise made real.</li>
-  <li>The cost: name collisions need a resolution rule (registered schema map wins over
-    generic alias lookup — implemented), and the exact-reference grammar is scoped to
+  <li>The cost: name collisions need a resolution rule. The two-tier lookup stands —
+    schema-name map first, generic alias lookup second (implemented in the spike) —
+    but the schema-name map itself is now the unification's deterministic fleet-wide
+    winner map (§6), replacing the spike-era per-client "registered map wins by load
+    order". And the exact-reference grammar is scoped to
     whole-block content so prose containing <code>((…))</code> never becomes a field
     (implemented in <code>referenceBlock.ts</code>).</li>
 </ul>
@@ -1191,9 +1245,24 @@ skill while at it.
 <dl>
   <dt><strong>Field-row recognition.</strong></dt>
   <dd>A child of P is a field row iff <code>reference_target_id</code> equals a
-    registered schema's <code>fieldId</code>. Column read, no content parse. Unregistered
+    definition block's id — a fieldId-keyed lookup the unified registry ships
+    (<code>resolveField</code>). Column read, no content parse. Classification needs
+    the definition, not the owning plugin (an uninstalled plugin's definitions sync
+    like any block), and works for shadowed definitions too (§6 — losers stay
+    fieldId-resolvable). Unresolvable
     targets render as plain reference blocks — a pasted field from another workspace
     degrades to a visible, honest "unknown field" row.</dd>
+
+  <dt><strong>Orphan keys — the backstop schema unification leans on.</strong></dt>
+  <dd>A cell key with no definition block of <em>any</em> origin (historic residue,
+    keys from plugins disabled before the unification's cutover, dormant dynamic
+    extensions) is a permanent cell-backed key: no flag, no children, no
+    materialization — today's semantics retained — and its row keeps the cell channel
+    under §11's composition rule. Creating a definition later (user add, plugin
+    enable/convert, or an explicit inference pass) makes it an ordinary schema whose
+    flip rides the normal machinery. Nothing further is needed here; the unification
+    doc counts disabled-plugin residue as this problem's easy sub-case (its
+    §4.3).</dd>
 
   <dt><strong>Value decoding.</strong></dt>
   <dd>Spike: first parseable value child wins (order-key order); unparseable children are
@@ -1317,14 +1386,18 @@ linking to the schema block; value editing via the preset's editor; empty-value 
 for slot rows) and <code>PropertyValueBlockRenderer</code>, registered in the default
 renderer chain, plus hidden-field filtering in <code>useChildIds</code> and a
 "Show Hidden Fields" context-menu toggle. Under §6's materialize-everything decision
-the hidden mechanism is load-bearing, not cosmetic — and it is not yet complete: the
-spike's hidden set is a curated list (<code>hiddenKernelPropertyUis</code> in
-<code>typesPropertyUi.ts</code>), not a default on every kernel schema.
-<code>system:collapsed</code> and <code>createdAt</code> are in it; <code>types</code>
-is <em>not</em> — a materialized <code>[[types]]</code> row would be visible in
-today's outline. Extending <code>hidden: true</code> to every child-backed system
-schema that should stay out of the outline is a kernel-flip deliverable (§11,
-end-state step 3), with the toggle as the escape hatch. The property panel remains fully functional
+the hidden mechanism is load-bearing, not cosmetic. The spike's curated list
+(<code>hiddenKernelPropertyUis</code> in <code>typesPropertyUi.ts</code>) predates
+schema unification, which replaced hidden-ness with a synced
+<code>property-schema:hidden</code> definition field carried on
+<code>ResolvedPropertySchema</code> — extraction reads that field, not a code list.
+What the field does <em>not</em> yet answer: it is one bit gating the property panel,
+while the outline needs its own answer for panel-visible props —
+<code>types</code> above all is (rightly) not hidden in the panel, yet a materialized
+<code>[[types]]</code> row must not appear in the outline. Deciding whether outline
+filtering reuses <code>hidden</code>, adds a per-surface bit to the definition, or
+defaults by origin is the kernel-flip deliverable (§11, end-state step 3), with the
+toggle as the escape hatch. The property panel remains fully functional
 alongside — both surfaces read the same cell and write through the same
 <code>setProperty</code>, so they coexist safely during the transition. Panel sunset is
 deliberately last (§11) and follows usage, not a schedule. Rev 1's inventory of what
@@ -1445,9 +1518,20 @@ implementation</strong> and keep it open until its content is fully accounted fo
       <p>
         Everything the write path needs, but reviewed as three separable units so B
         doesn't become the monolith this section argues against.
-        <strong>B1 (core, the only piece slice C waits on):</strong>
-        <code>PropertySchema.fieldId</code> + <code>childBacked</code> (§6 defaults;
-        cross-source name collisions fail loudly), dual-writing
+        <strong>B1 (core, the only piece slice C waits on):</strong> the
+        <code>property-schema:child-backed</code> definition field (§6 defaults; the
+        home schema unification reserved) joining <code>ResolvedPropertySchema</code> —
+        identity itself is <em>consumed, not built</em>: field-row stamping resolves
+        fieldIds through the unification's tx/workspace-bound resolution primitive
+        (the only source of a <code>ResolvedPropertySchema</code>; never a handle,
+        never the ambient name-keyed registry), and cross-source name collisions
+        already fail deterministically upstream (its §7 winner gate — B1 inherits the
+        structured <code>shadowed</code> rejection at the write boundary). Extraction
+        note: the spike predates unification — swap its synthetic-id plumbing
+        (<code>fieldIdForPropertyName</code>, fieldId-on-the-schema-object) for
+        resolver lookups (<code>resolve(handle)</code> /
+        <code>resolveField(fieldId)</code>) during extraction, not after. Then
+        dual-writing
         <code>setProperty</code>, <code>core.projectPropertyChildren</code> +
         <code>core.materializePropertyChildren</code> gated on the flag <em>and on the
         §8 e2ee workspace gate</em> (the write path and both processors are off in e2ee
@@ -1461,9 +1545,9 @@ implementation</strong> and keep it open until its content is fully accounted fo
         <strong>B3 (integration):</strong> merge/orphan/panel-layout handling with the
         §9 dedup tightening, and the roam importer (a user-value writer the spike had
         to adapt; its import tests changed for child-backed seeds).
-        Plugin-flag <em>persistence</em> is deliberately deferred until the first
-        plugin actually opts in (footer): user schemas get durability for free from
-        their schema blocks, and no plugin opts in during the user-schema-first ship.
+        Plugin flips need no new persistence — a flip is a seed-revision bump on the
+        plugin's definition block (§6); what stays deferred is merely the first flip
+        itself, since no plugin flips during the user-schema-first ship.
         Rollout defaults at this stage keep <em>everything</em> cell-only in
         production — the machinery lands dormant, exercised in tests/dev. The first
         production flip of user schemas rides <strong>with slice C, not before
@@ -1614,15 +1698,19 @@ sequence, each step gated on the one before:
   <li><strong>Backfill completes fleet-wide</strong> (slice C) — every property has
     child rows behind it.</li>
   <li><strong>Kernel-prop flip + test porting</strong>: flip <code>childBacked</code>
-    defaults for <em>kernel</em> schemas (§6 end state). Plugin schemas flip
-    separately, each behind the durable persisted opt-in §6 requires (PR-review P2):
-    plugin code varies independently of app version (dynamic/agent extensions), so a
-    code-constant flip is exactly the data fork §6 forbids — until the persistence
-    mechanism lands, plugin schemas stay cell-backed. Run the schema-scoped backfill
+    defaults for <em>kernel</em> schemas (§6 end state) — a seed-revision bump through
+    the unification's operator upgrade step. Plugin schemas flip separately by the
+    same mechanism, each a revision bump on its own definition block (§6; durable and
+    synced by construction). Dynamic extensions can flip only once converted to seed
+    declarations — an unconverted one (the unification's transitional dual-path
+    window) has no definition block to carry the flag, which coincides with the safe
+    default: it stays cell-backed. Run the schema-scoped backfill
     for the newly flipped schemas (markers make this incremental), port the residual
-    tree-shape tests as deliberate behavior changes, extend the curated hidden-override
-    set to every system schema that should stay out of the outline (§10), ship the
-    references-projection guard for synthetic fieldIds. <em>This step completes the §6
+    tree-shape tests as deliberate behavior changes, and settle §10's
+    outline-visibility question for system field rows (the synced <code>hidden</code>
+    definition field replaced the curated code list; what's left is deciding the
+    outline's bit for panel-visible props like <code>types</code>). <em>This step
+    completes the §6
     correctness fix — it is sequenced here for rollout pacing (tier-4 measurement
     informs it), but it is required regardless of the step-5 decision.</em></li>
   <li><strong>Stop uploading the cell — per row, by key composition, never
@@ -1630,11 +1718,14 @@ sequence, each step gated on the one before:
     only when every key in its bag is <em>known to be child-backed</em>. Three kinds
     of key therefore keep a row on the channel: §6 carve-out-scope keys (UiState,
     UserPrefs, Automation — cell-backed permanently); cell-backed plugin
-    <code>BlockDefault</code> keys (§6 defaults plugins <code>false</code> until their
-    durable opt-in, and plugin props like todo <code>status</code> live on ordinary
+    <code>BlockDefault</code> keys (§6 defaults plugins <code>false</code> until
+    flipped, and plugin props like todo <code>status</code> live on ordinary
     content blocks — freezing those rows would orphan the plugin's only synced store);
-    and keys a client's registry can't classify (a plugin not installed here may be
-    live elsewhere). Practical consequence: opting-in the content-block plugin schemas
+    and keys with <em>no definition block to classify them</em> — historic orphan keys
+    and unconverted dynamic-extension schemas. (An <em>uninstalled</em> plugin's keys
+    are no longer in this bucket: schema unification syncs its definition blocks to
+    every client, so classification works without the plugin — its §5.3.) Practical
+    consequence: flipping the content-block plugin schemas
     is effectively a prerequisite for this step delivering much.
     <em>Semantics for rows that stop:</em> the server copy freezes — and because
     downloads continue at this step, the <strong>materializer seam change moves up
@@ -1663,12 +1754,18 @@ sequence, each step gated on the one before:
     rows, any plaintext keys — so eligibility must be a durable client-written marker
     (natural home: maintained by the same projection that stamps the checksum),
     consumed fail-safe: only rows explicitly marked fully-child-backed leave the
-    stream; unmarked rows keep the column. And because classification is
-    <em>per-client</em> while the marker is global server state, the marker may only
-    be set where every key belongs to a schema <em>every</em> client can classify —
-    kernel and user schemas (one ships with the app, the other syncs as blocks); rows
-    carrying plugin-backed keys are never marked, whatever the local opt-in state — a
-    plugin-less peer still needs their cell (PR-review P2). Or keep downloading the column
+    stream; unmarked rows keep the column. And because the marker is global server
+    state, it may only be set where every key belongs to a schema <em>every</em>
+    client can classify. Schema unification widened that set from "kernel and user
+    schemas only" to <strong>every key that resolves to a definition block</strong> —
+    plugin keys included, since a plugin-less client classifies them from the synced
+    definition (its §5.3 definition-metadata surface); this matters because the
+    previous restriction excluded exactly the content-block plugin schemas whose
+    flip step 4 calls "effectively a prerequisite for this step delivering much".
+    Rows carrying keys with <em>no</em> definition block — historic orphan keys, and
+    dynamic-extension schemas not yet converted to seeds during the unification's
+    transitional window — are never marked (PR-review P2, re-scoped post-unification).
+    Or keep downloading the column
     fleet-wide and consume it only where the composition rule says it is live; the
     download bytes are the smallest of the wins. Fresh
     devices now need the first-sync projection pass (below) before the cells of
@@ -1680,7 +1777,7 @@ sequence, each step gated on the one before:
     view/aggregate — the data is all there for plaintext workspaces, which is the
     only case server features could read anyway). It cannot be <em>dropped</em>: the
     column survives as the carrier for carve-out-scope, un-flipped-plugin, and
-    unclassifiable keys unless those are someday migrated off
+    definition-less (orphan) keys unless those are someday migrated off
     <code>blocks</code>.</li>
 </ol>
 
@@ -1707,8 +1804,10 @@ no infrastructure needed:
   <li><strong>Full pass offline (~40-line Node script):</strong> export the local DB
     (the corruption-recovery backup zip yields the <code>.db</code>), open with
     <code>better-sqlite3</code>, run join → decode (the pure helpers in
-    <code>src/data/propertyChildren.ts</code>; kernel schemas import directly, user
-    schemas rebuild from the <code>property-schema</code> rows in the same file) →
+    <code>src/data/propertyChildren.ts</code>; kernel/plugin declarations import
+    directly — their per-workspace fieldIds are computable offline from seedKeys —
+    and user schemas rebuild from the <code>property-schema</code> rows in the same
+    file) →
     chunked UPDATEs of ~1k rows/tx. Wall-clock it; multiply by ~3× for the
     browser.</li>
   <li><strong>Browser-fidelity write test (live client, safe):</strong>
@@ -1750,15 +1849,20 @@ would otherwise stomp the projected cell on every remote edit). It's the single
 seam that applies sync writes — one place to get right. The first-sync projection pass
 reuses the backfill's harness (schema-readiness gating, per-workspace markers, chunked
 transactions, throughput logging), pointed the other direction — with one structural
-wrinkle (PR-review P2): the pass must be <strong>two-phase</strong>, because schema
-discovery itself reads the cell. <code>userSchemasProjector</code> finds schema blocks
+wrinkle (PR-review P2): the pass must be <strong>two-phase</strong>, because
+user-schema discovery itself reads the cell. <code>userSchemasProjector</code> finds
+schema blocks
 through <code>types: ['property-schema']</code>, and <code>block_types</code> is
 populated from <code>properties_json.$.types</code> — with no downloaded cell those
-entries don't exist yet. Phase 1 projects the <em>code-defined</em> schemas' keys
-(kernel/plugin — above all <code>types</code> and the <code>property-schema:*</code>
-config props, recognizable by their code-known synthetic fieldIds) from field rows,
+entries don't exist yet. Schema unification dissolved the phase's hard dependency
+(its §4.4): phase 1's recognizer — the fieldIds of code-declared schemas — is a pure
+computation, <code>uuidv5(workspaceId:seedKey)</code> over the loaded declarations,
+needing zero DB state; and registry <em>behavior</em> needs no bootstrap at all
+(declaration synthesis serves every code-declared schema with zero rows synced).
+Phase 1 projects those schemas' keys (above all <code>types</code> and the
+<code>property-schema:*</code> config props) from field rows,
 which repopulates <code>types</code>/<code>block_types</code> and lets the projector
-register user schemas; phase 2 then projects user-schema keys. A single
+register user definitions; phase 2 then projects user-schema keys. A single
 schema-readiness-gated pass would deadlock — waiting on schemas only the pass itself
 can surface — or complete early with user schemas unregistered. And the pass's cell
 writes must not ride <code>repo.tx</code> (PR-review P2): <code>txEngine</code>
@@ -1791,14 +1895,19 @@ the backfill's harness for gating and chunking, not its write path.
   </li>
   <li>
     <strong>Schema-registry timing.</strong> Derivation quality depends on which schemas
-    are registered when a pass runs. The spike's gating (backfill held until projector
-    publish, generation-coalesced rescans, row-targeted catch-up bypassing markers) is
-    the answer; keep its tests.
+    are registered when a pass runs. Since schema unification the repo supplies the
+    backbone: active-workspace transactions queue at a shared readiness boundary until
+    the definition projector's first fresh snapshot (its §5.1 prime gate), and
+    declaration behavior is available with zero rows. The spike's backfill-specific
+    gating (held until projector publish, generation-coalesced rescans, row-targeted
+    catch-up bypassing markers) layers on top; keep its tests where they still apply.
   </li>
   <li>
-    <strong><code>findSchemaByFieldId</code> is O(schemas) per lookup</strong> and sits
-    in child-filtering paths that run per rendered row. Fine at today's schema counts;
-    add a fieldId-keyed map alongside the facet if profiles say otherwise.
+    <strong><code>findSchemaByFieldId</code>-style scans are retired.</strong> The
+    spike's O(schemas)-per-lookup helper sat in child-filtering paths that run per
+    rendered row. The unified registry is fieldId-keyed (projected definitions key by
+    <code>metadata.fieldId</code>; the resolver exposes <code>resolveField</code>) —
+    extraction consumes that instead of porting the scan.
   </li>
   <li>
     <strong>Old-client interop during rollout.</strong> A device on pre-slice-B code
@@ -1852,13 +1961,18 @@ the backfill's harness for gating and chunking, not its write path.
 
 <p class="footer-note">
 Open questions for the slice PRs: whether ghost rows need a per-type declared order;
-the add-field slash-command UX; where plugin <code>childBacked</code> opt-ins persist
-(§6 requires durable — pick the mechanism); and when to run the e2ee derive-locally
-path (§8 option 2). The cell sync-off question is not open — it's staged and gated on
+the add-field slash-command UX; whether outline filtering of system field rows reuses
+the <code>hidden</code> definition field or needs its own per-surface bit (§10 — the
+plugin-flip persistence question is resolved: seed-revision bumps, §6); and when to
+run the e2ee derive-locally path (§8 option 2). The cell sync-off question is not open — it's staged and gated on
 the §11 measurements.
 Reference implementation: PR #285 (<code>props-as-childrent-spike-merge</code> — a
 moving branch; this doc's mechanism claims were verified at <code>d33393a9</code> and
 branch-state notes at <code>f4d0b447</code>).
+Companion: <code>docs/schema-unification.html</code> — the identity/registry
+substrate this plan consumes (fieldId = definition block id, the resolution
+primitive, seed-revision flips, the winner gate); its §11.1 is the requirements
+traceability back to this doc.
 Prior art and lineage: <code>docs/properties-model-evolution.md</code> (Thread 2),
 <code>docs/field-level-sync-merge.md</code> (the on-hold alternative),
 PR #55 (rev 1 of this document).
