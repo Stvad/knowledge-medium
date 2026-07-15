@@ -9,6 +9,7 @@ import {
   isValidSeededDefinition,
   materializePropertySeeds,
   propertyDefinitionBlockId,
+  typeDefinitionBlockId,
 } from '@/data/definitionSeeds'
 import {
   propertyDefaultProp,
@@ -86,6 +87,21 @@ describe('property definition identity and payload', () => {
       id: uuidv5(`${WS}:malformed-key`, DEFINITION_SEED_NS),
       workspaceId: WS,
       properties: {[seedKeyProp.name]: 'malformed-key'},
+    })).toBe(false)
+  })
+
+  it('validates a /type/-grammar seed row by the same equation, and rejects one at the wrong id', () => {
+    const typeSeedKey = 'system:kernel-data/type/page'
+    const id = typeDefinitionBlockId(WS, typeSeedKey)
+    expect(isValidSeededDefinition({
+      id,
+      workspaceId: WS,
+      properties: {[seedKeyProp.name]: typeSeedKey},
+    })).toBe(true)
+    expect(isValidSeededDefinition({
+      id: 'wrong-id',
+      workspaceId: WS,
+      properties: {[seedKeyProp.name]: typeSeedKey},
     })).toBe(false)
   })
 

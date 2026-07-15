@@ -64,14 +64,16 @@ const validSeedKeyForRow = (row: SeedIdentityRow): string | undefined => {
   } catch {
     return undefined
   }
-  return isPropertySeedKey(seedKey) && row.id === propertyDefinitionBlockId(row.workspaceId, seedKey)
-    ? seedKey
-    : undefined
+  // Code-seeded under EITHER grammar (property or type). Both kinds hash the
+  // same formula into one shared namespace, so a matching deterministic id for
+  // the row's own workspace is the proof; a key of neither grammar isn't seeded.
+  if (!isPropertySeedKey(seedKey) && !isTypeSeedKey(seedKey)) return undefined
+  return row.id === definitionBlockId(row.workspaceId, seedKey) ? seedKey : undefined
 }
 
 /** A seed:key property alone proves nothing. A row is code-seeded only when
- * the key has declaration grammar and its id satisfies the deterministic
- * equation for that row's own workspace. */
+ * the key has property- OR type-declaration grammar and its id satisfies the
+ * deterministic equation for that row's own workspace. */
 export const isValidSeededDefinition = (row: SeedIdentityRow): boolean =>
   validSeedKeyForRow(row) !== undefined
 
