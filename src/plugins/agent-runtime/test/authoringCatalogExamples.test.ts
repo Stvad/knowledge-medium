@@ -1,5 +1,8 @@
 import * as Babel from '@babel/standalone'
 import {describe, expect, it} from 'vitest'
+import * as extensionApi from '@/extensions/api'
+import {definitionSeedsFacet, propertySchemasFacet} from '@/data/facets'
+import {resolveFacetRuntimeSync, type AppExtension} from '@/facets/facet'
 import {
   describeAuthoringCatalog,
   type AuthoringExample,
@@ -60,6 +63,26 @@ const collectExamples = async (): Promise<Array<{path: string, example: Authorin
     throw new Error('No catalog examples found — the catalog restructured and this test is silently passing')
   }
   return examples
+}
+
+const evaluateCompleteExample = (source: string, filename: string): AppExtension => {
+  const compiled = Babel.transform(source, {
+    filename,
+    presets: ['react', 'typescript'],
+    plugins: ['transform-modules-commonjs'],
+  }).code
+  if (!compiled) throw new Error(`${filename}: Babel returned empty output`)
+
+  const module = {exports: {} as {default?: AppExtension}}
+  const requireExampleImport = (specifier: string): unknown => {
+    if (specifier === '@/extensions/api.js') return extensionApi
+    if (specifier === '@/utils/navigation.js') return {navigate: () => undefined}
+    throw new Error(`${filename}: unexpected example import ${specifier}`)
+  }
+  const evaluate = new Function('require', 'module', 'exports', compiled)
+  evaluate(requireExampleImport, module, module.exports)
+  if (!module.exports.default) throw new Error(`${filename}: no default export`)
+  return module.exports.default
 }
 
 // Capture group 1: the optional `type ` keyword on the whole statement.
@@ -133,6 +156,72 @@ describe('authoring catalog example drift guard', () => {
       missing,
       missing.map(({path, name}) => `${path} imports '${name}' from @/extensions/api.js, but it isn't exported`).join('\n'),
     ).toEqual([])
+  })
+
+  it('every property-bearing example uses block-owned definition seeds', async () => {
+    const examples = await collectExamples()
+    const expectedPaths = [
+      'guides.block-backed-config.examples[0] (Define a prefs type and read/write a setting)',
+      'storage.patterns.settings-via-property-editor-override',
+      'storage.patterns.user-prefs-config',
+    ].sort()
+    const propertyExamples = examples.filter(({example}) =>
+      /seedProperty\s*\(|\bdefineProperty\s*\(|propertySchemasFacet/.test(example.code),
+    )
+    expect(propertyExamples.map(({path}) => path).sort()).toEqual(expectedPaths)
+
+    for (const {path, example} of propertyExamples) {
+      const declarationCount = example.code.match(/seedProperty\(\{/g)?.length ?? 0
+      const dynamicKeyCount = example.code.match(
+        /seedKey:\s*extensionPropertySeedKey\(/g,
+      )?.length ?? 0
+      const contributionCount = example.code.match(
+        /definitionSeedsFacet\.of\(/g,
+      )?.length ?? 0
+
+      expect(declarationCount, `${path}: expected at least one seeded declaration`)
+        .toBeGreaterThan(0)
+      expect(dynamicKeyCount, `${path}: every declaration needs a block-owned key`)
+        .toBe(declarationCount)
+      expect(contributionCount, `${path}: every declaration needs a seed contribution`)
+        .toBe(declarationCount)
+      expect(example.code, `${path}: legacy ambient schemas must stay absent`)
+        .not.toContain('propertySchemasFacet')
+      expect(example.code, `${path}: legacy property constructors must stay absent`)
+        .not.toMatch(/\bdefineProperty\s*\(/)
+    }
+  })
+
+  it('the complete settings example evaluates and contributes definition seeds', async () => {
+    const examples = await collectExamples()
+    const match = examples.find(({path}) =>
+      path === 'storage.patterns.settings-via-property-editor-override',
+    )
+    expect(match).toBeDefined()
+
+    const runtime = resolveFacetRuntimeSync(evaluateCompleteExample(
+      match!.example.code,
+      'settings-via-property-editor-override.tsx',
+    ))
+    expect(runtime.read(definitionSeedsFacet)).toEqual([
+      expect.objectContaining({
+        seedKey: '@extension/property/auto-sync',
+        revision: 1,
+        name: 'readwise:autoSync',
+        presetId: 'boolean',
+        defaultValue: false,
+        changeScope: extensionApi.ChangeScope.UserPrefs,
+      }),
+      expect.objectContaining({
+        seedKey: '@extension/property/interval-minutes',
+        revision: 1,
+        name: 'readwise:intervalMinutes',
+        presetId: 'number',
+        defaultValue: 60,
+        changeScope: extensionApi.ChangeScope.UserPrefs,
+      }),
+    ])
+    expect(runtime.read(propertySchemasFacet).size).toBe(0)
   })
 
   it('parseNamedImportsFromApi extracts runtime imports across syntaxes (skipping types)', () => {

@@ -10,9 +10,9 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.js'
 import { typesProp } from '@/data/properties.js'
 import { typesFacet } from '@/data/facets.js'
 import {
+  definitionSeedsFacet,
   invalidationRulesFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   queriesFacet,
 } from '@/data/facets.js'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.js'
@@ -99,18 +99,20 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(queries.get(GROUPED_BACKLINKS_FOR_BLOCK_QUERY)).toBeDefined()
   })
 
-  it('contributes grouped backlinks property schemas', () => {
+  it('contributes grouped backlinks property seeds', () => {
     const runtime = resolveFacetRuntimeSync(groupedBacklinksDataExtension)
-    const schemas = runtime.read(propertySchemasFacet)
+    const seeds = runtime.read(definitionSeedsFacet)
 
-    expect(schemas.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsProp)
-    expect(schemas.get(groupedBacklinksOverridesProp.name)).toBe(groupedBacklinksOverridesProp)
+    expect(seeds).toEqual(expect.arrayContaining([
+      groupedBacklinksDefaultsProp,
+      groupedBacklinksOverridesProp,
+    ]))
     expect(groupedBacklinksDefaultsProp.defaultValue).toEqual(INITIAL_GROUPED_BACKLINKS_CONFIG)
   })
 
   it('contributes a custom property UI for grouped backlinks defaults', () => {
     const runtime = resolveFacetRuntimeSync(groupedBacklinksPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
+    const schemas = new Map([[groupedBacklinksDefaultsProp.name, groupedBacklinksDefaultsProp]])
     const uis = runtime.read(propertyEditorOverridesFacet)
 
     expect(uis.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsUi)

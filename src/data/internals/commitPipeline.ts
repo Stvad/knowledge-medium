@@ -51,6 +51,7 @@ import {
 } from './txEngine'
 import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import type { BlockCache } from '@/data/blockCache'
+import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
@@ -177,6 +178,15 @@ export interface RunTxParams<R> {
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+  /** Tx-start-captured workspace registry factory. It reads no live runtime
+   * state when the target row's workspace becomes known inside the tx. */
+  propertyDefinitionRegistryForWorkspace: (
+    workspaceId: string,
+  ) => PropertyDefinitionRegistrySnapshot | null
+  /** Active workspace captured with the registry factory at tx start. */
+  propertySchemaWorkspaceId: string | null
+  /** Original declaration-name multiplicity paired with the runtime snapshot. */
+  propertySeedNameCounts: ReadonlyMap<string, number>
 }
 
 export interface TxResult<R> {
@@ -214,6 +224,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, now,
     mutators, processors, sameTxProcessors, propertySchemas,
+    propertyDefinitionRegistryForWorkspace,
+    propertySchemaWorkspaceId,
+    propertySeedNameCounts,
     isReplay = false,
   } = params
   const {scope, description} = opts
@@ -260,6 +273,9 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       mutatorCalls,
       mutators,
       processors,
+      propertyDefinitionRegistryForWorkspace,
+      propertySchemaWorkspaceId,
+      propertySeedNameCounts,
       sameTxEvents,
       now,
       newId,

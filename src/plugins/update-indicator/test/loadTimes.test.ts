@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
+import { definitionSeedsFacet } from '@/data/facets'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { getPluginPrefsBlock } from '@/data/stateBlocks'
 import {
@@ -30,6 +31,11 @@ const makeRepo = (h: TestDb): Repo => {
     user: USER,
     newTxSeq: () => ++txSeq,
   })
+  repo.setRuntimeContributions(
+    definitionSeedsFacet,
+    'test:update-indicator-seeds',
+    [previousLoadTimeProp, currentLoadTimeProp],
+  )
   repo.setActiveWorkspaceId(WS)
   return repo
 }

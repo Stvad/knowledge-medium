@@ -25,6 +25,8 @@ import {
 } from '@/extensions/extensionToggles.js'
 import { Repo } from '../data/repo'
 import { BlockData } from '@/types.js'
+import {definitionSeedsFacet} from '@/data/facets.js'
+import {bindExtensionPropertySeed} from '@/extensions/dynamicExtensionSeeds.js'
 
 export interface ExtensionLoadErrorReporter {
   (blockId: string, error: Error): void
@@ -305,7 +307,14 @@ const prefixContributionSource = (
   const composed = contribution.source
     ? `${blockSource}/${contribution.source}`
     : blockSource
-  const result: FacetContribution<unknown> = {...contribution, source: composed}
+  const value = contribution.facet.id === definitionSeedsFacet.id
+    ? bindExtensionPropertySeed(contribution.value, blockId)
+    : contribution.value
+  const result: FacetContribution<unknown> = {
+    ...contribution,
+    value,
+    source: composed,
+  }
   if (contribution.enables !== undefined) {
     result.enables = validateAndPrefix(contribution.enables, blockId)
   }

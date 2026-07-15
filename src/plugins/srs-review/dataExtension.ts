@@ -1,4 +1,4 @@
-import { propertySchemasFacet, typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, typesFacet } from '@/data/facets.js'
 import type { AppExtension } from '@/facets/facet.js'
 import {
   reviewDeckStartedProp,
@@ -9,9 +9,9 @@ import {
 } from './schema.ts'
 
 export const srsReviewDataExtension: AppExtension = [
-  propertySchemasFacet.of(reviewDeckTagProp, {source: 'srs-review'}),
-  propertySchemasFacet.of(reviewDeckStartedProp, {source: 'srs-review'}),
-  propertySchemasFacet.of(reviewProgressProp, {source: 'srs-review'}),
+  definitionSeedsFacet.of(reviewDeckTagProp, {source: 'srs-review'}),
+  definitionSeedsFacet.of(reviewDeckStartedProp, {source: 'srs-review'}),
+  definitionSeedsFacet.of(reviewProgressProp, {source: 'srs-review'}),
   typesFacet.of(srsReviewDeckType, {source: 'srs-review'}),
   typesFacet.of(srsReviewProgressType, {source: 'srs-review'}),
 ]

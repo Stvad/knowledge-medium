@@ -502,13 +502,15 @@ describe('parseReferences — schema-swap reprojection', () => {
     )).toBeNull()
   })
 
-  it('uses the scheduled schema, not the live registry, when the workspace switched after scheduling', async () => {
+  it('skips the deferred scan for a workspace the user has left (isolation gate)', async () => {
     // A reprojection captures (names, scheduled schemas, workspaceId) atomically
-    // and runs deferred. If the user switches workspace before it fires,
-    // `this._propertySchemas` now reflects the OTHER workspace — reconciling the
-    // scan against it would let the other workspace's schema set strip refs from
-    // the captured workspace's blocks. The scan must fall back to its scheduled
-    // snapshot in that case.
+    // and runs deferred. If the user switches workspace before it fires, the scan
+    // must NOT touch the workspace they've left: reprojecting a non-active
+    // workspace's blocks — even correctly, from the frozen snapshot — violates
+    // workspace isolation. The scan skips instead (the runner's active gate),
+    // deferring WS's backfill to its next open. Skipping ALSO subsumes the older
+    // concern this test guarded — the other workspace's registry can't strip the
+    // captured workspace's refs, because the scan doesn't run at all.
     await env.repo.tx(
       tx => tx.create({
         id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0',
@@ -526,11 +528,9 @@ describe('parseReferences — schema-swap reprojection', () => {
     env.repo.setFacetRuntime(runtimeWithoutReviewer())
     await flush()
 
-    // The WS-scheduled scan still projects reviewer from its own snapshot — it
-    // does NOT read ws-2's empty registry and strip the ref.
-    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
-      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
-    ])
+    // The WS-scheduled scan skipped (WS is no longer active): `src` is neither
+    // backfilled (its ref waits for WS's next open) nor stripped.
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([])
   })
 
   it('does not add a ref for a parked ref-typed backfill after the property is redefined non-ref', async () => {
@@ -1143,5 +1143,51 @@ describe('cleanupOrphanAliases — schema validation at enqueue', () => {
     }, {scope: ChangeScope.BlockDefault})).rejects.toThrow()
     // The tx rolled back — src-bad doesn't exist.
     expect(await env.read('src-bad')).toBeNull()
+  })
+})
+
+describe('parseReferences — workspace-switch reprojection', () => {
+  const reviewerProp = defineProperty<string>('reviewer', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
+
+  beforeEach(async () => {
+    await env.h.cleanup()
+    // `reviewer` is an unscoped static schema → ref-typed in EVERY workspace,
+    // so switching between two workspaces produces an empty ref-ness diff.
+    env = await setup([propertySchemasFacet.of(reviewerProp, {source: 'test'})])
+  })
+
+  it('backfills a newly-opened workspace sharing a ref-typed name with the prior one', async () => {
+    // `ws-1` (the setup default) is the previously-active workspace. Create a
+    // `ws-b` row with a ref value while `ws-b` is inactive, then blank its
+    // derived references to model a row synced from another device that never
+    // ran this client's per-write references processor.
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'srcB',
+        workspaceId: 'ws-b',
+        parentId: null,
+        orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    await env.h.db.execute(`UPDATE blocks SET references_json = '[]' WHERE id = ?`, ['srcB'])
+    expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([])
+
+    // Open `ws-b`: bootstrap pins it, then schedules the once-per-workspace ref
+    // backfill. `reviewer` is ref-typed in both `ws-1` and `ws-b`, so the
+    // prev-vs-new diff is empty — only this workspace-open scan reaches srcB.
+    env.repo.setActiveWorkspaceId('ws-b')
+    env.repo.scheduleWorkspaceRefBackfill('ws-b')
+    await flush()
+
+    expect(JSON.parse((await env.read('srcB'))!.references_json)).toEqual([
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+    ])
   })
 })

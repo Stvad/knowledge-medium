@@ -1,6 +1,6 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
+import { ChangeScope, defineBlockType, seedProperty, type PropertySeedDeclaration } from '@/data/api'
 import { getPluginUIStateBlock } from '@/data/stateBlocks.js'
 
 export const RECENT_BLOCKS_LIMIT = 10
@@ -12,11 +12,16 @@ export const RECENT_BLOCKS_LIMIT = 10
  *  id derived from (workspace, user), so if it does sync the per-device
  *  semantic still holds — each device's quick-find subtree is keyed
  *  to that device's user identity. */
-export const recentBlockIdsProp = defineProperty<string[]>('recentBlockIds', {
-  codec: codecs.list(codecs.string),
+export const recentBlockIdsProp = seedProperty({
+  seedKey: 'system:quick-find/property/recent-block-ids',
+  revision: 1,
+  name: 'recentBlockIds',
+  preset: 'string-list',
   defaultValue: [],
   changeScope: ChangeScope.UiState,
-})
+// The shared string-list core returns a fresh mutable array, but exposes it as
+// readonly. Preserve this handle's historical string[] contract locally.
+}) as PropertySeedDeclaration<string[]>
 
 export const quickFindUIStateType = defineBlockType({
   id: 'quick-find-ui-state',

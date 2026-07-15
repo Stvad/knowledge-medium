@@ -1,5 +1,6 @@
-/** User-defined `'property-schema'` blocks → the `propertySchemasFacet`
- *  `'user-data'` runtime-contribution bucket. See
+/** Property-schema blocks → a workspace-scoped, field-id-keyed projection
+ *  with mandatory metadata and optional locally-buildable behavior. The
+ *  bridge derives the public name-keyed registry from this bucket. See
  *  user-defined-properties.md §5 + §7.
  *
  *  The reactive lifecycle (subscribe / pin / publish / reset+clear on
@@ -11,6 +12,7 @@
 
 import {
   ChangeScope,
+  normalizePresetDefault,
   type AnyPropertySchema,
   type AnyValuePresetCore,
   type BlockData,
@@ -19,12 +21,22 @@ import {
 import type { Repo } from '@/data/repo'
 import type { DefinitionBlockProjector } from '@/data/projectorRuntime'
 import {
+  parsePropertyDefinitionMetadata,
+  type PropertyDefinitionMetadata,
+} from '@/data/propertyDefinitionMetadata'
+import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
+import {resolveSelectedPropertyDefinition} from '@/data/internals/propertySchemaResolution'
+import {
   presetConfigProp,
   presetIdProp,
+  propertyDefaultProp,
   propertyNameProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
-import { propertySchemasFacet } from '@/data/facets'
+import {
+  projectedPropertyDefinitionsFacet,
+} from '@/data/facets'
+import {createChild as createChildMutator} from '@/data/mutators'
 
 /** Projector id for the user-defined property-schema bridge. */
 export const USER_SCHEMAS_PROJECTOR_ID = 'user-schemas'
@@ -51,16 +63,42 @@ const rawPresetConfig = (
   return preset.configCodec.encode(preset.defaultConfig)
 }
 
-/** Validates a schema block against the current presets and returns the
- *  schema if it parses, or null with a logged diagnostic if not. Three
- *  skip paths: (1) preset not loaded, (2) name empty, (3)
- *  configCodec.decode throws. The block stays in the database
+/** Decode the row's stored default with the built codec, falling back to the
+ *  preset default when the stored value is incompatible. An incompatible stored
+ *  default is a stale *value* (e.g. a `null` optional-string default left behind
+ *  when a seed revision — or an out-of-band edit — switches the preset to plain
+ *  string), not a broken codec: the property keeps working with the preset
+ *  default instead of collapsing to metadata-only and losing all behavior.
+ *  Missing default → preset default, unchanged. */
+const decodeStoredDefault = (
+  row: BlockData,
+  preset: AnyValuePresetCore,
+  codec: ReturnType<AnyValuePresetCore['build']>,
+  name: string,
+): unknown => {
+  if (!Object.prototype.hasOwnProperty.call(row.properties, propertyDefaultProp.name)) {
+    return normalizePresetDefault(preset, codec)
+  }
+  try {
+    return codec.decode(row.properties[propertyDefaultProp.name])
+  } catch (err) {
+    console.warn(
+      `[UserSchemasService] schema "${name}" stored default is incompatible with preset ` +
+      `${JSON.stringify(preset.id)}; using the preset default: ${(err as Error).message}`,
+    )
+    return normalizePresetDefault(preset, codec)
+  }
+}
+
+/** Builds optional local behavior for already-validated definition metadata.
+ *  Missing presets and invalid configs return null with a diagnostic. The block stays in the database
  *  untouched; a fix re-runs this on the next subscription tick (or the
  *  `onValuePresetsChange` re-resolve when a missing preset's plugin
  *  loads). */
 const tryBuildSchema = (
   row: BlockData,
   presets: ReadonlyMap<string, AnyValuePresetCore>,
+  metadata: PropertyDefinitionMetadata,
 ): AnyPropertySchema | null => {
   const presetId = peekRowProperty(row, presetIdProp) ?? ''
   if (!presetId) {
@@ -75,11 +113,6 @@ const tryBuildSchema = (
     )
     return null
   }
-  const name = peekRowProperty(row, propertyNameProp) ?? ''
-  if (!name) {
-    console.warn(`[UserSchemasService] schema block ${row.id} has empty propertyName`)
-    return null
-  }
   let config: unknown
   if (preset.configCodec) {
     try {
@@ -87,18 +120,19 @@ const tryBuildSchema = (
       config = preset.configCodec.decode(raw)
     } catch (err) {
       console.warn(
-        `[UserSchemasService] schema "${name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
+        `[UserSchemasService] schema "${metadata.name}" has invalid config: ${(err as Error).message}; skipping until fixed`,
       )
       return null
     }
   } else {
     config = undefined
   }
+  const codec = preset.build(config as never)
   return {
-    name,
-    codec: preset.build(config as never),
-    defaultValue: preset.defaultValue,
-    changeScope: ChangeScope.BlockDefault,
+    name: metadata.name,
+    codec,
+    defaultValue: decodeStoredDefault(row, preset, codec, metadata.name),
+    changeScope: metadata.changeScope,
   }
 }
 
@@ -106,13 +140,29 @@ const tryBuildSchema = (
  *  lifecycle. Raw `BlockData` rows (no hydrate — see `peekRowProperty`);
  *  re-resolves on `onValuePresetsChange` so a schema skipped for an
  *  unknown preset resolves when that preset's plugin loads. */
-export const userSchemasProjector: DefinitionBlockProjector<BlockData, AnyPropertySchema> = {
+export const userSchemasProjector: DefinitionBlockProjector<
+  BlockData,
+  ProjectedPropertyDefinition
+> = {
   id: USER_SCHEMAS_PROJECTOR_ID,
   metaType: PROPERTY_SCHEMA_TYPE,
-  targetFacet: propertySchemasFacet,
+  targetFacet: projectedPropertyDefinitionsFacet,
   sourceId: USER_DATA_SOURCE_ID,
-  keyOf: schema => schema.name,
-  project: (row, ctx) => tryBuildSchema(row, ctx.repo.valuePresetCores),
+  keyOf: definition => definition.metadata.fieldId,
+  project: (row, ctx) => {
+    const metadata = parsePropertyDefinitionMetadata(row)
+    if (!metadata) return null
+    let schema: AnyPropertySchema | null = null
+    try {
+      schema = tryBuildSchema(row, ctx.repo.valuePresetCores, metadata)
+    } catch (error) {
+      console.warn(
+        `[UserSchemasService] schema block ${row.id} behavior failed; publishing metadata only`,
+        error,
+      )
+    }
+    return {metadata, ...(schema ? {schema} : {})}
+  },
   secondarySignal: (repo, rebuild) => repo.onValuePresetsChange(rebuild),
 }
 
@@ -126,51 +176,51 @@ export interface AddSchemaArgs {
   config?: unknown
 }
 
-/** Thin facade over the `'user-schemas'` projector. Holds no state of
- *  its own — the lifecycle + the contribution list / id maps live in
- *  the projector's `ProjectorHandle`, reached through `repo.projectors`.
- *  Singleton on `Repo` so imperative call sites (AddPropertyForm, the
- *  Roam importer) all hit the same in-memory bucket. */
+/** Thin facade over the `'user-schemas'` projector. Projector lifecycle,
+ * contribution state, and indexes live in the `ProjectorHandle`, reached
+ * through `repo.projectors`; this facade owns only in-flight name reservations
+ * that serialize same-Repo creation attempts. Singleton on `Repo` so
+ * imperative callers share both the projector generation and reservations. */
 export class UserSchemasService {
+  private readonly pendingCreations = new Set<string>()
+
   constructor(private readonly repo: Repo) {}
 
   private get handle() {
-    return this.repo.projectors.handle<AnyPropertySchema>(USER_SCHEMAS_PROJECTOR_ID)
+    return this.repo.projectors.handle<ProjectedPropertyDefinition>(USER_SCHEMAS_PROJECTOR_ID)
   }
 
-  /** Start the schema projector for the active workspace. Returns a
-   *  disposer; throws on double-start / no active workspace. */
-  start(): () => void {
-    return this.repo.projectors.startById(USER_SCHEMAS_PROJECTOR_ID)
-  }
-
-  dispose(): void {
-    this.repo.projectors.disposeProjector(USER_SCHEMAS_PROJECTOR_ID)
-  }
-
-  /** Look up the property-schema block id for a registered user-data
-   *  schema name. Returns undefined for kernel/plugin schemas (which
-   *  don't have backing blocks) or names that aren't registered. */
+  /** Look up the selected live definition block id for a schema name.
+   * Returns undefined while a seed exists only in synthesis (its deterministic
+   * row has not materialized yet), or when the name has no live definition. */
   getSchemaBlockId(name: string): string | undefined {
-    return this.handle?.blockIdForKey(name)
+    return this.repo.propertyDefinitions?.definitionsByName.get(name)?.[0]?.fieldId
   }
 
-  /** Look up the published user-data schema for a property-schema
-   *  block id. Returns undefined for blocks that aren't currently
-   *  materializing a schema — including blocks pending hydration,
-   *  blocks failing `tryBuildSchema` validation (empty name, unknown
-   *  preset, invalid config), and ids that simply don't exist. */
+  /** Resolve a property-definition block id through the selected workspace
+   * winner. Metadata-only seeded rows use their declaration behavior; unknown,
+   * invalid, and shadowed rows return undefined. */
   getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined {
-    return this.handle?.contributionForBlockId(blockId)
+    const definition = this.handle?.contributionForBlockId(blockId)
+    if (!definition) return undefined
+    return resolveSelectedPropertyDefinition(
+      definition.metadata,
+      this.repo.propertySchemaResolverFor(definition.metadata.workspaceId),
+    )
   }
 
-  /** Synchronously add a user-data schema to the runtime bucket. Used
+  /** Synchronously add a projected definition to the runtime bucket. Used
    *  by `addSchema` after persisting the schema block — registers
    *  before any dependent property write so the form's "create-then-
    *  write-initial-value" flow doesn't race the subscription tick.
    *  `blockId` is the property-schema block that produced `schema`. */
-  appendUserSchema(schema: AnyPropertySchema, blockId: string): void {
-    this.handle?.upsert(schema, blockId)
+  appendUserSchema(schema: AnyPropertySchema, blockId: string, workspaceId: string): void {
+    const row = this.repo.block(blockId).peek()
+    const metadata = row ? parsePropertyDefinitionMetadata(row) : null
+    if (!metadata) {
+      throw new Error(`[UserSchemasService] cannot publish metadata for schema block ${blockId}`)
+    }
+    this.handle?.upsert({metadata, schema}, blockId, workspaceId)
   }
 
   /** Create a property-schema block in the workspace's Properties
@@ -179,6 +229,22 @@ export class UserSchemasService {
   async addSchema(args: AddSchemaArgs): Promise<AnyPropertySchema> {
     const name = args.name.trim()
     if (!name) throw new Error('[addSchema] name is required')
+
+    // Capture the generation before the first await. Creation is a
+    // definition-identity write: synthesis is available synchronously, but
+    // existing user definitions are complete only after this workspace's
+    // projector has delivered its first tick.
+    const workspaceId = this.repo.activeWorkspaceId
+    const propertiesPageId = this.repo.propertiesPageId
+    const generationToken = this.repo.projectors.generationToken
+    if (
+      !workspaceId ||
+      !propertiesPageId ||
+      generationToken === null ||
+      this.repo.projectors.workspaceId !== workspaceId
+    ) {
+      throw new Error('[addSchema] no active workspace; properties page unavailable')
+    }
 
     const preset = this.repo.valuePresetCores.get(args.presetId)
     if (!preset) {
@@ -217,41 +283,82 @@ export class UserSchemasService {
       ? preset.configCodec.encode(parsedConfig as never)
       : {}
 
-    const workspaceId = this.repo.activeWorkspaceId
-    const propertiesPageId = this.repo.propertiesPageId
-    if (!workspaceId || !propertiesPageId) {
-      throw new Error('[addSchema] no active workspace; properties page unavailable')
+    const reservationKey = `${workspaceId}\u0000${name}`
+    if (this.pendingCreations.has(reservationKey)) {
+      throw new Error(`[addSchema] name ${JSON.stringify(name)} is already being created`)
     }
+    this.pendingCreations.add(reservationKey)
+    try {
+      const handle = this.handle
+      if (!handle) throw new Error('[addSchema] user-schemas projector unavailable')
+      const assertGeneration = (phase: 'creation' | 'registration'): void => {
+        if (
+          this.repo.activeWorkspaceId !== workspaceId ||
+          this.repo.projectors.generationToken !== generationToken ||
+          !handle.isPrimedFor(workspaceId)
+        ) {
+          throw new Error(`[addSchema] active workspace generation changed before schema ${phase}`)
+        }
+      }
+      const assertNameAvailable = (): void => {
+        const registry = this.repo.propertyDefinitions
+        if (!registry || registry.workspaceId !== workspaceId) {
+          throw new Error('[addSchema] property definitions unavailable for active workspace')
+        }
+        const definition = registry.definitionsByName.get(name)?.[0]
+        const declaration = registry.seedsByName.get(name)?.[0]
+        if (definition || declaration) {
+          const claimant = declaration
+            ? `seed ${JSON.stringify(declaration.seedKey)}`
+            : `definition ${JSON.stringify(definition!.fieldId)}`
+          throw new Error(`[addSchema] name ${JSON.stringify(name)} is already claimed by ${claimant}`)
+        }
+      }
+      try {
+        await handle.whenPrimed(workspaceId)
+      } catch (error) {
+        if (
+          this.repo.activeWorkspaceId !== workspaceId ||
+          this.repo.projectors.generationToken !== generationToken
+        ) {
+          throw new Error(
+            '[addSchema] active workspace generation changed before schema creation',
+            {cause: error},
+          )
+        }
+        throw error
+      }
+      assertGeneration('creation')
+      assertNameAvailable()
 
-    const childId: string = await this.repo.mutate.createChild({
-      parentId: propertiesPageId,
-      position: {kind: 'last'},
-    })
+      const childId = await this.repo.tx(async tx => {
+        // Recheck after acquiring the write transaction and immediately before
+        // return. A queued write must not commit against a projector generation
+        // or seed/name registry that changed after the optimistic preflight.
+        assertGeneration('creation')
+        assertNameAvailable()
+        const id = await tx.run(createChildMutator, {
+          parentId: propertiesPageId,
+          position: {kind: 'last'},
+        })
+        // Lift property-schema type membership through Repo.addTypeInTx
+        // so types invariants stay consistent (block_types row + the
+        // typesProp lift). The remaining property-schema fields are
+        // written directly since they're scoped to this block.
+        await this.repo.addTypeInTx(tx, id, PROPERTY_SCHEMA_TYPE, {})
+        await tx.setProperty(id, propertyNameProp, name)
+        await tx.setProperty(id, presetIdProp, args.presetId)
+        await tx.setProperty(id, presetConfigProp, persistConfig as Record<string, unknown>)
+        assertGeneration('creation')
+        assertNameAvailable()
+        return id
+      }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
 
-    await this.repo.tx(async tx => {
-      // Lift property-schema type membership through Repo.addTypeInTx
-      // so types invariants stay consistent (block_types row + the
-      // typesProp lift). The remaining property-schema fields are
-      // written directly since they're scoped to this block.
-      await this.repo.addTypeInTx(tx, childId, PROPERTY_SCHEMA_TYPE, {})
-      await tx.setProperty(childId, propertyNameProp, name)
-      await tx.setProperty(childId, presetIdProp, args.presetId)
-      await tx.setProperty(childId, presetConfigProp, persistConfig as Record<string, unknown>)
-    }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
-
-    // Register synchronously, before returning — but only if the workspace
-    // didn't change while the create/tx was in flight. The schema block is
-    // durably persisted under `workspaceId`'s Properties page; publishing it
-    // into the (workspace-agnostic) 'user-data' bucket after a switch would
-    // leak it into the new workspace. The projector's `disposed` guard can't
-    // catch this — the per-projector container is reused and re-armed across
-    // the switch — so the in-flight write is pinned to its workspace here.
-    // Skipping is safe: when `workspaceId` is active again, its subscription
-    // re-materialises the block. The subscription otherwise arrives at an
-    // idempotent state.
-    if (this.repo.activeWorkspaceId === workspaceId) {
-      this.appendUserSchema(newSchema, childId)
+      assertGeneration('registration')
+      this.appendUserSchema(newSchema, childId, workspaceId)
+      return newSchema
+    } finally {
+      this.pendingCreations.delete(reservationKey)
     }
-    return newSchema
   }
 }

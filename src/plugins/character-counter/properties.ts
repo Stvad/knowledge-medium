@@ -13,24 +13,37 @@
  *  plugins provide platform-specific counting hooks through
  *  `characterCountProfilesFacet`. */
 
-import { ChangeScope, codecs, defineProperty } from '@/data/api'
+import { ChangeScope, seedProperty } from '@/data/api'
 
 export type CharacterCounterScope = 'self' | 'children'
 
-export const charLimitProp = defineProperty<number | undefined>('char:limit', {
-  codec: codecs.optionalNumber,
+export const charLimitProp = seedProperty({
+  seedKey: 'system:character-counter/property/limit',
+  revision: 1,
+  name: 'char:limit',
+  preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const charScopeProp = defineProperty<CharacterCounterScope>('char:scope', {
-  codec: codecs.enum(['self', 'children']),
+export const charScopeProp = seedProperty<CharacterCounterScope>({
+  seedKey: 'system:character-counter/property/scope',
+  revision: 1,
+  name: 'char:scope',
+  preset: 'strict-enum',
+  config: {options: [
+    {value: 'self', label: 'self'},
+    {value: 'children', label: 'children'},
+  ]},
   defaultValue: 'self',
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const charProfileProp = defineProperty<string | undefined>('char:profile', {
-  codec: codecs.optionalString,
+export const charProfileProp = seedProperty({
+  seedKey: 'system:character-counter/property/profile',
+  revision: 1,
+  name: 'char:profile',
+  preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })

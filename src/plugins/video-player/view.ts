@@ -1,7 +1,6 @@
 import {
   ChangeScope,
-  codecs,
-  defineProperty,
+  seedProperty,
 } from '@/data/api'
 
 /** The pane view mode (`panelViewModeProp` / the `;view=` URL key) under
@@ -12,8 +11,11 @@ export const VIDEO_NOTES_VIEW_MODE = 'video-notes'
 
 export const DEFAULT_VIDEO_NOTES_PANE_RATIO = 0.8
 
-export const videoNotesPaneRatioProp = defineProperty<number>('video:notesPaneRatio', {
-  codec: codecs.number,
+export const videoNotesPaneRatioProp = seedProperty({
+  seedKey: 'system:video-player/property/notes-pane-ratio',
+  revision: 1,
+  name: 'video:notesPaneRatio',
+  preset: 'number',
   defaultValue: DEFAULT_VIDEO_NOTES_PANE_RATIO,
   changeScope: ChangeScope.UserPrefs,
 })

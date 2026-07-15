@@ -31,15 +31,26 @@ import type {
   AnyValuePresetCore,
   TypeContribution,
 } from '@/data/api'
-import type { Facet, FacetRuntime } from '@/facets/facet'
+import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  buildPropertyDefinitionRegistry,
+  buildUnboundPropertySchemas,
+} from '@/data/propertyDefinitionRegistry'
+import type {
+  Facet,
+  FacetRuntime,
+  WorkspaceRuntimeContributionOptions,
+} from '@/facets/facet'
 import { CallbackSet } from '@/utils/callbackSet'
 import type { InvalidationRule } from './invalidation'
 import {
   invalidationRulesFacet,
+  definitionSeedsFacet,
   mutatorsFacet,
   postCommitProcessorsFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
+  projectedPropertyDefinitionsFacet,
   queriesFacet,
   sameTxProcessorsFacet,
   typesFacet,
@@ -59,6 +70,8 @@ interface RebuildStep {
   readonly id: string
   readonly inputs: readonly Facet<unknown, unknown>[]
   readonly run: (runtime: FacetRuntime) => void
+  /** Re-run synchronously when the active-workspace read filter changes. */
+  readonly workspaceScoped?: boolean
 }
 
 /** Sink the bridge writes facet-derived state into — implemented by `Repo`
@@ -68,6 +81,13 @@ export interface FacetBridgeTarget {
   /** Current merged property-schema map, read as the "before" snapshot for
    *  the ref-change diff that decides whether a swap needs reprojection. */
   getPropertySchemas(): ReadonlyMap<string, AnyPropertySchema>
+  /** Whether the workspace's persisted property-definition projection has
+   * produced its first complete result. Seed synthesis must not claim names
+   * before this is true: an empty projection and a not-yet-loaded projection
+   * have different winner semantics. */
+  getPropertyDefinitionProjector(): {
+    isPrimedFor(workspaceId: string): boolean
+  } | undefined
   applyMutators(mutators: Map<string, AnyMutator>): void
   applyProcessors(processors: Map<string, AnyPostCommitProcessor>): void
   applySameTxProcessors(processors: Map<string, AnySameTxProcessor>): void
@@ -76,6 +96,8 @@ export interface FacetBridgeTarget {
   applyTypesAndSchemas(
     types: ReadonlyMap<string, TypeContribution>,
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+    propertyDefinitions: PropertyDefinitionRegistrySnapshot | null,
+    propertySeedNameCounts: ReadonlyMap<string, number>,
   ): void
   applyPropertyEditorOverrides(overrides: ReadonlyMap<string, AnyPropertyEditorOverride>): void
   applyValuePresetCores(presets: ReadonlyMap<string, AnyValuePresetCore>): void
@@ -92,6 +114,10 @@ export class FacetBridge {
   /** Currently-installed FacetRuntime. Null until the first
    *  `setFacetRuntime` call. */
   private runtime: FacetRuntime | null = null
+  private activeWorkspaceId: string | null = null
+  /** Workspace-scoped inputs may each notify during a filter flip. Their
+   * owning steps run once after the runtime reaches the complete new view. */
+  private workspacePinInProgress = false
   /** Per-facet listener disposers from `onFacetChange` registrations.
    *  Cleared when `setFacetRuntime` swaps to a fresh runtime — old
    *  listeners would fire against stale rebuild closures otherwise. */
@@ -147,6 +173,7 @@ export class FacetBridge {
     // merged view on first read (no flicker through a state where
     // user-data is missing and then re-added).
     if (previous) runtime.adoptDurableContributionsFrom(previous)
+    runtime.setActiveWorkspaceId(this.activeWorkspaceId)
 
     // Run every rebuild step on the fresh runtime.
     for (const step of this.rebuildSteps) step.run(runtime)
@@ -163,7 +190,10 @@ export class FacetBridge {
     }
     for (const [facetId, steps] of stepsByFacetId) {
       const unsub = runtime.onFacetChange(facetId, () => {
-        for (const step of steps) step.run(runtime)
+        for (const step of steps) {
+          if (this.workspacePinInProgress && step.workspaceScoped) continue
+          step.run(runtime)
+        }
       })
       this.runtimeFacetUnsubs.push(unsub)
     }
@@ -181,11 +211,32 @@ export class FacetBridge {
     facet: Facet<Input, unknown>,
     sourceId: string,
     contributions: readonly Input[],
+    options?: WorkspaceRuntimeContributionOptions,
   ): void {
     if (!this.runtime) {
       throw new Error('[FacetBridge.setRuntimeContributions] called before setFacetRuntime')
     }
-    this.runtime.setRuntimeContributions(facet, sourceId, contributions, { durable: true })
+    this.runtime.setRuntimeContributions(facet, sourceId, contributions, {
+      durable: true,
+      workspaceId: options?.workspaceId,
+    })
+  }
+
+  /** Synchronously flip the workspace filter on the installed runtime.
+   * The pin is retained across future runtime swaps. */
+  setActiveWorkspaceId(workspaceId: string | null): void {
+    this.activeWorkspaceId = workspaceId
+    if (this.runtime) {
+      this.workspacePinInProgress = true
+      try {
+        this.runtime.setActiveWorkspaceId(workspaceId)
+      } finally {
+        this.workspacePinInProgress = false
+      }
+      for (const step of this.rebuildSteps) {
+        if (step.workspaceScoped) step.run(this.runtime)
+      }
+    }
   }
 
   onPropertySchemasChange(listener: () => void): () => void {
@@ -204,9 +255,22 @@ export class FacetBridge {
     return this.valuePresetsListeners.add(listener)
   }
 
-  /** Rebuild step list. Order matters: types runs before propertySchemas
-   *  (the merge folds in type-lifted schemas); propertySchemas runs before
-   *  the query swap if a future step ever needs it. */
+  private unavailableActiveWorkspaceId(): string | null {
+    const projector = this.target.getPropertyDefinitionProjector()
+    return this.activeWorkspaceId
+      && projector?.isPrimedFor(this.activeWorkspaceId) === false
+      ? this.activeWorkspaceId
+      : null
+  }
+
+  private canBuildPropertyDefinitionsForWorkspace(workspaceId: string): boolean {
+    return workspaceId !== this.unavailableActiveWorkspaceId()
+  }
+
+  /** Rebuild step list. Order matters: value presets run before property
+   * schemas so a runtime swap re-resolves block behavior against the incoming
+   * cores before the final registry snapshot; types are read by the schema
+   * step for the transitional type lift. */
   private makeRebuildSteps(): readonly RebuildStep[] {
     const target = this.target
     return [
@@ -236,18 +300,65 @@ export class FacetBridge {
         run: (rt) => { target.applyWorkspaceBackfills(rt.read(workspaceBackfillsFacet)) },
       },
       {
+        id: 'valuePresets',
+        inputs: [
+          valuePresetCoresFacet as Facet<unknown, unknown>,
+          valuePresetPresentationsFacet as Facet<unknown, unknown>,
+        ],
+        // Fires on any core/presentation change so `userSchemasService`
+        // re-resolves schemas when a preset's plugin loads.
+        run: (rt) => {
+          const presets = readValuePresetRegistry(rt)
+          target.applyValuePresetCores(presets.cores)
+          this.valuePresetsListeners.notify()
+        },
+      },
+      {
         // Reads typesFacet AND propertySchemasFacet — both inputs feed
         // mergeLiftedSchemas, so a change to either re-runs the merge.
         id: 'propertySchemas',
         inputs: [
           typesFacet as Facet<unknown, unknown>,
           propertySchemasFacet as Facet<unknown, unknown>,
+          projectedPropertyDefinitionsFacet as Facet<unknown, unknown>,
+          definitionSeedsFacet as Facet<unknown, unknown>,
         ],
+        workspaceScoped: true,
         run: (rt) => {
           const previousPropertySchemas = target.getPropertySchemas()
           const types = rt.read(typesFacet)
-          const propertySchemas = mergeLiftedSchemas(rt.read(propertySchemasFacet), types)
-          target.applyTypesAndSchemas(types, propertySchemas)
+          const legacySchemas = mergeLiftedSchemas(rt.read(propertySchemasFacet), types)
+          const seeds = rt.read(definitionSeedsFacet)
+          const propertySeedNameCounts = new Map<string, number>()
+          for (const seed of seeds) {
+            propertySeedNameCounts.set(
+              seed.name,
+              (propertySeedNameCounts.get(seed.name) ?? 0) + 1,
+            )
+          }
+          const propertyDefinitions = this.activeWorkspaceId
+            && this.canBuildPropertyDefinitionsForWorkspace(this.activeWorkspaceId)
+            ? buildPropertyDefinitionRegistry({
+              workspaceId: this.activeWorkspaceId,
+              legacySchemas,
+              projectedDefinitions: rt.read(projectedPropertyDefinitionsFacet),
+              seeds,
+            })
+            : null
+          const propertySchemas = propertyDefinitions?.schemas
+            ?? buildUnboundPropertySchemas(legacySchemas, seeds)
+          target.applyTypesAndSchemas(
+            types,
+            propertySchemas,
+            propertyDefinitions,
+            propertySeedNameCounts,
+          )
+          // Reproject rows whose ref-ness changed in this rebuild (e.g. a plugin
+          // load makes a name ref-typed). A newly-OPENED workspace's existing
+          // rows are handled separately, once per workspace, by
+          // `scheduleWorkspaceRefBackfill` from `bootstrapWorkspace` — the
+          // prev-vs-new diff here can't see them when a ref-typed name is
+          // unchanged from the previously-active workspace.
           const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, propertySchemas)
           if (refSchemaChanges.length > 0) {
             target.scheduleReprojection(refSchemaChanges, propertySchemas)
@@ -269,20 +380,6 @@ export class FacetBridge {
         run: (rt) => {
           target.applyPropertyEditorOverrides(rt.read(propertyEditorOverridesFacet))
           this.propertyEditorOverridesListeners.notify()
-        },
-      },
-      {
-        id: 'valuePresets',
-        inputs: [
-          valuePresetCoresFacet as Facet<unknown, unknown>,
-          valuePresetPresentationsFacet as Facet<unknown, unknown>,
-        ],
-        // Fires `onValuePresetsChange` on any core/presentation change so
-        // `userSchemasService` re-resolves schemas when a preset's plugin loads.
-        run: (rt) => {
-          const presets = readValuePresetRegistry(rt)
-          target.applyValuePresetCores(presets.cores)
-          this.valuePresetsListeners.notify()
         },
       },
       {

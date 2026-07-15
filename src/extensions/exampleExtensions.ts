@@ -37,10 +37,10 @@ export interface ExampleExtensionDefinition {
 const HELLO_RENDERER_SOURCE = `import {
   blockContentRendererFacet,
   ChangeScope,
-  codecs,
-  defineProperty,
+  definitionSeedsFacet,
   defineVariant,
-  propertySchemasFacet,
+  extensionPropertySeedKey,
+  seedProperty,
 } from '@/extensions/api.js'
 
 // Variant on blockContentRendererFacet: contributes an alternative
@@ -51,8 +51,11 @@ const HELLO_RENDERER_SOURCE = `import {
 // content area inside DefaultBlockRenderer — the rest of the block
 // chrome is untouched.
 
-const helloProp = defineProperty('user:hello', {
-  codec: codecs.boolean,
+const helloProp = seedProperty({
+  seedKey: extensionPropertySeedKey('hello'),
+  revision: 1,
+  name: 'user:hello',
+  preset: 'boolean',
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
 })
@@ -69,7 +72,7 @@ const HelloContent = ({ block }) => (
 export default [
   // Register the schema so the value-preset / property-editor lookups
   // can find this prop, and describeRuntime can list it.
-  propertySchemasFacet.of(helloProp),
+  definitionSeedsFacet.of(helloProp),
   blockContentRendererFacet.of((ctx) => {
     if (!ctx.block.peekProperty(helloProp)) return null
     return defineVariant('user.hello', 'Hello', HelloContent)
@@ -132,10 +135,10 @@ const EMOJI_REACT_SOURCE = `import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   ChangeScope,
-  codecs,
-  defineProperty,
+  definitionSeedsFacet,
+  extensionPropertySeedKey,
   isSelectionClick,
-  propertySchemasFacet,
+  seedProperty,
 } from '@/extensions/api.js'
 
 // Multi-facet plugin: an action, a click handler, and a content
@@ -147,8 +150,11 @@ const EMOJI_REACT_SOURCE = `import {
 // custom 'renderer: hello-renderer' property still gets its reactions
 // row.
 
-const reactionsProp = defineProperty('user:reactions', {
-  codec: codecs.list(codecs.string),
+const reactionsProp = seedProperty({
+  seedKey: extensionPropertySeedKey('reactions'),
+  revision: 1,
+  name: 'user:reactions',
+  preset: 'string-list',
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
@@ -170,7 +176,7 @@ const cycleReaction = async (block) => {
 export default [
   // Register the schema so the codec/editor lookups know about this
   // property and describeRuntime can list it.
-  propertySchemasFacet.of(reactionsProp),
+  definitionSeedsFacet.of(reactionsProp),
 
   // Click on a block while holding Alt to add a reaction.
   blockClickHandlersFacet.of((ctx) => (event) => {
@@ -252,10 +258,10 @@ export default [
 const SPLIT_LAYOUT_SOURCE = `import {
   blockLayoutFacet,
   ChangeScope,
-  codecs,
-  defineProperty,
+  definitionSeedsFacet,
   defineVariant,
-  propertySchemasFacet,
+  extensionPropertySeedKey,
+  seedProperty,
 } from '@/extensions/api.js'
 
 // blockLayoutFacet contributions arrange the four slots (Content,
@@ -270,8 +276,12 @@ const SPLIT_LAYOUT_SOURCE = `import {
 // arranges the slots; the slots' insides are still resolved through
 // the rest of the registry.
 
-const layoutProp = defineProperty('user:layout', {
-  codec: codecs.string,
+const layoutProp = seedProperty({
+  seedKey: extensionPropertySeedKey('layout'),
+  revision: 1,
+  name: 'user:layout',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -301,7 +311,7 @@ const SplitLayout = ({ Content, Children, Properties, Footer }) => (
 export default [
   // Register the schema so describeRuntime / property-editor lookups
   // know about this property.
-  propertySchemasFacet.of(layoutProp),
+  definitionSeedsFacet.of(layoutProp),
   blockLayoutFacet.of((ctx) => {
     if (ctx.block.peekProperty(layoutProp) !== 'split') return null
     return defineVariant('split', 'Split (content / children)', SplitLayout)

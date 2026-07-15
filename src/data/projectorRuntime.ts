@@ -5,7 +5,8 @@
  *  contribution per matching block, and publishes the set into a
  *  facet's `'user-data'` runtime-contribution bucket. Two instances
  *  exist today and were hand-copied then DIVERGED:
- *    - `UserSchemasService` — `'property-schema'` blocks → `propertySchemasFacet`
+ *    - `UserSchemasService` — `'property-schema'` blocks →
+ *      `projectedPropertyDefinitionsFacet` (the bridge derives `propertySchemas`)
  *    - `UserTypesService`   — `'block-type'`    blocks → `typesFacet`
  *
  *  This module owns the ONE copy of the safety-critical lifecycle the
@@ -15,10 +16,9 @@
  *    - a `primed` gate so a cross-projector publish on the secondary
  *      signal during a workspace-switch handoff can't rebuild against
  *      rows this projector doesn't own yet;
- *    - on dispose: reset in-memory state AND clear the bucket (the Repo
- *      is a per-user singleton reused across workspace switches and
- *      `setFacetRuntime` carries durable buckets forward, so a stale
- *      bucket would leak into the next workspace until its first tick);
+ *    - on dispose: reset in-memory state AND clear the captured workspace's
+ *      bucket (scoped filtering prevents visibility leaks; clearing bounds
+ *      durable state and forces a current-row rebuild on restart);
  *    - one `disposed` flag checked before every synchronous publish, so a
  *      publish from a torn-down container (a queued subscription/secondary
  *      callback, or a write landing during the dispose→restart gap) can't
@@ -50,16 +50,48 @@ import { definitionBlockProjectorFacet } from '@/data/facets'
  *  rather than reaching into the lifecycle. */
 export interface ProjectorHandle<Contribution = unknown> {
   /** Block id that materialised the contribution registered under
-   *  `key` (a schema name / a type id). */
+   *  `key` (a definition field id / a type id). */
   blockIdForKey(key: string): string | undefined
   /** Contribution currently materialised from `blockId`. */
   contributionForBlockId(blockId: string): Contribution | undefined
   /** Synchronously upsert one contribution and publish — the
    *  schemas `addSchema` path registers before the subscription tick.
-   *  No-op once the container is disposed (guards a publish from a
-   *  torn-down container; see the module header for the cross-workspace
-   *  limit this does NOT cover). */
-  upsert(contribution: Contribution, blockId: string): void
+   *  Requires a Repo-pinned projector generation: calling before the first
+   *  pin throws, while a disposed generation or a different workspace
+   *  no-ops. The explicit workspace plus lifecycle generation prevent an
+   *  outgoing async path from publishing through a container re-armed
+   *  elsewhere. */
+  upsert(contribution: Contribution, blockId: string, workspaceId: string): void
+  isPrimedFor(workspaceId: string): boolean
+  whenPrimed(workspaceId: string): Promise<void>
+}
+
+type PrimeOutcome =
+  | {readonly kind: 'primed'}
+  | {readonly kind: 'cancelled'}
+  | {readonly kind: 'failed'; readonly error: unknown}
+
+interface PrimeDeferred {
+  readonly workspaceId: string
+  readonly generation: number
+  readonly promise: Promise<PrimeOutcome>
+  settle(outcome: PrimeOutcome): void
+}
+
+const createPrimeDeferred = (workspaceId: string, generation: number): PrimeDeferred => {
+  let settlePromise!: (outcome: PrimeOutcome) => void
+  let settled = false
+  const promise = new Promise<PrimeOutcome>(resolve => { settlePromise = resolve })
+  return {
+    workspaceId,
+    generation,
+    promise,
+    settle: outcome => {
+      if (settled) return
+      settled = true
+      settlePromise(outcome)
+    },
+  }
 }
 
 /** Handed to a descriptor's `project` / `hydrate` so it can reach the
@@ -92,7 +124,7 @@ export interface DefinitionBlockProjector<
   readonly dependsOn?: readonly string[]
   /** Build a contribution from a row, or null to skip it. */
   project(row: Row, ctx: ProjectorBuildContext): Contribution | null
-  /** Registry key for a contribution (schema name / type id) — drives
+  /** Registry key for a contribution (definition field id / type id) — drives
    *  the `blockIdForKey` index. */
   keyOf(contribution: Contribution): string
   /** Map the delivered raw rows into the form `project` expects.
@@ -119,7 +151,7 @@ export type AnyDefinitionBlockProjector = DefinitionBlockProjector<any, any>
 class ProjectorLifecycle<Row extends { id: string }, Contribution>
   implements ProjectorHandle<Contribution> {
   private contributions: readonly Contribution[] = []
-  /** key (schema name / type id) -> source block id. */
+  /** descriptor key (definition field id / type id) -> source block id. */
   private byKey = new Map<string, string>()
   /** source block id -> resolved contribution. */
   private byBlockId = new Map<string, Contribution>()
@@ -132,12 +164,14 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
   /** True once the workspace-pinned subscription has delivered its
    *  first tick. Gates the secondary-signal rebuild. */
   private primed = false
-  /** False until dispose(); the in-flight-write guard (see module
-   *  header). Starts false so the synchronous write path (`upsert`,
-   *  used by schemas' `addSchema`) works even when the subscription was
-   *  never started — e.g. the Roam importer registers schemas in batch
-   *  without a live workspace subscription. `start()` re-arms it after a
-   *  prior dispose so a reused container publishes again. */
+  private pinnedWorkspaceId: string | null = null
+  /** Monotonic lifecycle token: callbacks captured by an outgoing workspace
+   * cannot publish after the persistent container is re-armed for another. */
+  private generation = 0
+  private primeDeferred: PrimeDeferred | null = null
+  /** False until dispose(); the in-flight-write guard (see module header).
+   * Repo pinning starts the lifecycle before imperative schema writes; a
+   * later workspace re-arms the persistent container with a new generation. */
   private disposed = false
 
   constructor(
@@ -146,52 +180,76 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
     private readonly ctx: ProjectorBuildContext,
   ) {}
 
-  start(): void {
+  start(workspaceId: string): void {
     if (this.subscriptionDisposer) {
       throw new Error(`[projector ${this.descriptor.id}] already started`)
     }
-    // Pin the workspace at start() time. The driver restarts projectors
-    // on workspace switch, so capturing here pairs the subscription's
-    // lifetime to one workspace explicitly.
-    const workspaceId = this.repo.activeWorkspaceId
     if (!workspaceId) {
       throw new Error(`[projector ${this.descriptor.id}] no active workspace at start()`)
+    }
+    if (this.pinnedWorkspaceId && this.pinnedWorkspaceId !== workspaceId) {
+      this.clearWorkspaceBucket(this.pinnedWorkspaceId)
+      this.resetState()
     }
     // Re-arm after a prior dispose (the container is reused across
     // workspace switches; see ProjectorRuntime).
     this.disposed = false
+    this.pinnedWorkspaceId = workspaceId
+    const generation = ++this.generation
+    this.primeDeferred = createPrimeDeferred(workspaceId, generation)
 
-    this.subscriptionDisposer = this.repo.subscribeBlocks(
-      { workspaceId, types: [this.descriptor.metaType] },
-      rows => this.rebuild(this.hydrate(rows)),
-    )
+    try {
+      this.subscriptionDisposer = this.repo.subscribeBlocks(
+        { workspaceId, types: [this.descriptor.metaType] },
+        rows => {
+          if (this.disposed || this.generation !== generation) return
+          this.rebuild(this.hydrate(rows), false, generation)
+        },
+        {
+          freshInitial: true,
+          onInitialError: error => {
+            if (this.disposed || this.generation !== generation) return
+            this.primeDeferred?.settle({kind: 'failed', error})
+          },
+        },
+      )
 
-    const secondarySignal = this.descriptor.secondarySignal
-    if (secondarySignal) {
-      this.secondaryDisposer = secondarySignal(this.repo, () => {
-        // Ignore until our own subscription has primed (workspace-switch
-        // handoff: another projector may publish first and fire this
-        // signal) and never run after teardown.
-        if (!this.primed || this.disposed) return
-        this.rebuild(this.latestRows)
-      })
+      const secondarySignal = this.descriptor.secondarySignal
+      if (secondarySignal) {
+        this.secondaryDisposer = secondarySignal(this.repo, () => {
+          // Ignore until our own subscription has primed (workspace-switch
+          // handoff: another projector may publish first and fire this
+          // signal) and never run after teardown.
+          if (!this.primed || this.disposed || this.generation !== generation) return
+          // Imperative upserts may precede their subscription row (the
+          // create-then-immediate-use path). Re-resolve rows we do own while
+          // retaining only contributions whose source row has not arrived yet.
+          this.rebuild(this.latestRows, true, generation)
+        })
+      }
+    } catch (error) {
+      // startById cannot return a disposer when startup throws, so the
+      // lifecycle must unwind its own partially-acquired subscriptions.
+      this.dispose()
+      throw error
     }
   }
 
   dispose(): void {
+    const workspaceId = this.pinnedWorkspaceId
+    this.primeDeferred?.settle({kind: 'cancelled'})
+    this.primeDeferred = null
     this.disposed = true
+    this.generation += 1
     this.subscriptionDisposer?.()
     this.subscriptionDisposer = null
     this.secondaryDisposer?.()
     this.secondaryDisposer = null
     // Reset in-memory state AND clear the bucket — the invariant that
     // diverged between the two copied services (see module header).
-    this.latestRows = []
-    this.contributions = []
-    this.byKey = new Map()
-    this.byBlockId = new Map()
-    this.primed = false
-    this.repo.setRuntimeContributions(this.descriptor.targetFacet, this.descriptor.sourceId, [])
+    this.resetState()
+    this.pinnedWorkspaceId = null
+    if (workspaceId) this.clearWorkspaceBucket(workspaceId)
   }
 
   blockIdForKey(key: string): string | undefined {
@@ -202,8 +260,37 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
     return this.byBlockId.get(blockId)
   }
 
-  upsert(contribution: Contribution, blockId: string): void {
+  isPrimedFor(workspaceId: string): boolean {
+    return this.pinnedWorkspaceId === workspaceId && this.primed
+  }
+
+  whenPrimed(workspaceId: string): Promise<void> {
+    const deferred = this.primeDeferred
+    if (
+      this.pinnedWorkspaceId !== workspaceId ||
+      !this.subscriptionDisposer ||
+      !deferred ||
+      deferred.workspaceId !== workspaceId ||
+      deferred.generation !== this.generation
+    ) {
+      return Promise.reject(new Error(
+        `[projector ${this.descriptor.id}] ${workspaceId} projector readiness unavailable`,
+      ))
+    }
+    return deferred.promise.then(outcome => {
+      if (outcome.kind === 'cancelled') {
+        throw new Error(`${workspaceId} projector readiness cancelled`)
+      }
+      if (outcome.kind === 'failed') throw outcome.error
+    })
+  }
+
+  upsert(contribution: Contribution, blockId: string, workspaceId: string): void {
     if (this.disposed) return
+    if (this.pinnedWorkspaceId === null) {
+      throw new Error(`[projector ${this.descriptor.id}] upsert before workspace pin`)
+    }
+    if (this.pinnedWorkspaceId !== workspaceId) return
     const key = this.descriptor.keyOf(contribution)
     this.contributions = [
       ...this.contributions.filter(c => this.descriptor.keyOf(c) !== key),
@@ -220,10 +307,13 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
       : (rows as readonly unknown[] as readonly Row[])
   }
 
-  private rebuild(rows: readonly Row[]): void {
-    if (this.disposed) return
+  private rebuild(
+    rows: readonly Row[],
+    preserveContributionsMissingRows = false,
+    generation = this.generation,
+  ): void {
+    if (this.disposed || this.generation !== generation) return
     this.latestRows = rows
-    this.primed = true
     const next: Contribution[] = []
     const nextByKey = new Map<string, string>()
     const nextByBlockId = new Map<string, Contribution>()
@@ -250,50 +340,134 @@ class ProjectorLifecycle<Row extends { id: string }, Contribution>
         nextByBlockId.set(row.id, built)
       }
     }
-    // Skip AFTER priming + capturing latestRows so the secondary path
-    // still has fresh rows to re-resolve from on the next signal.
-    if (this.descriptor.dedup?.(next, this.contributions)) return
+    if (preserveContributionsMissingRows) {
+      const rowIds = new Set(rows.map(row => row.id))
+      for (const [blockId, contribution] of this.byBlockId) {
+        if (rowIds.has(blockId)) continue
+        next.push(contribution)
+        nextByKey.set(this.descriptor.keyOf(contribution), blockId)
+        nextByBlockId.set(blockId, contribution)
+      }
+    }
+    // Skip only after capturing latestRows so the secondary path still has
+    // fresh rows to re-resolve from on the next signal. Even a deduped first
+    // result completes readiness; the existing contribution state is already
+    // the value this generation would publish.
+    if (this.descriptor.dedup?.(next, this.contributions)) {
+      this.finishPrime(false, generation)
+      return
+    }
     this.contributions = next
     this.byKey = nextByKey
     this.byBlockId = nextByBlockId
-    this.publish()
+    this.finishPrime(true, generation)
+  }
+
+  /** Make the complete projection visible to the synchronous bridge rebuild
+   * during publish, but release external waiters only after publish returns. */
+  private finishPrime(shouldPublish: boolean, generation: number): void {
+    const deferred = this.primeDeferred
+    const workspaceId = this.pinnedWorkspaceId
+    if (
+      this.disposed
+      || this.generation !== generation
+      || !deferred
+      || !workspaceId
+    ) return
+    this.primed = true
+    try {
+      if (shouldPublish) this.publish()
+    } catch (error) {
+      if (
+        !this.disposed
+        && this.generation === generation
+        && this.primeDeferred === deferred
+        && this.pinnedWorkspaceId === workspaceId
+      ) {
+        this.primed = false
+        deferred.settle({kind: 'failed', error})
+      }
+      throw error
+    }
+    if (
+      this.disposed
+      || this.generation !== generation
+      || this.primeDeferred !== deferred
+      || this.pinnedWorkspaceId !== workspaceId
+    ) return
+    deferred.settle({kind: 'primed'})
   }
 
   private publish(): void {
-    if (this.disposed) return
+    if (this.disposed || !this.pinnedWorkspaceId) return
     this.repo.setRuntimeContributions(
       this.descriptor.targetFacet,
       this.descriptor.sourceId,
       this.contributions,
+      {workspaceId: this.pinnedWorkspaceId},
     )
   }
+
+  private clearWorkspaceBucket(workspaceId: string): void {
+    this.repo.setRuntimeContributions(
+      this.descriptor.targetFacet,
+      this.descriptor.sourceId,
+      [],
+      {workspaceId},
+    )
+  }
+
+  private resetState(): void {
+    this.latestRows = []
+    this.contributions = []
+    this.byKey = new Map()
+    this.byBlockId = new Map()
+    this.primed = false
+  }
+
+}
+
+interface PinnedProjectorGeneration {
+  readonly token: number
+  readonly workspaceId: string
+  readonly descriptorIds: readonly string[]
+  readonly dispose: Unsubscribe
 }
 
 /** Registry + driver for definition-block projectors. One instance per
  *  Repo (`repo.projectors`).
  *
- *  Each projector's lifecycle container is created lazily and KEPT for
- *  the life of the Repo — not torn down on `dispose`. Two reasons:
- *    - the synchronous write path / read getters must work without a
- *      live subscription (the importer registers schemas in batch; the
- *      property panel reads `getSchemaForBlockId` before any start);
- *    - keeping the disposed container (rather than deleting + lazily
- *      re-creating a fresh one) is what makes the `disposed` in-flight
- *      guard durable: a write completing after a workspace-switch
- *      teardown re-reads the SAME disposed container and no-ops, instead
- *      of resurrecting a fresh container that would republish.
- *  `start()` re-arms a reused container; `dispose()` just deactivates +
- *  resets it. */
+ *  Each registered projector's lifecycle container is created lazily and
+ *  kept across workspace generations. Keeping the disposed container
+ *  (rather than deleting + recreating it) makes the `disposed` in-flight
+ *  guard durable: a write completing after a workspace-switch teardown
+ *  re-reads the same disposed container and no-ops instead of resurrecting
+ *  a fresh container that would republish. Removed descriptors are hidden
+ *  from new handle lookups; callbacks that captured their old container
+ *  still see its durable disposed guard.
+ *  The Repo pin re-arms a reused container; teardown deactivates + resets it. */
 export class ProjectorRuntime {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous lifecycles share the registry slot
   private readonly lifecycles = new Map<string, ProjectorLifecycle<any, any>>()
   private readonly ctx: ProjectorBuildContext
+  private pinnedGeneration: PinnedProjectorGeneration | null = null
+  private nextGenerationToken = 1
 
   constructor(private readonly repo: Repo) {
     this.ctx = {
       repo,
       handle: id => this.obtain(id),
     }
+  }
+
+  get workspaceId(): string | null {
+    return this.pinnedGeneration?.workspaceId ?? null
+  }
+
+  /** Monotonic identity of the current pin generation. Unlike workspaceId,
+   * this detects an away-and-back switch that reuses the same workspace. */
+  get generationToken(): number | null {
+    return this.pinnedGeneration?.token ?? null
   }
 
   /** Read handle onto a projector's state — for the service facades and
@@ -304,32 +478,31 @@ export class ProjectorRuntime {
     return this.obtain(projectorId) as ProjectorHandle<Contribution> | undefined
   }
 
-  /** Start a projector by id, resolving its descriptor from
-   *  `definitionBlockProjectorFacet`. The service facades' `start()`
-   *  funnel through here so the descriptor stays data-defined. Throws on
-   *  double-start (the `[...] already started` invariant). Returns a
-   *  disposer. */
-  startById(projectorId: string): Unsubscribe {
+  /** Internal start for one descriptor in the Repo pin's generation. */
+  private startById(projectorId: string, workspaceId: string): Unsubscribe {
+    if (!workspaceId) throw new Error(`[ProjectorRuntime] no active workspace for ${projectorId}`)
     const lifecycle = this.obtain(projectorId)
     if (!lifecycle) {
       throw new Error(`[ProjectorRuntime] no projector registered with id ${projectorId}`)
     }
-    lifecycle.start()
+    lifecycle.start(workspaceId)
     return () => this.disposeProjector(projectorId)
   }
 
-  /** Start every registered projector in dependency order — the
-   *  production entry point. Adding a projector is then just registering
-   *  a descriptor. Returns a disposer that tears them down in reverse. */
-  startAll(): Unsubscribe {
-    const ordered = orderByDependencies(this.descriptors())
+  /** Snapshot and start one complete projector generation. */
+  private startGeneration(
+    workspaceId: string,
+    descriptors: readonly AnyDefinitionBlockProjector[],
+  ): PinnedProjectorGeneration {
+    if (!workspaceId) throw new Error('[ProjectorRuntime] no active workspace')
+    const ordered = orderByDependencies(descriptors)
     const disposers: Unsubscribe[] = []
     const disposeStarted = (): void => {
       for (let i = disposers.length - 1; i >= 0; i--) disposers[i]()
     }
     for (const descriptor of ordered) {
       try {
-        disposers.push(this.startById(descriptor.id))
+        disposers.push(this.startById(descriptor.id, workspaceId))
       } catch (err) {
         // Roll back the projectors already started this call so a partial
         // failure can't strand live subscriptions the caller never got a
@@ -338,13 +511,66 @@ export class ProjectorRuntime {
         throw err
       }
     }
-    return disposeStarted
+    return {
+      token: this.nextGenerationToken++,
+      workspaceId,
+      descriptorIds: descriptors.map(descriptor => descriptor.id),
+      dispose: disposeStarted,
+    }
   }
 
   /** Deactivate + reset a projector (idempotent). The container is kept
    *  for reuse / the in-flight guard (see class doc). */
-  disposeProjector(projectorId: string): void {
+  private disposeProjector(projectorId: string): void {
     this.lifecycles.get(projectorId)?.dispose()
+  }
+
+  /** Repo workspace-pin owner. Synchronously tears down the outgoing
+   * generation and starts every projector for the incoming workspace. */
+  pinWorkspace(workspaceId: string | null): void {
+    const descriptors = workspaceId ? this.descriptors() : []
+    const descriptorIds = descriptors.map(descriptor => descriptor.id)
+    const previous = this.pinnedGeneration
+    if (
+      workspaceId === previous?.workspaceId &&
+      descriptorIds.length === previous.descriptorIds.length &&
+      descriptorIds.every((id, index) => id === previous.descriptorIds[index])
+    ) return
+    previous?.dispose()
+    this.pinnedGeneration = null
+    if (!workspaceId) return
+    try {
+      this.pinnedGeneration = this.startGeneration(workspaceId, descriptors)
+    } catch (error) {
+      if (previous) {
+        try {
+          this.pinnedGeneration = this.startGeneration(previous.workspaceId, this.descriptors())
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            `[ProjectorRuntime] failed to pin ${workspaceId} and restore ${previous.workspaceId}`,
+            {cause: rollbackError},
+          )
+        }
+      }
+      throw error
+    }
+  }
+
+  isPrimed(workspaceId: string): boolean {
+    const descriptors = this.descriptors()
+    return descriptors.every(descriptor =>
+      this.obtain(descriptor.id)?.isPrimedFor(workspaceId) === true,
+    )
+  }
+
+  async whenPrimed(workspaceId: string): Promise<void> {
+    const descriptors = this.descriptors()
+    await Promise.all(descriptors.map(descriptor => {
+      const lifecycle = this.obtain(descriptor.id)
+      if (!lifecycle) throw new Error(`[ProjectorRuntime] missing projector ${descriptor.id}`)
+      return lifecycle.whenPrimed(workspaceId)
+    }))
   }
 
   /** Get-or-create the persistent container for `projectorId`, resolving
@@ -356,15 +582,15 @@ export class ProjectorRuntime {
    *  *different* descriptor would keep serving the original. That holds
    *  today — the two projectors are kernel consts registered once, never
    *  overridden — and `definitionBlockProjectorFacet` is not last-wins, so
-   *  a duplicate id surfaces as a `startAll` double-start throw rather than
-   *  a silent swap. Revisit this caching if projectors ever become
+   *  a duplicate id surfaces as a validation error before any projector starts
+   *  rather than a silent swap. Revisit this caching if projectors ever become
    *  per-id-overridable (e.g. plugin-replaceable descriptors). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- container generics are erased at the registry boundary
   private obtain(projectorId: string): ProjectorLifecycle<any, any> | undefined {
-    const existing = this.lifecycles.get(projectorId)
-    if (existing) return existing
     const descriptor = this.descriptors().find(d => d.id === projectorId)
     if (!descriptor) return undefined
+    const existing = this.lifecycles.get(projectorId)
+    if (existing) return existing
     const lifecycle = new ProjectorLifecycle(this.repo, descriptor, this.ctx)
     this.lifecycles.set(projectorId, lifecycle)
     return lifecycle
@@ -382,6 +608,13 @@ export class ProjectorRuntime {
 function orderByDependencies(
   descriptors: readonly AnyDefinitionBlockProjector[],
 ): readonly AnyDefinitionBlockProjector[] {
+  const seenIds = new Set<string>()
+  for (const descriptor of descriptors) {
+    if (seenIds.has(descriptor.id)) {
+      throw new Error(`[ProjectorRuntime] duplicate projector id ${descriptor.id}`)
+    }
+    seenIds.add(descriptor.id)
+  }
   const byId = new Map(descriptors.map(d => [d.id, d]))
   const ordered: AnyDefinitionBlockProjector[] = []
   const done = new Set<string>()

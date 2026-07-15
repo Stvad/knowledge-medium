@@ -321,8 +321,9 @@ the whole bucket on every delivery (`rebuildFromBlocks` does
 materialized* table that the observer fills **gradually** from `blocks_synced`
 (PowerSync now writes only `blocks_synced`). So at cold start the subscription
 delivers an empty/partial schema-block set first, and a workspace-restart
-(`userSchemas.start()` is keyed on `workspaceId`) or a REPLACE re-materialization
-(`943b4d8f`) can momentarily **shrink** it → the bucket drops these schemas → a
+(`ProjectorRuntime` starts a generation keyed on the Repo's active workspace)
+or a REPLACE re-materialization (`943b4d8f`) can momentarily **shrink** it → the
+bucket drops these schemas → a
 rebuild publishes a snapshot where they're absent → `changedRefSchemaNames` reads
 "ref→non-ref" → `scheduleReprojection` runs against that snapshot →
 the gate can't skip them (`kind === undefined`), it **strips their refs to `[]`

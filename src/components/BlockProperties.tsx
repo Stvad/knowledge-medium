@@ -89,6 +89,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // FacetRuntime memoises combine() results, so these reads are identity-stable
   // across renders for the same runtime.
   const schemas = usePropertySchemas()
+  const propertyDefinitions = block.repo.propertyDefinitions
   const uis = runtime.read(propertyEditorOverridesFacet)
   const presets = readValuePresets(runtime)
   const typesRegistry = runtime.read(typesFacet)
@@ -99,14 +100,17 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       .filter(ref =>
         ref.blockId === block.id
         && !Object.hasOwn(properties, ref.name)
-        && schemas.has(ref.name),
+        && (
+          schemas.has(ref.name)
+          || propertyDefinitions?.definitionsByName.has(ref.name) === true
+        ),
       )
       .map(ref => ({
         name: ref.name,
         encodedValue: undefined,
         isSet: false,
       })),
-    [block.id, properties, schemas, syntheticProperties],
+    [block.id, properties, propertyDefinitions, schemas, syntheticProperties],
   )
 
   const model = useMemo(() => blockData
@@ -117,13 +121,14 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       updatedByBlockId: updatedByUser.blockId,
       properties,
       schemas,
+      propertyDefinitions,
       uis,
       presets,
       typesRegistry,
       syntheticRows,
     })
     : null,
-  [blockData, presets, properties, schemas, syntheticRows, typesRegistry, uis, updatedByUser])
+  [blockData, presets, properties, propertyDefinitions, schemas, syntheticRows, typesRegistry, uis, updatedByUser])
 
   if (!blockData || !model) return null
 
@@ -185,6 +190,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const handleConfigure = async (row: PropertyPanelModelRow) => {
+    if (row.isHidden) return
     // 1. User-defined schema → open its backing block in the side panel.
     const existingId = block.repo.userSchemas.getSchemaBlockId(row.name)
     if (existingId) {
@@ -216,8 +222,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     // canConfigure: user-data schema (block exists) OR unregistered
     // (will materialize on click). Kernel/plugin rows fall through and
     // get a disabled glyph button.
-    const canConfigure = row.schemaUnknown
+    const canConfigure = !row.isHidden && (
+      row.schemaUnknown
       || block.repo.userSchemas.getSchemaBlockId(row.name) !== undefined
+    )
     return (
       <PropertyRow
         key={`${sectionId}:${row.name}`}
@@ -301,9 +309,9 @@ export function BlockProperties({block}: BlockPropertiesProps) {
               return schemas.get(trimmed)
             }
             // If a kernel/plugin schema already owns this name, adopt
-            // it instead of creating a shadowing user schema. There's
-            // no panel to open (kernel schemas have no block) but the
-            // form still gets a schema back to submit with.
+            // it instead of creating a shadowing user schema. A synthesized
+            // seed may not have materialized its definition row yet, so there
+            // is no panel to open; the form can still adopt its behavior.
             const kernelSchema = schemas.get(trimmed)
             if (kernelSchema) return kernelSchema
             try {

@@ -2,7 +2,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { propertySchemasFacet, typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typesFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPageBlockId } from '@/data/kernelPage'
@@ -52,15 +52,15 @@ let env: Harness
 const setup = async (): Promise<Harness> => {
   await resetTestDb(sharedDb.db)
   const repo = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: USER } })
-  repo.setActiveWorkspaceId(WS)
   repo.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,
       typesFacet.of(MEDIA_TYPE_CONTRIBUTION, { source: 'test' }),
       typesFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'test' }),
-      ...MEDIA_PROPERTY_SCHEMAS.map((s) => propertySchemasFacet.of(s, { source: 'test' })),
+      ...MEDIA_PROPERTY_SCHEMAS.map((s) => definitionSeedsFacet.of(s, { source: 'test' })),
     ]),
   )
+  repo.setActiveWorkspaceId(WS)
   // A normal block to embed the !((id)) under.
   let parentId = ''
   await repo.tx(

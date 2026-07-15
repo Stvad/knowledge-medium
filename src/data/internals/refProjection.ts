@@ -77,6 +77,21 @@ export const changedRefSchemaNames = (
     .sort()
 }
 
+/** Every ref-typed name in a registry. A workspace pin schedules a
+ *  marker-gated scan over these so a newly-activated workspace backfills its
+ *  own rows' derived refs even when a ref-typed name (e.g. a shared static
+ *  seed like `next-review-date`) is unchanged from the previously-active
+ *  workspace and thus absent from `changedRefSchemaNames`. */
+export const refTypedSchemaNames = (
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+): string[] => {
+  const names: string[] = []
+  for (const [name, schema] of schemas) {
+    if (refCodecKind(schema) !== undefined) names.push(name)
+  }
+  return names.sort()
+}
+
 const appendRefProjection = (
   refs: BlockReference[],
   seen: Set<string>,

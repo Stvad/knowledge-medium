@@ -15,7 +15,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import type { FacetRuntime, Facet } from '@/facets/facet'
+import type { FacetRuntime, Facet, WorkspaceRuntimeContributionOptions } from '@/facets/facet'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import type {
   AnyMutator,
@@ -53,6 +53,7 @@ import {
   latestRefProjectionSchema,
   projectedRefsForField,
   refCodecKind,
+  refTypedSchemaNames,
 } from './internals/refProjection'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { devAssertionsEnabled } from './internals/devAssertions'
@@ -114,15 +115,25 @@ import {
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
-import { KERNEL_PROPERTY_SCHEMAS } from './properties'
+import { KERNEL_PROPERTY_SEEDS } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
 import { typesPageBlockId } from './typesPage'
 import { ProjectorRuntime } from './projectorRuntime'
-import { UserSchemasService } from './userSchemasService'
+import {USER_SCHEMAS_PROJECTOR_ID, UserSchemasService} from './userSchemasService'
 import { UserTypesService } from './userTypesService'
 import { TypeTagger } from './typeTagger'
 import { FacetBridge } from './facetBridge'
+import type {PropertyDefinitionRegistrySnapshot} from './propertyDefinitionRegistry'
+import {
+  materializePropertySeeds,
+  awaitPropertySeedMaterializationAccess,
+} from './definitionSeeds'
+import {
+  propertySchemaResolverForWorkspace,
+  type PropertySchemaResolver,
+} from './internals/propertySchemaResolution'
+import { runFreshInitialLoad } from './internals/freshInitialLoad'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -181,7 +192,7 @@ type KnownQueryDispatch = {
 export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => LoaderHandle<any> }
 
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
-const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
+const KERNEL_PROPERTY_SEED_MAP = new Map(KERNEL_PROPERTY_SEEDS.map(seed => [seed.name, seed]))
 
 /** The `repo.mutate` / `repo.query` proxy shape: string property access
  *  returns `dispatch(name)` (a fresh dispatcher closure per access —
@@ -225,6 +236,39 @@ const reprojectionMarkerKey = (workspaceId: string, name: string): string =>
  *  shape/rationale as `reprojectionMarkerKey`. */
 const workspaceBackfillMarkerKey = (workspaceId: string, id: string): string =>
   `${workspaceId}:${id}`
+
+/** True when two registry snapshots carry the same SET of seed keys (ignoring
+ *  order, revisions, and everything else). Used to fire seed materialization
+ *  only when the active workspace's declared seeds actually change — a new
+ *  seed appearing (or one dropping) is the sole trigger the create/restore pass
+ *  cares about; revisions are the operator step's concern (§4.3/§6.1). Treats
+ *  an absent map as the empty set. */
+const sameSeedKeySet = (
+  a: ReadonlyMap<string, unknown> | undefined,
+  b: ReadonlyMap<string, unknown> | undefined,
+): boolean => {
+  const sizeA = a?.size ?? 0
+  const sizeB = b?.size ?? 0
+  if (sizeA !== sizeB) return false
+  if (!a || !b) return true
+  for (const key of a.keys()) if (!b.has(key)) return false
+  return true
+}
+
+/** The one-deep "active-or-retained-previous" retain rule, expressed once.
+ *  Serve `workspaceId` from the active snapshot, or the immediately-previous one
+ *  still retained across a switch; any other (genuinely foreign) workspace
+ *  resolves null (fail closed). Used both live and over a tx's frozen capture. */
+const registryForWorkspace = (
+  active: PropertyDefinitionRegistrySnapshot | null,
+  previous: PropertyDefinitionRegistrySnapshot | null,
+  workspaceId: string,
+): PropertyDefinitionRegistrySnapshot | null =>
+  active?.workspaceId === workspaceId
+    ? active
+    : previous?.workspaceId === workspaceId
+      ? previous
+      : null
 
 export interface RepoOptions {
   db: PowerSyncDb
@@ -307,7 +351,20 @@ export class Repo {
   private sameTxProcessors: Map<string, AnySameTxProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
-  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
+  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SEED_MAP
+  /** Atomic active-workspace definition snapshot. Null at stage 0 before a
+   * workspace pin; identity resolution is unavailable in that state. */
+  private _propertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null
+  /** The immediately-previous active workspace's snapshot, retained across one
+   * switch so an in-flight read/tx that began for that workspace still resolves
+   * against its REAL definitions (faithful shadow/winner info) instead of a
+   * partial rebuild. Bounded to one workspace: anything older is genuinely
+   * foreign and fails closed. Rotated by `applyTypesAndSchemas` on a pin to a
+   * different workspace. */
+  private _previousPropertyDefinitionRegistry: PropertyDefinitionRegistrySnapshot | null = null
+  /** Original declaration-name multiplicity retained so both stage-0 and
+   * snapshot-bound plain-schema fallbacks reject seed-owned names. */
+  private _propertySeedNameCounts: ReadonlyMap<string, number> = new Map()
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
   private _valuePresetCores: ReadonlyMap<string, AnyValuePresetCore> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
@@ -440,6 +497,33 @@ export class Repo {
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** In-flight property-seed materialization passes (§4.3 of the schema-
+   *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
+   *  siblings the pass is create/restore-only + idempotent rather than
+   *  marker-gated once-per-workspace, so it can re-run on every seed-set change
+   *  (a probe SELECT that short-circuits in steady state). */
+  private readonly seedMaterializationJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** The "trigger generation" the seed-materialization access gate references.
+   *  A deferred pass parks on the membership row before writing; the App defaults
+   *  a not-yet-synced role to writable, so on a workspace whose membership never
+   *  syncs that wait never resolves. Without an abort, every subsequent seed-set
+   *  change would park another job (and its members subscription), unbounded.
+   *  Aborted + renewed whenever the active workspace changes, so parked waits for
+   *  a workspace we've left terminate promptly. */
+  private seedMaterializationGeneration = new AbortController()
+  /** Workspaces with a seed-materialization pass already queued or parked.
+   *  Repeated seed-set changes within one workspace (e.g. toggling several
+   *  dynamic extensions) coalesce onto the one pending pass instead of stacking
+   *  a job + a `workspace_members` subscription each; the pending pass reads the
+   *  LATEST seed set when it runs, so nothing is missed. Cleared when it settles. */
+  private readonly pendingSeedMaterializationWorkspaces = new Set<string>()
+  /** Workspaces whose seed set changed while a pass was already in flight AND had
+   *  already snapshotted its seeds (or was aborted mid-flight). Coalescing onto the
+   *  running pass would drop that change — the pass materializes only its old
+   *  snapshot. Instead we mark the workspace dirty and re-schedule ONE more pass
+   *  once the running one settles, so a newly-enabled extension's definitions land
+   *  without waiting for the next unrelated seed change or a workspace reopen. */
+  private readonly dirtySeedMaterializationWorkspaces = new Set<string>()
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -497,6 +581,33 @@ export class Repo {
     return this._propertySchemas
   }
 
+  get propertyDefinitions(): PropertyDefinitionRegistrySnapshot | null {
+    return this._propertyDefinitionRegistry
+  }
+
+  /** Internal identity boundary factory. The caller supplies the target row's
+   * workspace (the transaction layer owns that fact); resolve() itself accepts
+   * only a handle/name and is therefore immune to ambient workspace switches. */
+  propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
+    // Serve the active workspace, or the immediately-previous one still retained
+    // across a switch, from its faithful snapshot. Any other (genuinely foreign)
+    // workspace fails closed — we never synthesise a partial seeds-only snapshot
+    // for a workspace whose definitions aren't loaded (which could resolve a
+    // shadowed seed as a winner). The stage-0/active boot window (null snapshot +
+    // allow-plain) still uses the transitional resolver.
+    const snapshot = registryForWorkspace(
+      this._propertyDefinitionRegistry,
+      this._previousPropertyDefinitionRegistry,
+      workspaceId,
+    )
+    return propertySchemaResolverForWorkspace(
+      snapshot,
+      workspaceId,
+      this._propertySeedNameCounts,
+      this._activeWorkspaceId === null || workspaceId === this._activeWorkspaceId,
+    )
+  }
+
   get propertyEditorOverrides(): ReadonlyMap<string, AnyPropertyEditorOverride> {
     return this._propertyEditorOverrides
   }
@@ -515,24 +626,20 @@ export class Repo {
 
   /** Registry + driver for definition-block projectors (the
    *  data-defined "watch a meta-type → mirror into a facet bucket"
-   *  pattern, issue #90). Owns the shared lifecycle for every projector
-   *  registered in `definitionBlockProjectorFacet`; the React provider
-   *  starts them all once per workspace via `startAll()`. The
+   *  pattern, issue #90). The synchronous Repo workspace pin owns the
+   *  lifecycle for every projector in `definitionBlockProjectorFacet`.
+   *  Each incoming generation exposes an awaitable first-tick prime. The
    *  `userSchemas` / `userTypes` facades read their state through it. */
   readonly projectors: ProjectorRuntime = new ProjectorRuntime(this)
 
-  /** UserSchemasService singleton bound to this Repo. Owns the
-   *  user-data contribution bucket on `propertySchemasFacet`; sharing
-   *  one instance means imperative call sites (the AddPropertyForm,
-   *  the Roam importer) all hit the same in-memory list rather than
-   *  each fresh instance clobbering the bucket from an empty start.
-   *  The block-subscription path is opt-in via `start()` (delegates to
-   *  the `'user-schemas'` projector). */
+  /** Thin facade over the Repo-owned `'user-schemas'` projector. The
+   *  projector runtime owns its lifecycle, contribution state, and indexes;
+   *  the Repo pin starts its workspace generation before callers can perform
+   *  workspace work. */
   readonly userSchemas: UserSchemasService = new UserSchemasService(this)
 
-  /** UserTypesService singleton bound to this Repo. Symmetric to
-   *  `userSchemas`: owns the user-data contribution bucket on
-   *  `typesFacet`. The `'user-types'` projector depends on
+  /** Thin facade over the Repo-owned `'user-types'` projector. The projector
+   *  runtime owns its lifecycle, contribution state, and indexes. It depends on
    *  `'user-schemas'` (started first) to resolve block-type:properties
    *  refList entries to live property schemas. */
   readonly userTypes: UserTypesService = new UserTypesService(this)
@@ -650,14 +757,42 @@ export class Repo {
     // subscriptions, and the React change channels.
     this.facetBridge = new FacetBridge({
       getPropertySchemas: () => this._propertySchemas,
+      getPropertyDefinitionProjector: () => this.propertyDefinitionProjector(),
       applyMutators: (mutators) => { this.mutators = mutators },
       applyProcessors: (processors) => { this.processors = processors },
       applySameTxProcessors: (processors) => { this.sameTxProcessors = processors },
       applyInvalidationRules: (rules) => { this.invalidationRules = rules },
       applyWorkspaceBackfills: (backfills) => { this._workspaceBackfills = backfills },
-      applyTypesAndSchemas: (types, propertySchemas) => {
+      applyTypesAndSchemas: (
+        types,
+        propertySchemas,
+        propertyDefinitions,
+        propertySeedNameCounts,
+      ) => {
         this._types = types
         this._propertySchemas = propertySchemas
+        // Retain the outgoing workspace's faithful snapshot when pinning a
+        // DIFFERENT workspace, so an in-flight read/tx that began for it still
+        // resolves against real definitions. A same-workspace rebuild (contribution
+        // change) or a re-prime doesn't rotate the slot.
+        const incomingWorkspaceId = propertyDefinitions?.workspaceId ?? null
+        const currentWorkspaceId = this._propertyDefinitionRegistry?.workspaceId ?? null
+        if (this._propertyDefinitionRegistry && incomingWorkspaceId !== currentWorkspaceId) {
+          this._previousPropertyDefinitionRegistry = this._propertyDefinitionRegistry
+        }
+        // Seed materialization (§4.3): plugin/dynamic seeds first appear when the
+        // toggle-aware app runtime installs in a post-paint effect, long after
+        // bootstrap ran — so re-run the create/restore pass whenever this active
+        // workspace's seedKey SET changes (not on every type/preset rebuild).
+        const seedKeysChanged = !sameSeedKeySet(
+          this._propertyDefinitionRegistry?.seedsByKey,
+          propertyDefinitions?.seedsByKey,
+        )
+        this._propertyDefinitionRegistry = propertyDefinitions
+        this._propertySeedNameCounts = propertySeedNameCounts
+        if (seedKeysChanged && incomingWorkspaceId !== null && incomingWorkspaceId === this._activeWorkspaceId) {
+          this.scheduleWorkspaceSeedMaterialization(incomingWorkspaceId, false)
+        }
       },
       applyPropertyEditorOverrides: (overrides) => { this._propertyEditorOverrides = overrides },
       applyValuePresetCores: (presets) => { this._valuePresetCores = presets },
@@ -942,7 +1077,53 @@ export class Repo {
   }
 
   setActiveWorkspaceId(workspaceId: string | null): void {
+    if (
+      workspaceId === this._activeWorkspaceId &&
+      (!this.facetRuntime || workspaceId === this.projectors.workspaceId)
+    ) return
+    const previousWorkspaceId = this._activeWorkspaceId
     this._activeWorkspaceId = workspaceId
+    if (workspaceId !== previousWorkspaceId) {
+      // Cancel any parked seed-materialization access waits bound to the
+      // workspace we just left, then open a fresh generation for the incoming
+      // one (a same-workspace projector re-pin keeps the current generation).
+      this.seedMaterializationGeneration.abort()
+      this.seedMaterializationGeneration = new AbortController()
+    }
+    this.facetBridge.setActiveWorkspaceId(workspaceId)
+    try {
+      if (this.facetRuntime) {
+        this.projectors.pinWorkspace(workspaceId)
+      }
+    } catch (error) {
+      // ProjectorRuntime attempts to restore its outgoing generation. If that
+      // nested rollback also failed, its honest state is null; mirror that
+      // rather than claiming the old workspace and suppressing a retry.
+      const restoredWorkspaceId = this.projectors.workspaceId
+      this._activeWorkspaceId = restoredWorkspaceId
+      this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
+      // The failed switch already aborted the outgoing seed-materialization
+      // generation. Open a fresh one and re-arm the restored workspace so its
+      // aborted parked pass isn't stranded until the next seed change (a no-op
+      // if the pinned registry isn't the restored workspace's).
+      this.seedMaterializationGeneration = new AbortController()
+      if (restoredWorkspaceId) this.scheduleWorkspaceSeedMaterialization(restoredWorkspaceId, false)
+      throw error
+    }
+  }
+
+  /** Wait until persisted property definitions have produced their first
+   * complete workspace snapshot. Bootstrap calls this before typed writes so
+   * declaration synthesis cannot temporarily outrank a stored rename/shadow. */
+  async whenPropertyDefinitionsReady(workspaceId: string): Promise<void> {
+    const handle = this.propertyDefinitionProjector()
+    if (!handle) return
+    await handle.whenPrimed(workspaceId)
+  }
+
+  private propertyDefinitionProjector() {
+    if (!this.facetRuntime) return undefined
+    return this.projectors.handle(USER_SCHEMAS_PROJECTOR_ID)
   }
 
   /** The active workspace's undo / redo manager — what cmd-Z and the
@@ -1187,6 +1368,10 @@ export class Repo {
     // the dead entry. Never group-bound; delegate.
     const scheduleWorkspaceBackfills: Repo['scheduleWorkspaceBackfills'] = (ws) =>
       this.scheduleWorkspaceBackfills(ws)
+    const scheduleWorkspaceRefBackfill: Repo['scheduleWorkspaceRefBackfill'] = (ws) =>
+      this.scheduleWorkspaceRefBackfill(ws)
+    const scheduleWorkspaceSeedMaterialization: Repo['scheduleWorkspaceSeedMaterialization'] =
+      (ws, freshlyCreated) => this.scheduleWorkspaceSeedMaterialization(ws, freshlyCreated)
     const scheduleReconcileRescan: Repo['scheduleReconcileRescan'] = (ws) =>
       this.scheduleReconcileRescan(ws)
     // Field-assigning members: run with the facade as `this`, the
@@ -1208,7 +1393,8 @@ export class Repo {
     return Object.assign(facade, {
       tx, run, mutate, undoGroup, block, runQuery,
       addType, removeType, toggleType, setBlockTypes,
-      scheduleWorkspaceBackfills, scheduleReconcileRescan,
+      scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
+      scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
       setActiveWorkspaceId, setReadOnly, undo, redo,
       startSyncObserver, stopSyncObserver, resetMetrics,
     })
@@ -1236,6 +1422,26 @@ export class Repo {
   ) {
     const txT0 = performance.now()
     let result
+    // A workspace pin starts the definition projector asynchronously. Delay
+    // active-workspace transactions at the one shared boundary so callers
+    // cannot capture declaration-only seed winners during that short window.
+    // The wait is generation-bound: a workspace switch rejects it instead of
+    // letting the queued transaction drift into a different workspace.
+    const readinessWorkspaceId = this._activeWorkspaceId
+    const readinessGenerationToken = this.projectors.generationToken
+    if (readinessWorkspaceId) {
+      await this.whenPropertyDefinitionsReady(readinessWorkspaceId)
+      if (
+        this._activeWorkspaceId !== readinessWorkspaceId
+        || this.projectors.generationToken !== readinessGenerationToken
+      ) {
+        throw new Error(
+          `[Repo.tx] active workspace generation changed while waiting for ${readinessWorkspaceId}`,
+        )
+      }
+    }
+    const capturedActivePropertyDefinitions = this._propertyDefinitionRegistry
+    const capturedPreviousPropertyDefinitions = this._previousPropertyDefinitionRegistry
     try {
       result = await runTx({
         db: this.db,
@@ -1252,6 +1458,18 @@ export class Repo {
         processors: this.processors,
         sameTxProcessors: this.sameTxProcessors,
         propertySchemas: this._propertySchemas,
+        // Serve the tx's active-at-start workspace, or the retained previous one,
+        // from their frozen snapshots; any other workspace resolves null (fail
+        // closed). Frozen at tx-start so a mid-tx workspace switch can't re-scope
+        // resolution for the workspace the tx is operating on.
+        propertyDefinitionRegistryForWorkspace:
+          workspaceId => registryForWorkspace(
+            capturedActivePropertyDefinitions,
+            capturedPreviousPropertyDefinitions,
+            workspaceId,
+          ),
+        propertySchemaWorkspaceId: this._activeWorkspaceId,
+        propertySeedNameCounts: this._propertySeedNameCounts,
         // Undo/redo replays skip the same-tx processor pass so a
         // value-deriving processor can't override `applyRaw`'s exact
         // restore (#187). Post-commit processors still dispatch below.
@@ -1380,8 +1598,43 @@ export class Repo {
   subscribeBlocks(
     query: TypedBlockQuery,
     listener: (rows: BlockData[]) => void,
+    options?: {
+      /** Projector-only mode: suppress cached delivery and emit exactly one
+       * fresh initial snapshot before forwarding later live changes. */
+      freshInitial?: boolean
+      onInitialError?: (error: unknown) => void
+    },
   ): Unsubscribe {
     const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
+    if (options?.freshInitial) {
+      let initialPending = true
+      const unsubscribe = handle.subscribe(rows => {
+        if (!initialPending) listener(rows)
+      })
+      // Bounded retry: a transient initial-load fault must not settle projector
+      // readiness as failed for the whole generation (which would wedge every
+      // active-workspace transaction until the next re-pin). Only a persistent
+      // failure reaches onInitialError.
+      const cancelLoad = runFreshInitialLoad(
+        () => handle.loadFresh(),
+        rows => {
+          initialPending = false
+          try {
+            listener(rows)
+          } catch (error) {
+            options.onInitialError?.(error)
+          }
+        },
+        error => {
+          initialPending = false
+          options.onInitialError?.(error)
+        },
+      )
+      return () => {
+        cancelLoad()
+        unsubscribe()
+      }
+    }
     const current = handle.peek()
     if (current !== undefined) queueMicrotask(() => listener(current))
     return handle.subscribe(listener)
@@ -1469,6 +1722,20 @@ export class Repo {
    *  the static-facet bundle the kernel ships. */
   setFacetRuntime(runtime: FacetRuntime): void {
     this.facetBridge.setFacetRuntime(runtime)
+    if (this._activeWorkspaceId) {
+      try {
+        this.projectors.pinWorkspace(this._activeWorkspaceId)
+      } catch (error) {
+        // A changed descriptor set can fail both its incoming start and the
+        // attempted restoration under this same replacement runtime. Keep the
+        // Repo/filter pin honest with the projector runtime so an explicit
+        // workspace retry is not suppressed.
+        const restoredWorkspaceId = this.projectors.workspaceId
+        this._activeWorkspaceId = restoredWorkspaceId
+        this.facetBridge.setActiveWorkspaceId(restoredWorkspaceId)
+        throw error
+      }
+    }
   }
 
   /** Replace the runtime contribution bucket for `facet` keyed by
@@ -1479,18 +1746,18 @@ export class Repo {
    *
    *  OWNERSHIP CONTRACT: the bucket is DURABLE — it survives `setFacetRuntime`
    *  swaps via `FacetRuntime.adoptDurableContributionsFrom`, and the Repo is a
-   *  per-user singleton reused across workspace switches. A writer that owns a
-   *  workspace-scoped bucket (e.g. `UserSchemasService` / `UserTypesService`)
-   *  MUST clear it — `setRuntimeContributions(facet, sourceId, [])` — when it
-   *  tears down on a workspace switch, or the previous workspace's data is
-   *  adopted into the next workspace's runtime until the new bucket rebuilds.
-   *  (This is the leak fixed in `UserSchemasService.dispose`.) */
+   *  per-user singleton reused across workspace switches. Workspace-scoped
+   *  buckets are filtered synchronously by the Repo pin, so they cannot bleed
+   *  into another workspace. Their owner still clears the captured workspace's
+   *  bucket on teardown to bound retained/adopted state and ensure a later
+   *  restart rebuilds from the current rows. */
   setRuntimeContributions<Input>(
     facet: Facet<Input, unknown>,
     sourceId: string,
     contributions: readonly Input[],
+    options?: WorkspaceRuntimeContributionOptions,
   ): void {
-    this.facetBridge.setRuntimeContributions(facet, sourceId, contributions)
+    this.facetBridge.setRuntimeContributions(facet, sourceId, contributions, options)
   }
 
   /** Subscribe to changes on `_propertySchemas`. Fires when
@@ -1592,6 +1859,16 @@ export class Repo {
     workspaceId: string,
   ): Promise<void> {
     if (this.isReadOnly || propertyNames.length === 0 || !workspaceId) return
+    // Workspace-isolation gate: only backfill the ACTIVE workspace's refs. This
+    // scan is deferred (deep-idle, up to ~30 s), so by the time it fires the user
+    // may have switched away — reprojecting a workspace they've left would write
+    // derived `references` into a non-open workspace's blocks. Skip it (leaving
+    // its marker unset) so it re-runs when that workspace is next opened
+    // (`scheduleWorkspaceRefBackfill` on bootstrap). This mirrors the
+    // seed-materialization access gate. A switch DURING the scan is still handled
+    // by the per-block frozen-snapshot fallback below and by `repo.tx`'s readiness
+    // gate, which cancels a tx parked across an active-workspace flip.
+    if (this._activeWorkspaceId !== workspaceId) return
     const t0 = performance.now()
     let blocksUpdated = 0
     let scanScheduled = false
@@ -1816,6 +2093,21 @@ export class Repo {
     )
   }
 
+  /** Schedule a marker-gated reprojection over every ref-typed schema in the
+   *  active workspace. Called once per workspace open from `bootstrapWorkspace`
+   *  (the sibling of `scheduleWorkspaceBackfills`): a freshly-opened workspace
+   *  backfills its existing rows' derived references even when a ref-typed name
+   *  is unchanged from a previously-active workspace — which the facet bridge's
+   *  `changedRefSchemaNames` diff can't see. The reprojection markers are
+   *  `(workspaceId, name)`-keyed, so subsequent opens are a no-op. Scheduling on
+   *  workspace OPEN (not on every raw pin) keeps deferred scans off unrelated
+   *  in-session workspace flips. */
+  scheduleWorkspaceRefBackfill(workspaceId: string): void {
+    if (this.isReadOnly || !workspaceId || workspaceId !== this._activeWorkspaceId) return
+    const refNames = refTypedSchemaNames(this._propertySchemas)
+    if (refNames.length > 0) this.scheduleReprojection(refNames, this._propertySchemas)
+  }
+
   /** Test escape hatch — drop the in-memory marker mirror so the next
    *  reprojection re-reads from `client_schema_state`. Used by tests
    *  that mutate the table out-of-band to simulate cross-session state. */
@@ -1864,6 +2156,109 @@ export class Repo {
     this.workspaceBackfillJobs.schedule(() =>
       this.runWorkspaceBackfills(workspaceId, backfills),
     )
+  }
+
+  /**
+   * Materialize the code-declared property seeds visible to the installed
+   * runtime into real `property-schema` blocks under the workspace's Properties
+   * page (§4.3 of the schema-unification design). This is what makes seeded
+   * definitions visible/editable in the UI and available to clients that don't
+   * have the contributing plugin loaded; the in-memory registry itself works
+   * with zero rows, so this pass never blocks correctness.
+   *
+   * Organic + deferred: scheduled off the critical path (`scheduleDeepIdle` /
+   * `CATCHUP_DEEP_IDLE`, same scheme as `scheduleWorkspaceBackfills`) and re-run
+   * on every seed-set change — create/restore-only + idempotent, so steady state
+   * is a single probe SELECT that short-circuits on `seed:revision`. Passes
+   * COALESCE per workspace (one pending pass at a time); the pass reads the
+   * workspace's current seed set at run time, and only if that workspace is still
+   * the active/projected one, so a coalesced set-grow is picked up and a
+   * switched-away workspace is skipped.
+   *
+   * The deferred job awaits `awaitPropertySeedMaterializationAccess`, which
+   * (for a non-freshly-created workspace) waits for the membership row before
+   * writing — a fresh device defaults a not-yet-synced role to writable, so a
+   * bare `isReadOnly` check would let a viewer enqueue ~100 RLS-rejected creates.
+   * The early `isReadOnly` guard is a cheap short-circuit for a genuinely
+   * read-only session; the gate is the authoritative check.
+   */
+  scheduleWorkspaceSeedMaterialization(workspaceId: string, freshlyCreated: boolean): void {
+    if (this.isReadOnly || !workspaceId) return
+    const registry = this._propertyDefinitionRegistry
+    if (!registry || registry.workspaceId !== workspaceId) return
+    if (registry.seedsByKey.size === 0) return
+    // Coalesce: one pending pass per workspace. Repeated seed-set changes while a
+    // pass is parked on the membership wait would otherwise stack a job + a
+    // `workspace_members` subscription each; the pending pass reads the latest
+    // seed set at run time, so a coalesced change is still materialized — UNLESS
+    // the change lands after the pass snapshotted its seeds (or under an aborted
+    // signal), which the running pass can't pick up. Mark dirty so the running
+    // job re-runs once more rather than silently dropping it.
+    if (this.pendingSeedMaterializationWorkspaces.has(workspaceId)) {
+      this.dirtySeedMaterializationWorkspaces.add(workspaceId)
+      return
+    }
+    this.pendingSeedMaterializationWorkspaces.add(workspaceId)
+    this.seedMaterializationJobs.schedule(async () => {
+      try {
+        // Re-run while dirty: a seed-set change that coalesced onto this pass
+        // after it snapshotted its seeds — or a switch-away that aborted it — sets
+        // the dirty bit; loop so the change materializes without waiting for the
+        // next unrelated change or a workspace reopen. The bit is cleared BEFORE
+        // each run so a change landing during the run re-arms it. Re-fetch the
+        // live generation each iteration: a switch-away aborts the prior one, so a
+        // re-run for a (now re-active) workspace must use the current signal, not
+        // the stale aborted one. `runWorkspaceSeedMaterialization` re-checks the
+        // active/projected workspace and reads the latest seeds, so a run whose
+        // workspace has gone away is a cheap no-op rather than a wrong write.
+        // Kept inside ONE scheduled job (not a re-schedule) so the drain barrier's
+        // single pending promise still covers the whole cascade.
+        do {
+          this.dirtySeedMaterializationWorkspaces.delete(workspaceId)
+          await this.runWorkspaceSeedMaterialization(
+            workspaceId, freshlyCreated, this.seedMaterializationGeneration.signal,
+          )
+        } while (this.dirtySeedMaterializationWorkspaces.has(workspaceId))
+      } finally {
+        this.pendingSeedMaterializationWorkspaces.delete(workspaceId)
+        this.dirtySeedMaterializationWorkspaces.delete(workspaceId)
+      }
+    })
+  }
+
+  private async runWorkspaceSeedMaterialization(
+    workspaceId: string,
+    freshlyCreated: boolean,
+    signal: AbortSignal,
+  ): Promise<void> {
+    try {
+      const access = await awaitPropertySeedMaterializationAccess(this, workspaceId, {freshlyCreated, signal})
+      if (!access.allowed) return
+      // Read the CURRENT seed set at run time: coalesced schedules mean it may
+      // have grown since this pass was queued, and re-checking the projected
+      // workspace skips a pass whose workspace is no longer active/projected
+      // (closing the post-gate switch-away window too).
+      const registry = this._propertyDefinitionRegistry
+      if (!registry || registry.workspaceId !== workspaceId) return
+      const seeds = [...registry.seedsByKey.values()]
+      if (seeds.length === 0) return
+      await materializePropertySeeds(this, workspaceId, seeds)
+    } catch (err) {
+      // A superseded generation (the user switched workspaces) aborts the parked
+      // access wait — expected, not a failure to log or retry. Gate on OUR signal
+      // so an unrelated AbortError-named failure inside the pass still surfaces.
+      if (signal.aborted && err instanceof Error && err.name === 'AbortError') return
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(
+        `[seedMaterialization] workspace ${workspaceId} failed (will retry next open/seed change): ${reason}`,
+      )
+    }
+  }
+
+  /** Test helper — drains seed-materialization passes whose deferral timer has
+   *  fired. Mirror of `awaitWorkspaceBackfills`. */
+  async awaitSeedMaterialization(): Promise<void> {
+    await this.seedMaterializationJobs.drain()
   }
 
   private async runWorkspaceBackfills(

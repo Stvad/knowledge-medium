@@ -10,6 +10,7 @@ import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.js'
 import { useAppRuntime } from '@/extensions/runtimeContext.js'
 import {readValuePresets} from '@/data/valuePresetRegistry'
+import { isValidSeededDefinition } from '@/data/definitionSeeds.js'
 import { selectablePresets } from '@/components/propertyEditors/selectablePresets.js'
 import {
   presetConfigProp,
@@ -33,7 +34,9 @@ const renderConfigEditor = (
   return <ConfigEditor value={value} onChange={onChange} />
 }
 
-const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
+/** Exported for the read-only regression test; production mounts it only
+ *  through `PropertySchemaBlockRenderer` below. */
+export const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   const data = useHandle(block, {
     selector: d => d ? {
       id: d.id,
@@ -43,7 +46,17 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
   })
   const runtime = useAppRuntime()
   const presets = readValuePresets(runtime)
-  const readOnly = block.repo.isReadOnly
+
+  // A materialized seed row is a kernel/plugin property *defined in code*.
+  // In v1 these are code-owned and unshadowable: their name, type, config,
+  // and lifecycle are fixed by the declaration. Editing the seed's own row
+  // has no legitimate meaning and silently corrupts the definition — e.g.
+  // switching its preset leaves a stored default the new codec can't decode,
+  // which drops the whole schema to metadata-only. Render read-only so the
+  // user sees what the property is without being able to mutate it. A viewer
+  // (repo read-only) is the same case for a different reason.
+  const isSeedBacked = data ? isValidSeededDefinition(data) : false
+  const readOnly = block.repo.isReadOnly || isSeedBacked
 
   const presetId = useMemo<string>(() => {
     if (!data) return ''
@@ -189,7 +202,7 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
         <Input
           value={draftName}
           placeholder="property name"
-          readOnly={readOnly}
+          disabled={readOnly}
           onChange={(e: ChangeEvent<HTMLInputElement>) => setDraftName(e.target.value)}
           onBlur={() => { void writeName(draftName.trim()) }}
           onKeyDown={(e) => {
@@ -229,9 +242,22 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
       {preset?.ConfigEditor && (
         <div className="grid grid-cols-[6rem,minmax(0,1fr)] gap-3">
           <label className="pt-1 text-xs font-semibold text-muted-foreground">Config</label>
-          <div>
+          {/* The config editors don't take a readOnly prop; block interaction
+              at the wrapper so a read-only schema (seed-backed or viewer)
+              still shows its options without letting them be edited. */}
+          <div
+            className={readOnly ? 'pointer-events-none opacity-60' : undefined}
+            aria-disabled={readOnly || undefined}
+          >
             {renderConfigEditor(preset, decodedConfig, writeConfig)}
           </div>
+        </div>
+      )}
+
+      {isSeedBacked && (
+        <div className="text-xs text-muted-foreground">
+          Built-in property defined in code — its name, type, and options are
+          fixed and can&rsquo;t be edited here.
         </div>
       )}
 

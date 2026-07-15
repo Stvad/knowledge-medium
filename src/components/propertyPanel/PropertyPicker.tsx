@@ -33,6 +33,8 @@ import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
 import { usePropertyEditingActivation } from './usePropertyEditingActivation'
 import type { Block } from '@/data/block'
+import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {isPropertyPanelHiddenProperty} from './visibility'
 
 export const DEFAULT_PRESET_ID = 'ref'
 export const FALLBACK_PRESET_ID = 'string'
@@ -64,13 +66,13 @@ const filterSuggestions = (
   presets: ReadonlyMap<string, AnyJoinedValuePreset>,
   excludedNames: ReadonlySet<string>,
   filterSchema: ((schema: AnyPropertySchema) => boolean) | undefined,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
 ): readonly NameSuggestion[] => {
   const q = query.trim().toLowerCase()
   const out: NameSuggestion[] = []
   for (const schema of schemas.values()) {
     if (excludedNames.has(schema.name)) continue
-    const ui = uis.get(schema.name)
-    if (ui?.hidden) continue
+    if (isPropertyPanelHiddenProperty(schema.name, schemas, uis, definitions)) continue
     if (q !== '' && !schema.name.toLowerCase().includes(q)) continue
     if (filterSchema && !filterSchema(schema)) continue
     out.push({schema, preset: presets.get(schema.codec.type)})
@@ -131,6 +133,7 @@ export function PropertyPicker({
   const presets = readValuePresets(runtime)
   const uis = runtime.read(propertyEditorOverridesFacet)
   const schemas = usePropertySchemas()
+  const propertyDefinitions = block.repo.propertyDefinitions
 
   const presetEntries = useMemo(() => selectablePresets(presets), [presets])
   const initialPresetId = useMemo(() => {
@@ -171,8 +174,16 @@ export function PropertyPicker({
   }, [autoFocus, focusNameInput])
 
   const suggestions = useMemo(
-    () => filterSuggestions(propertyName, schemas, uis, presets, excludedNamesSet, filterSchema),
-    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema],
+    () => filterSuggestions(
+      propertyName,
+      schemas,
+      uis,
+      presets,
+      excludedNamesSet,
+      filterSchema,
+      propertyDefinitions,
+    ),
+    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema, propertyDefinitions],
   )
 
   const reset = useCallback(() => {
@@ -189,6 +200,7 @@ export function PropertyPicker({
   const submit = useCallback(async (adopted?: AnyPropertySchema) => {
     const name = (adopted?.name ?? propertyName).trim()
     if (!name || submitting) return
+    if (isPropertyPanelHiddenProperty(name, schemas, uis, propertyDefinitions)) return
     setSubmitting(true)
     try {
       await onAdd(adopted
@@ -199,7 +211,7 @@ export function PropertyPicker({
     } finally {
       setSubmitting(false)
     }
-  }, [onAdd, presetId, propertyName, reset, submitting])
+  }, [onAdd, presetId, propertyDefinitions, propertyName, reset, schemas, submitting, uis])
 
   const handleGlyphClick = useCallback(async () => {
     const name = propertyName.trim()
@@ -208,10 +220,21 @@ export function PropertyPicker({
       return
     }
     if (submitting) return
+    if (isPropertyPanelHiddenProperty(name, schemas, uis, propertyDefinitions)) return
     const schema = await onConfigureNewSchema({name, presetId})
     if (!schema) return
     void submit(schema)
-  }, [focusNameInput, onConfigureNewSchema, presetId, propertyName, submit, submitting])
+  }, [
+    focusNameInput,
+    onConfigureNewSchema,
+    presetId,
+    propertyDefinitions,
+    propertyName,
+    schemas,
+    submit,
+    submitting,
+    uis,
+  ])
 
   const showSuggestions = suggestionsOpen && suggestions.length > 0
 

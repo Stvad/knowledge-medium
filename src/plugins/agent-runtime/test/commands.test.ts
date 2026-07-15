@@ -8,6 +8,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
+import { extensionsDataExtension } from '@/plugins/extensions-settings/dataExtension'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { __setCompileImplForTest, readApproval } from '@/extensions/compileExtensionModule'
 import { actionsFacet, appMountsFacet, blockRenderersFacet } from '@/extensions/core'
@@ -32,13 +33,13 @@ const setup = async (): Promise<Harness> => {
     db: h.db,
     user: USER,
   })
-  repo.setActiveWorkspaceId(WS)
-  const runtime = resolveFacetRuntimeSync(staticDataExtensions, {
+  const runtime = resolveFacetRuntimeSync([staticDataExtensions, extensionsDataExtension], {
     repo,
     workspaceId: WS,
     safeMode: false,
   })
   repo.setFacetRuntime(runtime)
+  repo.setActiveWorkspaceId(WS)
   const context = createAgentRuntimeContext({repo, runtime, safeMode: false})
   return {h, repo, context}
 }

@@ -67,7 +67,7 @@ export function PropertyRow({
   onDelete: () => void
 }) {
   const Editor = row.Editor
-  const rowReadOnly = readOnly
+  const rowReadOnly = readOnly || row.readOnly
   const renameAllowed = row.canRename && !rowReadOnly
   const renameFocusHandlers = usePropertyEditingActivation(block)
   const rowAlignment = isRefCodec(row.schema.codec) || isRefListCodec(row.schema.codec)
@@ -78,6 +78,7 @@ export function PropertyRow({
     row.schemaUnknown ? 'schema not registered' : null,
     row.decodeFailed ? 'decode failed' : null,
     row.isHidden ? 'hidden field' : null,
+    row.statusText,
     row.labelText !== row.name ? row.name : null,
   ].filter(Boolean).join(' · ')
 
@@ -135,6 +136,15 @@ export function PropertyRow({
               {row.decodeFailed && <span className="ml-1 text-destructive">*</span>}
             </div>
           )}
+          {row.statusText && (
+            <span
+              className="block min-w-0 truncate text-[10px] text-amber-700 dark:text-amber-300"
+              data-property-status="true"
+              title={row.statusText}
+            >
+              {row.statusText}
+            </span>
+          )}
         </div>
         {recentlyMaterialized && (
           <span
@@ -147,12 +157,15 @@ export function PropertyRow({
         )}
       </div>
       <div className="min-w-0" data-property-value="true">
-        {Editor !== undefined && !row.decodeFailed ? (
+        {Editor !== undefined && !row.decodeFailed && !row.readOnly ? (
           <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
         ) : row.decodeFailed ? (
           <RawJsonValue value={row.encodedValue} reason="Decode failed" />
         ) : (
-          <RawJsonValue value={row.value} reason="No editor registered" />
+          <RawJsonValue
+            value={row.readOnly ? row.encodedValue : row.value}
+            reason={row.statusText ?? 'No editor registered'}
+          />
         )}
       </div>
       <div className="flex h-7 items-center justify-center" data-property-row-control="true">

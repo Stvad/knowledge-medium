@@ -7,12 +7,13 @@ import {
   codecs,
   defineBlockType,
   defineProperty,
+  definePropertyEditorOverride,
 } from '@/data/api'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { typesFacet } from '@/data/facets'
+import { propertyEditorOverridesFacet, typesFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -25,7 +26,13 @@ import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from './propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { Block } from '@/data/block'
-import { aliasesProp, showPropertiesProp, typesProp } from '@/data/properties'
+import {
+  aliasesProp,
+  seedKeyProp,
+  seedRevisionProp,
+  showPropertiesProp,
+  typesProp,
+} from '@/data/properties'
 import { useContent } from '@/hooks/block'
 import type { BlockRendererProps } from '@/types'
 
@@ -103,6 +110,12 @@ const assignmentType = defineBlockType({
   properties: [reviewerProp],
 })
 
+const hiddenBackedName = 'test:hidden-backed'
+const hiddenBackedUi = definePropertyEditorOverride<string>({
+  name: hiddenBackedName,
+  hidden: true,
+})
+
 const TestBlockRenderer = ({block}: BlockRendererProps) => {
   const content = useContent(block)
   return <div>{content}</div>
@@ -131,6 +144,7 @@ describe('BlockProperties component', () => {
       blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
       typesFacet.of(reviewType, {source: 'test'}),
       typesFacet.of(assignmentType, {source: 'test'}),
+      propertyEditorOverridesFacet.of(hiddenBackedUi, {source: 'test'}),
       defaultActionContextConfigs.map(c => actionContextsFacet.of(c, {source: 'test'})),
     ])
     repo.setFacetRuntime(runtime)
@@ -244,6 +258,54 @@ describe('BlockProperties component', () => {
     expect(screen.getByText('Hidden')).toBeTruthy()
     expect(screen.getByText('ID')).toBeTruthy()
     expect(screen.queryByText('types')).toBeNull()
+  })
+
+  it('keeps seed provenance fields out of ordinary rows and capability-limited under Hidden', async () => {
+    const block = repo.block('block-1')
+    // Core safety must not depend on the optional kernel-property-ui toggle.
+    runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+      defaultActionContextConfigs.map(c => actionContextsFacet.of(c, {source: 'test'})),
+    ])
+    repo.setFacetRuntime(runtime)
+    await block.set(seedKeyProp, 'srs-rescheduling/property/config')
+    await block.set(seedRevisionProp, 3)
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(document.querySelector(`[data-property-name="${seedKeyProp.name}"]`)).toBeNull()
+    expect(document.querySelector(`[data-property-name="${seedRevisionProp.name}"]`)).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /show hidden fields/i}))
+    })
+
+    const hiddenLabel = screen.getByText('Hidden')
+    const hiddenGroup = hiddenLabel.parentElement?.parentElement
+    expect(hiddenGroup).toBeTruthy()
+    for (const property of [seedKeyProp, seedRevisionProp]) {
+      const row = hiddenGroup!.querySelector<HTMLElement>(
+        `[data-property-name="${property.name}"]`,
+      )
+      expect(row).toBeTruthy()
+      const glyph = within(row!).getByRole('button', {
+        name: new RegExp(`configure ${property.name}`, 'i'),
+      }) as HTMLButtonElement
+      expect(glyph.disabled).toBe(true)
+      expect(within(row!).queryByLabelText(`Field ${property.name}`)).toBeNull()
+      expect(within(row!).queryByTitle(`Delete ${property.name}`)).toBeNull()
+      expect(within(row!).queryByRole('textbox')).toBeNull()
+      expect(row!.querySelector('[data-property-value]')?.textContent).toContain(
+        JSON.stringify(block.data.properties[property.name]),
+      )
+    }
   })
 
   it('pins type membership above contributed property rows', () => {
@@ -379,6 +441,42 @@ describe('BlockProperties component', () => {
     expect(glyph.disabled).toBe(true)
     expect(glyph.title.toLowerCase()).toContain('built-in')
     expect(glyph.title.toLowerCase()).toContain('no config')
+  })
+
+  it('disables and defensively ignores configure for a hidden backed schema', async () => {
+    const block = repo.block('block-1')
+    const schema = await repo.userSchemas.addSchema({
+      name: hiddenBackedName,
+      presetId: 'string',
+    })
+    await block.set(schema, 'private')
+    expect(repo.userSchemas.getSchemaBlockId(hiddenBackedName)).toBeDefined()
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+        <BlockProperties block={block}/>
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /show hidden fields/i}))
+    })
+
+    const glyph = within(propertyRow(hiddenBackedName))
+      .getByRole('button', {name: /configure test:hidden-backed/i}) as HTMLButtonElement
+    expect(glyph.disabled).toBe(true)
+    expect(navigateCallsRef.current).toEqual([])
+
+    // Exercise the handler independently of the disabled affordance: if a
+    // caller or browser quirk dispatches the click, the defensive row guard
+    // must still prevent the hidden schema panel from opening.
+    glyph.disabled = false
+    await act(async () => {
+      fireEvent.click(glyph)
+    })
+    expect(navigateCallsRef.current).toEqual([])
   })
 
   it('materialises a user schema and opens the side panel when the glyph is clicked on an unregistered property', async () => {

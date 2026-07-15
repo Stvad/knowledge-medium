@@ -2,9 +2,9 @@ import {
   ActionContextTypes,
   ChangeScope,
   actionsFacet,
-  codecs,
-  defineProperty,
-  propertySchemasFacet,
+  definitionSeedsFacet,
+  seedProperty,
+  extensionPropertySeedKey,
 } from '@/extensions/api.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 
@@ -14,59 +14,96 @@ const CHECKPOINT_STORAGE_KEY = 'knowledge-medium:readwise:checkpoint:v1'
 const LIBRARY_ALIAS = 'Readwise Library'
 const SOURCE = 'readwise-sync'
 
-const userBookIdProp = defineProperty('readwise:user_book_id', {
-  codec: codecs.string,
+const userBookIdProp = seedProperty({
+  seedKey: extensionPropertySeedKey('user-book-id'),
+  revision: 1,
+  name: 'readwise:user_book_id',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const highlightIdProp = defineProperty('readwise:highlight_id', {
-  codec: codecs.string,
+const highlightIdProp = seedProperty({
+  seedKey: extensionPropertySeedKey('highlight-id'),
+  revision: 1,
+  name: 'readwise:highlight_id',
+  preset: 'string',
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
 })
-const sourceUrlProp = defineProperty('readwise:url', {
-  codec: codecs.optionalString,
-  defaultValue: null,
+// The optional-* seeds below default to `undefined`, not the old facet's
+// `null`. This is codec-forced (decode(encode(null)) === undefined) and inert
+// today (these handles are registration-only — never read via .get/.peek), but
+// keep it in mind if a future call site starts reading their default.
+const sourceUrlProp = seedProperty({
+  seedKey: extensionPropertySeedKey('url'),
+  revision: 1,
+  name: 'readwise:url',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const categoryProp = defineProperty('readwise:category', {
-  codec: codecs.optionalString,
-  defaultValue: null,
+const categoryProp = seedProperty({
+  seedKey: extensionPropertySeedKey('category'),
+  revision: 1,
+  name: 'readwise:category',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const authorProp = defineProperty('readwise:author', {
-  codec: codecs.optionalString,
-  defaultValue: null,
+const authorProp = seedProperty({
+  seedKey: extensionPropertySeedKey('author'),
+  revision: 1,
+  name: 'readwise:author',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const titleProp = defineProperty('readwise:title', {
-  codec: codecs.optionalString,
-  defaultValue: null,
+const titleProp = seedProperty({
+  seedKey: extensionPropertySeedKey('title'),
+  revision: 1,
+  name: 'readwise:title',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const coverProp = defineProperty('readwise:cover_image_url', {
-  codec: codecs.optionalString,
-  defaultValue: null,
+const coverProp = seedProperty({
+  seedKey: extensionPropertySeedKey('cover-image-url'),
+  revision: 1,
+  name: 'readwise:cover_image_url',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const locationProp = defineProperty('readwise:location', {
-  codec: codecs.optionalNumber,
-  defaultValue: null,
+const locationProp = seedProperty({
+  seedKey: extensionPropertySeedKey('location'),
+  revision: 1,
+  name: 'readwise:location',
+  preset: 'optional-number',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const highlightedAtProp = defineProperty('readwise:highlighted_at', {
-  codec: codecs.optionalString,
-  defaultValue: null,
+const highlightedAtProp = seedProperty({
+  seedKey: extensionPropertySeedKey('highlighted-at'),
+  revision: 1,
+  name: 'readwise:highlighted_at',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const updatedAtProp = defineProperty('readwise:updated', {
-  codec: codecs.optionalString,
-  defaultValue: null,
+const updatedAtProp = seedProperty({
+  seedKey: extensionPropertySeedKey('updated'),
+  revision: 1,
+  name: 'readwise:updated',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
-const noteProp = defineProperty('readwise:note', {
-  codec: codecs.optionalString,
-  defaultValue: null,
+const noteProp = seedProperty({
+  seedKey: extensionPropertySeedKey('note'),
+  revision: 1,
+  name: 'readwise:note',
+  preset: 'optional-string',
+  defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -455,7 +492,7 @@ const makeLogger = (label) => {
 }
 
 export default [
-  ...PROPERTY_SCHEMAS.map((prop) => propertySchemasFacet.of(prop, { source: SOURCE })),
+  ...PROPERTY_SCHEMAS.map((prop) => definitionSeedsFacet.of(prop, { source: SOURCE })),
 
   actionsFacet.of({
     id: 'user.readwise.configure',

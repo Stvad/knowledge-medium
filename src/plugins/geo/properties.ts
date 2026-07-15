@@ -17,8 +17,7 @@
  *      a category tree is wanted.
  */
 
-import { ChangeScope, codecs, defineProperty, type PropertySchema } from '@/data/api'
-import { optionalRefCodec } from './codecs'
+import { ChangeScope, seedProperty } from '@/data/api'
 
 // String literal here (not an import from `./blockTypes`) to avoid a
 // circular dependency: blockTypes lifts these property schemas into the
@@ -26,63 +25,64 @@ import { optionalRefCodec } from './codecs'
 // `blockTypePropertiesProp` references `'property-schema'` as a literal.
 const PLACE_TYPE_ID = 'place'
 
-export const placeLatProp = defineProperty<number | undefined>('place:lat', {
-  codec: codecs.optionalNumber,
+export const placeLatProp = seedProperty({
+  seedKey: 'system:geo/property/place-lat', revision: 1, name: 'place:lat', preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const placeLngProp = defineProperty<number | undefined>('place:lng', {
-  codec: codecs.optionalNumber,
+export const placeLngProp = seedProperty({
+  seedKey: 'system:geo/property/place-lng', revision: 1, name: 'place:lng', preset: 'optional-number',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const placeAddressProp = defineProperty<string | undefined>('place:address', {
-  codec: codecs.optionalString,
+export const placeAddressProp = seedProperty({
+  seedKey: 'system:geo/property/place-address', revision: 1, name: 'place:address', preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const placeGooglePlaceIdProp = defineProperty<string | undefined>('place:googlePlaceId', {
-  codec: codecs.optionalString,
+export const placeGooglePlaceIdProp = seedProperty({
+  seedKey: 'system:geo/property/place-google-place-id', revision: 1, name: 'place:googlePlaceId', preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const placeGoogleMapsUrlProp = defineProperty<string | undefined>('place:googleMapsUrl', {
-  codec: codecs.optionalString,
+export const placeGoogleMapsUrlProp = seedProperty({
+  seedKey: 'system:geo/property/place-google-maps-url', revision: 1, name: 'place:googleMapsUrl', preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const placeWebsiteProp = defineProperty<string | undefined>('place:website', {
-  codec: codecs.optionalString,
+export const placeWebsiteProp = seedProperty({
+  seedKey: 'system:geo/property/place-website', revision: 1, name: 'place:website', preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const placePhoneProp = defineProperty<string | undefined>('place:phone', {
-  codec: codecs.optionalString,
+export const placePhoneProp = seedProperty({
+  seedKey: 'system:geo/property/place-phone', revision: 1, name: 'place:phone', preset: 'optional-string',
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const placeCategoriesProp = defineProperty<readonly string[]>('place:categories', {
-  codec: codecs.list(codecs.string),
+export const placeCategoriesProp = seedProperty({
+  seedKey: 'system:geo/property/place-categories', revision: 1, name: 'place:categories', preset: 'string-list',
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
 })
 
 /** Reference from any block to a Place. Single ref for v1 — promote to
  *  refList if multi-location-per-block becomes a real need. */
-export const locationProp = defineProperty<string | undefined>('location', {
-  codec: optionalRefCodec({targetTypes: [PLACE_TYPE_ID]}),
+export const locationProp = seedProperty({
+  seedKey: 'system:geo/property/location', revision: 1, name: 'location', preset: 'optional-ref',
+  config: {targetTypes: [PLACE_TYPE_ID]},
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-export const PLACE_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
+export const PLACE_PROPERTY_SCHEMAS = [
   placeLatProp,
   placeLngProp,
   placeAddressProp,
@@ -91,9 +91,9 @@ export const PLACE_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   placeWebsiteProp,
   placePhoneProp,
   placeCategoriesProp,
-] as ReadonlyArray<PropertySchema<unknown>>
+] as const
 
-export const GEO_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
+export const GEO_PROPERTY_SCHEMAS = [
   ...PLACE_PROPERTY_SCHEMAS,
-  locationProp as PropertySchema<unknown>,
-]
+  locationProp,
+] as const

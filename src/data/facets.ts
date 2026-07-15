@@ -12,6 +12,7 @@ import { defineFacet, keyedMapFacet } from '@/facets/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertySeedDeclaration,
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyQuery,
@@ -22,9 +23,11 @@ import type {
   Tx,
   TypeContribution,
 } from '@/data/api'
+import type {ProjectedPropertyDefinition} from '@/data/propertyDefinitionRegistry'
 import type { AnyDefinitionBlockProjector } from './projectorRuntime.ts'
 import type { InvalidationRule } from './invalidation.ts'
 import type { Repo } from './repo.ts'
+import {isPropertySeedDeclaration} from './propertySeeds.ts'
 
 export interface LocalSchemaDb {
   execute: (sql: string) => Promise<unknown>
@@ -137,6 +140,25 @@ export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.n
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
 export const propertySchemasFacet = keyedMapFacet<AnyPropertySchema>('data.propertySchemas', s => s.name)
+
+/** Code-owned property definitions. The declaration object is also the typed
+ * PropertyHandle returned by seedProperty. This is deliberately a list facet,
+ * not a last-wins map: duplicate seed identities are an authoring error the
+ * materializer must observe and reject before any write. */
+export const definitionSeedsFacet = defineFacet<
+  AnyPropertySeedDeclaration,
+  readonly AnyPropertySeedDeclaration[]
+>({
+  id: 'data.definition-seeds',
+  validate: isPropertySeedDeclaration,
+})
+
+/** Block-built property definitions keyed by durable field id. Metadata is
+ * always present; locally-buildable behavior is optional. */
+export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedPropertyDefinition>(
+  'data.projected-property-definitions',
+  definition => definition.metadata.fieldId,
+)
 
 export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.id)
 

@@ -5,7 +5,7 @@ import {
   type HeaderItemContribution,
   type AppMountContribution,
 } from '@/extensions/core.js'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import { pluginUIStateExtension } from '@/data/pluginStateExtensions.js'
 import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
@@ -52,7 +52,7 @@ export const quickFindPlugin: AppExtension = systemToggle({
   description: 'Cmd+P jump-to-block by alias, content, or relative date.',
 }).of([
   appMountsFacet.of(quickFindMount, {source: 'quick-find'}),
-  propertySchemasFacet.of(recentBlockIdsProp, {source: 'quick-find'}),
+  definitionSeedsFacet.of(recentBlockIdsProp, {source: 'quick-find'}),
   ...pluginUIStateExtension(quickFindUIStateType, 'quick-find'),
   actionsFacet.of(quickFindAction, {source: 'quick-find'}),
   headerItemsFacet.of(quickFindHeaderItem, {

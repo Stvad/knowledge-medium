@@ -1,10 +1,10 @@
 import {
   blockRenderersFacet,
   actionsFacet,
-  propertySchemasFacet,
+  definitionSeedsFacet,
   ActionContextTypes,
-  defineProperty,
-  codecs,
+  seedProperty,
+  extensionPropertySeedKey,
   ChangeScope,
 } from '@/extensions/api.js'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
@@ -54,25 +54,42 @@ const subscribeCanvasMode = (notify) => {
 }
 const isCanvasMode = () => canvasMode
 
-const canvasXProp = defineProperty('canvasX', {
-  codec: codecs.number,
+// NOTE: the pre-conversion `defineProperty` calls here passed a `scope` key
+// (the `repo.tx` options field name), not `changeScope` (the schema field) —
+// so `changeScope` was actually left `undefined` on all four schemas. Read as
+// intent, `ChangeScope.UiState` is what the author meant; seedProperty
+// requires a valid ChangeScope so that's what's declared below.
+const canvasXProp = seedProperty({
+  seedKey: extensionPropertySeedKey('x'),
+  revision: 1,
+  name: 'canvasX',
+  preset: 'number',
   defaultValue: 0,
-  scope: ChangeScope.UiState,
+  changeScope: ChangeScope.UiState,
 })
-const canvasYProp = defineProperty('canvasY', {
-  codec: codecs.number,
+const canvasYProp = seedProperty({
+  seedKey: extensionPropertySeedKey('y'),
+  revision: 1,
+  name: 'canvasY',
+  preset: 'number',
   defaultValue: 0,
-  scope: ChangeScope.UiState,
+  changeScope: ChangeScope.UiState,
 })
-const canvasWProp = defineProperty('canvasW', {
-  codec: codecs.number,
+const canvasWProp = seedProperty({
+  seedKey: extensionPropertySeedKey('w'),
+  revision: 1,
+  name: 'canvasW',
+  preset: 'number',
   defaultValue: 480,
-  scope: ChangeScope.UiState,
+  changeScope: ChangeScope.UiState,
 })
-const canvasHProp = defineProperty('canvasH', {
-  codec: codecs.number,
+const canvasHProp = seedProperty({
+  seedKey: extensionPropertySeedKey('h'),
+  revision: 1,
+  name: 'canvasH',
+  preset: 'number',
   defaultValue: 360,
-  scope: ChangeScope.UiState,
+  changeScope: ChangeScope.UiState,
 })
 
 const useBlockSnapshot = (block) => {
@@ -370,10 +387,10 @@ const disableCanvasLayoutAction = {
 }
 
 export default [
-  propertySchemasFacet.of(canvasXProp),
-  propertySchemasFacet.of(canvasYProp),
-  propertySchemasFacet.of(canvasWProp),
-  propertySchemasFacet.of(canvasHProp),
+  definitionSeedsFacet.of(canvasXProp),
+  definitionSeedsFacet.of(canvasYProp),
+  definitionSeedsFacet.of(canvasWProp),
+  definitionSeedsFacet.of(canvasHProp),
   blockRenderersFacet.of({
     id: 'layout',
     renderer: CanvasLayoutRenderer,

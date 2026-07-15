@@ -1,19 +1,31 @@
 import {
   ChangeScope,
+  PropertySchemaScopeMismatchError,
+  scopePoliciesEquivalent,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.js'
-import { isPropertyPanelHiddenProperty } from './visibility'
+import {
+  isPropertyPanelHiddenProperty,
+  isPropertyPanelReadOnlyProperty,
+} from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
+import {declarationOnlyDefinitionForName} from './declarationOnly'
 
 export const writeProperty = (
   block: Block,
   schema: AnyPropertySchema,
   decodedValue: unknown,
-): Promise<void> =>
-  block.set(schema, decodedValue)
+): Promise<void> => {
+  if (isPropertyPanelReadOnlyProperty(schema.name)) return Promise.resolve()
+  if (declarationOnlyDefinitionForName(
+    schema.name,
+    block.repo.propertyDefinitions,
+  )) return Promise.resolve()
+  return block.set(schema, decodedValue)
+}
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a
@@ -28,7 +40,12 @@ export const addProperty = async (
 ): Promise<AnyPropertySchema | undefined> => {
   const name = args.name.trim()
   if (!name) return undefined
-  if (isPropertyPanelHiddenProperty(name, schemas, uis)) return undefined
+  if (isPropertyPanelHiddenProperty(name, schemas, uis, block.repo.propertyDefinitions)) {
+    return undefined
+  }
+  if (declarationOnlyDefinitionForName(name, block.repo.propertyDefinitions)) {
+    return undefined
+  }
 
   if (args.adopted) {
     return args.adopted
@@ -64,9 +81,16 @@ export const renameProperty = async (args: {
   const nextName = args.newName.trim()
   if (!nextName || nextName === args.oldName) return
   if (args.oldName === typesProp.name || nextName === typesProp.name) return
+  if (
+    isPropertyPanelReadOnlyProperty(args.oldName) ||
+    isPropertyPanelReadOnlyProperty(nextName)
+  ) return
   if (args.schemas.has(args.oldName) || args.schemas.has(nextName)) return
-  if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis)) return
-  if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis)) return
+  const definitions = args.block.repo.propertyDefinitions
+  if (declarationOnlyDefinitionForName(args.oldName, definitions)) return
+  if (declarationOnlyDefinitionForName(nextName, definitions)) return
+  if (isPropertyPanelHiddenProperty(args.oldName, args.schemas, args.uis, definitions)) return
+  if (isPropertyPanelHiddenProperty(nextName, args.schemas, args.uis, definitions)) return
 
   const value = args.properties[args.oldName]
   if (value === undefined || !Object.hasOwn(args.properties, args.oldName)) return
@@ -90,7 +114,17 @@ export const deleteProperty = async (args: {
   name: string
 }) => {
   if (args.name === typesProp.name) return
-  if (isPropertyPanelHiddenProperty(args.name, args.schemas, args.uis)) return
+  if (isPropertyPanelReadOnlyProperty(args.name)) return
+  if (declarationOnlyDefinitionForName(
+    args.name,
+    args.block.repo.propertyDefinitions,
+  )) return
+  if (isPropertyPanelHiddenProperty(
+    args.name,
+    args.schemas,
+    args.uis,
+    args.block.repo.propertyDefinitions,
+  )) return
   if (!Object.hasOwn(args.properties, args.name)) return
 
   const next = {...args.properties}
@@ -98,6 +132,22 @@ export const deleteProperty = async (args: {
   const schema = args.schemas.get(args.name)
 
   await args.block.repo.tx(async tx => {
+    if (schema) {
+      // `args.schemas` is a render-time snapshot; the property's change-scope may
+      // have changed (e.g. synced from another client) since. This delete opens
+      // the tx under that captured scope and writes via raw `tx.update`, which —
+      // unlike `tx.setProperty` — skips the scope-consistency check. Mirror it:
+      // re-resolve against the live row and reject if the current scope's policy
+      // differs from the one this tx was admitted under, so a stale allow-scope
+      // can't delete a now-reject-scope property in a read-only session (nor
+      // misroute the undo entry).
+      const resolved = await tx.resolvePropertySchema(args.block.id, schema)
+      if (!scopePoliciesEquivalent(resolved.changeScope, schema.changeScope)) {
+        throw new PropertySchemaScopeMismatchError(
+          args.name, schema.changeScope, resolved.changeScope,
+        )
+      }
+    }
     await tx.update(args.block.id, {properties: next})
   }, {
     scope: schema?.changeScope ?? ChangeScope.BlockDefault,

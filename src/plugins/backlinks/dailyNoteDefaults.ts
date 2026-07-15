@@ -1,14 +1,14 @@
 import {
   ChangeScope,
   defineBlockType,
-  defineProperty,
+  seedProperty,
   type BlockData,
 } from '@/data/api'
 import { hasBlockType } from '@/data/properties.js'
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.js'
 import {
   EMPTY_BACKLINKS_FILTER,
-  backlinksFilterCodec,
+  backlinksFilterPresetCore,
   type StoredBacklinksFilter,
 } from './filterProperty.ts'
 import {
@@ -19,14 +19,14 @@ import {
 
 export const INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS: StoredBacklinksFilter = EMPTY_BACKLINKS_FILTER
 
-export const dailyNoteBacklinksDefaultsProp = defineProperty<StoredBacklinksFilter>(
-  'dailyNotes:backlinksPredicates',
-  {
-    codec: backlinksFilterCodec,
-    defaultValue: EMPTY_BACKLINKS_FILTER,
-    changeScope: ChangeScope.UserPrefs,
-  },
-)
+export const dailyNoteBacklinksDefaultsProp = seedProperty({
+  seedKey: 'system:backlinks/property/daily-note-backlinks-predicates',
+  revision: 1,
+  name: 'dailyNotes:backlinksPredicates',
+  preset: backlinksFilterPresetCore,
+  defaultValue: EMPTY_BACKLINKS_FILTER,
+  changeScope: ChangeScope.UserPrefs,
+})
 
 /** Per-plugin prefs sub-block for the backlinks plugin. Currently holds
  *  only the daily-note backlinks default filter; per-block filters live

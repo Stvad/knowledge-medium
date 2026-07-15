@@ -2,6 +2,8 @@
  *  any of these; they all subclass `Error`. Names align with the data-layer
  *  spec (`tasks/data-layer-redesign.md` §5.3, §10.4, §4.7, §13.1). */
 
+import type {PropertySchemaIdentityUnavailableReason} from './propertySchema'
+
 // `name` is pinned for every subclass in the block at the BOTTOM of this file —
 // a source string literal that survives production minification. We deliberately
 // do NOT set it here via `new.target.name`: OXC minification strips class names,
@@ -164,6 +166,57 @@ export class WorkspaceNotPinnedError extends DataLayerError {
   }
 }
 
+/** A property schema could not prove that it maps to the target workspace's
+ * winning definition. Reads degrade at their boundary; writes surface this
+ * structured error before codecs or updater callbacks run. */
+export class PropertySchemaIdentityError extends DataLayerError {
+  constructor(
+    public readonly schemaName: string,
+    public readonly reason: PropertySchemaIdentityUnavailableReason,
+  ) {
+    super(
+      `cannot write property ${JSON.stringify(schemaName)}: ` +
+      `schema identity is unavailable (${reason})`,
+    )
+  }
+}
+
+/** A property write whose RESOLVED change-scope differs from the scope the
+ *  transaction was admitted under. The tx scope is chosen from the caller's
+ *  schema; if the backing definition's change-scope was edited after the caller
+ *  captured that schema, admitting the write under the stale scope would let it
+ *  bypass the read-only gate and misroute its undo entry. */
+export class PropertySchemaScopeMismatchError extends DataLayerError {
+  constructor(
+    public readonly schemaName: string,
+    public readonly txScope: string,
+    public readonly resolvedScope: string,
+  ) {
+    super(
+      `cannot write property ${JSON.stringify(schemaName)}: resolved change-scope ` +
+      `${resolvedScope} does not match the transaction scope ${txScope} ` +
+      `(the definition's change-scope changed after the caller captured its schema)`,
+    )
+  }
+}
+
+/** A user-scope (BlockDefault) property-bag write or delete targeting a
+ *  materialized seed definition block. A seed's bag is wholly code-owned in v1
+ *  (schema-unification §5.1 — no user-editable fields), so the schema editor
+ *  and property panel render it read-only; this is the data-layer backstop that
+ *  keeps the invariant true for every other writer (agent bridge, importer,
+ *  the outline delete key). System writes run under Automation scope
+ *  (materialization, the §13 revision-upgrade step) and are not blocked. */
+export class SeededDefinitionWriteError extends DataLayerError {
+  constructor(public readonly blockId: string) {
+    super(
+      `cannot edit or delete seed definition block ${blockId}: its bag is ` +
+      `code-owned (defined in code). Change the declaration and bump its ` +
+      `revision instead of editing the materialized row.`,
+    )
+  }
+}
+
 // ──── Mode / dispatch ────
 
 export class ReadOnlyError extends DataLayerError {
@@ -234,6 +287,9 @@ const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
   ['ParentDeletedError', ParentDeletedError],
   ['WorkspaceMismatchError', WorkspaceMismatchError],
   ['WorkspaceNotPinnedError', WorkspaceNotPinnedError],
+  ['PropertySchemaIdentityError', PropertySchemaIdentityError],
+  ['PropertySchemaScopeMismatchError', PropertySchemaScopeMismatchError],
+  ['SeededDefinitionWriteError', SeededDefinitionWriteError],
   ['ReadOnlyError', ReadOnlyError],
   ['MutatorNotRegisteredError', MutatorNotRegisteredError],
   ['QueryNotRegisteredError', QueryNotRegisteredError],

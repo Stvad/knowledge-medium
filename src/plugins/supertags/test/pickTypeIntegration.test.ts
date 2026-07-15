@@ -43,9 +43,7 @@ const setup = async (): Promise<Harness> => {
   repo.setActiveWorkspaceId(WS)
   await getOrCreatePropertiesPage(repo, WS)
   await getOrCreateTypesPage(repo, WS)
-  const disposeSchemas = repo.userSchemas.start()
-  const disposeTypes = repo.userTypes.start()
-  return {repo, dispose: () => { disposeTypes(); disposeSchemas() }}
+  return {repo, dispose: () => repo.setActiveWorkspaceId(null)}
 }
 
 let env: Harness

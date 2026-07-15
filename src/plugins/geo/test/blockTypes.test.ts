@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { aliasesProp } from '@/data/properties'
-import { propertySchemasFacet, typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typesFacet } from '@/data/facets'
 import { MAP_TYPE, PLACE_TYPE } from '../blockTypes'
 import {
   locationProp,
@@ -19,7 +19,7 @@ import { geoDataExtension } from '../dataExtension'
 describe('geoDataExtension types', () => {
   const runtime = resolveFacetRuntimeSync(geoDataExtension)
   const types = runtime.read(typesFacet)
-  const schemas = runtime.read(propertySchemasFacet)
+  const seeds = runtime.read(definitionSeedsFacet)
 
   it('registers PLACE_TYPE with the place:* property list lifted', () => {
     const place = types.get(PLACE_TYPE)
@@ -48,20 +48,20 @@ describe('geoDataExtension types', () => {
     expect(page?.properties?.map(p => p.name)).toEqual([aliasesProp.name])
   })
 
-  it('registers every place:* schema and locationProp on propertySchemasFacet', () => {
+  it('registers every place:* property seed and locationProp', () => {
     const expected = [
-      placeLatProp.name,
-      placeLngProp.name,
-      placeAddressProp.name,
-      placeGooglePlaceIdProp.name,
-      placeGoogleMapsUrlProp.name,
-      placeWebsiteProp.name,
-      placePhoneProp.name,
-      placeCategoriesProp.name,
-      locationProp.name,
+      placeLatProp,
+      placeLngProp,
+      placeAddressProp,
+      placeGooglePlaceIdProp,
+      placeGoogleMapsUrlProp,
+      placeWebsiteProp,
+      placePhoneProp,
+      placeCategoriesProp,
+      locationProp,
     ]
-    for (const name of expected) {
-      expect(schemas.has(name), `missing schema ${name}`).toBe(true)
+    for (const declaration of expected) {
+      expect(seeds, `missing seed ${declaration.name}`).toContain(declaration)
     }
   })
 })

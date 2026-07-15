@@ -20,9 +20,24 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import {
+  ChangeScope,
+  defineProperty,
+  codecs,
+  type BlockData,
+} from '@/data/api'
+import {
+  definitionBlockProjectorFacet,
+  definitionSeedsFacet,
+  projectedPropertyDefinitionsFacet,
+} from '@/data/facets'
+import type {DefinitionBlockProjector} from '@/data/projectorRuntime'
+import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {seedProperty} from '@/data/propertySeeds'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import {kernelDataExtension} from '@/data/kernelDataExtension'
+import {defineFacet, resolveFacetRuntimeSync} from '@/facets/facet'
 import { Repo } from '../repo'
 
 interface Harness {
@@ -110,6 +125,279 @@ describe('repo.activeWorkspaceId', () => {
     expect(env.repo.activeWorkspaceId).toBe('ws-2')
     env.repo.setActiveWorkspaceId(null)
     expect(env.repo.activeWorkspaceId).toBeNull()
+  })
+
+  it('owns projector lifecycle at the workspace pin in production mode', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+    })
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace')
+
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setActiveWorkspaceId('ws-1')
+    repo.setActiveWorkspaceId('ws-2')
+    repo.setActiveWorkspaceId(null)
+
+    expect(pin.mock.calls).toEqual([['ws-1'], ['ws-2'], [null]])
+  })
+
+  it('rolls back the Repo pin when projector startup fails and permits retry', () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-1')
+    const originalPin = repo.projectors.pinWorkspace.bind(repo.projectors)
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementation(workspaceId => {
+      if (workspaceId === 'ws-2') throw new Error('injected projector failure')
+      originalPin(workspaceId)
+    })
+
+    expect(() => repo.setActiveWorkspaceId('ws-2')).toThrow('injected projector failure')
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+
+    pin.mockRestore()
+    expect(() => repo.setActiveWorkspaceId('ws-2')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-2')
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('starts descriptors that arrive in a replacement runtime for an already-active workspace', async () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId('ws-late-runtime')
+    expect(repo.projectors.isPrimed('ws-late-runtime')).toBe(true)
+
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    await expect(repo.projectors.whenPrimed('ws-late-runtime')).resolves.toBeUndefined()
+    expect(repo.projectors.isPrimed('ws-late-runtime')).toBe(true)
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('resolves the seed per workspace, unshadowed by a same-name stored definition', async () => {
+    const declaration = seedProperty({
+      seedKey: 'system:kernel-data/property/test-synthesized',
+      revision: 1,
+      name: 'test:synthesized',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionSeedsFacet.of(declaration),
+    ]))
+
+    expect(repo.propertySchemas.get(declaration.name)).toBe(declaration)
+    expect(repo.propertyDefinitions).toBeNull()
+
+    await repo.tx(
+      tx => tx.create({
+        id: 'synthesis-target-a',
+        workspaceId: 'ws-synthesis-a',
+        parentId: null,
+        orderKey: 'a0',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    // A same-name USER definition (a stored winner) in ws-synthesis-a.
+    await repo.tx(
+      tx => tx.create({
+        id: 'stored-winner-a',
+        workspaceId: 'ws-synthesis-a',
+        parentId: null,
+        orderKey: 'a1',
+        properties: {
+          types: ['property-schema'],
+          'property-schema:name': declaration.name,
+          'property-schema:preset': 'string',
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    repo.setActiveWorkspaceId('ws-synthesis-a')
+    expect(repo.propertyDefinitions).toBeNull()
+    await repo.whenPropertyDefinitionsReady('ws-synthesis-a')
+    // The stored winner exists by field id, but v1 makes a code-owned seed
+    // unshadowable, so it resolves to its own per-workspace field.
+    expect(repo.propertyDefinitions?.definitionsByFieldId.has('stored-winner-a')).toBe(true)
+    expect(repo.propertySchemaResolverFor('ws-synthesis-a').resolve(declaration)).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-synthesis-a', declaration.seedKey),
+        workspaceId: 'ws-synthesis-a',
+      }),
+    })
+
+    // A different workspace (no stored winner) resolves the seed to ITS field.
+    repo.setActiveWorkspaceId('ws-synthesis-b')
+    expect(repo.propertyDefinitions).toBeNull()
+    await repo.whenPropertyDefinitionsReady('ws-synthesis-b')
+    expect(repo.propertyDefinitions).toMatchObject({workspaceId: 'ws-synthesis-b'})
+    expect(repo.propertySchemaResolverFor('ws-synthesis-b').resolve(declaration)).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-synthesis-b', declaration.seedKey),
+        workspaceId: 'ws-synthesis-b',
+      }),
+    })
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('cancels a queued transaction when the active projector generation changes', async () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-queued-a')
+    await repo.whenPropertyDefinitionsReady('ws-queued-a')
+    let release!: () => void
+    const readiness = new Promise<void>(resolve => { release = resolve })
+    vi.spyOn(repo, 'whenPropertyDefinitionsReady').mockReturnValueOnce(readiness)
+    const body = vi.fn()
+
+    const pending = repo.tx(body, {scope: ChangeScope.BlockDefault})
+    repo.setActiveWorkspaceId('ws-queued-b')
+    release()
+
+    await expect(pending).rejects.toThrow(
+      'active workspace generation changed while waiting for ws-queued-a',
+    )
+    expect(body).not.toHaveBeenCalled()
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('recomputes synthesis when a seed contribution arrives after projector priming', async () => {
+    const declaration = seedProperty({
+      seedKey: 'system:test-plugin/property/late-seed',
+      revision: 1,
+      name: 'test:late-seed',
+      preset: 'string',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-late-seed')
+    await repo.whenPropertyDefinitionsReady('ws-late-seed')
+    expect(repo.propertySchemas.has(declaration.name)).toBe(false)
+
+    repo.setRuntimeContributions(definitionSeedsFacet, 'test-late-seed', [declaration])
+
+    expect(repo.propertySchemas.get(declaration.name)).toBe(declaration)
+    expect(repo.propertySchemaResolverFor('ws-late-seed').resolve(declaration)).toEqual({
+      status: 'resolved',
+      schema: expect.objectContaining({
+        fieldId: propertyDefinitionBlockId('ws-late-seed', declaration.seedKey),
+        origin: 'plugin:system:test-plugin',
+      }),
+    })
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('rebuilds workspace-scoped schema state once per pin transition', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    const schema = defineProperty('test:scoped', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    repo.setRuntimeContributions(
+      projectedPropertyDefinitionsFacet,
+      'test-scoped',
+      [{
+        metadata: {
+          fieldId: 'field-scoped',
+          workspaceId: 'ws-scoped',
+          createdAt: 1,
+          name: schema.name,
+          changeScope: schema.changeScope,
+          hidden: false,
+          origin: 'user',
+        },
+        schema,
+      }],
+      {workspaceId: 'ws-scoped'},
+    )
+    let rebuilds = 0
+    const dispose = repo.onPropertySchemasChange(() => { rebuilds += 1 })
+
+    repo.setActiveWorkspaceId('ws-scoped')
+    expect(rebuilds).toBe(1)
+    expect(repo.propertySchemas.get(schema.name)).toBe(schema)
+
+    dispose()
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('mirrors a failed runtime-replacement reconcile and permits an explicit retry', () => {
+    const {repo} = createTestRepo({
+      db: sharedDb.db,
+      user: {id: 'u'},
+      installKernelRuntime: false,
+    })
+    repo.setFacetRuntime(resolveFacetRuntimeSync([]))
+    repo.setActiveWorkspaceId('ws-runtime-failure')
+
+    let failStart = true
+    const targetFacet = defineFacet<{readonly id: string}>({id: 'test.runtime-failure-target'})
+    const throwingDescriptor: DefinitionBlockProjector<BlockData, {readonly id: string}> = {
+      id: 'test-runtime-failure',
+      metaType: 'test-runtime-failure',
+      targetFacet,
+      sourceId: 'test-runtime-failure',
+      project: block => ({id: block.id}),
+      keyOf: contribution => contribution.id,
+      secondarySignal: () => {
+        if (failStart) throw new Error('replacement projector failed')
+        return vi.fn()
+      },
+    }
+    const replacement = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      definitionBlockProjectorFacet.of(throwingDescriptor),
+    ])
+
+    expect(() => repo.setFacetRuntime(replacement)).toThrow(
+      'failed to pin ws-runtime-failure and restore ws-runtime-failure',
+    )
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.projectors.workspaceId).toBeNull()
+
+    failStart = false
+    expect(() => repo.setActiveWorkspaceId('ws-runtime-failure')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-runtime-failure')
+    expect(repo.projectors.workspaceId).toBe('ws-runtime-failure')
+    repo.setActiveWorkspaceId(null)
+  })
+
+  it('falls back to a null pin when incoming start and outgoing restoration both fail', () => {
+    const {repo} = createTestRepo({db: sharedDb.db, user: {id: 'u'}})
+    repo.setActiveWorkspaceId('ws-1')
+    const originalPin = repo.projectors.pinWorkspace.bind(repo.projectors)
+    const pin = vi.spyOn(repo.projectors, 'pinWorkspace').mockImplementation(workspaceId => {
+      if (workspaceId === 'ws-2') {
+        originalPin(null)
+        throw new AggregateError([new Error('incoming'), new Error('rollback')], 'nested failure')
+      }
+      originalPin(workspaceId)
+    })
+
+    expect(() => repo.setActiveWorkspaceId('ws-2')).toThrow('nested failure')
+    expect(repo.activeWorkspaceId).toBeNull()
+    expect(repo.projectors.workspaceId).toBeNull()
+
+    pin.mockRestore()
+    expect(() => repo.setActiveWorkspaceId('ws-1')).not.toThrow()
+    expect(repo.activeWorkspaceId).toBe('ws-1')
+    repo.setActiveWorkspaceId(null)
   })
 })
 

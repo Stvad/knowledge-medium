@@ -13,7 +13,15 @@ import {
   type PropertyPanelSection,
 } from '@/components/propertyPanelSections'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
-import { isPropertyPanelHiddenProperty } from './visibility'
+import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  isPropertyPanelHiddenProperty,
+  isPropertyPanelReadOnlyProperty,
+} from './visibility'
+import {
+  declarationOnlyDefinitionForName,
+  declarationOnlyStatusText,
+} from './declarationOnly'
 
 const EMPTY_BLOCK_TYPES: readonly string[] = []
 
@@ -46,6 +54,9 @@ export interface PropertyPanelModelRow {
   readonly canDelete: boolean
   readonly canChangeShape: boolean
   readonly isHidden: boolean
+  /** Row-level lock independent of repository read-only mode. */
+  readonly readOnly: boolean
+  readonly statusText?: string
 }
 
 export interface PropertyPanelModelSection {
@@ -89,6 +100,7 @@ const partitionProperties = (
   properties: Record<string, unknown>,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
 ): {
   visibleProperties: Record<string, unknown>
   hiddenProperties: Record<string, unknown>
@@ -97,7 +109,7 @@ const partitionProperties = (
   const hiddenProperties: Record<string, unknown> = {}
 
   for (const [name, value] of Object.entries(properties)) {
-    if (isPropertyPanelHiddenProperty(name, schemas, uis)) hiddenProperties[name] = value
+    if (isPropertyPanelHiddenProperty(name, schemas, uis, definitions)) hiddenProperties[name] = value
     else visibleProperties[name] = value
   }
 
@@ -110,7 +122,14 @@ const resolveModelRow = (
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
     presets: ReadonlyMap<string, AnyJoinedValuePreset>
+    definitions: PropertyDefinitionRegistrySnapshot | null
     hidden: boolean
+    /** True when the block this panel is for is itself a materialized seed
+     *  definition. Its whole property bag is code-owned (§5.1), so every row
+     *  is locked — not just the `seed:key`/`seed:revision` provenance markers.
+     *  Otherwise editing e.g. `property-schema:hidden` on a code-owned seed
+     *  would mutate the definition metadata the panel itself trusts. */
+    blockIsSeededDefinition: boolean
   },
 ): PropertyPanelModelRow | null => {
   const display = resolvePropertyDisplay({
@@ -120,10 +139,20 @@ const resolveModelRow = (
     uis: args.uis,
     presets: args.presets,
   })
+  const declarationOnly = declarationOnlyDefinitionForName(
+    row.name,
+    args.definitions,
+  )
+  const rowReadOnly =
+    args.blockIsSeededDefinition ||
+    declarationOnly !== undefined ||
+    isPropertyPanelReadOnlyProperty(row.name)
 
-  if (!row.isSet && !display.isKnown) return null
+  if (!row.isSet && !display.isKnown && declarationOnly === undefined) return null
 
-  const decodedValue = row.isSet
+  const decodedValue = declarationOnly
+    ? row.encodedValue
+    : row.isSet
     ? display.isKnown
       ? safeDecode(display.schema, row.encodedValue)
       : row.encodedValue
@@ -139,15 +168,21 @@ const resolveModelRow = (
     labelText: ui?.label ?? row.name,
     shape: display.shape,
     schema: display.schema,
-    schemaUnknown: !display.isKnown,
+    schemaUnknown: !display.isKnown && declarationOnly === undefined,
     decodeFailed,
     value: decodeFailed ? row.encodedValue : decodedValue,
-    Editor: display.Editor,
+    Editor: rowReadOnly ? undefined : display.Editor,
     Glyph: display.Glyph,
-    canRename: !args.hidden && !display.isKnown,
-    canDelete: !args.hidden && row.isSet && !isTypeMembershipRow,
-    canChangeShape: !args.hidden && !display.isKnown,
+    canRename: !args.hidden && !display.isKnown && !rowReadOnly,
+    canDelete: !args.hidden && row.isSet && !isTypeMembershipRow && !rowReadOnly,
+    canChangeShape: !args.hidden && !display.isKnown && !rowReadOnly,
     isHidden: args.hidden,
+    readOnly: rowReadOnly,
+    ...(declarationOnly
+      ? {
+          statusText: declarationOnlyStatusText(declarationOnly),
+        }
+      : {}),
   }
 }
 
@@ -157,7 +192,9 @@ const resolveSection = (
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
     presets: ReadonlyMap<string, AnyJoinedValuePreset>
+    definitions: PropertyDefinitionRegistrySnapshot | null
     hidden: boolean
+    blockIsSeededDefinition: boolean
   },
 ): PropertyPanelModelSection | null => {
   const rows = section.rows
@@ -182,16 +219,24 @@ export const buildPropertyPanelModel = (args: {
   updatedByBlockId?: string
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
+  propertyDefinitions: PropertyDefinitionRegistrySnapshot | null
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   presets: ReadonlyMap<string, AnyJoinedValuePreset>
   typesRegistry: ReadonlyMap<string, TypeContribution>
   syntheticRows?: readonly PropertyPanelRow[]
 }): PropertyPanelModel => {
   const blockTypes = readBlockTypes(args.properties)
+  // A materialized seed definition block's whole bag is code-owned. The
+  // registry already parsed this block's provenance (seedKey present iff it's
+  // a valid seed), so lock every row of its panel — not just the provenance
+  // markers `isPropertyPanelReadOnlyProperty` catches by name.
+  const blockIsSeededDefinition =
+    args.propertyDefinitions?.definitionsByFieldId.get(args.blockId)?.seedKey !== undefined
   const {visibleProperties, hiddenProperties} = partitionProperties(
     args.properties,
     args.schemas,
     args.uis,
+    args.propertyDefinitions,
   )
   const pinnedRawRows: readonly PropertyPanelRow[] = [{
     name: typesProp.name,
@@ -208,7 +253,9 @@ export const buildPropertyPanelModel = (args: {
       schemas: args.schemas,
       uis: args.uis,
       presets: args.presets,
+      definitions: args.propertyDefinitions,
       hidden: false,
+      blockIsSeededDefinition,
     }))
     .filter((row): row is PropertyPanelModelRow => row !== null)
 
@@ -221,11 +268,21 @@ export const buildPropertyPanelModel = (args: {
   })
 
   const sections = rawSections
-    .map(section => resolveSection(section, {
+    .map(section => resolveSection({
+      ...section,
+      rows: section.rows.filter(row => !isPropertyPanelHiddenProperty(
+        row.name,
+        args.schemas,
+        args.uis,
+        args.propertyDefinitions,
+      )),
+    }, {
       schemas: args.schemas,
       uis: args.uis,
       presets: args.presets,
+      definitions: args.propertyDefinitions,
       hidden: false,
+      blockIsSeededDefinition,
     }))
     .filter((section): section is PropertyPanelModelSection => section !== null)
 
@@ -241,7 +298,9 @@ export const buildPropertyPanelModel = (args: {
     schemas: args.schemas,
     uis: args.uis,
     presets: args.presets,
+    definitions: args.propertyDefinitions,
     hidden: true,
+    blockIsSeededDefinition,
   }) ?? {...HIDDEN_SECTION, rows: []}
 
   const metadataRows = [

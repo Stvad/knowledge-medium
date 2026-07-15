@@ -39,6 +39,7 @@ describe('PropertyRow', () => {
       canDelete: true,
       canChangeShape: false,
       isHidden: false,
+      readOnly: false,
     }
 
     render(
@@ -81,6 +82,7 @@ describe('PropertyRow', () => {
       canDelete: true,
       canChangeShape: false,
       isHidden: false,
+      readOnly: false,
     }
 
     render(
@@ -99,5 +101,56 @@ describe('PropertyRow', () => {
 
     expect(screen.getByText('{"tti":42}')).toBeTruthy()
     expect(screen.queryByText('No editor registered')).toBeNull() // shows the value, not a placeholder
+  })
+
+  it('renders declaration-only values with attribution and no editing affordances', () => {
+    const encodedValue = {queue: ['block-1'], threshold: 2}
+    const UnexpectedEditor = () => <div data-testid="unexpected-editor">Editor</div>
+    const row: PropertyPanelModelRow = {
+      name: 'srs:config',
+      encodedValue,
+      isSet: true,
+      labelText: 'srs:config',
+      shape: 'object',
+      schema: defineProperty('srs:config', {
+        codec: codecs.optionalIdentity<Record<string, unknown>>('object'),
+        defaultValue: undefined,
+        changeScope: ChangeScope.BlockDefault,
+      }),
+      schemaUnknown: false,
+      decodeFailed: false,
+      value: encodedValue,
+      Editor: UnexpectedEditor,
+      Glyph: undefined,
+      // Row-level read-only is the defensive boundary. Keep capability flags
+      // true here so the component test proves it suppresses every affordance
+      // independently of the model's declaration-only capability policy.
+      canRename: true,
+      canDelete: true,
+      canChangeShape: true,
+      isHidden: false,
+      readOnly: true,
+      statusText: 'Provided by srs-rescheduling — not installed/disabled',
+    }
+
+    render(
+      <PropertyRow
+        row={row}
+        block={{id: 'block-1'} as Block}
+        readOnly={false}
+        canConfigure={false}
+        onNavigate={vi.fn()}
+        onConfigure={vi.fn()}
+        onChange={vi.fn()}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('{"queue":["block-1"],"threshold":2}')).toBeTruthy()
+    expect(screen.getByText('Provided by srs-rescheduling — not installed/disabled')).toBeTruthy()
+    expect(screen.queryByTestId('unexpected-editor')).toBeNull()
+    expect(screen.queryByLabelText('Field srs:config')).toBeNull()
+    expect(screen.queryByTitle('Delete srs:config')).toBeNull()
   })
 })

@@ -533,6 +533,66 @@ describe('Dependencies + invalidate()', () => {
   })
 })
 
+describe('LoaderHandle.loadFresh', () => {
+  it('bypasses a cached value invalidated while the handle had no subscribers', async () => {
+    const store = makeStore()
+    let value = 1
+    const h = store.getOrCreate('fresh-stale', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'fresh-stale',
+        loader: async ctx => {
+          ctx.depend({kind: 'row', id: 'r1'})
+          return value
+        },
+      }),
+    )
+
+    await expect(h.load()).resolves.toBe(1)
+    value = 2
+    store.invalidate({rowIds: ['r1']})
+    expect(h.peek()).toBe(1)
+    await expect(h.loadFresh()).resolves.toBe(2)
+  })
+
+  it('waits through a post-settle reload when the first load is invalidated in flight', async () => {
+    const store = makeStore()
+    const resolvers: Array<(value: number) => void> = []
+    const h = store.getOrCreate('fresh-inflight', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'fresh-inflight',
+        loader: ctx => {
+          ctx.depend({kind: 'row', id: 'r1'})
+          return new Promise<number>(resolve => { resolvers.push(resolve) })
+        },
+      }),
+    )
+
+    const fresh = h.loadFresh()
+    await vi.waitFor(() => expect(resolvers).toHaveLength(1))
+    store.invalidate({rowIds: ['r1']})
+    resolvers[0]!(1)
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2))
+    resolvers[1]!(2)
+
+    await expect(fresh).resolves.toBe(2)
+  })
+
+  it('surfaces loader failures', async () => {
+    const store = makeStore()
+    const h = store.getOrCreate('fresh-error', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'fresh-error',
+        loader: async () => { throw new Error('fresh load failed') },
+      }),
+    )
+
+    await expect(h.loadFresh()).rejects.toThrow('fresh load failed')
+  })
+})
+
 describe('Batched notify across multiple matching handles', () => {
   it('holds all matching handles\' notifies until the slowest loader settles', async () => {
     // The flicker symptom this fixes: on a structural move (indent /

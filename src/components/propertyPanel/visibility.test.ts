@@ -1,6 +1,33 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ChangeScope, codecs, defineProperty, type AnyPropertySchema } from '@/data/api'
+import {buildPropertyDefinitionRegistry} from '@/data/propertyDefinitionRegistry'
+import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
+import {seedProperty} from '@/data/propertySeeds'
 import { isPropertyPanelHiddenProperty } from './visibility'
+
+const metadata = (
+  fieldId: string,
+  name: string,
+  createdAt: number,
+  hidden: boolean,
+): PropertyDefinitionMetadata => ({
+  fieldId,
+  workspaceId: 'ws',
+  createdAt,
+  name,
+  changeScope: ChangeScope.BlockDefault,
+  hidden,
+  origin: 'user',
+})
+
+const hiddenSeed = (seedKey: string, name = 'secret') => seedProperty({
+  seedKey,
+  revision: 1,
+  name,
+  preset: 'string',
+  changeScope: ChangeScope.BlockDefault,
+  hidden: true,
+})
 
 const prop = (name: string, changeScope: ChangeScope): AnyPropertySchema =>
   defineProperty<string | undefined>(name, {
@@ -26,5 +53,79 @@ describe('isPropertyPanelHiddenProperty', () => {
     const sys = prop('system:internal', ChangeScope.Automation)
     const schemas = new Map([[sys.name, sys]])
     expect(isPropertyPanelHiddenProperty('system:internal', schemas, new Map())).toBe(true)
+  })
+
+  it('prefers the seed over a same-name user definition, else the createdAt winner', () => {
+    const schema = prop('secret', ChangeScope.BlockDefault)
+    const visibleWinner = metadata('first', schema.name, 1, false)
+    const hiddenLoser = metadata('second', schema.name, 2, true)
+    const snapshot = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map([[schema.name, schema]]),
+      projectedDefinitions: new Map([
+        [hiddenLoser.fieldId, {metadata: hiddenLoser}],
+        [visibleWinner.fieldId, {metadata: visibleWinner}],
+      ]),
+      seeds: [hiddenSeed('plugin:test/property/secret')],
+    })
+
+    // v1 no-shadowing: the hidden seed owns `secret`; the same-name user defs are
+    // excluded from name selection, so the panel follows the seed's hidden flag.
+    expect(isPropertyPanelHiddenProperty(schema.name, snapshot.schemas, new Map(), snapshot))
+      .toBe(true)
+
+    // With no seed colliding on the name, the earliest-createdAt user winner
+    // decides — here the hidden one.
+    const hiddenWinnerSnapshot = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map([[schema.name, schema]]),
+      projectedDefinitions: new Map([
+        [visibleWinner.fieldId, {metadata: {...visibleWinner, createdAt: 2}}],
+        [hiddenLoser.fieldId, {metadata: {...hiddenLoser, createdAt: 1}}],
+      ]),
+      seeds: [],
+    })
+    expect(isPropertyPanelHiddenProperty(
+      schema.name,
+      hiddenWinnerSnapshot.schemas,
+      new Map(),
+      hiddenWinnerSnapshot,
+    )).toBe(true)
+  })
+
+  it('hides a unique synthesized seed; drops a same-name collider without crashing', () => {
+    const unique = hiddenSeed('plugin:one/property/secret')
+    const uniqueSnapshot = buildPropertyDefinitionRegistry({
+      workspaceId: 'ws',
+      legacySchemas: new Map(),
+      projectedDefinitions: new Map(),
+      seeds: [unique],
+    })
+    expect(isPropertyPanelHiddenProperty(unique.name, uniqueSnapshot.schemas, new Map(), uniqueSnapshot))
+      .toBe(true)
+
+    // v1: two seeds sharing a name — the collider is dropped loudly and the
+    // registry still builds (the first, hidden, seed keeps the name).
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const collidedSnapshot = buildPropertyDefinitionRegistry({
+        workspaceId: 'ws',
+        legacySchemas: new Map(),
+        projectedDefinitions: new Map(),
+        seeds: [unique, hiddenSeed('plugin:two/property/secret')],
+      })
+      expect(isPropertyPanelHiddenProperty(unique.name, collidedSnapshot.schemas, new Map(), collidedSnapshot))
+        .toBe(true)
+      expect(errors).toHaveBeenCalled()
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  it('uses the declaration carried by stage-0 synthesis when no registry is bound', () => {
+    const hidden = hiddenSeed('plugin:stage-zero/property/secret')
+    const schemas = new Map([[hidden.name, hidden]])
+
+    expect(isPropertyPanelHiddenProperty(hidden.name, schemas, new Map(), null)).toBe(true)
   })
 })

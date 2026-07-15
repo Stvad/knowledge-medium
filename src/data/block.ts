@@ -211,9 +211,13 @@ export class Block implements Handle<BlockData | null> {
    *  fallback. Throws BlockNotLoadedError if the row isn't loaded. */
   get<T>(schema: PropertySchema<T>): T {
     const data = this.data  // throws if not loaded
-    const stored = data.properties[schema.name]
-    if (stored === undefined) return schema.defaultValue
-    return schema.codec.decode(stored)
+    const resolution = this.repo.propertySchemaResolverFor(data.workspaceId)
+      .resolveBoundary(schema)
+    if (resolution.status === 'identity-unavailable') return schema.defaultValue
+    const resolvedSchema = resolution.schema
+    const stored = data.properties[resolvedSchema.name]
+    if (stored === undefined) return resolvedSchema.defaultValue
+    return resolvedSchema.codec.decode(stored)
   }
 
   /** Like `get` but doesn't substitute the default — returns undefined
@@ -221,9 +225,13 @@ export class Block implements Handle<BlockData | null> {
   peekProperty<T>(schema: PropertySchema<T>): T | undefined {
     const snap = this.peek()
     if (snap === undefined || snap === null) return undefined
-    const stored = snap.properties[schema.name]
+    const resolution = this.repo.propertySchemaResolverFor(snap.workspaceId)
+      .resolveBoundary(schema)
+    if (resolution.status === 'identity-unavailable') return undefined
+    const resolvedSchema = resolution.schema
+    const stored = snap.properties[resolvedSchema.name]
     if (stored === undefined) return undefined
-    return schema.codec.decode(stored)
+    return resolvedSchema.codec.decode(stored)
   }
 
   get types(): readonly string[] {
@@ -303,10 +311,7 @@ export class Block implements Handle<BlockData | null> {
     }
     const updater = valueOrUpdater as (current: T | undefined) => T
     await this.repo.tx(async tx => {
-      const data = await tx.get(this.id)
-      const raw = data?.properties[schema.name]
-      const current = raw === undefined ? undefined : schema.codec.decode(raw)
-      await tx.setProperty(this.id, schema, updater(current))
+      await tx.setProperty(this.id, schema, updater)
     }, {scope: schema.changeScope, description: `update property ${schema.name} on ${this.id}`})
   }
 

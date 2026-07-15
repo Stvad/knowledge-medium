@@ -23,8 +23,10 @@
 
 import {
   FacetRuntime,
+  runtimeContributionBucketKey,
   type Facet,
   type FacetContribution,
+  type RuntimeContributionOptions,
   type RuntimeSourceId,
 } from '@/facets/facet.js'
 import {
@@ -45,8 +47,10 @@ interface ForwardedListener {
 
 interface RememberedBucket {
   readonly facet: Facet<unknown, unknown>
+  readonly sourceId: RuntimeSourceId
   readonly contributions: readonly unknown[]
   readonly durable?: boolean
+  readonly workspaceId?: string
 }
 
 /** A `FacetRuntime` facade effects capture so they survive runtime swaps.
@@ -59,9 +63,13 @@ interface RememberedBucket {
  *  runtime swaps. */
 export class LiveRuntimeHandle extends FacetRuntime {
   private current: FacetRuntime
+  /** Undefined until callers use the handle's pin API. Production usually
+   * pins raw runtimes through FacetBridge first; once explicitly set through
+   * this stable facade, preserve that choice across warm runtime swaps. */
+  private forwardedActiveWorkspaceId: string | null | undefined
   private readonly forwarded = new Set<ForwardedListener>()
   /** Transient (effect-owned) buckets written through this handle, keyed
-   *  facetId → sourceId. Replayed onto the fresh runtime on `setCurrent`
+   *  facetId → (workspaceId, sourceId). Replayed onto the fresh runtime on `setCurrent`
    *  because the owning effect is NOT restarted across the swap, so it
    *  won't re-push them itself. Cleared when the effect writes `[]`
    *  (its cleanup) so a removed effect doesn't strand. */
@@ -99,6 +107,11 @@ export class LiveRuntimeHandle extends FacetRuntime {
     return this.current.facetIds()
   }
 
+  override setActiveWorkspaceId(workspaceId: string | null): void {
+    this.forwardedActiveWorkspaceId = workspaceId
+    this.current.setActiveWorkspaceId(workspaceId)
+  }
+
   /** Unsupported on the handle: it is a stable wrapper effects hold, never
    *  a runtime a swap installs, so it is never the *target* of a durable
    *  adoption. Overridden to fail loud rather than silently write into the
@@ -128,18 +141,21 @@ export class LiveRuntimeHandle extends FacetRuntime {
     facet: Facet<Input, unknown>,
     sourceId: RuntimeSourceId,
     contributions: readonly Input[],
-    options?: { durable?: boolean },
+    options?: RuntimeContributionOptions,
   ): void {
+    const bucketKey = runtimeContributionBucketKey(sourceId, options?.workspaceId)
     if (contributions.length === 0) {
       const bySource = this.buckets.get(facet.id)
-      bySource?.delete(sourceId)
+      bySource?.delete(bucketKey)
       if (bySource && bySource.size === 0) this.buckets.delete(facet.id)
     } else {
       const bySource = this.buckets.get(facet.id) ?? new Map<RuntimeSourceId, RememberedBucket>()
-      bySource.set(sourceId, {
+      bySource.set(bucketKey, {
         facet: facet as Facet<unknown, unknown>,
+        sourceId,
         contributions: contributions as readonly unknown[],
         durable: options?.durable,
+        workspaceId: options?.workspaceId,
       })
       this.buckets.set(facet.id, bySource)
     }
@@ -154,14 +170,20 @@ export class LiveRuntimeHandle extends FacetRuntime {
   setCurrent(next: FacetRuntime): void {
     if (next === this.current) return
     this.current = next
+    if (this.forwardedActiveWorkspaceId !== undefined) {
+      next.setActiveWorkspaceId(this.forwardedActiveWorkspaceId)
+    }
     // `context` delegates to `current` via the constructor accessor, so it
     // already reflects `next` — nothing to repoint here.
 
     // Replay transient buckets so a kept effect's contributions survive
     // the swap (it won't re-push them — it isn't restarted).
     for (const bySource of this.buckets.values()) {
-      for (const [sourceId, bucket] of bySource) {
-        next.setRuntimeContributions(bucket.facet, sourceId, bucket.contributions, { durable: bucket.durable })
+      for (const bucket of bySource.values()) {
+        next.setRuntimeContributions(bucket.facet, bucket.sourceId, bucket.contributions, {
+          durable: bucket.durable,
+          workspaceId: bucket.workspaceId,
+        })
       }
     }
 

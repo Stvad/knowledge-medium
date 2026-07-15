@@ -28,7 +28,6 @@ import type {
   AnyPostCommitProcessor,
   BlockData,
   BlockDataPatch,
-  ChangeScope,
   Mutator,
   NewBlockData,
   PropertySchema,
@@ -45,6 +44,7 @@ import type {
 } from '@/data/api'
 import {
   BlockNotFoundError,
+  ChangeScope,
   CycleError,
   DeletedConflictError,
   DeterministicIdCrossWorkspaceError,
@@ -55,10 +55,14 @@ import {
   ParentNotFoundError,
   ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
+  PropertySchemaScopeMismatchError,
+  SeededDefinitionWriteError,
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
   normalizeReferences,
+  scopePoliciesEquivalent,
 } from '@/data/api'
+import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import {
   BLOCK_STORAGE_COLUMNS,
   blockToRowParams,
@@ -70,6 +74,12 @@ import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import { jsonValuesEqual } from './jsonCanonical'
 import type { BlockCache } from '@/data/blockCache'
+import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
+import {
+  propertySchemaResolverForWorkspace,
+  requireWritablePropertySchema,
+  type PropertySchemaResolver,
+} from './propertySchemaResolution'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
  *  Production passes the real type; the test harness's
@@ -145,6 +155,14 @@ export interface TxImplContext {
    *  fails the originating tx (clean rollback) instead of failing
    *  later at fire time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  /** Tx-start-captured registry factory. The row workspace selects a snapshot
+   * without consulting the live active-workspace runtime. */
+  propertyDefinitionRegistryForWorkspace: (
+    workspaceId: string,
+  ) => PropertyDefinitionRegistrySnapshot | null
+  propertySchemaWorkspaceId: string | null
+  /** Original declaration-name multiplicity captured with the registry. */
+  propertySeedNameCounts: ReadonlyMap<string, number>
   /** UUID generator — injected for testability. */
   newId: () => string
 }
@@ -229,6 +247,27 @@ export class TxImpl implements Tx {
     }
   }
 
+  private propertySchemaResolverFor(workspaceId: string): PropertySchemaResolver {
+    const snapshot = this.ctx.propertyDefinitionRegistryForWorkspace(workspaceId)
+    return propertySchemaResolverForWorkspace(
+      snapshot,
+      workspaceId,
+      this.ctx.propertySeedNameCounts,
+      this.ctx.propertySchemaWorkspaceId === null ||
+        workspaceId === this.ctx.propertySchemaWorkspaceId,
+    )
+  }
+
+  private resolvePropertySchemaForRow<T>(
+    row: BlockData,
+    schema: PropertySchema<T>,
+  ): PropertySchema<T> {
+    return requireWritablePropertySchema(
+      schema,
+      this.propertySchemaResolverFor(row.workspaceId),
+    )
+  }
+
   // ──── Reads ────
 
   async get(id: string): Promise<BlockData | null> {
@@ -303,9 +342,25 @@ export class TxImpl implements Tx {
     return {id: data.id, inserted: false}
   }
 
+  /** v1 invariant (schema-unification §5.1): a materialized seed definition's
+   *  bag is wholly code-owned — no user-editable fields. The schema editor and
+   *  property panel already render it read-only; this is the data-layer backstop
+   *  so the invariant also holds for the agent bridge, the importer, and the
+   *  outline delete key. Only USER writes are blocked (`BlockDefault` scope):
+   *  materialization and the §13 revision-upgrade step run under `Automation`,
+   *  and synced-in changes never pass through this engine at all, so neither is
+   *  affected. Provenance is read off the PERSISTED row — a caller can't forge
+   *  it, since a valid seed id must equal `uuidv5(workspaceId:seedKey)`. */
+  private assertSeedDefinitionMutable(before: BlockData): void {
+    if (this.meta.scope === ChangeScope.BlockDefault && isValidSeededDefinition(before)) {
+      throw new SeededDefinitionWriteError(before.id)
+    }
+  }
+
   async delete(id: string): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
+    this.assertSeedDefinitionMutable(before)
     if (before.deleted) return  // already a tombstone — no-op, no second snapshot
     const after: BlockData = {
       ...before,
@@ -359,6 +414,9 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     if (!updatePatchChangesBlock(before, patch)) return
+    // Only a bag mutation touches the seed-owned fields; a content/reference
+    // update leaves the code-owned definition intact.
+    if (patch.properties !== undefined) this.assertSeedDefinitionMutable(before)
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
@@ -444,17 +502,50 @@ export class TxImpl implements Tx {
 
   // ──── Typed property primitives — the codec boundary sites ────
 
+  async resolvePropertySchema<T>(
+    id: string,
+    schema: PropertySchema<T>,
+  ): Promise<PropertySchema<T>> {
+    const before = await this.requireExisting(id)
+    this.checkWorkspace(before.workspaceId)
+    return this.resolvePropertySchemaForRow(before, schema)
+  }
+
   async setProperty<T>(
     id: string,
     schema: PropertySchema<T>,
-    value: T,
+    valueOrUpdater: T | ((current: T | undefined) => T),
     opts?: TxWriteOpts,
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    const encoded = schema.codec.encode(value)
-    if (jsonValuesEqual(before.properties[schema.name], encoded)) return
-    const properties = {...before.properties, [schema.name]: encoded}
+    this.assertSeedDefinitionMutable(before)
+    const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
+    // Scope-consistency: the tx was admitted under `this.meta.scope`, chosen from
+    // the CALLER's schema.changeScope. If the definition's change-scope was edited
+    // after the caller captured its schema, the resolved scope can differ — and
+    // admitting the write under the stale scope would bypass the read-only gate
+    // and misroute its undo entry. Compare the resolved and admitted scopes by
+    // POLICY (read-only behavior + undoability), not identity: a same-policy
+    // difference (e.g. the references processor writing a BlockDefault property
+    // under its own `References` bucket) is intentional and harmless, while a
+    // policy difference (a stale UiState schema writing a now-BlockDefault
+    // property) is exactly the bypass/misroute this guards. The raw
+    // property-delete path shares this check via `scopePoliciesEquivalent`.
+    if (!scopePoliciesEquivalent(resolvedSchema.changeScope, this.meta.scope)) {
+      throw new PropertySchemaScopeMismatchError(
+        resolvedSchema.name, this.meta.scope, resolvedSchema.changeScope,
+      )
+    }
+    const stored = before.properties[resolvedSchema.name]
+    const value = typeof valueOrUpdater === 'function'
+      ? (valueOrUpdater as (current: T | undefined) => T)(
+        stored === undefined ? undefined : resolvedSchema.codec.decode(stored),
+      )
+      : valueOrUpdater
+    const encoded = resolvedSchema.codec.encode(value)
+    if (jsonValuesEqual(stored, encoded)) return
+    const properties = {...before.properties, [resolvedSchema.name]: encoded}
     const after: BlockData = {
       ...before,
       properties,
@@ -472,9 +563,13 @@ export class TxImpl implements Tx {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     const data = parseBlockRow(row)
-    const stored = data.properties[schema.name]
-    if (stored === undefined) return schema.defaultValue
-    return schema.codec.decode(stored)
+    const resolution = this.propertySchemaResolverFor(data.workspaceId)
+      .resolveBoundary(schema)
+    if (resolution.status === 'identity-unavailable') return schema.defaultValue
+    const resolvedSchema = resolution.schema
+    const stored = data.properties[resolvedSchema.name]
+    if (stored === undefined) return resolvedSchema.defaultValue
+    return resolvedSchema.codec.decode(stored)
   }
 
   // ──── Composition ────

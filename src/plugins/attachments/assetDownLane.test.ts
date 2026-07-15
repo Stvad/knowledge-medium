@@ -18,7 +18,7 @@ vi.mock('./assetResolver.js', () => ({
 
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { propertySchemasFacet, typesFacet } from '@/data/facets'
+import { definitionSeedsFacet, typesFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { Repo } from '@/data/repo'
@@ -40,15 +40,15 @@ let repo: Repo
 
 const buildRepo = (): Repo => {
   const r = new Repo({ db: sharedDb.db, cache: new BlockCache(), user: { id: USER } })
-  r.setActiveWorkspaceId(WS)
   r.setFacetRuntime(
     resolveFacetRuntimeSync([
       kernelDataExtension,
       typesFacet.of(MEDIA_TYPE_CONTRIBUTION, { source: 'test' }),
       typesFacet.of(ASSETS_TYPE_CONTRIBUTION, { source: 'test' }),
-      ...MEDIA_PROPERTY_SCHEMAS.map((s) => propertySchemasFacet.of(s, { source: 'test' })),
+      ...MEDIA_PROPERTY_SCHEMAS.map((s) => definitionSeedsFacet.of(s, { source: 'test' })),
     ]),
   )
+  r.setActiveWorkspaceId(WS)
   return r
 }
 

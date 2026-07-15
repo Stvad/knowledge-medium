@@ -36,7 +36,7 @@ const setup = async (): Promise<Harness> => {
   })
   repo.setActiveWorkspaceId(WS)
   await getOrCreatePropertiesPage(repo, WS)
-  const dispose = repo.userSchemas.start()
+  const dispose = (): void => repo.setActiveWorkspaceId(null)
   const h: TestDb = {db: sharedDb.db, cleanup: async () => {}}
   return {h, repo, dispose}
 }

@@ -7,6 +7,7 @@ import {definePresetCore} from './api/valuePresetCore'
 import { defineSplitPreset, joinValuePreset, type ValuePresetPresentation } from './api/valuePresets'
 import {readValuePresets} from './valuePresetRegistry'
 import {kernelValuePresetsExtension} from '@/components/propertyEditors/kernelValuePresets'
+import {ChangeScope} from './api/changeScope'
 
 describe('kernel value preset split', () => {
   it('registers codec cores in the data runtime without React presentation', () => {
@@ -23,7 +24,7 @@ describe('kernel value preset split', () => {
     const cores = runtime.read(valuePresetCoresFacet)
     expect([...cores.keys()]).toEqual(expect.arrayContaining([
       'optional-string', 'optional-number', 'string-list',
-      'optional-ref', 'json', 'optional-json',
+      'optional-ref', 'json', 'optional-json', 'raw-json', 'strict-enum',
     ]))
     expect(cores.get('optional-string')?.build(undefined).encode(undefined)).toBeNull()
     expect(cores.get('optional-number')?.build(undefined).decode(null)).toBeUndefined()
@@ -33,6 +34,13 @@ describe('kernel value preset split', () => {
     expect(optionalRef?.encode(undefined)).toBeNull()
     expect(cores.get('json')?.defaultValue).toBeNull()
     expect(cores.get('optional-json')?.build(undefined).decode(null)).toBeUndefined()
+    expect(cores.get('raw-json')?.defaultValue).toBeUndefined()
+    expect(cores.get('raw-json')?.build(undefined).decode(null)).toBeNull()
+    const strictEnum = cores.get('strict-enum')!
+    const strictConfig = strictEnum.configCodec!.decode({options: [
+      {value: ChangeScope.BlockDefault, label: 'Block default'},
+    ]})
+    expect(() => strictEnum.build(strictConfig).encode('' as ChangeScope)).toThrow()
 
     const enumCore = cores.get('enum')!
     const enumConfig = enumCore.configCodec!.decode({
@@ -72,6 +80,26 @@ describe('kernel value preset split', () => {
     const replacedPreset = readValuePresets(runtime).get('string')
     expect(replacedPreset?.build(undefined).type).toBe('replacement-string')
     expect(replacedPreset?.Editor).toBe(stringPreset?.Editor)
+  })
+
+  it('joins the strict-enum presentation so code-union seeds render their options', () => {
+    // Regression: the strict-enum CORE shipped with no matching presentation, so
+    // materialized seeds using it (property-schema:change-scope, todo status,
+    // char scope) rendered as "strict-enum (unknown)" and lost the options UI.
+    // The presentation is hidden from the user's preset picker but must still
+    // join to its core for display.
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelValuePresetsExtension,
+    ])
+    const core = runtime.read(valuePresetCoresFacet).get('strict-enum')
+    const preset = readValuePresets(runtime).get('strict-enum')
+
+    expect(core).toBeDefined()
+    expect(preset?.build).toBe(core?.build)
+    expect(preset?.Editor).toBeTypeOf('function')
+    expect(preset?.ConfigEditor).toBeTypeOf('function')
+    expect(preset?.hideFromPicker).toBe(true)
   })
 
   it('rejects a presentation joined to the wrong core id', () => {

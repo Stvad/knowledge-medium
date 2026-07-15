@@ -18,13 +18,14 @@
 
 import type {
   AnyPropertySchema,
+  PropertySchema,
   RepoTxOptions,
   Tx,
   TypeContribution,
   TypeRegistrySnapshot,
 } from '@/data/api'
 import { BlockNotFoundForTypeError, ChangeScope } from '@/data/api'
-import { getBlockTypes, typesProp } from './properties'
+import { typesProp } from './properties'
 
 /** The slice of `Repo` the tagger needs: a tx primitive, the live type +
  *  schema registries, and a snapshot accessor for the own-tx entry
@@ -35,6 +36,28 @@ export interface TypeTaggerHost {
   readonly types: ReadonlyMap<string, TypeContribution>
   readonly propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
+
+const requireTypeContribution = (
+  types: ReadonlyMap<string, TypeContribution>,
+  typeId: string,
+): TypeContribution => {
+  const contribution = types.get(typeId)
+  if (contribution !== undefined) return contribution
+  throw new Error(
+    `[addType] type id ${JSON.stringify(typeId)} is not registered. ` +
+    'Register a TypeContribution through typesFacet before calling addType.',
+  )
+}
+
+const hasStoredProperty = (properties: Record<string, unknown>, name: string): boolean =>
+  Object.prototype.hasOwnProperty.call(properties, name)
+
+const readResolvedProperty = <T>(
+  properties: Record<string, unknown>,
+  schema: PropertySchema<T>,
+): T => hasStoredProperty(properties, schema.name)
+  ? schema.codec.decode(properties[schema.name])
+  : schema.defaultValue
 
 export class TypeTagger {
   constructor(private readonly host: TypeTaggerHost) {}
@@ -53,13 +76,7 @@ export class TypeTagger {
      *  processor paths that may legitimately race a concurrent delete. */
     strict: boolean,
   ): Promise<void> {
-    const contribution = types.get(typeId)
-    if (contribution === undefined) {
-      throw new Error(
-        `[addType] type id ${JSON.stringify(typeId)} is not registered. ` +
-        'Register a TypeContribution through typesFacet before calling addType.',
-      )
-    }
+    const contribution = requireTypeContribution(types, typeId)
     const block = await tx.get(blockId)
     if (!block) {
       if (strict) throw new BlockNotFoundForTypeError(blockId, typeId, 'missing')
@@ -70,26 +87,40 @@ export class TypeTagger {
       return
     }
 
-    const current = getBlockTypes(block)
+    // Resolve before decoding: a shadowing winner may use an incompatible
+    // codec, and this write path must reject through the identity boundary
+    // rather than attempting to interpret the winner's cell as membership.
+    const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
+    const current = readResolvedProperty(block.properties, resolvedTypes)
     const wasNew = !current.includes(typeId)
     const next: Record<string, unknown> = {...block.properties}
     let propsChanged = false
 
     if (wasNew) {
-      next[typesProp.name] = typesProp.codec.encode([...current, typeId])
+      next[resolvedTypes.name] = resolvedTypes.codec.encode([...current, typeId])
       propsChanged = true
     }
 
-    for (const [name, value] of Object.entries(initialValues)) {
-      if (next[name] !== undefined) continue
-      const schema = propertySchemas.get(name)
+    const entries = Object.entries(initialValues)
+    const declaredSchemas = entries.length === 0
+      ? null
+      : new Map((contribution.properties ?? []).map(schema => [schema.name, schema] as const))
+    for (const [name, value] of entries) {
+      // Preserve the legacy only-if-empty contract for the caller's raw key.
+      // After resolution, repeat it for the canonical key; `hasOwnProperty`
+      // treats an explicitly stored null as present even when an optional codec
+      // would decode that value to undefined.
+      if (hasStoredProperty(block.properties, name)) continue
+      const schema = declaredSchemas?.get(name) ?? propertySchemas.get(name)
       if (schema === undefined) {
         throw new Error(
           `[addType] initialValues[${JSON.stringify(name)}] has no registered PropertySchema ` +
           'in the merged registry.',
         )
       }
-      next[name] = schema.codec.encode(value)
+      const resolved = await tx.resolvePropertySchema(blockId, schema)
+      if (hasStoredProperty(next, resolved.name)) continue
+      next[resolved.name] = resolved.codec.encode(value)
       propsChanged = true
     }
 
@@ -101,11 +132,12 @@ export class TypeTagger {
   private async _removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
     const block = await tx.get(blockId)
     if (!block) return
-    const current = getBlockTypes(block)
+    const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
+    const current = readResolvedProperty(block.properties, resolvedTypes)
     if (!current.includes(typeId)) return
     const next = {
       ...block.properties,
-      [typesProp.name]: typesProp.codec.encode(current.filter(t => t !== typeId)),
+      [resolvedTypes.name]: resolvedTypes.codec.encode(current.filter(t => t !== typeId)),
     }
     await tx.update(blockId, {properties: next})
   }
@@ -181,7 +213,8 @@ export class TypeTagger {
       // `_addTypeInTx` so the pre-check stays the single source of
       // truth for the missing-block branch.
       if (!block || block.deleted) return
-      if (getBlockTypes(block).includes(typeId)) {
+      const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
+      if (readResolvedProperty(block.properties, resolvedTypes).includes(typeId)) {
         await this._removeTypeInTx(tx, blockId, typeId)
       } else {
         await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {}, false)
@@ -191,7 +224,7 @@ export class TypeTagger {
 
   async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> {
     const desiredOrder = Array.from(new Set(typeIds))
-    const {types, propertySchemas} = this.host.snapshotTypeRegistries()
+    const {types} = this.host.snapshotTypeRegistries()
     await this.host.tx(async tx => {
       const block = await tx.get(blockId)
       // Pre-check matches toggleType's contract — silently no-op on a
@@ -199,29 +232,21 @@ export class TypeTagger {
       // to the inner add so the pre-check remains authoritative.
       if (!block || block.deleted) return
 
-      const current = getBlockTypes(block)
-      const want = new Set(desiredOrder)
-      for (const typeId of current) {
-        if (!want.has(typeId)) await this._removeTypeInTx(tx, blockId, typeId)
-      }
-
+      const resolvedTypes = await tx.resolvePropertySchema(blockId, typesProp)
+      const current = readResolvedProperty(block.properties, resolvedTypes)
       const currentSet = new Set(current)
       for (const typeId of desiredOrder) {
         if (currentSet.has(typeId)) continue
-        await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {}, false)
+        requireTypeContribution(types, typeId)
       }
-
-      const after = await tx.get(blockId)
-      if (!after) return
-      const stored = getBlockTypes(after)
       const alreadyOrdered =
-        stored.length === desiredOrder.length &&
-        stored.every((typeId, index) => typeId === desiredOrder[index])
+        current.length === desiredOrder.length &&
+        current.every((typeId, index) => typeId === desiredOrder[index])
       if (alreadyOrdered) return
       await tx.update(blockId, {
         properties: {
-          ...after.properties,
-          [typesProp.name]: typesProp.codec.encode(desiredOrder),
+          ...block.properties,
+          [resolvedTypes.name]: resolvedTypes.codec.encode(desiredOrder),
         },
       })
     }, {scope: ChangeScope.BlockDefault, description: 'setBlockTypes'})

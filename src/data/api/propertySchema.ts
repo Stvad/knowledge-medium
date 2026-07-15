@@ -21,9 +21,8 @@ export interface PropertySchemaEntry<T> {
  * The stable seed key can be resolved to a definition id only for a concrete
  * workspace; handles therefore never carry `fieldId` or `workspaceId`.
  *
- * Slice A introduces this type before `seedProperty` starts returning it in
- * slice B. Existing `defineProperty` declarations remain behavioral entries
- * until that cutover. */
+ * `seedProperty` returns this type. Existing `defineProperty` declarations
+ * remain behavioral entries until their Slice-B conversion. */
 export interface PropertyHandle<T> extends PropertySchemaEntry<T> {
   readonly seedKey: string
 }
@@ -46,12 +45,12 @@ export interface ResolvedPropertySchema<T> extends PropertySchemaEntry<T> {
 export type PropertySchemaIdentityUnavailableReason =
   | 'registry-not-workspace-keyed'
   | 'definition-unavailable'
+  | 'shadowed'
+  | 'ambiguous'
 
-/** Slice-A resolver result. Projected user rows already have block ids, but
- * today's registry cannot prove which workspace its id map is pinned to; code
- * schemas have no backing identity at all. Resolution therefore stays
- * unavailable until slice B installs workspace-keyed buckets and deterministic
- * seeded ids. No synthetic or ambient id fallback is permitted. */
+/** Result of the workspace-bound identity resolver. Unbound/stage-0 callers
+ * and definitions without locally-buildable behavior report identity as
+ * unavailable; no synthetic ambient-workspace fallback is permitted. */
 export type PropertySchemaResolution<T> =
   | {readonly status: 'resolved'; readonly schema: ResolvedPropertySchema<T>}
   | {

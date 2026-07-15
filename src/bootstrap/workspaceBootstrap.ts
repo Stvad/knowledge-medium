@@ -113,6 +113,12 @@ export const bootstrapWorkspace = async ({
   requestedHash,
   requestedWorkspaceId,
 }: WorkspaceBootstrapArgs): Promise<Block> => {
+  // A workspace pin starts the property-schema projector asynchronously. Until
+  // its first complete result, declaration synthesis cannot know whether a
+  // stored definition shadows or renames a seed. Keep bootstrap's writes behind
+  // that completeness boundary; the shared Repo tx path queues other callers.
+  await repo.whenPropertyDefinitionsReady(workspaceId)
+
   // Only NOW remember it as the default. Remembering a locked/waiting workspace
   // would make the next empty-hash visit re-select it and render only the key
   // gate (no switcher), trapping the user away from accessible spaces.
@@ -126,6 +132,13 @@ export const bootstrapWorkspace = async ({
   // rows upload — a raw write would stay local, which is exactly how the
   // original daily-note:date backfill silently never synced.
   repo.scheduleWorkspaceBackfills(workspaceId)
+
+  // Backfill derived references for this workspace's pre-existing rows. The
+  // facet bridge only reprojects names whose ref-ness CHANGED on a rebuild, so a
+  // workspace sharing a ref-typed name (e.g. a static seed like next-review-date)
+  // with the previously-active one produces an empty diff and never scans its
+  // own rows. Marker-gated once per workspace, deferred off this critical path.
+  repo.scheduleWorkspaceRefBackfill(workspaceId)
 
   // One-time post-upgrade recovery for the deterministic-id shadow: clients that
   // skip-staled the server's authoritative row under the old reconcile gate
@@ -208,6 +221,23 @@ export const bootstrapWorkspace = async ({
   // rather than racing it the way these kernel pages used to (each is
   // idempotent + deterministic-id, so on a warm start it's just a cached read).
   await repo.ensureSystemPages(workspaceId)
+
+  // Materialize the code-declared property seeds into block-backed definitions
+  // for this workspace (schema-unification §4.3). At bootstrap the installed
+  // runtime is the static-data one, so only its seeds land here; the post-paint
+  // app-runtime install (and dynamic-extension loads) re-fire the pass from the
+  // registry-apply path as plugin seeds appear. Deferred + create/restore-only;
+  // `freshlyCreated` lets a fresh workspace skip the membership-row wait its
+  // access gate otherwise performs.
+  //
+  // MUST run after `ensureSystemPages`: the materializer creates each definition
+  // block parented to `propertiesPageBlockId(workspaceId)`, and `tx.create`
+  // enforces `requireParentInWorkspace`. On a fresh workspace in a runtime with no
+  // `requestIdleCallback` (Node/jsdom, some webviews) the deferred pass falls back
+  // to `setTimeout(0)`, so scheduling it before the Properties page exists would
+  // let it fire mid-bootstrap and throw on the missing parent (retrying only on
+  // the next open/seed change). Scheduling here means the page is already created.
+  repo.scheduleWorkspaceSeedMaterialization(workspaceId, freshlyCreated)
 
   const layoutSessionBlock = await resolveLayoutSession()
   return layoutSessionBlock

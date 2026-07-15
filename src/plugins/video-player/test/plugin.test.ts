@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { definitionSeedsFacet } from '@/data/facets.js'
 import type { Block } from '@/data/block'
 import { makeBlockData } from '@/data/test/factories.js'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
@@ -21,14 +21,14 @@ const canRenderContent = (content: string) =>
   VideoPlayerRenderer.canRender?.({block: blockWithContent(content)}) ?? false
 
 describe('videoPlayerPlugin', () => {
-  it('contributes its player schemas', () => {
+  it('contributes its player property seeds', () => {
     const runtime = resolveFacetRuntimeSync(videoPlayerPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
+    const seeds = runtime.read(definitionSeedsFacet)
 
-    expect(schemas.get(videoNotesPaneRatioProp.name)).toBe(videoNotesPaneRatioProp)
+    expect(seeds).toEqual(expect.arrayContaining([videoNotesPaneRatioProp]))
     // video:playerView is retired — the pane mode (panelViewModeProp) owns
     // the notes view now; stale per-block values are ignored dead data.
-    expect(schemas.get('video:playerView')).toBeUndefined()
+    expect(seeds.some(seed => seed.name === 'video:playerView')).toBe(false)
     expect(videoNotesPaneRatioProp.changeScope).toBe(ChangeScope.UserPrefs)
   })
 
