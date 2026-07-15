@@ -374,6 +374,20 @@ export const ensureAliasTarget = async (
   workspaceId: string,
   typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
 ): Promise<{ id: string; inserted: boolean }> => {
+  // Lookup-first INSIDE the tx, not just at the caller's read phase:
+  // the read-phase lookup can go stale between plan build and apply —
+  // if a live block claimed the alias in that gap, minting the seat
+  // below would set the same alias on a second row, trip the
+  // block_aliases_workspace_alias_unique trigger, and roll back the
+  // caller's whole write tx (for parseReferences that means the source
+  // keeps its mark with no derived ref, and nothing re-fires — found by
+  // referencesRecompute.fuzz.test.ts). Binding to the claimant instead
+  // converges with what a fresh read-phase lookup would have produced.
+  // The seat-slot probe can't catch this case: it only inspects
+  // deterministic seat ids, and a claimant created via tx.create has an
+  // unrelated id (see the findAliasClaimant note above).
+  const claimant = await tx.aliasLookup(alias, workspaceId)
+  if (claimant !== null) return {id: claimant.id, inserted: false}
   const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)
   const seed = aliasSeatSeed(alias)
   return createOrRestoreTargetBlock(tx, {

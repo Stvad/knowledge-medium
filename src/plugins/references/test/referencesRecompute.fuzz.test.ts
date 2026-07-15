@@ -13,11 +13,14 @@
  * merge-retarget/inline-deleted processors, and orphan-alias cleanup
  * never execute there — this suite is where they get fuzzed).
  *
- * Oracle: after every op the processor pipeline is drained
- * (`flush` — the fake-timer + awaitReprojections + awaitProcessors
- * pattern from referencesProcessor.test.ts), then the FULL consistency
- * audit must report zero anomalies. That includes the deep checks this
- * exists for (audit.ts):
+ * Oracle: ops run in fc-generated batches of 1-3 (so a processor plan
+ * can still be in flight when the next op in the batch lands — the
+ * mid-plan-interleaving shape; see caseArb's docblock); after each
+ * batch the processor pipeline is drained (`flush` — the fake-timer +
+ * awaitReprojections + awaitProcessors pattern from
+ * referencesProcessor.test.ts), then the FULL consistency audit must
+ * report zero anomalies. That includes the deep checks this exists for
+ * (audit.ts):
  *  - `content_link_recompute` — re-parse every live block's content
  *    with the app parser and diff against stored content refs
  *    (stripped/stale detection, audit.ts:496)
@@ -30,16 +33,18 @@
  * The pipeline's own coherence contracts make the post-flush fixpoint
  * a sound oracle, not an aspiration:
  *  - parseReferences recomputes content refs authoritatively and
- *    retains absent-schema property refs (referencesProcessor.ts:180)
+ *    retains absent-schema property refs (reconcileDerived's `retain:
+ *    isRetainableAbsentRef`, referencesProcessor.ts:217-222)
  *  - delete inlines `((id))` marks in referrers same-tx
  *    (inlineDeletedBlockRefsProcessor.ts), merge retargets refs AND
  *    rewrites content marks same-tx (mergeRetargetProcessor.ts), and
  *    the rename processor rewrites referrers' wikilinks — each is
  *    specified to leave content and references agreeing.
  *
- * Orphan-alias cleanup (delayMs 4000, referencesProcessor.ts:306) is
- * exercised deterministically: fake timers per case, an `advanceTime`
- * op (and the end-of-sequence flush) advances past the delay.
+ * Orphan-alias cleanup (`tx.afterCommit(..., {delayMs: 4000})`,
+ * referencesProcessor.ts:371) is exercised deterministically: fake
+ * timers per case, an `advanceTime` op (and the end-of-sequence flush)
+ * advances past the delay.
  *
  * Out of scope, deliberately:
  *  - undo/redo oracles — processor txs run under ChangeScope.References
@@ -51,7 +56,11 @@
  * Determinism: ids come from a UUID-shaped counter (the block-ref
  * parser only recognises UUIDv4-shaped ids, referenceParser.ts:44);
  * alias-target / daily-note ids are deterministic seat probes; order-key
- * jitter is pinned via a seeded LCG over Math.random.
+ * jitter is pinned via a seeded LCG over Math.random. Processor-minted
+ * ids (alias seats, daily-note targets) are folded into the op-target
+ * pool after each flush via a SQL scan (`collectMintedIds`) rather than
+ * derived by hand — the scan result is itself a deterministic function
+ * of the ops + seed replayed so far, so shrinking/replay stay exact.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
@@ -106,7 +115,7 @@ const refSchemaExtension = [
 
 // 'ax'/'Inbox' exercise plain + case-carrying aliases; the ISO date
 // routes through the daily-note path (deterministic dailyNoteBlockId,
-// exempt from orphan cleanup — referencesProcessor.ts:133).
+// exempt from orphan cleanup — the daily branch, referencesProcessor.ts:146-172).
 const ALIAS_POOL = ['ax', 'ay', 'Inbox', '2026-01-05'] as const
 
 // Bracket shrapnel: content the parser must treat as inert (or not —
@@ -171,8 +180,18 @@ const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
   {weight: 1, arbitrary: fc.constant({op: 'advanceTime'} as OpSpec)},
 )
 
+// Batches, not a flat op list: each batch applies 1-3 ops back-to-back
+// BEFORE the single flush+audit that follows it, so a processor plan
+// from op[0] can still be in flight (unread committed state, an
+// afterCommit not yet drained) when op[1] lands in the same tick — the
+// mid-plan-interleaving shape that found the worst bugs this suite
+// fixed (a stale plan clobbering a rename; a references-only writer
+// clobbered between plan build and apply — see the SourcePlan docblock
+// in referencesProcessor.ts). The audit oracle is unaffected: it's a
+// post-flush fixpoint, and flush still runs once per batch (and once
+// more at end-of-case), never mid-batch.
 const caseArb = fc.record({
-  ops: fc.array(opArb, {minLength: 1, maxLength: 12}),
+  batches: fc.array(fc.array(opArb, {minLength: 1, maxLength: 3}), {minLength: 1, maxLength: 12}),
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 })
 
@@ -289,7 +308,28 @@ afterAll(async () => {
  *  that touches the shared DB barriers on this. */
 let inFlightCase: Promise<void> | null = null
 
-type CaseArgs = {ops: OpSpec[]; prngSeed: number}
+type CaseArgs = {batches: OpSpec[][]; prngSeed: number}
+
+/** Pull processor-minted ids (alias seats, daily-note targets) into the
+ *  op-target pool so later ops can pick them — deletes/restores/merges
+ *  were previously blind to them, missing the neighborhood of the
+ *  daily-seat collision bug this suite itself found. A SQL scan over
+ *  the (workspace-scoped) `blocks` table is deterministic given the
+ *  db state, which is itself a deterministic function of the ops +
+ *  seeded PRNG replayed so far — so this preserves shrinkability
+ *  without deriving seat ids by hand (which needs the probe index,
+ *  not just the alias — see `resolveAliasSeatId`, targets.ts:323).
+ *  `ORDER BY id` keeps the newly-appended slice's order reproducible. */
+const collectMintedIds = async (db: TestDb['db'], ids: string[]): Promise<void> => {
+  const rows = await db.getAll<{id: string}>(
+    'SELECT id FROM blocks WHERE workspace_id = ? ORDER BY id', [WS])
+  const known = new Set(ids)
+  for (const row of rows) {
+    if (known.has(row.id)) continue
+    known.add(row.id)
+    ids.push(row.id)
+  }
+}
 
 const buildEnv = async (): Promise<Env> => {
   await resetTestDb(sharedDb.db)
@@ -320,7 +360,7 @@ const buildEnv = async (): Promise<Env> => {
   return {repo, flush}
 }
 
-const runCase = async ({ops, prngSeed}: CaseArgs): Promise<void> => {
+const runCase = async ({batches, prngSeed}: CaseArgs): Promise<void> => {
   let lcg = prngSeed
   const realRandom = Math.random
   Math.random = () => {
@@ -329,22 +369,33 @@ const runCase = async ({ops, prngSeed}: CaseArgs): Promise<void> => {
   }
   // Fake timers so the 4s orphan-cleanup delay is drivable in-case and
   // can never leak a live timeout into a later case (cleared below).
-  vi.useFakeTimers({shouldAdvanceTime: true})
+  // No `shouldAdvanceTime`: that option auto-advances fake time in step
+  // with the wall clock, so the 4s orphan-cleanup timer could fire at a
+  // wall-clock-dependent point — weakening exact shrink/replay. `flush`
+  // advances fake time explicitly via `advanceTimersByTimeAsync`, which
+  // doesn't need it.
+  vi.useFakeTimers()
   let env: Env | null = null
   try {
     env = await buildEnv()
     const ids: string[] = [ROOT]
-    for (const op of ops) {
-      try {
-        ids.push(...await applyOp(env, op, ids))
-      } catch (e) {
-        assertLegalRejection(e, op)
+    for (const batch of batches) {
+      // All ops in the batch land before the batch's single flush —
+      // the mid-plan-interleaving window (see caseArb's docblock).
+      for (const op of batch) {
+        try {
+          ids.push(...await applyOp(env, op, ids))
+        } catch (e) {
+          assertLegalRejection(e, op)
+        }
       }
       await env.flush()
+      await collectMintedIds(sharedDb.db, ids)
       await auditOrFail(sharedDb.db, env.repo)
     }
     // Fire any pending orphan cleanups, then re-audit the settled state.
     await env.flush(4001)
+    await collectMintedIds(sharedDb.db, ids)
     await auditOrFail(sharedDb.db, env.repo)
   } finally {
     // A failing/abandoned case may leave detached processor work — drain

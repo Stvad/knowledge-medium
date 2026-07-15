@@ -968,6 +968,126 @@ describe('parseReferences — stale-plan guard covers references-only writers', 
   })
 })
 
+describe('parseReferences — alias claimed between plan build and apply (write-phase lookup-first)', () => {
+  // The race (found by referencesRecompute.fuzz.test.ts once its ops
+  // batched before a flush): the read phase's aliasLookup misses, so the
+  // plan predicts a fresh deterministic seat — but before the write
+  // phase runs, an unrelated commit claims the alias on a different
+  // block. The interfering write touches the CLAIMANT row, not the
+  // source, so no watched field re-fires the source: the stale-plan
+  // guard can't help here. Pre-fix the write phase minted the seat
+  // anyway, tripped the alias-uniqueness trigger, and the processor tx
+  // rolled back whole — leaving the source permanently carrying the
+  // mark with no derived ref. The fix is lookup-first INSIDE the write
+  // tx (ensureAliasTarget / ensureDailyNoteTarget) plus retargeting the
+  // plan's predicted seat id to the claimant, converging to exactly
+  // what a fresh re-parse would produce.
+  const parkLookupOf = (alias: string) => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const realQuery = env.repo.query
+    // `repo.query` is a name-dispatch Proxy (repo.ts), so spyOn can't
+    // patch a method on it — swap the whole facade for a gating wrapper.
+    const gatedQuery = new Proxy(realQuery, {
+      get(target, prop, receiver) {
+        if (prop !== 'aliasLookup') return Reflect.get(target, prop, receiver)
+        return (args: {workspaceId: string; alias: string}) => {
+          const handle = target.aliasLookup(args)
+          if (args.alias !== alias) return handle
+          return {
+            ...handle,
+            load: async () => {
+              await gate
+              return handle.load()
+            },
+          }
+        }
+      },
+    })
+    ;(env.repo as {query: typeof realQuery}).query = gatedQuery
+    return {
+      release,
+      restore: () => { ;(env.repo as {query: typeof realQuery}).query = realQuery },
+    }
+  }
+
+  it('binds a plain alias mark to the block that claimed the alias mid-plan instead of stripping', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'C'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // The source's SECOND mark ([[ParkZ]]) parks the read phase after
+    // [[RacedAlias]] has already been resolved (lookup miss → seat
+    // prediction), so the claim below lands in the read→write gap.
+    const park = parkLookupOf('ParkZ')
+    try {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'race-src', workspaceId: WS, parentId: null, orderKey: 'a1',
+          content: 'see [[RacedAlias]] and [[ParkZ]]',
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.tx(
+        tx => tx.setProperty('claimant', aliasesProp, ['RacedAlias']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      park.release()
+    } finally {
+      park.restore()
+    }
+    await flush()
+
+    const row = await env.read('race-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'RacedAlias' && ref.id === 'claimant'),
+      `raced alias binds to the claimant, not stripped/dangling (refs: ${row!.references_json})`,
+    ).toBe(true)
+    expect(refs.some(ref => ref.alias === 'ParkZ'), 'unraced mark still derived').toBe(true)
+    // The predicted seat must NOT have been minted — the claimant owns
+    // the alias.
+    const seat = await env.read(computeAliasSeatId('RacedAlias', WS))
+    expect(seat, 'no seat row minted for a claimed alias').toBeNull()
+  })
+
+  it('binds a date mark to the block that claimed the ISO alias mid-plan instead of stripping', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'date-claimant', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'D'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    const park = parkLookupOf('ParkZ')
+    try {
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'date-race-src', workspaceId: WS, parentId: null, orderKey: 'a1',
+          content: 'due [[2026-02-03]] and [[ParkZ]]',
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.tx(
+        tx => tx.setProperty('date-claimant', aliasesProp, ['2026-02-03']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      park.release()
+    } finally {
+      park.restore()
+    }
+    await flush()
+
+    const row = await env.read('date-race-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === '2026-02-03' && ref.id === 'date-claimant'),
+      `raced date alias binds to the claimant (refs: ${row!.references_json})`,
+    ).toBe(true)
+    const seat = await env.read(dailyNoteBlockId(WS, '2026-02-03'))
+    expect(seat, 'no daily seat minted for a claimed date alias').toBeNull()
+  })
+})
+
 describe('parseReferences — idempotent comparison', () => {
   it('skips the references write when stored refs canonical-equal the parse output despite differing array order', async () => {
     // Simulate what a sync-applied row looks like locally after the

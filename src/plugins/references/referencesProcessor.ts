@@ -2,10 +2,13 @@
  * Reference parsing + orphan-alias cleanup post-commit processors (spec §7).
  *
  * `references.parseReferences`
- *   - watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties'] }
+ *   - watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties', 'references', 'deleted'] }
  *   - For each changedRow whose `content` or `properties` changed (insert
  *     or update), parse `[[alias]]` / `((uuid))` references and ref-typed
- *     properties.
+ *     properties. `references` and `deleted` are also watched — not to
+ *     drive parsing off them, but so references-only writers re-converge
+ *     and a tombstone→live restore re-derives; see the registration's
+ *     `watches` comment (~line 319) for the full rationale.
  *   - Resolve aliases to existing target ids via a workspace-scoped
  *     SQL lookup (committed-state read via ctx.db). On miss, create
  *     the target via ensureAliasTarget / ensureDailyNoteTarget.
@@ -110,9 +113,14 @@ interface SourcePlan {
    *  should end up with. The id may name a non-yet-existing target if
    *  the write phase will create it (alias case below). */
   references: BlockReference[]
-  /** Aliases to be created via `ensureAliasTarget` in the write phase.
-   *  Excludes ids resolved by lookup (those already exist). */
-  aliasesToEnsure: string[]
+  /** Aliases to be created via `ensureAliasTarget` in the write phase,
+   *  each with the seat id the read phase PREDICTED for it. Excludes
+   *  ids resolved by lookup (those already exist). The prediction can
+   *  go stale — a live block may claim the alias between plan build and
+   *  apply — so the write phase compares the ensure's actual id against
+   *  `id` and retargets the planned references on divergence (see
+   *  applySourcePlan). */
+  aliasesToEnsure: Array<{alias: string; id: string}>
   /** ISO dates to be created via `ensureDailyNoteTarget` in the write phase. */
   datesToEnsure: string[]
   /** True iff the planned `references` differ from what's currently on
@@ -135,7 +143,7 @@ const buildSourcePlan = async (
 
   const aliasRefs: BlockReference[] = []
   const dateRefs: BlockReference[] = []
-  const aliasesToEnsure: string[] = []
+  const aliasesToEnsure: Array<{alias: string; id: string}> = []
   const datesToEnsure: string[] = []
   const seenAliases = new Set<string>()
 
@@ -195,7 +203,7 @@ const buildSourcePlan = async (
       source.workspaceId,
     )
     aliasRefs.push({id, alias: mark.alias})
-    aliasesToEnsure.push(mark.alias)
+    aliasesToEnsure.push({alias: mark.alias, id})
   }
 
   const blockRefs: BlockReference[] = []
@@ -293,15 +301,46 @@ const applySourcePlan = async (
     || JSON.stringify(current.references) !== plan.basisReferencesJson
   ) return []
   const newlyInserted: string[] = []
-  for (const date of plan.datesToEnsure) {
-    await ensureDailyNoteTarget(tx, ctx.repo, date, plan.workspaceId, typeSnapshot)
+  // The read phase's target predictions (seat/daily ids) can go stale:
+  // a live block claiming the alias between plan build and apply makes
+  // the ensure resolve to the CLAIMANT (tx-scoped lookup-first inside
+  // ensureAliasTarget / ensureDailyNoteTarget), not the predicted seat.
+  // The interfering write touched the claimant row, not the source, so
+  // no watched field re-fires the source — skipping like the stale-plan
+  // guard would drop the update permanently. Retargeting the planned
+  // entries to the ensure's actual id converges to exactly what a fresh
+  // re-parse would produce (its lookup would hit the claimant). The
+  // `alias !== id` conjunct keeps raw `((id))` blockrefs literal.
+  let references = plan.references
+  const retarget = (predicted: string, actual: string, alias?: string) => {
+    if (actual === predicted) return
+    references = references.map(ref =>
+      ref.sourceField === undefined
+      && ref.id === predicted
+      && ref.alias !== ref.id
+      && (alias === undefined || ref.alias === alias)
+        ? {...ref, id: actual}
+        : ref,
+    )
   }
-  for (const alias of plan.aliasesToEnsure) {
+  for (const date of plan.datesToEnsure) {
+    const ensured = await ensureDailyNoteTarget(tx, ctx.repo, date, plan.workspaceId, typeSnapshot)
+    retarget(dailyNoteBlockId(plan.workspaceId, date), ensured.id)
+  }
+  for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
     if (ensured.inserted) newlyInserted.push(ensured.id)
+    retarget(predicted, ensured.id, alias)
   }
-  if (plan.referencesChanged) {
-    await tx.update(plan.sourceId, {references: plan.references}, {skipMetadata: true})
+  // Retargeting invalidates the read phase's referencesChanged verdict —
+  // recompute it the same canonical-to-canonical way buildSourcePlan does
+  // (`current.references` equals the plan basis; the guard above ensured
+  // that).
+  const referencesChanged = references === plan.references
+    ? plan.referencesChanged
+    : JSON.stringify(current.references) !== JSON.stringify(normalizeReferences(references))
+  if (referencesChanged) {
+    await tx.update(plan.sourceId, {references}, {skipMetadata: true})
   }
   return newlyInserted
 }
