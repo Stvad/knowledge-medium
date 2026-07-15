@@ -533,6 +533,52 @@ describe('seed definition write guard (tx layer)', () => {
     expect(JSON.parse(row.properties_json)).toEqual({})
   })
 
+  it('rejects a user-scope createOrGet insert of a provenance-valid seed row', async () => {
+    // createOrGet's insert path builds the same row shape as create — the
+    // old per-primitive guard covered only create (Codex review). The
+    // commit-time check sees the insert's snapshot like any other write.
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await expect(repo.tx(async tx => {
+      await tx.createOrGet({
+        id,
+        workspaceId: WS,
+        parentId: propertiesPageBlockId(WS),
+        orderKey: 'a0',
+        content: seed.name,
+        properties: canonicalPropertySeedProperties(seed),
+      })
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?', [id])).toBeNull()
+  })
+
+  it('rejects a user-scope restore patch that makes a tombstoned occupant provenance-valid', async () => {
+    // The dual of restore-tamper: the tombstone is a PLAIN occupant of the
+    // deterministic id, and the patch writes the canonical bag in — the
+    // resulting row, not the before row, is what forges (Codex review).
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await repo.tx(async tx => {
+      await tx.create({
+        id,
+        workspaceId: WS,
+        parentId: propertiesPageBlockId(WS),
+        orderKey: 'a0',
+        content: 'placeholder',
+        properties: {},
+      })
+      await tx.delete(id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.tx(
+      tx => tx.restore(id, {properties: canonicalPropertySeedProperties(seed)}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+    const row = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(row.deleted).toBe(1)
+    expect(JSON.parse(row.properties_json)).toEqual({})
+  })
+
   it('rejects a user-scope restore that rewrites a tombstoned seed bag', async () => {
     // `restore` accepts a properties patch — without a guard it was the one
     // bag-write path a user-scope caller could still reach (tombstone the

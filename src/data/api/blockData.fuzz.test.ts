@@ -107,12 +107,17 @@ describe('normalizeReferences', () => {
     )
   })
 
-  it('output is a subset of input as a multiset of (sourceField, id, alias) tuples (no invented refs)', () => {
+  it('output tuple set EQUALS the unique input tuple set (nothing invented, nothing dropped)', () => {
+    // Set equality, not just subset: subset alone is satisfied by an
+    // implementation that drops everything — a dedup regression losing a
+    // non-duplicate ref would have passed every other property here
+    // (Codex review on PR #371).
     fc.assert(
       fc.property(refsArb, refs => {
         const out = normalizeReferences(refs)
         const inputKeys = new Set(refs.map(tupleKey))
-        for (const r of out) expect(inputKeys.has(tupleKey(r))).toBe(true)
+        const outputKeys = new Set(out.map(tupleKey))
+        expect([...outputKeys].sort()).toEqual([...inputKeys].sort())
       }),
       fuzzParams(150),
     )

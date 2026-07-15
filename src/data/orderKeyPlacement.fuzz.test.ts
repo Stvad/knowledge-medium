@@ -39,7 +39,7 @@
  * by `src/data/test/repoMutators.fuzz.test.ts` (~line 297), making
  * fast-check's shrink/seed-replay sound.
  */
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams } from '@/test/fuzz'
 import type { BlockData, Tx } from '@/data/api'
@@ -230,6 +230,11 @@ const checkOracles = (
  * pin, breaking seeded replay (Codex review on PR #371). Each case
  * records itself and barriers before pinning. */
 let inFlightCase: Promise<void> | null = null
+
+// The LAST property has no subsequent pre-case barrier, so an
+// interrupted final case could leave Math.random patched while vitest
+// moves on within the worker (Codex review on PR #371).
+afterAll(async () => { await inFlightCase?.catch(() => {}) })
 
 describe('orderKeyPlacement fuzz', () => {
   it('keysImmediatelyBefore: never throws; new keys ascending with no ties; ids preserved; land immediately before the anchor', async () => {

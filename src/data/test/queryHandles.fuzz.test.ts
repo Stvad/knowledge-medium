@@ -161,7 +161,11 @@ const LEGAL_ERRORS = [
 const assertLegalRejection = (e: unknown, op: OpSpec): void => {
   if (LEGAL_ERRORS.some(cls => e instanceof cls)) return
   if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
-  if (e instanceof Error && e.constructor === Error) return
+  // Placement anchors resolve by id under the TARGET parent — the one
+  // legal plain-Error rejection (mutators.ts:118/431). Anything else is
+  // a bug (Codex review on PR #371: the previous blanket branch accepted
+  // every plain Error).
+  if (e instanceof Error && /^(position\.(before|after) )?sibling .* not found under /.test(e.message)) return
   throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
 }
 
