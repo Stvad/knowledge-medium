@@ -244,6 +244,48 @@
     color: var(--fg-dim);
   }
 
+  /* Sticky TOC (pattern from docs/schema-unification.html) */
+  nav.toc {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    border-bottom: 1px solid var(--rule);
+    background: color-mix(in srgb, var(--bg) 90%, transparent);
+    backdrop-filter: blur(8px);
+    margin: 0 -1.5rem 1rem;
+    padding: 0.5rem 1.5rem;
+  }
+  nav.toc ol {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.1rem 1rem;
+    margin: 0;
+    padding: 0;
+    font-size: 0.82rem;
+  }
+  nav.toc li { margin: 0; }
+  nav.toc a { color: var(--fg-dim); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+
+  /* Reading guide */
+  aside.reading-guide {
+    margin: 0 0 1.5rem;
+    padding: 0.7rem 1rem;
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    background: var(--panel);
+    font-size: 0.92rem;
+  }
+  aside.reading-guide h5 {
+    margin: 0 0 0.4rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--fg-dim);
+  }
+
   /* Misc */
   ul, ol { margin: 0.5rem 0 1rem; padding-left: 1.4rem; }
   ul li, ol li { margin: 0.3rem 0; }
@@ -272,6 +314,25 @@
     prototype in PR #285. Supersedes rev 1 (PR #55).
   </p>
 </header>
+
+<nav class="toc" aria-label="Sections">
+  <ol>
+    <li><a href="#s1">1 Why</a></li>
+    <li><a href="#s2">2 Shape</a></li>
+    <li><a href="#s3">3 Re-grounding</a></li>
+    <li><a href="#s4">4 Alternatives</a></li>
+    <li><a href="#s5">5 Mechanism</a></li>
+    <li><a href="#s6">6 Scope</a></li>
+    <li><a href="#s7">7 Field rows</a></li>
+    <li><a href="#s8">8 E2EE</a></li>
+    <li><a href="#s9">9 Detection</a></li>
+    <li><a href="#s10">10 UI</a></li>
+    <li><a href="#s11">11 Shipping</a></li>
+    <li><a href="#cell-endstate">Cell end-state</a></li>
+    <li><a href="#invariants">Invariants</a></li>
+    <li><a href="#s12">12 Risks</a></li>
+  </ol>
+</nav>
 
 <aside class="doc-status">
   <strong>Status: current (planning).</strong> Rewritten 2026-07-01 against master
@@ -328,6 +389,31 @@
   <strong>Last verified against code:</strong> 2026-07-15 (initial rewrite 2026-07-01
   against <code>8a6f22cd</code>; spot-verifications through 07-09; unification
   re-ground 07-15 against post-#364 master).
+</aside>
+
+<aside class="reading-guide">
+  <h5>How to read this doc</h5>
+  <p style="margin:0.3rem 0">
+    The load-bearing core is <a href="#s5">§5</a> — merge semantics ("children are the
+    only truth that crosses sync"), the arrival reconcile, and the projection-checksum
+    discriminator. The design lives or dies there; read it first and in full. Then
+    <a href="#s6">§6</a> (which schemas are child-backed, and the carve-outs) and, if
+    you're implementing, your slice in <a href="#s11">§11</a>. <a href="#s2">§2</a>
+    gives the target shape in one figure. The
+    <a href="#invariants">invariants index</a> is the checklist every slice inherits —
+    consult it before adding any mechanism that touches sync, projection, or
+    detection.
+  </p>
+  <p style="margin:0.3rem 0">
+    Skip <a href="#s3">§3</a> (the rev-1 diff) and <a href="#s4">§4</a> (rejected
+    alternatives) unless you're doing archaeology. Two external dependencies:
+    this doc <em>consumes</em> schema unification
+    (<code>docs/schema-unification.html</code> — fieldId = definition block id, the
+    resolution primitive, the name-winner gate, <code>childBacked</code>'s durable
+    home; read its §3–§7 when an identity question comes up), and the
+    <code>row_events</code> optimization (§12) is a prerequisite for slice C, not for
+    slices A–B.
+  </p>
 </aside>
 
 <div class="callout">
@@ -1991,6 +2077,127 @@ edit. The pass must evict-or-force-refresh the touched blocks' handles per chunk
 (the observer's invalidation fan-out pointed at the projected ids), never rely on
 row-version deltas to propagate its repairs.
 </p>
+
+<h2 id="invariants">Invariants index — what implementation must keep true</h2>
+
+<p>
+The named rules this design rests on, each with one home section (the authoritative
+statement), the mechanisms it binds, and the test that pins it. Every slice inherits
+its tagged rows as test obligations; any new mechanism touching sync, projection, or
+detection must be swept against this table before it lands. (Pattern borrowed from
+<code>docs/schema-unification.html</code>, for the same reason it exists there: across
+seventeen review rounds, most findings were a rule stated in one section and missed by
+a mechanism added in another — round 17's buildability cluster alone hit four sites.)
+</p>
+
+<table>
+  <thead>
+    <tr><th>Invariant</th><th>Home</th><th>Binds</th><th>Pin with (slice)</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Children-authoritative sync.</strong> The cell is never a merge
+        input for child-backed keys; arrival re-projects them from local
+        children.</td>
+      <td><a href="#s5">§5</a></td>
+      <td>Arrival reconcile, materializer seam, backfill convergence, steps 4–6</td>
+      <td>Two clients' concurrent property writes converge per-key (C, the two-client
+        test)</td>
+    </tr>
+    <tr>
+      <td><strong>The flip is total.</strong> Materialize (cell → children) runs only
+        where the cell is genuinely newer truth — checksum-mismatched bags and
+        backfill convergence — never on a current client's projection.</td>
+      <td><a href="#s5">§5</a> callout</td>
+      <td>Arrival catch-up, sweep, projection rebuilds</td>
+      <td>A current-client bag arrival never overwrites children (C)</td>
+    </tr>
+    <tr>
+      <td><strong>Absent children license creation, never deletion.</strong> A
+        child-backed cell key with no child rows is pending materialization —
+        everywhere: arrival, projection rebuilds, sweep.</td>
+      <td><a href="#s5">§5</a></td>
+      <td>Reconcile branches, consistency sweep, projection</td>
+      <td>A no-children key survives arrival untouched; the sweep materializes it
+        (C)</td>
+    </tr>
+    <tr>
+      <td><strong>The checksum binds content, identity, and enumeration — both
+        directions.</strong> <code>{hash, coveredKeys}</code> over block id + covered
+        values; verification = the hash over exactly the listed keys <em>plus</em>
+        containment (present child-backed ⊆ covered); never the local registry.</td>
+      <td><a href="#s5">§5</a> discriminator</td>
+      <td>Arrival classification, sweep classification, checksum storage choice</td>
+      <td>A copied bag mismatches (id); an old-client added key mismatches
+        (containment); plugin skew never flips classification (C)</td>
+    </tr>
+    <tr>
+      <td><strong>Buildability gates every cell-independence decision.</strong>
+        Per-client at arrival (locally-unbuildable keys are cell-backed on that
+        client); fleet-wide for the sync-off (steps 4 and 5 share one
+        child-backed-and-fleet-buildable predicate, per-definition not
+        per-origin).</td>
+      <td><a href="#s5">§5</a>, <a href="#cell-endstate">§11 steps 4–5</a></td>
+      <td>Reconcile branches, coveredKeys stamping, upload stop, download marker</td>
+      <td>A plugin-less client keeps cell authority for a custom-codec key; rows
+        carrying such keys never stop syncing the cell (C; 4–5)</td>
+    </tr>
+    <tr>
+      <td><strong>Recognition = column + parent role.</strong> A field row's
+        <code>reference_target_id</code> is a definition id <em>and</em> its parent is
+        not itself a field row; children of field rows are never field rows.</td>
+      <td><a href="#s9">§9</a></td>
+      <td>Rendering, hidden filtering, <code>childrenOf</code> exclusion, projection,
+        dedup walk</td>
+      <td><code>block-type:properties</code> ref values render as values, not nested
+        fields (B)</td>
+    </tr>
+    <tr>
+      <td><strong>Cross-workspace copies re-derive, never carry.</strong> Structural
+        copy/move clears <code>reference_target_id</code>; the derive processor
+        re-resolves from <code>[[name]]</code> against the destination's winner
+        map.</td>
+      <td><a href="#s9">§9</a></td>
+      <td>Copy/move/paste paths; the §8 e2ee de-structure is its encrypted case</td>
+      <td>A cross-workspace paste resolves by the destination's name map (B3)</td>
+    </tr>
+    <tr>
+      <td><strong>The processor pair is idempotent and ping-pong-free.</strong>
+        Output-equals-input writes are skipped; duplicate resolution is
+        deterministic.</td>
+      <td><a href="#s5">§5</a> callout</td>
+      <td>Dual-write round-trip, arrival re-projection, backfill retries</td>
+      <td>The invalidation-counter no-op proof (B1, kernel-test idiom)</td>
+    </tr>
+    <tr>
+      <td><strong>Undo restores what processors won't re-derive.</strong> Same-tx
+        processors are skipped on replay by design, so history snapshots and replay
+        SQL must carry every storage column.</td>
+      <td><a href="#s12">§12</a>, slice A</td>
+      <td><code>row_events</code> serialization, undo replay column list</td>
+      <td>Undoing <code>[[status]]</code> → text clears the column (A)</td>
+    </tr>
+    <tr>
+      <td><strong>Repairs propagate visibly.</strong> Writes that preserve
+        <code>updated_at</code> fan out explicit invalidations (the LWW gate sees
+        nothing newer); arrival cell-repair completes before affected invalidations
+        reach readers.</td>
+      <td><a href="#s5">§5</a> arrival, <a href="#cell-endstate">§11 impl note</a></td>
+      <td>Materializer seam, first-sync projection pass, handle/query caches</td>
+      <td>A hydrated block reflects the repair without an unrelated edit; no stale
+        LWW-bag read after arrival (C; 4–5)</td>
+    </tr>
+    <tr>
+      <td><strong>Every history chain starts full.</strong> A compact
+        <code>row_events</code> update targeting a row with no prior event promotes to
+        a full snapshot — no provenance exemption strands a later edit.</td>
+      <td><a href="#s12">§12</a> history</td>
+      <td>row_events compact encoding, backfill/sync exemptions</td>
+      <td>First edit of a backfill-exempted row logs a full <code>after</code>
+        (history PR)</td>
+    </tr>
+  </tbody>
+</table>
 
 <h2 id="s12">12. Risks to monitor</h2>
 
