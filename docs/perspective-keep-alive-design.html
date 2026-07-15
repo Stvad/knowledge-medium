@@ -31,7 +31,7 @@
 </head>
 <body>
 <aside class="doc-status" style="margin:0 0 1.25rem;padding:.6rem .9rem;border:1px solid #b8860b;border-radius:6px;background:rgba(184,134,11,.12);font-size:.85rem;line-height:1.45">
-<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review (2026-07-14) corrected three things:</strong> Activity <em>reveal</em> pauses native-play video (so hiding is <code>display:none</code> for media, Activity for the rest — not Activity-only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; and <code>panelHistory</code> is not actually a blocker. <strong>Last verified against code:</strong> 2026-07-14 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
+<strong>Status: proposed</strong> &middot; design only, nothing built. Revised through upstream review (PR #357 thread): synced definitions; the core ask reframed as a <em>layout-root provider</em> seam (with an audit of the non-injected globals that block it, and a concrete provider sketch). <strong>Adversarial review + thread (2026-07-14/15) corrected:</strong> Activity <em>reveal</em> pauses native-play video — resolved by wiring <code>onPlay</code>/<code>onPause</code> so hiding stays uniform <code>&lt;Activity&gt;</code> (<code>display:none</code> is a fallback only); persp-on-the-workspace-URL-segment is a larger change than "extend the parser" and defeats keep-alive if done naively; <code>panelHistory</code> is not a blocker; and editor caret/selection <em>do</em> survive reveal (persisted via <code>editorSelection</code>) — only IME-composition / multi-cursor / in-editor undo-history reset. <strong>Last verified against code:</strong> 2026-07-15 (<code>src/</code> post-upstream-merge #367 + <code>agent-extensions/window-management/</code> + <code>node_modules/react-player</code>).
 </aside>
 
 <h1>Perspective keep-alive</h1>
@@ -354,11 +354,11 @@ strictly.</p>
       <em>class</em> survives — it's prop-driven; only DOM focus needs a nudge).</li>
     </ul>
   <p>What no hiding mode solves — remaining regardless: the DOM-selector ambiguity (hidden DOM
-  stays in the document either way) and the reveal-time focus nudge. And note the effect-registered
-  self-deactivation above is <em>Activity-specific</em>: a session hidden with
-  <code>display:none</code> keeps its effects mounted, so its action contexts stay registered and
-  DO need the explicit <code>sessionHidden</code> gating. Since the hiding policy below is
-  mixed (Activity for most, <code>display:none</code> for media), both paths must be handled.</p>
+  stays in the document either way) and the reveal-time focus nudge. Note the effect-registered
+  self-deactivation above is <em>Activity-specific</em> — it's exactly why the chosen policy below is
+  uniform Activity; the <code>display:none</code> fallback (kept only for a provider that can't be
+  made reveal-safe) keeps effects mounted and so would need explicit <code>sessionHidden</code>
+  gating for that one subtree.</p>
   </li>
 </ul>
 
@@ -394,14 +394,14 @@ strictly.</p>
   outcome; a LayoutRenderer override is heavier than the bar needs).</li>
 </ul>
 
-<h2>Hiding policy: <code>display:none</code> for media, <code>&lt;Activity&gt;</code> for the rest</h2>
+<h2>Hiding policy: uniform <code>&lt;Activity&gt;</code> + player prop-sync</h2>
 
-<p>Two ways to hide a mounted session, and the choice is not uniform — it splits on whether the
-subtree holds live media. React 19.2.6 (installed) exports stable <code>&lt;Activity&gt;</code>,
-the official hide-with-state primitive: it preserves state + DOM, defers hidden re-renders to
-background priority, and its effect-cleanup-on-hide is what makes the effect-registered half of
-input isolation free (above). The alternative, a plain <code>display:none</code> wrapper, keeps
-the subtree fully mounted — effects never clean up.</p>
+<p>React 19.2.6 (installed) exports stable <code>&lt;Activity&gt;</code>, the official
+hide-with-state primitive: it preserves state + DOM, defers hidden re-renders to background
+priority, and its effect-cleanup-on-hide is what makes the effect-registered half of input isolation
+free (above). The one hazard is that <em>reveal re-runs effects</em> — which, for the video player,
+needs a small fix before Activity is safe. The alternative, a plain <code>display:none</code>
+wrapper, keeps the subtree fully mounted (effects never clean up) — kept only as a fallback, below.</p>
 
 <div class="note"><strong>The blocker an earlier revision of this doc missed — Activity pauses
 native-play video on REVEAL.</strong> Activity's contract is: hide runs effect cleanups,
@@ -419,28 +419,42 @@ calls <code>.pause()</code>. Net: audio continues <em>while hidden</em> and stop
 you return</em> — the exact opposite of the headline, on the common (native-play) path. Only
 <code>seekTo</code>-started (timestamp-link) playback survives.</div>
 
-<p>Consequences, and the corrected policy:</p>
-<ul>
-  <li><strong><code>display:none</code> for media-bearing sessions</strong> — the safe default here,
-  not a contingency. Effects never unmount, so nothing re-runs on reveal and native-play keeps
-  playing. (This inverts an earlier round's "Activity everywhere" call — for exactly the subtree the
-  feature exists to protect, <code>display:none</code> is what delivers it.)</li>
-  <li><strong><code>&lt;Activity&gt;</code> for everything else</strong> — cheaper hidden re-renders
-  and free input isolation, where there's no live media to pause.</li>
-  <li><strong>Or make Activity safe for media</strong> (then it can be uniform): wire
-  <code>onPlay</code>/<code>onPause</code> on the player so <code>isPlaying</code> tracks native
-  state — then the reveal re-run is a no-op. Small core change to the video plugin; listed as
-  required work if we want Activity for media.</li>
-  <li><strong>Editors are not "exactly as left" under Activity.</strong> CodeMirror is effect-created,
-  so Activity reveal drops cursor, selection, in-progress IME composition, editor-local undo, and
-  intra-editor scroll. Under <code>display:none</code> they survive. Honest scope: keep-alive
-  preserves mounted views and (with the right hiding mode) playback — it does not preserve in-editor
-  transient state unless the editor's session is <code>display:none</code>-hidden.</li>
-</ul>
+<p><strong>Chosen policy (upstream review): uniform <code>&lt;Activity&gt;</code>, and fix the
+player so reveal is safe.</strong> Wire <code>onPlay</code>/<code>onPause</code> on the
+<code>&lt;ReactPlayer&gt;</code> so <code>isPlaying</code> tracks native play state — then the
+reveal-time re-run sees <code>playing === true</code> on the playing element and the enforcement
+<code>.pause()</code> never fires. Small, self-contained change to the video plugin
+(<span class="filepath">src/plugins/video-player/VideoPlayerRenderer.tsx</span>), and it's a latent
+correctness fix regardless of perspectives (KM's <code>isPlaying</code> is out of sync with the
+native controls today). With that in place, Activity is uniform across all inactive sessions — no
+media special-case — so the input-isolation gains (effect-registered contexts self-deactivate on
+hide) apply everywhere, and there's no <code>display:none</code>-hidden-but-effects-live case to
+gate.</p>
 
-<p><strong>Fix the spike accordingly:</strong> rollout must assert playback continues <em>after
-reveal</em>, not while hidden — the naive "confirm audio continues while hidden" check passes even
-in the broken case, because the pause fires only on reveal.</p>
+<p><code>display:none</code> stays documented as a per-session <em>fallback</em> only: if some
+future provider can't be made reveal-safe via prop-sync, wrap that one media subtree in
+<code>&lt;div style="display:none"&gt;</code> (effects stay mounted, nothing re-runs) — at the cost
+of needing explicit <code>sessionHidden</code> gating for that subtree's action contexts. Not the
+default; the escape hatch.</p>
+
+<div class="note"><strong>Editor state under Activity — narrower than an earlier revision claimed
+(a review correction).</strong> KM persists caret + selection to the <code>editorSelection</code>
+prop (debounce-saved, and the unmount <code>flushDebouncers</code> layout-cleanup flushes any
+pending write — <span class="filepath">src/components/BlockEditor.tsx:85,114</span>) and restores it
+on the edit-mode focus effect (<span class="filepath">BlockEditor.tsx:199-215</span>). So on Activity
+reveal the mid-edit block re-enters edit mode and the caret/selection come back — "exactly as left"
+holds for cursor, selection, and content. The genuinely-not-restored residual is minor:
+<code>editorSelection</code> stores a <em>single</em> range, so a multi-cursor/multi-range selection
+collapses to one; in-progress IME composition is editor-internal and lost; and the editor's
+in-session CodeMirror undo/redo stack is view-local (block content and repo-level undo grouping
+survive, but that per-session history resets). Scope is small either way — only the single block
+actively being edited has a CodeMirror instance; every other block in a hidden perspective is in
+view mode with no editor to lose.</div>
+
+<p><strong>Fix the spike accordingly:</strong> rollout must assert a <em>native-play</em> video (not
+just a <code>seekTo</code>-started one) still plays <em>after</em> switching back — the naive
+"confirm audio continues while hidden" check passes even in the broken (pre-<code>onPlay</code>-fix)
+case, because the pause fires only on reveal.</p>
 
 <p>Background cost model: per warm session, retained DOM + live query subscriptions that re-render
 the hidden tree on writes. A quiet workspace costs ≈ zero (handle-level structural-diff dedup); the
@@ -504,15 +518,17 @@ two perspectives, once mounted in the visible one, immediately hydrates its hidd
   <li>Core: session id read from <code>layoutSessionBlockId</code> context instead of the
   <code>getLayoutSessionId()</code> global at the ~9 call sites (global becomes the default seed);
   projection construction fully owned by the renderer. This is what makes the root overridable.</li>
+  <li>Video plugin: wire <code>onPlay</code>/<code>onPause</code> so <code>isPlaying</code> tracks
+  native play state (makes Activity reveal a no-op for the enforcement effect; a latent correctness
+  fix on its own).</li>
   <li>Core: active-session store + <code>LayoutSessionHost</code> override behind a default-off
-  switch; single-session behavior unchanged. <code>display:none</code> for media-bearing sessions,
-  <code>&lt;Activity&gt;</code> for the rest. The media spike must confirm a <em>native-play</em>
-  video (not a <code>seekTo</code>-started one) still plays <strong>after switching back</strong> —
+  switch; single-session behavior unchanged; inactive sessions wrapped in uniform
+  <code>&lt;Activity mode="hidden"&gt;</code>. The spike must confirm a <em>native-play</em> video
+  (not a <code>seekTo</code>-started one) still plays <strong>after switching back</strong> —
   checking only while hidden gives a false pass (see hiding policy).</li>
-  <li>Core: input gating (incl. explicit <code>sessionHidden</code> for <code>display:none</code>
-  sessions, whose effects stay mounted) + DOM-selector disambiguation + single-active-projection
-  rebinding; verify with two hand-made sessions in the sandbox (native-play video in one, switch
-  away and back, confirm it's still playing and the other perspective's layout is intact).</li>
+  <li>Core: input gating + DOM-selector disambiguation + single-active-projection rebinding; verify
+  with two hand-made sessions in the sandbox (native-play video in one, switch away and back,
+  confirm it's still playing and the other perspective's layout is intact).</li>
   <li>Extension: synced perspective registry + per-device deterministic session ids, migration from
   localStorage snapshots into the registry, expiry sweep deletes session subtrees, bar →
   <code>appMountsFacet</code>.</li>
