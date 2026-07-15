@@ -39,13 +39,25 @@ const SMOKE_SEED = 20260714
  *  whole deep budget (pass as `it()`'s third argument). A per-test
  *  timeout OVERRIDES vitest's CLI `--testTimeout`, so a hard-coded
  *  value here would silently cap a long nightly pass — derive it from
- *  the same env the budget comes from, with the same shrinking
- *  headroom scripts/fuzz.mjs uses. */
+ *  the same env the budget comes from, with the same headroom
+ *  scripts/fuzz.mjs uses (keep the two in sync). fast-check's
+ *  `interruptAfterTimeLimit` deadline is absolute and also bounds
+ *  shrinking (fc 4.9.0), so the property can't overrun its own budget;
+ *  the headroom below only needs to cover the one in-flight case left
+ *  running after the interrupt resolves without awaiting it
+ *  (docs/fuzzing.md §6), plus setup/teardown/reporting. Replay mode
+ *  (`FUZZ_SEED`/`FUZZ_PATH` set with no explicit budget) also gets the
+ *  generous ceiling: shrink/replay chains can run long, and a per-test
+ *  timeout here would otherwise silently override the `--testTimeout`
+ *  the docs tell users to pass for a manual replay. */
 export const fuzzTestTimeout = (): number => {
   const timeMs = envInt('FUZZ_TIME_MS')
-  if (timeMs !== undefined) return timeMs * 4 + 180_000
+  if (timeMs !== undefined) return timeMs + 300_000
   // Run-count-driven deep runs have no time bound to derive from.
   if (envInt('FUZZ_RUNS') !== undefined) return 3_600_000
+  // Replay mode: no explicit budget, but still needs headroom for a long
+  // shrink/replay chain — see docblock above.
+  if (envInt('FUZZ_SEED') !== undefined || process.env.FUZZ_PATH) return 3_600_000
   // Smoke: generous headroom over the ~1s budget for CI contention.
   return 60_000
 }

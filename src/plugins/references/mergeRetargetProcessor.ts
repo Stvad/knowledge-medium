@@ -59,9 +59,14 @@ const retargetReference = (
  *  value (string or string array — matching what `decodeRefId` /
  *  `decodeRefListIds` accept). Works on the raw value rather than a
  *  decode→re-encode round-trip so malformed sibling elements a lenient
- *  decode would drop are preserved verbatim. List rewrites dedupe the
- *  `intoId` entries the rewrite itself introduces (`[from, into]` must
- *  not become `[into, into]`). */
+ *  decode would drop are preserved verbatim. List rewrites dedupe every
+ *  `intoId` element once a rewrite has fired — both the entry the
+ *  rewrite itself introduces (`[from, into]` must not become
+ *  `[into, into]`) and any pre-existing `intoId` duplicate already in
+ *  the list; both are benign canonicalizations. String rewrites also
+ *  drop surrounding whitespace padding around a matched `fromId`
+ *  (`raw.trim() === fromId` matches, but the replacement is the bare
+ *  `intoId`) — same reasoning. */
 const rewriteRefValue = (
   raw: unknown,
   fromId: string,
@@ -153,6 +158,11 @@ const retargetSource = async (
 
   const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references'>> = {}
   if (nextContent !== current.content) patch.content = nextContent
+  // This write (including the properties bag) runs under the merge tx's
+  // BlockDefault scope, so if a canonical seed bag ever gains a ref/
+  // refList-typed field, merging a block referenced BY a seed definition
+  // would abort at the commit-time seed guard (assertNoSeedDefinitionWrites).
+  // Unreachable today: canonical bags carry no ref-typed fields.
   if (propertiesChanged) patch.properties = nextProperties
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {
     patch.references = nextReferences

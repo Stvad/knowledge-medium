@@ -132,7 +132,16 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
  *     stripping its provenance) and it may not be tombstoned or
  *     hard-deleted. Content/references edits and plain restores stay
  *     allowed — they don't touch the code-owned fields, and
- *     materialization itself restores tombstones. */
+ *     materialization itself restores tombstones.
+ *
+ *  The check is on the tx's NET effect: `snapshots` holds one (before,
+ *  after) pair per row — first-touch `before` vs last-write `after` — so
+ *  an intermediate state within the tx is never path-checked. A row
+ *  forged mid-tx and reverted before commit converges to a net no-op and
+ *  passes, even though its row/crud events may transit through the
+ *  forged state on the way there. Accepted: same-tx processors observe
+ *  net diffs too, the committed state is unforged either way, and sync
+ *  is out of this guard's threat model regardless. */
 export const assertNoSeedDefinitionWrites = (
   snapshots: SnapshotsMap,
   scope: ChangeScope,

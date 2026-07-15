@@ -633,4 +633,64 @@ describe('seed definition write guard (tx layer)', () => {
       {scope: ChangeScope.BlockDefault},
     )).resolves.toBeUndefined()
   })
+
+  it('an outline subtree-delete of a page containing a seed definition aborts the whole tx atomically', async () => {
+    // The guard is primitive-agnostic (assertNoSeedDefinitionWrites runs
+    // once over the tx's whole snapshots map), so it also catches a seed
+    // row tombstoned TRANSITIVELY by `repo.mutate.delete`'s subtree cascade
+    // (`core.delete` → softDeleteSubtree, mutators.ts:222-246) — not just a
+    // direct `tx.delete` on the seed's own id. That cascade is exactly the
+    // outline delete key's path (txEngine.ts:117's own rationale names it).
+    //
+    // Deliberately characterized here as correct-but-hostile UX: a user who
+    // deletes an ordinary page/section that happens to contain a seeded
+    // definition somewhere in its subtree gets the ENTIRE delete rejected
+    // and rolled back, with no indication which descendant blocked it.
+    // Softening this product-side (e.g. skipping seed rows during subtree
+    // delete instead of aborting the whole operation) is a flagged OPEN
+    // decision — NOT implemented here.
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    const pageId = await repo.mutate.createChild({parentId: propertiesPageBlockId(WS), content: 'a page'})
+    await repo.tx(tx => tx.move(id, {parentId: pageId, orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.mutate.delete({id: pageId})).rejects.toThrow(SeededDefinitionWriteError)
+
+    const pageRow = await sharedDb.db.get<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [pageId])
+    expect(pageRow.deleted, 'the page itself rolled back, not just the seed').toBe(0)
+    const seedRow = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(seedRow.deleted).toBe(0)
+    expect(JSON.parse(seedRow.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+  })
+
+  it('merge of a propertyless sibling into a seed definition succeeds (content-only merge is a legal edit)', async () => {
+    // `core.merge` (blockMerge.ts) writes `into`'s content AND properties in
+    // one `tx.update`. mergeProperties(into.properties, from.properties)
+    // with an EMPTY `from` bag never touches a key the guard would see as
+    // changed, so this is legal even though the seed is the merge target —
+    // matching the fuzzer's prediction (definitionSeeds.fuzz.test.ts
+    // `mergeIntoSeed` with `nonEmptyBag: false`). If a donor with a
+    // non-empty bag were merged in instead, mergeProperties would copy its
+    // from-only keys into `into` and the guard would reject it — see the
+    // `nonEmptyBag: true` fuzzer case for that direction.
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    const siblingId = await repo.mutate.createChild({
+      parentId: propertiesPageBlockId(WS), content: ' (extra note)',
+    })
+
+    await expect(repo.mutate.merge({intoId: id, fromId: siblingId})).resolves.toBeUndefined()
+
+    const seedRow = await sharedDb.db.get<{content: string; properties_json: string}>(
+      'SELECT content, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(seedRow.content).toBe(`${seed.name} (extra note)`)
+    expect(JSON.parse(seedRow.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+    const siblingRow = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [siblingId],
+    )
+    expect(siblingRow.deleted, 'the donor was tombstoned by the merge').toBe(1)
+  })
 })

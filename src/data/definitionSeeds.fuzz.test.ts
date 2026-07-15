@@ -4,12 +4,14 @@
  * seed-definition write guard (PR #364, schema-unification §5.1).
  *
  * Random interleavings of `materializePropertySeeds`, user-scope tamper
- * attempts, system-scope (Automation) lifecycle writes, and deterministic-id
- * poisoning run against a real test repo. The v1 invariant under test: a
- * materialized seed definition's bag is WHOLLY CODE-OWNED — no user-scope
- * (BlockDefault) write may create, rewrite, or delete it through any tx
- * primitive (txEngine.ts `assertSeedDefinitionMutable`), while Automation
- * writes and materialization itself stay unaffected.
+ * attempts, system-scope (Automation) lifecycle writes, deterministic-id
+ * poisoning, and user-scope STRUCTURAL mutators (`repo.mutate.delete`
+ * subtree-delete, `repo.mutate.merge`) run against a real test repo. The v1
+ * invariant under test: a materialized seed definition's bag is WHOLLY
+ * CODE-OWNED — no user-scope (BlockDefault) write may create, rewrite, or
+ * delete it through any tx primitive OR any mutator built on top of the
+ * primitives (`assertNoSeedDefinitionWrites`, txEngine.ts:111-154), while
+ * Automation writes and materialization itself stay unaffected.
  *
  * Oracles (each cited from the target's code/docs):
  *  - materialization idempotence: a successful pass immediately re-run over
@@ -31,10 +33,24 @@
  *    restore-with-properties forge paths under the older per-primitive
  *    guards; the update-INTO-validity path surfaced when the per-site
  *    design was probed, motivating the commit-time consolidation;
- *  - Automation-scope writes succeed (materialization and the §13
- *    revision-upgrade path run under Automation, txEngine.ts:346-353);
+ *  - Automation-scope writes succeed: `assertNoSeedDefinitionWrites`
+ *    (txEngine.ts:111-154) enforces the invariant only under `BlockDefault`
+ *    scope (the check at txEngine.ts:140, `if (scope !== ChangeScope.
+ *    BlockDefault) return`) — Automation-scope writes bypass it entirely, so
+ *    materialization and the §13 revision-upgrade path can write freely;
  *  - restore preserves a tombstone's existing bag (definitionSeeds.ts:267-270
  *    restores with `skipMetadata` and no payload repair);
+ *  - the guard is PRIMITIVE-AGNOSTIC, so it also covers structural mutators
+ *    built on the primitives: `repo.mutate.delete` (mutators.ts `core.delete`
+ *    → `softDeleteSubtree`, mutators.ts:222-246) subtree-deletes a parent
+ *    containing a live seed row and rolls back the WHOLE tx atomically
+ *    (correct-but-hostile UX, deliberately uncharacterized further here —
+ *    see definitionSeeds.test.ts); `repo.mutate.merge` (mutators.ts
+ *    `core.merge` → `mergeBlocksInTx`, blockMerge.ts) tombstones its `from`
+ *    side and rewrites its `into` side's bag via `mergeProperties` —
+ *    merging a seed away is always rejected (tombstone), merging INTO a
+ *    seed is rejected only when the donor's properties actually change the
+ *    seed's bag (an empty-bag donor is a legal content-only edit);
  *  - registry tie-in: after any interleaving, projecting the live rows via
  *    `parsePropertyDefinitionMetadata` and building the registry resolves
  *    every pool declaration to its deterministic field id (the stateful
@@ -114,6 +130,9 @@ type OpSpec =
   | {readonly op: 'poison'; readonly idx: number}
   | {readonly op: 'forgeCreate'; readonly idx: number}
   | {readonly op: 'forgeUpdate'; readonly idx: number}
+  | {readonly op: 'structuralDeleteParent'; readonly idx: number}
+  | {readonly op: 'mergeIntoSeed'; readonly idx: number; readonly nonEmptyBag: boolean}
+  | {readonly op: 'mergeSeedAway'; readonly idx: number}
 
 const idxArb = fc.nat(POOL.length - 1)
 const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
@@ -128,6 +147,11 @@ const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
   {arbitrary: fc.record({op: fc.constant('poison' as const), idx: idxArb}), weight: 1},
   {arbitrary: fc.record({op: fc.constant('forgeCreate' as const), idx: idxArb}), weight: 1},
   {arbitrary: fc.record({op: fc.constant('forgeUpdate' as const), idx: idxArb}), weight: 1},
+  {arbitrary: fc.record({op: fc.constant('structuralDeleteParent' as const), idx: idxArb}), weight: 1},
+  {arbitrary: fc.record({
+    op: fc.constant('mergeIntoSeed' as const), idx: idxArb, nonEmptyBag: fc.boolean(),
+  }), weight: 2},
+  {arbitrary: fc.record({op: fc.constant('mergeSeedAway' as const), idx: idxArb}), weight: 1},
 )
 const opsArb = fc.array(opArb, {maxLength: 14})
 
@@ -380,6 +404,102 @@ const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
         expect(row, 'rejected forge-create wrote nothing').toBeFalsy()
         break
       }
+      case 'structuralDeleteParent': {
+        const entry = model[op.idx]!
+        // A plain wrapper block, freshly created each time so a prior
+        // (rejected-and-rolled-back) invocation on the same idx can't leave
+        // stale state behind. `repo.mutate.delete` is `core.delete` →
+        // `softDeleteSubtree` (mutators.ts:222-246), a DFS cascade over
+        // tx.childrenOf that calls tx.delete on every node — the outline
+        // delete key's own path, and the guard's own rationale names it
+        // explicitly (txEngine.ts:117 "the outline delete key").
+        const wrapperId = await repo.mutate.createChild({
+          parentId: propertiesPageBlockId(WS), content: `wrapper-${position}`,
+        })
+        if (entry.status === 'live') {
+          // Move the LIVE seed under the wrapper — `tx.move` only touches
+          // parent_id/order_key (txEngine.ts move()), so before/after
+          // properties and deleted stay identical and this reparent itself
+          // never trips the guard. It sets up a subtree the guard SHOULD
+          // reject deleting.
+          await repo.tx(
+            tx => tx.move(IDS[op.idx]!, {parentId: wrapperId, orderKey: 'a0'}),
+            {scope: ChangeScope.BlockDefault},
+          )
+          const before = await snapshotRows(sharedDb.db)
+          await expect(repo.mutate.delete({id: wrapperId})).rejects.toThrow(SeededDefinitionWriteError)
+          expect(await snapshotRows(sharedDb.db), 'rejected structural delete wrote nothing to seed rows')
+            .toBe(before)
+          const wrapperRow = await sharedDb.db.get<{deleted: number}>(
+            'SELECT deleted FROM blocks WHERE id = ?', [wrapperId],
+          )
+          expect(wrapperRow.deleted, 'wrapper delete rolled back atomically with the seed rejection').toBe(0)
+          // entry stays 'live' — the whole tx (wrapper delete + seed
+          // tombstone) rolled back.
+        } else {
+          // No live seed under the wrapper (it only contains itself) — the
+          // subtree delete has nothing to reject and succeeds normally.
+          await repo.mutate.delete({id: wrapperId})
+          const wrapperRow = await sharedDb.db.get<{deleted: number}>(
+            'SELECT deleted FROM blocks WHERE id = ?', [wrapperId],
+          )
+          expect(wrapperRow.deleted, 'delete of a seed-free subtree succeeds').toBe(1)
+        }
+        break
+      }
+      case 'mergeIntoSeed': {
+        const entry = model[op.idx]!
+        if (entry.status !== 'live') break
+        // The donor's bag is either empty (content-only merge, LEGAL) or
+        // carries one made-up key absent from the seed's canonical bag
+        // (`mergeProperties(into, from)` — mergeProperties.ts — copies any
+        // from-only key into the result, so this always changes `into`'s
+        // bag and must be REJECTED).
+        const fromId = await repo.mutate.createChild({
+          parentId: propertiesPageBlockId(WS),
+          content: `donor-${position}`,
+          properties: op.nonEmptyBag ? {'fuzz:merge-marker': `marker-${position}`} : {},
+        })
+        const before = await snapshotRows(sharedDb.db)
+        if (op.nonEmptyBag) {
+          await expect(repo.mutate.merge({intoId: IDS[op.idx]!, fromId}))
+            .rejects.toThrow(SeededDefinitionWriteError)
+          expect(await snapshotRows(sharedDb.db), 'rejected merge-into-seed wrote nothing to seed rows')
+            .toBe(before)
+          // entry.bag unchanged — the whole merge tx (donor's children
+          // reparent, donor tombstone, into's bag rewrite) rolled back.
+        } else {
+          await repo.mutate.merge({intoId: IDS[op.idx]!, fromId})
+          // mergeProperties(into.properties, {}) is structurally equal to
+          // into.properties (mergeProperties.ts — the from-keys loop never
+          // runs), so the bag is unchanged even though tx.update rewrote
+          // the row (content-only edit) — entry.bag stays valid as-is.
+        }
+        break
+      }
+      case 'mergeSeedAway': {
+        const entry = model[op.idx]!
+        if (entry.status !== 'live' && entry.status !== 'tombstone') break
+        const intoId = await repo.mutate.createChild({
+          parentId: propertiesPageBlockId(WS), content: `dest-${position}`,
+        })
+        const before = await snapshotRows(sharedDb.db)
+        if (entry.status === 'live') {
+          // mergeBlocksInTx tombstones `from` (blockMerge.ts:87, `await
+          // tx.delete(from.id)`) before merging properties — a live valid
+          // seed row becoming `from` is always a rejected tombstone.
+          await expect(repo.mutate.merge({intoId, fromId: IDS[op.idx]!}))
+            .rejects.toThrow(SeededDefinitionWriteError)
+          expect(await snapshotRows(sharedDb.db), 'rejected merge-seed-away wrote nothing to seed rows')
+            .toBe(before)
+        } else {
+          // Already tombstoned: mergeBlocksInTx's `if (from.deleted) return`
+          // (blockMerge.ts:62) makes this a legal no-op before any primitive
+          // runs — nothing to reject.
+          await repo.mutate.merge({intoId, fromId: IDS[op.idx]!})
+        }
+        break
+      }
     }
     await verifyModel(sharedDb.db, model)
   }
@@ -444,8 +564,11 @@ describe('seed materialization + write-guard interleavings', () => {
 
   // Non-vacuity canary: a crafted sequence must actually traverse the
   // states the random sweep claims to cover — created, tampered-and-
-  // rejected, tombstoned, restored, poisoned-and-aborted.
-  it('op set reaches create, reject, tombstone, restore, and poison-abort', async () => {
+  // rejected, tombstoned, restored, poisoned-and-aborted, and (the
+  // structural-mutator extension) at least one structural rejection AND
+  // one legal structural op for both `repo.mutate.delete` (subtree) and
+  // `repo.mutate.merge` (both merge directions).
+  it('op set reaches create, reject, tombstone, restore, poison-abort, and structural reject/accept', async () => {
     await inFlightCase?.catch(() => {})
     await runCase([
       {op: 'forgeCreate', idx: 0},
@@ -461,6 +584,14 @@ describe('seed materialization + write-guard interleavings', () => {
       {op: 'forgeUpdate', idx: 2},
       {op: 'materialize', mask: [2, 3]},
       {op: 'materialize', mask: [3]},
+      // idx0=live, idx1=live, idx2=poisoned, idx3=live from here.
+      {op: 'structuralDeleteParent', idx: 0}, // live seed in subtree → rejected, atomic rollback
+      {op: 'structuralDeleteParent', idx: 2}, // no live seed in subtree (poisoned) → legal delete
+      {op: 'mergeIntoSeed', idx: 1, nonEmptyBag: true}, // non-empty donor bag → rejected
+      {op: 'mergeIntoSeed', idx: 3, nonEmptyBag: false}, // empty donor bag → legal content-only merge
+      {op: 'mergeSeedAway', idx: 0}, // live seed as merge source → rejected (tombstone)
+      {op: 'automationDelete', idx: 3},
+      {op: 'mergeSeedAway', idx: 3}, // tombstoned seed as merge source → legal no-op
     ])
   }, fuzzTestTimeout())
 })

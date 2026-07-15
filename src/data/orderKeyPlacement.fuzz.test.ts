@@ -7,8 +7,8 @@
  * Contract under test, cited from the code:
  *  - `siblings` is the parent's children in ascending `(order_key, id)`
  *    order — `tx.childrenOf` is documented as "ordered `(order_key, id)`"
- *    (src/data/api/tx.ts:171) and every real caller reads it straight from
- *    there (e.g. `mutators.ts:105` "Reads sibling list from SQL (tx.childrenOf
+ *    (src/data/api/tx.ts:185) and every real caller reads it straight from
+ *    there (e.g. `mutators.ts:86-87` "Reads sibling list from SQL (tx.childrenOf
  *    is sorted by (order_key, id) per §11.4)"). Ties — multiple siblings
  *    sharing one `order_key` — are an explicitly supported on-disk state
  *    per orderKeyPlacement.ts's own docblock (lines 6-11): "two adjacent
@@ -35,9 +35,9 @@
  *
  * The underlying key generator (`fractional-indexing-jittered`, wrapped by
  * `orderKey.ts`) draws on `Math.random` for jitter — the only nondeterminism
- * in this stack — so it's pinned via the seeded-LCG try/finally pattern used
- * by `src/data/test/repoMutators.fuzz.test.ts` (~line 297), making
- * fast-check's shrink/seed-replay sound.
+ * in this stack — so it's pinned via the same seeded-LCG try/finally pattern
+ * as `runCase` in `repoMutators.fuzz.test.ts`, making fast-check's
+ * shrink/seed-replay sound.
  */
 import { afterAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -116,8 +116,8 @@ const caseArb = fc.record({
   prngSeed: fc.integer({min: 1, max: 2147483646}),
 })
 
-/** Seeded LCG over `Math.random` — same recipe as
- *  `src/data/test/repoMutators.fuzz.test.ts` (~line 297). */
+/** Seeded LCG over `Math.random` — same recipe as the pinned-LCG pattern
+ *  in `runCase`, repoMutators.fuzz.test.ts. */
 const withPinnedRandom = async <T>(seed: number, fn: () => Promise<T>): Promise<T> => {
   let lcg = seed
   const realRandom = Math.random
@@ -135,7 +135,7 @@ const withPinnedRandom = async <T>(seed: number, fn: () => Promise<T>): Promise<
 /** `(order_key, id)` order — orderKey.ts backs every key with plain base62
  *  strings compared via plain `<`/`>` (orderKey.test.ts's assertions all
  *  compare returned keys with bare `<`), and the id tiebreak is the
- *  documented secondary sort (`tx.childrenOf`, orderKeyPlacement.ts:19-20's
+ *  documented secondary sort (`tx.childrenOf`, orderKey.ts:14-16's
  *  `<order_key>!hex(id)/` note). */
 const byKeyThenId = (a: {orderKey: string; id: string}, b: {orderKey: string; id: string}): number => {
   if (a.orderKey !== b.orderKey) return a.orderKey < b.orderKey ? -1 : 1

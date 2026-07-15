@@ -21,7 +21,7 @@
  *    runtime boundary a dynamic/public facet contribution must clear or
  *    it is silently dropped (propertySeeds.ts:100-102).
  *  - P2 canonical bag -> metadata round-trip + provenance demotion:
- *    `canonicalPropertySeedProperties` (definitionSeeds.ts:52-70) fed back
+ *    `canonicalPropertySeedProperties` (definitionSeeds.ts:51-69) fed back
  *    through `isValidSeededDefinition` / `parsePropertyDefinitionMetadata`
  *    recovers the seed's own facts exactly when the row's id/workspace
  *    satisfy the deterministic-id equation (definitionSeeds.ts:29-46:
@@ -39,14 +39,14 @@
  *    non-fixpoint codec would make the stored bag diverge from the
  *    runtime default) — plus strict-decode totality (only `CodecError`)
  *    on arbitrary JSON, for every entry in `kernelValuePresetCoresById`
- *    (kernelValuePresetCores.ts:155-174).
+ *    (kernelValuePresetCores.ts:153-171).
  *  - P4 config codec laws: the same two properties directly against
  *    `refConfigCodec` / `enumConfigCodec` (kernelValuePresetCores.ts:5-49).
  *  - P5 `isPropertySeedDeclaration` mutation rejection: every single-field
  *    corruption the validator's own conjuncts check
  *    (propertySeeds.ts:103-123, cited per-corruption below) is rejected,
  *    and the validator never throws on arbitrary input
- *    (propertySeeds.ts:103-105 is a plain boolean expression with no
+ *    (propertySeeds.ts:106-123 is a plain boolean expression with no
  *    unguarded access once `isRecord` short-circuits).
  */
 import { describe, it, expect } from 'vitest'
@@ -461,7 +461,7 @@ const CORRUPTIONS: readonly Corruption[] = [
   // config own-key required (propertySeeds.ts:112).
   { label: 'config: own-key deleted', apply: d => deleteKey(d, 'config') },
   // encodedConfig: own key + isRecord + isJsonValue (propertySeeds.ts:113,
-  // isJsonValue at propertySeeds.ts:76-95).
+  // isJsonValue at propertySeeds.ts:76-98).
   { label: 'encodedConfig: string', apply: d => ({ ...d, encodedConfig: 'nope' }) },
   { label: 'encodedConfig: array', apply: d => ({ ...d, encodedConfig: [] }) },
   { label: 'encodedConfig: null', apply: d => ({ ...d, encodedConfig: null }) },
@@ -479,13 +479,26 @@ const CORRUPTIONS: readonly Corruption[] = [
       return { ...d, encodedConfig: o }
     },
   },
-  // codec: isRecord + type/encode/decode shape (propertySeeds.ts:114-117).
+  // codec: isRecord (propertySeeds.ts:114).
   { label: 'codec: missing', apply: d => deleteKey(d, 'codec') },
+  // codec.type: typeof === 'string' && trim().length > 0 (propertySeeds.ts:115).
+  { label: 'codec: type empty string', apply: d => ({ ...d, codec: { ...d.codec, type: '' } }) },
+  // codec.encode: typeof === 'function' (propertySeeds.ts:116).
   { label: 'codec: encode not a function', apply: d => ({ ...d, codec: { ...d.codec, encode: 'nope' } }) },
+  // codec.decode: typeof === 'function' (propertySeeds.ts:117).
+  { label: 'codec: decode not a function', apply: d => ({ ...d, codec: { ...d.codec, decode: 'nope' } }) },
+  // defaultValue: own-key required (propertySeeds.ts:118).
+  { label: 'defaultValue: own-key deleted', apply: d => deleteKey(d, 'defaultValue') },
+  // changeScope: isChangeScope(...) (propertySeeds.ts:119).
+  { label: 'changeScope: invalid enum member', apply: d => ({ ...d, changeScope: 'bogus-scope' }) },
   // hidden: typeof === 'boolean' (propertySeeds.ts:120).
   { label: 'hidden: string', apply: d => ({ ...d, hidden: 'yes' }) },
+  // hasExplicitDefault: typeof === 'boolean' (propertySeeds.ts:121).
+  { label: 'hasExplicitDefault: non-boolean', apply: d => ({ ...d, hasExplicitDefault: 'true' }) },
+  // encodedDefaultValue: own-key required (propertySeeds.ts:122).
+  { label: 'encodedDefaultValue: own-key deleted', apply: d => deleteKey(d, 'encodedDefaultValue') },
   // hasExplicitDefault true requires isJsonValue(encodedDefaultValue)
-  // (propertySeeds.ts:121-123).
+  // (propertySeeds.ts:123).
   {
     label: 'encodedDefaultValue: NaN with explicit default',
     apply: d => ({ ...d, hasExplicitDefault: true, encodedDefaultValue: Number.NaN }),

@@ -46,27 +46,33 @@
  * re-run of the real SQL against the current committed state,
  * independent of whatever dependency-tracking bug we're trying to catch.
  *
- * ── Oracle carve-out: searchByContent membership vs. row freshness ──
+ * ── Oracle carve-out: searchByContent / recentBlocks membership vs. row
+ *    freshness ──
  *
- * `searchByContentQuery.resolve` (kernelQueries.ts L1045-1052) passes
- * `{declareRowDeps: false}` to `hydrateBlocks` DELIBERATELY: "Property
- * edits, parent moves, and reference changes on a currently-matched row
- * don't affect whether the row matches — declaring per-row deps would fan
- * out invalidations for free." This is a tested, intentional contract
- * (`kernelQueries.test.ts` L1386 "parent move on a result row does NOT
- * invalidate" and L1427 "non-content property edit on a result row does
- * NOT invalidate" — the latter's comment notes a PRIOR bug over-fired on
+ * `searchByContentQuery.resolve` (kernelQueries.ts L1045-1052) and
+ * `recentBlocksQuery.resolve` (L1083-1089) both pass
+ * `{declareRowDeps: false}` to `hydrateBlocks` DELIBERATELY, relying
+ * solely on the `kernel.content` plugin channel: "Property edits, parent
+ * moves, and reference changes on a currently-matched row don't affect
+ * whether the row matches — declaring per-row deps would fan out
+ * invalidations for free." This is a tested, intentional contract for
+ * BOTH queries (`kernelQueries.test.ts` L1386 "searchByContent /
+ * recentBlocks: parent move on a result row does NOT invalidate" and
+ * L1427 "... non-content property edit on a result row does NOT
+ * invalidate" — the latter's comment notes a PRIOR bug over-fired on
  * every property write and was fixed to under-invalidate on purpose). So
- * a `searchByContent` handle's matched-row BlockData can legitimately lag
- * ground truth on property-only edits (alias/type/etc.) or parent moves
- * that don't touch content — full deep-equality against a fresh read
- * would be the WRONG oracle here (confirmed empirically: a deep run
- * caught exactly this on `setAlias` with no other bug present). Every
- * other probed query declares per-row deps by default (`repo.ts` L482:
- * `declareRowDeps = Boolean(ctx)` defaults true) or returns bare ids with
- * nothing to go stale (`childIds` lean path), so only `searchByContent`
- * gets the narrower `project` — comparing the returned id SET (its
- * documented invariant) instead of full record equality.
+ * a matched-row's BlockData in either query's result can legitimately lag
+ * ground truth on property-only edits (alias/type/etc.) or parent
+ * moves/reorders that don't touch content — full deep-equality against a
+ * fresh read would be the WRONG oracle here (confirmed empirically: a
+ * deep run caught exactly this divergence on `recentBlocks` after a
+ * `move` with no other bug present, mirroring the pre-existing
+ * `searchByContent` finding on `setAlias`). Every other probed query
+ * declares per-row deps by default (`repo.ts` L482: `declareRowDeps =
+ * Boolean(ctx)` defaults true) or returns bare ids with nothing to go
+ * stale (`childIds` lean path), so only `searchByContent` and
+ * `recentBlocks` get the narrower `project` — comparing the returned id
+ * SET (their documented invariant) instead of full record equality.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import fc from 'fast-check'
@@ -227,13 +233,17 @@ const applyOp = async (repo: Repo, op: OpSpec, ids: readonly string[]): Promise<
 
 // ──── probe pool ────
 // One handle per required query name (kernelQueries.ts KERNEL_QUERIES),
-// covering every declared Dependency kind used by this op set: row
-// (subtree/ancestors), parent-edge (subtree/children/childIds), plugin
-// channels (byType/aliasLookup/searchByContent). Targets for the
-// structural probes are resolved against the SEED ids only (they must
-// exist at subscribe time, before any fuzzed op runs) — same
-// index-modulo-length resolution style as op targets, so shrinking stays
-// meaningful.
+// minus `findExtensionBlocksQuery` — see the exclusion note right after
+// `buildProbes` below for why. Covers every declared Dependency kind used
+// by this op set: row (subtree/ancestors/manyAncestors), parent-edge
+// (subtree/children/childIds/firstChildByContent), plugin channels
+// (byType/typedBlocks/typedBlockIds/typedBlockCount/aliasLookup/
+// aliasesInWorkspace/aliasMatches/aliasMatchesFuzzy/searchByContent/
+// recentBlocks). Targets for the structural probes (subtree/children/
+// childIds/ancestors/manyAncestors/firstChildByContent) are resolved
+// against the SEED ids only (they must exist at subscribe time, before
+// any fuzzed op runs) — same index-modulo-length resolution style as op
+// targets, so shrinking stays meaningful.
 interface Probe {
   name: string
   args: Record<string, unknown>
@@ -253,13 +263,64 @@ const buildProbes = (targets: readonly number[]): Probe[] => [
   {name: 'children', args: {id: pick(targets[1], seedIds)}},
   {name: 'childIds', args: {id: pick(targets[2], seedIds)}},
   {name: 'ancestors', args: {id: pick(targets[3], seedIds)}},
+  {name: 'manyAncestors', args: {ids: [pick(targets[4], seedIds), pick(targets[5], seedIds)]}},
   {name: 'byType', args: {workspaceId: WS, type: TYPE_POOL[0]}},
   {name: 'byType', args: {workspaceId: WS, type: TYPE_POOL[1]}},
+  // types.length > 1 routes `resolveTypedBlocks` through the compiled
+  // typed-block query instead of byType's SELECT_BLOCKS_BY_TYPE_SQL
+  // fast path (the `types.length === 1 && where === undefined && ...`
+  // guard, kernelQueries.ts L908-920) — a distinct code path with its
+  // own dep declarations (`collectTypedBlockAxisDeps`).
+  {name: 'typedBlocks', args: {workspaceId: WS, types: [...TYPE_POOL]}},
+  // typedBlockIds has no fast-path shortcut (always compiles), so a
+  // single type here still exercises a different resolver body than
+  // both `byType` and `typedBlocks` above.
+  {name: 'typedBlockIds', args: {workspaceId: WS, types: [TYPE_POOL[0]]}},
+  {name: 'typedBlockCount', args: {workspaceId: WS, types: [TYPE_POOL[1]]}},
+  // No wall-clock dependency — SELECT_RECENT_BLOCKS_SQL orders purely by
+  // stored `coalesce(user_updated_at, updated_at)`/`id` columns
+  // (kernelQueries.ts L286-294), so peek() vs. a fresh read is sound in
+  // principle. But like searchByContent, the resolver passes
+  // `declareRowDeps: false` (L1083-1089) and deliberately tolerates
+  // stale parentId/orderKey/updatedAt on an already-matched row (tested
+  // contract, kernelQueries.test.ts L1386/L1427) — same "Oracle
+  // carve-out" as searchByContent above, so this needs the same
+  // id-set projection. A deep run without this narrowing found exactly
+  // this false positive (a `move` on a row already in the result set),
+  // not a real dependency-declaration bug.
+  {name: 'recentBlocks', args: {workspaceId: WS}, project: idSet},
+  {name: 'firstChildByContent', args: {parentId: pick(targets[6], seedIds), content: SEARCH_MARKER}},
   {name: 'aliasLookup', args: {workspaceId: WS, alias: ALIAS_POOL[0]}},
   {name: 'aliasLookup', args: {workspaceId: WS, alias: ALIAS_POOL[1]}},
+  {name: 'aliasesInWorkspace', args: {workspaceId: WS}},
+  {name: 'aliasMatches', args: {workspaceId: WS, filter: ALIAS_POOL[0]}},
+  // prefixes:['a'] is a common prefix of every ALIAS_POOL entry
+  // ('ax'/'ay'/'az'), so this stays non-empty whenever any alias is
+  // set. Ranking is deterministic given db state: the SQL ORDER BY
+  // (exact/prefix/created_at/alias, kernelQueries.ts
+  // buildFuzzyAliasMatchesSql L380-405) is purely column-derived: the
+  // JS fuzzy ranker that reads `Date.now()` (src/utils/fuzzyRank.ts)
+  // is caller-side, not invoked inside this resolver, so it doesn't
+  // affect what `repo.query.aliasMatchesFuzzy(...)` itself returns.
+  {name: 'aliasMatchesFuzzy', args: {workspaceId: WS, prefixes: ['a']}},
   // project: id-set only — see "Oracle carve-out" docblock.
   {name: 'searchByContent', args: {workspaceId: WS, query: SEARCH_MARKER}, project: idSet},
 ]
+
+// Exclusion: `findExtensionBlocksQuery` ('core.findExtensionBlocks',
+// kernelQueries.ts L1281-1292) is deliberately left unprobed. Its
+// resolver declares NO `ctx.depend(...)` at all — by design, per its own
+// doc comment (L1266-1280): the only real consumer loads it once at
+// FacetRuntime construction and refreshes it explicitly via the
+// `refresh_extensions` action, never through live-handle invalidation.
+// A subscribed handle for it can never re-resolve after its initial
+// load, so comparing `peek()` against a fresh read after a mutation
+// sequence would either be permanently vacuous (this op set never
+// creates `type: 'extension'` blocks, so both sides stay `[]` forever)
+// or, if it ever did see an extension-typed block appear, a guaranteed
+// false positive — the query intentionally has no mechanism to catch
+// that. Neither outcome exercises the under-declared-dependency bug
+// class this suite targets, so it's excluded rather than probed.
 
 const probeLabel = (p: Probe): string => `${p.name}(${JSON.stringify(p.args)})`
 
@@ -290,7 +351,7 @@ const settleAndVerify = async (handles: readonly Handle<unknown>[], probes: read
     await vi.waitFor(() => {
       expect(handle.status(), `${label} handle status`).not.toBe('error')
       expect(project(handle.peek()), `${label} peek() vs fresh load()`).toEqual(project(fresh[i]))
-    })
+    }, {timeout: 10_000})
   }
 }
 
@@ -317,7 +378,9 @@ const caseArb = fc.record({
   // probe) is per-CASE, not per-op, so the budget is dominated by
   // fc-run-count × op-count, not op-count alone.
   ops: fc.array(opArb, {minLength: 1, maxLength: 15}),
-  probeTargets: fc.array(fc.nat(seedIds.length - 1), {minLength: 4, maxLength: 4}),
+  // 7 slots: subtree/children/childIds/ancestors (0-3), manyAncestors'
+  // two ids (4-5), firstChildByContent's parentId (6) — see buildProbes.
+  probeTargets: fc.array(fc.nat(seedIds.length - 1), {minLength: 7, maxLength: 7}),
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 })
 
@@ -388,7 +451,11 @@ describe('query handle soundness', () => {
   // computed from the same never-changing rows. Pins that each probed
   // query's value provably CHANGES under a deterministic sequence
   // exercising its declared dependency axis (structure, live-set
-  // membership, alias/type property writes, content).
+  // membership, alias/type property writes, content). Covers every name
+  // in `buildProbes` above (`findExtensionBlocks` excepted — see its
+  // exclusion note) by reusing the same four actions: each new probe's
+  // dependency axis is already touched by one of them (documented
+  // inline below).
   it('every probed query value provably changes across a deterministic sequence', async () => {
     await inFlightCase?.catch(() => {})
     await resetTestDb(sharedDb.db)
@@ -408,8 +475,17 @@ describe('query handle soundness', () => {
       {name: 'children', args: {id: ROOT}},
       {name: 'childIds', args: {id: ROOT}},
       {name: 'ancestors', args: {id: P1}},
+      {name: 'manyAncestors', args: {ids: [P1, MID]}},
       {name: 'byType', args: {workspaceId: WS, type: TYPE_POOL[0]}},
+      {name: 'typedBlocks', args: {workspaceId: WS, types: [TYPE_POOL[0]]}},
+      {name: 'typedBlockIds', args: {workspaceId: WS, types: [TYPE_POOL[0]]}},
+      {name: 'typedBlockCount', args: {workspaceId: WS, types: [TYPE_POOL[0]]}},
+      {name: 'recentBlocks', args: {workspaceId: WS}},
+      {name: 'firstChildByContent', args: {parentId: ROOT, content: SEARCH_MARKER}},
       {name: 'aliasLookup', args: {workspaceId: WS, alias: ALIAS_POOL[0]}},
+      {name: 'aliasesInWorkspace', args: {workspaceId: WS}},
+      {name: 'aliasMatches', args: {workspaceId: WS, filter: ALIAS_POOL[0]}},
+      {name: 'aliasMatchesFuzzy', args: {workspaceId: WS, prefixes: ['a']}},
       {name: 'searchByContent', args: {workspaceId: WS, query: SEARCH_MARKER}},
     ]
     const unsubs: Array<() => void> = []
@@ -422,13 +498,15 @@ describe('query handle soundness', () => {
       const before = await Promise.all(handles.map(h => h.load()))
 
       // Structure + live-set membership (subtree/children/childIds/
-      // searchByContent): a new descendant with the search marker.
+      // searchByContent/recentBlocks/firstChildByContent): a new
+      // descendant of ROOT with the search marker as content.
       await repo.mutate.createChild({parentId: ROOT, position: {kind: 'last'}, content: SEARCH_MARKER})
-      // Ancestor-chain (ancestors): reparent p1 under mid.
+      // Ancestor-chain (ancestors/manyAncestors): reparent p1 under mid.
       await repo.mutate.move({id: P1, parentId: MID, position: {kind: 'last'}})
-      // Type property (byType).
+      // Type property (byType/typedBlocks/typedBlockIds/typedBlockCount).
       await repo.mutate.setProperty({id: P1, schema: typesProp, value: [TYPE_POOL[0]]})
-      // Alias property (aliasLookup).
+      // Alias property (aliasLookup/aliasesInWorkspace/aliasMatches/
+      // aliasMatchesFuzzy).
       await repo.mutate.setProperty({id: P1, schema: aliasesProp, value: [ALIAS_POOL[0]]})
 
       for (let i = 0; i < handles.length; i++) {
@@ -436,7 +514,7 @@ describe('query handle soundness', () => {
         await vi.waitFor(() => {
           expect(handles[i].status(), `${label} handle status`).not.toBe('error')
           expect(handles[i].peek(), `${label} changed from seed value`).not.toEqual(before[i])
-        })
+        }, {timeout: 10_000})
       }
     } finally {
       for (const unsub of unsubs) unsub()

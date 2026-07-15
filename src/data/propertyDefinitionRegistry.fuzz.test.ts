@@ -6,9 +6,9 @@
  * user, renamed, foreign-workspace) are built into a snapshot and swept for
  * the invariants the two modules maintain BY HAND across each other:
  *
- * - first-wins same-name seed drop (propertyDefinitionRegistry.ts:44-66):
+ * - first-wins same-name seed drop (propertyDefinitionRegistry.ts:47-65):
  *   differential against a five-line reference model;
- * - name-winner uniqueness (propertyDefinitionRegistry.ts:126-135 sorts by
+ * - name-winner uniqueness (propertyDefinitionRegistry.ts:130-135 sorts by
  *   (createdAt, fieldId); propertySchemaResolution.ts:298-300 rejects
  *   non-winners as 'shadowed'): at most one row per effective name resolves,
  *   and it is the group head;
@@ -276,7 +276,7 @@ describe('property definition registry + resolver (fuzz)', () => {
         const snapshot = buildSnapshot(universe)
 
         // First-wins same-name drop, reference model
-        // (propertyDefinitionRegistry.ts:47-66).
+        // (propertyDefinitionRegistry.ts:47-65).
         const expectedKept: AnyPropertySeedDeclaration[] = []
         const takenNames = new Set<string>()
         for (const seed of universe.seeds) {

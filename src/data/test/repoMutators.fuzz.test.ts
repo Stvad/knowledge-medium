@@ -9,24 +9,50 @@
  * far, so fast-check's shrinking (dropping ops from the sequence)
  * keeps the remaining ops meaningful.
  *
+ * Two workspaces (`ws-1` / `ws-2`), each with its own seed root, coexist
+ * in every case — op args draw ids from either pool (weighted heavily
+ * toward ws-1, see `idSelArb`), including occasional deliberately
+ * cross-workspace combinations (a `move` targeting a parent in the other
+ * workspace, a `merge` whose `into`/`from` live in different workspaces).
+ * That's what makes `WorkspaceMismatchError` (a second write in one tx
+ * targeting a different workspace than the tx's first write pinned) and
+ * `ParentWorkspaceMismatchError` (reparenting under a parent in a
+ * different workspace) reachable — both are legal, exercised rejections
+ * (see LEGAL_ERRORS). Undo/redo are per-workspace by product design
+ * (issue #186), so the undo-all/redo-all oracle drains each workspace's
+ * manager separately (`drainAllWorkspaces`).
+ *
  * Oracles — typed domain errors are LEGAL outcomes for incoherent op
  * combinations; what must never happen silently:
  *  - a structural cycle (cycleScanSql over every known id)
  *  - a live orphan (deleted=0 block whose parent is missing/deleted)
  *  - an order-key collision among live siblings (the tie re-keying
- *    contract of the placement helpers)
+ *    contract of the placement helpers) — an invariant of THIS universe
+ *    (kernel mutators only, scoped per workspace): seed materialization
+ *    (`definitionSeeds.ts`) deliberately mints sibling seeds all at
+ *    `'a0'`, relying on the `(order_key, id)` tie-break to stay legal —
+ *    that's a different universe and not what this sweep polices.
  *  - SUBTREE_SQL disagreeing with a plain JS pre-order walk over the
- *    raw rows (differential test of the recursive CTE + its pinned
- *    INDEXED BY plan)
+ *    raw rows, checked for BOTH workspaces' subtrees (differential test
+ *    of the recursive CTE + its pinned INDEXED BY plan; also doubles as
+ *    the workspace-uniformity check — a block structurally reachable
+ *    from one workspace's root but tagged with the other's workspace_id
+ *    shows up as a mismatch here)
  *  - a trigger-maintained derived index (block_references,
  *    block_aliases, block_types, blocks_fts) disagreeing with a
  *    from-scratch recompute over the live rows — the incremental
  *    trigger maintenance must equal re-running the trigger's own
  *    SELECT over the whole table (clientSchema.ts / references
  *    localSchema.ts)
- *  - a consistency-audit anomaly (references index mirror etc.)
- *  - undo-all not returning the live tree to its seed state, or
- *    redo-all not returning it to the post-sequence state
+ *  - a consistency-audit anomaly (references index mirror etc.), for
+ *    either workspace
+ *  - undo-all not restoring every row that existed at seed time
+ *    byte-identical, INCLUDING tombstones (so undo corrupting a
+ *    soft-deleted row's content/properties/parent is caught, not hidden
+ *    by a `deleted = 0` filter) — or leaving a block created during the
+ *    sequence live instead of tombstoned (this layer has no hard-delete,
+ *    so "un-create" can only tombstone; see `expectUndoneToSeed`) — or
+ *    redo-all not returning the whole tree to the post-sequence state
  *  - any non-domain error (TypeError & co. are always bugs)
  *
  * Determinism: order keys are jittered via Math.random, so each case
@@ -48,6 +74,7 @@ import {
   NotDeletedError,
   ParentDeletedError,
   ParentNotFoundError,
+  ParentWorkspaceMismatchError,
   ProcessorRejection,
   WorkspaceMismatchError,
 } from '@/data/api'
@@ -58,28 +85,41 @@ import type { Repo } from '@/data/repo'
 
 const WS = 'ws-1'
 const ROOT = 'root'
+const WS2 = 'ws-2'
+const ROOT2 = 'root2'
+/** Index-aligned with the `pool` field of `IdSel` / the `pools` tuple
+ *  threaded through `applyOp`. */
+const WORKSPACES = [WS, WS2] as const
 
 // ──── op descriptors ────
-// Targets are indices resolved modulo the known-id list at execution
-// time. `nonRoot` selectors skip the seed root so a single early
-// delete/merge of the root doesn't turn the whole sequence into
-// error-path noise.
+// Targets are indices resolved modulo the known-id list of a WORKSPACE
+// POOL at execution time. `nonRoot` selectors skip that pool's seed root
+// so a single early delete/merge of a root doesn't turn the whole
+// sequence into error-path noise.
 
-type Pos = {kind: 'first'} | {kind: 'last'} | {kind: 'before' | 'after'; sibling: number}
+/** Which workspace pool an op argument resolves an id against, plus a
+ *  raw index into that pool. `pool: 1` (ws-2) is deliberately rare —
+ *  most sequences should stay a single coherent tree; the occasional
+ *  ws-2 pick is what makes cross-workspace op combinations (and the
+ *  WorkspaceMismatchError / ParentWorkspaceMismatchError rejections
+ *  they provoke) reachable at all. */
+type IdSel = {pool: 0 | 1; idx: number}
+
+type Pos = {kind: 'first'} | {kind: 'last'} | {kind: 'before' | 'after'; sibling: IdSel}
 
 type OpSpec =
-  | {op: 'createChild'; parent: number; pos: Pos; content: string}
-  | {op: 'createSiblingAbove' | 'createSiblingBelow'; sibling: number; content: string}
-  | {op: 'insertChildren'; parent: number; contents: string[]; pos: Pos}
-  | {op: 'move'; id: number; parent: number; pos: Pos}
-  | {op: 'setContent'; id: number; content: string}
-  | {op: 'indent' | 'outdent' | 'deleteBlock' | 'restoreBlock'; id: number}
-  | {op: 'moveVertical'; id: number; direction: -1 | 1}
-  | {op: 'split'; id: number; before: string; after: string}
-  | {op: 'merge'; into: number; from: number}
-  | {op: 'setAlias'; id: number; alias: number; clear: boolean}
-  | {op: 'setType'; id: number; type: number; clear: boolean}
-  | {op: 'setReferences'; id: number; refs: Array<{target: number; aliased: boolean; prop: boolean}>}
+  | {op: 'createChild'; parent: IdSel; pos: Pos; content: string}
+  | {op: 'createSiblingAbove' | 'createSiblingBelow'; sibling: IdSel; content: string}
+  | {op: 'insertChildren'; parent: IdSel; contents: string[]; pos: Pos}
+  | {op: 'move'; id: IdSel; parent: IdSel; pos: Pos}
+  | {op: 'setContent'; id: IdSel; content: string}
+  | {op: 'indent' | 'outdent' | 'deleteBlock' | 'restoreBlock'; id: IdSel}
+  | {op: 'moveVertical'; id: IdSel; direction: -1 | 1}
+  | {op: 'split'; id: IdSel; before: string; after: string}
+  | {op: 'merge'; into: IdSel; from: IdSel}
+  | {op: 'setAlias'; id: IdSel; alias: number; clear: boolean}
+  | {op: 'setType'; id: IdSel; type: number; clear: boolean}
+  | {op: 'setReferences'; id: IdSel; refs: Array<{target: IdSel; aliased: boolean; prop: boolean}>}
   | {op: 'undo'} | {op: 'redo'}
 
 // Tiny alias pool so collisions (and merge-then-undo alias handoffs —
@@ -88,31 +128,34 @@ type OpSpec =
 const ALIAS_POOL = ['ax', 'ay', 'az'] as const
 const TYPE_POOL = ['task', 'note'] as const
 
-const sel = fc.nat(31)
+const idSelArb: fc.Arbitrary<IdSel> = fc.record({
+  pool: fc.oneof({arbitrary: fc.constant(0 as const), weight: 9}, {arbitrary: fc.constant(1 as const), weight: 1}),
+  idx: fc.nat(31),
+})
 const text = fc.string({maxLength: 8})
 const posArb: fc.Arbitrary<Pos> = fc.oneof(
   {arbitrary: fc.constant({kind: 'first'} as Pos), weight: 2},
   {arbitrary: fc.constant({kind: 'last'} as Pos), weight: 3},
-  {arbitrary: fc.record({kind: fc.constantFrom('before' as const, 'after' as const), sibling: sel}), weight: 2},
+  {arbitrary: fc.record({kind: fc.constantFrom('before' as const, 'after' as const), sibling: idSelArb}), weight: 2},
 )
 
 const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
-  {weight: 5, arbitrary: fc.record({op: fc.constant('createChild' as const), parent: sel, pos: posArb, content: text})},
-  {weight: 2, arbitrary: fc.record({op: fc.constantFrom('createSiblingAbove' as const, 'createSiblingBelow' as const), sibling: sel, content: text})},
-  {weight: 1, arbitrary: fc.record({op: fc.constant('insertChildren' as const), parent: sel, contents: fc.array(text, {minLength: 1, maxLength: 3}), pos: posArb})},
-  {weight: 4, arbitrary: fc.record({op: fc.constant('move' as const), id: sel, parent: sel, pos: posArb})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('setContent' as const), id: sel, content: text})},
-  {weight: 3, arbitrary: fc.record({op: fc.constantFrom('indent' as const, 'outdent' as const), id: sel})},
-  {weight: 2, arbitrary: fc.record({op: fc.constantFrom('deleteBlock' as const, 'restoreBlock' as const), id: sel})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('moveVertical' as const), id: sel, direction: fc.constantFrom(-1 as const, 1 as const)})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('split' as const), id: sel, before: text, after: text})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('merge' as const), into: sel, from: sel})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('setAlias' as const), id: sel, alias: fc.nat(ALIAS_POOL.length - 1), clear: fc.boolean()})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('setType' as const), id: sel, type: fc.nat(TYPE_POOL.length - 1), clear: fc.boolean()})},
+  {weight: 5, arbitrary: fc.record({op: fc.constant('createChild' as const), parent: idSelArb, pos: posArb, content: text})},
+  {weight: 2, arbitrary: fc.record({op: fc.constantFrom('createSiblingAbove' as const, 'createSiblingBelow' as const), sibling: idSelArb, content: text})},
+  {weight: 1, arbitrary: fc.record({op: fc.constant('insertChildren' as const), parent: idSelArb, contents: fc.array(text, {minLength: 1, maxLength: 3}), pos: posArb})},
+  {weight: 4, arbitrary: fc.record({op: fc.constant('move' as const), id: idSelArb, parent: idSelArb, pos: posArb})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('setContent' as const), id: idSelArb, content: text})},
+  {weight: 3, arbitrary: fc.record({op: fc.constantFrom('indent' as const, 'outdent' as const), id: idSelArb})},
+  {weight: 2, arbitrary: fc.record({op: fc.constantFrom('deleteBlock' as const, 'restoreBlock' as const), id: idSelArb})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('moveVertical' as const), id: idSelArb, direction: fc.constantFrom(-1 as const, 1 as const)})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('split' as const), id: idSelArb, before: text, after: text})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('merge' as const), into: idSelArb, from: idSelArb})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('setAlias' as const), id: idSelArb, alias: fc.nat(ALIAS_POOL.length - 1), clear: fc.boolean()})},
+  {weight: 2, arbitrary: fc.record({op: fc.constant('setType' as const), id: idSelArb, type: fc.nat(TYPE_POOL.length - 1), clear: fc.boolean()})},
   {weight: 2, arbitrary: fc.record({
     op: fc.constant('setReferences' as const),
-    id: sel,
-    refs: fc.array(fc.record({target: sel, aliased: fc.boolean(), prop: fc.boolean()}), {maxLength: 3}),
+    id: idSelArb,
+    refs: fc.array(fc.record({target: idSelArb, aliased: fc.boolean(), prop: fc.boolean()}), {maxLength: 3}),
   })},
   {weight: 1, arbitrary: fc.constant({op: 'undo'} as OpSpec)},
   {weight: 1, arbitrary: fc.constant({op: 'redo'} as OpSpec)},
@@ -130,6 +173,17 @@ const caseArb = fc.record({
 // combinations — legal fuzz outcomes. A plain `Error` (exactly, not a
 // subclass like TypeError) is also accepted as a message-carrying
 // domain rejection; anything else fails the property.
+//
+// WorkspaceMismatchError / ParentWorkspaceMismatchError are reachable
+// now that a second workspace (ws-2) is seeded and op args occasionally
+// draw ids from its pool (see `idSelArb`): a cross-workspace `move` (or
+// `indent`/`outdent`/`moveVertical` reparenting attempt) throws the
+// latter via `requireParentInWorkspace`; a cross-workspace `merge`
+// throws the latter when `from` has live children (the child re-home
+// hits the parent check first) or the former when `from` has none (the
+// tx pins on `delete(from)`'s workspace, then `update(into)` mismatches)
+// — see `checkWorkspace` / `requireParentInWorkspace` in
+// `src/data/internals/txEngine.ts`.
 const LEGAL_ERRORS = [
   BlockNotFoundError,
   CycleError,
@@ -139,6 +193,7 @@ const LEGAL_ERRORS = [
   NotDeletedError,
   ParentDeletedError,
   ParentNotFoundError,
+  ParentWorkspaceMismatchError,
   WorkspaceMismatchError,
 ]
 
@@ -149,82 +204,106 @@ const assertLegalRejection = (e: unknown, op: OpSpec): void => {
   // any other ProcessorRejection from the kernel-only runtime is a bug.
   if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
   // Placement anchors resolve by id under the TARGET parent: an op whose
-  // anchor sibling lives elsewhere is a legal incoherent-op rejection —
-  // mutators.ts throws plain Error for it (mutators.ts:118 for
-  // `position.before/after`, mutators.ts:431 for the split path). Only
-  // these exact messages — any other plain Error is a bug (Codex review
-  // on PR #371: the previous `e.constructor === Error` branch accepted
-  // them all).
+  // anchor sibling lives elsewhere (including in the other workspace) is
+  // a legal incoherent-op rejection — mutators.ts throws plain Error for
+  // it (mutators.ts:118 for `position.before/after`, used by
+  // createChild/move/createSibling*/insertChildren's shared
+  // `orderKeyForInsert` helper, and mutators.ts:431 for insertChildren's
+  // own anchor lookup — NOT split; split's `ix < 0` case silently falls
+  // back to `keyBetween(null, self.orderKey)` around mutators.ts:741-743
+  // rather than throwing). Only these exact messages — any other plain
+  // Error is a bug (Codex review on PR #371: the previous
+  // `e.constructor === Error` branch accepted them all).
   if (e instanceof Error && /^(position\.(before|after) )?sibling .* not found under /.test(e.message)) return
   throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
 }
 
 // ──── execution ────
 
-const pick = (index: number, ids: readonly string[]): string => ids[index % ids.length]
-/** Skips the seed root (ids[0]) so destructive ops keep the tree alive. */
-const pickNonRoot = (index: number, ids: readonly string[]): string =>
-  ids.length === 1 ? ids[0] : ids[1 + (index % (ids.length - 1))]
+/** The known-id pools, index-aligned with `WORKSPACES` / `IdSel.pool`
+ *  (`[ws-1 ids, ws-2 ids]`); each pool's index 0 is that workspace's
+ *  seed root. */
+type IdPools = readonly [readonly string[], readonly string[]]
+
+const pick = (sel: IdSel, pools: IdPools): string => {
+  const pool = pools[sel.pool]
+  return pool[sel.idx % pool.length]
+}
+/** Skips the pool's own seed root (index 0) so destructive ops keep
+ *  that workspace's tree alive. */
+const pickNonRoot = (sel: IdSel, pools: IdPools): string => {
+  const pool = pools[sel.pool]
+  return pool.length === 1 ? pool[0] : pool[1 + (sel.idx % (pool.length - 1))]
+}
 
 type ResolvedPos = {kind: 'first'} | {kind: 'last'} | {kind: 'before'; siblingId: string} | {kind: 'after'; siblingId: string}
-const resolvePos = (pos: Pos, ids: readonly string[]): ResolvedPos =>
+const resolvePos = (pos: Pos, pools: IdPools): ResolvedPos =>
   pos.kind === 'first' || pos.kind === 'last'
     ? pos
     : pos.kind === 'before'
-      ? {kind: 'before', siblingId: pick(pos.sibling, ids)}
-      : {kind: 'after', siblingId: pick(pos.sibling, ids)}
+      ? {kind: 'before', siblingId: pick(pos.sibling, pools)}
+      : {kind: 'after', siblingId: pick(pos.sibling, pools)}
 
-/** Applies one op; returns ids of any newly created blocks. */
-const applyOp = async (repo: Repo, op: OpSpec, ids: readonly string[]): Promise<string[]> => {
+/** A newly-created block, tagged with the pool (workspace) it belongs
+ *  to — inferred from whichever existing id (parent/sibling/self) it
+ *  was created under, since kernel mutators always inherit the parent's
+ *  real `workspaceId` and that id was itself drawn from exactly one
+ *  pool. */
+interface Created {id: string; pool: 0 | 1}
+
+/** Applies one op; returns any newly created blocks. */
+const applyOp = async (repo: Repo, op: OpSpec, pools: IdPools): Promise<Created[]> => {
   switch (op.op) {
     case 'createChild':
-      return [await repo.mutate.createChild({parentId: pick(op.parent, ids), position: resolvePos(op.pos, ids), content: op.content})]
+      return [{id: await repo.mutate.createChild({parentId: pick(op.parent, pools), position: resolvePos(op.pos, pools), content: op.content}), pool: op.parent.pool}]
     case 'createSiblingAbove':
-      return [await repo.mutate.createSiblingAbove({siblingId: pickNonRoot(op.sibling, ids), content: op.content})]
+      return [{id: await repo.mutate.createSiblingAbove({siblingId: pickNonRoot(op.sibling, pools), content: op.content}), pool: op.sibling.pool}]
     case 'createSiblingBelow':
-      return [await repo.mutate.createSiblingBelow({siblingId: pickNonRoot(op.sibling, ids), content: op.content})]
-    case 'insertChildren':
-      return await repo.mutate.insertChildren({
-        parentId: pick(op.parent, ids),
+      return [{id: await repo.mutate.createSiblingBelow({siblingId: pickNonRoot(op.sibling, pools), content: op.content}), pool: op.sibling.pool}]
+    case 'insertChildren': {
+      const created = await repo.mutate.insertChildren({
+        parentId: pick(op.parent, pools),
         items: op.contents.map(content => ({content})),
-        position: resolvePos(op.pos, ids),
+        position: resolvePos(op.pos, pools),
       })
+      return created.map(id => ({id, pool: op.parent.pool}))
+    }
     case 'move':
-      await repo.mutate.move({id: pickNonRoot(op.id, ids), parentId: pick(op.parent, ids), position: resolvePos(op.pos, ids)})
+      await repo.mutate.move({id: pickNonRoot(op.id, pools), parentId: pick(op.parent, pools), position: resolvePos(op.pos, pools)})
       return []
     case 'setContent':
-      await repo.mutate.setContent({id: pick(op.id, ids), content: op.content})
+      await repo.mutate.setContent({id: pick(op.id, pools), content: op.content})
       return []
     case 'indent':
-      await repo.mutate.indent({id: pickNonRoot(op.id, ids)})
+      await repo.mutate.indent({id: pickNonRoot(op.id, pools)})
       return []
     case 'outdent':
-      await repo.mutate.outdent({id: pickNonRoot(op.id, ids)})
+      await repo.mutate.outdent({id: pickNonRoot(op.id, pools)})
       return []
     case 'deleteBlock':
-      await repo.mutate.delete({id: pickNonRoot(op.id, ids)})
+      await repo.mutate.delete({id: pickNonRoot(op.id, pools)})
       return []
     case 'restoreBlock':
-      await repo.mutate.restore({id: pickNonRoot(op.id, ids)})
+      await repo.mutate.restore({id: pickNonRoot(op.id, pools)})
       return []
     case 'moveVertical':
-      await repo.mutate.moveVertical({id: pickNonRoot(op.id, ids), direction: op.direction})
+      await repo.mutate.moveVertical({id: pickNonRoot(op.id, pools), direction: op.direction})
       return []
     case 'split':
-      return [await repo.mutate.split({id: pickNonRoot(op.id, ids), before: op.before, after: op.after})]
+      return [{id: await repo.mutate.split({id: pickNonRoot(op.id, pools), before: op.before, after: op.after}), pool: op.id.pool}]
     case 'merge':
-      await repo.mutate.merge({intoId: pick(op.into, ids), fromId: pickNonRoot(op.from, ids)})
+      await repo.mutate.merge({intoId: pick(op.into, pools), fromId: pickNonRoot(op.from, pools)})
       return []
     case 'setAlias':
       await repo.mutate.setProperty({
-        id: pick(op.id, ids),
+        id: pick(op.id, pools),
         schema: aliasesProp,
         value: op.clear ? [] : [ALIAS_POOL[op.alias]],
       })
       return []
     case 'setType':
       await repo.mutate.setProperty({
-        id: pick(op.id, ids),
+        id: pick(op.id, pools),
         schema: typesProp,
         value: op.clear ? [] : [TYPE_POOL[op.type]],
       })
@@ -234,11 +313,12 @@ const applyOp = async (repo: Repo, op: OpSpec, ids: readonly string[]): Promise<
       // references plugin writes it via tx.update post-commit); writing
       // it directly exercises the block_references triggers + the
       // canonicalization path, which no other op reaches. Targets may be
-      // tombstones — dangling targets are legal at this layer (only the
-      // full audit's dangling_refs check polices them).
-      const sourceId = pick(op.id, ids)
+      // tombstones or live in the OTHER workspace — dangling / foreign
+      // targets are legal at this layer (only the full audit's
+      // dangling_refs check polices them, and it does so per-workspace).
+      const sourceId = pick(op.id, pools)
       const references = op.refs.map(r => {
-        const targetId = pick(r.target, ids)
+        const targetId = pick(r.target, pools)
         return {
           id: targetId,
           alias: r.aliased ? 'ref-alias' : targetId,
@@ -341,33 +421,18 @@ const sweepDerivedIndexes = async (db: TestDb['db']): Promise<void> => {
   expect(orphanRowids, 'blocks_fts_rowids orphan').toEqual([])
 }
 
-const sweepInvariants = async (db: TestDb['db'], ids: readonly string[]): Promise<void> => {
-  const cycles = await db.getAll<{start_id: string}>(cycleScanSql(ids.length), [...ids])
-  expect(cycles, 'structural cycle').toEqual([])
-
-  const orphans = await db.getAll<{id: string}>(
-    `SELECT b.id FROM blocks b
-      WHERE b.deleted = 0 AND b.parent_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM blocks p WHERE p.id = b.parent_id AND p.deleted = 0)`,
-  )
-  expect(orphans, 'live block under missing/deleted parent').toEqual([])
-
-  const collisions = await db.getAll<{parent_id: string | null; order_key: string; n: number}>(
-    `SELECT parent_id, order_key, COUNT(*) AS n FROM blocks
-      WHERE deleted = 0 GROUP BY parent_id, order_key HAVING n > 1`,
-  )
-  expect(collisions, 'order-key collision among live siblings').toEqual([])
-
-  const foreign = await db.getAll<{id: string}>(
-    'SELECT id FROM blocks WHERE workspace_id != ?', [WS],
-  )
-  expect(foreign, 'block outside the seeded workspace').toEqual([])
-
-  // Differential: recursive CTE vs a plain JS pre-order walk. The CTE
-  // orders siblings by the path encoding of (order_key, hex(id)) which
-  // must agree with a bytewise (order_key, id) sort.
-  const rows = await db.getAll<RawRow>('SELECT id, parent_id, order_key, deleted, workspace_id FROM blocks')
-  const live = rows.filter(r => r.deleted === 0)
+/** SUBTREE_SQL-vs-JS-walk differential for one workspace's rooted
+ *  subtree. Also the workspace-uniformity check: `live` is filtered to
+ *  rows actually tagged with `workspaceId`, so a block that's
+ *  structurally reachable from `root` (SUBTREE_SQL doesn't care about
+ *  workspace_id, only parent_id) but tagged with the WRONG workspace_id
+ *  shows up as an `extra`/`missing` mismatch here — exactly the failure
+ *  mode `ParentWorkspaceMismatchError` exists to prevent from ever
+ *  landing. */
+const sweepSubtreeForWorkspace = async (
+  db: TestDb['db'], rows: readonly RawRow[], workspaceId: string, root: string,
+): Promise<void> => {
+  const live = rows.filter(r => r.deleted === 0 && r.workspace_id === workspaceId)
   const children = new Map<string | null, RawRow[]>()
   for (const row of live) {
     const list = children.get(row.parent_id) ?? []
@@ -383,20 +448,105 @@ const sweepInvariants = async (db: TestDb['db'], ids: readonly string[]): Promis
     expected.push({id, depth})
     for (const child of children.get(id) ?? []) walk(child.id, depth + 1)
   }
-  if (live.some(r => r.id === ROOT)) walk(ROOT, 0)
-  const subtree = await db.getAll<{id: string; depth: number}>(SUBTREE_SQL, [ROOT])
-  expect(subtree.map(r => ({id: r.id, depth: r.depth})), 'SUBTREE_SQL vs JS walk').toEqual(expected)
+  if (live.some(r => r.id === root)) walk(root, 0)
+  const subtree = await db.getAll<{id: string; depth: number}>(SUBTREE_SQL, [root])
+  expect(subtree.map(r => ({id: r.id, depth: r.depth})), `SUBTREE_SQL vs JS walk (${workspaceId})`).toEqual(expected)
+}
+
+const sweepInvariants = async (db: TestDb['db'], ids: readonly string[]): Promise<void> => {
+  const cycles = await db.getAll<{start_id: string}>(cycleScanSql(ids.length), [...ids])
+  expect(cycles, 'structural cycle').toEqual([])
+
+  const orphans = await db.getAll<{id: string}>(
+    `SELECT b.id FROM blocks b
+      WHERE b.deleted = 0 AND b.parent_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM blocks p WHERE p.id = b.parent_id AND p.deleted = 0)`,
+  )
+  expect(orphans, 'live block under missing/deleted parent').toEqual([])
+
+  // Grouped by (workspace_id, parent_id, order_key): for any non-root
+  // block workspace_id is already implied by parent_id (children share
+  // their live parent's workspace, enforced by
+  // ParentWorkspaceMismatchError), so this only matters at the root
+  // level — where BOTH seeded workspace roots share parent_id = NULL
+  // and would otherwise look like colliding siblings of each other.
+  const collisions = await db.getAll<{workspace_id: string; parent_id: string | null; order_key: string; n: number}>(
+    `SELECT workspace_id, parent_id, order_key, COUNT(*) AS n FROM blocks
+      WHERE deleted = 0 GROUP BY workspace_id, parent_id, order_key HAVING n > 1`,
+  )
+  expect(collisions, 'order-key collision among live siblings').toEqual([])
+
+  const foreign = await db.getAll<{id: string}>(
+    'SELECT id FROM blocks WHERE workspace_id NOT IN (?, ?)', [WS, WS2],
+  )
+  expect(foreign, 'block outside the seeded workspaces').toEqual([])
+
+  // Differential: recursive CTE vs a plain JS pre-order walk, once per
+  // seeded workspace (see `sweepSubtreeForWorkspace`). The CTE orders
+  // siblings by the path encoding of (order_key, hex(id)) which must
+  // agree with a bytewise (order_key, id) sort.
+  const rows = await db.getAll<RawRow>('SELECT id, parent_id, order_key, deleted, workspace_id FROM blocks')
+  await sweepSubtreeForWorkspace(db, rows, WS, ROOT)
+  await sweepSubtreeForWorkspace(db, rows, WS2, ROOT2)
 
   await sweepDerivedIndexes(db)
 }
 
-/** User-visible state of the live tree, for undo/redo round-trips. */
-const liveSnapshot = async (db: TestDb['db']): Promise<string> => {
-  const rows = await db.getAll(
-    `SELECT id, parent_id, order_key, content, properties_json, references_json
-       FROM blocks WHERE deleted = 0 ORDER BY id`,
+interface SnapRow {
+  id: string
+  parent_id: string | null
+  order_key: string
+  content: string
+  properties_json: string
+  references_json: string
+  deleted: number
+}
+
+/** Full row state, for undo/redo round-trips. Includes tombstones
+ *  (`deleted`) — an undo-all that corrupts a soft-deleted row's
+ *  content/properties/parent rather than restoring it byte-identically
+ *  must be caught, not hidden by a `deleted = 0` filter (replay writes
+ *  tombstone rows too, so undo-all should restore them exactly). */
+const fullSnapshotRows = (db: TestDb['db']): Promise<SnapRow[]> =>
+  db.getAll<SnapRow>(
+    `SELECT id, parent_id, order_key, content, properties_json, references_json, deleted
+       FROM blocks ORDER BY id`,
   )
-  return JSON.stringify(rows)
+
+const fullSnapshot = async (db: TestDb['db']): Promise<string> =>
+  JSON.stringify(await fullSnapshotRows(db))
+
+/** Undo-all oracle, asymmetric by construction — NOT plain snapshot
+ *  equality against the seed. This data layer has no hard-delete
+ *  (`txEngine.ts`'s `applyRaw`, the "Inverse of a `create`" branch):
+ *  undoing a block's creation can only tombstone it, never make the row
+ *  vanish. So a block created during the sequence will still be a row
+ *  after undo-all — just `deleted = 1` — even though the seed snapshot
+ *  never had it at all. (Confirmed empirically: the naive
+ *  `fullSnapshot(...) === seedSnap` version of this check fails on the
+ *  very first case, `[{op:'createChild',...}]`, with the created block
+ *  present post-undo as a tombstone — legitimate divergence, not a
+ *  replay bug.)
+ *
+ *  What must still hold, precisely:
+ *   - every row that existed at seed time is restored BYTE-IDENTICAL
+ *     (this is what catches undo corrupting a tombstone's content /
+ *     properties / parent — the oracle gap this suite's item 2 fix
+ *     targets);
+ *   - every row that did NOT exist at seed time (created during the
+ *     sequence) must be tombstoned, not left live — a live leftover
+ *     would mean undo-all silently failed to undo a create. */
+const expectUndoneToSeed = async (db: TestDb['db'], seedRows: readonly SnapRow[]): Promise<void> => {
+  const current = await fullSnapshotRows(db)
+  const currentById = new Map(current.map(r => [r.id, r]))
+  const seedIds = new Set(seedRows.map(r => r.id))
+  for (const seed of seedRows) {
+    expect(currentById.get(seed.id), `undo-all: row ${seed.id} must match its seed state`).toEqual(seed)
+  }
+  for (const row of current) {
+    if (seedIds.has(row.id)) continue
+    expect(row.deleted, `undo-all: ${row.id} was created during the sequence and has no hard-delete — must be tombstoned, not live`).toBe(1)
+  }
 }
 
 const drain = async (fn: () => Promise<boolean>): Promise<number> => {
@@ -404,6 +554,18 @@ const drain = async (fn: () => Promise<boolean>): Promise<number> => {
     if (!(await fn())) return n
   }
   throw new Error('undo/redo did not bottom out after 300 steps')
+}
+
+/** Undo (or redo) is per-workspace by product design (issue #186):
+ *  `repo.undo()`/`repo.redo()` only ever act on the ACTIVE workspace's
+ *  manager. A tx pinned to ws-2 records into ws-2's own manager, so
+ *  draining "all" undo/redo history means switching the active
+ *  workspace and draining each manager in turn. */
+const drainAllWorkspaces = async (repo: Repo, direction: 'undo' | 'redo'): Promise<void> => {
+  for (const workspaceId of WORKSPACES) {
+    repo.setActiveWorkspaceId(workspaceId)
+    await drain(() => (direction === 'undo' ? repo.undo() : repo.redo()))
+  }
 }
 
 // ──── the property ────
@@ -443,37 +605,52 @@ const runCase = async ({ops, withUndoRedo, prngSeed}: CaseArgs): Promise<void> =
           await repo.tx(async tx => {
             await tx.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0'})
           }, {scope: ChangeScope.BlockDefault})
-          // The seed tx records its own undo entry; drop it so undo-all
-          // bottoms out AT the seed state rather than one step before it.
-          repo.undoManager?.clear()
+          // Separate tx: each tx pins to the workspace of its first write, so
+          // seeding both roots in one tx would itself throw
+          // WorkspaceMismatchError.
+          await repo.tx(async tx => {
+            await tx.create({id: ROOT2, workspaceId: WS2, parentId: null, orderKey: 'a0'})
+          }, {scope: ChangeScope.BlockDefault})
+          // The seed txs record their own undo entries — ONE PER WORKSPACE
+          // (each tx's undo entry lands in the manager for the workspace it
+          // pinned to, not the "active" one) — so both must be dropped
+          // explicitly; `repo.undoManager` alone only resolves to the
+          // active workspace's manager and would leave ws-2's seed entry
+          // sitting in its stack, which `drainAllWorkspaces` would then
+          // undo PAST the seed state (deleting ROOT2 itself).
+          repo.undoManagerFor(WS).clear()
+          repo.undoManagerFor(WS2).clear()
 
-          const seedSnap = await liveSnapshot(sharedDb.db)
-          const ids: string[] = [ROOT]
+          const seedRows = await fullSnapshotRows(sharedDb.db)
+          const pools: [string[], string[]] = [[ROOT], [ROOT2]]
           let ranUndoRedo = false
           for (const op of ops) {
             if ((op.op === 'undo' || op.op === 'redo') && !withUndoRedo) continue
             if (op.op === 'undo' || op.op === 'redo') ranUndoRedo = true
             try {
-              ids.push(...await applyOp(repo, op, ids))
+              const created = await applyOp(repo, op, pools)
+              for (const {id, pool} of created) pools[pool].push(id)
             } catch (e) {
               assertLegalRejection(e, op)
             }
-            await sweepInvariants(sharedDb.db, ids)
+            await sweepInvariants(sharedDb.db, [...pools[0], ...pools[1]])
           }
 
-          const finalSnap = await liveSnapshot(sharedDb.db)
-          await drain(() => repo.undo())
-          expect(await liveSnapshot(sharedDb.db), 'undo-all returns to seed state').toBe(seedSnap)
-          await sweepInvariants(sharedDb.db, ids)
+          const finalSnap = await fullSnapshot(sharedDb.db)
+          await drainAllWorkspaces(repo, 'undo')
+          await expectUndoneToSeed(sharedDb.db, seedRows)
+          await sweepInvariants(sharedDb.db, [...pools[0], ...pools[1]])
 
-          await drain(() => repo.redo())
+          await drainAllWorkspaces(repo, 'redo')
           if (!ranUndoRedo) {
-            expect(await liveSnapshot(sharedDb.db), 'redo-all returns to final state').toBe(finalSnap)
+            expect(await fullSnapshot(sharedDb.db), 'redo-all returns to final state').toBe(finalSnap)
           }
-          await sweepInvariants(sharedDb.db, ids)
+          await sweepInvariants(sharedDb.db, [...pools[0], ...pools[1]])
 
-          const audit = await runConsistencyAudit(sharedDb.db, WS, 0)
-          expect(audit.anomalies, `consistency audit: ${JSON.stringify(audit.checks)}`).toBe(0)
+          const auditWs1 = await runConsistencyAudit(sharedDb.db, WS, 0)
+          expect(auditWs1.anomalies, `consistency audit (${WS}): ${JSON.stringify(auditWs1.checks)}`).toBe(0)
+          const auditWs2 = await runConsistencyAudit(sharedDb.db, WS2, 0)
+          expect(auditWs2.anomalies, `consistency audit (${WS2}): ${JSON.stringify(auditWs2.checks)}`).toBe(0)
   } finally {
     Math.random = realRandom
   }
@@ -509,20 +686,21 @@ describe('kernel mutator sequences', () => {
       await tx.create({id: ROOT, workspaceId: WS, parentId: null, orderKey: 'a0'})
     }, {scope: ChangeScope.BlockDefault})
 
-    const ids = [ROOT]
+    const pools: [string[], string[]] = [[ROOT], []]
     for (const op of [
-      {op: 'createChild', parent: 0, pos: {kind: 'last'}, content: 'searchable text'},
-      {op: 'setAlias', id: 1, alias: 0, clear: false},
-      {op: 'setType', id: 1, type: 0, clear: false},
-      {op: 'setReferences', id: 1, refs: [{target: 0, aliased: true, prop: true}]},
+      {op: 'createChild', parent: {pool: 0, idx: 0}, pos: {kind: 'last'}, content: 'searchable text'},
+      {op: 'setAlias', id: {pool: 0, idx: 1}, alias: 0, clear: false},
+      {op: 'setType', id: {pool: 0, idx: 1}, type: 0, clear: false},
+      {op: 'setReferences', id: {pool: 0, idx: 1}, refs: [{target: {pool: 0, idx: 0}, aliased: true, prop: true}]},
     ] satisfies OpSpec[]) {
-      ids.push(...await applyOp(repo, op, ids))
+      const created = await applyOp(repo, op, pools)
+      for (const {id, pool} of created) pools[pool].push(id)
     }
 
     for (const table of ['block_aliases', 'block_types', 'block_references', 'blocks_fts']) {
       const rows = await sharedDb.db.getAll<{n: number}>(`SELECT COUNT(*) AS n FROM ${table}`)
       expect(rows[0].n, `${table} populated by the op set`).toBeGreaterThan(0)
     }
-    await sweepInvariants(sharedDb.db, ids)
+    await sweepInvariants(sharedDb.db, [...pools[0], ...pools[1]])
   })
 })

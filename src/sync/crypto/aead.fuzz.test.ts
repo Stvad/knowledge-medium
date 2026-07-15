@@ -25,14 +25,15 @@
  *    fail this oracle for a reason that has nothing to do with the AEAD
  *    (confirmed and documented the same way in
  *    cryptoCodecs.fuzz.test.ts:63-78). Byte-array plaintext has no such
- *    restriction — `sealBytes`/`openBytes` never touch `TextEncoder`
- *    (byteAead.ts:1-20).
+ *    restriction — `sealBytes`/`openBytes` never touch `TextEncoder`:
+ *    both pass `plaintext` straight to `crypto.subtle.encrypt`/`decrypt`
+ *    (byteAead.ts:26-39 `sealBytes`, :44-53 `openBytes`).
  *
  *  - Tamper rejection: flipping a single bit anywhere in the ciphertext‖tag
  *    portion of a sealed envelope must make `open`/`openBytes` reject —
  *    GCM's tag authenticates every ciphertext byte, so a modified
  *    ciphertext decrypts to garbage that fails the tag check with
- *    probability `1 - 2^-128` (aead.ts:35-36,41-43 "Throws on AEAD
+ *    probability `1 - 2^-128` (aead.ts:35-36,43-47 "Throws on AEAD
  *    failure"). We decode the envelope (envelope.ts:49-63 /
  *    binaryEnvelope.ts:73-87) to locate the exact ciphertext bytes rather
  *    than perturbing the encoded string/blob blindly, so the tamper always

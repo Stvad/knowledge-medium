@@ -234,10 +234,13 @@ export function extractBlockRefIds(content: string): string[] {
 /** Render a wikilink targeting `alias`. If `alias` contains wikilink
  *  delimiters (`[[`, `]]`, or a trailing `]`), the output is
  *  syntactically safe but lossy; callers that need alias identity must
- *  verify by parsing the result. Guarantee: the output always parses to
- *  exactly one outermost reference spanning the whole string, and is
- *  delimiter-balanced so it cannot combine with surrounding text into
- *  a different link. */
+ *  verify by parsing the result. Guarantee, for non-empty `alias`: the
+ *  output always parses to exactly one outermost reference spanning the
+ *  whole string, and is delimiter-balanced so it cannot combine with
+ *  surrounding text into a different link. Exception: `alias === ''`
+ *  renders `[[]]`, which the parser's `if (alias)` gate emits ZERO
+ *  references for — callers on this path already verify-by-parsing and
+ *  fall back, so this is a contract-doc caveat, not a live bug. */
 export const renderWikilink = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
   // place, and an unclosed `[[` would leak an opener that a later `]]`

@@ -7,10 +7,13 @@
 # long dedicated pass on the stateful data-layer fuzzer (highest
 # bug-yield per minute, so it gets the lion's share).
 #
-# On failure: the vitest log (which contains fast-check's failing seed +
-# path + shrunk counterexample) is uploaded as an artifact, and an issue
-# is filed (or a comment added to the existing open one) with the log
-# tail and repro instructions.
+# On failure: both passes' vitest logs (each of which, if it failed,
+# contains fast-check's failing seed + path + shrunk counterexample) are
+# uploaded as an artifact, and an issue is filed (or a comment added to
+# the existing open one). The issue body is built ONLY from the log(s) of
+# the pass(es) that actually failed — a pass 2 pass after a pass 1
+# failure must not bury the seed under green output — with a best-effort
+# extracted failure excerpt; the full logs are always in the artifact.
 name: Nightly Fuzz
 
 on:
@@ -54,45 +57,98 @@ jobs:
       # (seemingly redundant on Linux) `shell:` line can't silently green
       # the nightly.
       - name: Deep fuzz — all suites
+        id: sweep
         shell: bash
         env:
           FUZZ_TIME_MS: ${{ inputs.time_ms || '15000' }}
         run: |
           set -o pipefail
-          yarn fuzz 2>&1 | tee fuzz-output.log
+          yarn fuzz 2>&1 | tee fuzz-sweep.log
 
       - name: Deep fuzz — stateful data-layer suite (long pass)
+        id: stateful
         # Run even when the sweep above failed — a sweep failure should
-        # not cost us the night's stateful signal (both failures land in
-        # the same issue via the log artifact).
+        # not cost us the night's stateful signal (both logs are
+        # inspected independently when building the failure issue below).
         if: ${{ !cancelled() }}
         shell: bash
         env:
           FUZZ_TIME_MS: ${{ inputs.stateful_time_ms || '1200000' }}
         run: |
           set -o pipefail
-          yarn fuzz src/data/test/repoMutators.fuzz.test.ts 2>&1 | tee -a fuzz-output.log
+          yarn fuzz src/data/test/repoMutators.fuzz.test.ts 2>&1 | tee fuzz-stateful.log
 
-      - name: Upload fuzz log
+      - name: Upload fuzz logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-output
-          path: fuzz-output.log
+          path: |
+            fuzz-sweep.log
+            fuzz-stateful.log
+          if-no-files-found: warn
           retention-days: 30
 
+      # `cancelled()` (not just `failure()`) so a job-timeout cancellation
+      # — e.g. the stateful pass running long enough to hit the job's
+      # timeout-minutes — still files/comments instead of going silent.
       - name: File or update failure issue
-        if: failure()
+        if: failure() || cancelled()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SWEEP_OUTCOME: ${{ steps.sweep.outcome }}
+          STATEFUL_OUTCOME: ${{ steps.stateful.outcome }}
+          JOB_STATUS: ${{ job.status }}
         run: |
-          tail_log=$(tail -c 5000 fuzz-output.log || echo '(no log captured)')
-          body=$(printf '%s\n\n```\n%s\n```\n\n%s\n%s\n' \
-            "Nightly fuzz run failed: $RUN_URL (full log in the run's fuzz-output artifact)." \
-            "$tail_log" \
-            "Reproduce: find the \`seed\`/\`path\` in fast-check's failure report above, then run" \
+          # Best-effort: pull fast-check's failure block (seed/path/shrunk
+          # counterexample usually sit within a few lines of "seed:") out of
+          # a log; fall back to a plain tail if the grep finds nothing (e.g.
+          # a non-fast-check crash).
+          extract() {
+            local log="$1"
+            if [ ! -f "$log" ]; then
+              echo '(no log captured)'
+              return
+            fi
+            local excerpt
+            excerpt=$(grep -B 3 -A 12 'seed:' "$log" 2>/dev/null | tail -c 5000 || true)
+            if [ -n "$excerpt" ]; then
+              printf '%s' "$excerpt"
+            else
+              tail -c 5000 "$log"
+            fi
+          }
+
+          # Only pull from logs whose pass actually failed — a passing
+          # pass 2 after a failing pass 1 must not bury the seed under
+          # green output.
+          failing=()
+          [ "$SWEEP_OUTCOME" = "failure" ] && failing+=("Deep fuzz — all suites|fuzz-sweep.log")
+          [ "$STATEFUL_OUTCOME" = "failure" ] && failing+=("Deep fuzz — stateful data-layer suite (long pass)|fuzz-stateful.log")
+
+          if [ ${#failing[@]} -eq 0 ]; then
+            excerpt=$'\n(no step reported failure — the job was cancelled, most likely by the 90-minute job timeout; see whichever of fuzz-sweep.log / fuzz-stateful.log made it into the fuzz-output artifact.)\n'
+          else
+            excerpt=""
+            for entry in "${failing[@]}"; do
+              name="${entry%%|*}"
+              log="${entry#*|}"
+              excerpt+=$(printf '\n### %s\n\n```\n%s\n```\n' "$name" "$(extract "$log")")
+            done
+          fi
+
+          if [ "$JOB_STATUS" = "cancelled" ]; then
+            headline="Nightly fuzz run timed out or was cancelled — see artifact: $RUN_URL"
+          else
+            headline="Nightly fuzz run failed: $RUN_URL (full logs in the run's fuzz-output artifact)."
+          fi
+
+          body=$(printf '%s\n%s\n\n%s\n%s\n' \
+            "$headline" \
+            "$excerpt" \
+            "Reproduce: find the \`seed\`/\`path\` in fast-check's failure report above (or in the fuzz-output artifact), then run" \
             '`FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file> -t "<failing test>"` (see docs/fuzzing.md).')
           existing=$(gh issue list --label fuzz-failure --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then

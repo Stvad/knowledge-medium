@@ -24,9 +24,11 @@ The same property code runs at three intensities (mechanics in
 The smoke tier is deliberately deterministic: the gate re-explores the
 same cases every run, so a pre-existing bug can only surface in the
 nightly run — never as a flake blocking an unrelated PR. New territory
-is the nightly tier's job; on failure it uploads the vitest log as an
-artifact and files (or appends to) an issue labeled `fuzz-failure` with
-the failing seed.
+is the nightly tier's job; on failure it uploads both passes' vitest
+logs as an artifact and files (or appends to) an issue labeled
+`fuzz-failure`. The failing seed is always in the uploaded artifact;
+the issue body itself carries a best-effort excerpt of the failure
+(only from the pass(es) that actually failed), not a guarantee.
 
 ## Reproducing a failure
 
@@ -39,12 +41,18 @@ FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failin
 
 The `-t` filter matters: the env vars apply to every property in the
 file, and a path only fits the property that produced it — other tests
-in the file will fail with "Unable to replay". `FUZZ_PATH` jumps
-straight to the counterexample; omit it to re-run the whole sequence
-from the seed. `FUZZ_RUNS=<n>` forces a run count
-instead of a time budget. The stateful suite pins its only other
-nondeterminism (order-key jitter) through a seeded PRNG, so replays are
-exact.
+in the file may fail with "Unable to replay", or may silently replay an
+unrelated case instead — always pass `-t`. `FUZZ_PATH` jumps straight to
+the counterexample; omit it to re-run the whole sequence from the seed.
+`FUZZ_RUNS=<n>` forces a run count instead of a time budget. The
+stateful suite pins its only other nondeterminism (order-key jitter)
+through a seeded PRNG, so replays are exact.
+
+Triage note: fast-check reports "Property interrupted after 0 tests" as
+a FAILURE when the time budget expires before even the first case
+finishes. That's a budget/perf signal, not a property failure — rerun
+with a larger `FUZZ_RUNS` or `FUZZ_TIME_MS`. It comes with a seed but no
+counterexample, so there's nothing to shrink or replay.
 
 ## The suites
 
@@ -231,6 +239,21 @@ hadn't reached (both confirmed red-first and fixed):
   nothing left to re-derive the lost entry. The plan now carries a
   references basis and the processor watches `references`; retention
   keeps entries a re-parse can't derive.
+
+Teaching the references fuzzer to land several ops before a flush
+(mid-plan interleaving — the region every prior race bug lived in)
+found one more within its first minute:
+
+- A live block claiming an alias between `parseReferences`' plan build
+  and apply made the write phase mint the predicted seat anyway,
+  tripping the alias-uniqueness trigger and rolling back the whole
+  processor tx — permanently stripped refs, because the interfering
+  write touched the CLAIMANT row and no watched field on the source
+  ever re-fires (the stale-plan guard can't see this race). Both
+  `ensureAliasTarget` and `ensureDailyNoteTarget` now lookup-first
+  INSIDE the write tx and `applySourcePlan` retargets the planned
+  entries to the claimant — converging to what a fresh re-parse would
+  produce.
 
 ## Adding a suite
 

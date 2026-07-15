@@ -232,6 +232,17 @@ type ModelEvent =
    *  clears `hasPendingUpload`, and its echo is delivered immediately
    *  (an upload's echo is itself the next staging delivery). */
   | { readonly type: 'uploadAck'; readonly drift: number }
+  /** Deliver a RECORDED PAST server stamp (not necessarily the current
+   *  one) as a staging row — models a stale/out-of-order delivery, e.g.
+   *  a rescan or a delayed sync round-trip landing after the server has
+   *  already moved on. `pick` indexes into the recorded stamp history
+   *  (modulo its length at run time, since the history's size isn't known
+   *  when this arbitrary is generated). This is the only event that can
+   *  make `stagingUpdatedAt` land strictly behind the current
+   *  `local.localUpdatedAt` — see the runModel docblock's "Deliberately
+   *  NOT asserted" section for why that's reachable and intentionally
+   *  unguarded by the gate. */
+  | { readonly type: 'deliverStale'; readonly pick: number }
 
 const driftArb = fc.integer({ min: -5, max: 5 })
 
@@ -250,6 +261,10 @@ const eventArb: fc.Arbitrary<ModelEvent> = fc.oneof(
     arbitrary: fc.record({ type: fc.constant('uploadAck' as const), drift: driftArb }),
     weight: 2,
   },
+  {
+    arbitrary: fc.record({ type: fc.constant('deliverStale' as const), pick: fc.nat() }),
+    weight: 2,
+  },
 )
 
 /**
@@ -265,7 +280,7 @@ const eventArb: fc.Arbitrary<ModelEvent> = fc.oneof(
  *   the SAME nonzero stamp right after an apply of that stamp (with no
  *   intervening pending edit) must yield skip-stale — re-delivery is
  *   idempotent.
- * - I2 (reconcile.ts:105-107, 109-110): equal-ZERO stamps still apply —
+ * - I2 (reconcile.ts:100-105): equal-ZERO stamps still apply —
  *   checked whenever a delivery happens to land with
  *   `local.localUpdatedAt === 0 === stagingUpdatedAt` and no pending
  *   upload.
@@ -275,17 +290,29 @@ const eventArb: fc.Arbitrary<ModelEvent> = fc.oneof(
  *   within one extra delivery and then skip-stales forever on repeat
  *   redelivery. (Zero stays a standing exception per I2: a 0-stamped
  *   staging row applies on EVERY redelivery, by design — reconcile.ts:
- *   109-110 — so the "forever skip-stale" half of convergence is only
+ *   100-105 — so the "forever skip-stale" half of convergence is only
  *   asserted for a nonzero final stamp.)
  *
  * Deliberately NOT asserted: "the gate never applies a staging stamp
  * strictly older than a nonzero local stamp." reconcile.ts:125-136 says
  * the opposite is intentional — strictly-newer-local protection was
  * removed; an older, non-pending, non-equal delivery still applies
- * (a transient revert the echo/LWW cache self-heals). The `serverStamp
- * can move by a negative drift relative to a stale in-flight delivery`
- * scenario below exercises exactly that path without asserting it's
- * refused.
+ * (a transient revert the echo/LWW cache self-heals). That input region —
+ * `stagingUpdatedAt` strictly less than a nonzero `local.localUpdatedAt`,
+ * both nonzero, no pending upload — is NOT reachable through `deliver()`
+ * alone: `deliver()` always ships the CURRENT `server.stamp`, and the fake
+ * clamp (`applyContentChange`/`applyMetaChange`) keeps `server.stamp`
+ * monotone non-decreasing, so a plain negative `drift` can only pull the
+ * *candidate* below the floor — the floor always wins and the delivered
+ * stamp itself never regresses. The `deliverStale` event below is what
+ * makes the region reachable in this stateful dimension: it records every
+ * stamp the fake server has ever held and redelivers an fc-picked one from
+ * that history (which may now be strictly behind `local`), reusing
+ * `deliver()`'s own I1/I2 checks as the oracle — those checks are a pure
+ * function of the delivered value and don't assume it's the current server
+ * stamp. The single-call differential test (`referenceDecide`, ~line 167)
+ * already covers this same input region memorylessly at one call; this
+ * event is what makes the *sequence* model exercise it too.
  */
 const runModel = (
   materializability: Materializability,
@@ -294,9 +321,16 @@ const runModel = (
 ): void => {
   const server: ServerState = { stamp: startStamp }
   let local: LocalRowState = { localUpdatedAt: startStamp, hasPendingUpload: false }
+  // Every stamp the fake server has ever held, in mint order. Feeds
+  // `deliverStale` below — a real staging delivery can arrive carrying any
+  // past server stamp (rescans, delayed sync round-trips), not just the
+  // current one.
+  const stampHistory: number[] = [startStamp]
+  const recordStamp = (): void => {
+    stampHistory.push(server.stamp)
+  }
 
-  const deliver = (): ReconcileAction => {
-    const stagingUpdatedAt = server.stamp
+  const deliver = (stagingUpdatedAt: number = server.stamp): ReconcileAction => {
     const before = local
     const action = decideStagingRow(materializability, stagingUpdatedAt, before)
     expect(reconcileActionKinds).toContain(action.kind)
@@ -335,17 +369,26 @@ const runModel = (
         break
       case 'serverContentChange':
         applyContentChange(server, ev.drift)
+        recordStamp()
         break
       case 'serverMetaChange':
         applyMetaChange(server, ev.drift)
+        recordStamp()
         break
       case 'uploadAck': {
         // The upload always carries a content change (that's what
         // makes it worth uploading), so it goes through the +1-bump
         // path, then clears pending, then its echo is delivered.
         applyContentChange(server, ev.drift)
+        recordStamp()
         local = { ...local, hasPendingUpload: false }
         deliver()
+        break
+      }
+      case 'deliverStale': {
+        // stampHistory always has at least startStamp, so this is total.
+        const stale = stampHistory[ev.pick % stampHistory.length]!
+        deliver(stale)
         break
       }
     }

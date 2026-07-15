@@ -21,10 +21,17 @@ const yarn = process.platform === 'win32' ? 'yarn.cmd' : 'yarn'
 // requested count at 15s. Keep both when the caller set both.
 const runsOnly = process.env.FUZZ_RUNS !== undefined && process.env.FUZZ_TIME_MS === undefined
 const timeMs = runsOnly ? undefined : Number(process.env.FUZZ_TIME_MS ?? 15_000)
-// Headroom over the generation budget: shrinking a failure replays many
-// smaller cases after the time limit interrupts generation. Count-driven
-// runs have no time bound to derive from — match fuzzTestTimeout().
-const testTimeout = timeMs === undefined ? 3_600_000 : timeMs * 4 + 180_000
+// fast-check's time-limit interrupt (`interruptAfterTimeLimit`, backed by
+// `SkipAfterProperty`) uses an ABSOLUTE deadline that also bounds
+// shrinking — a shrink run cannot execute past it (verified against fc
+// 4.9.0's node_modules source). So the property itself never overruns its
+// own budget; the only headroom this test-level timeout needs is for the
+// one in-flight case that keeps running (and writing to shared state)
+// after `interruptAfterTimeLimit` resolves without awaiting it
+// (docs/fuzzing.md §6), plus setup/teardown/reporting. Count-driven runs
+// have no time bound to derive from — match fuzzTestTimeout() (keep the
+// two in sync).
+const testTimeout = timeMs === undefined ? 3_600_000 : timeMs + 300_000
 
 const extra = process.argv.slice(2)
 const files = extra.length > 0 ? extra : ['fuzz.test.']

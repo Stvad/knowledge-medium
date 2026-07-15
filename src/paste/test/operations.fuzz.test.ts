@@ -38,7 +38,7 @@
  *       `createsAdditionalBlocks` (`:264,278-283`) — which is equivalent to
  *       `parsed.length > 1` (every id is unique, so "some block other than
  *       the absorbed root" reduces to "more than one block total").
- *     - `focusOffsetInTarget` (`:274,281`) is always
+ *     - `focusOffsetInTarget` (`:273,281`) is always
  *       `contentBeforeStructuralBreak.length`; derived exactly per branch
  *       below, which also implies the weaker `[0, targetContent.length]`
  *       range the task asked for.
@@ -207,7 +207,7 @@ describe('planEditModeMultilinePaste', () => {
           }
 
           // focusOffsetInTarget = contentBeforeStructuralBreak.length always
-          // (operations.ts:274,281); branch-exact value, which implies the
+          // (operations.ts:273,281); branch-exact value, which implies the
           // [0, targetContent.length] range.
           expect(plan.focusOffsetInTarget).toBeGreaterThanOrEqual(0)
           expect(plan.focusOffsetInTarget).toBeLessThanOrEqual(plan.targetContent.length)
