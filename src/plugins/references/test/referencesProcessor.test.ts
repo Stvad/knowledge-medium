@@ -26,6 +26,7 @@ import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { aliasesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
@@ -163,6 +164,30 @@ describe('parseReferences — basic alias creation', () => {
     await flush()
     const refs = JSON.parse((await env.read('src'))!.references_json)
     expect(refs).toEqual([{id: someUuid, alias: someUuid}])
+  })
+
+  // Regression (found by referencesRecompute.fuzz.test.ts): tx.update
+  // legally writes content on tombstones, and apply() skips soft-deleted
+  // rows — so without the `deleted` field-watch, a block edited while
+  // tombstoned came back live with marks but no derived refs.
+  it('restore re-parses content that was edited while soft-deleted', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'plain'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    await env.repo.tx(tx => tx.delete('src'), {scope: ChangeScope.BlockDefault})
+    await flush()
+    await env.repo.tx(tx => tx.update('src', {content: 'now links [[foo]]'}), {scope: ChangeScope.BlockDefault})
+    await flush()
+    // While deleted: no derivation happened (apply skips tombstones).
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([])
+
+    await env.repo.tx(tx => tx.restore('src'), {scope: ChangeScope.BlockDefault})
+    await flush()
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(refs).toEqual([{id: aliasId('foo'), alias: 'foo'}])
+    expect((await env.read(aliasId('foo')))?.deleted).toBe(0)
   })
 })
 
@@ -941,6 +966,31 @@ describe('parseReferences — daily-note routing (§7.6)', () => {
     const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
     expect(refs).toEqual([{id: dailyId(iso), alias: longForm}])
     expect(await env.read(aliasId(longForm))).toBeNull()
+  })
+
+  // Regression (found by referencesRecompute.fuzz.test.ts): when a live
+  // NON-seat block already owns the date-shaped alias, minting the
+  // deterministic seat would set the same alias on it, trip the
+  // alias-uniqueness trigger, and roll back the whole processor tx —
+  // permanently stripped references for the source. The daily branch now
+  // does lookup-first like the non-date branch (§7.5).
+  it('[[YYYY-MM-DD]] binds to an existing live owner of that alias instead of minting a colliding seat', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'owner', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'my imported daily page'})
+      await tx.setProperty('owner', aliasesProp, ['2026-03-15'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'see [[2026-03-15]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(refs).toEqual([{id: 'owner', alias: '2026-03-15'}])
+    // No seat was minted alongside the owner.
+    expect(await env.read(dailyId('2026-03-15'))).toBeNull()
   })
 
   it('[[today]] stays an ordinary alias page, not a daily-note reference', async () => {

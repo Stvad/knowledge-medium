@@ -1,7 +1,10 @@
 import {
   CORE_BLOCK_MERGED_EVENT,
   defineSameTxProcessor,
+  isRefCodec,
+  isRefListCodec,
   normalizeReferences,
+  type AnyPropertySchema,
   type AnySameTxProcessor,
   type BlockData,
   type BlockReference,
@@ -52,6 +55,39 @@ const retargetReference = (
     : {id: intoId, alias: nextAlias, sourceField: ref.sourceField}
 }
 
+/** Rewrite `fromId` → `intoId` inside a ref/refList property's RAW encoded
+ *  value (string or string array — matching what `decodeRefId` /
+ *  `decodeRefListIds` accept). Works on the raw value rather than a
+ *  decode→re-encode round-trip so malformed sibling elements a lenient
+ *  decode would drop are preserved verbatim. List rewrites dedupe the
+ *  `intoId` entries the rewrite itself introduces (`[from, into]` must
+ *  not become `[into, into]`). */
+const rewriteRefValue = (
+  raw: unknown,
+  fromId: string,
+  intoId: string,
+): {value: unknown; changed: boolean} => {
+  if (typeof raw === 'string') {
+    return raw.trim() === fromId ? {value: intoId, changed: true} : {value: raw, changed: false}
+  }
+  if (Array.isArray(raw)) {
+    let changed = false
+    const mapped = raw.map(el =>
+      typeof el === 'string' && el.trim() === fromId ? (changed = true, intoId) : el)
+    if (!changed) return {value: raw, changed: false}
+    let seenInto = false
+    const deduped = mapped.filter(el => {
+      if (typeof el === 'string' && el.trim() === intoId) {
+        if (seenInto) return false
+        seenInto = true
+      }
+      return true
+    })
+    return {value: deduped, changed: true}
+  }
+  return {value: raw, changed: false}
+}
+
 const retargetReferenceContent = (
   content: string,
   fromId: string,
@@ -70,13 +106,42 @@ const retargetSource = async (
   sourceId: string,
   event: CoreBlockMergedEvent,
   aliasRewrites: ReadonlyMap<string, string>,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ): Promise<void> => {
   const current = await tx.get(sourceId)
   if (current === null || current.deleted) return
 
+  // Property-derived refs (sourceField set) project from the property
+  // VALUE (`projectPropertyReferences`), so a retargeted ref entry whose
+  // underlying value still names `fromId` is a projection anomaly the
+  // next re-parse would silently revert (found by
+  // referencesRecompute.fuzz.test.ts). Rewrite the value alongside the
+  // entry when the schema is loaded and ref-typed; otherwise leave BOTH
+  // untouched — an absent-schema ref is value-tied by the add-only
+  // contract, and a non-ref/undecodable value never projected this ref
+  // in the first place (pre-existing incoherence isn't ours to mutate).
+  const nextProperties = {...current.properties}
+  let propertiesChanged = false
+  const retargetableFields = new Set<string>()
+  for (const ref of current.references) {
+    if (ref.id !== event.fromId || ref.sourceField === undefined) continue
+    if (retargetableFields.has(ref.sourceField)) continue
+    const schema = propertySchemas.get(ref.sourceField)
+    if (!schema || !(isRefCodec(schema.codec) || isRefListCodec(schema.codec))) continue
+    const {value, changed} = rewriteRefValue(
+      nextProperties[ref.sourceField], event.fromId, event.intoId)
+    if (changed) {
+      nextProperties[ref.sourceField] = value
+      propertiesChanged = true
+      retargetableFields.add(ref.sourceField)
+    }
+  }
+
   const nextReferences = normalizeReferences(
     current.references.map(ref =>
-      retargetReference(ref, event.fromId, event.intoId, aliasRewrites),
+      ref.sourceField !== undefined && !retargetableFields.has(ref.sourceField)
+        ? ref
+        : retargetReference(ref, event.fromId, event.intoId, aliasRewrites),
     ),
   )
   const nextContent = retargetReferenceContent(
@@ -86,8 +151,9 @@ const retargetSource = async (
     aliasRewrites,
   )
 
-  const patch: Partial<Pick<BlockData, 'content' | 'references'>> = {}
+  const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references'>> = {}
   if (nextContent !== current.content) patch.content = nextContent
+  if (propertiesChanged) patch.properties = nextProperties
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {
     patch.references = nextReferences
   }
@@ -109,7 +175,7 @@ const retargetMergedBlockReferences = async (
     event.aliasRewrites.map(({fromAlias, toAlias}) => [fromAlias, toAlias]),
   )
   for (const {id} of sourceRows) {
-    await retargetSource(ctx.tx, id, event, aliasRewrites)
+    await retargetSource(ctx.tx, id, event, aliasRewrites, ctx.propertySchemas)
   }
 }
 

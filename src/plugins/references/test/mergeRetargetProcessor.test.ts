@@ -1,9 +1,16 @@
 // @vitest-environment node
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, normalizeReferences, type BlockData } from '@/data/api'
+import {
+  ChangeScope,
+  codecs,
+  defineProperty,
+  normalizeReferences,
+  type BlockData,
+} from '@/data/api'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
+import { propertySchemasFacet } from '@/data/facets.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
@@ -141,5 +148,110 @@ describe('references.retargetMergedBlockReferences', () => {
       {id: 'target', alias: 'Existing'},
       {id: 'target', alias: 'Other'},
     ]))
+  })
+
+  // Regression (found by referencesRecompute.fuzz.test.ts): property-derived
+  // refs project from the property VALUE, so retargeting the ref entry
+  // without rewriting the value left a projection anomaly that the next
+  // re-parse silently reverted.
+  describe('property-derived refs', () => {
+    const reviewerProp = defineProperty<string>('reviewer', {
+      codec: codecs.ref(),
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const relatedProp = defineProperty<readonly string[]>('related', {
+      codec: codecs.refList(),
+      defaultValue: [],
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const seed = async (repo: Repo): Promise<void> => {
+      await repo.tx(async tx => {
+        await tx.create({id: 'into', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        await tx.create({id: 'from', workspaceId: WS, parentId: null, orderKey: 'a1'})
+        await tx.create({
+          id: 'ref',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a2',
+          properties: {reviewer: 'from', related: ['from', 'into']},
+          references: [
+            {id: 'from', alias: 'from', sourceField: 'reviewer'},
+            {id: 'from', alias: 'from', sourceField: 'related'},
+            {id: 'into', alias: 'into', sourceField: 'related'},
+          ],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+    }
+
+    it('rewrites the property value alongside the ref when the schema is loaded', async () => {
+      await resetTestDb(sharedDb.db)
+      const {repo, cache} = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        extensions: [
+          referencesDataExtension,
+          aliasDataExtension,
+          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+          propertySchemasFacet.of(relatedProp, {source: 'test'}),
+        ],
+      })
+      await seed(repo)
+
+      await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+
+      const ref = cache.getSnapshot('ref')!
+      expect(ref.properties.reviewer).toBe('into')
+      // The list rewrite dedupes the `into` entry it introduces.
+      expect(ref.properties.related).toEqual(['into'])
+      expect(ref.references).toEqual(normalizeReferences([
+        {id: 'into', alias: 'into', sourceField: 'reviewer'},
+        {id: 'into', alias: 'into', sourceField: 'related'},
+      ]))
+    })
+
+    it('leaves ref AND value untouched when the schema is absent (value-tied retention)', async () => {
+      // The value-tied state arises when refs were derived while the
+      // owning plugin was loaded and the app later runs without it —
+      // seed through a schema-carrying repo, merge through one without.
+      await resetTestDb(sharedDb.db)
+      const seeder = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        extensions: [
+          referencesDataExtension,
+          aliasDataExtension,
+          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+          propertySchemasFacet.of(relatedProp, {source: 'test'}),
+        ],
+      })
+      await seed(seeder.repo)
+
+      // Distinct generators — two Repos over one db otherwise mint
+      // colliding tx-seqs/ids (see the createTestRepo module doc).
+      let txSeq = 1000
+      let time = 1_800_000_000_000
+      const {repo, cache} = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        extensions: [referencesDataExtension, aliasDataExtension],
+        newTxSeq: () => ++txSeq,
+        now: () => ++time,
+        newId: () => `second-${++txSeq}`,
+      })
+      await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+      await repo.awaitProcessors()
+
+      const ref = cache.getSnapshot('ref') ?? await repo.load('ref')
+      expect(ref!.properties.reviewer).toBe('from')
+      expect(ref!.properties.related).toEqual(['from', 'into'])
+      expect(ref!.references).toEqual(normalizeReferences([
+        {id: 'from', alias: 'from', sourceField: 'reviewer'},
+        {id: 'from', alias: 'from', sourceField: 'related'},
+        {id: 'into', alias: 'into', sourceField: 'related'},
+      ]))
+    })
   })
 })

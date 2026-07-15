@@ -87,6 +87,19 @@ const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
 interface SourcePlan {
   sourceId: string
   workspaceId: string
+  /** Parse inputs observed at read time. The write phase re-reads the
+   *  source and skips the plan when either has moved — mirrors
+   *  renameProcessor.applyPlan's stale-plan guard. Safe to skip: the
+   *  write that moved the source re-fires this processor (both fields
+   *  are watched) with a fresh plan, so the LAST write's event always
+   *  applies. Without this, a concurrent rewriter (e.g. the rename
+   *  backlink rewriter fired by the same properties commit) can land
+   *  first and have its result clobbered by this stale plan (found by
+   *  referencesRecompute.fuzz.test.ts: self-referencing block whose
+   *  alias is renamed ends with content `[[new]]` but a stored ref
+   *  still carrying `old`). */
+  basisContent: string
+  basisPropertiesJson: string
   /** Resolved-or-to-be-created refs the source's `references` column
    *  should end up with. The id may name a non-yet-existing target if
    *  the write phase will create it (alias case below). */
@@ -130,6 +143,24 @@ const buildSourcePlan = async (
       // materialise the canonical ISO daily-note target. `parseLiteral...`
       // accepts ISO and Roam long-form titles while rejecting relative
       // words like "today", "friday", and "may" so those remain aliases.
+      //
+      // Lookup-first, same as the non-date branch below: when a live
+      // block ALREADY owns this date-shaped alias (e.g. an imported page
+      // aliased "2026-01-05" on a non-seat id), bind to it. Minting the
+      // deterministic seat instead would have `ensureDailyNoteTarget` set
+      // the same alias on the new seat, trip the alias-uniqueness
+      // trigger, and roll back the whole write tx — permanently stripped
+      // references for the source (found by
+      // referencesRecompute.fuzz.test.ts). Convergent either way: alias
+      // uniqueness means every client resolves the same owner, and on a
+      // lookup miss every client mints the same deterministic seat id.
+      const existingOwner = await ctx.repo.query
+        .aliasLookup({workspaceId: source.workspaceId, alias: mark.alias})
+        .load()
+      if (existingOwner !== null) {
+        dateRefs.push({id: existingOwner.id, alias: mark.alias})
+        continue
+      }
       const id = dailyNoteBlockId(source.workspaceId, dailyTitle.iso)
       dateRefs.push({id, alias: mark.alias})
       datesToEnsure.push(dailyTitle.iso)
@@ -226,6 +257,8 @@ const buildSourcePlan = async (
   return {
     sourceId: source.id,
     workspaceId: source.workspaceId,
+    basisContent: source.content,
+    basisPropertiesJson: JSON.stringify(source.properties),
     references,
     aliasesToEnsure,
     datesToEnsure,
@@ -244,6 +277,13 @@ const applySourcePlan = async (
   plan: SourcePlan,
   typeSnapshot: TypeRegistrySnapshot,
 ): Promise<string[]> => {
+  // Stale-plan guard — see the SourcePlan basis fields' docblock.
+  const current = await tx.get(plan.sourceId)
+  if (current === null || current.deleted) return []
+  if (
+    current.content !== plan.basisContent
+    || JSON.stringify(current.properties) !== plan.basisPropertiesJson
+  ) return []
   const newlyInserted: string[] = []
   for (const date of plan.datesToEnsure) {
     await ensureDailyNoteTarget(tx, ctx.repo, date, plan.workspaceId, typeSnapshot)
@@ -268,7 +308,15 @@ const planNeedsWrite = (plan: SourcePlan): boolean =>
 
 export const parseReferencesProcessor = definePostCommitProcessor({
   name: PARSE_REFERENCES_PROCESSOR,
-  watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties'] },
+  // `deleted` is watched so a RESTORE re-derives references: tx.update
+  // legally writes content/properties on tombstones (sync, undo), but
+  // apply() skips soft-deleted rows — without re-firing on the
+  // deleted→live flip, a block edited while tombstoned comes back live
+  // with marks in content and no derived refs (the audit's
+  // content_link_recompute "stripped" anomaly; found by
+  // referencesRecompute.fuzz.test.ts). Pure deletes still exit via the
+  // `row.after.deleted` skip below, so the extra firings are no-ops.
+  watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties', 'deleted'] },
   apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
     // Read phase — outside any tx; bare-connection reads, no writer
     // contention. Each plan describes what the write phase needs to do
