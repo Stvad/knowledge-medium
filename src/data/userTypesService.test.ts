@@ -355,9 +355,21 @@ describe('UserTypesService subscription', () => {
     try {
       env.repo.setRuntimeContributions(definitionSeedsFacet, 'test-renamed-metadata-only-seed', [seed])
       await materializePropertySeeds(env.repo, WS, [seed])
+      // The divergence originates from an older client / a sync, not a user edit
+      // (the tx guard blocks user-scope seed-bag writes). Model that with an
+      // Automation-scope whole-bag update — the same shape a synced row lands as
+      // — which also avoids setProperty's per-property BlockDefault scope check.
+      const current = await env.repo.db.get<{properties_json: string}>(
+        'SELECT properties_json FROM blocks WHERE id = ?', [fieldId],
+      )
       await env.repo.tx(async tx => {
-        await tx.setProperty(fieldId, propertyNameProp, storedDivergence)
-      }, {scope: ChangeScope.BlockDefault})
+        await tx.update(fieldId, {
+          properties: {
+            ...JSON.parse(current.properties_json),
+            [propertyNameProp.name]: propertyNameProp.codec.encode(storedDivergence),
+          },
+        })
+      }, {scope: ChangeScope.Automation})
       await vi.waitFor(() => {
         const definitions = env.repo.propertyDefinitions
         expect(definitions?.definitionsByFieldId.get(fieldId)?.name).toBe(seed.name)

@@ -28,7 +28,6 @@ import type {
   AnyPostCommitProcessor,
   BlockData,
   BlockDataPatch,
-  ChangeScope,
   Mutator,
   NewBlockData,
   PropertySchema,
@@ -45,6 +44,7 @@ import type {
 } from '@/data/api'
 import {
   BlockNotFoundError,
+  ChangeScope,
   CycleError,
   DeletedConflictError,
   DeterministicIdCrossWorkspaceError,
@@ -56,11 +56,13 @@ import {
   ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
   PropertySchemaScopeMismatchError,
+  SeededDefinitionWriteError,
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
   normalizeReferences,
   policyForScope,
 } from '@/data/api'
+import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import {
   BLOCK_STORAGE_COLUMNS,
   blockToRowParams,
@@ -340,9 +342,25 @@ export class TxImpl implements Tx {
     return {id: data.id, inserted: false}
   }
 
+  /** v1 invariant (schema-unification §5.1): a materialized seed definition's
+   *  bag is wholly code-owned — no user-editable fields. The schema editor and
+   *  property panel already render it read-only; this is the data-layer backstop
+   *  so the invariant also holds for the agent bridge, the importer, and the
+   *  outline delete key. Only USER writes are blocked (`BlockDefault` scope):
+   *  materialization and the §13 revision-upgrade step run under `Automation`,
+   *  and synced-in changes never pass through this engine at all, so neither is
+   *  affected. Provenance is read off the PERSISTED row — a caller can't forge
+   *  it, since a valid seed id must equal `uuidv5(workspaceId:seedKey)`. */
+  private assertSeedDefinitionMutable(before: BlockData): void {
+    if (this.meta.scope === ChangeScope.BlockDefault && isValidSeededDefinition(before)) {
+      throw new SeededDefinitionWriteError(before.id)
+    }
+  }
+
   async delete(id: string): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
+    this.assertSeedDefinitionMutable(before)
     if (before.deleted) return  // already a tombstone — no-op, no second snapshot
     const after: BlockData = {
       ...before,
@@ -396,6 +414,9 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     if (!updatePatchChangesBlock(before, patch)) return
+    // Only a bag mutation touches the seed-owned fields; a content/reference
+    // update leaves the code-owned definition intact.
+    if (patch.properties !== undefined) this.assertSeedDefinitionMutable(before)
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
@@ -498,6 +519,7 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
+    this.assertSeedDefinitionMutable(before)
     const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
     // Scope-consistency: the tx was admitted under `this.meta.scope`, chosen from
     // the CALLER's schema.changeScope. If the definition's change-scope was edited

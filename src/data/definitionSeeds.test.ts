@@ -1,6 +1,6 @@
 // @vitest-environment node
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest'
-import {ChangeScope, seedProperty} from '@/data/api'
+import {ChangeScope, seedProperty, SeededDefinitionWriteError} from '@/data/api'
 import {
   canonicalPropertySeedProperties,
   awaitPropertySeedMaterializationAccess,
@@ -134,10 +134,14 @@ describe('materializePropertySeeds', () => {
       [propertyNameProp.name]: 'tampered',
       [seedRevisionProp.name]: 1,
     }
+    // A tampered/tombstoned seed row can only originate from sync or a legacy
+    // client — the tx guard blocks user (BlockDefault) seed-bag edits/deletes —
+    // so simulate that non-user origin with the Automation scope it's allowed
+    // under.
     await repo.tx(async tx => {
       await tx.update(id, {properties: tampered})
       await tx.delete(id)
-    }, {scope: ChangeScope.BlockDefault})
+    }, {scope: ChangeScope.Automation})
 
     const result = await materializePropertySeeds(repo, WS, [seed])
     const row = await sharedDb.db.get<{deleted: number; properties_json: string}>(
@@ -151,7 +155,16 @@ describe('materializePropertySeeds', () => {
   it('only diagnoses stale live rows and does not patch them', async () => {
     await materializePropertySeeds(repo, WS, [seed])
     const id = propertyDefinitionBlockId(WS, seed.seedKey)
-    await repo.tx(tx => tx.setProperty(id, seedRevisionProp, 1), {scope: ChangeScope.BlockDefault})
+    // A stale synced/legacy row (revision 1 while code is at 2), written under
+    // Automation — not a (guarded) user edit. update() writes the whole bag the
+    // way materialization does, avoiding the per-property BlockDefault
+    // scope-consistency check that setProperty enforces.
+    await repo.tx(tx => tx.update(id, {
+      properties: {
+        ...canonicalPropertySeedProperties(seed),
+        [seedRevisionProp.name]: seedRevisionProp.codec.encode(1),
+      },
+    }), {scope: ChangeScope.Automation})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const before = await sharedDb.db.get<{properties_json: string}>('SELECT properties_json FROM blocks WHERE id = ?', [id])
 
@@ -259,12 +272,14 @@ describe('materializePropertySeeds', () => {
     const originalGetAll = repo.db.getAll.bind(repo.db)
     vi.spyOn(repo.db, 'getAll').mockImplementationOnce(async (sql, params) => {
       const rows = await originalGetAll(sql, params)
+      // Automation scope: the raced impostor mimics a synced/legacy write, not
+      // a (guarded) user edit to the seed row.
       await repo.tx(tx => tx.update(poisonedId, {
         properties: {
           ...canonicalPropertySeedProperties(seed),
           [seedKeyProp.name]: 'system:test/property/raced-impostor',
         },
-      }), {scope: ChangeScope.BlockDefault})
+      }), {scope: ChangeScope.Automation})
       return rows
     })
 
@@ -437,5 +452,58 @@ describe('scheduled seed materialization (Repo wiring, §4.3)', () => {
     // Exactly one dirty re-run (2 total): the mid-flight change is honored and the
     // loop terminates once no further change is pending — no unbounded re-running.
     expect(calls).toBe(2)
+  })
+})
+
+describe('seed definition write guard (tx layer)', () => {
+  it('rejects user-scope bag edits and deletes of a materialized seed block', async () => {
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+
+    await expect(repo.tx(
+      tx => tx.update(id, {
+        properties: {...canonicalPropertySeedProperties(seed), [propertyNameProp.name]: 'hacked'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+
+    await expect(repo.tx(
+      tx => tx.setProperty(id, propertyHiddenProp, false),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+
+    // The outline delete key routes here (core.delete runs under BlockDefault).
+    await expect(repo.tx(
+      tx => tx.delete(id),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+
+    const row = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(row.deleted).toBe(0)
+    expect(JSON.parse(row.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+  })
+
+  it('allows system (Automation) bag writes so materialization/upgrades work', async () => {
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await expect(repo.tx(
+      tx => tx.update(id, {
+        properties: {
+          ...canonicalPropertySeedProperties(seed),
+          [seedRevisionProp.name]: seedRevisionProp.codec.encode(3),
+        },
+      }),
+      {scope: ChangeScope.Automation},
+    )).resolves.toBeUndefined()
+  })
+
+  it('does not block user-scope bag writes on a non-seed block', async () => {
+    const plainId = await repo.mutate.createChild({parentId: propertiesPageBlockId(WS)})
+    await expect(repo.tx(
+      tx => tx.update(plainId, {properties: {types: ['note']}}),
+      {scope: ChangeScope.BlockDefault},
+    )).resolves.toBeUndefined()
   })
 })

@@ -200,6 +200,23 @@ export class PropertySchemaScopeMismatchError extends DataLayerError {
   }
 }
 
+/** A user-scope (BlockDefault) property-bag write or delete targeting a
+ *  materialized seed definition block. A seed's bag is wholly code-owned in v1
+ *  (schema-unification §5.1 — no user-editable fields), so the schema editor
+ *  and property panel render it read-only; this is the data-layer backstop that
+ *  keeps the invariant true for every other writer (agent bridge, importer,
+ *  the outline delete key). System writes run under Automation scope
+ *  (materialization, the §13 revision-upgrade step) and are not blocked. */
+export class SeededDefinitionWriteError extends DataLayerError {
+  constructor(public readonly blockId: string) {
+    super(
+      `cannot edit or delete seed definition block ${blockId}: its bag is ` +
+      `code-owned (defined in code). Change the declaration and bump its ` +
+      `revision instead of editing the materialized row.`,
+    )
+  }
+}
+
 // ──── Mode / dispatch ────
 
 export class ReadOnlyError extends DataLayerError {
@@ -272,6 +289,7 @@ const ERROR_NAMES: ReadonlyArray<readonly [string, {prototype: object}]> = [
   ['WorkspaceNotPinnedError', WorkspaceNotPinnedError],
   ['PropertySchemaIdentityError', PropertySchemaIdentityError],
   ['PropertySchemaScopeMismatchError', PropertySchemaScopeMismatchError],
+  ['SeededDefinitionWriteError', SeededDefinitionWriteError],
   ['ReadOnlyError', ReadOnlyError],
   ['MutatorNotRegisteredError', MutatorNotRegisteredError],
   ['QueryNotRegisteredError', QueryNotRegisteredError],
