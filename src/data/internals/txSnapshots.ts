@@ -113,7 +113,7 @@ export const replayApplicationOrder = (
       if (onPath.has(id)) { base = 0; break }
       path.push(id)
       onPath.add(id)
-      const parentId = live.get(id)?.parentId
+      const parentId: string | null | undefined = live.get(id)?.parentId
       id = parentId != null && live.has(parentId) ? parentId : undefined
     }
     for (let i = path.length - 1; i >= 0; i--) {
