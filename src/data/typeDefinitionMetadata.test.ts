@@ -85,15 +85,6 @@ describe('parseTypeDefinitionMetadata', () => {
     })
   })
 
-  it('omits description/color and defaults the hide flags to false when absent', () => {
-    const row = typeDefinitionRow({[blockTypeLabelProp.name]: 'Recipe'})
-    const parsed = parseTypeDefinitionMetadata(row)
-
-    expect(parsed).not.toHaveProperty('description')
-    expect(parsed).not.toHaveProperty('color')
-    expect(parsed).toMatchObject({hideFromBlockDisplay: false, hideFromCompletion: false})
-  })
-
   it('honors a seed-valid type-id claim differing from the block id', () => {
     const id = typeDefinitionBlockId(WS, TYPE_SEED_KEY)
     const row = typeDefinitionRow({

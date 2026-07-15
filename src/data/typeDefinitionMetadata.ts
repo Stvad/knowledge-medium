@@ -30,6 +30,11 @@ export interface TypeDefinitionMetadata {
   readonly hideFromBlockDisplay: boolean
   /** Present only when seed provenance passes the deterministic-id check. */
   readonly seedKey?: string
+  // No `origin` field (unlike PropertyDefinitionMetadata) — no consumer needs it
+  // yet. When C2b adds one, do NOT reuse propertySchemaOriginForSeedKey: its
+  // `seedKey.indexOf('/property/')` returns -1 for a /type/ key, so slice(0, -1)
+  // silently truncates the owner (even 'system:kernel-data' → 'system:kernel-dat')
+  // instead of failing. Factor a grammar-aware owner split shared by both kinds.
 }
 
 const decodePresentOrDefault = <T>(
@@ -44,8 +49,15 @@ const decodePresentOrDefault = <T>(
  * Deleted / non-block-type / label-less / malformed rows return null. The §9
  * type-id claim rule: a `block-type:type-id` differing from the block's own id
  * is honored only when the row passes the deterministic seeded-id check
- * (`isValidSeededDefinition`); otherwise the type projects under its block id —
- * a fabricated or cross-workspace-pasted claim can't squat a seed's type id. */
+ * (`isValidSeededDefinition`). That check proves the row's id and its own
+ * `seed:key` are mutually consistent — enough to demote a claim from a row that
+ * FAILS it (a bare `seed:key` at a random id; a cross-workspace paste, whose
+ * `workspace_id` is rewritten to the local workspace, §12). It does NOT prove the
+ * `seed:key` is a real code declaration, so a fully self-consistent forged seed
+ * (correct uuid for an invented key) can still emit a competing claim — §9's
+ * stated small-fleet residual, bounded not here but by the registry's §7
+ * earliest-`createdAt` winner resolution (C2b: a late forgery loses to the early
+ * real seed) and remediable via §12's enumeration query. */
 export const parseTypeDefinitionMetadata = (
   row: BlockData,
 ): TypeDefinitionMetadata | null => {
