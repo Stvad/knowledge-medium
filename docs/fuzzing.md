@@ -130,6 +130,30 @@ exact.
   view, multi-select wrappers, undo/redo) through `invokeAction` with
   UI-shaped deps; oracles = structural invariants + scope-root
   boundary protection.
+- `src/data/propertyDefinitionRegistry.fuzz.test.ts` — the
+  schema-unification registry + resolver (PR #364): random universes of
+  seed declarations and projected definition rows; oracles =
+  first-wins name-collision drop (reference-model differential),
+  name-winner uniqueness, three-path resolution agreement
+  (resolve/resolveField/resolveName round-trips), the kept-seed
+  unshadowability case model, insertion-order independence, boundary
+  fail-closed on forged identities, strict-codec recovery at the write
+  seam. `legacySchemas` stays empty — the transitional dual-path dies
+  in the B′ deletion slice and the suite must survive that unchanged.
+- `src/data/propertySeeds.fuzz.test.ts` — the seed-declaration layer:
+  `seedProperty` totality → `isPropertySeedDeclaration`
+  self-validation across every kernel preset; canonical bag →
+  `parsePropertyDefinitionMetadata` round-trip with provenance demotion
+  when either half of the deterministic-id equation is wrong;
+  encode-fixpoint + strict-decode totality for all kernel preset cores
+  and both config codecs; per-conjunct mutation rejection.
+- `src/data/definitionSeeds.fuzz.test.ts` — stateful: random
+  interleavings of `materializePropertySeeds`, user-scope tamper
+  attempts, Automation lifecycle writes, and deterministic-id
+  poisoning; oracles = materialization idempotence, batch-abort
+  atomicity under poisoning, bag code-ownership through every tx
+  primitive, restore-preserves-bag, and a registry-resolution tie-in
+  after each sequence.
 
 ## Found so far
 
@@ -178,6 +202,35 @@ The interaction fuzzer found one more:
   rendered surface out from under the panel. The boundary rule now
   lives in `StructuralEditPolicy.canDelete` (scope-less callers like
   the agent bridge remain free to delete).
+
+The seed-materialization fuzzer (schema-unification surface, PR #364)
+found two more within its first minutes, both in the tx-layer
+seed-definition write guard:
+
+- `tx.create` had no guard at all: the deterministic seed id is
+  publicly computable (uuidv5 of `workspaceId:seedKey`), so a
+  user-scope create carrying a provenance-valid bag forged a
+  code-owned definition BEFORE materialization ran — and the
+  materialization probe then trusted it forever (live row → skipped,
+  payloads never repaired).
+- `tx.restore` applied a `properties` patch unguarded — the one
+  remaining bag-write primitive: tombstone a seed row via
+  Automation/sync, resurrect it with a forged bag.
+
+Codex review on the fuzz suites themselves then surfaced two product
+bugs the suites' oracles were positioned to catch but their generators
+hadn't reached (both confirmed red-first and fixed):
+
+- `delete_empty_block_cm`'s empty-block path deleted before consulting
+  the scope-root boundary (reachable: split the zoomed page at cursor
+  0, then Backspace in the emptied root) — now gated on
+  `StructuralEditPolicy.canDelete`.
+- `parseReferences`' stale-plan guard checked only content/properties,
+  so a references-ONLY writer (ref-backfill reprojection on schema
+  load) landing between plan build and apply was clobbered with
+  nothing left to re-derive the lost entry. The plan now carries a
+  references basis and the processor watches `references`; retention
+  keeps entries a re-parse can't derive.
 
 ## Adding a suite
 
