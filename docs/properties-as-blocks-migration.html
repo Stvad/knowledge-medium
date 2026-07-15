@@ -353,9 +353,12 @@
       cell-authoritative catch-up re-creates the per-key clobber between current
       clients; arrival is a reconcile pass and the cell is never a merge input for
       child-backed keys (§5).</li>
-    <li><strong>The old-client discriminator is a self-describing, id-bound projection
-      checksum</strong> — presence markers fail because an old client's whole-bag
-      read-modify-write <em>preserves</em> them; no-children keys are pending
+    <li><strong>Sync is one-way — children→cell only, no classification.</strong> An
+      arriving bag is never a merge input; the backfill is the one-time
+      cell→children materialization; non-projecting writers (stale tabs, pre-flip
+      queues, raw SQL) are closed by policy and their edits revert, logged by the
+      sweep. The two-way checksum design lives in review-thread history as the remedy
+      if the fleet outgrows coordination. No-children keys are pending
       materialization, never deleted (§5).</li>
     <li><strong>Materialize everything — no scope carve-outs</strong>: kernel, plugin,
       and user schemas alike, all five <code>ChangeScope</code>s, with system/machine
@@ -374,10 +377,10 @@
   no scope carve-outs (§6); flip lever = per-workspace
   <code>workspaces.properties_migration</code> column, replacing the per-schema
   <code>childBacked</code> flag; one uniform flip at slice C with mandatory
-  orphan-definition synthesis (§9); checksum stays <code>{hash, coveredKeys}</code>
-  (the round-20 <code>preservedKeys</code> armor demoted to a recorded remedy —
-  fleet policy closes the state instead, §5); sync-off is per-workspace and the
-  column is ultimately droppable (§11).<br>
+  orphan-definition synthesis (§9); <strong>sync is one-way</strong> — the projection
+  checksum, containment rule, materialize branches, and <code>preservedKeys</code>
+  are all deleted in favor of policy-closed writer classes (§5); sync-off is
+  per-workspace and the column is ultimately droppable (§11).<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -402,8 +405,8 @@
   <h5>How to read this doc</h5>
   <p style="margin:0.3rem 0">
     The load-bearing core is <a href="#s5">§5</a> — merge semantics ("children are the
-    only truth that crosses sync"), the arrival reconcile, and the projection-checksum
-    discriminator. The design lives or dies there; read it first and in full. Then
+    only truth that crosses sync"), the arrival reconcile, and the one-direction
+    decision. The design lives or dies there; read it first and in full. Then
     <a href="#s6">§6</a> (the scope decision: everything migrates) and, if
     you're implementing, your slice in <a href="#s11">§11</a>. <a href="#s2">§2</a>
     gives the target shape in one figure. The
@@ -443,8 +446,9 @@
     <li><code>setProperty</code> dual-writes children and cell in one tx; the
       materialize/project processor pair is permanent convergence machinery
       (<a href="#s5">§5</a>).</li>
-    <li>The arrival pass becomes a <em>reconcile</em>: project-from-children for
-      current-client rows, materialize only for old-client convergence, dedup at
+    <li>The arrival pass becomes a <em>reconcile</em>: project-from-children, always —
+      arriving bags are never merge inputs, no classification exists, and
+      non-projecting writers are closed by policy; dedup at
       parents (<a href="#s5">§5</a>, slice C).</li>
     <li>Stopping cell sync is a staged, <em>measurement-gated</em>
       optimization, per-workspace once backfill-complete and sweep-clean — see the
@@ -890,8 +894,8 @@ and the pass's repair — a stale-read window on every concurrent remote edit am
 current clients, not just the upload stop's frozen-cell case. The <em>cell repair</em>
 for child-backed keys (re-project from local children) therefore runs inside the
 materializer seam, before the affected invalidations fan out — the same single
-sync-write seam the §11 upload stop already modifies; the heavier reconcile work below (dedup,
-checksum branches, the materialize direction) stays in the async pass. As built
+sync-write seam the §11 upload stop already modifies; the heavier reconcile work below
+(dedup, the pending-keys handling) stays in the async pass. As built
 in the spike that pass runs <em>materialize</em> (cell-authoritative — wrong per the
 callout above). As specified here it becomes a <strong>reconcile pass</strong>, per
 arrived row:
@@ -901,37 +905,23 @@ arrived row:
   <li>Arrived <em>field/value rows</em> → walk up to the parent, re-<strong>project</strong>
     its child-backed keys from local children, and dedup duplicate field rows at the
     parent while there.</li>
-  <li>Arrived <em>parent cells</em> → classify the cell first (the discriminator in
-    the callout below). A <em>current-client</em> cell (projection checksum matches)
-    is never a merge input: re-project child-backed keys from local children; apply
-    the cell only for keys that are <em>not</em> child-backed. Child-backed is
-    <em>per-client actionable</em> here (PR-review P2): a key whose schema this client
-    cannot build — a custom-codec plugin schema without its plugin, a user schema on
-    an absent plugin preset — is treated as cell-backed <em>on this client</em>: the
-    arriving cell applies, and this client's own projections never cover it (no codec
-    ⇒ it can neither decode children nor re-project; ignoring the cell would replace
-    its only usable value with an empty local projection). Fleet-wide the key stays
-    child-backed — peers with the behavior project it. One hazard rides this skew
-    (PR-review P2, resolved by fleet policy rather than machinery — see the
-    unbuildable-writer note in the callout below): a client in this state still
-    uploads whole bags, so its stale copy of the unbuildable key can travel under a
-    fresh parent timestamp. In this fleet the state itself is exceptional — every
-    codec-bearing plugin is static (shipped in the app bundle), so it requires a
-    disabled plugin or a stale tab, both coordination-visible. A child-backed
-    key with
-    <em>no local child rows at all</em> is left untouched as pending materialization —
-    children-in-flight from the writer's dual-write, landing next drain (under the
-    id-bound checksum a copied bag can't reach this branch: it mismatches and
-    materializes); <strong>removing a cell key because children are
-    absent is forbidden everywhere</strong> — arrival, projection rebuilds, and the
-    sweep alike. An <em>old-client</em>
-    cell (checksum mismatched or absent) is the one place the full materialize direction
-    still runs — sets, <strong>updates to keys that already have children</strong>,
-    and clears (the deletion diff below) — because that bag genuinely is its writer's
-    newest truth. Two guards apply even there: a child is overwritten only if its own
-    <code>updated_at</code> predates the arrived bag's (the per-row clock the pipeline
-    already trusts), and a key whose local children are all soft-deleted is not
-    resurrected past a newer deletion.</li>
+  <li>Arrived <em>parent cells</em> → <strong>never a merge input, without
+    classification</strong> (owner decision — see the one-direction callout below;
+    the earlier revisions of this doc classified arriving bags with a projection
+    checksum and ran a materialize direction for old-client bags): re-project keys
+    that have local children. A key with
+    <em>no local child rows at all</em> keeps the arrived cell value as pending
+    materialization — a read fallback, children-in-flight from the writer's
+    dual-write or awaiting the backfill; <strong>removing a cell key because children
+    are absent is forbidden everywhere</strong> — arrival, projection rebuilds, and
+    the sweep alike. The same pending treatment covers per-client buildability
+    degradation (PR-review P2): a key whose schema this client cannot build — a
+    custom-codec plugin schema with the plugin disabled — keeps the arrived value as
+    its read surface (no codec ⇒ it can neither decode children nor re-project;
+    projecting it away would replace its only usable value with nothing). The
+    round-20 stale-carry hazard is gone by construction: such a client's whole-bag
+    uploads still carry its stale copy, but no peer reads an arriving bag as a merge
+    input, so the stale carry can overwrite nothing.</li>
   <li>Arrived rows whose cell carries a key <em>no registered schema matches</em>, on a
     block whose children carry a known <code>fieldId</code> → re-project the cell from
     those children (the offline-rename race; §7, slice C). Still project-direction:
@@ -939,115 +929,40 @@ arrived row:
 </ul>
 
 <div class="callout warn">
-  <strong>Two gaps the spike's catch-up leaves open</strong> (folded into the reconcile
-  pass above; stated separately because each has a concrete failure):
+  <strong>One direction, by policy — and the dedup gap</strong> (folded into the
+  reconcile pass above):
   <ul>
-    <li><strong>Old-client clears resurrect — and the discriminator that closes
-      them.</strong>
-      <p><em>The failure:</em> a pre-migration client (cell-only writer) removes key
-      <code>status</code>; the PATCH arrives at client B, whose <code>[[status]]</code>
-      field row is untouched — the spike's set-only catch-up sees no present key to
-      process. B's tree still shows the value, and the next touch of that subtree
-      re-projects it into the cell and re-uploads: the delete is undone fleet-wide.
-      The reconcile's deletion diff closes this — but it must never fire on cell shape
-      alone. "Arrived cell omits key K while local children for K exist" is also the
-      signature of an innocent current-client bag (a writer that never had K, winning
-      column-LWW); soft-deleting on that re-opens the clobber for deletes.</p>
-      <p><em>The discriminator</em> (shaped by three review rounds): a presence marker
-      fails — an old client's <code>setProperty</code> is a read-modify-write of the
-      whole bag, so a reserved marker key written by the last current client
-      <em>survives</em> the old client's edit untouched, and column-narrow upload
-      means a separate stamp column is never touched either; a marker masks exactly
-      the writes it must expose. The discriminator is therefore a
-      <strong>projection checksum</strong> with three properties — and a bounded
-      lifetime: the discriminator referees the era when synced cells and multiple
-      writer generations coexist, and it <em>retires with the cell channel</em> — at
-      <code>'cell-off'</code> nothing arrives to classify (the cell is a local
-      derived column; the sweep compares children against a deterministic local
-      projection, no writer ambiguity). Unlike the processor pair, which is permanent
-      convergence machinery, this is sync-era machinery. Within it,
-      <code>coveredKeys</code> is what keeps the record honest while coverage can be
-      <em>partial</em> — mid-backfill (keys whose children don't exist yet) and a
-      buildability-degraded client (projects what it can build, must not claim it
-      verified the rest); a whole-bag hash would misclassify both.
-      <em>Content-bound:</em> a canonical hash over the covered keys' values, so any
-      non-projecting edit breaks it. <em>Id-bound:</em> the block id is hashed in, so
-      a wholesale-copied bag mismatches on the new block and takes the old-client
-      branch instead of being mis-certified. <em>Self-describing:</em> the stored
-      record is <code>{hash, coveredKeys}</code>, and verification recomputes over
-      exactly the listed keys — never over "what this client's registry considers
-      child-backed", which varies with plugin/version skew and would let a client
-      missing a plugin mis-classify a peer's fresh projection as an old-client bag
-      (PR-review P1). The registry decides what to <em>re-project</em>; it plays no
-      part in classification. A <em>containment rule</em> completes verification
-      (PR-review P1): a child-backed key <em>present in the bag but missing from
-      <code>coveredKeys</code></em> is itself a mismatch. On a current client's
-      projection, present-child-backed ⊆ covered always holds — projection stamps
-      exactly what it covers, in the same tx — so an uncovered present key proves a
-      non-projecting writer added it after the stamp; without the rule, an old
-      client's <em>added</em> key rides the still-matching checksum into the
-      current-client branch and sits pending forever (readable from the cell, but
-      never materialized until the sweep) instead of materializing on arrival. The
-      containment check classifies bag keys by this client's <em>actionable</em> set —
-      a key it cannot build is cell-backed for it (per-client rule above) and exempt.
-      <em>The unbuildable-writer note</em> (PR-review P2, resolved by fleet policy):
-      the exemption protects the reader's own branch but not its uploads — a client
-      that cannot build a child-backed key still re-ships the whole bag on unrelated
-      edits, and on a codec-bearing peer that stale key is present, actionable, and
-      uncovered: the materialize branch, whose per-child clock guard has only the
-      arrived bag's timestamp, could overwrite a newer value child — and
-      unrepairably, since the sweep then sees children and cell agreeing. This fleet
-      closes the state rather than armoring the merge: every codec-bearing plugin is
-      static, so an unbuildable <em>current</em> writer requires a deliberately
-      disabled plugin or a stale tab — coordination-visible, and the flip runbook
-      says so. If plugin asymmetry ever becomes a real fleet state, the designed
-      remedy is a third checksum class (<code>preservedKeys</code>: verify-gated
-      verbatim carries, hashed like covered keys, never merge inputs, enumerable from
-      synced metadata without the codec — full sketch in this PR's review thread,
-      round 20) — build it then, not now.
-      Match (hash <em>and</em> containment) ⇒ a current client's projection ⇒ never a
-      merge input. Mismatch or absent ⇒ last modified by a non-projecting writer ⇒ the
-      full materialize direction (set / update / clear) is licensed for that row's
-      child-backed keys, clock-guarded per child (previous list).</p>
-      <p><em>Storage</em> (PR-review P2): the record must be invisible to every
-      generic property surface — the panel's unregistered-keys section,
-      copy/extract/import paths, key enumeration — or every block grows a visible
-      synthetic property. Two sound homes, slice C picks: a <em>reserved, filtered
-      bag key</em> (atomic with the bag by construction — it rides the same column
-      through LWW and e2ee envelopes — but every enumerator must filter the reserved
-      namespace through one shared helper, and filtering a namespace is only sound
-      once no real schema name can occupy it (PR-review P2): bag keys are schema
-      names and users pick those freely, so a colliding name would either vanish
-      from every property surface or be misread as checksum metadata. Choose the
-      reserved key from the space §7's name-validity rule already forbids — a key
-      containing <code>]]</code> cannot round-trip the wikilink grammar, so
-      <code>addSchema</code>/rename can never mint it — and the same slice-B
-      preflight that sweeps existing names for round-trip violations doubles as the
-      occupancy proof for pre-existing names: a schema found squatting in the
-      reserved space is rejected/renamed there, before any filter ships), or a
-      <em>dedicated synced column</em>
-      (invisible to property consumers by construction; atomicity holds because
-      current clients write bag + checksum in the same patch, so per-column LWW picks
-      both from the same winner, while an old client's bag-only patch leaves the
-      checksum column behind — exactly the mismatch signal; costs a migration and an
-      upload-whitelist entry). One e2ee constraint on the column option (PR-review
-      P2): it must never carry plaintext for e2ee rows — <code>coveredKeys</code>
-      names the schemas present on an encrypted row, and hashes over low-cardinality
-      values invite guessing; exactly the edge metadata §8 encrypts. Under the §8
-      option-1 gate this is moot (e2ee rows run no child machinery and stamp no
-      checksum); if option 2 later child-backs e2ee workspaces, their checksum rides
-      the encrypted reserved-bag-key form — the column, if it exists, stays NULL for
-      e2ee rows, enforced by the same server-trigger family as
-      <code>reference_target_id</code>.</p>
-      <p><em>Residual and fallback:</em> an old-client bag is a whole-bag write, so
-      accepting it can carry stale copies of <em>other</em> keys on that block —
-      inherent to mixed-version operation (the old client has no per-key channel),
-      bounded by the per-child clock guard and the upgrade window. Among current
-      clients the cell is never consulted — deletes travel exclusively as child
-      soft-delete rows. If the checksum slips out of slice C, ship <em>without</em>
-      the old-client materialize branches and close the whole mixed-version gap by
-      coordinated fleet upgrade instead (§12): a wrong-direction overwrite is worse
-      than a temporarily unconverged edit.</p></li>
+    <li><strong>Sync is children→cell only; the cell is never read back.</strong>
+      <p>Rounds 14–21 of this PR's review built a full two-way design: a projection
+      checksum (<code>{hash, coveredKeys}</code>, id-bound, containment rule, a
+      storage scheme, a <code>preservedKeys</code> extension) classifying every
+      arriving bag so that <em>non-projecting writers'</em> edits — old clients,
+      raw-SQL writers, buildability-degraded clients — could be honored via a
+      clock-guarded materialize direction, including a deletion diff. <strong>Owner
+      decision: delete all of it.</strong> The fleet closes every non-projecting
+      writer class by coordination instead of armoring the merge, one closure per
+      class: <em>stale tabs</em> (the update path never force-reloads, so this is
+      social policy — update before continuing to use; a stale tab's property edits
+      are reverted); <em>pre-flip offline queues</em> (runbook: every device online
+      and drained before the flip); <em>raw writers</em> (agent-bridge SQL, ad-hoc
+      server SQL — post-flip convention: write children, not the cell; note that
+      anything going through <code>repo.tx</code> is not in this class, because the
+      same-tx materializer creates children for bag-shaped local writes). After the
+      one-time backfill, cell→children materialization <em>never runs again</em>:
+      arrival re-projects from children, period.</p>
+      <p><em>Accepted consequences, stated plainly:</em> a policy-violating writer's
+      property edits — updates <em>and deletes</em> — are reverted by the next
+      projection, silently from that writer's perspective; the sweep below logs the
+      divergence it repairs, and <code>row_events</code> history holds the reverted
+      values for recovery. Deletes among current clients travel exclusively as child
+      soft-delete rows (an old client's cell-key removal is <em>not</em> honored —
+      the old "clears resurrect" failure is resolved by refusing the writer class
+      rather than by classifying it). What this deletes from the design: the checksum
+      record and its verification, the containment rule, the reserved-bag-key /
+      dedicated-column storage question with its e2ee constraints, the old-client
+      materialize branches, the per-child clock guard, and the no-resurrection rules
+      — the full record lives in this PR's review threads (rounds 14–21) as the
+      remedy if the fleet ever outgrows coordination.</p></li>
     <li><strong>Duplicate field rows from concurrent backfills persist.</strong> Two
       devices backfilling offline each create their own <code>[[status]]</code> row;
       after sync, the arrived rows are field/value rows whose <em>own</em> cells are
@@ -1076,9 +991,8 @@ arrived row:
   server feature) fails <em>silently</em> — the cell and the children just drift.
   Deterministic projection makes that cheap to police: a background sweep recomputes
   each block's child-backed cell keys from its children, byte-compares against the
-  stored cell, and repairs divergence — with the <em>arrival reconcile's
-  projection-side branch rules, not blanket children-win</em> (PR-review P2; checksum
-  classification is arrival-only — the sweep repairs local projection state and never
+  stored cell, and repairs divergence — children-win, with two carve-outs that were
+  never about classification (the sweep repairs local projection state and never
   consumes a remote bag): keys with live children →
   project, children win; keys whose children are all soft-deleted → the deletion won,
   drop the key; cell keys with <strong>no child rows at all</strong> → pending
@@ -1248,7 +1162,9 @@ default — not in anyone's document tree.
   <code>'cell-off'</code> until the backfill/sweep gates have been attested. The predicate every consumer shares — recognition (§9), dual-write,
   projection, reconcile — is <strong>child-backed = workspace flipped</strong>.
   Nothing else: no scope term (§6 migrates all scopes), no per-schema stamp, no
-  buildability term at flip time (§5's unbuildable-writer note is fleet policy), and
+  buildability term at flip time (under §5's one-direction rule a degraded writer's
+  stale bag can overwrite nothing — buildability degradation is read-side only, the
+  pending fallback), and
   no per-key definition-existence term either — "every key resolves a definition" is
   an <em>invariant</em>, not a predicate branch: established before the flip by §9's
   orphan synthesis, maintained after it by <code>addSchema</code> (the only normal
@@ -1276,8 +1192,9 @@ default — not in anyone's document tree.
   option 1). One window this rollout must tolerate (and does — the flip is a
   coordinated event here): the column propagates via sync, not atomically, so a
   device may briefly run pre-flip against a flipped workspace; its cell-only writes
-  are classified by the §5 checksum exactly like any old-client writer's, and the
-  backfill sweeps them in.
+  in that window are stale-writer writes under §5's one-direction rule — reverted on
+  the next projection, logged by the sweep — which is why the flip runbook drains
+  every device before moving the column.
 </div>
 
 <p>
@@ -1944,17 +1861,15 @@ implementation</strong> and keep it open until its content is fully accounted fo
         subtle surface worth its own review attention) and the observer
         <code>onRowsAccepted</code> catch-up, scoped to child-backed schemas —
         <strong>rebuilt as the §5 reconcile pass — this slice IS the clobber fix</strong>:
-        arrival re-projects child-backed keys from local children (a current client's
-        cell is never a merge input); materialize direction runs only for genuinely
-        old-client cells, gated on the §5 projection-checksum discriminator — which
-        this slice introduces (current clients embed the self-describing
-        <code>{hash, coveredKeys}</code> record when they project; a
-        mismatched or absent checksum marks an old-client bag) — never on cell shape (mismatched
-        bags get the full set/update/clear materialize, clock-guarded per child and
-        soft-delete-aware — no resurrection past a newer deletion; the deletion diff
-        must not ship without the checksum); child-backed keys with <em>no child rows
+        arrival re-projects keys from local children (an arriving cell is never a
+        merge input — §5's one-direction rule; no classification, no materialize
+        branches, no checksum); the backfill is the <em>one-time</em>
+        cell→children materialization and nothing re-runs that direction after it;
+        keys with <em>no child rows
         at all</em> are pending materialization, never deleted; and dedup happens at
-        the <em>parent</em> of arrived field rows.
+        the <em>parent</em> of arrived field rows. The flip runbook's stale-writer
+        closures (§5: drain every device, then move the column) are part of this
+        slice's acceptance, not optional hygiene.
         The §5 consistency sweep ships here too — it reuses this slice's harness in
         verify mode, and its divergence counter is the acceptance metric for the
         reconcile pass itself. It must also
@@ -2104,8 +2019,10 @@ step gated on the one before:
     Fleet-buildability, previously a per-definition predicate here, is a runbook
     check under §6's uniform flip: all codec-bearing plugins are static, so "every
     client can re-project every key" means "all devices current, no codec-bearing
-    plugin disabled" — verified at flip time, not encoded per row (§5's
-    unbuildable-writer note).
+    plugin disabled" — verified at cutover time, not encoded per row. The check
+    protects <em>readers</em>, not the merge (§5's per-client degradation): a
+    degraded client lives off the downloaded cell as its read fallback for keys it
+    can't build, and the sync-off removes exactly that fallback.
     "Stops uploading" also means the per-edit PATCH channel only (PR-review P2):
     <em>creates keep sending the projected bag</em> — <code>apply_block_creates</code>
     binds an explicit <code>properties_json</code> into a NOT NULL server column, so a
@@ -2144,8 +2061,9 @@ step gated on the one before:
     <em>is</em> the "column stopped" case — preserve the local
     <code>properties_json</code> / re-project instead of writing the NULL through.
     The placeholder bind avoids the cascade entirely, at the cost of making '{}'
-    ambiguous between "empty bag" and "column stopped" — fine only because the
-    checksum, not cell shape, licenses merge decisions). The split's predicate must
+    ambiguous between "empty bag" and "column stopped" — harmless under §5's
+    one-direction rule, since no merge decision ever reads cell shape). The split's
+    predicate must
     be <em>server-visible</em> (PR-review P2): sync rules select over
     <code>public.blocks</code> and can see neither a client's registry nor, for e2ee
     rows, any plaintext keys — which is exactly why the eligibility state lives in
@@ -2312,12 +2230,13 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
         test)</td>
     </tr>
     <tr>
-      <td><strong>The flip is total.</strong> Materialize (cell → children) runs only
-        where the cell is genuinely newer truth — checksum-mismatched bags and
-        backfill convergence — never on a current client's projection.</td>
+      <td><strong>The flip is total and one-way.</strong> Materialize (cell →
+        children) runs exactly once — the backfill; after it, no code path converts
+        cell state into children, ever. Arriving bags are read fallbacks for pending
+        keys, never merge inputs.</td>
       <td><a href="#s5">§5</a> callout</td>
       <td>Arrival catch-up, sweep, projection rebuilds</td>
-      <td>A current-client bag arrival never overwrites children (C)</td>
+      <td>A bag arrival never overwrites children — any writer, any version (C)</td>
     </tr>
     <tr>
       <td><strong>Absent children license creation, never deletion.</strong> A
@@ -2329,24 +2248,24 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
         (C)</td>
     </tr>
     <tr>
-      <td><strong>The checksum binds content, identity, and enumeration — both
-        directions.</strong> <code>{hash, coveredKeys}</code> over
-        block id + covered values; verification = the hash over
-        exactly the listed keys <em>plus</em> containment (present child-backed ⊆
-        covered); never the local registry.</td>
-      <td><a href="#s5">§5</a> discriminator</td>
-      <td>Arrival classification, sweep classification, checksum storage choice</td>
-      <td>A copied bag mismatches (id); an old-client added key mismatches
-        (containment); plugin skew never flips classification (C)</td>
+      <td><strong>Non-projecting writers are closed by policy, not honored by
+        machinery.</strong> Stale tabs: social update policy; pre-flip queues:
+        drain-before-flip runbook; raw writers: write children, not the cell.
+        Violations are reverted by the next projection, logged by the sweep,
+        recoverable from <code>row_events</code>.</td>
+      <td><a href="#s5">§5</a> callout</td>
+      <td>The flip runbook, sweep telemetry, agent-bridge conventions</td>
+      <td>A raw cell write is reverted and the sweep divergence counter records it
+        (C)</td>
     </tr>
     <tr>
-      <td><strong>Buildability degrades per-client; the fleet closes it by
-        policy.</strong> Locally-unbuildable keys are cell-backed on that client
-        (arrival); the sync-off presumes every client can re-project every key —
-        a runbook check (static plugins, all devices current), with the
-        unbuildable-writer hazard and its designed remedy recorded in §5.</td>
+      <td><strong>Buildability degrades per-client, read-side only.</strong> A
+        locally-unbuildable key keeps the arrived cell value as its read fallback
+        (pending treatment); under one-way sync its stale uploads can overwrite
+        nothing. The sync-off runbook check (static plugins, all devices current)
+        protects those readers — the cutover removes the fallback they live on.</td>
       <td><a href="#s5">§5</a>, <a href="#cell-endstate">§11 sync-off</a></td>
-      <td>Reconcile branches, coveredKeys stamping, the flip/cutover runbook</td>
+      <td>Pending-key read fallback, the flip/cutover runbook</td>
       <td>A plugin-less client keeps cell authority for a custom-codec key (C)</td>
     </tr>
     <tr>
@@ -2490,16 +2409,17 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
     extraction consumes that instead of porting the scan.
   </li>
   <li>
-    <strong>Old-client interop during rollout.</strong> A device on pre-slice-B code
-    writes cell-only. Only its <em>new-key sets</em> converge without help (no
-    children exist for the projection to fight with). Its <em>updates to
-    already-backfilled keys</em> and its <em>clears</em> converge only once the §5
-    checksum discriminator and the old-client materialize branches land with slice C —
-    before that, an old client's update to a child-backed key is silently reverted by
-    the next projection, and its deletes resurrect on the next touch (PR-review P1
-    caught the update half of this). Coordinated upgrade (small fleet) is the honest
-    mitigation for the pre-slice-C window, not the reconcile pass; the §5 fix closes
-    it properly.
+    <strong>Old-client interop during rollout — closed by policy, permanently.</strong>
+    A device on pre-flip code writes cell-only. Its <em>new-key sets</em> converge
+    without help (no children exist for the projection to fight with); its
+    <em>updates to already-backfilled keys</em> and its <em>clears</em> do not — they
+    are reverted by the next projection under §5's one-direction rule. This is the
+    accepted design, not a window (owner decision; an earlier revision closed it with
+    the checksum discriminator + materialize branches — see the §5 callout and
+    review rounds 14–21): coordinated upgrade IS the mitigation, made mechanical by
+    the flip runbook (all devices drained before the column moves) and made visible
+    by the sweep's divergence log, with <code>row_events</code> as the recovery
+    path for anything a straggler loses.
   </li>
   <li>
     <strong>Stale bootstrap-hint window.</strong> A fresh device reads downloaded cells
