@@ -27,7 +27,7 @@ interface Harness {
   h: TestDb
   cache: BlockCache
   repo: Repo
-  read(id: string): Promise<{id: string; content: string; deleted: 0 | 1; properties_json: string} | null>
+  read(id: string): Promise<{id: string; content: string; deleted: 0 | 1; properties_json: string; references_json: string} | null>
 }
 
 const setup = async (): Promise<Harness> => {
@@ -49,7 +49,7 @@ const setup = async (): Promise<Harness> => {
     cache,
     repo,
     read: async id => h.db.getOptional(
-      `SELECT id, content, deleted, properties_json FROM blocks WHERE id = ?`,
+      `SELECT id, content, deleted, properties_json, references_json FROM blocks WHERE id = ?`,
       [id],
     ),
   }
@@ -110,6 +110,27 @@ describe('rename — Case R1 (clean 1-for-1 swap)', () => {
     await flush()
 
     expect((await env.read('s'))!.content).toBe('See [[New]] for context.')
+  })
+
+  // Regression (found by referencesRecompute.fuzz.test.ts): the rename
+  // commit fires BOTH this processor and parseReferences. The parse plan
+  // is built from pre-rewrite content, so without parseReferences'
+  // stale-plan guard its write could land after the rename rewrite and
+  // clobber the refs back to a seat for the REMOVED alias — content
+  // `[[New]]` with a stored ref still carrying `Old`. A self-referencing
+  // target makes the race deterministic-ish (one row, both processors).
+  it('converges refs and content when the renamed target references itself', async () => {
+    await seedTarget('t', 'see [[Old]]', ['Old'])
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const target = (await env.read('t'))!
+    expect(target.content).toBe('see [[New]]')
+    expect(JSON.parse(target.references_json)).toEqual([{id: 't', alias: 'New'}])
   })
 
   it('does not rewrite blocks that did not reference the alias', async () => {

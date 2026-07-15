@@ -31,7 +31,11 @@ export interface ParsedBlockRef {
   startIndex: number;
   endIndex: number;
   embed: boolean;  // true for !((id)), false for plain ((id))
-  label?: string;  // display label from [label](((id)))
+  /** Display label from `[label](((id)))`. Present (possibly `''` —
+   *  the renderer falls back to displaying the id) iff the mark used
+   *  the aliased form; absent for plain/embed marks. Rewriters key on
+   *  presence to preserve the mark's form. */
+  label?: string;
 }
 
 // UUIDv4 shape — anchors what counts as a block-ref id. We deliberately keep
@@ -174,13 +178,17 @@ export function parseBlockRefs(content: string): ParsedBlockRef[] {
   while ((match = ALIASED_BLOCK_REF_RE.exec(content)) !== null) {
     const start = match.index
     const end = start + match[0].length
-    const label = match[1].trim()
     found.push({
       blockId: match[2].toLowerCase(),
       startIndex: start,
       endIndex: end,
       embed: false,
-      ...(label ? {label} : {}),
+      // Always present for the aliased form, even when '' — a truthy
+      // gate here made `[](((id)))` indistinguishable from `((id))`,
+      // so rewriteBlockRefs silently degraded the aliased form to a
+      // plain ref (changing display semantics from id-fallback to
+      // target content). Found by referenceParser.fuzz.
+      label: match[1].trim(),
     })
     consumed.push([start, end])
   }
@@ -223,21 +231,41 @@ export function extractBlockRefIds(content: string): string[] {
 //      / blockref syntax via string templates and accidentally diverge
 //      from parser expectations). ────
 
-/** Render a wikilink targeting `alias`. If `alias` contains the closing
- *  wikilink delimiter, the output is syntactically safe but lossy;
- *  callers that need alias identity must verify by parsing the result. */
+/** Render a wikilink targeting `alias`. If `alias` contains wikilink
+ *  delimiters (`[[`, `]]`, or a trailing `]`), the output is
+ *  syntactically safe but lossy; callers that need alias identity must
+ *  verify by parsing the result. Guarantee, for non-empty `alias`: the
+ *  output always parses to exactly one outermost reference spanning the
+ *  whole string, and is delimiter-balanced so it cannot combine with
+ *  surrounding text into a different link. Exception: `alias === ''`
+ *  renders `[[]]`, which the parser's `if (alias)` gate emits ZERO
+ *  references for — callers on this path already verify-by-parsing and
+ *  fall back, so this is a contract-doc caveat, not a live bug. */
 export const renderWikilink = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
-  // place. Splitting it with a space keeps the visible text close to
-  // the input, but it no longer parses to the same alias.
-  const safe = alias.replace(/]]/g, '] ]')
-  return `[[${safe}]]`
+  // place, and an unclosed `[[` would leak an opener that a later `]]`
+  // anywhere in the document could pair with, swallowing unrelated
+  // text. Splitting with a space keeps the visible text close to the
+  // input, but it no longer parses to the same alias. Lookahead, not
+  // pair replacement: replacing the pair `]]` recreates one on odd
+  // runs (']]]' → '] ]]') — the space must land between EVERY two
+  // adjacent delimiters. Found by referenceParser.fuzz.
+  const safe = alias.replace(/\[(?=\[)/g, '[ ').replace(/\](?=\])/g, '] ')
+  // A trailing `]` would pair with the closing delimiter's first `]`
+  // and close the link one character early, leaving a stray `]`
+  // outside the parsed span.
+  const padded = safe.endsWith(']') ? safe + ' ' : safe
+  return `[[${padded}]]`
 }
 
 /** Render an aliased blockref `[label](((id)))`. Strips `]` and
  *  newlines from `label` because the parser's regex rejects them in
  *  the label segment (see `ALIASED_BLOCK_REF_RE`). `id` is assumed
- *  to be a UUID — already safe. */
+ *  to be a UUID — already safe. An empty label (also after stripping)
+ *  is allowed — the parser matches `[]` (zero-length label) and the
+ *  live renderer then displays the target's content, exactly like a
+ *  plain `((id))` (remark-blockrefs emits no display children for an
+ *  empty label; only unresolved targets fall back to the short id). */
 export const renderAliasedBlockref = (label: string, id: string): string => {
   // Parser regex: `\[([^\]\n]*)\]\(\(\((UUID)\)\)\)`. Anything in `]`
   // or `\n` would break the match; drop them. Empty label after
@@ -300,7 +328,12 @@ export const inlineBlockRefs = (
     if (mark.startIndex < cursor) continue
     if (mark.blockId !== normalizedId) continue
     result += content.slice(cursor, mark.startIndex)
-    result += mark.label !== undefined ? mark.label : inlineContent
+    // Degrade to what the mark DISPLAYED: the label for labeled marks;
+    // the target's content otherwise. An EMPTY-label aliased mark
+    // renders like a plain ref (remark-blockrefs emits no display
+    // children for it, so BlockRef falls back to target content) —
+    // it takes the inlineContent path too.
+    result += mark.label ? mark.label : inlineContent
     cursor = mark.endIndex
   }
   return cursor === 0 ? content : result + content.slice(cursor)

@@ -75,6 +75,16 @@ export interface CreateOrRestoreArgs {
    *  shortcuts) set this; content-bearing creators (Roam import, which
    *  uses its own tx.create, not this primitive) do not. */
   systemMint?: boolean
+  /** Strip the tombstone bag's `aliases` key in the SAME restore UPDATE.
+   *  Set by callers whose `onInsertedOrRestored` OWNS the alias write
+   *  (the alias/daily seat wrappers): a tombstoned seat can carry a
+   *  stale claim, and restoring it as-is trips the alias-uniqueness
+   *  trigger against the current claimant before the callback can
+   *  correct it (whole-tx rollback; found by
+   *  referencesRecompute.fuzz.test.ts). Callers that do NOT re-write
+   *  aliases (sidebar shortcuts, media assets) must leave this unset so
+   *  a user-set alias survives the restore. */
+  stripAliasesOnRestore?: boolean
   /** Optional callback invoked after the row is inserted OR restored
    *  (NOT on the live-row-hit path). Used by per-domain wrappers to
    *  write properties (e.g. the alias list via tx.setProperty) that
@@ -109,7 +119,21 @@ export const createOrRestoreTargetBlock = async (
       // BlockDataPatch, so we can refresh content in the same UPDATE.
       // Property writes that need codec encoding still go through
       // tx.setProperty inside the callback.
-      await tx.restore(args.id, {content: args.freshContent})
+      //
+      // See `stripAliasesOnRestore`'s docblock for why alias-owning
+      // callers strip the tombstone bag's aliases in the same UPDATE
+      // (stale-claim resurrection trips the uniqueness trigger and rolls
+      // back the whole tx; found by referencesRecompute.fuzz.test.ts) —
+      // and why non-alias-owning callers must NOT (a user-set alias on
+      // a restored shortcuts/media row must survive).
+      if (args.stripAliasesOnRestore) {
+        const tombstone = await tx.get(args.id)
+        const restoredProperties = {...(tombstone?.properties ?? {})}
+        delete restoredProperties[aliasesProp.name]
+        await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
+      } else {
+        await tx.restore(args.id, {content: args.freshContent})
+      }
       if (args.onInsertedOrRestored) {
         await args.onInsertedOrRestored(tx, args.id)
       }
@@ -374,6 +398,20 @@ export const ensureAliasTarget = async (
   workspaceId: string,
   typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
 ): Promise<{ id: string; inserted: boolean }> => {
+  // Lookup-first INSIDE the tx, not just at the caller's read phase:
+  // the read-phase lookup can go stale between plan build and apply —
+  // if a live block claimed the alias in that gap, minting the seat
+  // below would set the same alias on a second row, trip the
+  // block_aliases_workspace_alias_unique trigger, and roll back the
+  // caller's whole write tx (for parseReferences that means the source
+  // keeps its mark with no derived ref, and nothing re-fires — found by
+  // referencesRecompute.fuzz.test.ts). Binding to the claimant instead
+  // converges with what a fresh read-phase lookup would have produced.
+  // The seat-slot probe can't catch this case: it only inspects
+  // deterministic seat ids, and a claimant created via tx.create has an
+  // unrelated id (see the findAliasClaimant note above).
+  const claimant = await tx.aliasLookup(alias, workspaceId)
+  if (claimant !== null) return {id: claimant.id, inserted: false}
   const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)
   const seed = aliasSeatSeed(alias)
   return createOrRestoreTargetBlock(tx, {
@@ -382,6 +420,7 @@ export const ensureAliasTarget = async (
     parentId: null,
     orderKey: keyAtEnd(),
     freshContent: seed.content,
+    stripAliasesOnRestore: true,
     // A freshly-probed alias seat is a speculative default: if the server
     // already has a real page for this alias, the local seat must yield.
     systemMint: true,

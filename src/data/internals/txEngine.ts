@@ -108,6 +108,60 @@ const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): bool
   return false
 }
 
+/** v1 invariant (schema-unification §5.1): a materialized seed definition is
+ *  wholly code-owned — its bag and lifecycle belong to materialization and
+ *  the §13 revision-upgrade step (both `Automation` scope); synced-in
+ *  changes never pass through this engine at all. The schema editor and
+ *  property panel already render seed rows read-only; this is the
+ *  data-layer backstop for the agent bridge, the importer, and the outline
+ *  delete key.
+ *
+ *  ONE commit-time check over the tx's snapshots map — the single
+ *  convergence point for everything a tx wrote — rather than per-primitive
+ *  guards. The per-site form needed every current and future write path to
+ *  remember a call and missed three: `create` (forge a provenance-valid row
+ *  at the publicly computable uuidv5 id before materialization runs),
+ *  `restore` with a properties patch, and `update` that makes an occupant
+ *  row BECOME provenance-valid (per-site guards checked only the `before`
+ *  row). Checking (before, after) pairs here covers both directions for
+ *  every primitive at once.
+ *
+ *  Rules, under `BlockDefault` scope only:
+ *   - a row may not BECOME a valid seeded definition (forgery);
+ *   - a valid seeded definition's bag may not change (which also covers
+ *     stripping its provenance) and it may not be tombstoned or
+ *     hard-deleted. Content/references edits and plain restores stay
+ *     allowed — they don't touch the code-owned fields, and
+ *     materialization itself restores tombstones.
+ *
+ *  The check is on the tx's NET effect: `snapshots` holds one (before,
+ *  after) pair per row — first-touch `before` vs last-write `after` — so
+ *  an intermediate state within the tx is never path-checked. A row
+ *  forged mid-tx and reverted before commit converges to a net no-op and
+ *  passes, even though its row/crud events may transit through the
+ *  forged state on the way there. Accepted: same-tx processors observe
+ *  net diffs too, the committed state is unforged either way, and sync
+ *  is out of this guard's threat model regardless. */
+export const assertNoSeedDefinitionWrites = (
+  snapshots: SnapshotsMap,
+  scope: ChangeScope,
+): void => {
+  if (scope !== ChangeScope.BlockDefault) return
+  for (const [id, {before, after}] of snapshots) {
+    const beforeSeed = before !== null && isValidSeededDefinition(before)
+    if (!beforeSeed && after !== null && isValidSeededDefinition(after)) {
+      throw new SeededDefinitionWriteError(id)
+    }
+    if (beforeSeed && (
+      after === null
+      || !jsonValuesEqual(before.properties, after.properties)
+      || (!before.deleted && after.deleted)
+    )) {
+      throw new SeededDefinitionWriteError(id)
+    }
+  }
+}
+
 /** Per-tx scheduling record produced by `tx.afterCommit`. The commit
  *  pipeline picks these up post-commit; rollback discards them. */
 export interface AfterCommitJob {
@@ -342,25 +396,9 @@ export class TxImpl implements Tx {
     return {id: data.id, inserted: false}
   }
 
-  /** v1 invariant (schema-unification §5.1): a materialized seed definition's
-   *  bag is wholly code-owned — no user-editable fields. The schema editor and
-   *  property panel already render it read-only; this is the data-layer backstop
-   *  so the invariant also holds for the agent bridge, the importer, and the
-   *  outline delete key. Only USER writes are blocked (`BlockDefault` scope):
-   *  materialization and the §13 revision-upgrade step run under `Automation`,
-   *  and synced-in changes never pass through this engine at all, so neither is
-   *  affected. Provenance is read off the PERSISTED row — a caller can't forge
-   *  it, since a valid seed id must equal `uuidv5(workspaceId:seedKey)`. */
-  private assertSeedDefinitionMutable(before: BlockData): void {
-    if (this.meta.scope === ChangeScope.BlockDefault && isValidSeededDefinition(before)) {
-      throw new SeededDefinitionWriteError(before.id)
-    }
-  }
-
   async delete(id: string): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    this.assertSeedDefinitionMutable(before)
     if (before.deleted) return  // already a tombstone — no-op, no second snapshot
     const after: BlockData = {
       ...before,
@@ -414,9 +452,6 @@ export class TxImpl implements Tx {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
     if (!updatePatchChangesBlock(before, patch)) return
-    // Only a bag mutation touches the seed-owned fields; a content/reference
-    // update leaves the code-owned definition intact.
-    if (patch.properties !== undefined) this.assertSeedDefinitionMutable(before)
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
@@ -519,7 +554,6 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
-    this.assertSeedDefinitionMutable(before)
     const resolvedSchema = this.resolvePropertySchemaForRow(before, schema)
     // Scope-consistency: the tx was admitted under `this.meta.scope`, chosen from
     // the CALLER's schema.changeScope. If the definition's change-scope was edited
@@ -746,7 +780,13 @@ export class TxImpl implements Tx {
    *  `Repo._replay`). `applyRaw`'s write is still a field change in the
    *  replay tx, so without that gate a value-deriving same-tx processor
    *  would re-derive and override the restore — leaving the row at a
-   *  derived value, not `target` (#187). */
+   *  derived value, not `target` (#187).
+   *
+   *  The row-level triggers (e.g. the parent-liveness check) still fire
+   *  per statement and can reject an intermediate replay state even
+   *  though the target state is valid — `applyRaw` itself does no
+   *  ordering or retry around that; callers own it (see
+   *  `replayApplicationOrder` in txSnapshots.ts). */
   async applyRaw(id: string, target: BlockData | null): Promise<void> {
     const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)

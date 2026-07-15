@@ -910,13 +910,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Don't merge the scope root into a block outside the surface —
         // there's no visible previous block to merge into here.
-        const {canMergeUp} = await structuralEditPolicyForBlock(block, scopeRootId)
+        const {canMergeUp, canDelete} = await structuralEditPolicyForBlock(block, scopeRootId)
 
         // Live content from the editor — SQL may lag (pushChange is debounced).
         const liveContent = editorView.state.doc.toString()
 
-        // Empty block: delete it and move focus up.
+        // Empty block: delete it and move focus up. Never the scope root —
+        // an emptied zoomed page (split at cursor 0, then Backspace) would
+        // otherwise tombstone the whole rendered surface, the same boundary
+        // delete_block guards (Codex review on the interaction fuzzer).
         if (liveContent === '') {
+          if (!canDelete) return
           trigger.preventDefault()
           const prevVisible = await previousVisibleBlock(block, scopeRootId)
           if (prevVisible) {

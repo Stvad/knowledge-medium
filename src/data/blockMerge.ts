@@ -52,6 +52,15 @@ export const mergeBlocksInTx = async (
   // under the tombstone. Treat self-merge as a no-op.
   if (into.id === from.id) return
 
+  // Merging an already-tombstoned block is a retry of a merge that
+  // already happened (e.g. the alias-collision "Merge into…" flow
+  // re-firing, #188) — treat it as a no-op like self-merge. Without
+  // this, the degenerate all-writes-elide case (tombstone delete
+  // no-ops, content/properties update elides when `from` was empty)
+  // reached emitEvent with no prior write in the tx and aborted with
+  // WorkspaceNotPinnedError. Found by repoMutators.fuzz.
+  if (from.deleted) return
+
   // Merging `from` into one of its own descendants can never succeed: the
   // child re-homing below would move an ancestor of `into` under `into` and
   // trip `tx.move`'s cycle guard mid-fold (clean rollback, raw CycleError).

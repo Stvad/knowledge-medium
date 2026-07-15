@@ -1,7 +1,11 @@
 import {
   CORE_BLOCK_MERGED_EVENT,
   defineSameTxProcessor,
+  isRefCodec,
+  isRefListCodec,
   normalizeReferences,
+  scopePoliciesEquivalent,
+  type AnyPropertySchema,
   type AnySameTxProcessor,
   type BlockData,
   type BlockReference,
@@ -17,6 +21,7 @@ import {
   rewriteWikilinks,
 } from './referenceParser.ts'
 import { inlineDeletedBlockRefsProcessor } from './inlineDeletedBlockRefsProcessor.ts'
+import { projectedIdOf } from './referenceProjection.ts'
 
 export const RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR =
   'references.retargetMergedBlockReferences'
@@ -52,6 +57,47 @@ const retargetReference = (
     : {id: intoId, alias: nextAlias, sourceField: ref.sourceField}
 }
 
+/** Rewrite `fromId` → `intoId` inside a ref/refList property's RAW encoded
+ *  value (string or string array — matching what `decodeRefId` /
+ *  `decodeRefListIds` accept). Works on the raw value rather than a
+ *  decode→re-encode round-trip so malformed sibling elements a lenient
+ *  decode would drop are preserved verbatim. List rewrites dedupe every
+ *  `intoId` element once a rewrite has fired — both the entry the
+ *  rewrite itself introduces (`[from, into]` must not become
+ *  `[into, into]`) and any pre-existing `intoId` duplicate already in
+ *  the list; both are benign canonicalizations. String rewrites also
+ *  drop surrounding whitespace padding around a matched `fromId`
+ *  (element matching goes through `projectedIdOf`, the same trim/empty
+ *  normalization `appendPropertyRef` uses, so `raw.trim() === fromId`
+ *  matches, but the replacement is the bare `intoId`) — same reasoning. */
+const rewriteRefValue = (
+  raw: unknown,
+  fromId: string,
+  intoId: string,
+): {value: unknown; changed: boolean} => {
+  if (typeof raw === 'string') {
+    return projectedIdOf(raw) === fromId
+      ? {value: intoId, changed: true}
+      : {value: raw, changed: false}
+  }
+  if (Array.isArray(raw)) {
+    let changed = false
+    const mapped = raw.map(el =>
+      projectedIdOf(el) === fromId ? (changed = true, intoId) : el)
+    if (!changed) return {value: raw, changed: false}
+    let seenInto = false
+    const deduped = mapped.filter(el => {
+      if (projectedIdOf(el) === intoId) {
+        if (seenInto) return false
+        seenInto = true
+      }
+      return true
+    })
+    return {value: deduped, changed: true}
+  }
+  return {value: raw, changed: false}
+}
+
 const retargetReferenceContent = (
   content: string,
   fromId: string,
@@ -70,13 +116,71 @@ const retargetSource = async (
   sourceId: string,
   event: CoreBlockMergedEvent,
   aliasRewrites: ReadonlyMap<string, string>,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ): Promise<void> => {
   const current = await tx.get(sourceId)
   if (current === null || current.deleted) return
 
+  // Property-derived refs (sourceField set) project from the property
+  // VALUE (`projectPropertyReferences`), so a retargeted ref entry whose
+  // underlying value still names `fromId` is a projection anomaly the
+  // next re-parse would silently revert (found by
+  // referencesRecompute.fuzz.test.ts). Rewrite the value alongside the
+  // entry when the schema is loaded and ref-typed; otherwise leave BOTH
+  // untouched — an absent-schema ref is value-tied by the add-only
+  // contract, and a non-ref/undecodable value never projected this ref
+  // in the first place (pre-existing incoherence isn't ours to mutate).
+  const nextProperties = {...current.properties}
+  let propertiesChanged = false
+  // Eligibility for the value+entry rewrite: schema present, ref-typed,
+  // and scope-equivalent. The scope check matters because the value
+  // lands via the raw `properties` patch below, in THIS tx's scope —
+  // bypassing setProperty's per-field scope routing. A field whose
+  // declared scope isn't policy-equivalent to the merge tx's (e.g. a
+  // UiState/UserPrefs ref pointer) must not be mutated by a
+  // document-scoped merge: leave value AND entry alone, like the
+  // absent-schema branch (the entry stays value-tied and re-parses
+  // consistently).
+  const isEligibleField = (field: string): boolean => {
+    const schema = propertySchemas.get(field)
+    if (!schema || !(isRefCodec(schema.codec) || isRefListCodec(schema.codec))) return false
+    return scopePoliciesEquivalent(schema.changeScope, tx.meta.scope)
+  }
+  // Collect eligible fields from BOTH directions:
+  //  - stored entries pointing at fromId (a field whose VALUE was
+  //    deleted can still carry a stale entry — sync-applied rows), and
+  //  - the bag itself: mergeProperties can have copied a ref property
+  //    from `from` onto this very row with a value naming fromId and NO
+  //    stored entry yet — entry-driven collection can't see it, and the
+  //    follow-up parse would project a backlink to the tombstoned merge
+  //    source (Codex review on PR #371).
+  // Eligible fields ALWAYS retarget their entries, whether or not the
+  // value needed rewriting (a stale entry can coexist with an
+  // already-correct value on sync-applied rows); the value write stays
+  // conditional on an actual change.
+  const retargetableFields = new Set<string>()
+  for (const ref of current.references) {
+    if (ref.id !== event.fromId || ref.sourceField === undefined) continue
+    if (isEligibleField(ref.sourceField)) retargetableFields.add(ref.sourceField)
+  }
+  for (const field of Object.keys(nextProperties)) {
+    if (isEligibleField(field)) retargetableFields.add(field)
+  }
+  for (const field of retargetableFields) {
+    if (!(field in nextProperties)) continue
+    const {value, changed} = rewriteRefValue(
+      nextProperties[field], event.fromId, event.intoId)
+    if (changed) {
+      nextProperties[field] = value
+      propertiesChanged = true
+    }
+  }
+
   const nextReferences = normalizeReferences(
     current.references.map(ref =>
-      retargetReference(ref, event.fromId, event.intoId, aliasRewrites),
+      ref.sourceField !== undefined && !retargetableFields.has(ref.sourceField)
+        ? ref
+        : retargetReference(ref, event.fromId, event.intoId, aliasRewrites),
     ),
   )
   const nextContent = retargetReferenceContent(
@@ -86,8 +190,14 @@ const retargetSource = async (
     aliasRewrites,
   )
 
-  const patch: Partial<Pick<BlockData, 'content' | 'references'>> = {}
+  const patch: Partial<Pick<BlockData, 'content' | 'properties' | 'references'>> = {}
   if (nextContent !== current.content) patch.content = nextContent
+  // This write (including the properties bag) runs under the merge tx's
+  // BlockDefault scope, so if a canonical seed bag ever gains a ref/
+  // refList-typed field, merging a block referenced BY a seed definition
+  // would abort at the commit-time seed guard (assertNoSeedDefinitionWrites).
+  // Unreachable today: canonical bags carry no ref-typed fields.
+  if (propertiesChanged) patch.properties = nextProperties
   if (JSON.stringify(nextReferences) !== JSON.stringify(current.references)) {
     patch.references = nextReferences
   }
@@ -103,13 +213,22 @@ const retargetMergedBlockReferences = async (
     SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
     [event.workspaceId, event.fromId],
   )
-  if (sourceRows.length === 0) return
+  // The merge TARGET is always a source candidate, backlink row or not:
+  // mergeProperties can have copied a ref/refList property from `from`
+  // onto `into` (target lacked the key) whose value names `fromId` —
+  // `into` has no stored reference entry yet, so the block_references
+  // lookup above can't see it, and without a rewrite the follow-up
+  // parse would project a backlink to the tombstoned merge source
+  // (Codex review on PR #371). retargetSource no-ops when nothing
+  // matches.
+  const sourceIds = new Set(sourceRows.map(row => row.id))
+  sourceIds.add(event.intoId)
 
   const aliasRewrites = new Map(
     event.aliasRewrites.map(({fromAlias, toAlias}) => [fromAlias, toAlias]),
   )
-  for (const {id} of sourceRows) {
-    await retargetSource(ctx.tx, id, event, aliasRewrites)
+  for (const id of sourceIds) {
+    await retargetSource(ctx.tx, id, event, aliasRewrites, ctx.propertySchemas)
   }
 }
 

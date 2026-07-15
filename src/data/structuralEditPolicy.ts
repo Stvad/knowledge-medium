@@ -74,6 +74,15 @@ export interface StructuralEditPolicy {
    *  block? False at the scope root, where the previous visible block
    *  is outside the surface. */
   canMergeUp: boolean
+  /** May Delete remove this block (and its subtree)? False at the scope
+   *  root: deleting it would tombstone the entire rendered surface out
+   *  from under the panel, with no in-surface block left to recover
+   *  focus to — the same boundary rule as indent/merge. Surfaces with
+   *  no scope (e.g. the agent bridge, which can't inject one) pass
+   *  `scopeRootId: undefined` and stay free to delete anything. Found
+   *  by defaultActions.fuzz.test.ts: delete_block was the only
+   *  structural handler without a scope-root guard. */
+  canDelete: boolean
 }
 
 export const resolveStructuralEditPolicy = (
@@ -88,6 +97,7 @@ export const resolveStructuralEditPolicy = (
     canIndent: !isScopeRoot,
     canOutdent: !isScopeRoot && parentId !== scopeRootId,
     canMergeUp: !isScopeRoot,
+    canDelete: !isScopeRoot,
   }
 }
 

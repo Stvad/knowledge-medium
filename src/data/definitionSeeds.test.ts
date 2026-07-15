@@ -485,6 +485,133 @@ describe('seed definition write guard (tx layer)', () => {
     expect(JSON.parse(row.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
   })
 
+  it('rejects a user-scope create that forges a provenance-valid seed row', async () => {
+    // The deterministic id is publicly computable (uuidv5 of
+    // `workspaceId:seedKey`), so without a create-side guard a user-scope
+    // caller could author the row BEFORE materialization runs — and the
+    // materialization probe would then trust the forged bag forever (live
+    // row → skipped, payloads never repaired). Found by definitionSeeds.fuzz.
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await expect(repo.tx(async tx => {
+      await tx.create({
+        id,
+        workspaceId: WS,
+        parentId: propertiesPageBlockId(WS),
+        orderKey: 'a0',
+        content: seed.name,
+        properties: canonicalPropertySeedProperties(seed),
+      })
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?', [id])).toBeNull()
+  })
+
+  it('rejects a user-scope update that makes an occupant row provenance-valid', async () => {
+    // The third forge direction: create a PLAIN row at the deterministic id
+    // (legal — it is just a block), then write the canonical bag onto it.
+    // The old per-primitive guards checked only the `before` row and let
+    // this through; the commit-time check over the snapshots map rejects a
+    // row BECOMING a valid seeded definition under user scope.
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await repo.tx(async tx => {
+      await tx.create({
+        id,
+        workspaceId: WS,
+        parentId: propertiesPageBlockId(WS),
+        orderKey: 'a0',
+        content: 'innocent occupant',
+        properties: {},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.tx(
+      tx => tx.update(id, {properties: canonicalPropertySeedProperties(seed)}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+    const row = await sharedDb.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(JSON.parse(row.properties_json)).toEqual({})
+  })
+
+  it('rejects a user-scope createOrGet insert of a provenance-valid seed row', async () => {
+    // createOrGet's insert path builds the same row shape as create — the
+    // old per-primitive guard covered only create (Codex review). The
+    // commit-time check sees the insert's snapshot like any other write.
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await expect(repo.tx(async tx => {
+      await tx.createOrGet({
+        id,
+        workspaceId: WS,
+        parentId: propertiesPageBlockId(WS),
+        orderKey: 'a0',
+        content: seed.name,
+        properties: canonicalPropertySeedProperties(seed),
+      })
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(SeededDefinitionWriteError)
+    expect(await sharedDb.db.getOptional('SELECT id FROM blocks WHERE id = ?', [id])).toBeNull()
+  })
+
+  it('rejects a user-scope restore patch that makes a tombstoned occupant provenance-valid', async () => {
+    // The dual of restore-tamper: the tombstone is a PLAIN occupant of the
+    // deterministic id, and the patch writes the canonical bag in — the
+    // resulting row, not the before row, is what forges (Codex review).
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await repo.tx(async tx => {
+      await tx.create({
+        id,
+        workspaceId: WS,
+        parentId: propertiesPageBlockId(WS),
+        orderKey: 'a0',
+        content: 'placeholder',
+        properties: {},
+      })
+      await tx.delete(id)
+    }, {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.tx(
+      tx => tx.restore(id, {properties: canonicalPropertySeedProperties(seed)}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+    const row = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(row.deleted).toBe(1)
+    expect(JSON.parse(row.properties_json)).toEqual({})
+  })
+
+  it('rejects a user-scope restore that rewrites a tombstoned seed bag', async () => {
+    // `restore` accepts a properties patch — without a guard it was the one
+    // bag-write path a user-scope caller could still reach (tombstone the
+    // row via Automation/sync, then resurrect it with a forged bag). A
+    // PLAIN restore stays allowed: it keeps the code-owned bag intact.
+    // Found by definitionSeeds.fuzz.
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    await repo.tx(tx => tx.delete(id), {scope: ChangeScope.Automation})
+
+    await expect(repo.tx(
+      tx => tx.restore(id, {
+        properties: {
+          ...canonicalPropertySeedProperties(seed),
+          [propertyNameProp.name]: 'forged',
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(SeededDefinitionWriteError)
+    const tampered = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(tampered.deleted).toBe(1)
+    expect(JSON.parse(tampered.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+
+    await repo.tx(tx => tx.restore(id), {scope: ChangeScope.BlockDefault})
+    const restored = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(restored.deleted).toBe(0)
+    expect(JSON.parse(restored.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+  })
+
   it('allows system (Automation) bag writes so materialization/upgrades work', async () => {
     await materializePropertySeeds(repo, WS, [seed])
     const id = propertyDefinitionBlockId(WS, seed.seedKey)
@@ -505,5 +632,65 @@ describe('seed definition write guard (tx layer)', () => {
       tx => tx.update(plainId, {properties: {types: ['note']}}),
       {scope: ChangeScope.BlockDefault},
     )).resolves.toBeUndefined()
+  })
+
+  it('an outline subtree-delete of a page containing a seed definition aborts the whole tx atomically', async () => {
+    // The guard is primitive-agnostic (assertNoSeedDefinitionWrites runs
+    // once over the tx's whole snapshots map), so it also catches a seed
+    // row tombstoned TRANSITIVELY by `repo.mutate.delete`'s subtree cascade
+    // (`core.delete` → softDeleteSubtree, mutators.ts:222-246) — not just a
+    // direct `tx.delete` on the seed's own id. That cascade is exactly the
+    // outline delete key's path (txEngine.ts:117's own rationale names it).
+    //
+    // Deliberately characterized here as correct-but-hostile UX: a user who
+    // deletes an ordinary page/section that happens to contain a seeded
+    // definition somewhere in its subtree gets the ENTIRE delete rejected
+    // and rolled back, with no indication which descendant blocked it.
+    // Softening this product-side (e.g. skipping seed rows during subtree
+    // delete instead of aborting the whole operation) is a flagged OPEN
+    // decision — NOT implemented here.
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    const pageId = await repo.mutate.createChild({parentId: propertiesPageBlockId(WS), content: 'a page'})
+    await repo.tx(tx => tx.move(id, {parentId: pageId, orderKey: 'a0'}), {scope: ChangeScope.BlockDefault})
+
+    await expect(repo.mutate.delete({id: pageId})).rejects.toThrow(SeededDefinitionWriteError)
+
+    const pageRow = await sharedDb.db.get<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [pageId])
+    expect(pageRow.deleted, 'the page itself rolled back, not just the seed').toBe(0)
+    const seedRow = await sharedDb.db.get<{deleted: number; properties_json: string}>(
+      'SELECT deleted, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(seedRow.deleted).toBe(0)
+    expect(JSON.parse(seedRow.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+  })
+
+  it('merge of a propertyless sibling into a seed definition succeeds (content-only merge is a legal edit)', async () => {
+    // `core.merge` (blockMerge.ts) writes `into`'s content AND properties in
+    // one `tx.update`. mergeProperties(into.properties, from.properties)
+    // with an EMPTY `from` bag never touches a key the guard would see as
+    // changed, so this is legal even though the seed is the merge target —
+    // matching the fuzzer's prediction (definitionSeeds.fuzz.test.ts
+    // `mergeIntoSeed` with `nonEmptyBag: false`). If a donor with a
+    // non-empty bag were merged in instead, mergeProperties would copy its
+    // from-only keys into `into` and the guard would reject it — see the
+    // `nonEmptyBag: true` fuzzer case for that direction.
+    await materializePropertySeeds(repo, WS, [seed])
+    const id = propertyDefinitionBlockId(WS, seed.seedKey)
+    const siblingId = await repo.mutate.createChild({
+      parentId: propertiesPageBlockId(WS), content: ' (extra note)',
+    })
+
+    await expect(repo.mutate.merge({intoId: id, fromId: siblingId})).resolves.toBeUndefined()
+
+    const seedRow = await sharedDb.db.get<{content: string; properties_json: string}>(
+      'SELECT content, properties_json FROM blocks WHERE id = ?', [id],
+    )
+    expect(seedRow.content).toBe(`${seed.name} (extra note)`)
+    expect(JSON.parse(seedRow.properties_json)).toEqual(canonicalPropertySeedProperties(seed))
+    const siblingRow = await sharedDb.db.get<{deleted: number}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [siblingId],
+    )
+    expect(siblingRow.deleted, 'the donor was tombstoned by the merge').toBe(1)
   })
 })

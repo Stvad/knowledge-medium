@@ -74,7 +74,10 @@ describe('PropertySchemaContentRenderer read-only for code-owned seeds', () => {
           'property-schema:config': {},
         },
       })
-    }, {scope: ChangeScope.BlockDefault, description: 'schema renderer fixture'})
+      // Automation scope: the fixture authors a provenance-valid seed row,
+      // which the tx-layer forge guard rejects under user scope (in
+      // production only materialization — an Automation write — creates it).
+    }, {scope: ChangeScope.Automation, description: 'schema renderer fixture'})
   })
 
   afterEach(() => { cleanup() })

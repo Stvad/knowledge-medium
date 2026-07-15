@@ -311,13 +311,21 @@ export const ensureDailyNoteTarget = async (
   date: string,
   workspaceId: string,
   typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
-): Promise<{ id: string; inserted: boolean }> =>
-  createOrRestoreTargetBlock(tx, {
+): Promise<{ id: string; inserted: boolean }> => {
+  // Lookup-first INSIDE the tx (mirrors ensureAliasTarget): the caller's
+  // read-phase lookup can go stale between plan build and apply — a live
+  // block that claimed the ISO alias in that gap would collide with the
+  // setProperty below on the alias-uniqueness trigger and roll back the
+  // whole write tx (found by referencesRecompute.fuzz.test.ts).
+  const claimant = await tx.aliasLookup(date, workspaceId)
+  if (claimant !== null) return {id: claimant.id, inserted: false}
+  return createOrRestoreTargetBlock(tx, {
     id: dailyNoteBlockId(workspaceId, date),
     workspaceId,
     parentId: null,
     orderKey: keyAtEnd(),
     freshContent: date,
+    stripAliasesOnRestore: true,
     // A daily-note seat materialized from a reference is a speculative
     // default — it must yield to a real daily-note row the server already
     // has for this date.
@@ -332,3 +340,4 @@ export const ensureDailyNoteTarget = async (
       )
     },
   })
+}

@@ -685,10 +685,12 @@ export const CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL = `
 // tombstoned but the descendant's UPDATE has `NEW.deleted = 1`, which
 // the WHEN clause excludes.
 //
-// Undo of a subtree-delete is safe by snapshot ordering: `softDelete-
-// Subtree` records the root's snapshot first (DFS pop), so `_replay`
-// restores the root before its children — descendant UPDATEs see a
-// live parent.
+// Undo/redo replay does NOT rely on any mutator's first-touch snapshot
+// order: `_replay` applies rows via `replayApplicationOrder`
+// (txSnapshots.ts) — live targets parents-first, tombstones last — so
+// a descendant's restore always sees a live parent regardless of how
+// the original tx happened to touch rows (core.merge, for one, touches
+// rehomed children before the from-block's tombstone).
 // ============================================================================
 
 export const CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL = `

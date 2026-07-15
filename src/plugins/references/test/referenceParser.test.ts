@@ -12,6 +12,7 @@ import {
   renderWikilink,
   rewriteWikilinks,
   inlineBlockRefs,
+  rewriteBlockRefs,
 } from '../referenceParser'
 
 const UUID = '11111111-1111-4111-8111-111111111111'
@@ -210,6 +211,21 @@ Another [[normal-ref]]
       const result = parseBlockRefs(`see ((${id})) for context`)
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({blockId: id, embed: false})
+    })
+
+    it('keeps an empty aliased label distinguishable from a plain ref', () => {
+      // `[](((id)))` displays the id (renderer fallback); `label: ''`
+      // marks the aliased FORM so rewrites preserve it instead of
+      // degrading to `((id))`. Found by referenceParser.fuzz.
+      const result = parseBlockRefs(`[](((${id})))`)
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({blockId: id, embed: false, label: ''})
+      expect(rewriteBlockRefs(`[](((${id})))`, id, id2)).toBe(`[](((${id2})))`)
+      // Inlining degrades to what the mark displayed. An empty-label
+      // mark renders like a plain ref (remark-blockrefs emits no
+      // display children for '', so BlockRef shows target content) —
+      // it takes the inlineContent path.
+      expect(inlineBlockRefs(`[](((${id})))`, id, 'target content')).toBe('target content')
     })
 
     it('parses an aliased [label](((uuid))) ref as one block ref span', () => {

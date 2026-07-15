@@ -278,10 +278,19 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block, uiStateBlock, scopeRootId} = deps
       if (!block || !uiStateBlock) return
 
-      // `scopeRootId` only locates the post-delete focus target; the
-      // delete itself doesn't need it. Don't gate the delete on it, so
-      // non-React runners that can't inject a scope (the agent-runtime
-      // bridge) still delete — they just skip focus recovery.
+      // Boundary rule: never delete the scope root itself — it would
+      // tombstone the whole rendered surface out from under the panel
+      // (see StructuralEditPolicy.canDelete). Every other structural
+      // handler already refuses at this boundary; found missing here by
+      // defaultActions.fuzz.test.ts.
+      const {canDelete} = await structuralEditPolicyForBlock(block, scopeRootId)
+      if (!canDelete) return
+
+      // Beyond the scope-root refusal above, `scopeRootId` only locates
+      // the post-delete focus target; the delete itself doesn't need it.
+      // Don't gate the delete on it, so non-React runners that can't
+      // inject a scope (the agent-runtime bridge) still delete — they
+      // just skip focus recovery.
       // Same-depth next sibling is the natural shift-up target. When
       // `block` has descendants those vanish too, so we can't use
       // `nextVisibleBlock` (which would descend into the doomed

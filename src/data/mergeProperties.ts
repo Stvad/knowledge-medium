@@ -27,8 +27,19 @@ export const mergeProperties = (
   const out: Record<string, unknown> = {...intoProps}
   for (const key of Object.keys(fromProps)) {
     const fromVal = fromProps[key]
-    if (!(key in out)) {
-      out[key] = fromVal
+    // hasOwn, not `in`: `in` walks the prototype chain, so a source-only
+    // key shadowing an Object.prototype member ('constructor', an own
+    // '__proto__' from JSON.parse, …) looked "present" and was silently
+    // dropped (found by mergeProperties.fuzz). Define, don't assign: a
+    // plain `out[key] =` on a source-only '__proto__' key would invoke
+    // the prototype setter instead of creating the own data property.
+    if (!Object.hasOwn(out, key)) {
+      Object.defineProperty(out, key, {
+        value: fromVal,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      })
       continue
     }
     const intoVal = out[key]
