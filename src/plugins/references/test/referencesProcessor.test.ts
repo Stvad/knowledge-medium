@@ -346,18 +346,23 @@ describe('parseReferences — schema-swap reprojection', () => {
   })
 
   it('preserves references committed after the schema-swap scan starts', async () => {
+    // The concurrent write must be INPUT-BACKED (here: an absent-schema
+    // property value, the retainable shape): since the parser started
+    // watching `references`, a raw entry with no backing input is
+    // re-derived away on the spot — the derived-column model working,
+    // not the reprojection clobber this test guards against.
     await env.repo.tx(
       tx => tx.create({
         id: 'src',
         workspaceId: WS,
         parentId: null,
         orderKey: 'a0',
-        properties: {reviewer: 'target-a'},
+        properties: {reviewer: 'target-a', 'other-prop': 'target-b'},
       }),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
-    const liveReference: BlockReference = {id: 'live-content', alias: 'live-content'}
+    const liveReference: BlockReference = {id: 'target-b', alias: 'target-b', sourceField: 'other-prop'}
     const originalGetAll = env.h.db.getAll.bind(env.h.db)
     let intercepted = false
     const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
@@ -882,6 +887,84 @@ describe('parseReferences — schema-swap reprojection', () => {
     const m = repo2.metrics()
     expect(m.reprojection.calls).toBe(0)
     expect(m.reprojection.rowsScanned).toBe(0)
+  })
+})
+
+describe('parseReferences — stale-plan guard covers references-only writers', () => {
+  it('does not clobber a references-only write landing between plan build and apply', async () => {
+    // The race (Codex review on PR #371): a parse plan is built from the
+    // content edit's event row; before it applies, a references-ONLY
+    // writer (the ref-backfill reprojection on schema load, simulated
+    // here with a raw update) adds an entry the parse cannot re-derive
+    // (absent schema) but must retain (value unchanged). Pre-fix the
+    // plan's basis checked only content/properties, so the stale plan
+    // applied and silently dropped the entry — and with `references`
+    // unwatched, nothing ever re-derived it. The fix is both halves:
+    // the plan carries a references basis (stale plan skipped) and the
+    // processor watches `references` (the skipped work is rebuilt from
+    // the fresh row, retention keeping the foreign entry).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'ref-target', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'target'})
+      await tx.create({
+        id: 'ref-src', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'plain',
+        // Value present with NO schema loaded for the field — the shape
+        // isRetainableAbsentRef protects (referenceProjection.ts:69-80).
+        properties: {'fuzz:reviewer': 'ref-target'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // Park the parse read phase at its alias lookup so the content
+    // edit's plan is built but applies only after the concurrent
+    // references-only write lands.
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    // `repo.query` is a name-dispatch Proxy (repo.ts), so spyOn can't
+    // patch a method on it — swap the whole facade for a gating wrapper.
+    const realQuery = env.repo.query
+    const gatedQuery = new Proxy(realQuery, {
+      get(target, prop, receiver) {
+        if (prop !== 'aliasLookup') return Reflect.get(target, prop, receiver)
+        return (args: {workspaceId: string; alias: string}) => {
+          const handle = target.aliasLookup(args)
+          return {
+            ...handle,
+            load: async () => {
+              await gate
+              return handle.load()
+            },
+          }
+        }
+      },
+    })
+    ;(env.repo as {query: typeof realQuery}).query = gatedQuery
+    try {
+      await env.repo.tx(
+        tx => tx.update('ref-src', {content: 'see [[StaleGuardAlias]]'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      // While the plan is parked: the references-only write.
+      await env.repo.tx(
+        tx => tx.update(
+          'ref-src',
+          {references: [{id: 'ref-target', alias: 'ref-target', sourceField: 'fuzz:reviewer'}]},
+          {skipMetadata: true},
+        ),
+        {scope: ChangeScope.References},
+      )
+      release()
+    } finally {
+      ;(env.repo as {query: typeof realQuery}).query = realQuery
+    }
+    await flush()
+
+    const row = await env.read('ref-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.sourceField === 'fuzz:reviewer' && ref.id === 'ref-target'),
+      `retained property entry survives the parse plan (refs: ${row!.references_json})`,
+    ).toBe(true)
+    expect(refs.some(ref => ref.alias === 'StaleGuardAlias'), 'content link parsed').toBe(true)
   })
 })
 

@@ -87,19 +87,25 @@ const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
 interface SourcePlan {
   sourceId: string
   workspaceId: string
-  /** Parse inputs observed at read time. The write phase re-reads the
-   *  source and skips the plan when either has moved — mirrors
+  /** Parse basis observed at read time. The write phase re-reads the
+   *  source and skips the plan when ANY of the three has moved — mirrors
    *  renameProcessor.applyPlan's stale-plan guard. Safe to skip: the
-   *  write that moved the source re-fires this processor (both fields
-   *  are watched) with a fresh plan, so the LAST write's event always
-   *  applies. Without this, a concurrent rewriter (e.g. the rename
-   *  backlink rewriter fired by the same properties commit) can land
-   *  first and have its result clobbered by this stale plan (found by
-   *  referencesRecompute.fuzz.test.ts: self-referencing block whose
-   *  alias is renamed ends with content `[[new]]` but a stored ref
-   *  still carrying `old`). */
+   *  write that moved the source re-fires this processor (all three
+   *  fields are watched) with a fresh plan, so the LAST write's event
+   *  always applies. Without the content/properties half, a concurrent
+   *  rewriter (e.g. the rename backlink rewriter fired by the same
+   *  properties commit) can land first and have its result clobbered by
+   *  this stale plan (found by referencesRecompute.fuzz.test.ts:
+   *  self-referencing block whose alias is renamed ends with content
+   *  `[[new]]` but a stored ref still carrying `old`). The references
+   *  half covers writers that touch ONLY the references column — the
+   *  ref-backfill reprojection on schema load, raw bridge writes: their
+   *  entries would otherwise be silently dropped by a plan built from
+   *  the pre-write row, with no watched-field change left to re-derive
+   *  them (Codex review on PR #371). */
   basisContent: string
   basisPropertiesJson: string
+  basisReferencesJson: string
   /** Resolved-or-to-be-created refs the source's `references` column
    *  should end up with. The id may name a non-yet-existing target if
    *  the write phase will create it (alias case below). */
@@ -259,6 +265,7 @@ const buildSourcePlan = async (
     workspaceId: source.workspaceId,
     basisContent: source.content,
     basisPropertiesJson: JSON.stringify(source.properties),
+    basisReferencesJson: JSON.stringify(source.references),
     references,
     aliasesToEnsure,
     datesToEnsure,
@@ -283,6 +290,7 @@ const applySourcePlan = async (
   if (
     current.content !== plan.basisContent
     || JSON.stringify(current.properties) !== plan.basisPropertiesJson
+    || JSON.stringify(current.references) !== plan.basisReferencesJson
   ) return []
   const newlyInserted: string[] = []
   for (const date of plan.datesToEnsure) {
@@ -316,7 +324,16 @@ export const parseReferencesProcessor = definePostCommitProcessor({
   // content_link_recompute "stripped" anomaly; found by
   // referencesRecompute.fuzz.test.ts). Pure deletes still exit via the
   // `row.after.deleted` skip below, so the extra firings are no-ops.
-  watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties', 'deleted'] },
+  //
+  // `references` is watched so references-ONLY writers (the ref-backfill
+  // reprojection on schema load, raw bridge writes) re-converge: the
+  // stale-plan guard drops a plan whose references basis moved, and this
+  // re-fire is what rebuilds it from the fresh row — retention
+  // (isRetainableAbsentRef) keeps entries the parse can't re-derive.
+  // No self-loop: this processor's own references write re-fires one
+  // read phase that comes out idempotent (planNeedsWrite false) and
+  // stops. (Codex review on PR #371.)
+  watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties', 'references', 'deleted'] },
   apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
     // Read phase — outside any tx; bare-connection reads, no writer
     // contention. Each plan describes what the write phase needs to do

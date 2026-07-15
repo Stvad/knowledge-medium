@@ -555,6 +555,36 @@ describe('default CodeMirror shortcuts', () => {
     })
   })
 
+  it('refuses to delete the scope root even when it is empty', async () => {
+    // Reachable from the keyboard: split the zoomed page at cursor 0 (its
+    // content moves down), then Backspace at 0 in the now-empty root —
+    // without the canDelete guard the handler tombstoned the whole
+    // rendered surface (Codex review on the interaction fuzzer, PR #371).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0', content: ''})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'child', content: 'child'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await focusBlock(uiStateBlock, 'root')
+
+    const action = findEditModeAction(env.repo, 'delete_empty_block_cm')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('root'),
+      editorView: emptyEditorView(),
+      uiStateBlock,
+      scopeRootId: 'root',
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).not.toHaveBeenCalled()
+    expect(env.repo.block('root').peek()).not.toBeNull()
+    expect(env.repo.block('root').peekRaw()?.deleted).toBe(false)
+  })
+
   it("merges a first child with children into its parent when it is the parent's only child", async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
