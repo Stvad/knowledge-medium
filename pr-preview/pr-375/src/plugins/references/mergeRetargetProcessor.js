@@ -1,0 +1,10 @@
+import{normalizeReferences as e}from"../../data/api/blockData.js";import{CORE_BLOCK_MERGED_EVENT as t}from"../../data/api/events.js";import{defineSameTxProcessor as n}from"../../data/api/sameTxProcessor.js";import"../../data/api/index.js";import{parseReferences as r,renderAliasedBlockref as i,renderWikilink as a,rewriteBlockRefs as o,rewriteWikilinks as s}from"./referenceParser.js";import{inlineDeletedBlockRefsProcessor as c}from"./inlineDeletedBlockRefsProcessor.js";var l=`references.retargetMergedBlockReferences`,u=`
+  SELECT DISTINCT br.source_id AS id
+  FROM block_references br
+  JOIN blocks source ON source.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND br.target_id = ?
+    AND source.deleted = 0
+  ORDER BY source.order_key, source.id
+`,d=(e,t)=>{let n=a(e);return r(n)[0]?.alias===e?n:i(e,t)},f=(e,t,n,r)=>{if(e.id!==t)return e;let i=e.alias===t?n:r.get(e.alias)??e.alias;return e.sourceField===void 0?{id:n,alias:i}:{id:n,alias:i,sourceField:e.sourceField}},p=(e,t,n,r)=>{let i=o(e,t,n);for(let[e,t]of r)i=s(i,e,d(t,n));return i},m=async(t,n,r,i)=>{let a=await t.get(n);if(a===null||a.deleted)return;let o=e(a.references.map(e=>f(e,r.fromId,r.intoId,i))),s=p(a.content,r.fromId,r.intoId,i),c={};s!==a.content&&(c.content=s),JSON.stringify(o)!==JSON.stringify(a.references)&&(c.references=o),Object.keys(c).length!==0&&await t.update(a.id,c,{skipMetadata:!0})},h=async(e,t)=>{let n=await t.db.getAll(u,[e.workspaceId,e.fromId]);if(n.length===0)return;let r=new Map(e.aliasRewrites.map(({fromAlias:e,toAlias:t})=>[e,t]));for(let{id:i}of n)await m(t.tx,i,e,r)},g=n({name:l,watches:{kind:`event`,events:[t]},apply:async(e,t)=>{for(let n of e.emittedEvents)await h(n.payload,t)}}),_=[g,c];export{l as RETARGET_MERGED_BLOCK_REFERENCES_PROCESSOR,_ as referencesSameTxProcessors,g as retargetMergedBlockReferencesProcessor};
+//# sourceMappingURL=mergeRetargetProcessor.js.map

@@ -1,0 +1,2 @@
+var e=e=>!e||typeof e!=`object`?!1:e.repo?.isReadOnly===!0,t=(e,t)=>({name:e,...t}),n=(e,t)=>{if(typeof e?.seedKey!=`string`)throw Error(`[definePropertyEditorOverride] first argument must be a seed handle (from seedProperty); the name-keyed override shape was removed in B′`);return{seedKey:e.seedKey,...t}},r=e=>typeof e==`object`&&!!e&&typeof e.seedKey==`string`;export{t as defineProperty,n as definePropertyEditorOverride,r as isPropertyEditorOverride,e as isReadOnlyBlock};
+//# sourceMappingURL=propertySchema.js.map
