@@ -402,15 +402,15 @@ export interface PropertyDisplayInfo {
   schema: AnyPropertySchema
   /** Codec type (open string). */
   shape: string
-  /** Editor selected by the resolver. Comes from the per-name
+  /** Editor selected by the resolver. Comes from the seed-identity-joined
    *  `PropertyEditorOverride.Editor` if present, else the matching
    *  `ValuePreset.Editor`. Undefined when no preset is registered for
    *  the codec type — the unknown-schema fallback path renders nothing. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Editor?: PropertyEditor<any>
   /** Glyph for the property's row button / config sheet — picked from
-   *  the per-name `PropertyEditorOverride.Glyph` if present, else the
-   *  matching `ValuePreset.Glyph`. Undefined falls back to the
+   *  the seed-identity-joined `PropertyEditorOverride.Glyph` if present, else
+   *  the matching `ValuePreset.Glyph`. Undefined falls back to the
    *  type-keyed glyph table in `PropertyShapeGlyph`. */
   Glyph?: ComponentType<{className?: string}>
   /** True iff a real `PropertySchema` was found in the registry; false
@@ -421,7 +421,8 @@ export interface PropertyDisplayInfo {
 /** Resolution chain (per user-defined-properties §1-edit):
  *
  *    1. Look up the schema in `repo.propertySchemas` by `name`.
- *    2. Look up any per-name override in `repo.propertyEditorOverrides`.
+ *    2. Take the caller's pre-resolved `override` (joined by seed identity
+ *       via `resolveEditorOverride`, not by name — B′ §8).
  *    3. If schema is known → use the override `Editor` if any, else
  *       the `ValuePreset.Editor` matching `codec.type`.
  *    4. If schema is unknown → infer a primitive type from the JSON
@@ -432,12 +433,14 @@ export const resolvePropertyDisplay = (args: {
   name: string
   encodedValue: unknown
   schemas: ReadonlyMap<string, AnyPropertySchema>
-  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
+  /** Pre-resolved editor override, joined by seed identity by the caller
+   *  (`resolveEditorOverride`). B′ replaced the former name-key `uis` join. */
+  override?: AnyPropertyEditorOverride
   presets: ReadonlyMap<string, AnyJoinedValuePreset>
 }): PropertyDisplayInfo => {
   const known = args.schemas.get(args.name)
   if (known) {
-    const ui = args.uis.get(args.name)
+    const ui = args.override
     const preset = args.presets.get(known.codec.type)
     return {
       schema: known,

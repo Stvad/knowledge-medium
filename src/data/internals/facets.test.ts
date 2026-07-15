@@ -35,7 +35,6 @@ import {
   definitionSeedsFacet,
   mutatorsFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
   queriesFacet,
   typesFacet,
   valuePresetCoresFacet,
@@ -48,6 +47,7 @@ import {
   extensionDescriptionProp,
   extensionNameProp,
 } from '@/data/properties'
+import { seedProperty } from '@/data/propertySeeds'
 import {
   BLOCK_TYPE_TYPE,
   EXTENSION_TYPE,
@@ -171,47 +171,6 @@ describe('kernel property declaration registration', () => {
   it('kernelDataExtension contributes every kernel entry as a definition seed', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension])
     expect(runtime.read(definitionSeedsFacet)).toEqual(KERNEL_PROPERTY_SEEDS)
-    expect(runtime.read(propertySchemasFacet).size).toBe(0)
-  })
-
-  it('a legacy plugin schema remains available during the staged conversion', () => {
-    const pluginSchema = defineProperty<string | undefined>('plugin:foo', {
-      codec: codecs.optionalString,
-      defaultValue: undefined,
-      changeScope: ChangeScope.BlockDefault,
-    })
-    const runtime = resolveFacetRuntimeSync([
-      kernelDataExtension,
-      propertySchemasFacet.of(pluginSchema, {source: 'plugin'}),
-    ])
-    const registered = runtime.read(propertySchemasFacet)
-    expect(registered.get('plugin:foo')).toBe(pluginSchema)
-    expect(runtime.read(definitionSeedsFacet)).toEqual(KERNEL_PROPERTY_SEEDS)
-  })
-
-  it('duplicate-name registration logs a warning and last-wins', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      const a = defineProperty<string | undefined>('plugin:dup', {
-        codec: codecs.optionalString,
-        defaultValue: undefined,
-        changeScope: ChangeScope.BlockDefault,
-      })
-      const b = defineProperty<string | undefined>('plugin:dup', {
-        codec: codecs.optionalString,
-        defaultValue: undefined,
-        changeScope: ChangeScope.BlockDefault,
-      })
-      const runtime = resolveFacetRuntimeSync([
-        propertySchemasFacet.of(a, {source: 'test'}),
-        propertySchemasFacet.of(b, {source: 'test'}),
-      ])
-      const registered = runtime.read(propertySchemasFacet)
-      expect(registered.get('plugin:dup')).toBe(b)
-      expect(warn).toHaveBeenCalledOnce()
-    } finally {
-      warn.mockRestore()
-    }
   })
 })
 
@@ -268,26 +227,26 @@ describe('typesFacet + schema lift', () => {
     expect(repo.propertySchemas.get('task:status')).toBe(liftedSchema)
   })
 
-  it('direct property schema registrations override type-lifted conflicts', () => {
+  it('conflicting type-lifted schemas last-wins with a warning', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
-      const liftedSchema = defineProperty<string>('status', {
+      const firstSchema = defineProperty<string>('status', {
         codec: codecs.string,
         defaultValue: 'open',
         changeScope: ChangeScope.BlockDefault,
       })
-      const directSchema = defineProperty<string>('status', {
+      const secondSchema = defineProperty<string>('status', {
         codec: codecs.string,
         defaultValue: 'todo',
         changeScope: ChangeScope.BlockDefault,
       })
       const runtime = resolveFacetRuntimeSync([
-        typesFacet.of(defineBlockType({id: 'task', properties: [liftedSchema]}), {source: 'test'}),
-        propertySchemasFacet.of(directSchema, {source: 'test'}),
+        typesFacet.of(defineBlockType({id: 'task', properties: [firstSchema]}), {source: 'test'}),
+        typesFacet.of(defineBlockType({id: 'todo', properties: [secondSchema]}), {source: 'test'}),
       ])
       repo.setFacetRuntime(runtime)
 
-      expect(repo.propertySchemas.get('status')).toBe(directSchema)
+      expect(repo.propertySchemas.get('status')).toBe(secondSchema)
       expect(warn).toHaveBeenCalledOnce()
     } finally {
       warn.mockRestore()
@@ -386,8 +345,14 @@ describe('facet variance — typed plugin contributions register without widenin
   })
 
   it('propertyEditorOverridesFacet accepts a typed PropertyEditorOverride<Date | undefined>', () => {
-    const typedUi = definePropertyEditorOverride<Date | undefined>({
+    const dueDateProp = seedProperty({
+      seedKey: 'system:test-plugin/property/due-date',
+      revision: 1,
       name: 'tasks:due-date',
+      preset: 'date',
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const typedUi = definePropertyEditorOverride(dueDateProp, {
       label: 'Due date',
       Editor: (): JSX.Element => createElement('span', null, null),
     })
@@ -395,20 +360,7 @@ describe('facet variance — typed plugin contributions register without widenin
       propertyEditorOverridesFacet.of(typedUi, {source: 'plugin'}),
     ])
     const registered = runtime.read(propertyEditorOverridesFacet)
-    expect(registered.get('tasks:due-date')).toBe(typedUi)
-  })
-
-  it('propertySchemasFacet accepts a typed PropertySchema<Date | undefined>', () => {
-    const typedSchema = defineProperty<Date | undefined>('tasks:due-date', {
-      codec: codecs.date,
-      defaultValue: undefined,
-      changeScope: ChangeScope.BlockDefault,
-    })
-    const runtime = resolveFacetRuntimeSync([
-      propertySchemasFacet.of(typedSchema, {source: 'plugin'}),
-    ])
-    const registered = runtime.read(propertySchemasFacet)
-    expect(registered.get('tasks:due-date')).toBe(typedSchema)
+    expect(registered.get(dueDateProp.seedKey)).toBe(typedUi)
   })
 })
 

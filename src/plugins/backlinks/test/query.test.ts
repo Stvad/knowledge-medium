@@ -126,12 +126,12 @@ describe('backlinksDataExtension query', () => {
     const schemas = new Map([[dailyNoteBacklinksDefaultsProp.name, dailyNoteBacklinksDefaultsProp]])
     const uis = runtime.read(propertyEditorOverridesFacet)
 
-    expect(uis.get(dailyNoteBacklinksDefaultsProp.name)).toBe(dailyNoteBacklinksDefaultsUi)
+    expect(uis.get(dailyNoteBacklinksDefaultsProp.seedKey)).toBe(dailyNoteBacklinksDefaultsUi)
     expect(resolvePropertyDisplay({
       name: dailyNoteBacklinksDefaultsProp.name,
       encodedValue: dailyNoteBacklinksDefaultsProp.defaultValue,
       schemas,
-      uis,
+      override: uis.get(dailyNoteBacklinksDefaultsProp.seedKey),
       presets: readValuePresets(runtime),
     }).Editor).toBe(dailyNoteBacklinksDefaultsUi.Editor)
   })

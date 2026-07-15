@@ -18,6 +18,7 @@ import {
   getAliases,
 } from '@/data/properties.js'
 import { propertyEditorOverridesFacet } from '@/data/facets.js'
+import { resolveEditorOverride } from '@/data/propertyDefinitionRegistry'
 import {readValuePresets} from '@/data/valuePresetRegistry'
 import type { Block } from '@/data/block.js'
 import { Input } from '@/components/ui/input.js'
@@ -265,7 +266,7 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
                 <>
                   <PropertyShapeGlyph
                     shape={entry.schema.codec.type}
-                    Glyph={uis.get(entry.schema.name)?.Glyph ?? presets.get(entry.schema.codec.type)?.Glyph}
+                    Glyph={resolveEditorOverride(entry.schema.name, block.repo.propertyDefinitions, uis, entry.schema)?.Glyph ?? presets.get(entry.schema.codec.type)?.Glyph}
                     className="text-muted-foreground"
                   />
                   <span className="flex-1 truncate">{entry.schema.name}</span>

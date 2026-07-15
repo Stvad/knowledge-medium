@@ -4,6 +4,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   codecs,
+  defineBlockType,
   defineProperty,
   type BlockReference,
 } from '@/data/api'
@@ -11,7 +12,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
 import { typesProp } from '@/data/properties'
-import { propertySchemasFacet } from '../facets'
+import { typesFacet } from '../facets'
 import { kernelDataExtension } from '../kernelDataExtension'
 import { Repo } from '../repo'
 
@@ -81,13 +82,10 @@ const setup = async (): Promise<Harness> => {
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
-    propertySchemasFacet.of(statusProp, {source: 'test'}),
-    propertySchemasFacet.of(doneProp, {source: 'test'}),
-    propertySchemasFacet.of(priorityProp, {source: 'test'}),
-    propertySchemasFacet.of(dueProp, {source: 'test'}),
-    propertySchemasFacet.of(weirdNameProp, {source: 'test'}),
-    propertySchemasFacet.of(labelsProp, {source: 'test'}),
-    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+    typesFacet.of(defineBlockType({
+      id: 'test:typed-block-query-props',
+      properties: [statusProp, doneProp, priorityProp, dueProp, weirdNameProp, labelsProp, reviewerProp],
+    }), {source: 'test'}),
   ]))
   repo.setActiveWorkspaceId(WS)
   return {h, repo}

@@ -206,7 +206,7 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'settings-via-property-editor-override',
       when: 'Settings / configuration UI for a plugin — what a user sees when they want to change how the plugin behaves. Preferred over a modal dialog: configuration belongs *with* the block whose properties it edits, syncs naturally, and is browsable / scriptable like any other block.',
-      use: 'Define a custom property editor with `definePropertyEditorOverride({name, label, Editor})` and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `set`, `block`, etc.). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
+      use: 'Define a custom property editor with `definePropertyEditorOverride(propHandle, {label, Editor})` (pass the seed handle it presents) and register it via `propertyEditorOverridesFacet`. The Editor receives `PropertyEditorProps<T>` (`value`, `set`, `block`, etc.). To "open settings" from the command palette or a header item, navigate to the prefs block with `navigate(repo, {target: \'new-panel\', blockId: prefsBlock.id, workspaceId})` — the property panel renders your custom Editor inline. Reserve modal dialogs — `openDialog(Component)`, or `appMountsFacet` + a `useSyncExternalStore` visibility store — for *interactive* flows (search, picker), not for configuration.',
       modules: ['@/extensions/api.js', '@/utils/navigation.js'],
       example: {
         label: 'Custom settings UI as a property-editor override on the prefs block',
@@ -263,8 +263,7 @@ const storageGuide: AuthoringStorageGuide = {
           "  </label>",
           ")",
           "",
-          "const autoSyncUi = definePropertyEditorOverride<boolean>({",
-          "  name: autoSyncProp.name,",
+          "const autoSyncUi = definePropertyEditorOverride(autoSyncProp, {",
           "  label: 'Auto-sync',",
           "  Editor: AutoSyncEditor,",
           "})",

@@ -4,6 +4,7 @@ import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
   codecs,
+  defineBlockType,
   definePresetCore,
   defineProperty,
   type AnyValuePresetCore,
@@ -17,7 +18,7 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import {
   definitionSeedsFacet,
   projectedPropertyDefinitionsFacet,
-  propertySchemasFacet,
+  typesFacet,
   valuePresetCoresFacet,
 } from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
@@ -771,14 +772,16 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
     expect(env.repo.propertySchemas.has('plugin:runtime-only')).toBe(false)
   })
 
-  it('direct setRuntimeContributions bucket survives a runtime swap', async () => {
+  it('a type-lifted setRuntimeContributions bucket survives a runtime swap', async () => {
     env = await setup()
     const pluginSchema = defineProperty<string | undefined>('plugin:custom', {
       codec: codecs.optionalString,
       defaultValue: undefined,
       changeScope: ChangeScope.BlockDefault,
     })
-    env.repo.setRuntimeContributions(propertySchemasFacet, 'plugin', [pluginSchema])
+    env.repo.setRuntimeContributions(typesFacet, 'plugin', [
+      defineBlockType({id: 'test:plugin-custom', properties: [pluginSchema]}),
+    ])
     expect(env.repo.propertySchemas.get('plugin:custom')).toBe(pluginSchema)
 
     env.repo.setFacetRuntime(resolveFacetRuntimeSync([

@@ -5,8 +5,7 @@ import type { AppExtension } from '@/facets/facet.js'
 import { systemToggle } from '@/facets/togglable.js'
 import { TypesPropertyEditor } from './TypesPropertyEditor'
 
-export const typesPropertyUi = definePropertyEditorOverride<readonly string[]>({
-  name: typesProp.name,
+export const typesPropertyUi = definePropertyEditorOverride(typesProp, {
   label: 'Types',
   Editor: TypesPropertyEditor,
 })

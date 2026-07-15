@@ -6,15 +6,17 @@
  * and call site invokes via `repo.mutate['plugin:foo']({...})` typed."
  *
  * This test simulates a static plugin that contributes one mutator,
- * one PropertySchema, and one PropertyEditorOverride exactly as §12.1
- * shows, and checks the full Phase 3 chain end-to-end:
+ * one property seed, and one PropertyEditorOverride exactly as the B′
+ * seed+override flow expects, and checks the full chain end-to-end:
  *   - mutatorsFacet.of registration → repo.mutate['tasks:setDueDate'] dispatches.
  *   - declare module '@/data/api' augmentation → repo.mutate is typed.
- *   - propertySchemasFacet.of registration → schema appears in the registry
- *     under the same name plugin authors call from BlockProperties /
- *     resolvePropertyDisplay.
- *   - propertyEditorOverridesFacet.of registration → override appears in
- *     the registry; resolvePropertyDisplay's join-by-name returns it.
+ *   - definitionSeedsFacet.of registration (seedProperty handle) → the seed
+ *     appears in `repo.propertySchemas` under its declared name once a
+ *     workspace is active, which is what BlockProperties / resolvePropertyDisplay
+ *     read from.
+ *   - propertyEditorOverridesFacet.of registration, keyed by the seed's
+ *     `seedKey` → override appears in `repo.propertyEditorOverrides`;
+ *     resolvePropertyDisplay's pre-resolved `override` arg returns it.
  *
  * It also pins the variance-erasure work (chunk B reviewer P2):
  * `Query<{x:number}, string>` / `PropertySchema<Date | undefined>` /
@@ -33,20 +35,19 @@ import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import {
   ChangeScope,
-  codecs,
   defineMutator,
-  defineProperty,
   definePropertyEditorOverride,
   type PropertyEditor,
 } from '@/data/api'
+import { seedProperty } from '@/data/propertySeeds'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
+  definitionSeedsFacet,
   mutatorsFacet,
   propertyEditorOverridesFacet,
-  propertySchemasFacet,
 } from '../facets'
 import { DatePropertyEditor, resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -56,17 +57,18 @@ import { Repo } from '../repo'
 
 // ──── §12.1 plugin contributions ────
 
-const dueDateProp = defineProperty<Date | undefined>('tasks:due-date', {
-  codec: codecs.date,
-  defaultValue: undefined,
+const dueDateProp = seedProperty({
+  seedKey: 'system:tasks/property/due-date',
+  revision: 1,
+  name: 'tasks:due-date',
+  preset: 'date',
   changeScope: ChangeScope.BlockDefault,
 })
 
 const TaskDueDateEditor: PropertyEditor<Date | undefined> = (): JSX.Element =>
   createElement('input', {type: 'date'})
 
-const dueDateUi = definePropertyEditorOverride<Date | undefined>({
-  name: 'tasks:due-date',
+const dueDateUi = definePropertyEditorOverride(dueDateProp, {
   label: 'Due date',
   Editor: TaskDueDateEditor,
 })
@@ -94,7 +96,7 @@ declare module '@/data/api' {
 
 const tasksPluginExtension = [
   mutatorsFacet.of(setDueDate, {source: 'tasks'}),
-  propertySchemasFacet.of(dueDateProp, {source: 'tasks'}),
+  definitionSeedsFacet.of(dueDateProp, {source: 'tasks'}),
   propertyEditorOverridesFacet.of(dueDateUi, {source: 'tasks'}),
 ]
 
@@ -118,6 +120,10 @@ beforeEach(async () => {
     // the merged kernel + plugin runtime (the same shape
     // AppRuntimeProvider produces).
   }))
+  // Pin the workspace the mutator writes into. With a seed handle,
+  // `setProperty` resolves identity against the active workspace — this
+  // pin persists across the per-test `setFacetRuntime` calls below.
+  repo.setActiveWorkspaceId('ws-1')
   // Seed a row so setProperty has a target.
   await repo.tx(
     tx => tx.create({id: 'b1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
@@ -174,10 +180,12 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
     ).rejects.toThrow()
   })
 
-  it('propertySchemasFacet exposes the plugin schema by name', () => {
+  it('definitionSeedsFacet exposes the plugin schema by name', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension, ...tasksPluginExtension])
-    const schemas = runtime.read(propertySchemasFacet)
-    expect(schemas.get('tasks:due-date')).toBe(dueDateProp)
+    repo.setFacetRuntime(runtime)
+    // With the workspace active, the ambient entry for a unique seed
+    // declaration IS the seed handle itself.
+    expect(repo.propertySchemas.get('tasks:due-date')).toBe(dueDateProp)
   })
 
   it('propertyEditorOverridesFacet exposes the plugin override and resolvePropertyDisplay returns it', () => {
@@ -187,17 +195,18 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
       kernelValuePresetsExtension,
       ...tasksPluginExtension,
     ])
-    const schemas = runtime.read(propertySchemasFacet)
-    const uis = runtime.read(propertyEditorOverridesFacet)
-    expect(uis.get('tasks:due-date')).toBe(dueDateUi)
+    repo.setFacetRuntime(runtime)
+    const schemas = repo.propertySchemas
+    const uis = repo.propertyEditorOverrides
+    expect(uis.get(dueDateProp.seedKey)).toBe(dueDateUi)
 
-    // Per-name override beats the codec-type-keyed preset fallback.
+    // Seed-identity-joined override beats the codec-type-keyed preset fallback.
     const display = resolvePropertyDisplay({
       name: 'tasks:due-date',
       // Encoded shape — date codec stores ISO strings.
       encodedValue: '2026-06-01T00:00:00.000Z',
       schemas,
-      uis,
+      override: uis.get(dueDateProp.seedKey),
       presets: readValuePresets(runtime),
     })
     expect(display.isKnown).toBe(true)
@@ -215,14 +224,15 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       mutatorsFacet.of(setDueDate, {source: 'tasks'}),
-      propertySchemasFacet.of(dueDateProp, {source: 'tasks'}),
+      definitionSeedsFacet.of(dueDateProp, {source: 'tasks'}),
       // no propertyEditorOverridesFacet.of(dueDateUi)
     ])
+    repo.setFacetRuntime(runtime)
     const display = resolvePropertyDisplay({
       name: 'tasks:due-date',
       encodedValue: '2026-06-01T00:00:00.000Z',
-      schemas: runtime.read(propertySchemasFacet),
-      uis: runtime.read(propertyEditorOverridesFacet),
+      schemas: repo.propertySchemas,
+      override: undefined,
       presets: readValuePresets(runtime),
     })
     expect(display.isKnown).toBe(true)

@@ -28,13 +28,14 @@ import {
   ChangeScope,
   codecs,
   type AnyPostCommitProcessor,
+  defineBlockType,
   defineProperty,
 } from '@/data/api'
 import { resolveFacetRuntimeSync } from '@/facets/facet'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '../repo'
-import { postCommitProcessorsFacet, propertySchemasFacet } from '../facets'
+import { postCommitProcessorsFacet, typesFacet } from '../facets'
 
 const WS = 'ws-1'
 
@@ -307,14 +308,14 @@ describe('ProcessorRunner — registry snapshot semantics', () => {
 
     env.repo.setFacetRuntime(resolveFacetRuntimeSync([
       postCommitProcessorsFacet.of(processor, {source: 'test'}),
-      propertySchemasFacet.of(originalSchema, {source: 'test'}),
+      typesFacet.of(defineBlockType({id: 'test:schema-snapshot', properties: [originalSchema]}), {source: 'test'}),
     ]))
 
     await env.repo.tx(async tx => {
       await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
       env.repo.setFacetRuntime(resolveFacetRuntimeSync([
         postCommitProcessorsFacet.of(processor, {source: 'test'}),
-        propertySchemasFacet.of(replacementSchema, {source: 'test'}),
+        typesFacet.of(defineBlockType({id: 'test:schema-snapshot', properties: [replacementSchema]}), {source: 'test'}),
       ]))
     }, {scope: ChangeScope.BlockDefault})
     await env.repo.awaitProcessors()

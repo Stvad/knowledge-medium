@@ -2,8 +2,8 @@
  * Data-layer facets — the bridge between the kernel + plugin
  * contributions and the `Repo` lifecycle (spec §6, §8).
  *
- * Stage 1.4 ships `mutatorsFacet` only. The remaining four facets
- * (`queriesFacet`, `propertySchemasFacet`, `propertyEditorOverridesFacet`,
+ * Stage 1.4 ships `mutatorsFacet` only. The remaining facets
+ * (`queriesFacet`, `propertyEditorOverridesFacet`,
  * `postCommitProcessorsFacet`) land in stages 1.5+ as the matching
  * machinery comes online.
  */
@@ -14,7 +14,6 @@ import type {
   AnyPostCommitProcessor,
   AnyPropertySeedDeclaration,
   AnyPropertyEditorOverride,
-  AnyPropertySchema,
   AnyQuery,
   AnySameTxProcessor,
   AnyValuePresetCore,
@@ -139,8 +138,6 @@ export const mutatorsFacet = keyedMapFacet<AnyMutator>('data.mutators', m => m.n
 
 export const queriesFacet = keyedMapFacet<AnyQuery>('data.queries', q => q.name)
 
-export const propertySchemasFacet = keyedMapFacet<AnyPropertySchema>('data.propertySchemas', s => s.name)
-
 /** Code-owned property definitions. The declaration object is also the typed
  * PropertyHandle returned by seedProperty. This is deliberately a list facet,
  * not a last-wins map: duplicate seed identities are an authoring error the
@@ -162,7 +159,7 @@ export const projectedPropertyDefinitionsFacet = keyedMapFacet<ProjectedProperty
 
 export const typesFacet = keyedMapFacet<TypeContribution>('data.types', t => t.id)
 
-export const propertyEditorOverridesFacet = keyedMapFacet<AnyPropertyEditorOverride>('data.property-editor-overrides', c => c.name)
+export const propertyEditorOverridesFacet = keyedMapFacet<AnyPropertyEditorOverride>('data.property-editor-overrides', c => c.seedKey)
 
 /** Data-only codec factories available to projectors and headless surfaces. */
 export const valuePresetCoresFacet = keyedMapFacet<AnyValuePresetCore>('data.value-preset-cores', p => p.id)

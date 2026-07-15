@@ -1791,10 +1791,10 @@ export class Repo {
   }
 
   /** Subscribe to changes on `_propertySchemas`. Fires when
-   *  `setFacetRuntime` rebuilds the schema map AND when
-   *  `setRuntimeContributions(propertySchemasFacet, ...)` updates the
-   *  user-data bucket. Used by `usePropertySchemas` so React rerenders
-   *  on user-schema add/edit/remove without a runtime swap. */
+   *  `setFacetRuntime` rebuilds the schema map AND when a projected
+   *  definition (user-schema) contribution updates the user-data bucket.
+   *  Used by `usePropertySchemas` so React rerenders on user-schema
+   *  add/edit/remove without a runtime swap. */
   onPropertySchemasChange(listener: () => void): () => void {
     return this.facetBridge.onPropertySchemasChange(listener)
   }

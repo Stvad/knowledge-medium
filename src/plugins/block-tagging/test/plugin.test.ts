@@ -23,7 +23,7 @@ describe('blockTaggingPlugin', () => {
   it('contributes a property editor override for the tag-list config', () => {
     const runtime = resolveFacetRuntimeSync(blockTaggingPlugin)
     const overrides = runtime.read(propertyEditorOverridesFacet)
-    const override = overrides.get(blockTagsConfigProp.name)
+    const override = overrides.get(blockTagsConfigProp.seedKey)
     expect(override?.label).toBe('Block tags')
     expect(typeof override?.Editor).toBe('function')
   })

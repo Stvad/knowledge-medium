@@ -1,8 +1,8 @@
 // @vitest-environment node
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, codecs, defineProperty } from '@/data/api'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
+import { typesFacet } from '@/data/facets.js'
 import { Repo } from '@/data/repo'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
@@ -105,7 +105,7 @@ describe('moveSrsState', () => {
       extensions: [
         dailyNotesDataExtension,
         srsReschedulingDataExtension,
-        propertySchemasFacet.of(unrelatedProp, {source: 'test'}),
+        typesFacet.of(defineBlockType({id: 'test:unrelated-prop', properties: [unrelatedProp]}), {source: 'test'}),
       ],
     }))
   })

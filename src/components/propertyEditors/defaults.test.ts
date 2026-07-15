@@ -2,7 +2,7 @@
 /**
  * Pure-function tests for the property-display lookup chain. Cover the
  * three paths that drive `BlockProperties`'s rendering decision:
- *   1. Schema known + per-name editor override → use the override.
+ *   1. Schema known + seed-identity editor override → use the override.
  *   2. Schema known + no override → use the matching ValuePreset.Editor
  *      (keyed by codec.type).
  *   3. Schema unknown → infer a primitive type from the value, build an
@@ -15,7 +15,6 @@ import {
   ChangeScope,
   codecs,
   defineProperty,
-  definePropertyEditorOverride,
   type AnyJoinedValuePreset,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
@@ -35,9 +34,6 @@ import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 
 const schemasMap = (entries: AnyPropertySchema[]): ReadonlyMap<string, AnyPropertySchema> =>
   new Map(entries.map(s => [s.name, s]))
-
-const uisMap = (entries: AnyPropertyEditorOverride[]): ReadonlyMap<string, AnyPropertyEditorOverride> =>
-  new Map(entries.map(u => [u.name, u]))
 
 /** Local join-preset builder standing in for the removed `definePreset`
  *  identity helper — these display-lookup fixtures are already joined
@@ -145,18 +141,21 @@ describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
   })
 
   const exactEditor = noopEditor
-  const titleUi = definePropertyEditorOverride<string>({
-    name: 'title',
+  // `resolvePropertyDisplay` now takes a pre-resolved override (the seedKey
+  // join happens in the caller via `resolveEditorOverride`), so a literal is
+  // enough here — the seedKey is not consulted on this path.
+  const titleUi: AnyPropertyEditorOverride = {
+    seedKey: 'test/property/title',
     label: 'Title',
     Editor: exactEditor,
-  })
+  }
 
   it('schema known + editor override registered → returns the override Editor', () => {
     const display = resolvePropertyDisplay({
       name: 'title',
       encodedValue: 'Hello',
       schemas: schemasMap([titleSchema]),
-      uis: uisMap([titleUi]),
+      override: titleUi,
       presets: presetsMap(presets),
     })
     expect(display.isKnown).toBe(true)
@@ -170,7 +169,7 @@ describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
       name: 'title',
       encodedValue: 'Hello',
       schemas: schemasMap([titleSchema]),
-      uis: uisMap([]),
+      override: undefined,
       presets: presetsMap(presets),
     })
     expect(display.isKnown).toBe(true)
@@ -188,7 +187,7 @@ describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
       name: 'reviewer',
       encodedValue: 'target-1',
       schemas: schemasMap([refSchema]),
-      uis: uisMap([]),
+      override: undefined,
       presets: presetsMap(presets),
     })
     expect(display.shape).toBe('ref')
@@ -205,7 +204,7 @@ describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
       name: 'related',
       encodedValue: ['target-1'],
       schemas: schemasMap([refListSchema]),
-      uis: uisMap([]),
+      override: undefined,
       presets: presetsMap(presets),
     })
     expect(display.shape).toBe('refList')
@@ -217,7 +216,7 @@ describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
       name: 'newish-prop',
       encodedValue: [1, 2, 3],
       schemas: schemasMap([]),
-      uis: uisMap([]),
+      override: undefined,
       presets: presetsMap(presets),
     })
     expect(display.isKnown).toBe(false)
@@ -227,16 +226,15 @@ describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
     expect(display.Editor).toBe(ListPropertyEditor)
   })
 
-  it('schema unknown + editor override registered → ignores orphan override and uses preset', () => {
-    // An override without a matching schema is ignored — the
-    // facet join key is the schema name. Only-override registrations
-    // from an inattentive plugin author shouldn't accidentally apply to
-    // every unknown property; the panel infers + uses preset editors.
+  it('schema unknown + editor override supplied → ignores it and uses preset', () => {
+    // An override is only applied on the known-schema path; when the schema is
+    // unknown the resolver infers a type and uses the preset editor, so an
+    // override handed in for an unknown property never applies.
     const display = resolvePropertyDisplay({
       name: 'orphan-prop',
       encodedValue: 'x',
       schemas: schemasMap([]),
-      uis: uisMap([titleUi]),
+      override: titleUi,
       presets: presetsMap(presets),
     })
     expect(display.isKnown).toBe(false)
@@ -252,8 +250,10 @@ describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
     const display = resolvePropertyDisplay({
       name: 'count',
       encodedValue: 7,
+      // The caller resolves the override per definition; `count` resolves to
+      // none even though a `title` override exists elsewhere.
       schemas: schemasMap([titleSchema, otherSchema]),
-      uis: uisMap([titleUi]),
+      override: undefined,
       presets: presetsMap(presets),
     })
     expect(display.schema).toBe(otherSchema)
@@ -266,7 +266,7 @@ describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
       name: 'title',
       encodedValue: 'Hello',
       schemas: schemasMap([titleSchema]),
-      uis: uisMap([]),
+      override: undefined,
       presets: presetsMap([]),
     })
     expect(display.Editor).toBeUndefined()

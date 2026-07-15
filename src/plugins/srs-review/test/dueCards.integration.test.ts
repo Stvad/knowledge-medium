@@ -7,11 +7,11 @@
 // of `exclude`, not in the query we build. These tests run the actual
 // query so that regression stays caught.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, type BlockReference } from '@/data/api'
+import { ChangeScope, defineBlockType, type BlockReference } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { typesProp } from '@/data/properties'
-import { propertySchemasFacet, typesFacet } from '@/data/facets'
+import { typesFacet } from '@/data/facets'
 import { Repo } from '@/data/repo'
 import { dailyNoteDateProp, dailyNoteType, DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
 import {
@@ -44,9 +44,10 @@ const setup = async (): Promise<Harness> => {
     extensions: [
       typesFacet.of(dailyNoteType, {source: 'test'}),
       typesFacet.of(srsSm25Type, {source: 'test'}),
-      propertySchemasFacet.of(dailyNoteDateProp, {source: 'test'}),
-      propertySchemasFacet.of(srsNextReviewDateProp, {source: 'test'}),
-      propertySchemasFacet.of(srsArchivedProp, {source: 'test'}),
+      typesFacet.of(defineBlockType({
+        id: 'test:due-cards-props',
+        properties: [dailyNoteDateProp, srsNextReviewDateProp, srsArchivedProp],
+      }), {source: 'test'}),
     ],
   })
   repo.setActiveWorkspaceId(WS)

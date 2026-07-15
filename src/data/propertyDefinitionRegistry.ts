@@ -1,9 +1,10 @@
 import type {
+  AnyPropertyEditorOverride,
   AnyPropertySchema,
 } from '@/data/api'
 import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
 import type {PropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
-import type {AnyPropertySeedDeclaration} from '@/data/propertySeeds'
+import {isPropertySeedDeclaration, type AnyPropertySeedDeclaration} from '@/data/propertySeeds'
 
 /** A block-built behavioral entry kept beside its durable field identity.
  * The public ambient registry is name-keyed; this internal form prevents that
@@ -25,7 +26,9 @@ export interface PropertyDefinitionRegistrySnapshot {
 
 export interface BuildPropertyDefinitionRegistryArgs {
   readonly workspaceId: string
-  /** Transitional direct registrations/type lift. Removed in Slice B4. */
+  /** Transitional type-lifted schemas (`TypeContribution.properties`). The
+   *  direct-registration source was removed in B′; the type-lift dies at the
+   *  types cutover (Slice C). */
   readonly legacySchemas: ReadonlyMap<string, AnyPropertySchema>
   readonly projectedDefinitions: ReadonlyMap<string, ProjectedPropertyDefinition>
   readonly seeds: readonly AnyPropertySeedDeclaration[]
@@ -181,4 +184,44 @@ export const buildPropertyDefinitionRegistry = (
     seedsByKey,
     seedsByName: seedsByNameMutable,
   }
+}
+
+/** The definition metadata or ambient seed declaration a property name resolves
+ * to for the panel's identity-scoped joins (editor override + hidden flag,
+ * B′ §8). One source of truth for the winner→single-seed→stage-0 walk both
+ * joins share — keeping the subtle ambiguity + stage-0-lag rules from drifting
+ * apart:
+ *   - the winning definition's metadata when the projector has one (a user row
+ *     is a valid winner but carries no `seedKey` → no override);
+ *   - else a lone unambiguous seed declaration for the name;
+ *   - else, before a workspace is pinned (or a snapshot briefly lagging a
+ *     swap), the ambient schema entry when it is itself a seed declaration. */
+export const resolveDefinitionSource = (
+  name: string,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
+  schema: AnyPropertySchema | undefined,
+): PropertyDefinitionMetadata | AnyPropertySeedDeclaration | undefined => {
+  if (definitions) {
+    const winner = definitions.definitionsByName.get(name)?.[0]
+    if (winner) return winner
+    // No winner yet: only an unambiguous single seed declaration names it.
+    const seeds = definitions.seedsByName.get(name)
+    if (seeds !== undefined) return seeds.length === 1 ? seeds[0] : undefined
+  }
+  return schema !== undefined && isPropertySeedDeclaration(schema) ? schema : undefined
+}
+
+/** Resolve the editor override for a property name by joining through seed
+ * identity (B′ §8): the name's resolved definition source yields a `seedKey`
+ * that keys the seedKey-keyed override map. Returns undefined when the name has
+ * no seed identity — user-authored rows carry no override. Replaces the former
+ * name-key `uis.get(name)` join. */
+export const resolveEditorOverride = (
+  name: string,
+  definitions: PropertyDefinitionRegistrySnapshot | null,
+  overridesBySeedKey: ReadonlyMap<string, AnyPropertyEditorOverride>,
+  schema: AnyPropertySchema | undefined,
+): AnyPropertyEditorOverride | undefined => {
+  const seedKey = resolveDefinitionSource(name, definitions, schema)?.seedKey
+  return seedKey === undefined ? undefined : overridesBySeedKey.get(seedKey)
 }

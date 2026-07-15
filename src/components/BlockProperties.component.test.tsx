@@ -7,13 +7,12 @@ import {
   codecs,
   defineBlockType,
   defineProperty,
-  definePropertyEditorOverride,
 } from '@/data/api'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { Repo } from '@/data/repo'
-import { propertyEditorOverridesFacet, typesFacet } from '@/data/facets'
+import { typesFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/facets/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
@@ -110,11 +109,11 @@ const assignmentType = defineBlockType({
   properties: [reviewerProp],
 })
 
-const hiddenBackedName = 'test:hidden-backed'
-const hiddenBackedUi = definePropertyEditorOverride<string>({
-  name: hiddenBackedName,
-  hidden: true,
-})
+// A user-schema-backed property hidden via the `system:` name convention.
+// B′ removed the name-key editor-override join, so a code override can no
+// longer hide a user schema; the `system:` prefix (a surviving fallback in
+// `isPropertyPanelHiddenProperty`) is the mechanism now.
+const hiddenBackedName = 'system:hidden-backed'
 
 const TestBlockRenderer = ({block}: BlockRendererProps) => {
   const content = useContent(block)
@@ -144,7 +143,6 @@ describe('BlockProperties component', () => {
       blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
       typesFacet.of(reviewType, {source: 'test'}),
       typesFacet.of(assignmentType, {source: 'test'}),
-      propertyEditorOverridesFacet.of(hiddenBackedUi, {source: 'test'}),
       defaultActionContextConfigs.map(c => actionContextsFacet.of(c, {source: 'test'})),
     ])
     repo.setFacetRuntime(runtime)
@@ -465,7 +463,7 @@ describe('BlockProperties component', () => {
     })
 
     const glyph = within(propertyRow(hiddenBackedName))
-      .getByRole('button', {name: /configure test:hidden-backed/i}) as HTMLButtonElement
+      .getByRole('button', {name: /configure system:hidden-backed/i}) as HTMLButtonElement
     expect(glyph.disabled).toBe(true)
     expect(navigateCallsRef.current).toEqual([])
 

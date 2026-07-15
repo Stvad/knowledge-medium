@@ -24,8 +24,8 @@ import { getBoundary } from '@/facets/togglable'
 import type { Overrides } from '@/facets/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
-import {ChangeScope} from '@/data/api'
-import {definitionSeedsFacet} from '@/data/facets'
+import {ChangeScope, definePropertyEditorOverride} from '@/data/api'
+import {definitionSeedsFacet, propertyEditorOverridesFacet} from '@/data/facets'
 import {seedProperty} from '@/data/propertySeeds'
 import {extensionPropertySeedKey} from '@/extensions/dynamicExtensionSeeds'
 
@@ -324,6 +324,43 @@ describe('dynamicExtensionsExtension — property seed identity', () => {
     }
   })
 
+  it('binds a dynamic editor override to the block so its seedKey matches its seed', async () => {
+    // The override must join its seed by the SAME block-scoped seedKey the seed
+    // received, or the seed-identity join silently misses (B′ §8).
+    const blocks = [blockData({id: 'ext-ovr', content: 'with-override'})]
+    const restore = __setCompileImplForTest(async () => {
+      const declaration = seedProperty({
+        seedKey: extensionPropertySeedKey('status'),
+        revision: 1,
+        name: 'example:status',
+        preset: 'boolean',
+        defaultValue: false,
+        changeScope: ChangeScope.BlockDefault,
+      })
+      const override = definePropertyEditorOverride(declaration, {label: 'Status'})
+      return {default: [
+        definitionSeedsFacet.of(declaration),
+        propertyEditorOverridesFacet.of(override),
+      ]}
+    })
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+      }))
+
+      const seeds = runtime.read(definitionSeedsFacet)
+      const overrides = runtime.read(propertyEditorOverridesFacet)
+      expect(seeds[0]?.seedKey).toBe('ext-ovr/property/status')
+      // Bound to the same block-scoped key, so it keys the override map there.
+      expect(overrides.get('ext-ovr/property/status')?.label).toBe('Status')
+      expect(overrides.has(extensionPropertySeedKey('status'))).toBe(false)
+    } finally {
+      restore()
+    }
+  })
+
   it('rejects hard-coded owners so dynamic seeds cannot collide across installs', async () => {
     const blocks = [blockData({id: 'ext-hardcoded', content: 'hardcoded'})]
     const declaration = seedProperty({
@@ -352,6 +389,46 @@ describe('dynamicExtensionsExtension — property seed identity', () => {
         'ext-hardcoded',
         expect.objectContaining({
           message: 'Dynamic property seeds must use extensionPropertySeedKey(key)',
+        }),
+      )
+    } finally {
+      restore()
+      errorSpy.mockRestore()
+    }
+  })
+
+  it('rejects a seed declaration mis-contributed to the override facet', async () => {
+    // A seed handle structurally satisfies PropertyEditorOverride (both carry a
+    // string seedKey), so a misrouted `propertyEditorOverridesFacet.of(seed)`
+    // type-checks; the runtime guard must reject it (it carries revision/presetId)
+    // and fail the block loudly rather than pollute the override registry.
+    const blocks = [blockData({id: 'ext-misroute', content: 'misroute'})]
+    const seed = seedProperty({
+      seedKey: extensionPropertySeedKey('status'),
+      revision: 1,
+      name: 'example:status',
+      preset: 'boolean',
+      defaultValue: false,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    const restore = stubCompileByBlockId({
+      misroute: {default: propertyEditorOverridesFacet.of(seed)},
+    })
+    const errorReporter = vi.fn()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await approveBlocks(blocks)
+      const runtime = await resolveFacetRuntime(loadExtensions(blocks, {
+        overrides: enableBlocks(blocks),
+        errorReporter,
+      }))
+
+      expect(runtime.read(propertyEditorOverridesFacet).size).toBe(0)
+      expect(errorReporter).toHaveBeenCalledWith(
+        'ext-misroute',
+        expect.objectContaining({
+          message: 'Dynamic property editor override contribution is malformed',
         }),
       )
     } finally {

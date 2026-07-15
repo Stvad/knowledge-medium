@@ -3,8 +3,11 @@ import {
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
 } from '@/data/api'
-import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
-import {isPropertySeedDeclaration} from '@/data/propertySeeds'
+import {
+  resolveDefinitionSource,
+  resolveEditorOverride,
+  type PropertyDefinitionRegistrySnapshot,
+} from '@/data/propertyDefinitionRegistry'
 import {seedKeyProp, seedRevisionProp} from '@/data/properties'
 
 const INTRINSIC_READ_ONLY_PROPERTY_NAMES = new Set([
@@ -21,22 +24,12 @@ const isDefinitionHidden = (
   name: string,
   schema: AnyPropertySchema | undefined,
   definitions: PropertyDefinitionRegistrySnapshot | null,
-): boolean => {
-  if (definitions) {
-    const winner = definitions.definitionsByName.get(name)?.[0]
-    if (winner) return winner.hidden
-
-    const seeds = definitions.seedsByName.get(name)
-    // An ambiguous synthesized name has no winner yet. Do not let whichever
-    // declaration happened to reach the name-keyed schema map dictate policy.
-    if (seeds !== undefined) return seeds.length === 1 && seeds[0]!.hidden
-  }
-
-  // Stage 0 (or a registry snapshot briefly lagging a runtime swap) still
-  // carries the actual seed declaration as the behavioral schema entry. Read
-  // its declaration-only flag without widening AnyPropertySchema itself.
-  return schema !== undefined && isPropertySeedDeclaration(schema) && schema.hidden
-}
+): boolean =>
+  // Same winner→single-seed→stage-0 resolution the override join uses; the
+  // `?? false` covers "no source" and the ambiguous-synthesized-name case
+  // (>1 seed, no winner) where policy must not follow whichever declaration
+  // happened to reach the name-keyed schema map.
+  resolveDefinitionSource(name, definitions, schema)?.hidden ?? false
 
 /**
  * Property-panel visibility policy. Prefer propertyEditorOverridesFacet
@@ -52,7 +45,7 @@ export const isPropertyPanelHiddenProperty = (
   definitions: PropertyDefinitionRegistrySnapshot | null = null,
 ): boolean => {
   const schema = schemas.get(name)
-  const ui = uis.get(name)
+  const ui = resolveEditorOverride(name, definitions, uis, schema)
   return isPropertyPanelReadOnlyProperty(name) ||
     ui?.hidden === true ||
     isDefinitionHidden(name, schema, definitions) ||

@@ -1,11 +1,11 @@
 /**
  * Shared property-schema projection helpers — the ref-codec classification,
- * the type→schema lift/merge, and the ref-change diff. Used by two engines
+ * the type→schema lift, and the ref-change diff. Used by two engines
  * that were both carved out of `Repo`:
  *
- *   - `facetBridge.ts` rebuild steps: `mergeLiftedSchemas` (build the merged
- *     registry) + `changedRefSchemaNames` (decide whether a swap needs a
- *     reprojection pass).
+ *   - `facetBridge.ts` rebuild steps: `liftTypeSchemas` (lift the type-
+ *     contributed schemas) + `changedRefSchemaNames` (decide whether a swap
+ *     needs a reprojection pass).
  *   - `repo.ts` reprojection: `projectedRefsForField` / `latestRefProjection-
  *     Schema` (recompute a block's derived references from its ref-typed
  *     property values).
@@ -22,12 +22,15 @@ import type {
 } from '@/data/api'
 import { decodeRefId, decodeRefListIds, isRefCodec, isRefListCodec } from '@/data/api'
 
-/** Build the merged property-schema registry: type-lifted schemas first
- *  (each `TypeContribution.properties`), then direct `propertySchemasFacet`
- *  registrations, last-wins per facet convention with a warning on a
- *  genuine conflict (different schema object for the same name). */
-export const mergeLiftedSchemas = (
-  directSchemas: ReadonlyMap<string, AnyPropertySchema>,
+/** Lift `TypeContribution.properties` schemas into a name-keyed registry,
+ *  last-wins per facet convention with a warning on a genuine conflict
+ *  (different schema object for the same name).
+ *
+ *  This is the surviving half of the former direct-registration merge: B′
+ *  removed the `propertySchemasFacet` direct-registration source (schemas now
+ *  enter the registry as seeds or user rows). The type-lift itself is
+ *  transitional too and dies at the types cutover (Slice C). */
+export const liftTypeSchemas = (
   types: ReadonlyMap<string, TypeContribution>,
 ): ReadonlyMap<string, AnyPropertySchema> => {
   const merged = new Map<string, AnyPropertySchema>()
@@ -42,16 +45,6 @@ export const mergeLiftedSchemas = (
       }
       merged.set(schema.name, schema)
     }
-  }
-  for (const [name, schema] of directSchemas) {
-    const existing = merged.get(name)
-    if (existing !== undefined && existing !== schema) {
-      console.warn(
-        `[schema-lift] direct propertySchemasFacet registration "${name}" ` +
-        'replaces an earlier type-lifted registration; last-wins per facet convention',
-      )
-    }
-    merged.set(name, schema)
   }
   return merged
 }

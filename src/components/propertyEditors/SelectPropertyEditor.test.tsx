@@ -61,7 +61,7 @@ describe('enum preset wiring', () => {
       name: modeProp.name,
       encodedValue: 'compact',
       schemas: new Map([[modeProp.name, modeProp]]),
-      uis: new Map(),
+      override: undefined,
       presets,
     })
 

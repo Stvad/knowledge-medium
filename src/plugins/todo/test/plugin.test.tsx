@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
-import { definitionSeedsFacet, propertySchemasFacet, typesFacet } from '@/data/facets.js'
+import { definitionSeedsFacet, typesFacet } from '@/data/facets.js'
 import {
   blockContentDecoratorsFacet,
   type BlockResolveContext,
@@ -20,12 +20,9 @@ import {
 describe('todoPlugin', () => {
   it('contributes both seeded properties and the todo type', () => {
     const runtime = resolveFacetRuntimeSync(todoPlugin)
-    const schemas = runtime.read(propertySchemasFacet)
     const seeds = runtime.read(definitionSeedsFacet)
     const types = runtime.read(typesFacet)
 
-    expect(schemas.has(statusProp.name)).toBe(false)
-    expect(schemas.has(roamTodoStateProp.name)).toBe(false)
     expect(seeds).toEqual(expect.arrayContaining([statusProp, roamTodoStateProp]))
     expect(types.get(TODO_TYPE)?.properties).toEqual([statusProp])
   })

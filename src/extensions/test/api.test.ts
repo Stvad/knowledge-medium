@@ -56,7 +56,6 @@ describe('@/extensions/api — public surface', () => {
     'seedProperty',
     'extensionPropertySeedKey',
     'definePropertyEditorOverride',
-    'propertySchemasFacet',
     'definitionSeedsFacet',
     'propertyEditorOverridesFacet',
     'typesFacet',
