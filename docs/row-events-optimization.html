@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>row_events: compact local history with sampled anchors</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --fg-dim: #555;
+    --fg-faint: #8a8a8a;
+    --bg: #fafaf7;
+    --panel: #fff;
+    --rule: #e3e0d8;
+    --accent: #5b3fd6;
+    --accent-bg: #ece8fb;
+    --good: #1f7a3a;
+    --good-bg: #e3f3e8;
+    --warn: #8a5a00;
+    --warn-bg: #fbf1d8;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fg: #ececec;
+      --fg-dim: #b6b6b6;
+      --fg-faint: #7d7d7d;
+      --bg: #1a1a1a;
+      --panel: #232323;
+      --rule: #383838;
+      --accent: #b8a8ff;
+      --accent-bg: #2a2540;
+      --good: #7ed29a;
+      --good-bg: #1d3225;
+      --warn: #e6c068;
+      --warn-bg: #322a16;
+    }
+  }
+  html { font-size: 16px; }
+  body {
+    font-family: var(--sans);
+    color: var(--fg);
+    background: var(--bg);
+    margin: 0;
+    padding: 0;
+    line-height: 1.55;
+  }
+  main {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 6rem;
+  }
+  header.doc-header {
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 1.25rem;
+    margin-bottom: 1.5rem;
+  }
+  header.doc-header h1 {
+    font-size: 1.85rem;
+    margin: 0 0 0.35rem;
+    letter-spacing: -0.01em;
+  }
+  header.doc-header .subtitle {
+    color: var(--fg-dim);
+    font-size: 1.02rem;
+    margin: 0;
+  }
+  aside.doc-status {
+    margin: 0 0 1.5rem;
+    padding: 0.6rem 0.9rem;
+    border: 1px solid var(--good);
+    border-radius: 6px;
+    background: var(--good-bg);
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  aside.reading-guide {
+    margin: 0 0 1.5rem;
+    padding: 0.7rem 1rem;
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 4px 4px 0;
+    background: var(--panel);
+    font-size: 0.92rem;
+  }
+  aside.reading-guide h5 {
+    margin: 0 0 0.4rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--fg-dim);
+  }
+  h2 {
+    font-size: 1.32rem;
+    margin: 3rem 0 0.75rem;
+    letter-spacing: -0.005em;
+  }
+  h3 {
+    font-size: 1.06rem;
+    margin: 1.8rem 0 0.5rem;
+    color: var(--fg);
+  }
+  p { margin: 0.6rem 0 1rem; }
+  a { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+  code, .mono {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 0.05em 0.3em;
+  }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 0.85rem 1rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; font-size: inherit; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-bg);
+    padding: 0.7rem 1rem;
+    margin: 1rem 0 1.25rem;
+    border-radius: 0 4px 4px 0;
+    font-size: 0.95rem;
+  }
+  .callout.good { border-color: var(--good); background: var(--good-bg); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-bg); }
+  .callout strong { font-weight: 600; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0 1.5rem;
+    font-size: 0.9rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.55rem 0.7rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th { background: var(--panel); font-weight: 600; font-size: 0.85rem; }
+  .table-scroll { overflow-x: auto; }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    border-bottom: 1px solid var(--rule);
+    background: color-mix(in srgb, var(--bg) 90%, transparent);
+    backdrop-filter: blur(8px);
+    margin: 0 -1.5rem 1rem;
+    padding: 0.5rem 1.5rem;
+  }
+  nav.toc ol {
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.1rem 1rem;
+    margin: 0;
+    padding: 0;
+    font-size: 0.82rem;
+  }
+  nav.toc li { margin: 0; }
+  nav.toc a { color: var(--fg-dim); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+  ul, ol { margin: 0.5rem 0 1rem; padding-left: 1.4rem; }
+  ul li, ol li { margin: 0.3rem 0; }
+  hr { border: none; border-top: 1px solid var(--rule); margin: 3rem 0 0; }
+  .footer-note { font-size: 0.82rem; color: var(--fg-faint); margin-top: 1.25rem; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="doc-header">
+  <h1>row_events: compact local history with sampled anchors</h1>
+  <p class="subtitle">
+    Keep the full per-row history log, shrink it ~4&times;: changed-columns
+    events with periodic full-snapshot anchors, provenance-gated logging for
+    bulk derivation bursts, per-workspace-mode sync logging, and a
+    reconstruction-lossless migration of the existing ~1.17M full-snapshot
+    events — followed by the VACUUM that actually returns the bytes.
+  </p>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <ol>
+    <li><a href="#s1">1 Why now</a></li>
+    <li><a href="#s2">2 Ground truth</a></li>
+    <li><a href="#s3">3 Format v2</a></li>
+    <li><a href="#s4">4 Anchors</a></li>
+    <li><a href="#s5">5 Derived writes</a></li>
+    <li><a href="#s6">6 Sync events</a></li>
+    <li><a href="#s7">7 Write path</a></li>
+    <li><a href="#s8">8 Migration</a></li>
+    <li><a href="#s9">9 VACUUM</a></li>
+    <li><a href="#s10">10 Readers</a></li>
+    <li><a href="#s11">11 PR #288 contract</a></li>
+    <li><a href="#s12">12 Arithmetic</a></li>
+    <li><a href="#s13">13 Slices</a></li>
+    <li><a href="#invariants">Invariants</a></li>
+    <li><a href="#s15">15 Rejected</a></li>
+    <li><a href="#s16">16 Open</a></li>
+  </ol>
+</nav>
+
+<aside class="doc-status">
+  <strong>Status: proposed design (this PR — no implementation).</strong>
+  Grounded against master <code>b581e60b</code>; every code claim carries a
+  file:line reference verified at that commit. The companion constraint record
+  lives in <code>docs/properties-as-blocks-migration.html</code> §12 (PR #288
+  branch <code>claude/properties-as-blocks-migration-4b60xg</code>, verified at
+  <code>a6407ed4</code>) — this doc is the "dedicated design task" that bullet
+  names, and it gates that project's slice C.
+  Supersedes the prune-based design in <code>docs/row-events-retention.md</code>
+  (re-stamped in this PR). Direction fixed by the user: history is <em>kept</em>,
+  never pruned; events shrink.
+  <strong>Last verified against code:</strong> 2026-07-15.
+</aside>
+
+<aside class="reading-guide">
+  <h5>How to read this doc</h5>
+  <p style="margin:0.3rem 0">
+    The load-bearing core is <a href="#s3">§3</a>–<a href="#s4">§4</a> (the event
+    format and the anchor/reconstruction machinery) and <a href="#s8">§8</a> (the
+    migration of existing history). <a href="#s5">§5</a> and <a href="#s6">§6</a>
+    resolve the two policy questions (derived-write logging, sync-source logging).
+    If you are implementing, start from your slice in <a href="#s13">§13</a> and
+    the <a href="#invariants">invariants index</a>. If you are PR #288, read
+    <a href="#s11">§11</a> — it is the contract your slice C consumes.
+    SQL in this doc is illustrative shape, not implementation.
+  </p>
+</aside>
+
+<div class="callout">
+  <strong>Decisions made in this doc</strong> (each argued in its section):
+  <ul>
+    <li><strong>Compact updates, column-granular</strong>: an update event stores
+      only the changed domain fields' <em>after</em> values; identical updates are
+      not logged (§3).</li>
+    <li><strong>Deterministic per-block anchors every W=50 events, cadence carried
+      in the log itself</strong> (<code>chain_pos</code>), not in an auxiliary
+      counter and not probabilistic. Anchors carry full before+after (§4).</li>
+    <li><strong>Every chain starts full</strong>: a compact update whose
+      predecessor is missing — or is a legacy-v1 event — promotes itself to an
+      anchor (§4, inherited from PR #288's invariants index).</li>
+    <li><strong>Derived writes log normally in compact form; only enumerated
+      one-shot bulk bursts skip</strong>, via a tx-scoped
+      <code>tx_context.history_mode</code> opt-in — provenance-keyed, never
+      column-keyed (§5).</li>
+    <li><strong>Sync-applied events drop for plaintext workspaces, stay (compact)
+      for e2ee</strong>; unknown mode logs. The redundancy claim against
+      server-side <code>blocks_history</code> is verified with caveats stated (§6).</li>
+    <li><strong>Triggers remain the writer</strong>; bodies are generated from a
+      single column spec shared with the existing snapshot/upload projections (§7).</li>
+    <li><strong>The migration is reconstruction-lossless</strong>: chunked,
+      resumable via the format tag itself, sampling anchors at cadence <em>and at
+      chain discontinuities</em>, so every state derivable today stays derivable (§8).</li>
+    <li><strong>One-time full VACUUM</strong> (deep-idle + manual command), not
+      <code>incremental_vacuum</code> — in-place row rewrites leave half-full pages
+      only a rebuild compacts (§9).</li>
+  </ul>
+</div>
+
+<h2 id="s1">1. Why now</h2>
+
+<p>
+<code>row_events</code> is the client-side per-row audit log: three triggers on
+<code>blocks</code> write one event per row write, for local and sync-applied
+writes alike (<code>src/data/internals/clientSchema.ts:370-381</code>). Updates
+store <em>two full row snapshots</em> — before and after — including the whole
+<code>properties_json</code> and <code>references_json</code> columns
+(<code>blockJsonObjectSql</code>, <code>clientSchema.ts:386-402</code>). Nothing
+reads the table at runtime (<code>clientSchema.ts:63-65</code>); it is
+intentionally unbounded and never trimmed (<code>clientSchema.ts:67-69</code>),
+and there is no client-side VACUUM anywhere in <code>src/</code>, so even a
+future deletion would not return OPFS bytes.
+</p>
+
+<p>Observed scale and the two forcing functions:</p>
+
+<ul>
+  <li><strong>It is already the biggest thing in the database.</strong>
+    ~1.17M events &times; ~2&nbsp;KB on a dev instance
+    (<code>docs/row-events-retention.md:4</code>) ≈ 2+&nbsp;GB of OPFS for a
+    ~300–350k-block workspace — history bytes rivaling or exceeding live-data
+    bytes, on devices where OPFS quota is finite.</li>
+  <li><strong>PR #288 multiplies it.</strong> The properties-as-blocks backfill
+    creates ~650k rows through <code>repo.tx</code> per workspace (its §12 and
+    measurement section; the spike took 5–10 minutes largely paying
+    <code>row_events</code> + <code>ps_crud</code> envelopes), and those rows then
+    sync down and append events <em>again on every receiving device</em>. Its §12
+    carries the constraint record: the optimization must land before its slice C
+    runs. <a href="#s11">§11</a> states the contract.</li>
+  <li><strong>Every fresh device pays on first sync.</strong> The observer
+    materializes each downloaded block into <code>blocks</code>
+    (<code>materialize.ts:365</code>), firing the INSERT trigger once per block:
+    ~350k full-snapshot <code>create</code> events (~350&nbsp;MB) per device,
+    recording rows the server already has.</li>
+</ul>
+
+<p>
+The consumers this format serves are all future — block history / time-travel
+UI, drift-tolerant undo (<code>src/data/internals/undoManager.ts:26-28</code>
+names <code>row_events.before_json</code> as the substrate; today's undo is
+in-memory only, depth 100 at <code>undoManager.ts:80-82</code>), forensics after
+incidents (the SRS backlink-wipe class), and convergence debugging for the
+props migration. Because nothing reads the log yet, we are free to change the
+format — the design is judged by what those readers need (<a href="#s10">§10</a>),
+not by compatibility.
+</p>
+
+<h2 id="s2">2. Ground truth (verified 2026-07-15, master <code>b581e60b</code>)</h2>
+
+<h3>2.1 The table and its writers</h3>
+
+<p>
+Schema (<code>clientSchema.ts:70-82</code>): <code>id INTEGER PK AUTOINCREMENT,
+tx_id TEXT, block_id TEXT NOT NULL, kind TEXT NOT NULL, before_json TEXT,
+after_json TEXT, source TEXT NOT NULL, created_at INTEGER NOT NULL, group_id
+TEXT</code>. Indexes (<code>:84-97</code>): <code>(tx_id)</code>,
+<code>(block_id, created_at DESC)</code>, <code>(created_at DESC)</code>.
+Payload shapes per kind: <code>create</code> → after only
+(<code>:427-444</code>); <code>update</code>/<code>soft-delete</code> → both
+full sides (<code>:446-466</code>); <code>delete</code> (hard purge) → before
+only (<code>:471-488</code>). There is no identical-update gate: a same-values
+UPDATE still logs two full snapshots.
+</p>
+
+<p>Complete inventory of <code>blocks</code> writers (what the triggers see):</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Writer</th><th>Where</th><th><code>tx_context.source</code></th><th>Resulting event</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>All <code>repo.tx</code> writes — mutators, same-tx processors, undo/redo
+        replay via <code>applyRaw</code></td>
+      <td><code>commitPipeline.ts:255-370</code> (context set <code>:261-264</code>,
+        cleared <code>:365-367</code>; replay is a normal tx with
+        <code>isReplay</code>, <code>:166-176</code>)</td>
+      <td><code>'user'</code> — the only assignable value
+        (<code>changeScope.ts:37-42</code>)</td>
+      <td><code>source='user'</code>, <code>tx_id</code>/<code>group_id</code>
+        stamped</td>
+    </tr>
+    <tr>
+      <td>Sync-apply: observer materialize UPSERT / stream-exit DELETE</td>
+      <td><code>syncObserver/materialize.ts:344</code> (explicit
+        <code>source = NULL</code> bracket), writes at <code>:365</code>,
+        <code>:395</code></td>
+      <td>NULL</td>
+      <td><code>source='sync'</code>, <code>tx_id=NULL</code> via COALESCE/CASE
+        (<code>clientSchema.ts:412-422</code>)</td>
+    </tr>
+    <tr>
+      <td>Bootstrap column backfills</td>
+      <td><code>clientSchema.ts:1361-1370</code>, bracketed by
+        <code>withTriggerSuspended</code> (<code>:1174-1197</code>)</td>
+      <td>NULL</td>
+      <td><em>No event</em> — trigger deliberately dropped for the bracket
+        (bootstrap-only; safe because no other write is served in that window)</td>
+    </tr>
+    <tr>
+      <td>Raw out-of-band SQL (agent bridge <code>sql execute</code>, dev tools)</td>
+      <td>forbidden as a third write path; the schema-statement class throws via
+        <code>guardSyncedTableWrites</code> (<code>repoProvider.ts:390-397</code>)</td>
+      <td>NULL</td>
+      <td><code>source='sync'</code> (the COALESCE catch-all — logged, mislabeled)</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+PowerSync's own CRUD-apply never touches <code>blocks</code> — it writes the
+<code>blocks_synced</code> staging table (<code>blockSchema.ts:112-131</code>),
+which has no row_events triggers. Only the observer moves data into
+<code>blocks</code>.
+</p>
+
+<h3>2.2 What reads it, and adjacent facts the design leans on</h3>
+
+<ul>
+  <li><strong>No runtime reader.</strong> The only statements touching
+    <code>row_events</code> in non-test <code>src/</code> are the three trigger
+    INSERTs (verified by search). The old row_events→invalidation tail
+    (<code>rowEventsTail.ts</code>) is deleted; only historical comments mention
+    it (<code>observer.ts:32</code>, <code>invalidate.ts:6</code>,
+    <code>block.ts:118</code>).</li>
+  <li><strong>Trigger bodies self-upgrade.</strong> Every boot re-applies
+    <code>DROP TRIGGER</code> + <code>CREATE TRIGGER</code> from source
+    (<code>withTriggerRecreate</code>, <code>clientSchema.ts:1151-1172</code>) —
+    a trigger-body change ships fleet-wide with no per-change migration.</li>
+  <li><strong>ALTER-based column adds have precedent and a footgun.</strong>
+    <code>ensureUndoGroupIdColumns</code> (<code>clientSchema.ts:1373-1407</code>)
+    added <code>group_id</code> to <code>row_events</code> and documents the
+    ordering constraint: the ALTER must run before any trigger re-creation
+    references the new column.</li>
+  <li><strong>Provenance is joinable today.</strong> <code>command_events</code>
+    (<code>clientSchema.ts:99-113</code>) records one row per
+    <code>repo.tx</code> — scope, description, <code>mutator_calls</code> —
+    keyed by the same <code>tx_id</code> the events carry
+    (<code>commitPipeline.ts:339-357</code>). It is small (one row per tx) and
+    also unbounded; out of scope here beyond this note.</li>
+  <li><strong>Idle machinery exists.</strong> Marker-gated one-shot jobs
+    (<code>client_schema_state</code>, <code>clientSchema.ts:182-187</code>),
+    <code>MarkerStore</code>/<code>PendingIdleJobs</code>
+    (<code>idleMarkerJobs.ts</code>), deep-idle scheduling
+    (<code>scheduleIdle.ts</code>), and the idle ANALYZE pattern
+    (<code>repoProvider.ts:415-433</code>).</li>
+  <li><strong>DB config that matters for §9:</strong> rollback journal, not WAL
+    (<code>repoProvider.ts:312-316</code>); <code>temp_store = MEMORY</code> and a
+    256&nbsp;MiB page cache (<code>:338-339</code>); single SQLite worker.</li>
+  <li><strong><code>docs/row-events-retention.md</code> is stale</strong>: it
+    cites the deleted <code>rowEventsTail.ts</code> drain, a
+    <code>local-ephemeral</code> source that no longer exists, and a prune design
+    ("keep recent 50k + 7-day grace") superseded by the keep-history direction.
+    Re-stamped as superseded in this PR.</li>
+</ul>
+
+<h2 id="s3">3. Event format v2</h2>
+
+<p>
+Two new columns, added by an idempotent ALTER migration in the
+<code>ensureUndoGroupIdColumns</code> mold (and with its same must-run-before-
+trigger-recreation ordering):
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>v INTEGER</code></td>
+      <td>Format version. <code>NULL</code> = legacy v1 (full snapshots per
+        §2.1); <code>2</code> = compact format below. How a reader tells formats
+        apart, and how the migration finds unrewritten rows.</td>
+    </tr>
+    <tr>
+      <td><code>chain_pos INTEGER</code></td>
+      <td>Position since the last <em>full</em> event of this block.
+        <code>0</code> = this event carries complete row state (create, anchor,
+        delete); <code>k&gt;0</code> = compact event, k-th since the last full
+        one. <code>NULL</code> on v1 rows (every v1 row is full by
+        construction). One column serves as both the anchor marker and the
+        cadence counter — the log describes itself; there is no auxiliary
+        state to drift or migrate.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>Per-kind payloads in v2 (domain-shaped keys, same naming as
+<code>blockJsonObjectSql</code> today so v1 and v2 payloads read uniformly):</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>kind</th><th>chain_pos</th><th>before_json</th><th>after_json</th></tr></thead>
+  <tbody>
+    <tr><td><code>create</code></td><td>0</td><td>NULL</td><td>full snapshot (unchanged from v1 — creates are inherently full)</td></tr>
+    <tr><td><code>update</code> / <code>soft-delete</code>, compact</td><td>k&gt;0</td><td>NULL</td><td><strong>changed domain fields only</strong>: JSON object, key present ⇔ column changed, value = new value (JSON <code>null</code> = cleared). The key set <em>is</em> the changed-columns list — no separate column.</td></tr>
+    <tr><td><code>update</code> / <code>soft-delete</code>, <strong>anchor</strong></td><td>0</td><td>full snapshot</td><td>full snapshot</td></tr>
+    <tr><td><code>delete</code> (hard purge)</td><td>0</td><td>full snapshot</td><td>NULL</td></tr>
+    <tr><td><em>identical update (no column changed)</em></td><td colspan="3"><em>no event written</em> — mirrors the server trigger's skip (<code>20260522062437_add_blocks_history.sql:120-125</code>). The v1 trigger has no such gate; this alone deletes a class of pure-noise 4&nbsp;KB events (LWW echoes, clamp no-ops).</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+Change detection compares storage columns
+(<code>OLD.x IS NOT NEW.x</code> — the exact predicate the upload trigger
+already uses, <code>clientSchema.ts:542-544</code>) but emits domain keys.
+Column-granular only: a changed <code>properties_json</code> stores the whole
+new cell value, not a sub-key diff — see §15 for why, and note the
+props-as-blocks migration shrinks that very column structurally.
+One v1 nuance carries over: <code>userUpdatedAt</code> is serialized as
+<code>coalesce(user_updated_at, updated_at)</code> (<code>clientSchema.ts:397</code>);
+v2 keeps that projection for the field and accepts that a (never-occurring
+today) explicit clear is not distinguishable.
+</p>
+
+<p>Index change, bundled with the §8 migration: replace
+<code>idx_row_events_block (block_id, created_at DESC)</code> with
+<code>(block_id, id)</code>. <code>id</code> is AUTOINCREMENT-monotonic and is
+the authoritative per-block order (same-millisecond events in one tx tie on
+<code>created_at</code>); the trigger's predecessor probe (§4) and every reader
+walk need exactly this ordering, and the entries are smaller. No runtime reader
+uses the old index (nothing reads the table); <code>(created_at DESC)</code> and
+<code>(tx_id)</code> stay for time-scoped and tx-join forensics.</p>
+
+<h2 id="s4">4. Anchors: cadence, promotion, reconstruction</h2>
+
+<h3>4.1 Cadence and keying — decision</h3>
+
+<p>
+On every logged update, the trigger probes the block's most recent event —
+one <code>O(log n)</code> seek on the new <code>(block_id, id)</code> index:
+</p>
+
+<pre><code>SELECT v, chain_pos FROM row_events
+ WHERE block_id = NEW.id ORDER BY id DESC LIMIT 1</code></pre>
+
+<p>and decides:</p>
+
+<ul>
+  <li><strong>No prior event</strong> → this chain has no base: <strong>promote to
+    anchor</strong> (full before+after, <code>chain_pos = 0</code>). This is PR
+    #288's "every history chain starts full" invariant (<a href="#invariants">I1</a>) —
+    it is what makes every exemption in §5/§6 safe: OLD is always available to
+    the trigger, so the first logged edit of an unlogged row rebuilds a complete
+    base no matter why earlier events are absent.</li>
+  <li><strong>Prior event is v1</strong> (<code>v IS NULL</code>) → also promote
+    to anchor. v2 chains never count a v1 event as their base — this decouples
+    the live log from the §8 migration entirely: the rewriter may compact
+    <em>any</em> v1 event without checking whether some live chain leans on it.
+    Cost: one anchor per block on its first post-deploy edit, only for blocks
+    edited at all.</li>
+  <li><strong><code>prev.chain_pos ≥ W−1</code></strong> → anchor
+    (<code>chain_pos = 0</code>).</li>
+  <li>Otherwise → compact event, <code>chain_pos = prev.chain_pos + 1</code>.</li>
+</ul>
+
+<div class="callout good">
+  <strong>Decision — deterministic per-block window W = 50, position carried in
+  the event row itself.</strong> Alternatives and why not:
+  <ul>
+    <li><em>Probabilistic (1-in-50 by <code>random()</code>)</em>: stateless, but
+      the window is unbounded in the tail (P(no anchor in n events) =
+      0.98<sup>n</sup>; the 99th-percentile gap is ~228 events) — which makes
+      both reconstruction cost and the corruption blast radius unbounded.
+      Rejected.</li>
+    <li><em>Per-block counter side-table</em>: O(1), but introduces mutable state
+      that can drift from the log, costs an extra B-tree upsert on every write,
+      and needs its own backfill/repair story. Rejected.</li>
+    <li><em>Byte-budget (anchor after ≥X bytes of compact payloads)</em>: bounds
+      replay <em>bytes</em> rather than replay <em>count</em>, but needs an
+      accumulator (same drawbacks as the counter) or an O(W) SUM per write.
+      Deferred — W bounds bytes well enough in practice (worst case W &times;
+      largest column value), and cadence is a constant we can revisit
+      (§4.4).</li>
+  </ul>
+  The chosen probe keeps the log self-describing: cadence state cannot be lost,
+  corrupted, or skewed independently of the history it describes, and the
+  migration + live trigger share one rule.
+</div>
+
+<h3>4.2 Anchor content — decision</h3>
+
+<p>
+Anchors carry <strong>full before + full after</strong> (not after-only):
+</p>
+
+<ul>
+  <li><em>Integrity check for free</em>: replaying the compact run from the
+    previous full event must reproduce <code>anchor.before_json</code>. The §8
+    migration's equivalence test and any future integrity sweep get a built-in
+    checkpoint at every anchor.</li>
+  <li><em>One-sided recovery</em>: if the run before an anchor is lost, the
+    anchor's before still yields the state just prior to it.</li>
+  <li><em>Cost is noise</em>: one extra ~1&nbsp;KB side per W=50 events ≈
+    +20&nbsp;B amortized per event.</li>
+</ul>
+
+<h3>4.3 Reconstruction algorithm</h3>
+
+<pre><code>stateAt(blockId, eventId):                  # row state just after event E
+  E = event(eventId)
+  if E.v is NULL:      return per-kind full side (v1 events are all full)
+  if E.chain_pos == 0: return per-kind full side (create/anchor: after; delete: gone/before)
+
+  # compact: walk back to the chain base — at most W−1 steps, contiguous
+  # in the (block_id, id) index
+  patches = [E]
+  for ev in events(blockId, id &lt; E.id, ORDER BY id DESC):
+      if ev.v is NULL or ev.chain_pos == 0:
+          base = fullAfterOf(ev); break
+      patches.prepend(ev)
+  if no base: raise ChainBroken            # bounded loss — see below
+
+  state = base
+  for ev in patches: state = {...state, ...parse(ev.after_json)}
+  return state</code></pre>
+
+<p>
+Complexity: <code>O(log n)</code> seek + <code>O(W)</code> contiguous index
+scan + <code>O(W·c)</code> field merges (c = mean changed fields, ~3) —
+microseconds-scale per point lookup at W=50. A whole-block timeline
+streams forward once, carrying the running state: <code>O(events of block)</code>.
+Workspace-wide time-travel to time T: per touched block, binary-search the
+event ≤ T, then <code>stateAt</code> — <code>O(B·(log n + W))</code>.
+</p>
+
+<p>
+<strong>Failure bound.</strong> <code>ChainBroken</code> can only arise from
+row loss/corruption inside the log itself. The damage is confined to the
+compact run between two full events — at most W−1 states; everything at or
+after the next full event reconstructs normally, and the <em>current</em> state
+is never at risk (it lives in <code>blocks</code>). This is the property the
+sampled anchors buy: reconstruction is "nearest anchor + short replay", never
+full-chain replay to the insert, and an interrupted chain loses at most one
+window.
+</p>
+
+<h3 id="s4-4">4.4 W is a tunable constant, not a schema property</h3>
+
+<p>
+W lives in the trigger SQL, which re-installs from source on every boot
+(<code>clientSchema.ts:1151-1172</code>). Changing it needs no migration and no
+version bump: <code>chain_pos</code> makes each chain self-describing, so
+mixed cadences coexist — readers never assume W, they walk to
+<code>chain_pos = 0</code>. Amortized anchor overhead ≈ (full-pair size −
+compact size)/W ≈ (2048−200)/50 ≈ +37&nbsp;B per update (~+18% of compact-update
+bytes); W=100 would halve that at double the replay bound. 50 is the starting
+point (matching the frame's 1-in-50 suggestion), revisit with real telemetry.
+</p>
+
+<h2 id="s5">5. Derived-write logging — analysis and recommendation</h2>
+
+<p>
+The props migration introduces machine writers: the one-shot backfill (~650k
+creates), the children→cell projection (2–3 row writes per property edit), the
+consistency sweep, and arrival catch-up. The question: do their writes belong
+in the history log? The earlier "skip them all via a tx_context-gated trigger
+condition" suggestion trades away exactly the record you want when the
+machinery misbehaves. Options considered:
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th></th><th>Option</th><th>Bytes (backfill burst)</th><th>Debugging value</th><th>Verdict</th></tr></thead>
+  <tbody>
+    <tr><td>(a)</td><td>Skip entirely</td><td>0</td><td>Per-tx only (via <code>command_events</code>)</td><td><strong>Adopted for enumerated one-shot bursts only</strong></td></tr>
+    <tr><td>(b)</td><td>Log compact, values stripped</td><td>~650k &times; ~90&nbsp;B ≈ 60&nbsp;MB + index churn</td><td>Row-level "something wrote here", no values</td><td>Rejected — pays row+index cost for little: burst writes are fully derivable, so the values a debugger wants are reconstructable from the sources' own logged history</td></tr>
+    <tr><td>(c)</td><td>Log compact, sampled</td><td>~1–10&nbsp;MB</td><td>Statistical only</td><td>Rejected — a sampled forensic log answers neither "what happened to <em>this</em> block" nor "how much happened"</td></tr>
+    <tr><td>(d)</td><td>Log normally, provenance-marked</td><td>~650k &times; ~350&nbsp;B ≈ 230&nbsp;MB/device</td><td>Full</td><td><strong>Adopted for steady-state derived writes</strong> — and the "mark" is free, see below</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout good">
+  <strong>Recommendation — split by write class, keyed on provenance.</strong>
+  <ul>
+    <li><strong>Steady-state derived writes log normally</strong> (option d):
+      projection, sweep repairs, per-row catch-up. In compact form a 2–3-write
+      fan-out per property edit costs ~0.5&nbsp;KB total — affordable, and this
+      is precisely the record convergence debugging needs ("which pass rewrote
+      the cell, from what, to what, when"). No new provenance column:
+      every local event already carries <code>tx_id</code>, and
+      <code>command_events</code> (scope, description,
+      <code>mutator_calls</code>; <code>commitPipeline.ts:339-357</code>)
+      identifies the writer — provenance is a join, and a later compaction pass
+      could target it by that join if the volume ever warrants.</li>
+    <li><strong>Enumerated one-shot bulk bursts skip</strong> (option a): the
+      props backfill, the arrival catch-up bulk pass, and future whole-table
+      column backfills. Justification: their writes are fully derivable (field
+      rows mirror cell values whose own edit history <em>is</em> logged), each
+      burst still leaves a <code>command_events</code> row per tx, and invariant
+      I1 guarantees the first later edit of any exempted row rebuilds a full
+      base.</li>
+  </ul>
+</div>
+
+<h3>5.1 Mechanism: <code>tx_context.history_mode</code></h3>
+
+<p>
+Add a nullable <code>history_mode TEXT</code> column to <code>tx_context</code>
+(<code>clientSchema.ts:38-48</code>), set by the commit pipeline from a new
+optional <code>RepoTxOptions.historyMode</code> (<code>tx.ts:269-277</code>) in
+step 1 (<code>commitPipeline.ts:261-264</code>) and cleared with the rest in
+step 5 (<code>:365-367</code>, rollback-safe inside the tx). One value:
+<code>'skip'</code>. The row_events triggers add
+<code>COALESCE((SELECT history_mode FROM tx_context WHERE id = 1), 'full') != 'skip'</code>
+to their WHEN clause. NULL/absent means full logging — the default cannot
+silently drop history (invariant <a href="#invariants">I3</a>), sync-applied
+writes (which never set it) are unaffected, and only a caller that explicitly
+opts in is exempt (invariant <a href="#invariants">I4</a>: exemption by
+provenance, never by column — skipping <code>properties_json</code> wholesale
+would lose primary history for carve-out/un-flipped/orphan keys, per PR #288
+§12).
+</p>
+
+<p>
+This is the tx-scoped, concurrency-safe generalization of the existing
+<code>withTriggerSuspended</code> bracket (<code>clientSchema.ts:1174-1197</code>) —
+which stays bootstrap-only, because dropping a trigger is DB-global and would
+also unlog concurrent writers mid-session.
+</p>
+
+<h2 id="s6">6. Sync-source logging, per workspace mode</h2>
+
+<h3>6.1 Verifying the redundancy claim</h3>
+
+<p>
+Starting position to verify: sync-applied events are redundant for plaintext
+workspaces because the server-side <code>blocks_history</code> table already
+records those changes. Read against
+<code>supabase/migrations/20260522062437_add_blocks_history.sql</code>:
+</p>
+
+<ul>
+  <li><strong>All columns, all writers</strong> — the trigger fires
+    <code>AFTER INSERT OR UPDATE OR DELETE ON public.blocks FOR EACH ROW</code>
+    (<code>:167-170</code>) and snapshots <code>to_jsonb(NEW/OLD)</code>
+    (<code>:93</code>, <code>:112-113</code>), so every server-side write path —
+    PowerSync CRUD-apply, RPCs, manual SQL — is captured, every column included.
+    Shape is the same "changed-columns diff, full bookends" family as this
+    design (<code>:18-24</code>). ✅</li>
+  <li><strong>Granularity caveat</strong> — resolution is per <em>uploaded</em>
+    write, and the client compacts per-id before upload
+    (<code>compactBlockCrudEntries</code>, <code>src/services/powersync.ts:211</code>,
+    used at <code>:638</code>/<code>:672</code>; the migration's own header says
+    so, <code>:5-10</code>). But the local <code>source='sync'</code> events are
+    <em>also</em> collapsed — PowerSync delivers checkpoint states, and the
+    observer additionally skips no-op re-deliveries
+    (<code>materialize.ts:56-60</code>). Server history is at least as fine as
+    what any receiving device could log. ✅ (Per-edit fidelity exists only in the
+    authoring device's <code>source='user'</code> events — unaffected by this
+    section.)</li>
+  <li><strong>E2EE caveat</strong> — for e2ee workspaces the server sees and
+    records ciphertext envelopes. Local events on a device holding the key are
+    the <em>only plaintext history</em>. ❌ redundancy does not hold.</li>
+  <li><strong>Availability caveat</strong> — <code>blocks_history</code> has
+    <em>no client read path yet</em>: the migration header defers read/restore
+    RPCs to a follow-up (<code>:2-3</code>), RLS grants SELECT to workspace
+    members (<code>:177-192</code>), and no later migration in
+    <code>supabase/migrations/</code> adds an RPC (verified against the full
+    listing). The redundancy is "the bytes exist server-side", not "a reader
+    exists today". Flagged as open question <a href="#s16">O1</a>.</li>
+  <li><strong>What is genuinely lost</strong> — the local-apply record: when
+    THIS device materialized a change and what it saw. LWW skip decisions are
+    recorded nowhere either way (<code>skippedStale</code> rows never fire
+    triggers), so the marginal forensic loss is apply-timing only.</li>
+</ul>
+
+<div class="callout good">
+  <strong>Decision — per-workspace-mode sync logging.</strong> Plaintext
+  workspaces: drop <code>source='sync'</code> events entirely (create, update,
+  soft-delete, delete). E2EE workspaces: keep them, in compact v2 form with
+  anchors like any other events. Unknown/undecided mode: log (fail-safe,
+  invariant I3). Applies to future writes only — the §8 migration never deletes
+  existing sync events (history is kept).
+  <br>Consequences owned: a plaintext workspace's cross-device timeline is
+  served by the server (RPC pending — O1); e2ee first sync writes one full
+  <code>create</code> per block per device (~1&nbsp;KB each) — that IS the
+  product cost of local-only e2ee history, and it is also per-device-loss
+  fragile, worth a line in e2ee docs. The comment at
+  <code>clientSchema.ts:55-69</code> ("the ONLY place an INCOMING sync change is
+  durably recorded") becomes conditional and must be updated in the same PR.
+  Raw out-of-band local writes (already forbidden as a write path, §2.1) stop
+  being logged in plaintext workspaces — acceptable for a forbidden path;
+  noted, not mourned.
+</div>
+
+<h3>6.2 Mechanism: a local policy side-table</h3>
+
+<p>
+Workspace mode is a JS-side fact (durable per-(user, workspace) mode pin,
+<code>src/sync/keys/modePin.ts:2-16</code>, set-once <code>:104-124</code>;
+the observer resolves materializability per workspace each pass,
+<code>materialize.ts:284-291</code>) — triggers can't call it. Bridge it with a
+tiny local table:
+</p>
+
+<pre><code>CREATE TABLE IF NOT EXISTS workspace_history_policy (
+  workspace_id TEXT PRIMARY KEY,
+  sync_events  TEXT NOT NULL CHECK (sync_events IN ('log', 'drop'))
+)</code></pre>
+
+<p>
+The materializer writes the row at the top of its Phase-2 write tx for each
+workspace in the batch (mode 'copy' → 'drop', 'decrypt' → 'log'; 'defer' writes
+nothing — deferred rows aren't materialized anyway), so the policy is committed
+before the first upsert of that workspace in the same transaction — no ordering
+race with first sync. The trigger WHEN clause gates:
+<code>NOT ((SELECT source FROM tx_context WHERE id=1) IS NULL AND
+(SELECT sync_events FROM workspace_history_policy WHERE workspace_id =
+NEW.workspace_id) = 'drop')</code> — one PK probe per sync write; local writes
+(<code>source IS NOT NULL</code>) short-circuit past it. Absent row ⇒ the
+comparison is NULL ⇒ logs. Mode pins are immutable per workspace
+(<code>modePin.ts:104-124</code>), so the row never flips in normal operation;
+a debugging escape hatch (force-log) is a one-row UPDATE documented in the
+implementation PR.
+</p>
+
+<h2 id="s7">7. Write path: triggers stay</h2>
+
+<p>
+Both serious candidates were examined honestly — the app layer is more capable
+than it first looks, since <em>both</em> major writers already hold before/after
+snapshots in JS (<code>repo.tx</code>'s snapshots map, the observer's
+<code>SyncSnapshot</code> map, <code>materialize.ts:110-113</code>) and both hold
+an open write tx, so an app-layer event writer could be atomic. What decides it:
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th></th><th>Triggers (chosen)</th><th>App layer</th></tr></thead>
+  <tbody>
+    <tr><td>Coverage</td><td><strong>Catch-all</strong>: every writer including raw paths and any future one; a write cannot dodge history silently — and "who wrote this without going through the API" is itself the forensic question</td><td>Two parallel writers to build and keep in lockstep (tx engine + observer); raw paths uncovered; a forgotten future path = silent gap</td></tr>
+    <tr><td>Diff verbosity</td><td>Per-column CASE — <strong>already proven in-tree</strong>: the upload PATCH trigger builds changed-columns-only JSON in pure SQLite (<code>blockUploadPatchJsonSql</code>, <code>clientSchema.ts:552-563</code>, <code>json_set</code>/CASE/<code>json_remove('$.__noop')</code>)</td><td>Simpler TS diff, easier unit tests</td></tr>
+    <tr><td>Upgrades</td><td>Free fleet-wide via boot-time recreation (<code>:1151-1172</code>)</td><td>Ordinary code deploy (also fine)</td></tr>
+    <tr><td>Cadence probe</td><td>Scalar subquery, O(log n)</td><td>Same query from JS</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout">
+  <strong>Decision:</strong> triggers remain the sole writer. To pay the
+  verbosity once instead of thrice, the implementation generates the v2 trigger
+  bodies from a single column-spec array shared with
+  <code>blockJsonObjectSql</code> (<code>:386-402</code>) and
+  <code>BLOCK_UPLOAD_COLUMNS</code> (<code>:518-534</code>) — which also
+  discharges PR #288's slice-A warning that the row_events serialization is a
+  hand-maintained parallel of <code>BLOCK_STORAGE_COLUMNS</code> that must be
+  extended in lockstep (its §11 slice A, "history/undo seam").
+  Per-write cost of v2: the same JSON build machinery as today minus one full
+  snapshot side, plus one O(log n) predecessor probe and one PK policy probe —
+  strictly less work than v1 for every non-anchor update (invariant
+  <a href="#invariants">I6</a>).
+</div>
+
+<h2 id="s8">8. Migrating the existing ~1.17M events</h2>
+
+<p>
+Required, not optional: the stock of old full-snapshot events is where the
+multi-GB sits. Direction fixed by the frame: rewrite old events into compact
+form, <em>sampling old <code>before_json</code> values into anchors rather than
+dropping them wholesale</em>; delete nothing.
+</p>
+
+<h3>8.1 The rewrite, per block</h3>
+
+<p>
+Unit of work: one block's v1 events, in <code>id</code> order (per-block
+processing keeps the running reconstruction state at one row, ~2&nbsp;KB —
+processing in global id order would need a 350k-entry state map). For each
+block with any <code>v IS NULL</code> event:
+</p>
+
+<ol>
+  <li>Stream its v1 events ascending. Maintain <code>runningState</code> (the
+    reconstructed after of the previous kept event) and <code>pos</code> (compact
+    count since the last full event).</li>
+  <li><code>create</code>/<code>delete</code>: stamp <code>v=2,
+    chain_pos=0</code>, payload unchanged. Reset <code>pos</code>.</li>
+  <li><code>update</code>/<code>soft-delete</code>: compute changed fields by
+    comparing the event's <em>own</em> before/after JSON (exact — no cross-event
+    inference), then keep it <strong>full (anchor)</strong> if any of:
+    <ul>
+      <li><em>chain start</em> — no prior event for the block (I1);</li>
+      <li><em>cadence</em> — <code>pos ≥ W−1</code>;</li>
+      <li><em>discontinuity</em> — the event's <code>before_json</code> ≠
+        <code>runningState</code>. This is the load-bearing sampling rule: v1
+        <code>before</code> is normally redundant with the previous event's
+        <code>after</code>, but where the log has gaps (trigger-suspended
+        backfill windows, the pre-row_events era of a block, historical bugs)
+        it is <em>not</em> — anchoring exactly at discontinuities keeps those
+        seams reconstructable and visible instead of silently splicing them.</li>
+    </ul>
+    Otherwise rewrite compact: <code>after_json</code> = changed fields,
+    <code>before_json = NULL</code>, <code>v=2, chain_pos=++pos</code>. An
+    all-fields-identical v1 update (the v1 trigger logged no-ops) becomes an
+    empty compact event — kept, ~60&nbsp;B, preserving "an UPDATE happened"
+    timing.</li>
+  <li>Mark the batch done by the rewrite itself: <code>v</code> flips 2.</li>
+</ol>
+
+<div class="callout good">
+  <strong>The migration is reconstruction-lossless (invariant I5):</strong> for
+  every event e, <code>stateAt(e)</code> returns the same value before and after
+  the rewrite — the only bytes dropped are ones derivable from neighboring
+  events, and every non-derivable <code>before</code> is retained as an anchor.
+  Pinned by an equivalence test: seed a DB with randomized edit histories
+  (including deliberate gaps), snapshot <code>stateAt</code> for every event,
+  migrate, compare.
+</div>
+
+<h3>8.2 Resumability, scheduling, coexistence</h3>
+
+<ul>
+  <li><strong>Progress marker is the format tag.</strong>
+    <code>WHERE v IS NULL</code> is the work queue; a partial index
+    <code>ON row_events(block_id) WHERE v IS NULL</code> makes claiming the next
+    blocks cheap and shrinks to nothing as the job completes (dropped at the
+    end). Interruption at any point (crash, tab close) is safe: rewritten rows
+    are self-describingly done, unrewritten rows self-describingly not — no
+    cursor to corrupt. A <code>client_schema_state</code> marker
+    (<code>row_events_compact_migration_v1</code>) records only overall
+    completion, gating the §9 VACUUM and the index swap.</li>
+  <li><strong>Chunking:</strong> a few hundred blocks (or ~2–5k events) per write
+    tx, scheduled via <code>PendingIdleJobs</code> +
+    <code>scheduleDeepIdle</code> (<code>idleMarkerJobs.ts</code>) like the other
+    catch-up passes — never on the boot or first-paint path. Each chunk holds
+    the single writer briefly; live writes queue behind it, as they do behind
+    any tx.</li>
+  <li><strong>Live-write coexistence is free by construction:</strong> §4's
+    trigger anchors whenever the predecessor is v1, so no live v2 chain ever
+    references a v1 base — the rewriter may compact any v1 event without
+    coordination. Within a block, all v1 events predate all v2 events (v1 stops
+    being written the moment slice A deploys).</li>
+  <li><strong>Ordering with the ALTERs:</strong> the column adds run in
+    <code>initializePowerSyncDb</code> before the <code>CLIENT_SCHEMA_STATEMENTS</code>
+    loop recreates triggers referencing them — same constraint and same slot as
+    <code>ensureUndoGroupIdColumns</code> (<code>repoProvider.ts:352-357</code>
+    area; documented footgun at <code>clientSchema.ts:1381-1394</code>).</li>
+  <li><strong>Index swap (§3) runs after the rewrite completes</strong>, then one
+    explicit <code>ANALYZE</code>: the automatic drift check keys on
+    <code>blocks</code> counts only (<code>analyzeIsWarranted</code>,
+    <code>clientSchema.ts:1436-1453</code>) and would never notice
+    row_events index changes.</li>
+</ul>
+
+<h2 id="s9">9. VACUUM: making the bytes come back</h2>
+
+<p>
+The rewrite shrinks rows in place; SQLite reuses the slack for future inserts
+but the file never shrinks — and after compaction most pages are
+<em>partially</em> filled, which is exactly what
+<code>incremental_vacuum</code> cannot help with (it releases only wholly-free
+pages, and <code>auto_vacuum</code> is off on every existing DB and cannot be
+enabled without a full VACUUM anyway). A one-time full VACUUM is the honest
+tool.
+</p>
+
+<div class="callout warn">
+  <strong>Two wa-sqlite/OPFS-specific hazards to design around:</strong>
+  <ul>
+    <li><strong><code>temp_store = MEMORY</code></strong>
+      (<code>repoProvider.ts:339</code>): SQLite's VACUUM builds the rebuilt
+      database in its temp store — with MEMORY that means holding a multi-GB
+      rebuild in RAM. Bracket the VACUUM with
+      <code>PRAGMA temp_store = FILE</code> (restore after), and <em>verify at
+      implementation</em> that the OPFS VFS serves temp files sanely; if not,
+      fall back to the VACUUM-INTO variant below.</li>
+    <li><strong>Single worker, minutes-long stall</strong>: a multi-GB rebuild at
+      OPFS speeds blocks every query. Run only at deep idle
+      (<code>scheduleDeepIdle</code>), gated on the §8 completion marker, a
+      one-shot <code>client_schema_state</code> marker of its own, and a
+      free-space check (<code>navigator.storage.estimate()</code> ≥ ~1.2&times;
+      the post-compaction data size — VACUUM needs the temp copy + journal;
+      rollback-journal mode makes an interrupted VACUUM safely roll back,
+      <code>repoProvider.ts:312-316</code>).</li>
+  </ul>
+</div>
+
+<p>
+Ship it in two forms, mirroring the ANALYZE precedent (automatic drift-gated
+pass + manual override command in
+<code>src/plugins/db-maintenance/plugin.ts:1-23</code>): the deep-idle one-shot,
+plus a command-palette "Compact database" action with a size/duration toast for
+users who want it now. Fallback variant if in-place VACUUM proves fragile on
+this VFS: <code>VACUUM INTO</code> a staging OPFS file + swap at next boot —
+the swap machinery already exists for DB import/recovery
+(<code>src/utils/exportSqliteDb.ts</code>, <code>localDbRecovery.ts</code>);
+costs more moving parts, bounds memory, never touches the live file.
+</p>
+
+<h2 id="s10">10. What each future reader needs from the format</h2>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Reader</th><th>Needs</th><th>Served by</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Block history / time-travel UI</td>
+      <td>Per-block timeline; state at any event; actor + kind labels; cheap
+        "what changed here"</td>
+      <td><code>(block_id, id)</code> index; <code>stateAt</code> O(W); compact
+        key set = changed-columns list; <code>updatedBy</code> appears in the
+        diff whenever it changed — a forward-streaming timeline carries it (and
+        any field) between events. Note for a merged local+server view:
+        <code>blocks_history</code> uses storage column names,
+        <code>row_events</code> domain names — the UI maps once.</td>
+    </tr>
+    <tr>
+      <td>Drift-tolerant undo (<code>undoManager.ts:26-28</code>,
+        <code>user.ts:17-21</code>)</td>
+      <td>My tx's writes (<code>tx_id</code>, <code>group_id</code>); the state
+        to restore to; detection that someone else changed the field since</td>
+      <td>Restore state = <code>stateAt</code>(event before my tx's first event)
+        — O(W); drift check = my after vs live <code>blocks</code> row.
+        <code>before_json</code>-per-event was never required, only
+        reconstructable-before — which anchors guarantee.</td>
+    </tr>
+    <tr>
+      <td>Forensics / incident recovery (backlink-wipe class)</td>
+      <td>Completeness for user writes; attribution; bulk "state of these blocks
+        at T"; bounded damage from log corruption</td>
+      <td>Catch-all triggers (§7); <code>source</code>/<code>tx_id</code>/
+        <code>group_id</code> + <code>command_events</code> join; per-block
+        <code>stateAt</code>; anchor bound (§4.3). Anchor-embedded before-sides
+        double as integrity checkpoints.</td>
+    </tr>
+    <tr>
+      <td>Props-migration convergence debugging</td>
+      <td>Row-grain history of cell and child writes, with which-machinery
+        attribution; arrival history</td>
+      <td>Steady-state derived writes logged (§5) + tx_id→command_events join;
+        e2ee arrivals logged; plaintext arrivals delegated to server history
+        (gap acknowledged in O1). Burst writes reconstructable from their
+        sources' logged history.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="s11">11. Contract with PR #288 (the slice-C gate)</h2>
+
+<p>What this design guarantees to the props migration, in its §12 terms:</p>
+
+<ol>
+  <li><strong>G1 — authoring device:</strong> the backfill runs its
+    <code>repo.tx</code> batches with <code>historyMode: 'skip'</code> → ~650k
+    creates write <em>zero</em> row_events rows (vs ~230&nbsp;MB + index churn).
+    <code>command_events</code> still records every backfill tx.</li>
+  <li><strong>G2 — receiving devices:</strong> backfilled rows arrive as
+    sync-applied creates; plaintext workspaces drop them (§6) → zero rows per
+    device. E2EE workspaces are gated out of the backfill by #288 itself, so no
+    e2ee arrival burst exists.</li>
+  <li><strong>G3 — no stranded chains:</strong> the first later edit of any
+    exempted row promotes to a full anchor (I1) — "every history chain starts
+    full" holds under every exemption above.</li>
+  <li><strong>G4 — steady-state fan-out priced:</strong> a property edit's 2–3
+    row writes log as compact events (~0.5&nbsp;KB total), not 2–3 full snapshot
+    pairs (~4–6&nbsp;KB).</li>
+  <li><strong>G5 — ordering:</strong> #288 slice C requires this project's
+    slices A+B only (format + provenance/sync policy). The §8 migration and §9
+    VACUUM (slices C/D) may trail — they concern the existing stock, not the
+    new burst. Matches #288's "prerequisite for slice C, not slices A–B".</li>
+</ol>
+
+<h2 id="s12">12. Storage arithmetic</h2>
+
+<p>
+Worked against the dev instance (~1.17M events ≈ ~2.2&nbsp;GB at ~2&nbsp;KB
+mean; ~350k blocks). Event-mix assumption, stated not measured: ~30% create
+(first sync + organic), ~65% update, ~5% delete — consistency check:
+0.35M&times;1&nbsp;KB + 0.76M&times;2&nbsp;KB + 0.06M&times;1&nbsp;KB ≈
+1.9&nbsp;GB ≈ observed. Compact update sizes assume ~3 changed fields ≈
+200&nbsp;B (content edits: content + stamps + author).
+</p>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Component</th><th>Today (v1)</th><th>After (v2)</th></tr></thead>
+  <tbody>
+    <tr><td>Existing creates (0.35M — full by nature)</td><td>~350&nbsp;MB</td><td>~350&nbsp;MB (unchanged)</td></tr>
+    <tr><td>Existing updates (0.76M)</td><td>~1.5&nbsp;GB</td><td>~150&nbsp;MB compact + ~30&nbsp;MB sampled/discontinuity anchors ≈ <strong>180&nbsp;MB</strong></td></tr>
+    <tr><td>Existing deletes (0.06M)</td><td>~60&nbsp;MB</td><td>~60&nbsp;MB</td></tr>
+    <tr><td><strong>Stock total</strong></td><td><strong>~1.9–2.2&nbsp;GB</strong></td><td><strong>~0.6&nbsp;GB → ~1.3–1.6&nbsp;GB reclaimed at VACUUM (~3.5&times;)</strong></td></tr>
+    <tr><td>Fresh device, first sync (plaintext, 350k blocks)</td><td>~350&nbsp;MB</td><td><strong>0</strong> (§6)</td></tr>
+    <tr><td>#288 backfill, authoring device (~650k creates)</td><td>~230&nbsp;MB</td><td><strong>0</strong> (§5/G1)</td></tr>
+    <tr><td>#288 backfill, per receiving device</td><td>~230&nbsp;MB</td><td><strong>0</strong> (§6/G2)</td></tr>
+    <tr><td>Ongoing: one content edit</td><td>~4&nbsp;KB</td><td>~0.25&nbsp;KB incl. amortized anchor (~16&times;)</td></tr>
+    <tr><td>Ongoing: property edit in props-world (2–3 writes)</td><td>~4–6&nbsp;KB</td><td>~0.5&nbsp;KB</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+The bound that does <em>not</em> improve: creates and e2ee first-sync remain
+full snapshots — inherent to "history is kept" (a create <em>is</em> its
+snapshot). Indexes also shrink with the §3 swap (smaller entries, and
+<code>(created_at DESC)</code> entries are unchanged but the table they point
+into is smaller).
+</p>
+
+<h2 id="s13">13. Rollout slices (every slice lands green)</h2>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Slice</th><th>Contents</th><th>Gates / gated by</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>A — format</strong></td>
+      <td>ALTER adds (<code>v</code>, <code>chain_pos</code>; ordering per §8.2);
+        v2 trigger bodies generated from the shared column spec (compact updates,
+        identical-update skip, anchor cadence, v1/missing-predecessor promotion);
+        <code>stateAt</code> reader utility; tests pinning I1/I2/I4/I6. All new
+        events compact from here.</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td><strong>B — provenance + sync policy</strong></td>
+      <td><code>tx_context.history_mode</code> + <code>RepoTxOptions.historyMode</code>
+        plumbing; <code>workspace_history_policy</code> + materializer writes +
+        trigger gates; update the <code>clientSchema.ts:55-69</code> comment;
+        tests pinning I1-under-exemption and I3.</td>
+      <td><strong>Unblocks #288 slice C</strong> (G1–G3)</td>
+    </tr>
+    <tr>
+      <td><strong>C — stock migration</strong></td>
+      <td>§8 idle rewriter (per-block, discontinuity-anchoring), partial work
+        index, completion marker, index swap + explicit ANALYZE; equivalence test
+        (I5) + resumability test (interrupt mid-chunk, rerun, byte-identical
+        outcome).</td>
+      <td>Requires A. Gates D.</td>
+    </tr>
+    <tr>
+      <td><strong>D — reclaim</strong></td>
+      <td>§9 VACUUM: deep-idle one-shot (marker + space-check gated,
+        temp_store bracket) + manual db-maintenance command; measure and record
+        before/after bytes on the dev instance.</td>
+      <td>Requires C.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="invariants">14. Invariants index</h2>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>#</th><th>Invariant</th><th>Home</th><th>Binds</th><th>Pinned by</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>I1</td>
+      <td><strong>Every chain starts full.</strong> A compact update whose
+        predecessor is missing or v1 promotes to a full before+after anchor —
+        no exemption (§5 skip, §6 drop, trigger-suspended windows) strands a
+        later edit without a base. (Inherited from PR #288's invariants
+        index.)</td>
+      <td><a href="#s4">§4.1</a></td>
+      <td>v2 trigger; every §5/§6 exemption</td>
+      <td>Test: first edit of a skip-exempted row logs full before+after; same
+        after a plaintext-sync-dropped arrival.</td>
+    </tr>
+    <tr>
+      <td>I2</td>
+      <td><strong>Full-within-W.</strong> Every compact event reaches a full
+        event within W−1 predecessors on its block; readers never assume W,
+        only <code>chain_pos → 0</code>.</td>
+      <td><a href="#s4">§4.1/4.4</a></td>
+      <td>Trigger cadence; §8 rewriter</td>
+      <td>Property test: random edit sequences; every <code>stateAt</code>
+        equals the actually-written state; walk length ≤ W.</td>
+    </tr>
+    <tr>
+      <td>I3</td>
+      <td><strong>Absent policy means log.</strong> NULL
+        <code>history_mode</code>, missing <code>workspace_history_policy</code>
+        row, or undecided mode ⇒ full logging. No default ever drops
+        history.</td>
+      <td><a href="#s5">§5.1</a>/<a href="#s6">§6.2</a></td>
+      <td>Trigger WHEN gates; materializer policy writes</td>
+      <td>Test: sync write to a workspace with no policy row produces an
+        event.</td>
+    </tr>
+    <tr>
+      <td>I4</td>
+      <td><strong>Exemption by provenance, never by column.</strong> No trigger
+        gate or policy may condition on <em>which columns</em> changed —
+        skipping <code>properties_json</code> wholesale would lose primary
+        history for cell-only keys.</td>
+      <td><a href="#s5">§5.1</a></td>
+      <td>Trigger bodies; future policy changes</td>
+      <td>Test: a properties_json-only update under default policy logs; plus
+        review rule.</td>
+    </tr>
+    <tr>
+      <td>I5</td>
+      <td><strong>The migration is reconstruction-lossless.</strong>
+        <code>stateAt(e)</code> identical before/after the rewrite for every
+        event; every non-derivable <code>before</code> survives as a
+        discontinuity anchor; nothing is deleted.</td>
+      <td><a href="#s8">§8.1</a></td>
+      <td>§8 rewriter</td>
+      <td>Equivalence test over seeded histories with deliberate gaps;
+        resumability test (interrupt + rerun ⇒ identical outcome).</td>
+    </tr>
+    <tr>
+      <td>I6</td>
+      <td><strong>The log never gets slower than today.</strong> v2 per-write
+        work = v1 minus one full snapshot side, plus O(log n) probes — no
+        trigger body may scan unbounded history on the write path.</td>
+      <td><a href="#s7">§7</a></td>
+      <td>v2 trigger; cadence mechanism</td>
+      <td>Bench note in slice A (write-tx tail latency before/after); review
+        rule for trigger SQL.</td>
+    </tr>
+    <tr>
+      <td>I7</td>
+      <td><strong>History rows are immutable</strong> once written — the §8
+        one-time rewrite is the sole sanctioned exception; runtime code never
+        UPDATEs or DELETEs <code>row_events</code>.</td>
+      <td><a href="#s1">§1</a>/<a href="#s8">§8</a></td>
+      <td>All future code</td>
+      <td>Review rule (no test — restating it in a test would just duplicate
+        the absence).</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="s15">15. Rejected alternatives</h2>
+
+<ul>
+  <li><strong>Pruning (keep-recent + grace window)</strong> — the
+    <code>row-events-retention.md</code> design. Rejected by the frame: history
+    is a product feature to keep, and pruning also would not have reduced the
+    per-write cost that motivated that doc.</li>
+  <li><strong>Server-shape adoption without anchors</strong> (changed-cols
+    diffs, full bookends only — exactly <code>blocks_history</code>'s Option B).
+    Reconstruction becomes full-chain replay back to the create; a single lost
+    row poisons everything after it. Anchors cost ~2% of rows and bound both.</li>
+  <li><strong>Probabilistic or counter-table cadence</strong> — §4.1 callout.</li>
+  <li><strong>App-layer event writer</strong> — §7 table; loses the catch-all
+    property that is the log's reason to exist.</li>
+  <li><strong>Values-free or sampled logging for the bulk bursts</strong> —
+    §5 table rows (b)/(c).</li>
+  <li><strong>Column-keyed exemptions</strong> (e.g. never log
+    <code>properties_json</code>) — violates I4; loses the only history for
+    cell-primary keys and the whole pre-flip period (PR #288 §12).</li>
+  <li><strong>Sub-key diffs of <code>properties_json</code></strong> — real wins
+    today (property edits rewrite the whole cell), but it complicates every
+    reader and the trigger, and the props migration is about to shrink the cell
+    structurally; column-granular is right-sized for the post-#288 world.
+    Revisit only if #288 stalls.</li>
+  <li><strong>Compression (per-event zlib, content dedup)</strong> — wa-sqlite
+    ships no compression extension; JS-side compression forces an app-layer
+    writer (see above). The compact format gets the structural win without new
+    machinery.</li>
+  <li><strong>History in a separate ATTACHed database file</strong> — would make
+    VACUUM trivial (vacuum the side file, or drop it), but SQLite triggers
+    cannot write across databases, so it forces the app-layer writer; rejected
+    with it.</li>
+  <li><strong>Retroactively applying the §6 sync-drop to old events</strong> —
+    deleting existing sync history contradicts "history is kept"; the migration
+    compacts it instead.</li>
+</ul>
+
+<h2 id="s16">16. Open questions</h2>
+
+<ol>
+  <li><strong>O1 — plaintext sync-drop before a <code>blocks_history</code>
+    reader exists.</strong> §6 drops local sync events on the strength of
+    server-side bytes with <em>no client RPC yet</em>. Lean: accept — the
+    server data is durable and RLS-readable the day the RPC lands, and the
+    reclaimed per-device cost is the second-largest item in §12. Alternative if
+    unacceptable: hold the drop (log plaintext sync compact) until the RPC
+    ships, keeping everything else; costs ~0 for updates but re-admits the
+    first-sync create burst. Needs a user call.</li>
+  <li><strong>O2 — auto-VACUUM at deep idle vs manual-first.</strong> A
+    minutes-long single-worker stall triggered by a heuristic is the riskiest UX
+    moment in this design. Lean: ship the manual command in slice D, enable the
+    deep-idle one-shot a release later once the manual path has telemetry.</li>
+  <li><strong>O3 — W=50 confirmation</strong> — §4.4 has the tradeoff curve;
+    changing it later is free. Default stands unless someone objects.</li>
+  <li><strong>O4 — e2ee first-sync cost</strong> — full creates per block per
+    device is the price of local-only e2ee history (§6); confirm that's the
+    intended product posture (it also means e2ee history has per-device
+    durability only).</li>
+</ol>
+
+<hr>
+<p class="footer-note">
+  Companions: <code>docs/properties-as-blocks-migration.html</code> (PR #288 —
+  consumer of §11), <code>docs/row-events-retention.md</code> (superseded by
+  this doc), <code>docs/undo-grouping.md</code> (group_id semantics the format
+  preserves). Working notes for the implementing session:
+  <code>docs/row-events-optimization-handoff.md</code>.
+</p>
+
+</main>
+</body>
+</html>
