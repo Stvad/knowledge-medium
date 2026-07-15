@@ -1,2 +1,0 @@
-var e=e=>!e||typeof e!=`object`?!1:e.repo?.isReadOnly===!0,t=(e,t)=>({name:e,...t}),n=e=>e;export{t as defineProperty,n as definePropertyEditorOverride,e as isReadOnlyBlock};
-//# sourceMappingURL=propertySchema.js.map
