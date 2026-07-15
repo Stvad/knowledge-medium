@@ -325,6 +325,7 @@ export const ensureDailyNoteTarget = async (
     parentId: null,
     orderKey: keyAtEnd(),
     freshContent: date,
+    stripAliasesOnRestore: true,
     // A daily-note seat materialized from a reference is a speculative
     // default — it must yield to a real daily-note row the server already
     // has for this date.

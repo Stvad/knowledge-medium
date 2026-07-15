@@ -79,18 +79,9 @@ import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { assertLegalKernelRejection, pick, pickNonRoot } from '@/data/test/fuzzKernelHarness'
 import {
-  BlockNotFoundError,
   ChangeScope,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  ProcessorRejection,
-  WorkspaceMismatchError,
   type Handle,
 } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -111,8 +102,10 @@ const SEARCH_MARKER = 'findme'
 // Trimmed to the ops that exercise every probed query's dependency axes
 // (structure via createChild/move/indent/outdent/delete/restore/split/
 // merge; content via setContent/split; properties via setAlias/setType).
-// Op-arb shape, LEGAL_ERRORS, pick/pickNonRoot/resolvePos, and applyOp are
-// copied wholesale from repoMutators.fuzz.test.ts and trimmed to this subset.
+// Op-arb shape, resolvePos, and applyOp are copied wholesale from
+// repoMutators.fuzz.test.ts and trimmed to this subset; the legal-
+// rejection allowlist and pick/pickNonRoot come from the shared
+// `@/data/test/fuzzKernelHarness` (see its import above).
 
 type Pos = {kind: 'first'} | {kind: 'last'} | {kind: 'before' | 'after'; sibling: number}
 
@@ -149,35 +142,10 @@ const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
   {weight: 3, arbitrary: fc.record({op: fc.constant('setType' as const), id: sel, type: fc.nat(TYPE_POOL.length - 1), clear: fc.boolean()})},
 )
 
-// Domain rejections legal for incoherent op combinations (same allowlist
-// as repoMutators.fuzz.test.ts — a strict superset of what this trimmed
-// op set can actually throw is harmless).
-const LEGAL_ERRORS = [
-  BlockNotFoundError,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  WorkspaceMismatchError,
-]
-
-const assertLegalRejection = (e: unknown, op: OpSpec): void => {
-  if (LEGAL_ERRORS.some(cls => e instanceof cls)) return
-  if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
-  // Placement anchors resolve by id under the TARGET parent — the one
-  // legal plain-Error rejection (mutators.ts:118/431). Anything else is
-  // a bug (Codex review on PR #371: the previous blanket branch accepted
-  // every plain Error).
-  if (e instanceof Error && /^(position\.(before|after) )?sibling .* not found under /.test(e.message)) return
-  throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
-}
-
-const pick = (index: number, ids: readonly string[]): string => ids[index % ids.length]
-const pickNonRoot = (index: number, ids: readonly string[]): string =>
-  ids.length === 1 ? ids[0] : ids[1 + (index % (ids.length - 1))]
+// Domain rejections legal for incoherent op combinations — via the
+// shared `assertLegalKernelRejection` (`@/data/test/fuzzKernelHarness`),
+// same allowlist as repoMutators.fuzz.test.ts (a strict superset of what
+// this trimmed op set can actually throw is harmless).
 
 type ResolvedPos = {kind: 'first'} | {kind: 'last'} | {kind: 'before'; siblingId: string} | {kind: 'after'; siblingId: string}
 const resolvePos = (pos: Pos, ids: readonly string[]): ResolvedPos =>
@@ -410,7 +378,7 @@ const runCase = async ({ops, probeTargets}: Omit<CaseArgs, 'prngSeed'>): Promise
       try {
         ids.push(...await applyOp(repo, op, ids))
       } catch (e) {
-        assertLegalRejection(e, op)
+        assertLegalKernelRejection(e, JSON.stringify(op))
       }
     }
 

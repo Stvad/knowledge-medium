@@ -8,7 +8,7 @@
  *     properties. `references` and `deleted` are also watched — not to
  *     drive parsing off them, but so references-only writers re-converge
  *     and a tombstone→live restore re-derives; see the registration's
- *     `watches` comment (~line 319) for the full rationale.
+ *     `watches` comment below for the full rationale.
  *   - Resolve aliases to existing target ids via a workspace-scoped
  *     SQL lookup (committed-state read via ctx.db). On miss, create
  *     the target via ensureAliasTarget / ensureDailyNoteTarget.
@@ -323,18 +323,29 @@ const applySourcePlan = async (
   // so a long-form claimant would otherwise be missed and the entry left
   // bound to the daily seat where a fresh parse would bind the claimant
   // (Codex review on PR #371).
-  const isosStillNeedingSeat = new Set<string>()
+  const seatAliasesByIso = new Map<string, string[]>()
   for (const {iso, alias} of plan.datesToEnsure) {
     const claimant = await tx.aliasLookup(alias, plan.workspaceId)
     if (claimant !== null) {
       retarget(dailyNoteBlockId(plan.workspaceId, iso), claimant.id, alias)
       continue
     }
-    isosStillNeedingSeat.add(iso)
+    seatAliasesByIso.set(iso, [...(seatAliasesByIso.get(iso) ?? []), alias])
   }
-  for (const iso of isosStillNeedingSeat) {
+  for (const [iso, aliases] of seatAliasesByIso) {
     const ensured = await ensureDailyNoteTarget(tx, ctx.repo, iso, plan.workspaceId, typeSnapshot)
-    retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id)
+    // Retarget ONLY the entries for the literal date-mark aliases that
+    // fell through to this ensure — never every entry sharing the seat
+    // id. A renamed daily seat can be lookup-bound under an unrelated
+    // alias in the SAME plan (e.g. `[[Foo]]` resolved to the seat that
+    // now claims only "Foo"); an unfiltered retarget would hijack that
+    // binding to wherever the ensure resolved, and the wrong state is
+    // STABLE — every re-parse recomputes and re-retargets the same way,
+    // so referencesChanged sees no delta and nothing heals (round-2
+    // adversarial review, verified repro).
+    for (const alias of aliases) {
+      retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id, alias)
+    }
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)

@@ -154,7 +154,10 @@ const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
   }), weight: 2},
   {arbitrary: fc.record({op: fc.constant('mergeSeedAway' as const), idx: idxArb}), weight: 1},
 )
-const opsArb = fc.array(opArb, {maxLength: 14})
+const caseArb = fc.record({
+  ops: fc.array(opArb, {maxLength: 14}),
+  prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
+})
 
 /** Per-seed model. `bag` is the exact expected properties bag; it is only
  * tracked for provenance-valid rows (poisoned occupants are untracked). */
@@ -205,10 +208,16 @@ afterAll(async () => {
   await sharedDb.cleanup()
 })
 
-/** Interrupt-barrier for the shared DB — see `statefulFuzzGuard`
- * (`@/test/fuzz`, docs/fuzzing.md §6). This suite has no order-key
- * jitter to pin (every op resolves ids via `IDS`/`POOL` indices, not
- * fractional-indexing placement), so it always calls `guard.run(null, …)`. */
+/** Interrupt-barrier + Math.random pin for the shared DB — see
+ * `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). Every op here
+ * resolves ids via `IDS`/`POOL` indices, not fractional-indexing
+ * placement — but the structural ops (`structuralDeleteParent`/
+ * `mergeIntoSeed`/`mergeSeedAway`) mint wrapper/donor blocks via
+ * `repo.mutate.createChild`, which places them with a jittered order key
+ * through `fractional-indexing-jittered` (Math.random) just like the
+ * sibling suites' `createChild` calls — so a real seed must be threaded
+ * for `fc`'s shrinking/replay to stay sound, same as
+ * repoMutators.fuzz.test.ts. */
 const guard = statefulFuzzGuard()
 
 const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
@@ -535,7 +544,7 @@ const runCase = async (ops: readonly OpSpec[]): Promise<void> => {
 describe('seed materialization + write-guard interleavings', () => {
   it('keep materialized definition bags code-owned under any op order', async () => {
     await fc.assert(
-      fc.asyncProperty(opsArb, ops => guard.run(null, () => runCase(ops))),
+      fc.asyncProperty(caseArb, ({ops, prngSeed}) => guard.run(prngSeed, () => runCase(ops))),
       fuzzParams(8),
     )
   }, fuzzTestTimeout())

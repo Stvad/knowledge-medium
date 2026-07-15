@@ -41,8 +41,9 @@
  *    layout projection, window.location, file pickers, or dialogs.
  *
  * Oracles after every dispatch:
- *  - only domain rejections (same LEGAL_ERRORS as the kernel fuzzer)
- *    or a decline (`false`) — any TypeError & co. is a bug in a
+ *  - only domain rejections (`assertLegalKernelRejection`,
+ *    `@/data/test/fuzzKernelHarness` — same allowlist as the kernel
+ *    fuzzer) or a decline (`false`) — any TypeError & co. is a bug in a
  *    handler's own logic.
  *  - structural invariants: no cycles, no live orphans, no order-key
  *    collisions, single workspace.
@@ -69,19 +70,8 @@ import type { EditorView } from '@codemirror/view'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import {
-  BlockNotFoundError,
-  ChangeScope,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  ProcessorRejection,
-  WorkspaceMismatchError,
-} from '@/data/api'
+import { assertLegalKernelRejection, pick, sweepStructuralInvariants } from '@/data/test/fuzzKernelHarness'
+import { ChangeScope } from '@/data/api'
 import {
   focusBlock,
   peekFocusedBlockLocation,
@@ -99,7 +89,6 @@ import {
   type BaseShortcutDependencies,
 } from '@/shortcuts/types'
 import { resolveFacetRuntimeSync } from '@/facets/facet.js'
-import { cycleScanSql } from '@/data/internals/treeQueries'
 import type { Repo } from '@/data/repo'
 
 const WS = 'ws-1'
@@ -170,30 +159,9 @@ const caseArb = fc.record({
   prngSeed: fc.integer({min: 1, max: 2 ** 31 - 2}),
 })
 
-const LEGAL_ERRORS = [
-  BlockNotFoundError,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  WorkspaceMismatchError,
-]
-
-const assertLegalRejection = (e: unknown, desc: string): void => {
-  if (LEGAL_ERRORS.some(cls => e instanceof cls)) return
-  if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
-  // Placement anchors resolve by id under the TARGET parent — the one
-  // legal plain-Error rejection (mutators.ts:118/431). Anything else is
-  // a bug (Codex review on PR #371: the previous blanket branch accepted
-  // every plain Error).
-  if (e instanceof Error && /^(position\.(before|after) )?sibling .* not found under /.test(e.message)) return
-  throw new Error(`illegal error from ${desc}: ${String(e)}`, {cause: e})
-}
-
-const pick = (index: number, ids: readonly string[]): string => ids[index % ids.length]
+// Domain rejections legal for incoherent op combinations — via the
+// shared `assertLegalKernelRejection` (`@/data/test/fuzzKernelHarness`),
+// same allowlist as the kernel fuzzer.
 
 // ──── fake editor view (defaultShortcuts.test.ts's harness, trimmed) ────
 
@@ -233,27 +201,15 @@ const fakeEditorView = (content: string, cursor: number): EditorView => {
 // ──── invariant sweep ────
 
 const sweepInvariants = async (db: TestDb['db']): Promise<void> => {
-  // Scan ALL rows, not just the seed ids: actions create blocks
-  // (split_block_cm & co.) and later actions operate on them, so a cycle
-  // through a created id would otherwise escape the sweep (Codex review
-  // on PR #371).
-  const liveIds = (await db.getAll<{id: string}>('SELECT id FROM blocks')).map(row => row.id)
-  const cycles = await db.getAll<{start_id: string}>(cycleScanSql(liveIds.length), liveIds)
-  expect(cycles, 'structural cycle').toEqual([])
-
-  const orphans = await db.getAll<{id: string}>(
-    `SELECT b.id FROM blocks b
-      WHERE b.deleted = 0 AND b.parent_id IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM blocks p WHERE p.id = b.parent_id AND p.deleted = 0)`,
-  )
-  expect(orphans, 'live block under missing/deleted parent').toEqual([])
-
-  const collisions = await db.getAll<{n: number}>(
-    `SELECT COUNT(*) AS n FROM (
-       SELECT 1 FROM blocks WHERE deleted = 0
-       GROUP BY parent_id, order_key HAVING COUNT(*) > 1)`,
-  )
-  expect(collisions[0].n, 'order-key collision among live siblings').toBe(0)
+  // Cycles/orphans/collisions come from the shared
+  // `sweepStructuralInvariants` (`@/data/test/fuzzKernelHarness`) with
+  // `allRows: true` — actions create blocks (split_block_cm & co.) and
+  // later actions operate on them, so scanning only the seed ids would
+  // let a cycle through a created id escape the sweep (Codex review on
+  // PR #371). The collision check there is scoped to `ws: WS`, which is
+  // equivalent to this suite's un-scoped grouping since every live block
+  // is asserted (below) to belong to WS.
+  await sweepStructuralInvariants(db, {ws: WS, allRows: true})
 
   const foreign = await db.getAll<{id: string}>('SELECT id FROM blocks WHERE workspace_id != ?', [WS])
   expect(foreign, 'block outside the seeded workspace').toEqual([])
@@ -408,7 +364,7 @@ const runCase = async (
         const result = invokeAction(runtime, {action, deps, trigger})
         if (result instanceof Promise) await result
       } catch (e) {
-        assertLegalRejection(e, `${id} (${context})`)
+        assertLegalKernelRejection(e, `${id} (${context})`)
       }
     }
     await env.fence()

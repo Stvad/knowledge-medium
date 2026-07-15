@@ -132,32 +132,46 @@ const retargetSource = async (
   // in the first place (pre-existing incoherence isn't ours to mutate).
   const nextProperties = {...current.properties}
   let propertiesChanged = false
+  // Eligibility for the value+entry rewrite: schema present, ref-typed,
+  // and scope-equivalent. The scope check matters because the value
+  // lands via the raw `properties` patch below, in THIS tx's scope —
+  // bypassing setProperty's per-field scope routing. A field whose
+  // declared scope isn't policy-equivalent to the merge tx's (e.g. a
+  // UiState/UserPrefs ref pointer) must not be mutated by a
+  // document-scoped merge: leave value AND entry alone, like the
+  // absent-schema branch (the entry stays value-tied and re-parses
+  // consistently).
+  const isEligibleField = (field: string): boolean => {
+    const schema = propertySchemas.get(field)
+    if (!schema || !(isRefCodec(schema.codec) || isRefListCodec(schema.codec))) return false
+    return scopePoliciesEquivalent(schema.changeScope, tx.meta.scope)
+  }
+  // Collect eligible fields from BOTH directions:
+  //  - stored entries pointing at fromId (a field whose VALUE was
+  //    deleted can still carry a stale entry — sync-applied rows), and
+  //  - the bag itself: mergeProperties can have copied a ref property
+  //    from `from` onto this very row with a value naming fromId and NO
+  //    stored entry yet — entry-driven collection can't see it, and the
+  //    follow-up parse would project a backlink to the tombstoned merge
+  //    source (Codex review on PR #371).
+  // Eligible fields ALWAYS retarget their entries, whether or not the
+  // value needed rewriting (a stale entry can coexist with an
+  // already-correct value on sync-applied rows); the value write stays
+  // conditional on an actual change.
   const retargetableFields = new Set<string>()
   for (const ref of current.references) {
     if (ref.id !== event.fromId || ref.sourceField === undefined) continue
-    if (retargetableFields.has(ref.sourceField)) continue
-    const schema = propertySchemas.get(ref.sourceField)
-    if (!schema || !(isRefCodec(schema.codec) || isRefListCodec(schema.codec))) continue
-    // The value lands via the raw `properties` patch below, in THIS tx's
-    // scope — bypassing setProperty's per-field scope routing. A field
-    // whose declared scope isn't policy-equivalent to the merge tx's
-    // (e.g. a UiState/UserPrefs ref pointer) must not be mutated by a
-    // document-scoped merge: leave value AND entry alone, like the
-    // absent-schema branch (the entry stays value-tied and re-parses
-    // consistently).
-    if (!scopePoliciesEquivalent(schema.changeScope, tx.meta.scope)) continue
-    // Eligible (schema-present, ref-typed, scope-equivalent) fields
-    // ALWAYS retarget their entries, whether or not the value needed
-    // rewriting: a sync-applied row can carry a stale entry whose value
-    // already names intoId (rewriteRefValue reports no change there),
-    // and skipping it would leave a backlink to the tombstoned fromId —
-    // exactly the stale state this processor cleans up (Codex review on
-    // PR #371). The value write stays conditional on an actual change.
-    retargetableFields.add(ref.sourceField)
+    if (isEligibleField(ref.sourceField)) retargetableFields.add(ref.sourceField)
+  }
+  for (const field of Object.keys(nextProperties)) {
+    if (isEligibleField(field)) retargetableFields.add(field)
+  }
+  for (const field of retargetableFields) {
+    if (!(field in nextProperties)) continue
     const {value, changed} = rewriteRefValue(
-      nextProperties[ref.sourceField], event.fromId, event.intoId)
+      nextProperties[field], event.fromId, event.intoId)
     if (changed) {
-      nextProperties[ref.sourceField] = value
+      nextProperties[field] = value
       propertiesChanged = true
     }
   }
@@ -199,12 +213,21 @@ const retargetMergedBlockReferences = async (
     SELECT_LIVE_REFERENCE_SOURCE_IDS_SQL,
     [event.workspaceId, event.fromId],
   )
-  if (sourceRows.length === 0) return
+  // The merge TARGET is always a source candidate, backlink row or not:
+  // mergeProperties can have copied a ref/refList property from `from`
+  // onto `into` (target lacked the key) whose value names `fromId` —
+  // `into` has no stored reference entry yet, so the block_references
+  // lookup above can't see it, and without a rewrite the follow-up
+  // parse would project a backlink to the tombstoned merge source
+  // (Codex review on PR #371). retargetSource no-ops when nothing
+  // matches.
+  const sourceIds = new Set(sourceRows.map(row => row.id))
+  sourceIds.add(event.intoId)
 
   const aliasRewrites = new Map(
     event.aliasRewrites.map(({fromAlias, toAlias}) => [fromAlias, toAlias]),
   )
-  for (const {id} of sourceRows) {
+  for (const id of sourceIds) {
     await retargetSource(ctx.tx, id, event, aliasRewrites, ctx.propertySchemas)
   }
 }

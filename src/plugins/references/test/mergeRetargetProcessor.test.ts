@@ -254,6 +254,50 @@ describe('references.retargetMergedBlockReferences', () => {
       ]))
     })
 
+    it('rewrites a ref property the merge itself copied onto the TARGET', async () => {
+      // mergeProperties can copy a ref property from `from` onto `into`
+      // (target lacked the key) with a value naming fromId — e.g. a
+      // self-reference on the merged-away block. `into` has no stored
+      // reference entry for fromId yet, so entry-driven collection
+      // can't see the field, and the follow-up parse would project a
+      // backlink to the tombstoned merge source (Codex review on
+      // PR #371). The merge target is now always a retarget candidate
+      // and eligible fields are collected from the bag too.
+      await resetTestDb(sharedDb.db)
+      const {repo} = createTestRepo({
+        db: sharedDb.db,
+        user: {id: 'user-1'},
+        extensions: [
+          referencesDataExtension,
+          aliasDataExtension,
+          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+        ],
+      })
+      await repo.tx(async tx => {
+        await tx.create({id: 'into', workspaceId: WS, parentId: null, orderKey: 'a0'})
+        await tx.create({
+          id: 'from',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a1',
+          properties: {reviewer: 'from'},
+          references: [{id: 'from', alias: 'from', sourceField: 'reviewer'}],
+        })
+      }, {scope: ChangeScope.BlockDefault})
+      await repo.awaitProcessors()
+
+      await repo.mutate.merge({intoId: 'into', fromId: 'from'})
+      await repo.awaitProcessors()
+
+      const into = await repo.load('into')
+      expect(into!.properties.reviewer).toBe('into')
+      expect(
+        into!.references.some(r => r.id === 'from'),
+        `no backlink to the tombstoned merge source (refs: ${JSON.stringify(into!.references)})`,
+      ).toBe(false)
+      expect(into!.references.some(r => r.id === 'into' && r.sourceField === 'reviewer')).toBe(true)
+    })
+
     it('retargets a stale entry whose value ALREADY points at the merge target', async () => {
       // Stale derived data (value updated to intoId, entry still naming
       // fromId, no pending parse event): rewriteRefValue reports no

@@ -75,6 +75,16 @@ export interface CreateOrRestoreArgs {
    *  shortcuts) set this; content-bearing creators (Roam import, which
    *  uses its own tx.create, not this primitive) do not. */
   systemMint?: boolean
+  /** Strip the tombstone bag's `aliases` key in the SAME restore UPDATE.
+   *  Set by callers whose `onInsertedOrRestored` OWNS the alias write
+   *  (the alias/daily seat wrappers): a tombstoned seat can carry a
+   *  stale claim, and restoring it as-is trips the alias-uniqueness
+   *  trigger against the current claimant before the callback can
+   *  correct it (whole-tx rollback; found by
+   *  referencesRecompute.fuzz.test.ts). Callers that do NOT re-write
+   *  aliases (sidebar shortcuts, media assets) must leave this unset so
+   *  a user-set alias survives the restore. */
+  stripAliasesOnRestore?: boolean
   /** Optional callback invoked after the row is inserted OR restored
    *  (NOT on the live-row-hit path). Used by per-domain wrappers to
    *  write properties (e.g. the alias list via tx.setProperty) that
@@ -110,22 +120,20 @@ export const createOrRestoreTargetBlock = async (
       // Property writes that need codec encoding still go through
       // tx.setProperty inside the callback.
       //
-      // The stored bag's ALIASES are stripped in the same UPDATE: a
-      // tombstoned seat can carry a stale claim — e.g. a daily seat
-      // whose alias was overwritten, then merged away (merge hands the
-      // alias to the merge target and tombstones the seat with its bag
-      // intact). Restoring that bag as-is would resurrect the stale
-      // claim and trip the alias-uniqueness trigger against the current
-      // legitimate claimant BEFORE onInsertedOrRestored can correct it,
-      // rolling back the caller's whole tx (for parseReferences: a
-      // permanently stripped source; found by
-      // referencesRecompute.fuzz.test.ts). The callback then writes the
-      // correct alias via tx.setProperty — its target alias is either
-      // unclaimed (the caller lookup-first'ed) or this row's own.
-      const tombstone = await tx.get(args.id)
-      const restoredProperties = {...(tombstone?.properties ?? {})}
-      delete restoredProperties[aliasesProp.name]
-      await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
+      // See `stripAliasesOnRestore`'s docblock for why alias-owning
+      // callers strip the tombstone bag's aliases in the same UPDATE
+      // (stale-claim resurrection trips the uniqueness trigger and rolls
+      // back the whole tx; found by referencesRecompute.fuzz.test.ts) —
+      // and why non-alias-owning callers must NOT (a user-set alias on
+      // a restored shortcuts/media row must survive).
+      if (args.stripAliasesOnRestore) {
+        const tombstone = await tx.get(args.id)
+        const restoredProperties = {...(tombstone?.properties ?? {})}
+        delete restoredProperties[aliasesProp.name]
+        await tx.restore(args.id, {content: args.freshContent, properties: restoredProperties})
+      } else {
+        await tx.restore(args.id, {content: args.freshContent})
+      }
       if (args.onInsertedOrRestored) {
         await args.onInsertedOrRestored(tx, args.id)
       }
@@ -412,6 +420,7 @@ export const ensureAliasTarget = async (
     parentId: null,
     orderKey: keyAtEnd(),
     freshContent: seed.content,
+    stripAliasesOnRestore: true,
     // A freshly-probed alias seat is a speculative default: if the server
     // already has a real page for this alias, the local seat must yield.
     systemMint: true,

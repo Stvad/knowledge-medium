@@ -1173,6 +1173,51 @@ describe('parseReferences — alias claimed between plan build and apply (write-
     const absorber = await env.read('absorber')
     expect(JSON.parse(absorber!.properties_json)[aliasesProp.name]).toEqual(['zz-stale'])
   })
+
+  it('date-ensure divergence must not hijack a lookup-bound entry sharing the seat id', async () => {
+    // Static state, no race: the daily seat was renamed (claims only
+    // "Foo") and another page claims the freed ISO. A source citing
+    // BOTH [[Foo]] and the long-form date binds Foo→seat by lookup and
+    // routes the date through the ensure, which resolves to the ISO
+    // claimant. Pre-fix the ensure's retarget was NOT alias-filtered,
+    // so it rewrote every entry carrying the seat id — hijacking the
+    // Foo binding — and the wrong state was STABLE (every re-parse
+    // recomputed and re-retargeted identically, so referencesChanged
+    // saw no delta). Round-2 adversarial review, verified repro.
+    const seatId = dailyNoteBlockId(WS, '2026-05-20')
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'seed-src', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[2026-05-20]]'})
+      await tx.create({id: 'iso-claimant', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'C'})
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+    expect(await env.read(seatId), 'daily seat materialized').not.toBeNull()
+
+    await env.repo.tx(async tx => {
+      await tx.setProperty(seatId, aliasesProp, ['Foo'])
+      await tx.setProperty('iso-claimant', aliasesProp, ['2026-05-20'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'hijack-src', workspaceId: WS, parentId: null, orderKey: 'a2',
+        content: 'see [[Foo]] and [[May 20th, 2026]]',
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const row = await env.read('hijack-src')
+    const refs = JSON.parse(row!.references_json) as BlockReference[]
+    expect(
+      refs.some(ref => ref.alias === 'Foo' && ref.id === seatId),
+      `lookup-bound [[Foo]] stays on the renamed seat (refs: ${row!.references_json})`,
+    ).toBe(true)
+    expect(
+      refs.some(ref => ref.alias === 'May 20th, 2026' && ref.id === 'iso-claimant'),
+      'date mark binds to the ISO claimant via the ensure',
+    ).toBe(true)
+  })
 })
 
 describe('parseReferences — idempotent comparison', () => {

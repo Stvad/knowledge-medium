@@ -67,20 +67,11 @@ import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
+import { assertLegalKernelRejection, pick, pickNonRoot } from '@/data/test/fuzzKernelHarness'
 import {
-  BlockNotFoundError,
   ChangeScope,
   codecs,
-  CycleError,
-  DeletedConflictError,
   defineProperty,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  ProcessorRejection,
-  WorkspaceMismatchError,
 } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { propertySchemasFacet } from '@/data/facets.js'
@@ -199,36 +190,12 @@ const caseArb = fc.record({
 })
 
 // Domain rejections that are legal outcomes for incoherent op combos —
-// same contract as the kernel fuzzer, plus alias-collision processor
-// rejections (block_aliases_workspace_alias_unique).
-const LEGAL_ERRORS = [
-  BlockNotFoundError,
-  CycleError,
-  DeletedConflictError,
-  DuplicateIdError,
-  MergeIntoDescendantError,
-  NotDeletedError,
-  ParentDeletedError,
-  ParentNotFoundError,
-  WorkspaceMismatchError,
-]
-
-const assertLegalRejection = (e: unknown, op: OpSpec): void => {
-  if (LEGAL_ERRORS.some(cls => e instanceof cls)) return
-  if (e instanceof ProcessorRejection && e.code === 'alias.collision') return
-  // Placement anchors resolve by id under the TARGET parent — the one
-  // legal plain-Error rejection (mutators.ts:118/431). Anything else is
-  // a bug (Codex review on PR #371: the previous blanket branch accepted
-  // every plain Error).
-  if (e instanceof Error && /^(position\.(before|after) )?sibling .* not found under /.test(e.message)) return
-  throw new Error(`illegal error from ${JSON.stringify(op)}: ${String(e)}`, {cause: e})
-}
+// via the shared `assertLegalKernelRejection`
+// (`@/data/test/fuzzKernelHarness`), same contract as the kernel fuzzer,
+// plus alias-collision processor rejections
+// (block_aliases_workspace_alias_unique) that the harness itself covers.
 
 // ──── execution ────
-
-const pick = (index: number, ids: readonly string[]): string => ids[index % ids.length]
-const pickNonRoot = (index: number, ids: readonly string[]): string =>
-  ids.length === 1 ? ids[0] : ids[1 + (index % (ids.length - 1))]
 
 interface Env {
   repo: Repo
@@ -383,7 +350,7 @@ const runCase = async ({batches}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => 
         try {
           ids.push(...await applyOp(env, op, ids))
         } catch (e) {
-          assertLegalRejection(e, op)
+          assertLegalKernelRejection(e, JSON.stringify(op))
         }
       }
       await env.flush()
