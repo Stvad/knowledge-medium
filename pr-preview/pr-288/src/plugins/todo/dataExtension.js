@@ -1,2 +1,2 @@
-import{propertySchemasFacet as e,typesFacet as t}from"../../data/facets.js";import{roamTodoStateProp as n,todoType as r}from"./schema.js";var i=[e.of(n,{source:`todo`}),t.of(r,{source:`todo`})];export{i as todoDataExtension};
+import{definitionSeedsFacet as e,typesFacet as t}from"../../data/facets.js";import{roamTodoStateProp as n,statusProp as r,todoType as i}from"./schema.js";var a=[e.of(r,{source:`todo`}),e.of(n,{source:`todo`}),t.of(i,{source:`todo`})];export{a as todoDataExtension};
 //# sourceMappingURL=dataExtension.js.map
