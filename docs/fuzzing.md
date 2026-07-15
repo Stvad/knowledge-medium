@@ -95,6 +95,26 @@ exact.
   no id dropped/duplicated, new ids contiguously adjacent to the anchor
   under `(order_key, id)` sort — the #198/#182/#188 tie-collision
   class.
+- `src/plugins/references/test/referencesRecompute.fuzz.test.ts` — the
+  references pipeline, stateful: content edits with
+  `[[alias]]`/`((uuid))` marks, ref-typed property writes, alias
+  renames, deletes/restores, and merges against a repo with the REAL
+  references + daily-notes extensions; oracle = the FULL consistency
+  audit (`content_link_recompute`, `property_ref_projection`, index
+  mirror) reports zero anomalies after each drained op. Orphan-alias
+  cleanup driven deterministically via fake timers.
+- `src/data/test/splitMerge.fuzz.test.ts` — split/merge content
+  conservation: split-then-merge identity, whole-tree pre-order text
+  conservation, sibling placement + child adoption, exact-snapshot
+  undo/redo round-trips.
+- `src/sync/crypto/aead.fuzz.test.ts` — AEAD seal/open (text + bytes):
+  round-trips, single-byte ciphertext‖tag tamper rejection, one-field
+  AAD-mismatch rejection, wrong-key rejection, `validateCanary`
+  false-never-throws totality.
+- `src/utils/selection.fuzz.test.ts` — pure multi-select helpers:
+  contiguous endpoint-order-independent ranges, anchor-index contract,
+  `validateSelectionHierarchy` vs an independent ancestor walk +
+  idempotence.
 
 ## Found so far
 
@@ -115,6 +135,26 @@ regression test in the same PR (#371):
   degraded the aliased form (id-fallback display) to a plain ref
   (target-content display). Caught by the nightly-style random-seed
   sweep — the fixed smoke seed had missed it.
+
+The references-pipeline fuzzer found four more within its first hours
+(each fixed with a pinned example test in the same PR):
+
+- A block whose content/properties were edited while soft-deleted came
+  back live with marks but no derived refs — restores never re-fired
+  `parseReferences` (it now watches the `deleted` field).
+- Typing `[[2026-01-05]]` when a live non-seat block already owned that
+  date-shaped alias made `ensureDailyNoteTarget` trip the
+  alias-uniqueness trigger, rolling back the whole processor tx —
+  permanently stripped refs (the daily branch now resolves lookup-first,
+  like the non-date branch).
+- Merge retargeted property-derived reference entries without rewriting
+  the property VALUE they project from — a projection anomaly the next
+  re-parse silently reverted (merge now rewrites value + entry together
+  when the schema is loaded, and leaves both alone when it isn't).
+- `parseReferences` applied plans built from pre-write state without
+  checking the source had moved — the rename rewriter's concurrent
+  update could be clobbered by the stale plan (marks `[[new]]`, stored
+  ref `old`). It now carries the rename processor's stale-plan guard.
 
 ## Adding a suite
 
