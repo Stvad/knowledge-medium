@@ -35,6 +35,21 @@ const envInt = (name: string): number | undefined => {
 /** Arbitrary but fixed: keeps the smoke tier deterministic across runs. */
 const SMOKE_SEED = 20260714
 
+/** Per-test timeout for suites whose single property can consume the
+ *  whole deep budget (pass as `it()`'s third argument). A per-test
+ *  timeout OVERRIDES vitest's CLI `--testTimeout`, so a hard-coded
+ *  value here would silently cap a long nightly pass — derive it from
+ *  the same env the budget comes from, with the same shrinking
+ *  headroom scripts/fuzz.mjs uses. */
+export const fuzzTestTimeout = (): number => {
+  const timeMs = envInt('FUZZ_TIME_MS')
+  if (timeMs !== undefined) return timeMs * 4 + 180_000
+  // Run-count-driven deep runs have no time bound to derive from.
+  if (envInt('FUZZ_RUNS') !== undefined) return 3_600_000
+  // Smoke: generous headroom over the ~1s budget for CI contention.
+  return 60_000
+}
+
 export const fuzzParams = <T>(smokeRuns: number): fc.Parameters<T> => {
   const runs = envInt('FUZZ_RUNS')
   const timeMs = envInt('FUZZ_TIME_MS')

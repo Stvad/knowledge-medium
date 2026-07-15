@@ -29,7 +29,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
-import { fuzzParams } from '@/test/fuzz'
+import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import {
@@ -344,5 +344,5 @@ describe('kernel mutator sequences', () => {
       }),
       fuzzParams(10),
     )
-  }, 600_000)
+  }, fuzzTestTimeout())
 })
