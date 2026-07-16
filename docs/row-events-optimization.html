@@ -574,10 +574,7 @@ existing <code>(block_id, created_at DESC)</code> index is
 wall-clock steps, so bisecting <code>created_at</code> over an id-ordered
 index can pick a wrong event or degrade to a scan (see the subtree reader row
 in <a href="#s10">§10</a>). <code>(created_at DESC)</code> and
-<code>(tx_id)</code> stay for time-scoped and tx-join forensics. (Two earlier
-revisions of this paragraph — moving the id-index add into slice A as an idle
-job gating the trigger swap — existed solely for the deterministic probe's
-benefit; moot since O5's adoption.)</p>
+<code>(tx_id)</code> stay for time-scoped and tx-join forensics.</p>
 
 <h2 id="s4">4. Anchors: invertible payloads, sampled full snapshots</h2>
 
@@ -1376,11 +1373,8 @@ costs more moving parts, bounds memory, never touches the live file.
         to restore to; detection that someone else changed the field since</td>
       <td>My tx's events carry their own before values (§4.1) — restore =
         un-apply my events' <code>before_json</code> patches directly; no
-        reconstruction at all. (A round-2 review finding — undo of the first
-        edit after an unlogged gap — needed special <code>stateBefore</code>
-        handling under the probe design; under invertible patches it is the
-        ordinary case.) Drift check = my after vs live <code>blocks</code>
-        row.</td>
+        reconstruction at all, including for the first edit after an unlogged
+        gap. Drift check = my after vs live <code>blocks</code> row.</td>
     </tr>
     <tr>
       <td>Forensics / incident recovery (backlink-wipe class)</td>
@@ -1818,16 +1812,11 @@ under random interruption/resume points.
     class. Sampling probability: O3 → §4.4 (default p = 1/64, rarer than the
     original 1-in-50 frame, per the loss-window derivation).</li>
   <li><strong>O6 — RESOLVED (2026-07-15, user): UiState events are logged
-    but hard-bounded, not skipped.</strong> Measured trigger (§5.3): roughly
-    half of a working device's update events are panel selection/scroll churn
-    that compact patches barely shrink (~1.7&times;). The initial proposal
-    (default <code>history_mode = 'skip'</code> for the scope) was set aside
-    by the user — keep a few versions instead. Adopted: v2 events carry a
-    <code>scope</code> stamp (§3); a deep-idle sweeper keeps the newest
-    K = 8 <code>'local-ui'</code> events per block, pruning oldest-side only
-    (rule R1); I7 amended accordingly. Open detail deferred to measurement:
-    whether phase 2 also bounds the sync-arrived echo of the same blocks
-    (§5.3 caveats).</li>
+    but hard-bounded, not skipped</strong> — newest K = 8 per block via the
+    scope-stamped deep-idle sweeper, prefix-safe rule R1. Mechanism, caveats,
+    and the measured trigger are §5.3's; skip-entirely is recorded in §15.
+    Open remainder, deferred to measurement: whether phase 2 also bounds the
+    sync-arrived echo (load-bearing for multi-writer panels — §5.3).</li>
 </ol>
 
 <hr>
