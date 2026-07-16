@@ -720,8 +720,8 @@ than itself, back to the next-older full state.
 <strong>Failure bound.</strong> Corruption severing the log confines damage to
 states older than the break, back to the next-older full state — expected
 ~1/p events, p99 ≈ 4.6/p. (One non-corruption cause of a broken newer side
-exists: a raw <code>id</code> rewrite orphans the old id's chain — §3's
-asterisk.) Everything at or newer than the break reconstructs
+exists: a raw <code>id</code> rewrite orphans the old id's chain, which
+recovers via its older-side fulls only — §3's asterisk.) Everything at or newer than the break reconstructs
 from the live side, and the <em>current</em> state is never at risk (it lives
 in <code>blocks</code>). Anchor before-sides double as integrity checkpoints:
 replaying the span between two full states must reproduce the newer one's
@@ -1381,7 +1381,11 @@ looks natural but is defeated by this doc's own §5 mechanism — a
 this kind of idle) writes zero row_events rows and its uploads drain, so the
 swap would pass and silently discard the burst's <code>command_events</code>
 record and completion markers, then re-pay the ~230&nbsp;MB arrival logging
-G1 exists to prevent. Cost owned: with a correct fence, the staging file
+G1 exists to prevent. The fence value and the pending-swap state must live
+beside the staging file (or inside it), <em>never</em> in the live DB — an
+in-DB marker in this section's usual <code>client_schema_state</code> idiom
+would itself advance the counter and deterministically invalidate every
+swap. Cost owned: with a correct fence, the staging file
 survives only a write-free session tail — any user return invalidates it
 (interaction writes panel state, §5.3) and re-pays a multi-GB staging write
 on exactly the quota-tight device this route serves. If retries prove
@@ -1699,10 +1703,10 @@ under random interruption/resume points.
     <tr>
       <td>I2</td>
       <td><strong>A newer-side full state always exists.</strong> Every
-        reconstruction walk terminates: at the live <code>blocks</code> row, a
-        hard-delete event (full before), or an anchor (one raw-write
-        asterisk: an <code>id</code> rewrite orphans the old id's chain —
-        §3). Readers never assume a
+        reconstruction walk terminates (one raw-write asterisk: an
+        <code>id</code> rewrite orphans the old id's chain — §3): at the live
+        <code>blocks</code> row, a hard-delete event (full before), or an
+        anchor. Readers never assume a
         cadence — only the <code>full</code> flag; anchors bound the expected
         walk/loss window (~1/p, p99 ≈ 4.6/p) without carrying correctness.
         Corollary (§5.2): hard deletes are never
