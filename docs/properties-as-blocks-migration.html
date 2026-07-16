@@ -380,7 +380,11 @@
   orphan-definition synthesis (§9); <strong>sync is one-way</strong> — the projection
   checksum, containment rule, materialize branches, and <code>preservedKeys</code>
   are all deleted in favor of policy-closed writer classes (§5); sync-off is
-  per-workspace and the column is ultimately droppable (§11).<br>
+  per-workspace and the column is ultimately droppable (§11);
+  <code>reference_target_id</code> is a <em>local</em> derived column, never synced —
+  slice A is client-only and the e2ee fork is gone (§8, §11); the backfill is
+  operator-run-once per workspace; the flip column's guard is trigger + runbook, no
+  attestation RPC; the orphan retarget is detect-and-run-manually.<br>
   <strong>Re-grounded 2026-07-15 against schema unification</strong>
   (<code>docs/schema-unification.html</code>, design PR #355; the property slices are
   merged to master — PRs #362/#364): every property schema — kernel, plugin, user —
@@ -441,8 +445,10 @@
       category: partial migration would keep the column (and its sync/RPC/e2ee
       surface) alive forever. The flip lever is a per-workspace column, not a
       per-schema flag (<a href="#s6">§6</a>).</li>
-    <li>Field-row shape: <code>[[Schema Name]]</code> content + derived synced
-      <code>reference_target_id</code>, as the spike built it (<a href="#s7">§7</a>).</li>
+    <li>Field-row shape: <code>[[Schema Name]]</code> content + derived <em>local</em>
+      <code>reference_target_id</code> — never synced; every device derives it from
+      content + the synced name map, which also erases the column's e2ee fork
+      (<a href="#s7">§7</a>, <a href="#s8">§8</a>).</li>
     <li><code>setProperty</code> dual-writes children and cell in one tx; the
       materialize/project processor pair is permanent convergence machinery
       (<a href="#s5">§5</a>).</li>
@@ -680,8 +686,9 @@ schema unification (seeded definition blocks, the workspace-bound resolver — m
         <code>enc:v1</code> envelopes server-side; a plaintext synced
         <code>reference_target_id</code> crosses the established sensitivity line
         (reference edges are encrypted today).</td>
-      <td>New section §8. Gate child-backing off for e2ee workspaces until the
-        derive-locally path exists.</td>
+      <td>New section §8 — since resolved for all workspaces at once: the column is
+        local and derived per device, never synced (§11 slice A), so no e2ee fork
+        exists; e2ee workspaces differ only in flip timing.</td>
     </tr>
     <tr>
       <td>Backfill = "one-shot job per workspace"</td>
@@ -963,9 +970,11 @@ arrived row:
       materialize branches, the per-child clock guard, and the no-resurrection rules
       — the full record lives in this PR's review threads (rounds 14–21) as the
       remedy if the fleet ever outgrows coordination.</p></li>
-    <li><strong>Duplicate field rows from concurrent backfills persist.</strong> Two
-      devices backfilling offline each create their own <code>[[status]]</code> row;
-      after sync, the arrived rows are field/value rows whose <em>own</em> cells are
+    <li><strong>Duplicate field rows from concurrent dual-writes persist.</strong> Two
+      devices offline-editing the same not-yet-materialized property each create their
+      own <code>[[status]]</code> row (the backfill itself no longer races — it is
+      operator-run-once per workspace, §11); after sync, the arrived rows are
+      field/value rows whose <em>own</em> cells are
       empty, so the spike's row-targeted catch-up no-ops on them and never visits the
       shared parent — where the dedup lives. The reconcile pass walks arrived field
       rows (recognizable by <code>reference_target_id</code>) up to their parent and
@@ -1157,9 +1166,9 @@ default — not in anyone's document tree.
   the <code>workspaces</code> table is directly updatable by workspace writers — the
   e2ee migration added <code>workspaces_prevent_e2ee_field_change</code> for exactly
   this exposure — so the column ships with the same trigger family: client writes
-  rejected, transitions forward-only, advanced only through a
-  <code>SECURITY DEFINER</code> operator RPC that can refuse
-  <code>'cell-off'</code> until the backfill/sweep gates have been attested. The predicate every consumer shares — recognition (§9), dual-write,
+  rejected, transitions forward-only. Advancing it is a service-role SQL write per
+  the supabase skill — the runbook is the gate (no attestation RPC; encoding the
+  checklist in an RPC is armor for an operator this fleet doesn't have). The predicate every consumer shares — recognition (§9), dual-write,
   projection, reconcile — is <strong>child-backed = workspace flipped</strong>.
   Nothing else: no scope term (§6 migrates all scopes), no per-schema stamp, no
   buildability term at flip time (under §5's one-direction rule a degraded writer's
@@ -1247,8 +1256,9 @@ surface.
 
 <p>
 Rev 1 specified field-row content as <code>((schema-id))</code>. The spike ships
-<code>[[Schema Name]]</code> with the resolved <code>fieldId</code> in the synced
-<code>reference_target_id</code> column, derived same-tx from content. Keep the spike's
+<code>[[Schema Name]]</code> with the resolved <code>fieldId</code> in the
+<code>reference_target_id</code> column, derived same-tx from content (now a
+<em>local</em> column, derived on every device — §11 slice A). Keep the spike's
 shape:
 </p>
 
@@ -1300,88 +1310,68 @@ shape:
 E2EE workspaces (May 29) encrypt <code>content</code>, <code>properties_json</code>, and
 <code>references_json</code> into <code>enc:v1</code> envelopes; a server trigger
 rejects plaintext in those columns. Reference <em>edges</em> are therefore part of the
-encrypted surface today. A synced plaintext <code>reference_target_id</code> would leak,
-per row: "this row is a field instance", "of this schema", and for exact block-ref rows
-"this row points at that row" — precisely the edge metadata the current design encrypts.
+encrypted surface today. A synced plaintext <code>reference_target_id</code> would have
+leaked, per row: "this row is a field instance", "of this schema" (concretely readable
+— seeded definition ids are deterministic <code>uuidv5</code> values anyone can
+precompute), and for exact block-ref rows "this row points at that row" — precisely
+the edge metadata the current design encrypts. <strong>This analysis is what drove
+the column local for <em>every</em> workspace</strong> (owner decision, §11 slice A):
+derivation is a pure function of content + the synced name map, so nothing needed to
+cross the wire in the first place — the derive-at-arrival and first-sync derive pass
+that an e2ee-only fix would have required turned out to be the right universal
+design, and the e2ee fork for this column no longer exists. (Encrypting the column
+instead was considered and rejected: it would maintain a second synced copy of
+derivable state, and the server never queries it — ciphertext or plaintext.)
 </p>
 
-<p>Options, in increasing effort:</p>
+<p>What remains e2ee-specific is only <em>when the workspace flips</em>:</p>
 
 <ol>
   <li><strong>Gate: e2ee workspaces flip later — sequencing, not an endpoint.</strong>
     An e2ee workspace's <code>properties_migration</code> column stays at
     <code>'cell'</code> until option 2 below is built (§6 — the gate and the flip
     ride the same lever), so the machinery behaves as if every schema were
-    cell-backed. Zero leak, zero new code beyond the gate; e2ee users keep today's
+    cell-backed. Zero new code beyond the gate; e2ee users keep today's
     behavior <em>for now</em>. <em>Recommended for the first ship</em> — but option 2
     is required work, not optional: §11's column drop needs <em>every</em> workspace
     at <code>'cell-off'</code>, e2ee included, so a permanently-gated e2ee workspace
     would keep the column alive exactly the way §6's rejected carve-outs would
     have.</li>
-  <li><strong>Derive locally, never upload.</strong> The exclusion cannot live in
-    <code>BLOCK_UPLOAD_COLUMNS</code> — that is a static, trigger-generated list with
-    no per-workspace variance (PR-review P2). Strip the column at the upload
-    <em>connector</em> instead, keyed by workspace mode, when assembling envelopes
-    (suppressing column-only PATCHes outright): otherwise a local re-derive in an e2ee
-    workspace enqueues an envelope the slice-A server trigger rejects into the upload
-    quarantine. Run the derive pass
-    on sync arrival (the observer materializes decrypted plaintext locally, so content
-    is available; <code>onRowsAccepted</code> is the hook). Needs a first-sync full
-    derivation pass per device (marker-gated, same pattern as the backfill). This is the
-    real fix; it's mostly plumbing that reuses existing machinery.</li>
-  <li><strong>Encrypt the column.</strong> Defeats the point — the column exists to be
-    an indexable, queryable detection key on the client; the server never queries it.
+  <li><strong>Flip with client-side tooling.</strong> Field/value children are
+    ordinary blocks — their content encrypts like any content, so the child
+    machinery needs nothing new. What must run client-side because the server cannot
+    read e2ee keys: the orphan-definition synthesis and the one-time backfill (§9,
+    §11), on a synced device, per the same runbook. The cell keeps its envelope
+    until the workspace reaches the ordinary sync-off.
     (2) achieves the same privacy with less ceremony.</li>
 </ol>
 
 <p>
-The gate in option 1 needs its scope stated precisely — and one piece of it must move
-server-side (PR-review P1). As shipped, the e2ee ciphertext trigger
-(<code>blocks_require_ciphertext_for_e2ee</code>) checks only the three envelope
-columns and would happily accept a plaintext <code>reference_target_id</code> from a
-stale client, a missed hook, or a direct PostgREST write — exactly the untrusted paths
-that trigger exists to stop. Slice A must extend it to also require
-<code>reference_target_id IS NULL</code> for e2ee-workspace rows (same migration as
-the column add; note <code>encryption_mode</code> is immutable server-side today —
-<code>workspaces_prevent_e2ee_field_change</code> rejects flips — so no transition
-path exists to race the check; a future flip flow's bulk rewrite nulls the column
-and passes). The rest of the gate is client-side:
+With the column local, the gate needs no e2ee-specific machinery at all — it is
+simply the workspace column not having been advanced, same as any un-flipped
+workspace. The derive processor runs everywhere, including e2ee (a local column over
+decrypted content leaks nothing). Two edges survive, neither e2ee-specific in form:
 </p>
 
 <ul>
-  <li><strong>What the gate disables:</strong> all of it — the dual-write, both
-    property processors, the backfill, <em>and</em> the derive processor's uploads.
-    Disabling only the write path while leaving projection live re-creates the stale
-    children problem (§11 rollback discussion); the gate means "this workspace has no
-    child-backed machinery running, full stop."</li>
-  <li><strong>Cross-workspace moves/copies de-structure, not just strip.</strong> A
-    field row moved or pasted from a plaintext workspace into an e2ee workspace
-    carries its plaintext <code>reference_target_id</code>; nulling the column is
-    necessary but not sufficient (PR-review P2) — detection is column-based and the
-    machinery is gated off in e2ee, so the <code>[[field]]</code> rows and value
-    children would linger as ordinary visible content while the destination cell is
-    the property store. The move path must run the same de-structure step as the
-    mode-transition flow below: project the subtree's field/value children into the
-    destination cell, then null the column and hide or soft-delete the de-structured
-    rows. (Owner: slice B3's move/merge integration.)</li>
-  <li><strong>Mode transitions are migrations.</strong> Flipping a backfilled plaintext
-    workspace to e2ee means the column values for its rows were <em>already uploaded</em>
-    — the flip must null them server-side (the encryption migration is already a bulk
-    rewrite; add the column to it), run a project-then-freeze pass over existing
-    children locally, and then <em>hide or soft-delete the de-structured rows</em>:
-    with the column nulled, §9 detection fails and every former field row would
-    otherwise render as a plain <code>[[name]]</code> block with its values as loose
-    children, fleet-wide. The cell is authoritative post-flip; the rows must not
-    linger as clutter. Flipping e2ee → plaintext re-enables the machinery; the
-    ordinary backfill covers materialization. And the flip must be
-    <em>history-safe</em> (PR-review P2): today <code>encryption_mode</code> is
-    immutable by trigger, and <code>blocks_history</code> retains full plaintext
-    INSERT rows and UPDATE diffs — a live-row rewrite alone would leave every
-    pre-flip <code>reference_target_id</code> and plaintext column readable in
-    history after the flip. Either the mode stays immutable, or the transition is a
-    SECURITY DEFINER migration that also purges/encrypts the affected history rows.
-    (Owner: the workspace-encryption flip
-    flow itself — these requirements gate that feature, not the §11 slices.)</li>
+  <li><strong>Pastes from a flipped workspace into an un-flipped one de-structure,
+    not just strip</strong> (e2ee-at-<code>'cell'</code> is the standing case, but
+    the rule is general — PR-review P2, restated for the local column): the copied
+    <code>[[field]]</code>/value rows re-derive their column against the destination,
+    but recognition is flip-gated off there, so they would linger as ordinary visible
+    content while the destination cell is the property store. The move path projects
+    the subtree's field/value children into the destination cell, then soft-deletes
+    the de-structured rows. (Owner: slice B3's move/merge integration.)</li>
+  <li><strong>Encryption-mode transitions are the e2ee feature's problem, with one
+    property-shaped constraint.</strong> Today <code>encryption_mode</code> is
+    immutable by trigger (<code>workspaces_prevent_e2ee_field_change</code>). If a
+    flip flow ever lands, a <em>flipped</em> workspace transitions cleanly — children
+    are ordinary blocks, and the encryption bulk-rewrite covers them like all content
+    — but it must be <em>history-safe</em> (PR-review P2): <code>blocks_history</code>
+    retains full plaintext INSERT rows and UPDATE diffs, so the transition is a
+    SECURITY DEFINER migration that also purges/encrypts the affected history rows,
+    or the mode stays immutable. (Owner: the workspace-encryption flip flow, not the
+    §11 slices.)</li>
 </ul>
 
 <p>
@@ -1395,27 +1385,14 @@ child-row content.
 </p>
 
 <p>
-Two server-surface items move out of "verify later" into hard slice-A deliverables
-(§11): <strong>extend <em>both</em> server write RPCs</strong> (PR-review P1) — creates
-now batch through <code>apply_block_creates</code>
-(<code>20260709000000</code>, postdating this paragraph's first draft; its SQL inserts
-an explicit column list, superseding the carries-all-columns PostgREST upsert), and
-later changes ship as PATCHes through <code>apply_block_patches</code>, which silently
-drops unknown keys. Left unextended, a newly created field row reaches the server with
-<code>reference_target_id</code> NULL — peers never recognize it until some later
-PATCH — and a change to an existing row is dropped
-server-side, with no client-side re-derive on arrival to compensate; the synced
-detection column would be broken over sync in both directions. The extension must also be
-<strong>null-aware</strong> (PR-review P2): the column must be <em>clearable</em> —
-a row edited back to ordinary content, or stripped by the e2ee/move paths, must stop
-being a field row on peers — so the RPC needs the presence-based handling used for
-nullable <code>parent_id</code>, not the <code>COALESCE(patch, col)</code> pattern
-that silently ignores JSON <code>null</code>. And <strong>re-timestamp every
-spike-introduced Supabase migration</strong> — both <code>20260527123000</code>
-(reference_target_id) and <code>20260530143000</code> (recent-content index) sort
-<em>before</em> already-applied master migrations (<code>20260612…</code>,
-<code>20260625…</code>); wrap them in <code>begin; … commit;</code> per the supabase
-skill while at it.
+No server surface remains for the column (the earlier synced design needed both write
+RPCs extended null-aware, a Supabase migration, and the ciphertext-trigger extension —
+all deleted with the local-column decision; clearability is now derive-at-arrival's
+job: content changed → re-derive → NULL locally, on every device independently). One
+housekeeping item survives for slice E: the spike's <em>recent-content index</em>
+migration (<code>20260530143000</code>) sorts before already-applied master
+migrations — re-timestamp it and wrap in <code>begin; … commit;</code> per the
+supabase skill if it's kept.
 </p>
 
 <h2 id="s9">9. Detection rules and edge cases — as implemented, with divergences</h2>
@@ -1499,11 +1476,14 @@ skill while at it.
     definition drops to shadowed loser — excluded from the name map and cell
     projection — and the already-backfilled field rows still point at the synthetic
     fieldId, so the migrated values would vanish from <code>block.get</code>/queries
-    under the real schema. The plan therefore includes a <em>retarget pass</em>: on a
-    seed claiming a name held by a marker-carrying synthesized definition, re-point
-    that definition's field rows to the seed's fieldId (the §7 rename-reproject
-    machinery is the precedent — same re-stamp + re-project shape), then retire the
-    synthesized block; the sweep carries the same rule as backstop. The unification
+    under the real schema. Handled at runbook + detection level, not as shipped
+    machinery (simplification): the flip runbook's primary rule is <em>enable and
+    convert everything you intend to use before flipping</em>, so the collision
+    should not occur; if it does, the sweep detects a shadowed marker-carrying
+    synthesized definition and <em>reports</em> it, and the operator runs the
+    retarget manually — re-point the field rows to the seed's fieldId and retire the
+    synthesized block, reusing the §7 rename-reproject machinery. Build a shipped
+    pass only if this ever actually fires. The unification
     doc counts disabled-plugin residue as this problem's easy sub-case (its §4.3);
     e2ee workspaces synthesize client-side at their own (option-2) flip, since the
     server can never enumerate their keys.</dd>
@@ -1717,52 +1697,46 @@ implementation</strong> and keep it open until its content is fully accounted fo
   <div class="phase">
     <div class="num">A</div>
     <div class="body">
-      <div class="name">Foundations: column + derive processor</div>
+      <div class="name">Foundations: local derived column + derive processor</div>
       <p>
-        <code>reference_target_id</code> through all three layers (Supabase migration —
-        re-timestamped and wrapped in <code>begin;…commit;</code> per §8;
-        <code>BLOCK_STORAGE_COLUMNS</code>/parse/upload;
-        <code>BlockData.referenceTargetId</code>; regenerate sync-config),
-        <code>referenceBlock.ts</code> grammar, <code>core.deriveReferenceTarget</code>,
-        the partial index, and the §8 items: the e2ee gate (derive skips e2ee
-        workspaces; their uploads strip the column at the connector — the static
-        trigger-generated <code>BLOCK_UPLOAD_COLUMNS</code> can't vary per workspace,
-        §8), the server-side trigger
-        extension (<code>reference_target_id IS NULL</code> enforced for e2ee rows —
-        client gates alone are not a guarantee), and <em>both</em> §8 server RPC
-        extensions (PR-review P1): the <code>apply_block_creates</code> column list
-        (creates batch through it — unextended, every new field row lands server-side
-        with a NULL column and peers never recognize it) and the
-        <code>apply_block_patches</code> whitelist — null-aware, per §8:
-        clears must propagate (presence-based handling, as for nullable
-        <code>parent_id</code>). "All layers" also includes the history/undo seam
-        (PR-review P2): <code>row_events</code> snapshot serialization
-        (<code>blockJsonObjectSql</code>) and undo replay's write column list are
-        hand-maintained parallels of <code>BLOCK_STORAGE_COLUMNS</code> — extend both
-        (or generate them from it), else undoing a field-row edit back to plain text
-        restores the content but keeps the stale <code>reference_target_id</code>, and
-        the row stays classified as a field row (same-tx processors are deliberately
-        skipped on undo replay, §12 — the snapshot itself must carry the column).
-        Two hard-won requirements
-        from the spike's own review history: the <strong>existing-install local
-        migration must ALTER both <code>blocks</code> and
-        <code>blocks_synced</code></strong> (copy the spike's
-        <code>ensureBlockStorageColumns</code> as fixed at <code>03236460</code>, run
-        before the sync observer can stage rows — the single-table version broke
-        sync-apply on every upgrading device), and decide
-        <code>BlockData.referenceTargetId</code>'s optionality up front (the spike made
-        it required, which touches every <code>BlockData</code> literal in the test
-        suite; optional-in, normalized-to-null in <code>parseBlockRow</code> avoids
-        that churn).
+        <code>reference_target_id</code> is a <strong>local derived column — never
+        synced</strong> (owner decision, superseding the earlier synced-column
+        design: nothing server-side consumes it, every consumer is a client, and
+        derivation is a pure function of content + the synced name-winner map — the
+        same determinism §7/§9's copy re-derive already relies on. This deletes the
+        Supabase migration, both server RPC extensions, the sync-config change, the
+        e2ee server trigger, and the connector strip that the synced design needed,
+        and with them the last e2ee special-casing: e2ee devices derive identically
+        from decrypted content). What ships: the column on the local
+        <code>blocks</code> table only (an ALTER for existing installs; NOT in
+        <code>BLOCK_STORAGE_COLUMNS</code>, never staged in
+        <code>blocks_synced</code>, never uploaded — or equivalently a side index
+        table à la <code>block_types</code>; implementation picks),
+        <code>referenceBlock.ts</code> grammar, <code>core.deriveReferenceTarget</code>
+        for local writes, the partial index, and <strong>derive-at-arrival</strong>:
+        the materializer stamps the column for arrived rows whose content changed,
+        inside the same seam as the §5 cell repair (before invalidations fan out, so
+        recognition never lags reader visibility), plus a one-shot initial-sync
+        derive pass for fresh devices (reuses the backfill harness; until it sweeps a
+        block, unrecognized field rows are ordinary rows — visible-blocks
+        prioritization bounds the flash). The history/undo seam still applies
+        (PR-review P2, adapted): same-tx processors are skipped on undo replay
+        (§12), so either the <code>row_events</code> snapshot carries the column or
+        undo replay re-derives after restore — otherwise undoing a field-row edit
+        back to plain text leaves a stale column and the row keeps classifying as a
+        field row. Decide <code>BlockData.referenceTargetId</code>'s optionality up
+        front (the spike made it required, which touches every <code>BlockData</code>
+        literal in the test suite; optional-in, normalized-to-null in
+        <code>parseBlockRow</code> avoids that churn). One future consequence,
+        accepted: a server-side "derive properties from children" SQL view can no
+        longer recognize field rows without parsing content — already outside the
+        plan (§11).
       </p>
       <p>
-        <strong>Deploy ordering is load-bearing:</strong> (1) <code>db push</code> the
-        column, (2) <code>powersync deploy</code> the regenerated sync rule, (3) roll
-        clients. Deploying the sync rule before the Postgres column exists fails the
-        entire blocks stream for everyone; rolling new clients before the rule deploy
-        just reads NULLs (degraded, harmless). Old clients tolerate an extra stream
-        column (raw-table puts bind by name) — that tolerance is what makes the rollout
-        non-atomic-safe; canary one pinned old client before the fleet.
+        <strong>Deploy is client-only</strong> — no <code>db push</code>, no
+        <code>powersync deploy</code>, no rollout ordering: the local ALTER runs at
+        boot like <code>ensureUndoGroupIdColumns</code>, and old and new clients
+        coexist trivially (the column is invisible to sync).
       </p>
       <p>
         Also the standalone prerequisite fix: replace the literal NUL bytes in
@@ -1773,9 +1747,9 @@ implementation</strong> and keep it open until its content is fully accounted fo
       </p>
       <p class="deliv">No behavior change for existing data — the column stays NULL
         except on exact-reference rows. Behavior is reversible by dropping the
-        processor; the schema/sync surface is effectively one-way (the deployed sync
-        rule and already-uploaded envelopes reference the column) — acceptable for an
-        additive nullable column, but say it out loud.</p>
+        processor; the local ALTER is one-way in practice (SQLite column drops are
+        table rebuilds) — acceptable for an additive nullable local column, but say
+        it out loud.</p>
     </div>
   </div>
 
@@ -1877,11 +1851,12 @@ implementation</strong> and keep it open until its content is fully accounted fo
         edited offline across a schema rename syncs up with a cell key no registry
         knows; the reconcile recognizes that case from the <em>children's</em> side —
         field rows carry the stable <code>fieldId</code> — and re-projects the cell
-        from them. Two more requirements, not suggestions: the backfill inherits the §8
-        e2ee gate explicitly (the server trigger won't catch a plaintext-column leak),
-        and the first full backfill on a device is held until the initial sync drain
-        completes (backfilling a partially-synced cell state creates children for stale
-        values).
+        from them. The backfill is <strong>operator-run-once per workspace</strong>
+        (simplification: the children it creates sync to every device, so per-device
+        markers, the hold-until-initial-sync-drained rule, and concurrent-backfill
+        handling all disappear — the operator runs it on one fully-synced device as a
+        runbook step, right after flipping the column; e2ee workspaces run it
+        client-side the same way at their own flip, §8).
       </p>
       <p>
         The flip itself is one write: set the workspace's
@@ -1912,8 +1887,8 @@ implementation</strong> and keep it open until its content is fully accounted fo
         included — is child-backed; the cell is fully derived everywhere in a flipped
         workspace. The ~8 tree-shape tests port here as deliberate behavior changes.
         Fall-back per block unchanged from rev 1: on backfill failure the cell
-        stays authoritative for that block. The two-client concurrent-backfill test
-        (§12) gates this slice.</p>
+        stays authoritative for that block. The two-client concurrent dual-write
+        dedup test (§12) gates this slice.</p>
     </div>
   </div>
 
@@ -1991,8 +1966,12 @@ composition rule collapses: <strong>eligibility is per-workspace</strong> — a
 workspace whose backfill is complete and whose §5 sweep reports zero divergence can
 leave the channel wholesale (<code>properties_migration = 'cell-off'</code>, the
 same server-visible column the flip rides, which is what the sync-rules split keys
-on). The per-row fail-safe marker this section used to specify survives only as the
-<em>transitional</em> guard while a backfill is in flight. The staged sequence, each
+on). No per-row marker exists in any form — <code>'cell-off'</code> is only entered
+after the gates, so no state mixes an unfinished backfill with a stopped channel.
+<strong>Nothing in steps 3–5 is slice work: do not implement any of it until the
+tier measurements below say the sync-off is worth taking.</strong> The trap details
+are recorded so the eventual implementation doesn't rediscover them, not as an
+invitation to build. The staged sequence, each
 step gated on the one before:
 </p>
 
@@ -2013,9 +1992,10 @@ step gated on the one before:
     per-row key-composition test has nothing left to discriminate. Two conditions
     gate the workspace transition, both checkable by tooling: the backfill has
     completed (no definition-less keys, no property without child rows) and a full
-    §5 sweep pass reports zero divergence. A <em>transitional</em> per-row guard
-    remains while a backfill is in flight: rows the backfill hasn't reached keep
-    PATCHing — this is the fail-safe direction (unswept rows keep the channel).
+    §5 sweep pass reports zero divergence. (No per-row transitional guard exists —
+    there is no state in which the upload stop coexists with an unfinished backfill:
+    <code>'cell-off'</code> is only ever entered after the gates above, and blocks
+    created post-flip are born child-backed.)
     Fleet-buildability, previously a per-definition predicate here, is a runbook
     check under §6's uniform flip: all codec-bearing plugins are static, so "every
     client can re-project every key" means "all devices current, no codec-bearing
@@ -2339,13 +2319,14 @@ a mechanism added in another — round 17's buildability cluster alone hit four 
   </li>
   <li>
     <strong>Backfill upload burst per device.</strong> Completion markers are local
-    (<code>client_schema_state</code>), so every device scans; the NOT-EXISTS candidate
-    filter makes re-materialization a no-op once one device's rows sync down. Two
-    devices racing before convergence duplicate field rows, and — per the §5 finding —
-    the dedup does <em>not</em> fire passively on arrival as the spike stands (the
-    catch-up never visits the shared parent); slice C's parent-dedup fix plus the
-    hold-until-first-sync-drained requirement close this. Gate slice C on a two-client
-    concurrent-backfill test.
+    (<code>client_schema_state</code>), so in the spike every device scans — the
+    operator-run-once decision (§11 slice C) retires that shape: one device runs it,
+    everyone else receives rows. The dedup concern survives in its general form —
+    two devices offline-editing the same not-yet-materialized property mint duplicate
+    field rows, and the dedup does <em>not</em> fire passively on arrival as the
+    spike stands (the catch-up never visits the shared parent); slice C's
+    parent-dedup fix closes this. Gate slice C on a two-client concurrent
+    <em>dual-write</em> dedup test.
   </li>
   <li>
     <strong>Local history storage multiplies — optimize <code>row_events</code>
