@@ -41,18 +41,20 @@ export const USER_TYPES_PROJECTOR_ID = 'user-types'
 const USER_DATA_SOURCE_ID = 'user-data'
 
 /** Build a TypeContribution from a user-authored block-type block.
- *  Delegates identity/display extraction to the shared
- *  `parseTypeDefinitionMetadata` (the codec-less type-definition parser):
- *  it degrades malformed display fields to defaults, rejects only a
- *  label-less row, and applies the §9 `block-type:type-id` claim rule — a
- *  differing claim is honored only with valid `/type/` seed provenance,
- *  else the id demotes to the block id, so a user-authored row always
- *  projects under its own id (no seeded `/type/` rows exist until C3).
- *  This file keeps only the behavioral part the parser deliberately omits:
- *  resolving `block-type:properties` refs through the schema projector's
- *  handle + the workspace-bound central resolver. Silently drops refList
- *  entries that don't resolve to the selected workspace definition and
- *  locally available behavior (those fill in on the next
+ *  Delegates label/description/display extraction to the shared
+ *  `parseTypeDefinitionMetadata` (the codec-less type-definition parser),
+ *  which degrades malformed display fields to defaults and rejects only a
+ *  label-less row. This transitional projector deliberately keys the
+ *  published contribution by the BLOCK id, ignoring the parser's resolved
+ *  §9 `block-type:type-id` claim: honoring the claim is safe only once the
+ *  C3 id-keyed registry + §7 earliest-`createdAt` winner resolution can
+ *  bound a colliding (synced/imported/forged) claim from hijacking a
+ *  kernel/plugin type through the last-wins `typesFacet` (see the return
+ *  site). This file keeps only the behavioral part the parser deliberately
+ *  omits: resolving `block-type:properties` refs through the schema
+ *  projector's handle + the workspace-bound central resolver. Silently
+ *  drops refList entries that don't resolve to the selected workspace
+ *  definition and locally available behavior (those fill in on the next
  *  `onPropertySchemasChange` tick when the missing behavior publishes). */
 const tryBuildType = (
   block: Block,
@@ -73,7 +75,16 @@ const tryBuildType = (
     if (schema) properties.push(schema)
   }
   return {
-    id: metadata.typeId,
+    // Key by the BLOCK id, NOT metadata.typeId. The parser resolves the §9
+    // type-id claim, but honoring it here is unsafe until C3: `typesFacet` is a
+    // last-wins keyed map and user-data contributions are appended AFTER the
+    // static kernel/plugin registrations, so a synced/imported block-type row
+    // sitting at a `/type/` seed's deterministic id and claiming an existing id
+    // (e.g. 'page') would REPLACE the built-in type. The id-keyed registry +
+    // earliest-`createdAt` winner resolution that bounds that (§7) lands with
+    // the C3 materializer; until then a user-data row only ever publishes under
+    // its own block id.
+    id: block.id,
     label: metadata.label,
     ...(metadata.description ? {description: metadata.description} : {}),
     ...(metadata.hideFromBlockDisplay ? {hideFromBlockDisplay: metadata.hideFromBlockDisplay} : {}),

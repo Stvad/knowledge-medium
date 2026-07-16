@@ -136,17 +136,23 @@ describe('parseTypeDefinitionMetadata', () => {
   })
 
   it('keeps the type when a display-only field is malformed, degrading it to its default', () => {
-    // A bad color / hide-flag from a raw import/sync/bridge write must not drop
-    // the whole type from registries and pickers (mirrors tryBuildType).
+    // A bad color / hide-flag / description from a raw import/sync/bridge write
+    // must not drop the whole type from registries and pickers. `description` is
+    // covered explicitly: the transitional projector (tryBuildType) used to read
+    // it UNGUARDED, so a malformed description dropped the entire type — routing
+    // through this parser degrades it uniformly with the other display fields.
     const row = typeDefinitionRow({
       [blockTypeLabelProp.name]: 'Recipe',
       [blockTypeHideFromBlockDisplayProp.name]: {bad: 'value'},
+      [blockTypeDescriptionProp.name]: {bad: 'value'},
     })
     expect(parseTypeDefinitionMetadata(row)).toMatchObject({
       typeId: row.id,
       label: 'Recipe',
       hideFromBlockDisplay: false,
     })
+    // A malformed description degrades to absent (never rejected).
+    expect(parseTypeDefinitionMetadata(row)).not.toHaveProperty('description')
   })
 
   it('ignores a malformed optional type-id claim on an unseeded row instead of dropping the type', () => {

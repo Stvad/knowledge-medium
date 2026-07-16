@@ -6,6 +6,7 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
+  addBlockTypeToProperties,
   blockTypeColorProp,
   blockTypeDescriptionProp,
   blockTypeHideFromBlockDisplayProp,
@@ -13,10 +14,12 @@ import {
   blockTypeLabelProp,
   blockTypePropertiesProp,
   blockTypeTypeIdProp,
+  aliasesProp,
   propertyNameProp,
+  seedKeyProp,
 } from '@/data/properties'
-import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
-import { materializePropertySeeds, propertyDefinitionBlockId } from '@/data/definitionSeeds'
+import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { materializePropertySeeds, propertyDefinitionBlockId, typeDefinitionBlockId } from '@/data/definitionSeeds'
 import { definitionSeedsFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { getOrCreateTypesPage } from '@/data/typesPage'
@@ -80,17 +83,12 @@ const createBlockTypeBlock = async (
     hideFromBlockDisplay?: boolean
     hideFromCompletion?: boolean
     color?: string
-    /** Raw `block-type:type-id` claim to stamp on the row (§9). */
-    typeId?: string
   },
 ): Promise<string> => {
   const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
   await repo.tx(async tx => {
     await repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {})
     await tx.setProperty(id, blockTypeLabelProp, args.label)
-    if (args.typeId !== undefined) {
-      await tx.setProperty(id, blockTypeTypeIdProp, args.typeId)
-    }
     if (args.description !== undefined) {
       await tx.setProperty(id, blockTypeDescriptionProp, args.description)
     }
@@ -122,20 +120,54 @@ describe('UserTypesService subscription', () => {
     expect(env.service.getTypeBlockId(id)).toBe(id)
   })
 
-  it('demotes a block-type:type-id claim on an unseeded user row to the block id (§9)', async () => {
+  it('does not let a seed-valid /type/ row hijack a type id via a colliding claim (C2b transitional)', async () => {
     env = await setup()
-    // A user-authored row has no valid /type/ seed provenance, so its
-    // block-type:type-id claim — even for a real seed constant like 'page' —
-    // is ignored and the type projects under its own block id. The creation
-    // helper waits for registration UNDER `id`; an honored 'page' claim would
-    // key the contribution under 'page' instead and time out. Guards the §9
-    // claim rule now that the live projector reads type-id via
-    // parseTypeDefinitionMetadata.
-    const id = await createBlockTypeBlock(env.repo, {label: 'Squatter', typeId: 'page'})
-    expect(env.repo.types.get(id)!.id).toBe(id)
-    expect(env.service.getTypeBlockId(id)).toBe(id)
-    // The real kernel 'page' type is not hijacked to point at this block.
-    expect(env.service.getTypeBlockId('page')).not.toBe(id)
+    // Simulate a synced/imported block-type row that is a VALID seeded
+    // definition: it sits at the deterministic id for a /type/ seed key and
+    // claims an existing id ('page'). parseTypeDefinitionMetadata honors that
+    // claim (it passes the id equation), but the transitional projector must
+    // still key the user-data contribution by the block id — otherwise the
+    // last-wins typesFacet would let this row REPLACE the 'page' type, with no
+    // §7 winner resolution to bound it until C3. Created at Automation scope so
+    // the seed-write backstop (BlockDefault-only) doesn't reject the mint.
+    const seedKey = 'system:kernel-data/type/page'
+    const blockId = typeDefinitionBlockId(WS, seedKey)
+    // Mint the whole bag through tx.create (like the property materializer):
+    // per-prop setProperty would reject a BlockDefault prop under an Automation
+    // tx, and a BlockDefault tx would trip the seed-write backstop. Pre-populate
+    // the row so it's already a completed type (block-type + PAGE_TYPE
+    // membership, label, matching alias) — that keeps the same-tx typeify
+    // processor a no-op (it would otherwise write alias at BlockDefault scope
+    // and clash with this Automation tx), matching how a synced row arrives
+    // already-completed.
+    const properties = addBlockTypeToProperties(
+      addBlockTypeToProperties({
+        [seedKeyProp.name]: seedKeyProp.codec.encode(seedKey),
+        [blockTypeLabelProp.name]: blockTypeLabelProp.codec.encode('Imported Page'),
+        [blockTypeTypeIdProp.name]: blockTypeTypeIdProp.codec.encode('page'),
+        [aliasesProp.name]: aliasesProp.codec.encode(['Imported Page']),
+      }, BLOCK_TYPE_TYPE),
+      PAGE_TYPE,
+    )
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: blockId,
+        workspaceId: WS,
+        parentId: env.repo.typesPageId!,
+        orderKey: 'a0',
+        content: 'Imported Page',
+        properties,
+      }, {systemMint: true})
+    }, {scope: ChangeScope.Automation, description: 'simulate synced seed-valid type row'})
+
+    // The contribution publishes under its own block id (an honored 'page'
+    // claim would key it under 'page' instead and time this out).
+    await waitForTypeRegistration(env.repo, blockId, 'Imported Page')
+    expect(env.repo.types.get(blockId)!.id).toBe(blockId)
+    // 'page' is not hijacked: the built-in kernel type is untouched, and the
+    // user-types projector never acquires a 'page' key pointing at this block.
+    expect(env.repo.types.get('page')?.label).toBe('Page')
+    expect(env.service.getTypeBlockId('page')).not.toBe(blockId)
   })
 
   it('lifts hide-from-completion onto the contribution and republishes on change', async () => {
