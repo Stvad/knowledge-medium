@@ -78,17 +78,27 @@ export function excerptSeedBlock(log) {
   return tailBytes(text, 5000)
 }
 
-// fast-check reports its replay parameters as, e.g.
+// fast-check reports its replay parameters as a single brace block, e.g.
 //   { seed: -915705129, path: "20419:0:0:…", endOnFailure: true }
-// Pull out the seed and the leading run index (the `path`'s first segment is
-// the generation offset of the failure). The report uses these to offer a
-// *regenerate-from-seed* command in addition to the path replay — see
-// `buildFailureReport`. Returns null when no seed line is present (a
-// non-fast-check crash).
+// Pull the seed and the leading run index (the `path`'s first segment is the
+// generation offset of the failure) out of ONE such block — matching `seed`
+// and `path` separately across the whole log would pair a seed from one
+// property's failure with a path from another when a step reports more than
+// one (e.g. an interruption reports `{ seed: … }` with no path, a later
+// property a real path — the mix reproduces neither). When a step has several
+// failures we prefer the first block that carries a `path` (a replayable
+// failure) over a seed-only interruption block. Returns null when no seed
+// block is present (a non-fast-check crash).
 export function parseSeedAndPath(log) {
-  const seed = log.match(/\bseed:\s*(-?\d+)/)?.[1]
+  // fast-check's replay-params block has no nested braces, so `[^{}]*` scopes
+  // the match to a single block (and won't run away into the counterexample's
+  // `[{…}]`).
+  const blocks = log.match(/\{[^{}]*\bseed:\s*-?\d+[^{}]*\}/g)
+  if (!blocks) return null
+  const chosen = blocks.find((b) => /\bpath:\s*"/.test(b)) ?? blocks[0]
+  const seed = chosen.match(/\bseed:\s*(-?\d+)/)?.[1]
   if (seed === undefined) return null
-  const path = log.match(/\bpath:\s*"([^"]*)"/)?.[1]
+  const path = chosen.match(/\bpath:\s*"([^"]*)"/)?.[1]
   const firstSegment = path ? Number(path.split(':')[0]) : NaN
   return { seed, path, runIndex: Number.isInteger(firstSegment) ? firstSegment : undefined }
 }

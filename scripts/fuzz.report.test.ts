@@ -47,6 +47,25 @@ describe('fuzz --report', () => {
     expect(body).toContain('If that replay **passes**')
   })
 
+  it('pairs seed and path from the SAME block when a step has multiple failures', () => {
+    // An earlier property interrupts (seed only, no path); a later property has
+    // a real path. The regenerate command must use the block that carries the
+    // path, not splice the first seed onto the second path.
+    const multiFailLog = [
+      ' FAIL  src/data/api/blockData.fuzz.test.ts > suite > property A',
+      'Error: Property interrupted after 0 tests',
+      '{ seed: 111, endOnFailure: true }',
+      ' FAIL  src/data/api/blockData.fuzz.test.ts > suite > property B',
+      'Error: Property failed after 43 tests',
+      '{ seed: 222, path: "42:0:0", endOnFailure: true }',
+    ].join('\n')
+    const body = runReport('Deep fuzz — all suites', multiFailLog)
+
+    // seed 222 + path index 42 → FUZZ_RUNS 43, never seed 111.
+    expect(body).toContain('FUZZ_SEED=222 FUZZ_RUNS=43 yarn vitest run')
+    expect(body).not.toContain('FUZZ_SEED=111')
+  })
+
   it('omits the regenerate command when no seed is reported (non-fast-check crash)', () => {
     const crashLog = [
       ' FAIL  src/data/test/setup.fuzz.test.ts',
