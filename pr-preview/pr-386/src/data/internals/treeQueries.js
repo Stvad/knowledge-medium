@@ -125,6 +125,10 @@ var e=`
        )
        SELECT 1 FROM up
         WHERE up.reference_target_id IS NOT NULL
+          -- §9 root half: a workspace-root row is never a field row, so it
+          -- never makes its descendants "interior" (twin of the parentId
+          -- check in isPropertyFieldInstance).
+          AND up.parent_id IS NOT NULL
           AND EXISTS (
             SELECT 1 FROM block_types bt2
              WHERE bt2.block_id = up.reference_target_id
@@ -144,5 +148,70 @@ ${s}
    WHERE parent_id = ? AND deleted = 0
 ${s}
    ORDER BY order_key, id
-`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,l as VISIBLE_CHILDREN_IDS_SQL,c as VISIBLE_CHILDREN_SQL,i as cycleScanSql,n as manyAncestorsSql};
+`,u=`
+  WITH RECURSIVE
+  root_exempt(v) AS (
+    SELECT CASE WHEN EXISTS (
+      WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, depth) AS (
+        SELECT id, reference_target_id, parent_id, workspace_id, 0
+          FROM blocks WHERE id = ?
+        UNION ALL
+        SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
+          FROM blocks AS b
+          JOIN up ON b.id = up.parent_id
+         WHERE up.depth < 100
+      )
+      SELECT 1 FROM up
+       WHERE up.reference_target_id IS NOT NULL
+         -- §9 root half: a workspace-root row is never a field row (twin
+         -- of the parentId check in isPropertyFieldInstance).
+         AND up.parent_id IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM workspaces w
+            WHERE w.id = up.workspace_id
+              AND w.properties_migration IN ('children', 'cell-off')
+         )
+         AND EXISTS (
+           SELECT 1 FROM block_types bt
+            WHERE bt.block_id = up.reference_target_id
+              AND bt.type = 'property-schema'
+              AND bt.workspace_id = up.workspace_id
+         )
+       LIMIT 1
+    ) THEN 1 ELSE 0 END
+  ),
+  subtree AS (
+    SELECT *,
+           '!' || hex(id) || '/' AS path,
+           0 AS depth
+      FROM blocks
+     WHERE id = ? AND deleted = 0
+    UNION ALL
+    SELECT child.*,
+           subtree.path || child.order_key || '!' || hex(child.id) || '/',
+           subtree.depth + 1
+      FROM subtree
+      JOIN blocks AS child INDEXED BY idx_blocks_parent_order
+        ON child.parent_id = subtree.id
+     WHERE child.deleted = 0
+       AND subtree.depth < 100
+       AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0
+       AND (
+         (SELECT v FROM root_exempt) = 1
+         OR child.reference_target_id IS NULL
+         OR NOT EXISTS (
+           SELECT 1 FROM workspaces w
+            WHERE w.id = child.workspace_id
+              AND w.properties_migration IN ('children', 'cell-off')
+         )
+         OR NOT EXISTS (
+           SELECT 1 FROM block_types bt
+            WHERE bt.block_id = child.reference_target_id
+              AND bt.type = 'property-schema'
+              AND bt.workspace_id = child.workspace_id
+         )
+       )
+  )
+  SELECT * FROM subtree ORDER BY path
+`;export{t as ANCESTORS_SQL,o as CHILDREN_IDS_SQL,a as CHILDREN_SQL,r as IS_DESCENDANT_OF_SQL,e as SUBTREE_SQL,l as VISIBLE_CHILDREN_IDS_SQL,c as VISIBLE_CHILDREN_SQL,u as VISIBLE_SUBTREE_SQL,i as cycleScanSql,n as manyAncestorsSql};
 //# sourceMappingURL=treeQueries.js.map
