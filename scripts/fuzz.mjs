@@ -136,7 +136,15 @@ export function buildFailureReport({ runUrl, sections }) {
     : '\n(no step reported failure — see the fuzz-output artifact.)\n'
 
   const onlyFile = allFiles.size === 1 ? [...allFiles][0] : '<failing file>'
-  const seedInfo = sections.map((s) => (s.log ? parseSeedAndPath(s.log) : null)).find(Boolean)
+  // Across the failed sections, prefer one whose failure carries a `path` (has a
+  // `runIndex`, so the regenerate command below can be emitted) over a seed-only
+  // interruption — e.g. the sweep step interrupts with `{ seed }` and no path
+  // while the stateful step reports a real `{ seed, path }`. A bare
+  // `.find(Boolean)` would stop on the non-replayable sweep result and drop the
+  // regenerate command even though a later section has the needed path. Fall
+  // back to the first seed-bearing section when none has a path.
+  const seedInfos = sections.map((s) => (s.log ? parseSeedAndPath(s.log) : null)).filter(Boolean)
+  const seedInfo = seedInfos.find((s) => s.runIndex !== undefined) ?? seedInfos[0]
 
   // Two reproduce paths. The FUZZ_PATH replay jumps straight to the shrunk
   // counterexample (fast) and is right for a normal deterministic property.
