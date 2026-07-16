@@ -143,19 +143,24 @@ export const buildTypeDefinitionRegistry = (
     const declaredSeed = def.metadata.seedKey !== undefined
       ? seedsByKey.get(def.metadata.seedKey)
       : undefined
-    // Treat as a seed mirror only when it backs the ACTIVE seed for that id (not
-    // a dropped id-duplicate). Bind the declared id to this block's location; the
-    // declared contribution (step 1) stays authoritative, and the row is
-    // retained above for provenance.
-    if (declaredSeed && seedKeyById.get(declaredSeed.id) === declaredSeed.seedKey) {
-      blockIdByTypeId.set(declaredSeed.id, def.metadata.blockId)
+    if (declaredSeed) {
+      // A mirror of a declared seed — code-owned. If it backs the ACTIVE seed
+      // for that id, bind the declared id to this block's location (the declared
+      // contribution from step 1 stays authoritative). If the seed is INACTIVE
+      // (it lost the membership-id dedup to another seed), the mirror is still
+      // code-owned: retain it only in `definitionsByBlockId` (above) for
+      // provenance — never republish it as a user-selectable type.
+      if (seedKeyById.get(declaredSeed.id) === declaredSeed.seedKey) {
+        blockIdByTypeId.set(declaredSeed.id, def.metadata.blockId)
+      }
       continue
     }
 
-    // A user row (or a row whose seed key isn't a current active declaration):
-    // publish under its own block id, never a stored claim. A declared seed
-    // already owning this id always wins (a user block id is a fresh uuid, so
-    // this guard only fires for a pathological forged/duplicate id).
+    // A user row (seed key absent, or a `/type/` key that isn't a current
+    // declaration — foreign/forged/retired): publish under its own block id,
+    // never a stored claim. A declared seed already owning this id always wins
+    // (a user block id is a fresh uuid, so this guard only fires for a
+    // pathological forged/duplicate id).
     if (typesById.has(def.metadata.blockId)) continue
     typesById.set(def.metadata.blockId, contributionFromProjection(def))
     blockIdByTypeId.set(def.metadata.blockId, def.metadata.blockId)

@@ -169,6 +169,27 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.typesById.get('page')).toMatchObject({label: 'Real Page'})
   })
 
+  it('retains an inactive (dup-id-loser) seed mirror for provenance only, not as a user type', () => {
+    // seed A wins the 'page' id; seed B (different key, same id) is dropped. A
+    // materialized mirror of the LOSER must not resurface as a separate
+    // user-selectable type — it's code-owned, kept only in definitionsByBlockId.
+    const loserKey = 'evil/type/page'
+    const loserMirrorId = typeDefinitionBlockId(WS, loserKey)
+    const reg = buildTypeDefinitionRegistry({
+      workspaceId: WS,
+      projectedDefinitions: asMap([
+        projected({blockId: loserMirrorId, seedKey: loserKey, label: 'Impostor Page'}),
+      ]),
+      seeds: [
+        seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Real Page'}),
+        seedType({seedKey: loserKey, revision: 1, id: 'page', label: 'Impostor Page'}),
+      ],
+    })
+    expect(reg.typesById.get('page')).toMatchObject({label: 'Real Page'})
+    expect(reg.typesById.has(loserMirrorId)).toBe(false)
+    expect(reg.definitionsByBlockId.get(loserMirrorId)?.seedKey).toBe(loserKey)
+  })
+
   it('does not bind a seed to a non-seed row squatting its deterministic backing id', () => {
     // A poisoned row sits at the seed's backing id without valid seed provenance.
     // The declared seed stays published, but must not be bound to that row —
