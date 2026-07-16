@@ -184,7 +184,7 @@
     Keep the full per-row history log, shrink it: invertible
     changed-columns events (before + after per changed field) with sampled
     full-snapshot anchors, provenance-gated logging for bulk derivation
-    bursts (and, pending O6, UI-state churn), sync-applied events kept
+    bursts, hard-bounded retention for UI-state churn, sync-applied events kept
     (compact) for local self-sufficiency, and a reconstruction-lossless,
     backup-prompted migration of the existing ~1.9M full-snapshot events —
     followed by the VACUUM that actually returns the bytes. Measured (§12):
@@ -266,9 +266,11 @@
     <li><strong>Derived writes log normally in compact form; only enumerated
       one-shot bulk bursts skip</strong>, via a tx-scoped
       <code>tx_context.history_mode</code> opt-in — provenance-keyed, never
-      column-keyed; hard deletes never skip (§5). A same-mechanism default for
-      UI-state churn — measured at roughly half of a working device's update
-      events — is proposed pending a user call (<a href="#s16">O6</a>).</li>
+      column-keyed; hard deletes never skip (§5). UI-state churn — measured at
+      roughly half of a working device's update events — is logged but
+      <strong>hard-bounded</strong>: a retention sweeper keeps only the newest
+      K versions per block, pruning oldest-side only (user call,
+      <a href="#s16">O6</a>/§5.3).</li>
     <li><strong>Sync-applied events are kept, compact, for every workspace</strong>
       (user call 2026-07-15, superseding an earlier per-workspace-mode drop):
       local history stays self-sufficient instead of leaning on a server read
@@ -463,7 +465,7 @@ which has no row_events triggers. Only the observer moves data into
 <h2 id="s3">3. Event format v2</h2>
 
 <p>
-Two new columns, added by an idempotent ALTER migration in the
+Three new columns, added by an idempotent ALTER migration in the
 <code>ensureUndoGroupIdColumns</code> mold (and with its same must-run-before-
 trigger-recreation ordering):
 </p>
@@ -486,6 +488,16 @@ trigger-recreation ordering):
         sides). <code>NULL</code> on v1 rows — every v1 row is full by
         construction, so readers treat <code>v IS NULL</code> as full. There
         is no cadence state anywhere — the log stays self-describing.</td>
+    </tr>
+    <tr>
+      <td><code>scope TEXT</code></td>
+      <td>The writing tx's <code>ChangeScope</code>, copied from
+        <code>tx_context.scope</code> (already populated per tx,
+        <code>commitPipeline.ts:263-264</code>; NULL for sync-applied and raw
+        writes, and on all v1 rows). Costs nothing — the trigger already
+        probes <code>tx_context</code> — and buys per-event provenance for
+        forensics plus the key the §5.3 UiState retention sweeper prunes
+        by.</td>
     </tr>
   </tbody>
 </table>
@@ -832,13 +844,13 @@ self-sufficient — applies here too, so it is worth being precise about what a
     <code>history_mode</code> gate at all: the enumerated bursts are
     create/update-shaped, and a purge that wants silence is a design change
     that must renegotiate I2 explicitly, not a flag to set. Cost owned: bulk
-    cleanups pay a tombstone per row — the dev instance's 317k
-    machine-deleted blocks cost ~194&nbsp;MB of delete events (measured,
+    cleanups pay a tombstone per row — the dev instance's 317k-block
+    workspace-migration purge cost ~194&nbsp;MB of delete events (measured,
     §12), the price of "every deleted block's last state survives
     locally".</li>
 </ul>
 
-<h3>5.3 Measured: UI-state churn dominates organic updates (proposed — O6)</h3>
+<h3>5.3 Measured: UI-state churn dominates organic updates — bounded, not skipped (O6)</h3>
 
 <p>
 Live measurement (2026-07-15, §12) surfaced a third write class this section's
@@ -858,17 +870,54 @@ The class is already provenance-tagged: these writes go through
 ("Selection / focus / chrome state", explicitly <em>not undoable</em> —
 <code>changeScope.ts</code>), and <code>tx_context.scope</code> is already
 populated per tx (<code>commitPipeline.ts:263-264</code>).
-<strong>Proposal (<a href="#s16">O6</a>):</strong> the commit pipeline
-defaults <code>history_mode = 'skip'</code> for UiState-scoped txs unless the
-caller overrides — policy in one TS site, the trigger keeps its single
-NULL-safe gate, I4 intact (scope is provenance, not columns). Undo never
-needs these events (the scope is not undoable by definition), and a
-history/time-travel UI for scroll positions is meaningless. Caveats owned:
-scope does not travel over sync, so other devices' UI-state churn still logs
-on arrival as compact properties-pair patches (the identical-echo share is
-absorbed by the no-op skip); and if panel state moves into per-field blocks in
-the #288 world, the patches get small and this default can be revisited.
 </p>
+
+<div class="callout good">
+  <strong>Decision (user call 2026-07-15) — log them, but hard-bound
+  retention: keep only the newest K versions per block.</strong> Skipping
+  entirely was considered and set aside by the user: a short local record
+  keeps panel-state bugs debuggable ("what did this panel hold a minute
+  ago"), while bounding is what actually matters — the class's cost is
+  unbounded <em>accumulation</em>, not per-event size. Default K = 8
+  (boot-tunable like p; the value is having <em>a</em> recent record, not
+  depth), which caps a panel block's local history at ~K &times;
+  1.4&nbsp;KB ≈ 11&nbsp;KB regardless of write rate — versus 35&nbsp;MB
+  measured on the hottest prod panel in three weeks.
+</div>
+
+<p>Mechanism and the rule that makes pruning sound:</p>
+
+<ul>
+  <li><strong>v2 events carry a <code>scope</code> stamp</strong> (§3), copied
+    from the <code>tx_context</code> probe the trigger already makes — zero
+    new reads (I6 intact), and the sweeper's selection key. Exemption stays
+    provenance-keyed (I4).</li>
+  <li><strong>A deep-idle retention sweeper</strong> (same
+    <code>PendingIdleJobs</code> machinery as §8) deletes, per block, the
+    <code>scope = 'local-ui'</code> events older than that block's newest K.
+    Not in-trigger: pruning from the trigger would put a read+DELETE on the
+    hottest write path (rejected, §15). The bound is eventual, enforced at
+    idle — bursts between sweeps are small and compact.</li>
+  <li><strong>R1 — oldest-side only.</strong> The sweeper may remove only the
+    oldest contiguous run of a block's events, never a middle one: under §4
+    a missing middle is undetectable (id gaps are normal — blocks interleave)
+    and would silently splice older states, while an oldest-side cut is
+    indistinguishable from "the log started later" — the same gap class §4.3
+    already handles, with every surviving state still exact via the newer-side
+    walk. "Keep newest K, delete everything older" satisfies R1 by
+    construction; the fuzz suite pins it (§13).</li>
+  <li><strong>I7 amended:</strong> the sweeper joins the §8 one-time rewrite
+    as the second sanctioned <code>row_events</code> mutation — narrowly:
+    scope-stamped rows, R1 order, never anchors-of-record for other
+    scopes.</li>
+  <li><strong>Caveats owned:</strong> scope does not travel over sync, so
+    other devices' UI-state churn still logs unbounded on arrival (compact
+    properties-pair patches; the identical-echo share is absorbed by the
+    no-op skip). If measurement shows the sync side matters, phase 2 bounds
+    sync-source <em>update</em> events of blocks that carry local-ui-stamped
+    events — flagged, not designed here. And pruned bytes return only at
+    VACUUM (§9) — the point is bounding growth, not reclaiming it.</li>
+</ul>
 
 <h2 id="s6">6. Sync-source logging: kept for every workspace (revised)</h2>
 
@@ -1356,8 +1405,16 @@ share the file.
     the skip is about machinery, not typing.</li>
   <li><strong>Added: UI-state churn is ~half of organic update traffic</strong>
     (§5.3/O6) — and shrinks only ~1.7&times; under compact patches, since each
-    write replaces the whole properties value. The scope-keyed skip, not the
-    format, is the lever for that class.</li>
+    write replaces the whole properties value. Bounded retention (newest K per
+    block), not the patch format, is the lever for that class.</li>
+  <li><strong>Context for the dev mix: half the log is one day.</strong>
+    2026-05-13 — this DB's first day — carries the predecessor workspace's
+    first sync (341k sync creates), its re-creation under the current
+    workspace id (317k user creates), and the old workspace's purge an hour
+    later (317k sync-labeled deletes): ~975k of 1.94M events. The 16%
+    hard-delete share is a one-time migration artifact, not steady state —
+    and a concrete instance of §5.2's "bulk cleanups pay a tombstone per
+    row" (~194&nbsp;MB).</li>
 </ul>
 
 <div class="table-scroll">
@@ -1373,7 +1430,7 @@ share the file.
     <tr><td>#288 backfill, authoring device (~650k creates)</td><td>~230&nbsp;MB</td><td><strong>0</strong> (§5/G1)</td></tr>
     <tr><td>#288 backfill, per receiving device</td><td>~230&nbsp;MB</td><td>~230&nbsp;MB unless #288 adds an arrival exemption (§11 G2)</td></tr>
     <tr><td>Ongoing: one organic content edit (measured mean full pair)</td><td>~2.1&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~4–5&times;)</td></tr>
-    <tr><td>Ongoing: one UI-state panel write</td><td>~2.4&nbsp;KB</td><td>~1.4&nbsp;KB as a patch (~1.7&times;) — or <strong>0</strong> locally under O6</td></tr>
+    <tr><td>Ongoing: one UI-state panel write</td><td>~2.4&nbsp;KB, forever</td><td>~1.4&nbsp;KB as a patch — and the block's whole local-write history plateaus at ~K &times; 1.4&nbsp;KB ≈ <strong>11&nbsp;KB</strong> under O6 retention (§5.3)</td></tr>
   </tbody>
 </table>
 </div>
@@ -1396,7 +1453,8 @@ into is smaller).
   <tbody>
     <tr>
       <td><strong>A — format</strong></td>
-      <td>ALTER adds (<code>v</code>, <code>full</code>; ordering per §8.2);
+      <td>ALTER adds (<code>v</code>, <code>full</code>, <code>scope</code>;
+        ordering per §8.2);
         v2 trigger bodies generated from the shared column spec (invertible
         changed-field patches on both sides, projected-field diffs,
         identical-update skip, one-coin p=1/64 anchor sampling — no probe, no
@@ -1413,10 +1471,11 @@ into is smaller).
         trigger carries no <code>history_mode</code> gate, §5.2);
         <code>tx_context.apply_kind</code> sync marker + the truthful three-way
         <code>source</code> tag (§6.2 — labeling only; the policy table and
-        drop gates left with the §6 revision); the UiState-scope skip default
-        if O6 is approved (§5.3); tests pinning I1-under-exemption, I3 (incl.
-        raw-write labeling + logging), and delete-always-logs — plus the
-        fuzzed writer-interleaving suite (note below).</td>
+        drop gates left with the §6 revision); the §5.3 UiState retention
+        sweeper (newest K per block, rule R1); tests pinning
+        I1-under-exemption, I3 (incl. raw-write labeling + logging), and
+        delete-always-logs — plus the fuzzed writer-interleaving suite (note
+        below).</td>
       <td><strong>Unblocks #288 slice C</strong> (G1–G3)</td>
     </tr>
     <tr>
@@ -1460,7 +1519,9 @@ p&nbsp;=&nbsp;1 and p&nbsp;=&nbsp;0 trigger variants so both the full and the
 compact path are exercised on every seed. Slice B adds fuzzed interleavings
 of user / sync-applied / raw / <code>'skip'</code> writers (oracle: exactly
 the skip-tx create/update events are absent, delete events always present,
-labels truthful — I3/I4). Slice C's I5 equivalence suite is the same
+labels truthful — I3/I4), and randomized §5.3 retention sweeps interleaved
+with UiState writes (oracle: pruning is oldest-side-only per block — R1 —
+and <code>stateAt</code> stays exact for every surviving event). Slice C's I5 equivalence suite is the same
 generator aimed at v1 histories (deliberate gaps, pre-log openings, no-op
 runs): migrate, then <code>stateAt</code> must be identical for every event —
 under random interruption/resume points.
@@ -1551,9 +1612,11 @@ under random interruption/resume points.
     </tr>
     <tr>
       <td>I7</td>
-      <td><strong>History rows are immutable</strong> once written — the §8
-        one-time rewrite is the sole sanctioned exception; runtime code never
-        UPDATEs or DELETEs <code>row_events</code>.</td>
+      <td><strong>History rows are immutable</strong> once written — two
+        narrowly sanctioned exceptions: the §8 one-time rewrite, and the §5.3
+        UiState retention sweeper (scope-stamped rows only, oldest-side-only
+        rule R1). All other runtime code never UPDATEs or DELETEs
+        <code>row_events</code>.</td>
       <td><a href="#s1">§1</a>/<a href="#s8">§8</a></td>
       <td>All future code</td>
       <td>Review rule (no test — restating it in a test would just duplicate
@@ -1594,6 +1657,16 @@ under random interruption/resume points.
     property that is the log's reason to exist.</li>
   <li><strong>Values-free or sampled logging for the bulk bursts</strong> —
     §5 table rows (b)/(c).</li>
+  <li><strong>Skipping UiState-scoped events entirely</strong> — proposed
+    from the §5.3 measurements, set aside by the user 2026-07-15 in favor of
+    bounded retention (keep newest K per block): a short local record keeps
+    panel-state debugging possible while the bound removes the actual
+    problem (unbounded accumulation).</li>
+  <li><strong>In-trigger retention pruning</strong> — enforcing the UiState
+    bound from the trigger itself would put an indexed read + DELETE on the
+    hottest write path in the system (violates I6, and the §4 design just
+    removed the last write-path read); the deep-idle sweeper enforces the
+    same bound eventually.</li>
   <li><strong>Column-keyed exemptions</strong> (e.g. never log
     <code>properties_json</code>) — violates I4; loses the only history for
     cell-primary keys and the whole pre-flip period (PR #288 §12).</li>
@@ -1662,17 +1735,17 @@ under random interruption/resume points.
     undo befores stored directly, unconditional soundness under every gap
     class. Sampling probability: O3 → §4.4 (default p = 1/64, rarer than the
     original 1-in-50 frame, per the loss-window derivation).</li>
-  <li><strong>O6 — default <code>history_mode = 'skip'</code> for
-    UiState-scoped writes?</strong> Measured (§5.3): roughly half of a working
-    device's update events are panel selection/scroll churn that compact
-    patches barely shrink (~1.7&times;); the class is enumerable, already
-    provenance-tagged (<code>ChangeScope.UiState</code>), and explicitly not
-    undoable. Lean: yes — skip by default, overridable per tx, accepting that
-    sync-applied echoes of other devices' UI state still log (scope does not
-    travel over sync; the no-op skip absorbs the identical share). Flagged for
-    the user's call under the history-self-sufficiency steer: this is the one
-    place the doc proposes not logging a user-visible surface's state — though
-    the "history" at stake is scroll positions and focus, not knowledge.</li>
+  <li><strong>O6 — RESOLVED (2026-07-15, user): UiState events are logged
+    but hard-bounded, not skipped.</strong> Measured trigger (§5.3): roughly
+    half of a working device's update events are panel selection/scroll churn
+    that compact patches barely shrink (~1.7&times;). The initial proposal
+    (default <code>history_mode = 'skip'</code> for the scope) was set aside
+    by the user — keep a few versions instead. Adopted: v2 events carry a
+    <code>scope</code> stamp (§3); a deep-idle sweeper keeps the newest
+    K = 8 <code>'local-ui'</code> events per block, pruning oldest-side only
+    (rule R1); I7 amended accordingly. Open detail deferred to measurement:
+    whether phase 2 also bounds the sync-arrived echo of the same blocks
+    (§5.3 caveats).</li>
 </ol>
 
 <hr>
