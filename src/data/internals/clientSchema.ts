@@ -481,7 +481,14 @@ ${ROW_EVENT_COLUMNS.map(c => `        '${c.key}', ${c.emit(rowRef)}`).join(',\n'
  *  fields only. Key present ⇔ the field changed (JSON null = cleared); the
  *  same `changed` predicates drive both sides, so before/after key sets are
  *  equal by construction (invariant I1's shape half). Same
- *  json_set/json_remove('$.__noop') idiom as {@link blockUploadPatchJsonSql}. */
+ *  json_set/json_remove('$.__noop') idiom as {@link blockUploadPatchJsonSql}.
+ *
+ *  Note: json_set evaluates ALL value arguments eagerly — the CASE only
+ *  picks the path — so `json(properties_json)` runs on every logged update
+ *  even when that column didn't change, and a malformed JSON cell (only
+ *  reachable via raw writes with triggers suspended; the insert trigger
+ *  json()s the same cells) aborts the UPDATE. Same exposure as v1's full
+ *  snapshots, minus the identical updates the WHEN gate now skips. */
 const blockPatchJsonSql = (rowRef: 'NEW' | 'OLD') => `
       json_remove(
         json_set(
@@ -610,7 +617,7 @@ export const buildBlocksUpdateRowEventTriggerSql = (
       ${triggerTxIdSql},
       NEW.id,
       CASE
-        WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'
+        WHEN NOT OLD.deleted AND NEW.deleted THEN 'soft-delete'
         ELSE 'update'
       END,
       CASE WHEN ${isFullSql} THEN ${blockJsonObjectSql('OLD')} ELSE ${blockPatchJsonSql('OLD')} END,

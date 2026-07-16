@@ -35,6 +35,7 @@ import {
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
   ROW_EVENTS_FORMAT_VERSION,
+  blockJsonObjectSql,
   buildBlocksUpdateRowEventTriggerSql,
   ensureRowEventsV2Columns,
 } from './clientSchema'
@@ -294,6 +295,22 @@ describe('v2 shape under the PRODUCTION random coin (anchor-agnostic — the one
   })
 })
 
+describe('trigger-spec coverage tripwire', () => {
+  it('the update trigger WHEN gate references every blocks storage column (a dropped/typoed predicate would silently unlog that column — I3)', () => {
+    // ROW_EVENT_COLUMNS is a hand-maintained projection of
+    // BLOCK_STORAGE_COLUMNS; this pins the lockstep rule structurally, so a
+    // column added to blocks without a row_events spec entry (or a predicate
+    // typoed into OLD.x IS NOT OLD.x) fails here instead of silently
+    // vanishing under the identical-update skip.
+    const whenClause = CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL.match(/WHEN([\s\S]*?)BEGIN/)?.[1]
+    expect(whenClause).toBeTruthy()
+    for (const {name} of BLOCK_STORAGE_COLUMNS) {
+      expect(whenClause).toContain(`OLD.${name}`)
+      expect(whenClause).toContain(`NEW.${name}`)
+    }
+  })
+})
+
 describe('scope stamp (source-gated projection)', () => {
   const setCtx = (fields: Record<string, string | null>) => {
     const cols = Object.keys(fields)
@@ -389,6 +406,75 @@ describe('stateAt (design §4.3)', () => {
     // has no older base (pre-log create), no newer terminator, no live row.
     suspendRowEventTriggers(() => db.prepare('DELETE FROM blocks WHERE id = ?').run('b1'))
     await expect(stateAt(historyDb(db), compact.id)).rejects.toThrow(HistoryWalkError)
+  })
+
+  it('reconstructs compact events after an UNLOGGED delete+recreate (backward walk from the new live generation)', async () => {
+    installUpdateTrigger(db, ANCHOR_COIN_NEVER_SQL)
+    insertBlock()                                              // create(1)
+    db.prepare('DELETE FROM blocks WHERE id = ?').run('b1')    // delete(2)
+    suspendRowEventTriggers(() => insertBlock({content: 'g2'})) // unlogged recreate
+    updateBlock('b1', {content: 'g2a'})                        // compact(3)
+    updateBlock('b1', {content: 'g2b'})                        // compact(4)
+    const events = rowEvents()
+    expect(events.map(e => e.kind)).toEqual(['create', 'delete', 'update', 'update'])
+    // The compact events are NEWER than the gap — the backward walk from the
+    // live row is exact, and must not be poisoned by (or throw on) the old
+    // generation's create/delete on the forward side.
+    expect((await stateAt(historyDb(db), events[2].id)).content).toBe('g2a')
+    expect((await stateAt(historyDb(db), events[3].id)).content).toBe('g2b')
+  })
+
+  it('falls back to the forward walk when an unlogged purge+recreate makes the live generation unreachable', async () => {
+    installUpdateTrigger(db, ANCHOR_COIN_NEVER_SQL)
+    insertBlock()                                              // create(1)
+    for (const c of ['a', 'b', 'c']) updateBlock('b1', {content: c}) // compact(2,3,4)
+    suspendRowEventTriggers(() => db.prepare('DELETE FROM blocks WHERE id = ?').run('b1'))
+    insertBlock({content: 'gen2'})                             // create(5), live
+    const events = rowEvents()
+    expect(events.map(e => e.kind)).toEqual(['create', 'update', 'update', 'update', 'create'])
+    // Backward from the live row is severed by the gen-2 create; the forward
+    // walk from gen-1's own create still answers exactly.
+    expect((await stateAt(historyDb(db), events[1].id)).content).toBe('a')
+    expect((await stateAt(historyDb(db), events[2].id)).content).toBe('b')
+    expect((await stateAt(historyDb(db), events[3].id)).content).toBe('c')
+    expect((await stateAt(historyDb(db), events[4].id)).content).toBe('gen2')
+  })
+
+  it('handles a v1/v2 INTERLEAVED log — a stale-tab v1 full update serves as terminator and base', async () => {
+    installUpdateTrigger(db, ANCHOR_COIN_NEVER_SQL)
+    insertBlock()                                              // v2 create(1)
+    updateBlock('b1', {content: 'a'})                          // compact(2)
+    // Stale tab on old code reinstalls the v1 body (full both sides, no
+    // v/full/scope columns) — recreate that exact shape.
+    db.exec('DROP TRIGGER IF EXISTS blocks_row_event_update')
+    db.exec(`
+      CREATE TRIGGER blocks_row_event_update AFTER UPDATE ON blocks BEGIN
+        INSERT INTO row_events (tx_id, block_id, kind, before_json, after_json, source, created_at)
+        VALUES (NULL, NEW.id, 'update', ${blockJsonObjectSql('OLD')}, ${blockJsonObjectSql('NEW')}, 'sync',
+          CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+      END
+    `)
+    updateBlock('b1', {content: 'v1write'})                    // v1 full(3)
+    installUpdateTrigger(db, ANCHOR_COIN_NEVER_SQL)
+    updateBlock('b1', {content: 'z'})                          // compact(4)
+    const events = rowEvents()
+    expect(events[2].v).toBeNull()
+    expect((await stateAt(historyDb(db), events[1].id)).content).toBe('a')       // v1 before side terminates
+    expect((await stateAt(historyDb(db), events[2].id)).content).toBe('v1write') // v1 answers itself
+    expect((await stateAt(historyDb(db), events[3].id)).content).toBe('z')       // v1 after side is a base
+  })
+
+  it('id-rewrite chains: the NEW id reads via the forced-full pair; the orphaned old-id chain recovers via its older-side fulls', async () => {
+    installUpdateTrigger(db, ANCHOR_COIN_NEVER_SQL)
+    insertBlock()                                              // create b1 (1)
+    updateBlock('b1', {content: 'a'})                          // compact b1 (2)
+    updateBlock('b1', {id: 'b1-moved'})                        // forced full, block_id b1-moved (3)
+    updateBlock('b1-moved', {content: 'c'})                    // compact b1-moved (4)
+    const events = rowEvents()
+    expect((await stateAt(historyDb(db), events[3].id)).content).toBe('c')
+    expect((await stateAt(historyDb(db), events[2].id)).id).toBe('b1-moved')
+    // Old-id chain: no live b1 row, no newer b1 events — forward from create.
+    expect((await stateAt(historyDb(db), events[1].id)).content).toBe('a')
   })
 
   it('reads v1 rows (v IS NULL) as full snapshots', async () => {

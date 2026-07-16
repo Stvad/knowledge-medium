@@ -43,12 +43,15 @@ const IDS = ['b1', 'b2', 'b3'] as const
 type BlockId = (typeof IDS)[number]
 
 interface UpdateFields {
+  workspace_id?: string
   content?: string
   order_key?: string
   properties_json?: string
   references_json?: string
+  created_at?: number
   updated_at?: number
   user_updated_at?: number | null
+  created_by?: string
   updated_by?: string
 }
 
@@ -71,12 +74,20 @@ const propsArb = fc
 const updateFieldsArb: fc.Arbitrary<UpdateFields> = fc
   .record(
     {
+      // workspace_id/created_at/created_by don't move in normal app flows,
+      // but the WHEN gate must cover EVERY column (I3) — a dropped or
+      // typoed predicate on the columns nobody edits casually is exactly
+      // the drift that would go unnoticed longest, so the model exercises
+      // them like any other field.
+      workspace_id: fc.constantFrom('ws1', 'ws2'),
       content: contentArb,
       order_key: fc.constantFrom('a0', 'a1', 'a2'),
       properties_json: propsArb,
       references_json: fc.constantFrom('[]', '[{"id":"r1"}]'),
+      created_at: tsArb,
       updated_at: tsArb,
       user_updated_at: fc.option(tsArb, {nil: null}),
+      created_by: fc.constantFrom('u1', 'u2'),
       updated_by: fc.constantFrom('u1', 'u2'),
     },
     {requiredKeys: []},
@@ -102,6 +113,7 @@ const DOMAIN_KEYS = [
 
 interface StorageRow {
   id: string
+  workspace_id: string
   content: string
   order_key: string
   properties_json: string
@@ -109,6 +121,7 @@ interface StorageRow {
   created_at: number
   updated_at: number
   user_updated_at: number | null
+  created_by: string
   updated_by: string
   deleted: 0 | 1
 }
@@ -117,7 +130,7 @@ type DomainState = Record<string, unknown>
 
 const domainState = (r: StorageRow): DomainState => ({
   id: r.id,
-  workspaceId: 'ws1',
+  workspaceId: r.workspace_id,
   parentId: null,
   orderKey: r.order_key,
   content: r.content,
@@ -126,7 +139,7 @@ const domainState = (r: StorageRow): DomainState => ({
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   userUpdatedAt: r.user_updated_at ?? r.updated_at,
-  createdBy: 'u1',
+  createdBy: r.created_by,
   updatedBy: r.updated_by,
   deleted: r.deleted === 1,
 })
@@ -136,6 +149,8 @@ const domainState = (r: StorageRow): DomainState => ({
 const changedDomainKeys = (before: StorageRow, after: StorageRow): string[] => {
   const keys: string[] = []
   if (before.id !== after.id) keys.push('id')
+  if (before.workspace_id !== after.workspace_id) keys.push('workspaceId')
+  if (before.created_by !== after.created_by) keys.push('createdBy')
   if (before.order_key !== after.order_key) keys.push('orderKey')
   if (before.content !== after.content) keys.push('content')
   if (before.properties_json !== after.properties_json) keys.push('properties')
@@ -216,6 +231,7 @@ const runSequence = async (cmds: Cmd[], coinSql: string | null): Promise<void> =
         if (existing) continue // PK collision — model skips
         const row: StorageRow = {
           id: cmd.id,
+          workspace_id: 'ws1',
           content: cmd.content,
           order_key: 'a0',
           properties_json: '{}',
@@ -223,6 +239,7 @@ const runSequence = async (cmds: Cmd[], coinSql: string | null): Promise<void> =
           created_at: cmd.created_at,
           updated_at: cmd.created_at,
           user_updated_at: cmd.user_updated_at,
+          created_by: 'u1',
           updated_by: 'u1',
           deleted: 0,
         }
