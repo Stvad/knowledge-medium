@@ -111,13 +111,14 @@ var e=`
        SELECT 1 FROM block_types bt
         WHERE bt.block_id = blocks.reference_target_id
           AND bt.type = 'property-schema'
+          AND bt.workspace_id = blocks.workspace_id
      )
      OR EXISTS (
-       WITH RECURSIVE up(id, reference_target_id, parent_id, depth) AS (
-         SELECT id, reference_target_id, parent_id, 0
+       WITH RECURSIVE up(id, reference_target_id, parent_id, workspace_id, depth) AS (
+         SELECT id, reference_target_id, parent_id, workspace_id, 0
            FROM blocks WHERE id = ?
          UNION ALL
-         SELECT b.id, b.reference_target_id, b.parent_id, up.depth + 1
+         SELECT b.id, b.reference_target_id, b.parent_id, b.workspace_id, up.depth + 1
            FROM blocks AS b
            JOIN up ON b.id = up.parent_id
           WHERE up.depth < 100
@@ -128,6 +129,7 @@ var e=`
             SELECT 1 FROM block_types bt2
              WHERE bt2.block_id = up.reference_target_id
                AND bt2.type = 'property-schema'
+               AND bt2.workspace_id = up.workspace_id
           )
         LIMIT 1
      )
