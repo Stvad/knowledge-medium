@@ -78,6 +78,21 @@ export function excerptSeedBlock(log) {
   return tailBytes(text, 5000)
 }
 
+// fast-check reports its replay parameters as, e.g.
+//   { seed: -915705129, path: "20419:0:0:…", endOnFailure: true }
+// Pull out the seed and the leading run index (the `path`'s first segment is
+// the generation offset of the failure). The report uses these to offer a
+// *regenerate-from-seed* command in addition to the path replay — see
+// `buildFailureReport`. Returns null when no seed line is present (a
+// non-fast-check crash).
+export function parseSeedAndPath(log) {
+  const seed = log.match(/\bseed:\s*(-?\d+)/)?.[1]
+  if (seed === undefined) return null
+  const path = log.match(/\bpath:\s*"([^"]*)"/)?.[1]
+  const firstSegment = path ? Number(path.split(':')[0]) : NaN
+  return { seed, path, runIndex: Number.isInteger(firstSegment) ? firstSegment : undefined }
+}
+
 const ISSUE_381_NOTE = `**Known standing red:** the convergence deep tier (\`twoRepoConvergence.fuzz.test.ts\`) is expected to fail nightly while #381 (server-side fix) is open — do not treat that alone as new. Triage:
 1. Does the failing-file list above contain anything BESIDES \`twoRepoConvergence.fuzz.test.ts\`? If so, that's new — investigate it.
 2. If only convergence failed, compare the seed/path/shrunk counterexample below against #381's. A different fingerprint is a second, distinct bug in the same property, not the known one.`
@@ -110,9 +125,29 @@ export function buildFailureReport({ runUrl, sections }) {
     ? blocks.join('')
     : '\n(no step reported failure — see the fuzz-output artifact.)\n'
 
-  const repro =
-    "Reproduce: find the `seed`/`path` in fast-check's failure report above (or in the fuzz-output artifact), then run\n" +
-    '`FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file> -t "<failing test>"` (see docs/fuzzing.md).'
+  const onlyFile = allFiles.size === 1 ? [...allFiles][0] : '<failing file>'
+  const seedInfo = sections.map((s) => (s.log ? parseSeedAndPath(s.log) : null)).find(Boolean)
+
+  // Two reproduce paths. The FUZZ_PATH replay jumps straight to the shrunk
+  // counterexample (fast) and is right for a normal deterministic property.
+  // But if the shrink is unsound — a non-deterministic or engine-sensitive
+  // property, where the reported counterexample *passes* on replay (see
+  // docs/fuzzing.md) — you must regenerate the whole sequence from the seed:
+  // drop the path and run enough cases to reach the failure. `runIndex` is the
+  // 0-based generation offset from the path, so `FUZZ_RUNS = runIndex + 1`
+  // reaches it. (`fuzzParams` short-circuits a path replay regardless of
+  // count, which is why the path form can't be made to regenerate.)
+  const pathReplay =
+    "Reproduce — first try the fast path replay (find the `seed`/`path` in the report above if not filled in):\n" +
+    `\`FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 ${onlyFile} -t "<failing test>"\``
+
+  const regen =
+    seedInfo?.runIndex !== undefined
+      ? '\n\nIf that replay **passes**, the shrink is unsound — regenerate the full sequence from the seed instead:\n' +
+        `\`FUZZ_SEED=${seedInfo.seed} FUZZ_RUNS=${seedInfo.runIndex + 1} yarn vitest run --testTimeout=600000 ${onlyFile} -t "<failing test>"\``
+      : ''
+
+  const repro = `${pathReplay}${regen}\n\n(see docs/fuzzing.md).`
 
   return [headline, '', failingFiles, ISSUE_381_NOTE, excerpt, repro].join('\n')
 }
