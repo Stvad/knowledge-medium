@@ -336,7 +336,13 @@ children: first visible comment block, then reply blocks</code></pre>
   <h2>Thread Placement And Lifecycle</h2>
   <p>Thread roots need a tree location because they are normal blocks. The recommended v1 shape is one annotation-owned container per workspace, with thread roots as children and replies as descendants of the thread root. The target relationship is expressed only through <code>annotation:targetBlocks</code>, not through the outline parent.</p>
 
-  <p>The container should reuse the existing system-page machinery, not a hand-rolled get-or-create: register an ensure through <code>systemPagesFacet</code> and mint at the deterministic <code>uuidv5(workspaceId, namespace)</code> id the way <code>getOrCreateKernelPage</code> does (see <a href="../src/data/kernelPage.ts">kernelPage.ts</a>), so two offline clients converge on one container (<code>systemMint</code> pristine rows plus PUT/PATCH fusion). Two deliberate differences from kernel pages: the annotation container gets <em>no alias and no page type</em>, keeping it out of page autocomplete and alias listings; and its ensure must restore a soft-deleted container the way <code>getOrCreateKernelPage</code> does — plain <code>tx.createOrGet</code> throws on a tombstone, and a permanently deleted container must never brick comment creation. Facet registration means an eager pristine row minted on the workspace-open path in every workspace (<code>repo.ensureSystemPages</code>); v1 accepts that for uniformity with existing system pages — lazy ensure-at-first-comment is the fallback if boot-path writes become a concern.</p>
+  <p>The container reuses the existing system-page machinery, not a hand-rolled get-or-create:</p>
+  <ul>
+    <li><strong>Mechanism:</strong> register an ensure through <code>systemPagesFacet</code>, minting at the deterministic <code>uuidv5(workspaceId, namespace)</code> id the way <code>getOrCreateKernelPage</code> does (see <a href="../src/data/kernelPage.ts">kernelPage.ts</a>) — <code>systemMint</code> pristine rows plus PUT/PATCH fusion make two offline clients converge on one container.</li>
+    <li><strong>Delta from kernel pages — invisible:</strong> the container gets <em>no alias and no page type</em>, keeping it out of page autocomplete and alias listings. Its marker type is self-description only; lookups key on the deterministic id.</li>
+    <li><strong>Delta from kernel pages — tombstone-proof:</strong> the ensure must restore a soft-deleted container the way <code>getOrCreateKernelPage</code> does — plain <code>tx.createOrGet</code> throws on a tombstone, and a permanently deleted container must never brick comment creation.</li>
+    <li><strong>Timing:</strong> facet registration means an eager pristine row minted on the workspace-open path in every workspace (<code>repo.ensureSystemPages</code>); v1 accepts that for uniformity — lazy ensure-at-first-comment is the fallback if boot-path writes become a concern.</li>
+  </ul>
 
   <table>
     <tr>
@@ -604,7 +610,7 @@ children: first visible comment block, then reply blocks</code></pre>
 
   <h2>Open Questions</h2>
   <ul>
-    <li>Repair by exact/context search is decided (see Anchor Maintenance). Should repair also offer manual re-selection — the user selecting new text to reattach a thread whose original text is gone?</li>
+    <li>Should repair also offer manual re-selection — the user selecting new text to reattach a thread whose original text is gone? (Search-based repair itself is decided; see Anchor Maintenance.)</li>
     <li>When annotation count grows, is the right graduation path a dedicated synced table or the deferred <code>plugin_block_data</code> escape hatch described in <a href="follow-ups.md">follow-ups.md</a>?</li>
   </ul>
 
