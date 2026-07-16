@@ -329,10 +329,25 @@ const sweepAliasBindings = async (
         [workspaceId, ref.alias],
       )
       if (claimant === null) continue // ownership released — see docblock, not policed
+      // Only LIVE-bound bindings are policed. A binding whose target is a
+      // TOMBSTONE while a live claimant exists is the release-reclaim
+      // residual: the claimant was deleted (claim released — block_aliases
+      // is live-only), a different block later claimed the alias, and the
+      // add-only/retain contract deliberately keeps the tombstone-bound
+      // entry so restoring the old target rebinds cleanly (retargeting it
+      // would break undo). Whether such bindings should chase the new
+      // claimant is an open product decision — issue #383 (sibling of
+      // #378's restore-side stale claims). What must NEVER happen is two
+      // LIVE blocks disagreeing: a live-bound entry pointing at a
+      // non-claimant while a live claimant exists (the #20/#25 class).
+      const boundTarget = await db.getOptional<{deleted: number}>(
+        'SELECT deleted FROM blocks WHERE id = ?', [ref.id],
+      )
+      if (boundTarget === null || boundTarget.deleted === 1) continue
       expect(
         ref.id,
         `stable wrong binding: alias ${JSON.stringify(ref.alias)} on source ${row.id} `
-        + `is bound to ${ref.id}, but the current claimant of that alias is ${claimant.id}`,
+        + `is bound to LIVE ${ref.id}, but the current claimant of that alias is ${claimant.id}`,
       ).toBe(claimant.id)
     }
   }

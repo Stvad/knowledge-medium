@@ -66,6 +66,7 @@ import {
 import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
+import { aliasesProp } from '@/data/properties'
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
@@ -284,6 +285,49 @@ const buildSourcePlan = async (
  *  cleanup-eligibility filtering — only `ensureAliasTarget`'s
  *  `inserted: true` results count; date results never feed cleanup per
  *  §7.6). */
+/** Make the resolved date target CLAIM each long-form literal spelling
+ *  that bound to it (e.g. "January 5th, 2026" alongside the ISO
+ *  "2026-01-05"), so the binding gets the same
+ *  `block_aliases_workspace_alias_unique` exclusivity protection a
+ *  plain-alias seat gets from `ensureAliasTarget` claiming its literal.
+ *  Without the claim the literal string stays unowned: any later block
+ *  can legitimately claim it, and existing bindings are left silently
+ *  pointing at the old target FOREVER — nothing watches "a
+ *  previously-unclaimed literal was just claimed", and the source only
+ *  re-parses on its own row's changes (found by
+ *  referencesRecompute.fuzz.test.ts' stable-wrong-binding sweep).
+ *
+ *  `targetId` is whatever the ensure resolved — the deterministic daily
+ *  seat OR a live block that claims the ISO (a user page aliased to the
+ *  date). Claiming the spelling on the latter mutates a user page's
+ *  alias list, deliberately: that page IS what the spelling resolves to,
+ *  the claim is exactly the record that makes future resolutions
+ *  exclusive, and removing it triggers the rename ladder which rewrites
+ *  the sources properly. Callers run this AFTER the per-literal
+ *  `tx.aliasLookup` recheck, so within this tx the literal is known
+ *  unclaimed — the uniqueness trigger is the cross-writer backstop. */
+const claimLiteralDateAliases = async (
+  tx: Tx,
+  targetId: string,
+  iso: string,
+  aliases: readonly string[],
+): Promise<void> => {
+  const literals = [...new Set(aliases.filter(alias => alias !== iso))]
+  if (literals.length === 0) return
+  const target = await tx.get(targetId)
+  if (target === null || target.deleted) return
+  let existing: readonly string[]
+  try {
+    const encoded = target.properties[aliasesProp.name]
+    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
+  } catch {
+    existing = []
+  }
+  const missing = literals.filter(literal => !existing.includes(literal))
+  if (missing.length === 0) return
+  await tx.setProperty(targetId, aliasesProp, [...existing, ...missing])
+}
+
 const applySourcePlan = async (
   tx: Tx,
   ctx: ProcessorCtx,
@@ -346,6 +390,7 @@ const applySourcePlan = async (
     for (const alias of aliases) {
       retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id, alias)
     }
+    await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
