@@ -167,6 +167,24 @@ export const normalizeChord = (chord: string): string =>
   formatPress(parsePress(chord))
 
 /**
+ * `KeyboardEvent.code` key tokens that tinykeys can only match through its
+ * case-SENSITIVE `event.code` path, because their `event.key` differs from
+ * the token: code `Digit1`→key `'1'`, `Period`→`'.'`, `Space`→`' '`,
+ * `KeyA`→`'a'`, `Numpad3`→`'3'`. tinykeys tries `token.toUpperCase() ===
+ * event.key.toUpperCase()` OR `token === event.code` (tinykeys `matchKeybindingPress`),
+ * so a mis-cased spelling like `digit1` matches NEITHER — it never fires.
+ * Folding these to lowercase in the canonical key would therefore (a) claim
+ * `Digit1` and `digit1` are the same binding when only the former dispatches,
+ * letting a dead `digit1` override strip a live `Digit1` default, and (b) is
+ * meaningless anyway since the real binding must be exact-cased. Named keys
+ * whose `event.key` EQUALS the code (`Enter`, `Tab`, `Escape`, `Backspace`,
+ * `ArrowUp`, `F5`, …) are NOT here: they still match via the case-insensitive
+ * `event.key` path, so folding them is safe and keeps mis-cased spellings in
+ * one bucket. */
+const CODE_ONLY_KEY =
+  /^(?:Key[A-Z]|Digit[0-9]|Numpad\w+|Space|Period|Comma|Slash|Backslash|Semicolon|Quote|Backquote|Minus|Equal|BracketLeft|BracketRight|Intl[A-Za-z]+)$/
+
+/**
  * Canonicalise a whole chord, sequence-aware: splits on space first, then
  * canonicalises each press, so 'Cmd+K Cmd+S' becomes '$mod+k $mod+s'
  * instead of being mangled by a naive `+` split. Returns a stable string
@@ -176,7 +194,19 @@ export const normalizeChord = (chord: string): string =>
  */
 export const canonicalizeChord = (raw: string, phase?: ChordPhase): string => {
   const canonical = splitSequence(raw)
-    .map(press => formatPress(parsePress(press)))
+    // Fold the final key's CASE too, unlike `normalizeChord`: tinykeys
+    // dispatch compares `key.toUpperCase() === event.key.toUpperCase()`,
+    // so '$mod+K' and '$mod+k' are the same binding at dispatch and must
+    // land in the same bucket here (strip map, conflict detection).
+    // `normalizeChord` stays case-preserving — the settings UI stores and
+    // round-trips the user's spelling. EXCEPTION: {@link CODE_ONLY_KEY}
+    // tokens match only via tinykeys' case-sensitive `event.code` path, so
+    // folding them would corrupt the binding and forge false collisions —
+    // those keep their case.
+    .map(press => {
+      const {mods, key} = parsePress(press)
+      return formatPress({mods, key: CODE_ONLY_KEY.test(key) ? key : key.toLowerCase()})
+    })
     .join(' ')
   return phase ? `${phase}:${canonical}` : canonical
 }

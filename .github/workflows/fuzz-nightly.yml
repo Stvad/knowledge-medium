@@ -12,8 +12,11 @@
 # uploaded as an artifact, and an issue is filed (or a comment added to
 # the existing open one). The issue body is built ONLY from the log(s) of
 # the pass(es) that actually failed — a pass 2 pass after a pass 1
-# failure must not bury the seed under green output — with a best-effort
-# extracted failure excerpt; the full logs are always in the artifact.
+# failure must not bury the seed under green output — and leads with the
+# list of failing test files, then a static triage note (convergence
+# deep-tier red is expected while #381 is open), then a best-effort
+# seed/repro excerpt; the full logs are always in the artifact. Report
+# building lives in `node scripts/fuzz.mjs --report`.
 name: Nightly Fuzz
 
 on:
@@ -104,50 +107,19 @@ jobs:
           SWEEP_OUTCOME: ${{ steps.sweep.outcome }}
           STATEFUL_OUTCOME: ${{ steps.stateful.outcome }}
         run: |
-          # Best-effort: pull fast-check's failure block (seed/path/shrunk
-          # counterexample usually sit within a few lines of "seed:") out of
-          # a log; fall back to a plain tail if the grep finds nothing (e.g.
-          # a non-fast-check crash).
-          extract() {
-            local log="$1"
-            if [ ! -f "$log" ]; then
-              echo '(no log captured)'
-              return
-            fi
-            local excerpt
-            excerpt=$(grep -B 3 -A 12 'seed:' "$log" 2>/dev/null | tail -c 5000 || true)
-            if [ -n "$excerpt" ]; then
-              printf '%s' "$excerpt"
-            else
-              tail -c 5000 "$log"
-            fi
-          }
-
-          # Only pull from logs whose pass actually failed — a passing
-          # pass 2 after a failing pass 1 must not bury the seed under
-          # green output.
+          # Failing-file extraction, the seed/repro excerpt, and the
+          # standing-#381 triage note are all built by
+          # `node scripts/fuzz.mjs --report` (kept in JS, not shell, so
+          # the vitest-output parsing is testable — see that file). Only
+          # pass logs for steps that actually failed — a passing pass 2
+          # after a failing pass 1 must not bury the seed under green
+          # output.
           failing=()
           [ "$SWEEP_OUTCOME" = "failure" ] && failing+=("Deep fuzz — all suites|fuzz-sweep.log")
           [ "$STATEFUL_OUTCOME" = "failure" ] && failing+=("Deep fuzz — stateful data-layer suite (long pass)|fuzz-stateful.log")
 
-          if [ ${#failing[@]} -eq 0 ]; then
-            excerpt=$'\n(no step reported failure — see the fuzz-output artifact.)\n'
-          else
-            excerpt=""
-            for entry in "${failing[@]}"; do
-              name="${entry%%|*}"
-              log="${entry#*|}"
-              excerpt+=$(printf '\n### %s\n\n```\n%s\n```\n' "$name" "$(extract "$log")")
-            done
-          fi
+          body=$(node scripts/fuzz.mjs --report "${failing[@]}")
 
-          headline="Nightly fuzz run failed: $RUN_URL (full logs in the run's fuzz-output artifact)."
-
-          body=$(printf '%s\n%s\n\n%s\n%s\n' \
-            "$headline" \
-            "$excerpt" \
-            "Reproduce: find the \`seed\`/\`path\` in fast-check's failure report above (or in the fuzz-output artifact), then run" \
-            '`FUZZ_SEED=<seed> FUZZ_PATH="<path>" yarn vitest run --testTimeout=600000 <failing file> -t "<failing test>"` (see docs/fuzzing.md).')
           existing=$(gh issue list --label fuzz-failure --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"

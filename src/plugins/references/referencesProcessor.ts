@@ -65,7 +65,9 @@ import {
 } from './referenceParser.ts'
 import { isRetainableAbsentRef, projectPropertyReferences } from './referenceProjection.ts'
 import { devAssertionsEnabled } from '@/data/internals/devAssertions.js'
+import { parseAliasCollisionError } from '@/data/internals/raiseProtocol.js'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
+import { aliasesProp } from '@/data/properties'
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
@@ -284,6 +286,92 @@ const buildSourcePlan = async (
  *  cleanup-eligibility filtering — only `ensureAliasTarget`'s
  *  `inserted: true` results count; date results never feed cleanup per
  *  §7.6). */
+/** Make the resolved date target CLAIM each long-form literal spelling
+ *  that bound to it (e.g. "January 5th, 2026" alongside the ISO
+ *  "2026-01-05"), so the binding gets the same
+ *  `block_aliases_workspace_alias_unique` exclusivity protection a
+ *  plain-alias seat gets from `ensureAliasTarget` claiming its literal.
+ *  Without the claim the literal string stays unowned: any later block
+ *  can legitimately claim it, and existing bindings are left silently
+ *  pointing at the old target FOREVER — nothing watches "a
+ *  previously-unclaimed literal was just claimed", and the source only
+ *  re-parses on its own row's changes (found by
+ *  referencesRecompute.fuzz.test.ts' stable-wrong-binding sweep).
+ *
+ *  `targetId` is whatever the ensure resolved — the deterministic daily
+ *  seat OR a live block that claims the ISO (a user page aliased to the
+ *  date). Claiming the spelling on the latter mutates a user page's
+ *  alias list, deliberately: that page IS what the spelling resolves to,
+ *  the claim is exactly the record that makes future resolutions
+ *  exclusive, and removing it triggers the rename ladder which rewrites
+ *  the sources properly. Callers run this AFTER the per-literal
+ *  `tx.aliasLookup` recheck, so within this tx the literal is known
+ *  unclaimed — the uniqueness trigger backstops same-device racers.
+ *
+ *  Documented residuals (adversarial review, PR #384):
+ *  - The claim outlives the referencing edit: undo of the source (or a
+ *    later removal of the ISO alias from a user-page target) leaves the
+ *    auto-claimed literal in place — orphan cleanup exempts dates
+ *    (§7.6) and the rename ladder only rewrites sources bound under the
+ *    REMOVED string, so a page can keep resolving a spelling the user
+ *    never claimed. Rare, needs a lifecycle design (see issue #383's
+ *    release/reclaim discussion) rather than a spot fix.
+ *  - Concurrent claims of two spellings on two devices merge via
+ *    whole-column properties LWW server-side: one device's append can be
+ *    silently dropped, reverting that literal to bound-but-unclaimed
+ *    (the pre-claim state). Nothing re-fires the claim — same blind spot
+ *    this docblock's first paragraph describes. Small-fleet-rare;
+ *    accepted. */
+const claimLiteralDateAliases = async (
+  tx: Tx,
+  targetId: string,
+  iso: string,
+  aliases: readonly string[],
+): Promise<void> => {
+  const literals = [...new Set(aliases.filter(alias => alias !== iso))]
+  if (literals.length === 0) return
+  const target = await tx.get(targetId)
+  if (target === null || target.deleted) return
+  let existing: readonly string[]
+  try {
+    const encoded = target.properties[aliasesProp.name]
+    existing = encoded === undefined ? [] : aliasesProp.codec.decode(encoded)
+  } catch {
+    // Malformed alias property (e.g. legacy `["2026-01-05", 1]`): the
+    // append below would REPLACE the whole list, dropping entries the
+    // block_aliases trigger still indexes — parsing a long-form date
+    // must never un-claim the target's ISO. Losing a live binding is
+    // worse than leaving the literal unclaimed, so skip the claim for
+    // this target; it degrades to the pre-claim first-writer behavior.
+    return
+  }
+  const missing = literals.filter(literal => !existing.includes(literal))
+  if (missing.length === 0) return
+  // skipMetadata: derived bookkeeping, same as the source-references
+  // write in applySourcePlan — advances updatedAt for sync but must not
+  // stamp userUpdatedAt/updatedBy, or a background re-parse of some
+  // unrelated source makes the target look freshly user-edited.
+  try {
+    await tx.setProperty(targetId, aliasesProp, [...existing, ...missing], {skipMetadata: true})
+  } catch (err) {
+    // Swallow ONLY alias-collision aborts. The alias-update trigger
+    // deletes and re-inserts ALL of the target's aliases, re-checking
+    // each against the uniqueness trigger — so a LATENT duplicate on a
+    // pre-existing alias (cross-client dupes sync in trigger-free; V1
+    // leaves their merge latent, see clientSchema.ts) would abort here
+    // even though the newly claimed literals are fine. Letting that
+    // propagate would roll back the WHOLE parse batch — references for
+    // every other changed row — and recur on every re-edit: a silent,
+    // permanent recompute outage keyed to someone else's dupe. RAISE
+    // (ABORT) backs out only this statement (tx stays open) and
+    // setProperty records bookkeeping only after a successful execute,
+    // so skipping is clean: the claim degrades to the pre-claim
+    // first-writer behavior for this target only (adversarial review
+    // on PR #384).
+    if (parseAliasCollisionError(err) === null) throw err
+  }
+}
+
 const applySourcePlan = async (
   tx: Tx,
   ctx: ProcessorCtx,
@@ -346,6 +434,7 @@ const applySourcePlan = async (
     for (const alias of aliases) {
       retarget(dailyNoteBlockId(plan.workspaceId, iso), ensured.id, alias)
     }
+    await claimLiteralDateAliases(tx, ensured.id, iso, aliases)
   }
   for (const {alias, id: predicted} of plan.aliasesToEnsure) {
     const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)

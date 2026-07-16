@@ -7,16 +7,43 @@
  * (Batch-3 note below). Sibling of `createTestRepo.ts`; allowed to
  * import the data layer.
  *
- * NOT extracted here: the op-arb/`applyOp` harness itself. queryHandles'
- * trimmed op subset and repoMutators' two-workspace `IdSel` threading
- * have diverged materially enough that forcing a merge now risks
- * behavior drift — each suite still hand-rolls its own `OpSpec`/`opArb`/
- * `applyOp`. TODO(harness): Batch 3 should grow the op harness here once
- * the two-workspace shape stabilizes.
+ * Batch 3 (this pass): the op-arb/`applyOp` harness itself — `IdSel`
+ * (generalized from repoMutators' two-workspace-only `{pool: 0|1; idx}`
+ * to N-pool `{pool: number; idx}`), `KernelOpSpec`/`kernelOpArb`, and
+ * `applyKernelOp` — is now extracted, generalized to N id pools, so an
+ * upcoming two-repo convergence fuzzer can reuse the exact same op
+ * vocabulary with per-device pools (excluding `undo`/`redo` via
+ * `kernelOpArb`'s `exclude` option). `repoMutators.fuzz.test.ts` adopts
+ * it directly (2 pools, default weights). See "kernel op harness" below.
+ *
+ * NOT extracted: queryHandles' trimmed op subset. Its `OpSpec` targets
+ * are plain `number` indices into a single flat id array (no `IdSel`/
+ * pool concept at all — it only ever runs one workspace), it drops
+ * `createSiblingAbove`/`Below`/`insertChildren`/`moveVertical`/
+ * `setReferences`/`undo`/`redo` entirely, and its per-field weights
+ * differ from `KernelOpSpec`'s for the ops it keeps: `setContent` is
+ * weight 3 there vs weight 2 here, `setAlias`/`setType` are weight 3
+ * there vs weight 2 here (createChild/move/indent/outdent/deleteBlock/
+ * restoreBlock/split/merge all happen to match). Forcing it onto
+ * `kernelOpArb` would mean either (a) wrapping every plain-`number`
+ * target in a synthetic single-pool `IdSel`, which adds an indirection
+ * with no behavioral payoff for a suite that never has a second pool, or
+ * (b) changing its op weights to match `KernelOpSpec`, which is a
+ * behavior change to a suite this task was told not to touch. Genuinely
+ * adoptable ops/shapes (createChild/move/setContent/indent/outdent/
+ * deleteBlock/restoreBlock/split/merge/setAlias/setType) line up 1:1
+ * with `KernelOpSpec`'s fields once wrapped in `{pool: 0, idx}`; a
+ * future pass that's allowed to touch `queryHandles.fuzz.test.ts` could
+ * migrate it onto `kernelOpArb(idSelArb({pools: 1}), {exclude: [...]})`
+ * with custom per-op weights (not yet a parameter `kernelOpArb`
+ * exposes), at the cost of re-verifying its probe-invalidation
+ * properties still fire identically under the new weight distribution.
  */
 import { expect } from 'vitest'
+import fc from 'fast-check'
 import {
   BlockNotFoundError,
+  ChangeScope,
   CycleError,
   DeletedConflictError,
   DuplicateIdError,
@@ -30,6 +57,8 @@ import {
 } from '@/data/api'
 import { cycleScanSql } from '@/data/internals/treeQueries'
 import type { TestDb } from '@/data/test/createTestDb'
+import { aliasesProp, typesProp } from '@/data/properties'
+import type { Repo } from '@/data/repo'
 
 // ──── legal-rejection allowlist ────
 
@@ -102,11 +131,9 @@ export const assertLegalKernelRejection = (e: unknown, desc: string): void => {
 
 /**
  * Single-pool index-modulo-length id resolution — byte-identical across
- * splitMerge/queryHandles/referencesRecompute/defaultActions.
- * repoMutators keeps its own two-workspace `IdSel`/`IdPools` variant
- * local (a different shape: `{pool, idx}` resolved against one of two
- * pools, not a single flat list) rather than forcing it through this
- * single-pool signature.
+ * splitMerge/queryHandles/referencesRecompute/defaultActions. For an
+ * N-pool `IdSel` (repoMutators' two-workspace shape, or a future
+ * per-device convergence pool set), use `pickFromPools` below instead.
  */
 export const pick = (index: number, ids: readonly string[]): string => ids[index % ids.length]
 
@@ -114,9 +141,244 @@ export const pick = (index: number, ids: readonly string[]): string => ids[index
  *  alive — same byte-identical copy as `pick`, present in
  *  splitMerge/queryHandles/referencesRecompute (defaultActions doesn't
  *  need a non-root selector: its op pool never destructively targets a
- *  raw id the way delete/merge/move do). */
+ *  raw id the way delete/merge/move do). Multi-pool sibling:
+ *  `pickNonRootFromPools`. */
 export const pickNonRoot = (index: number, ids: readonly string[]): string =>
   ids.length === 1 ? ids[0] : ids[1 + (index % (ids.length - 1))]
+
+// ──── kernel op harness ────
+// `IdSel`/`KernelOpSpec`/`kernelOpArb`/`applyKernelOp` — the op
+// vocabulary repoMutators.fuzz.test.ts fuzzes the kernel mutator surface
+// with, generalized from a hardcoded two-workspace universe to N id
+// pools so a future two-repo convergence fuzzer can reuse it with
+// per-device pools. Moved verbatim from repoMutators.fuzz.test.ts except
+// where noted.
+
+/** Which id pool an op argument resolves against, plus a raw index into
+ *  that pool. Generalized from repoMutators' `{pool: 0 | 1; idx: number}`
+ *  (two workspaces) to an arbitrary pool count — `idSelArb` below is what
+ *  constrains `pool` to a live range for a given pool count. */
+export type IdSel = {pool: number; idx: number}
+
+export type KernelPos = {kind: 'first'} | {kind: 'last'} | {kind: 'before' | 'after'; sibling: IdSel}
+
+/** The kernel-mutator op vocabulary, verbatim from repoMutators'
+ *  `OpSpec` (same op names, same fields). */
+export type KernelOpSpec =
+  | {op: 'createChild'; parent: IdSel; pos: KernelPos; content: string}
+  | {op: 'createSiblingAbove' | 'createSiblingBelow'; sibling: IdSel; content: string}
+  | {op: 'insertChildren'; parent: IdSel; contents: string[]; pos: KernelPos}
+  | {op: 'move'; id: IdSel; parent: IdSel; pos: KernelPos}
+  | {op: 'setContent'; id: IdSel; content: string}
+  | {op: 'indent' | 'outdent' | 'deleteBlock' | 'restoreBlock'; id: IdSel}
+  | {op: 'moveVertical'; id: IdSel; direction: -1 | 1}
+  | {op: 'split'; id: IdSel; before: string; after: string}
+  | {op: 'merge'; into: IdSel; from: IdSel}
+  | {op: 'setAlias'; id: IdSel; alias: number; clear: boolean}
+  | {op: 'setType'; id: IdSel; type: number; clear: boolean}
+  | {op: 'setReferences'; id: IdSel; refs: Array<{target: IdSel; aliased: boolean; prop: boolean}>}
+  | {op: 'undo'} | {op: 'redo'}
+
+// Tiny alias/type pools so collisions (and merge-then-undo alias
+// handoffs — the block_aliases_workspace_alias_unique replay
+// interaction) happen constantly rather than by generation accident.
+export const ALIAS_POOL = ['ax', 'ay', 'az'] as const
+export const TYPE_POOL = ['task', 'note'] as const
+
+/** `IdSel` arbitrary factory. `pools` is the number of id pools in play;
+ *  `weights` (default `[9, 1]` for 2 pools, uniform for any other count)
+ *  controls how often each pool is picked — repoMutators keeps pool 0
+ *  (its primary workspace) dominant so most sequences stay a single
+ *  coherent tree, with the occasional cross-pool pick making
+ *  cross-workspace op combinations reachable at all. For `pools: 1` this
+ *  degenerates to always resolving pool 0 (`weights` is ignored — there's
+ *  only one pool to pick). */
+export const idSelArb = (opts: {pools: number; weights?: readonly number[]}): fc.Arbitrary<IdSel> => {
+  const {pools} = opts
+  if (pools < 1) throw new Error(`idSelArb: pools must be >= 1, got ${pools}`)
+  if (pools === 1) return fc.record({pool: fc.constant(0), idx: fc.nat(31)})
+
+  const weights = opts.weights ?? (pools === 2 ? [9, 1] : Array.from({length: pools}, () => 1))
+  if (weights.length !== pools) {
+    throw new Error(`idSelArb: weights.length (${weights.length}) must equal pools (${pools})`)
+  }
+  return fc.record({
+    pool: fc.oneof(...weights.map((weight, pool) => ({arbitrary: fc.constant(pool), weight}))),
+    idx: fc.nat(31),
+  })
+}
+
+/** `KernelOpSpec` arbitrary factory — same op set and SAME weights as
+ *  repoMutators' original `opArb`, minus any op kinds in
+ *  `opts.exclude` (the two-repo convergence fuzzer excludes `'undo'`/
+ *  `'redo'`: undo/redo are per-workspace-manager and don't have an
+ *  obvious cross-device convergence meaning). `idSel` is the arbitrary
+ *  used for every `IdSel`-typed field — pass `idSelArb({pools: N, ...})`
+ *  sized for the caller's pool count. Combined multi-kind entries
+ *  (`createSiblingAbove`/`Below`, `indent`/`outdent`,
+ *  `deleteBlock`/`restoreBlock`) are excluded as a whole if ANY of their
+ *  kinds is in `exclude` — no caller needs finer-grained exclusion than
+ *  that today. */
+export const kernelOpArb = (
+  idSel: fc.Arbitrary<IdSel>,
+  opts: {exclude?: readonly KernelOpSpec['op'][]} = {},
+): fc.Arbitrary<KernelOpSpec> => {
+  const exclude = new Set(opts.exclude ?? [])
+  const text = fc.string({maxLength: 8})
+  const posArb: fc.Arbitrary<KernelPos> = fc.oneof(
+    {arbitrary: fc.constant({kind: 'first'} as KernelPos), weight: 2},
+    {arbitrary: fc.constant({kind: 'last'} as KernelPos), weight: 3},
+    {arbitrary: fc.record({kind: fc.constantFrom('before' as const, 'after' as const), sibling: idSel}), weight: 2},
+  )
+
+  const entries: Array<{kinds: readonly KernelOpSpec['op'][]; weight: number; arbitrary: fc.Arbitrary<KernelOpSpec>}> = [
+    {kinds: ['createChild'], weight: 5, arbitrary: fc.record({op: fc.constant('createChild' as const), parent: idSel, pos: posArb, content: text})},
+    {kinds: ['createSiblingAbove', 'createSiblingBelow'], weight: 2, arbitrary: fc.record({op: fc.constantFrom('createSiblingAbove' as const, 'createSiblingBelow' as const), sibling: idSel, content: text})},
+    {kinds: ['insertChildren'], weight: 1, arbitrary: fc.record({op: fc.constant('insertChildren' as const), parent: idSel, contents: fc.array(text, {minLength: 1, maxLength: 3}), pos: posArb})},
+    {kinds: ['move'], weight: 4, arbitrary: fc.record({op: fc.constant('move' as const), id: idSel, parent: idSel, pos: posArb})},
+    {kinds: ['setContent'], weight: 2, arbitrary: fc.record({op: fc.constant('setContent' as const), id: idSel, content: text})},
+    {kinds: ['indent', 'outdent'], weight: 3, arbitrary: fc.record({op: fc.constantFrom('indent' as const, 'outdent' as const), id: idSel})},
+    {kinds: ['deleteBlock', 'restoreBlock'], weight: 2, arbitrary: fc.record({op: fc.constantFrom('deleteBlock' as const, 'restoreBlock' as const), id: idSel})},
+    {kinds: ['moveVertical'], weight: 2, arbitrary: fc.record({op: fc.constant('moveVertical' as const), id: idSel, direction: fc.constantFrom(-1 as const, 1 as const)})},
+    {kinds: ['split'], weight: 2, arbitrary: fc.record({op: fc.constant('split' as const), id: idSel, before: text, after: text})},
+    {kinds: ['merge'], weight: 2, arbitrary: fc.record({op: fc.constant('merge' as const), into: idSel, from: idSel})},
+    {kinds: ['setAlias'], weight: 2, arbitrary: fc.record({op: fc.constant('setAlias' as const), id: idSel, alias: fc.nat(ALIAS_POOL.length - 1), clear: fc.boolean()})},
+    {kinds: ['setType'], weight: 2, arbitrary: fc.record({op: fc.constant('setType' as const), id: idSel, type: fc.nat(TYPE_POOL.length - 1), clear: fc.boolean()})},
+    {kinds: ['setReferences'], weight: 2, arbitrary: fc.record({
+      op: fc.constant('setReferences' as const),
+      id: idSel,
+      refs: fc.array(fc.record({target: idSel, aliased: fc.boolean(), prop: fc.boolean()}), {maxLength: 3}),
+    })},
+    {kinds: ['undo'], weight: 1, arbitrary: fc.constant({op: 'undo'} as KernelOpSpec)},
+    {kinds: ['redo'], weight: 1, arbitrary: fc.constant({op: 'redo'} as KernelOpSpec)},
+  ]
+
+  const active = exclude.size === 0 ? entries : entries.filter(e => !e.kinds.some(k => exclude.has(k)))
+  return fc.oneof(...active.map(({weight, arbitrary}) => ({weight, arbitrary})))
+}
+
+/** Resolves an `IdSel` against an N-pool id-pool array — the multi-pool
+ *  sibling of `pick` above. `pools[sel.pool]`'s index 0 is that pool's
+ *  seed root by convention (callers seed it that way, e.g.
+ *  repoMutators.fuzz.test.ts). */
+export const pickFromPools = (sel: IdSel, pools: readonly (readonly string[])[]): string => {
+  const pool = pools[sel.pool]
+  return pool[sel.idx % pool.length]
+}
+
+/** Skips the pool's own seed root (index 0) so destructive ops keep that
+ *  pool's tree alive — the multi-pool sibling of `pickNonRoot` above. */
+export const pickNonRootFromPools = (sel: IdSel, pools: readonly (readonly string[])[]): string => {
+  const pool = pools[sel.pool]
+  return pool.length === 1 ? pool[0] : pool[1 + (sel.idx % (pool.length - 1))]
+}
+
+export type ResolvedPos = {kind: 'first'} | {kind: 'last'} | {kind: 'before'; siblingId: string} | {kind: 'after'; siblingId: string}
+export const resolvePos = (pos: KernelPos, pools: readonly (readonly string[])[]): ResolvedPos =>
+  pos.kind === 'first' || pos.kind === 'last'
+    ? pos
+    : pos.kind === 'before'
+      ? {kind: 'before', siblingId: pickFromPools(pos.sibling, pools)}
+      : {kind: 'after', siblingId: pickFromPools(pos.sibling, pools)}
+
+/** A newly-created block, tagged with the pool (workspace/device) it
+ *  belongs to — inferred from whichever existing id (parent/sibling/self)
+ *  it was created under, since kernel mutators always inherit the
+ *  parent's real `workspaceId` and that id was itself drawn from exactly
+ *  one pool. */
+export interface KernelCreated {id: string; pool: number}
+
+/** Applies one op; returns any newly created blocks. Verbatim from
+ *  repoMutators' `applyOp`, generalized from its hardcoded `IdPools`
+ *  2-tuple to an N-pool array. */
+export const applyKernelOp = async (
+  repo: Repo, op: KernelOpSpec, pools: readonly (readonly string[])[],
+): Promise<KernelCreated[]> => {
+  switch (op.op) {
+    case 'createChild':
+      return [{id: await repo.mutate.createChild({parentId: pickFromPools(op.parent, pools), position: resolvePos(op.pos, pools), content: op.content}), pool: op.parent.pool}]
+    case 'createSiblingAbove':
+      return [{id: await repo.mutate.createSiblingAbove({siblingId: pickNonRootFromPools(op.sibling, pools), content: op.content}), pool: op.sibling.pool}]
+    case 'createSiblingBelow':
+      return [{id: await repo.mutate.createSiblingBelow({siblingId: pickNonRootFromPools(op.sibling, pools), content: op.content}), pool: op.sibling.pool}]
+    case 'insertChildren': {
+      const created = await repo.mutate.insertChildren({
+        parentId: pickFromPools(op.parent, pools),
+        items: op.contents.map(content => ({content})),
+        position: resolvePos(op.pos, pools),
+      })
+      return created.map(id => ({id, pool: op.parent.pool}))
+    }
+    case 'move':
+      await repo.mutate.move({id: pickNonRootFromPools(op.id, pools), parentId: pickFromPools(op.parent, pools), position: resolvePos(op.pos, pools)})
+      return []
+    case 'setContent':
+      await repo.mutate.setContent({id: pickFromPools(op.id, pools), content: op.content})
+      return []
+    case 'indent':
+      await repo.mutate.indent({id: pickNonRootFromPools(op.id, pools)})
+      return []
+    case 'outdent':
+      await repo.mutate.outdent({id: pickNonRootFromPools(op.id, pools)})
+      return []
+    case 'deleteBlock':
+      await repo.mutate.delete({id: pickNonRootFromPools(op.id, pools)})
+      return []
+    case 'restoreBlock':
+      await repo.mutate.restore({id: pickNonRootFromPools(op.id, pools)})
+      return []
+    case 'moveVertical':
+      await repo.mutate.moveVertical({id: pickNonRootFromPools(op.id, pools), direction: op.direction})
+      return []
+    case 'split':
+      return [{id: await repo.mutate.split({id: pickNonRootFromPools(op.id, pools), before: op.before, after: op.after}), pool: op.id.pool}]
+    case 'merge':
+      await repo.mutate.merge({intoId: pickFromPools(op.into, pools), fromId: pickNonRootFromPools(op.from, pools)})
+      return []
+    case 'setAlias':
+      await repo.mutate.setProperty({
+        id: pickFromPools(op.id, pools),
+        schema: aliasesProp,
+        value: op.clear ? [] : [ALIAS_POOL[op.alias]],
+      })
+      return []
+    case 'setType':
+      await repo.mutate.setProperty({
+        id: pickFromPools(op.id, pools),
+        schema: typesProp,
+        value: op.clear ? [] : [TYPE_POOL[op.type]],
+      })
+      return []
+    case 'setReferences': {
+      // `references` is a bookkeeping field with no kernel mutator (the
+      // references plugin writes it via tx.update post-commit); writing
+      // it directly exercises the block_references triggers + the
+      // canonicalization path, which no other op reaches. Targets may be
+      // tombstones or live in the OTHER workspace — dangling / foreign
+      // targets are legal at this layer (only the full audit's
+      // dangling_refs check polices them, and it does so per-workspace).
+      const sourceId = pickFromPools(op.id, pools)
+      const references = op.refs.map(r => {
+        const targetId = pickFromPools(r.target, pools)
+        return {
+          id: targetId,
+          alias: r.aliased ? 'ref-alias' : targetId,
+          ...(r.prop ? {sourceField: 'refProp'} : {}),
+        }
+      })
+      await repo.tx(async tx => {
+        await tx.update(sourceId, {references})
+      }, {scope: ChangeScope.BlockDefault})
+      return []
+    }
+    case 'undo':
+      await repo.undo()
+      return []
+    case 'redo':
+      await repo.redo()
+      return []
+  }
+}
 
 // ──── snapshots + undo/redo draining ────
 
@@ -219,4 +481,89 @@ export const sweepStructuralInvariants = async (
     [ws],
   )
   expect(collisions, 'order-key collision among live siblings').toEqual([])
+}
+
+// ──── derived-index sweep ────
+// Moved from `repoMutators.fuzz.test.ts` (Batch 3) so `twoRepoConvergence`
+// can reuse it: sync-materialization is a different write shape than kernel
+// txs and could desync a trigger-maintained index while a plain blocks-table
+// comparison stays green.
+
+/** Incremental-vs-recompute differential for a trigger-maintained derived
+ *  index: the table's current rows must equal re-running the trigger's own
+ *  SELECT over all live blocks. Reports both directions so a failure shows
+ *  what's missing AND what's stale. */
+const expectMirror = async (
+  db: TestDb['db'], label: string, actualSql: string, expectedSql: string,
+): Promise<void> => {
+  const missing = await db.getAll(`${expectedSql} EXCEPT ${actualSql}`)
+  const extra = await db.getAll(`${actualSql} EXCEPT ${expectedSql}`)
+  expect({missing, extra}, `${label} index vs recompute`).toEqual({missing: [], extra: []})
+}
+
+/** `block_aliases`/`block_types`/`block_references`/`blocks_fts` vs a
+ *  from-scratch recompute over the live `blocks` rows — none of the four
+ *  recompute queries scope by workspace (they read every live block
+ *  regardless of `workspace_id`), so this sweep makes no assumption about
+ *  how many workspaces are seeded; it transfers unchanged to a
+ *  single-workspace universe (e.g. `twoRepoConvergence`'s one
+ *  ROOT-pinned pool) as much as to repoMutators' two-workspace one. */
+export const sweepDerivedIndexes = async (db: TestDb['db']): Promise<void> => {
+  // block_aliases — recompute mirrors blocks_alias_insert/update
+  // (clientSchema.ts): live blocks' properties_json $.alias text
+  // elements, alias_lower = LOWER(alias). DISTINCT matches the
+  // INSERT OR IGNORE (block_id, alias) PK dedup.
+  await expectMirror(db, 'block_aliases',
+    'SELECT block_id, alias, alias_lower, workspace_id FROM block_aliases',
+    `SELECT DISTINCT b.id, je.value, LOWER(je.value), b.workspace_id
+       FROM blocks b, json_each(b.properties_json, '$.alias') AS je
+      WHERE b.deleted = 0 AND typeof(je.value) = 'text'`)
+
+  // block_types — same shape over $.types (blocks_type_* triggers).
+  await expectMirror(db, 'block_types',
+    'SELECT block_id, type, workspace_id FROM block_types',
+    `SELECT DISTINCT b.id, je.value, b.workspace_id
+       FROM blocks b, json_each(b.properties_json, '$.types') AS je
+      WHERE b.deleted = 0 AND typeof(je.value) = 'text'`)
+
+  // block_references — recompute mirrors blocks_references_insert/update
+  // (references localSchema.ts): one row per (source, target, alias,
+  // sourceField-or-'') tuple of every live block's references_json.
+  await expectMirror(db, 'block_references',
+    'SELECT source_id, target_id, alias, source_field, workspace_id FROM block_references',
+    `SELECT DISTINCT b.id, json_extract(je.value, '$.id'), json_extract(je.value, '$.alias'),
+            COALESCE(json_extract(je.value, '$.sourceField'), ''), b.workspace_id
+       FROM blocks b, json_each(b.references_json) AS je
+      WHERE b.deleted = 0
+        AND typeof(json_extract(je.value, '$.id')) = 'text'
+        AND typeof(json_extract(je.value, '$.alias')) = 'text'
+        AND (json_type(je.value, '$.sourceField') IS NULL
+             OR typeof(json_extract(je.value, '$.sourceField')) = 'text')`)
+
+  // blocks_fts — one row per live non-empty-content block
+  // (blocks_fts_* triggers). EXCEPT is set-based, so also pin the row
+  // count: a double-insert of an identical row would otherwise hide.
+  await expectMirror(db, 'blocks_fts',
+    'SELECT block_id, content, workspace_id FROM blocks_fts',
+    `SELECT id, content, workspace_id FROM blocks WHERE deleted = 0 AND content != ''`)
+  const [ftsCount, liveCount] = await Promise.all([
+    db.getAll<{n: number}>('SELECT COUNT(*) AS n FROM blocks_fts'),
+    db.getAll<{n: number}>(`SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0 AND content != ''`),
+  ])
+  expect(ftsCount[0].n, 'blocks_fts row count').toBe(liveCount[0].n)
+
+  // Every FTS row's rowid must map back to its own block_id, and the
+  // rowid map (kept across soft-deletes by design) must never point at
+  // a block that doesn't exist at all.
+  const badJoins = await db.getAll<{block_id: string}>(
+    `SELECT f.block_id FROM blocks_fts f
+       LEFT JOIN blocks_fts_rowids r ON r.fts_rowid = f.rowid
+      WHERE r.block_id IS NULL OR r.block_id != f.block_id`,
+  )
+  expect(badJoins, 'blocks_fts rowid mapping').toEqual([])
+  const orphanRowids = await db.getAll<{block_id: string}>(
+    `SELECT r.block_id FROM blocks_fts_rowids r
+      WHERE NOT EXISTS (SELECT 1 FROM blocks b WHERE b.id = r.block_id)`,
+  )
+  expect(orphanRowids, 'blocks_fts_rowids orphan').toEqual([])
 }

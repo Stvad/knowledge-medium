@@ -24,7 +24,14 @@ import {
   startBlocksSyncedObserver,
   type BlocksSyncedObserver,
 } from '../observer.js'
-import type { GetMaterializability } from '../materialize.js'
+import {
+  materializeStagingRows,
+  type GetMaterializability,
+  type MaterializeDeps,
+  type MaterializeOptions,
+  type MaterializeOutcome,
+} from '../materialize.js'
+import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
 import type { ChangeNotification } from '@/data/internals/handleStore'
 import type { InvalidationRule } from '@/data/invalidation'
@@ -52,6 +59,44 @@ export const stagingCiphertextParams = (
   params[5] = wire.properties_json
   params[6] = wire.references_json
   return params
+}
+
+/**
+ * Single-window queue drain — mirrors `drainQueueOnce`'s per-window core
+ * (`../observer.ts:186-220`): read the pending `blocks_synced_changes`
+ * queue ordered by seq, dedup to latest-op-per-id, run
+ * `materializeStagingRows` over the whole window, then
+ * `DELETE ... WHERE seq <= maxSeq` to consume it. Returns `null` when the
+ * queue was empty (nothing to drain) so callers can distinguish "flushed
+ * nothing" from "flushed and materialized nothing" — `materializeStateful`'s
+ * `doFlush` has a real empty-queue branch that depends on this.
+ *
+ * Unlike the real `drainQueueOnce` this does exactly ONE window, never a
+ * chunk-bounded loop over a larger backlog — multi-window backlog behavior
+ * is `observer.test.ts`'s job. Shared by `twoRepoConvergence.fuzz.test.ts`
+ * (which layers `applySyncInvalidation` on top, replicating the observer's
+ * `applyOutcome`) and `materializeStateful.fuzz.test.ts` (which layers its
+ * differential-model assertions on top and passes through `readChunkSize`).
+ */
+export const drainStagingWindowOnce = async (
+  db: PowerSyncDb,
+  deps: MaterializeDeps,
+  opts: MaterializeOptions = {},
+): Promise<MaterializeOutcome | null> => {
+  const rows = await db.getAll<{ seq: number; id: string; op: 'upsert' | 'delete' }>(
+    'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq',
+  )
+  if (rows.length === 0) return null
+  const maxSeq = rows.at(-1)!.seq
+  const opById = new Map<string, 'upsert' | 'delete'>()
+  for (const row of rows) opById.set(row.id, row.op)
+  const upserted: string[] = []
+  const removed: string[] = []
+  for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
+
+  const outcome = await materializeStagingRows(db, { upserted, removed }, deps, opts)
+  await db.execute('DELETE FROM blocks_synced_changes WHERE seq <= ?', [maxSeq])
+  return outcome
 }
 
 export interface StartObserverOpts {

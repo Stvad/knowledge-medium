@@ -64,9 +64,17 @@ import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { assertLegalKernelRejection, drain, sweepStructuralInvariants } from '@/data/test/fuzzKernelHarness'
+import {
+  applyKernelOp,
+  assertLegalKernelRejection,
+  drain,
+  idSelArb,
+  kernelOpArb,
+  sweepDerivedIndexes,
+  sweepStructuralInvariants,
+  type KernelOpSpec,
+} from '@/data/test/fuzzKernelHarness'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
 import { SUBTREE_SQL } from '@/data/internals/treeQueries'
 import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
 import type { Repo } from '@/data/repo'
@@ -75,79 +83,25 @@ const WS = 'ws-1'
 const ROOT = 'root'
 const WS2 = 'ws-2'
 const ROOT2 = 'root2'
-/** Index-aligned with the `pool` field of `IdSel` / the `pools` tuple
- *  threaded through `applyOp`. */
+/** Index-aligned with the `pool` field of `IdSel` / the `pools` array
+ *  threaded through `applyKernelOp`. */
 const WORKSPACES = [WS, WS2] as const
 
 // ──── op descriptors ────
-// Targets are indices resolved modulo the known-id list of a WORKSPACE
-// POOL at execution time. `nonRoot` selectors skip that pool's seed root
-// so a single early delete/merge of a root doesn't turn the whole
-// sequence into error-path noise.
+// The op vocabulary (`IdSel`/`KernelOpSpec`/`kernelOpArb`/
+// `applyKernelOp`) is shared with a future two-repo convergence fuzzer
+// via `@/data/test/fuzzKernelHarness` (see its docblock for what's
+// shared vs. kept local). Targets are indices resolved modulo the
+// known-id list of a WORKSPACE POOL at execution time. `nonRoot`
+// selectors skip that pool's seed root so a single early delete/merge of
+// a root doesn't turn the whole sequence into error-path noise. `pool: 1`
+// (ws-2) is deliberately rare — `idSelArb({pools: 2})`'s default weights
+// ([9, 1]) keep most sequences a single coherent tree; the occasional
+// ws-2 pick is what makes cross-workspace op combinations (and the
+// WorkspaceMismatchError / ParentWorkspaceMismatchError rejections they
+// provoke) reachable at all.
 
-/** Which workspace pool an op argument resolves an id against, plus a
- *  raw index into that pool. `pool: 1` (ws-2) is deliberately rare —
- *  most sequences should stay a single coherent tree; the occasional
- *  ws-2 pick is what makes cross-workspace op combinations (and the
- *  WorkspaceMismatchError / ParentWorkspaceMismatchError rejections
- *  they provoke) reachable at all. */
-type IdSel = {pool: 0 | 1; idx: number}
-
-type Pos = {kind: 'first'} | {kind: 'last'} | {kind: 'before' | 'after'; sibling: IdSel}
-
-type OpSpec =
-  | {op: 'createChild'; parent: IdSel; pos: Pos; content: string}
-  | {op: 'createSiblingAbove' | 'createSiblingBelow'; sibling: IdSel; content: string}
-  | {op: 'insertChildren'; parent: IdSel; contents: string[]; pos: Pos}
-  | {op: 'move'; id: IdSel; parent: IdSel; pos: Pos}
-  | {op: 'setContent'; id: IdSel; content: string}
-  | {op: 'indent' | 'outdent' | 'deleteBlock' | 'restoreBlock'; id: IdSel}
-  | {op: 'moveVertical'; id: IdSel; direction: -1 | 1}
-  | {op: 'split'; id: IdSel; before: string; after: string}
-  | {op: 'merge'; into: IdSel; from: IdSel}
-  | {op: 'setAlias'; id: IdSel; alias: number; clear: boolean}
-  | {op: 'setType'; id: IdSel; type: number; clear: boolean}
-  | {op: 'setReferences'; id: IdSel; refs: Array<{target: IdSel; aliased: boolean; prop: boolean}>}
-  | {op: 'undo'} | {op: 'redo'}
-
-// Tiny alias pool so collisions (and merge-then-undo alias handoffs —
-// the block_aliases_workspace_alias_unique replay interaction) happen
-// constantly rather than by generation accident.
-const ALIAS_POOL = ['ax', 'ay', 'az'] as const
-const TYPE_POOL = ['task', 'note'] as const
-
-const idSelArb: fc.Arbitrary<IdSel> = fc.record({
-  pool: fc.oneof({arbitrary: fc.constant(0 as const), weight: 9}, {arbitrary: fc.constant(1 as const), weight: 1}),
-  idx: fc.nat(31),
-})
-const text = fc.string({maxLength: 8})
-const posArb: fc.Arbitrary<Pos> = fc.oneof(
-  {arbitrary: fc.constant({kind: 'first'} as Pos), weight: 2},
-  {arbitrary: fc.constant({kind: 'last'} as Pos), weight: 3},
-  {arbitrary: fc.record({kind: fc.constantFrom('before' as const, 'after' as const), sibling: idSelArb}), weight: 2},
-)
-
-const opArb: fc.Arbitrary<OpSpec> = fc.oneof(
-  {weight: 5, arbitrary: fc.record({op: fc.constant('createChild' as const), parent: idSelArb, pos: posArb, content: text})},
-  {weight: 2, arbitrary: fc.record({op: fc.constantFrom('createSiblingAbove' as const, 'createSiblingBelow' as const), sibling: idSelArb, content: text})},
-  {weight: 1, arbitrary: fc.record({op: fc.constant('insertChildren' as const), parent: idSelArb, contents: fc.array(text, {minLength: 1, maxLength: 3}), pos: posArb})},
-  {weight: 4, arbitrary: fc.record({op: fc.constant('move' as const), id: idSelArb, parent: idSelArb, pos: posArb})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('setContent' as const), id: idSelArb, content: text})},
-  {weight: 3, arbitrary: fc.record({op: fc.constantFrom('indent' as const, 'outdent' as const), id: idSelArb})},
-  {weight: 2, arbitrary: fc.record({op: fc.constantFrom('deleteBlock' as const, 'restoreBlock' as const), id: idSelArb})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('moveVertical' as const), id: idSelArb, direction: fc.constantFrom(-1 as const, 1 as const)})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('split' as const), id: idSelArb, before: text, after: text})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('merge' as const), into: idSelArb, from: idSelArb})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('setAlias' as const), id: idSelArb, alias: fc.nat(ALIAS_POOL.length - 1), clear: fc.boolean()})},
-  {weight: 2, arbitrary: fc.record({op: fc.constant('setType' as const), id: idSelArb, type: fc.nat(TYPE_POOL.length - 1), clear: fc.boolean()})},
-  {weight: 2, arbitrary: fc.record({
-    op: fc.constant('setReferences' as const),
-    id: idSelArb,
-    refs: fc.array(fc.record({target: idSelArb, aliased: fc.boolean(), prop: fc.boolean()}), {maxLength: 3}),
-  })},
-  {weight: 1, arbitrary: fc.constant({op: 'undo'} as OpSpec)},
-  {weight: 1, arbitrary: fc.constant({op: 'redo'} as OpSpec)},
-)
+const opArb: fc.Arbitrary<KernelOpSpec> = kernelOpArb(idSelArb({pools: 2}))
 
 const caseArb = fc.record({
   // ≤ 40 ops keeps every entry inside the undo stack (depth 100) so
@@ -177,123 +131,13 @@ const caseArb = fc.record({
 // ──── execution ────
 
 /** The known-id pools, index-aligned with `WORKSPACES` / `IdSel.pool`
- *  (`[ws-1 ids, ws-2 ids]`); each pool's index 0 is that workspace's
- *  seed root. */
+ *  (`[ws-1 ids, ws-2 ids]`); each pool's index 0 is that workspace's seed
+ *  root. Local 2-tuple alias for the harness's general N-pool array type
+ *  (`readonly (readonly string[])[]`) — see
+ *  `@/data/test/fuzzKernelHarness`, whose `applyKernelOp` (built on
+ *  `pickFromPools`/`pickNonRootFromPools`/`resolvePos`) this suite now
+ *  calls directly instead of hand-rolling its own two-workspace copy. */
 type IdPools = readonly [readonly string[], readonly string[]]
-
-const pick = (sel: IdSel, pools: IdPools): string => {
-  const pool = pools[sel.pool]
-  return pool[sel.idx % pool.length]
-}
-/** Skips the pool's own seed root (index 0) so destructive ops keep
- *  that workspace's tree alive. */
-const pickNonRoot = (sel: IdSel, pools: IdPools): string => {
-  const pool = pools[sel.pool]
-  return pool.length === 1 ? pool[0] : pool[1 + (sel.idx % (pool.length - 1))]
-}
-
-type ResolvedPos = {kind: 'first'} | {kind: 'last'} | {kind: 'before'; siblingId: string} | {kind: 'after'; siblingId: string}
-const resolvePos = (pos: Pos, pools: IdPools): ResolvedPos =>
-  pos.kind === 'first' || pos.kind === 'last'
-    ? pos
-    : pos.kind === 'before'
-      ? {kind: 'before', siblingId: pick(pos.sibling, pools)}
-      : {kind: 'after', siblingId: pick(pos.sibling, pools)}
-
-/** A newly-created block, tagged with the pool (workspace) it belongs
- *  to — inferred from whichever existing id (parent/sibling/self) it
- *  was created under, since kernel mutators always inherit the parent's
- *  real `workspaceId` and that id was itself drawn from exactly one
- *  pool. */
-interface Created {id: string; pool: 0 | 1}
-
-/** Applies one op; returns any newly created blocks. */
-const applyOp = async (repo: Repo, op: OpSpec, pools: IdPools): Promise<Created[]> => {
-  switch (op.op) {
-    case 'createChild':
-      return [{id: await repo.mutate.createChild({parentId: pick(op.parent, pools), position: resolvePos(op.pos, pools), content: op.content}), pool: op.parent.pool}]
-    case 'createSiblingAbove':
-      return [{id: await repo.mutate.createSiblingAbove({siblingId: pickNonRoot(op.sibling, pools), content: op.content}), pool: op.sibling.pool}]
-    case 'createSiblingBelow':
-      return [{id: await repo.mutate.createSiblingBelow({siblingId: pickNonRoot(op.sibling, pools), content: op.content}), pool: op.sibling.pool}]
-    case 'insertChildren': {
-      const created = await repo.mutate.insertChildren({
-        parentId: pick(op.parent, pools),
-        items: op.contents.map(content => ({content})),
-        position: resolvePos(op.pos, pools),
-      })
-      return created.map(id => ({id, pool: op.parent.pool}))
-    }
-    case 'move':
-      await repo.mutate.move({id: pickNonRoot(op.id, pools), parentId: pick(op.parent, pools), position: resolvePos(op.pos, pools)})
-      return []
-    case 'setContent':
-      await repo.mutate.setContent({id: pick(op.id, pools), content: op.content})
-      return []
-    case 'indent':
-      await repo.mutate.indent({id: pickNonRoot(op.id, pools)})
-      return []
-    case 'outdent':
-      await repo.mutate.outdent({id: pickNonRoot(op.id, pools)})
-      return []
-    case 'deleteBlock':
-      await repo.mutate.delete({id: pickNonRoot(op.id, pools)})
-      return []
-    case 'restoreBlock':
-      await repo.mutate.restore({id: pickNonRoot(op.id, pools)})
-      return []
-    case 'moveVertical':
-      await repo.mutate.moveVertical({id: pickNonRoot(op.id, pools), direction: op.direction})
-      return []
-    case 'split':
-      return [{id: await repo.mutate.split({id: pickNonRoot(op.id, pools), before: op.before, after: op.after}), pool: op.id.pool}]
-    case 'merge':
-      await repo.mutate.merge({intoId: pick(op.into, pools), fromId: pickNonRoot(op.from, pools)})
-      return []
-    case 'setAlias':
-      await repo.mutate.setProperty({
-        id: pick(op.id, pools),
-        schema: aliasesProp,
-        value: op.clear ? [] : [ALIAS_POOL[op.alias]],
-      })
-      return []
-    case 'setType':
-      await repo.mutate.setProperty({
-        id: pick(op.id, pools),
-        schema: typesProp,
-        value: op.clear ? [] : [TYPE_POOL[op.type]],
-      })
-      return []
-    case 'setReferences': {
-      // `references` is a bookkeeping field with no kernel mutator (the
-      // references plugin writes it via tx.update post-commit); writing
-      // it directly exercises the block_references triggers + the
-      // canonicalization path, which no other op reaches. Targets may be
-      // tombstones or live in the OTHER workspace — dangling / foreign
-      // targets are legal at this layer (only the full audit's
-      // dangling_refs check polices them, and it does so per-workspace).
-      const sourceId = pick(op.id, pools)
-      const references = op.refs.map(r => {
-        const targetId = pick(r.target, pools)
-        return {
-          id: targetId,
-          alias: r.aliased ? 'ref-alias' : targetId,
-          ...(r.prop ? {sourceField: 'refProp'} : {}),
-        }
-      })
-      await repo.tx(async tx => {
-        await tx.update(sourceId, {references})
-      }, {scope: ChangeScope.BlockDefault})
-      return []
-    }
-    case 'undo':
-      await repo.undo()
-      return []
-    case 'redo':
-      await repo.redo()
-      return []
-  }
-}
 
 // ──── invariant sweeps ────
 
@@ -305,77 +149,12 @@ interface RawRow {
   workspace_id: string
 }
 
-/** Incremental-vs-recompute differential for a trigger-maintained
- *  derived index: the table's current rows must equal re-running the
- *  trigger's own SELECT over all live blocks. Reports both directions
- *  so a failure shows what's missing AND what's stale. */
-const expectMirror = async (
-  db: TestDb['db'], label: string, actualSql: string, expectedSql: string,
-): Promise<void> => {
-  const missing = await db.getAll(`${expectedSql} EXCEPT ${actualSql}`)
-  const extra = await db.getAll(`${actualSql} EXCEPT ${expectedSql}`)
-  expect({missing, extra}, `${label} index vs recompute`).toEqual({missing: [], extra: []})
-}
-
-const sweepDerivedIndexes = async (db: TestDb['db']): Promise<void> => {
-  // block_aliases — recompute mirrors blocks_alias_insert/update
-  // (clientSchema.ts): live blocks' properties_json $.alias text
-  // elements, alias_lower = LOWER(alias). DISTINCT matches the
-  // INSERT OR IGNORE (block_id, alias) PK dedup.
-  await expectMirror(db, 'block_aliases',
-    'SELECT block_id, alias, alias_lower, workspace_id FROM block_aliases',
-    `SELECT DISTINCT b.id, je.value, LOWER(je.value), b.workspace_id
-       FROM blocks b, json_each(b.properties_json, '$.alias') AS je
-      WHERE b.deleted = 0 AND typeof(je.value) = 'text'`)
-
-  // block_types — same shape over $.types (blocks_type_* triggers).
-  await expectMirror(db, 'block_types',
-    'SELECT block_id, type, workspace_id FROM block_types',
-    `SELECT DISTINCT b.id, je.value, b.workspace_id
-       FROM blocks b, json_each(b.properties_json, '$.types') AS je
-      WHERE b.deleted = 0 AND typeof(je.value) = 'text'`)
-
-  // block_references — recompute mirrors blocks_references_insert/update
-  // (references localSchema.ts): one row per (source, target, alias,
-  // sourceField-or-'') tuple of every live block's references_json.
-  await expectMirror(db, 'block_references',
-    'SELECT source_id, target_id, alias, source_field, workspace_id FROM block_references',
-    `SELECT DISTINCT b.id, json_extract(je.value, '$.id'), json_extract(je.value, '$.alias'),
-            COALESCE(json_extract(je.value, '$.sourceField'), ''), b.workspace_id
-       FROM blocks b, json_each(b.references_json) AS je
-      WHERE b.deleted = 0
-        AND typeof(json_extract(je.value, '$.id')) = 'text'
-        AND typeof(json_extract(je.value, '$.alias')) = 'text'
-        AND (json_type(je.value, '$.sourceField') IS NULL
-             OR typeof(json_extract(je.value, '$.sourceField')) = 'text')`)
-
-  // blocks_fts — one row per live non-empty-content block
-  // (blocks_fts_* triggers). EXCEPT is set-based, so also pin the row
-  // count: a double-insert of an identical row would otherwise hide.
-  await expectMirror(db, 'blocks_fts',
-    'SELECT block_id, content, workspace_id FROM blocks_fts',
-    `SELECT id, content, workspace_id FROM blocks WHERE deleted = 0 AND content != ''`)
-  const [ftsCount, liveCount] = await Promise.all([
-    db.getAll<{n: number}>('SELECT COUNT(*) AS n FROM blocks_fts'),
-    db.getAll<{n: number}>(`SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0 AND content != ''`),
-  ])
-  expect(ftsCount[0].n, 'blocks_fts row count').toBe(liveCount[0].n)
-
-  // Every FTS row's rowid must map back to its own block_id, and the
-  // rowid map (kept across soft-deletes by design) must never point at
-  // a block that doesn't exist at all.
-  const badJoins = await db.getAll<{block_id: string}>(
-    `SELECT f.block_id FROM blocks_fts f
-       LEFT JOIN blocks_fts_rowids r ON r.fts_rowid = f.rowid
-      WHERE r.block_id IS NULL OR r.block_id != f.block_id`,
-  )
-  expect(badJoins, 'blocks_fts rowid mapping').toEqual([])
-  const orphanRowids = await db.getAll<{block_id: string}>(
-    `SELECT r.block_id FROM blocks_fts_rowids r
-      WHERE NOT EXISTS (SELECT 1 FROM blocks b WHERE b.id = r.block_id)`,
-  )
-  expect(orphanRowids, 'blocks_fts_rowids orphan').toEqual([])
-}
+/** `sweepDerivedIndexes` (block_aliases/block_types/block_references/
+ *  blocks_fts vs a from-scratch recompute) now lives in
+ *  `@/data/test/fuzzKernelHarness` (Batch 3) so `twoRepoConvergence` can
+ *  reuse it — see its docblock there for the workspace-agnostic-recompute
+ *  argument for why that's safe to share across suites with different
+ *  workspace counts. */
 
 /** SUBTREE_SQL-vs-JS-walk differential for one workspace's rooted
  *  subtree. Also the workspace-uniformity check: `live` is filtered to
@@ -523,7 +302,7 @@ afterAll(async () => {
  *  `statefulFuzzGuard` (`@/test/fuzz`, docs/fuzzing.md §6). */
 const guard = statefulFuzzGuard()
 
-type CaseArgs = {ops: OpSpec[]; withUndoRedo: boolean}
+type CaseArgs = {ops: KernelOpSpec[]; withUndoRedo: boolean}
 
 const runCase = async ({ops, withUndoRedo}: CaseArgs): Promise<void> => {
   await resetTestDb(sharedDb.db)
@@ -555,7 +334,7 @@ const runCase = async ({ops, withUndoRedo}: CaseArgs): Promise<void> => {
     if ((op.op === 'undo' || op.op === 'redo') && !withUndoRedo) continue
     if (op.op === 'undo' || op.op === 'redo') ranUndoRedo = true
     try {
-      const created = await applyOp(repo, op, pools)
+      const created = await applyKernelOp(repo, op, pools)
       for (const {id, pool} of created) pools[pool].push(id)
     } catch (e) {
       assertLegalKernelRejection(e, JSON.stringify(op))
@@ -609,8 +388,8 @@ describe('kernel mutator sequences', () => {
       {op: 'setAlias', id: {pool: 0, idx: 1}, alias: 0, clear: false},
       {op: 'setType', id: {pool: 0, idx: 1}, type: 0, clear: false},
       {op: 'setReferences', id: {pool: 0, idx: 1}, refs: [{target: {pool: 0, idx: 0}, aliased: true, prop: true}]},
-    ] satisfies OpSpec[]) {
-      const created = await applyOp(repo, op, pools)
+    ] satisfies KernelOpSpec[]) {
+      const created = await applyKernelOp(repo, op, pools)
       for (const {id, pool} of created) pools[pool].push(id)
     }
 
