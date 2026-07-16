@@ -4,13 +4,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   ChangeScope,
   codecs,
+  defineBlockType,
   defineProperty,
   normalizeReferences,
   type BlockData,
 } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
-import { propertySchemasFacet } from '@/data/facets.js'
+import { typesFacet } from '@/data/facets.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
@@ -194,8 +195,10 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-          propertySchemasFacet.of(relatedProp, {source: 'test'}),
+          typesFacet.of(
+            defineBlockType({id: 'test:ref-reviewer-related', properties: [reviewerProp, relatedProp]}),
+            {source: 'test'},
+          ),
         ],
       })
       await seed(repo)
@@ -223,8 +226,10 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-          propertySchemasFacet.of(relatedProp, {source: 'test'}),
+          typesFacet.of(
+            defineBlockType({id: 'test:ref-reviewer-related', properties: [reviewerProp, relatedProp]}),
+            {source: 'test'},
+          ),
         ],
       })
       await seed(seeder.repo)
@@ -270,7 +275,10 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+          typesFacet.of(
+            defineBlockType({id: 'test:ref-reviewer', properties: [reviewerProp]}),
+            {source: 'test'},
+          ),
         ],
       })
       await repo.tx(async tx => {
@@ -312,7 +320,10 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+          typesFacet.of(
+            defineBlockType({id: 'test:ref-reviewer', properties: [reviewerProp]}),
+            {source: 'test'},
+          ),
         ],
       })
       await repo.tx(async tx => {
@@ -368,8 +379,10 @@ describe('references.retargetMergedBlockReferences', () => {
         extensions: [
           referencesDataExtension,
           aliasDataExtension,
-          propertySchemasFacet.of(reviewerProp, {source: 'test'}),
-          propertySchemasFacet.of(pinnedProp, {source: 'test'}),
+          typesFacet.of(
+            defineBlockType({id: 'test:ref-reviewer-pinned', properties: [reviewerProp, pinnedProp]}),
+            {source: 'test'},
+          ),
         ],
       })
       await repo.tx(async tx => {
