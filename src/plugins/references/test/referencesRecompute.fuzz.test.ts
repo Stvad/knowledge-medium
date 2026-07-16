@@ -251,6 +251,94 @@ const auditOrFail = async (db: TestDb['db'], repo: Repo): Promise<void> => {
   expect(audit.anomalies, `consistency audit: ${JSON.stringify(audit.checks)}`).toBe(0)
 }
 
+/**
+ * Stable-wrong-binding sweep. The audit's `content_link_recompute`
+ * (audit.ts:496, `runContentLinkRecomputeCheck`) diffs the alias SET
+ * parsed from content against the alias set of stored content refs —
+ * it never compares the bound *id*. That leaves a whole bug class
+ * invisible: a `[[alias]]` entry whose stored `id` disagrees with who
+ * currently owns that alias, where every re-parse recomputes the
+ * identical wrong id (a fixpoint, so `referencesChanged` never trips
+ * and nothing heals). One such bug was real: `applySourcePlan`'s
+ * date-retarget once rewrote every entry sharing a predicted seat id
+ * instead of only the literal date-mark aliases that fell through to
+ * the ensure, hijacking an unrelated same-plan binding to wherever the
+ * ensure resolved — see the "hijack" guard note at
+ * referencesProcessor.ts:340-345 ("the wrong state is STABLE... so
+ * referencesChanged sees no delta and nothing heals").
+ *
+ * Mirrors `SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL`
+ * (kernelQueries.ts:327-336 — the exact SQL backing both
+ * `tx.aliasLookup`, txEngine.ts:697-710, and `repo.query.aliasLookup`,
+ * kernelQueries.ts:1242-1262): `block_aliases` joined to `blocks`,
+ * exact-case `alias` match (NOT the `alias_lower` column — that backs
+ * only the fuzzy-match queries), workspace-scoped, `blocks.deleted =
+ * 0`, oldest claimant wins ties (`ORDER BY blocks.created_at LIMIT
+ * 1`). `tx.aliasLookup` and `repo.query.aliasLookup` share this same
+ * matching logic; they differ only in which state they read (in-tx
+ * read-your-own-writes vs. committed-only) — irrelevant here since
+ * this sweep only ever runs post-drain against committed state.
+ *
+ * Only wikilink/daily-note-derived entries are policed
+ * (`sourceField === undefined && alias !== id`): blockrefs mint
+ * `alias === id` (referencesProcessor.ts:214) and property refs carry
+ * `sourceField` — neither names an alias binding.
+ *
+ * A binding with NO current claimant is a deliberate non-finding, not
+ * an oversight: `ensureAliasTarget` / `ensureDailyNoteTarget` mint a
+ * seat that immediately claims its own alias
+ * (referencesProcessor.ts:200-206, 335-349), so "no live claimant" can
+ * only arise AFTER that owner is later tombstoned or loses the alias —
+ * i.e. ownership was deliberately released. What's left is a
+ * lazily-healed residual the add-only reconcile contract deliberately
+ * retains (`isRetainableAbsentRef`, referencesProcessor.ts:218-224)
+ * with no live owner for rename/merge to retarget it to. Policing that
+ * case would fight the add-only contract, not catch the bug class this
+ * oracle targets.
+ */
+const sweepAliasBindings = async (
+  db: TestDb['db'], workspaceId: string,
+): Promise<{inspected: number}> => {
+  const rows = await db.getAll<{id: string; references_json: string}>(
+    'SELECT id, references_json FROM blocks WHERE workspace_id = ? AND deleted = 0',
+    [workspaceId],
+  )
+  let inspected = 0
+  for (const row of rows) {
+    let refs: Array<{id?: string; alias?: string; sourceField?: string}>
+    try {
+      refs = JSON.parse(row.references_json)
+    } catch {
+      continue
+    }
+    for (const ref of refs) {
+      if (ref.sourceField !== undefined) continue
+      if (ref.id === undefined || ref.alias === undefined || ref.alias === ref.id) continue
+      inspected += 1
+      // Same table/predicates/ordering as SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL
+      // (kernelQueries.ts:327-336) — see docblock above.
+      const claimant = await db.getOptional<{id: string}>(
+        `SELECT blocks.id AS id
+         FROM block_aliases ba
+         JOIN blocks ON blocks.id = ba.block_id
+         WHERE ba.workspace_id = ?
+           AND ba.alias = ?
+           AND blocks.deleted = 0
+         ORDER BY blocks.created_at
+         LIMIT 1`,
+        [workspaceId, ref.alias],
+      )
+      if (claimant === null) continue // ownership released — see docblock, not policed
+      expect(
+        ref.id,
+        `stable wrong binding: alias ${JSON.stringify(ref.alias)} on source ${row.id} `
+        + `is bound to ${ref.id}, but the current claimant of that alias is ${claimant.id}`,
+      ).toBe(claimant.id)
+    }
+  }
+  return {inspected}
+}
+
 // ──── the property ────
 
 let sharedDb: TestDb
@@ -343,11 +431,13 @@ const runCase = async ({batches}: Omit<CaseArgs, 'prngSeed'>): Promise<void> => 
       await env.flush()
       await collectMintedIds(sharedDb.db, ids)
       await auditOrFail(sharedDb.db, env.repo)
+      await sweepAliasBindings(sharedDb.db, WS)
     }
     // Fire any pending orphan cleanups, then re-audit the settled state.
     await env.flush(4001)
     await collectMintedIds(sharedDb.db, ids)
     await auditOrFail(sharedDb.db, env.repo)
+    await sweepAliasBindings(sharedDb.db, WS)
   } finally {
     // A failing/abandoned case may leave detached processor work — drain
     // it so it can't write into the next case's freshly reset DB.
@@ -444,6 +534,35 @@ describe('references pipeline sequences', () => {
       const projection = audit.checks.property_ref_projection as {status: string; scanned: number}
       expect(projection.status).toBe('ok')
       expect(projection.scanned, 'projection check saw candidates').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Non-vacuity canary for `sweepAliasBindings`: the oracle only bites if
+  // its claimant-exists branch actually runs (and passes) somewhere. A
+  // suite where every binding's claimant happened to be absent would
+  // pass vacuously without ever comparing an id. Deterministic (not the
+  // fuzz property) so the "at least one inspected binding" assertion is
+  // pinned rather than probabilistic.
+  it('alias-binding sweep inspects a live wikilink binding against its claimant', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const env = await buildEnv()
+      const {repo, flush} = env
+      const owner = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'owner',
+      })
+      await repo.mutate.setProperty({id: owner, schema: aliasesProp, value: ['ax']})
+      await flush()
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'referrer see [[ax]]',
+      })
+      await flush()
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected at least one alias binding').toBeGreaterThan(0)
     } finally {
       vi.clearAllTimers()
       vi.useRealTimers()
