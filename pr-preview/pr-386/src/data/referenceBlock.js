@@ -1,0 +1,2 @@
+var e=RegExp(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,`i`),t=/^\(\(([^()\s]+)\)\)$/,n=n=>{let r=n.trim(),i=t.exec(r);if(i){let t=i[1];return{kind:`blockRef`,id:e.test(t)?t.toLowerCase():t}}if(!r.startsWith(`[[`)||!r.endsWith(`]]`))return null;let a=r.slice(2,-2).trim();return!a||a.includes(`[[`)||a.includes(`]]`)?null:{kind:`alias`,alias:a}},r=e=>`[[${e.replace(/]]/g,`] ]`)}]]`;export{n as parseExactReferenceBlockContent,r as referenceBlockContentForLabel};
+//# sourceMappingURL=referenceBlock.js.map
