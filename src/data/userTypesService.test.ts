@@ -9,6 +9,7 @@ import {
   blockTypeColorProp,
   blockTypeDescriptionProp,
   blockTypeHideFromBlockDisplayProp,
+  blockTypeHideFromCompletionProp,
   blockTypeLabelProp,
   blockTypePropertiesProp,
   propertyNameProp,
@@ -76,6 +77,7 @@ const createBlockTypeBlock = async (
     description?: string
     properties?: readonly string[]
     hideFromBlockDisplay?: boolean
+    hideFromCompletion?: boolean
     color?: string
   },
 ): Promise<string> => {
@@ -91,6 +93,9 @@ const createBlockTypeBlock = async (
     }
     if (args.hideFromBlockDisplay !== undefined) {
       await tx.setProperty(id, blockTypeHideFromBlockDisplayProp, args.hideFromBlockDisplay)
+    }
+    if (args.hideFromCompletion !== undefined) {
+      await tx.setProperty(id, blockTypeHideFromCompletionProp, args.hideFromCompletion)
     }
     if (args.color !== undefined) {
       await tx.setProperty(id, blockTypeColorProp, args.color)
@@ -109,6 +114,12 @@ describe('UserTypesService subscription', () => {
     expect(contribution!.label).toBe('Person')
     expect(contribution!.id).toBe(id)
     expect(env.service.getTypeBlockId(id)).toBe(id)
+  })
+
+  it('lifts hide-from-completion onto the contribution', async () => {
+    env = await setup()
+    const id = await createBlockTypeBlock(env.repo, {label: 'Auto', hideFromCompletion: true})
+    expect(env.repo.types.get(id)).toMatchObject({hideFromCompletion: true})
   })
 
   it('lifts hide-from-block-display and color onto the contribution, and republishes on change', async () => {

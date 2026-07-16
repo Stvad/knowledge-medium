@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {ChangeScope, type BlockData} from '@/data/api'
 import {PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
-import {propertyDefinitionBlockId} from '@/data/definitionSeeds'
+import {propertyDefinitionBlockId, typeDefinitionBlockId} from '@/data/definitionSeeds'
 import {parsePropertyDefinitionMetadata} from '@/data/propertyDefinitionMetadata'
 import {
   addBlockTypeToProperties,
@@ -89,6 +89,22 @@ describe('parsePropertyDefinitionMetadata', () => {
       fieldId: row.id,
       origin: 'user',
     })
+    expect(parsePropertyDefinitionMetadata(row)).not.toHaveProperty('seedKey')
+  })
+
+  it('demotes a /type/-grammar seed key on a property row (no /property/ provenance)', () => {
+    // A dual-typed / imported row: PROPERTY_SCHEMA_TYPE membership + a valid
+    // /type/ seed:key at its own deterministic id. seededDefinitionKey validates
+    // it, but it isn't a property seed, so it must NOT publish as seeded property
+    // metadata (which would truncate the /type/ owner) — demote to user.
+    const typeKey = 'system:kernel-data/type/page'
+    const id = typeDefinitionBlockId(WS, typeKey)
+    const row = definitionRow({
+      [propertyNameProp.name]: 'confusing:field',
+      [seedKeyProp.name]: typeKey,
+    }, {id})
+
+    expect(parsePropertyDefinitionMetadata(row)).toMatchObject({fieldId: id, origin: 'user'})
     expect(parsePropertyDefinitionMetadata(row)).not.toHaveProperty('seedKey')
   })
 

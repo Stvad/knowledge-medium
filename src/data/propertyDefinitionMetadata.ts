@@ -1,12 +1,12 @@
 import {ChangeScope, isChangeScope, type BlockData, type PropertySchemaOrigin} from '@/data/api'
 import {PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
-import {isValidSeededDefinition} from '@/data/definitionSeeds'
+import {seededDefinitionKey} from '@/data/definitionSeeds'
+import {isPropertySeedKey} from '@/data/propertySeeds'
 import {
   hasBlockType,
   propertyChangeScopeProp,
   propertyHiddenProp,
   propertyNameProp,
-  seedKeyProp,
 } from '@/data/properties'
 
 /** Codec-less facts carried by every usable property-definition row.
@@ -38,8 +38,9 @@ export const propertySchemaOriginForSeedKey = (seedKey: string): PropertySchemaO
 
 /** Parse block-readable definition facts without consulting the preset
  * registry. Non-definition/deleted/nameless rows and rows with malformed
- * metadata fields return null; a malformed or wrong-id seed marker is the
- * one deliberate exception and demotes to ordinary user provenance. */
+ * metadata fields return null; a malformed, wrong-id, or non-`/property/`
+ * seed marker is the one deliberate exception and demotes to ordinary user
+ * provenance. */
 export const parsePropertyDefinitionMetadata = (
   row: BlockData,
 ): PropertyDefinitionMetadata | null => {
@@ -55,7 +56,14 @@ export const parsePropertyDefinitionMetadata = (
     if (!isChangeScope(changeScope)) return null
     const hidden = decodePresentOrDefault(row, propertyHiddenProp)
 
-    if (!isValidSeededDefinition(row)) {
+    // Require PROPERTY provenance. `seededDefinitionKey` now also validates
+    // `/type/` rows (a `block-type` block can be a valid seeded definition), so a
+    // dual-typed or imported row carrying a `/type/` `seed:key` at the shared
+    // deterministic id must NOT read as a seeded property — `propertySchemaOriginForSeedKey`
+    // assumes a `/property/` segment and would truncate a `/type/` owner. Demote
+    // anything without a valid `/property/` key to ordinary user provenance.
+    const seedKey = seededDefinitionKey(row)
+    if (seedKey === undefined || !isPropertySeedKey(seedKey)) {
       return {
         fieldId: row.id,
         workspaceId: row.workspaceId,
@@ -67,9 +75,8 @@ export const parsePropertyDefinitionMetadata = (
       }
     }
 
-    // isValidSeededDefinition already proved this field decodes as a valid
-    // property seed and satisfies the row's workspace/id equation.
-    const seedKey = seedKeyProp.codec.decode(row.properties[seedKeyProp.name])
+    // The validated key proved this `/property/` seed's deterministic id matches
+    // the row for its own workspace.
     return {
       fieldId: row.id,
       workspaceId: row.workspaceId,
