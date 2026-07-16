@@ -489,13 +489,17 @@ children: first visible comment block, then reply blocks</code></pre>
     </tr>
     <tr>
       <td>Backlinks view</td>
-      <td>Thread-root refs should not pollute the default linked references view. Current backlinks queries include all <code>sourceField</code> values; flat and grouped backlinks can suppress annotation-thread sources with a built-in <code>referencedBy.sourceField</code> exclusion, but inline backlink counts and any mixed-source edge semantics still need query/API work. The comments section separately queries <code>sourceField = "annotation:targetBlocks"</code>. Note the exclusion covers <em>only</em> the thread root's projected refs: a wikilink or <code>((ref))</code> typed inside a comment body is an ordinary content ref, indistinguishable from outline refs, and will surface in the target's linked references — with grouped backlinks rendering its ancestor chain up through the annotation container — and <code>[[New Page]]</code> in a comment mints a real page. V1 policy: comment-body refs are real graph edges and may appear (a comment referencing a block is a genuine mention); suppressing them would need a new inside-annotation-container ancestor predicate in the query layer, deferred until the behavior proves confusing. Group-context rendering of thread ancestors goes through the hiding seam.</td>
+      <td>Thread-root refs should not pollute the default linked references view. Current backlinks queries include all <code>sourceField</code> values; flat and grouped backlinks can suppress annotation-thread sources with a built-in <code>referencedBy.sourceField</code> exclusion, but inline backlink counts and any mixed-source edge semantics still need query/API work. The comments section separately queries <code>sourceField = "annotation:targetBlocks"</code>. Refs typed <em>inside comment bodies</em> are a separate policy — see the note below the table.</td>
     </tr>
     <tr>
       <td>Resolved comments</td>
       <td>Resolved threads remain blocks, but are hidden or collapsed by default in annotation surfaces.</td>
     </tr>
   </table>
+
+  <div class="note">
+    <strong>Comment-body refs:</strong> the <code>sourceField</code> exclusion covers only the thread root's projected refs. A wikilink or <code>((ref))</code> typed inside a comment body is an ordinary content ref, indistinguishable from outline refs, and will surface in the target's linked references — with grouped backlinks rendering its ancestor chain up through the annotation container — and <code>[[New Page]]</code> in a comment mints a real page. V1 policy: comment-body refs are real graph edges and may appear (a comment referencing a block is a genuine mention); suppressing them would need a new inside-annotation-container ancestor predicate in the query layer, deferred until the behavior proves confusing. Group-context rendering of thread ancestors goes through the hiding seam.
+  </div>
 
   <h2>Render Surface Policy</h2>
   <p>Annotation decorations should be scoped by render surface. Primary document and focused edit surfaces show inline highlights when they can resolve raw offsets correctly. Secondary surfaces such as backlinks, embeds, breadcrumbs, and block references default to compact markers, counts, or no annotation decoration. Any reveal behavior should be render-time policy, not persisted collapse-state mutation.</p>
@@ -535,7 +539,7 @@ children: first visible comment block, then reply blocks</code></pre>
     <tr>
       <td>Thread blocks with anchor property</td>
       <td>Uses existing block sync, undo, E2EE, deletion, and child replies. Queryable through refList backlinks once reference projection is handled.</td>
-      <td>Anchor payload is less queryable than a table; thread metadata shares one properties column, so concurrent annotation actions merge LWW (see Concurrency And Sync Merge); every block-enumerating surface (backlinks, search, recents, counts, export) needs explicit annotation exclusions, and unpatched surfaces leak.</td>
+      <td>Anchor payload is less queryable than a table; thread metadata shares one properties column, so concurrent annotation actions merge LWW (see Concurrency And Sync Merge); every block-enumerating surface needs explicit exclusions via the shared hiding seam (see Thread Placement), and unpatched surfaces leak.</td>
       <td>Recommended v1.</td>
     </tr>
     <tr>
@@ -559,6 +563,7 @@ children: first visible comment block, then reply blocks</code></pre>
   </table>
 
   <h2>Implementation Slices</h2>
+  <p>Annotation code lives in a new plugin (e.g. <code>src/plugins/annotations/</code>), following the references/backlinks pattern; the shared hiding seam may need kernel query hooks.</p>
   <h3>V1 comments</h3>
   <ol>
     <li>Define annotation schemas (<code>defineProperty</code> + <code>codecs.refList()</code>, as existing plugins do): thread type, annotation container type, target <code>refList</code> property, anchor payload property, status/kind properties.</li>
@@ -599,7 +604,7 @@ children: first visible comment block, then reply blocks</code></pre>
 
   <h2>Open Questions</h2>
   <ul>
-    <li>Should stale anchors have an explicit repair command that lets the user select new text and reattach the thread?</li>
+    <li>Repair by exact/context search is decided (see Anchor Maintenance). Should repair also offer manual re-selection — the user selecting new text to reattach a thread whose original text is gone?</li>
     <li>When annotation count grows, is the right graduation path a dedicated synced table or the deferred <code>plugin_block_data</code> escape hatch described in <a href="follow-ups.md">follow-ups.md</a>?</li>
   </ul>
 
