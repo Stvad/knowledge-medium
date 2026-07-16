@@ -70,8 +70,8 @@ import { createTestRepo } from '@/data/test/createTestRepo'
 import { assertLegalKernelRejection, pick, pickNonRoot } from '@/data/test/fuzzKernelHarness'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
-import { seedProperty } from '@/data/propertySeeds'
 import { definitionSeedsFacet } from '@/data/facets.js'
+import { refTestSeed } from './refTestSeeds.ts'
 import { computeAliasSeatId } from '@/data/targets'
 import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { runConsistencyAudit } from '@/plugins/data-integrity/audit'
@@ -84,24 +84,10 @@ const ROOT = '00000000-0000-4000-8000-000000000000'
 
 // ──── property schemas under test ────
 
-const reviewerProp = seedProperty({
-  seedKey: 'test:references/property/reviewer',
-  revision: 1,
-  name: 'reviewer',
-  preset: 'ref',
-  changeScope: ChangeScope.BlockDefault,
-})
-const relatedProp = seedProperty({
-  seedKey: 'test:references/property/related',
-  revision: 1,
-  name: 'related',
-  preset: 'refList',
-  changeScope: ChangeScope.BlockDefault,
-})
-const refSchemaExtension = [
-  definitionSeedsFacet.of(reviewerProp, {source: 'test'}),
-  definitionSeedsFacet.of(relatedProp, {source: 'test'}),
-]
+const reviewerProp = refTestSeed('reviewer', 'ref')
+const relatedProp = refTestSeed('related', 'refList')
+const refSchemaExtension = [reviewerProp, relatedProp].map(p =>
+  definitionSeedsFacet.of(p, {source: 'test'}))
 
 // ──── op + content generators ────
 

@@ -8,13 +8,13 @@ import {
 } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { aliasesProp } from '@/data/properties'
-import { seedProperty } from '@/data/propertySeeds'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { aliasDataExtension } from '@/plugins/alias/dataExtension.js'
 import { ALIAS_COLLISION_MERGE_MUTATOR } from '@/plugins/alias/collisionMerge.ts'
 import { referencesDataExtension } from '../dataExtension.ts'
+import { refTestSeed } from './refTestSeeds.ts'
 
 const WS = 'ws-1'
 
@@ -154,20 +154,8 @@ describe('references.retargetMergedBlockReferences', () => {
   // without rewriting the value left a projection anomaly that the next
   // re-parse silently reverted.
   describe('property-derived refs', () => {
-    const reviewerProp = seedProperty({
-      seedKey: 'test:references/property/reviewer',
-      revision: 1,
-      name: 'reviewer',
-      preset: 'ref',
-      changeScope: ChangeScope.BlockDefault,
-    })
-    const relatedProp = seedProperty({
-      seedKey: 'test:references/property/related',
-      revision: 1,
-      name: 'related',
-      preset: 'refList',
-      changeScope: ChangeScope.BlockDefault,
-    })
+    const reviewerProp = refTestSeed('reviewer', 'ref')
+    const relatedProp = refTestSeed('related', 'refList')
 
     const seed = async (repo: Repo): Promise<void> => {
       await repo.tx(async tx => {
@@ -363,13 +351,7 @@ describe('references.retargetMergedBlockReferences', () => {
       // entirely (value AND entry, like the absent-schema branch), not
       // silently mutated inside an undoable document merge (Codex
       // review on PR #371).
-      const pinnedProp = seedProperty({
-        seedKey: 'test:references/property/pinned-view',
-        revision: 1,
-        name: 'pinned-view',
-        preset: 'ref',
-        changeScope: ChangeScope.UiState,
-      })
+      const pinnedProp = refTestSeed('pinned-view', 'ref', ChangeScope.UiState)
       await resetTestDb(sharedDb.db)
       const {repo, cache} = createTestRepo({
         db: sharedDb.db,
