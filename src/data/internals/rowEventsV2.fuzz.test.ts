@@ -21,21 +21,14 @@
 
 import {describe, expect, it} from 'vitest'
 import fc from 'fast-check'
-import {DatabaseSync} from 'node:sqlite'
 import {fuzzParams, fuzzTestTimeout} from '@/test/fuzz'
-import {
-  BLOCK_STORAGE_COLUMNS,
-  CREATE_BLOCKS_SYNCED_TABLE_SQL,
-  CREATE_BLOCKS_TABLE_SQL,
-} from '@/data/blockSchema'
-import {CREATE_WORKSPACE_MEMBERS_TABLE_SQL} from '@/data/workspaceSchema'
+import {BLOCK_STORAGE_COLUMNS} from '@/data/blockSchema'
 import {
   ANCHOR_COIN_ALWAYS_SQL,
   ANCHOR_COIN_NEVER_SQL,
-  CLIENT_SCHEMA_STATEMENTS,
-  buildBlocksUpdateRowEventTriggerSql,
 } from './clientSchema'
-import {stateAt, type RowEventsHistoryDb} from './rowEventsHistory'
+import {stateAt, type RowEventRecord} from './rowEventsHistory'
+import {DOMAIN_KEYS, setupRowEventsDb} from './test/rowEventsTestDb'
 
 // ── command model ───────────────────────────────────────────────────────────
 
@@ -106,11 +99,6 @@ const cmdArb: fc.Arbitrary<Cmd> = fc.oneof(
 
 // ── harness ─────────────────────────────────────────────────────────────────
 
-const DOMAIN_KEYS = [
-  'id', 'workspaceId', 'parentId', 'orderKey', 'content', 'properties', 'references',
-  'createdAt', 'updatedAt', 'userUpdatedAt', 'createdBy', 'updatedBy', 'deleted',
-] as const
-
 interface StorageRow {
   id: string
   workspace_id: string
@@ -172,37 +160,10 @@ interface ExpectedEvent {
   changedKeys: string[] | null
 }
 
-interface EventRow {
-  id: number
-  block_id: string
-  kind: string
-  before_json: string | null
-  after_json: string | null
-  v: number | null
-  full: number | null
-}
-
-const setupDb = (coinSql: string | null): DatabaseSync => {
-  const db = new DatabaseSync(':memory:')
-  db.exec('CREATE TABLE ps_crud (id INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL, tx_id INTEGER)')
-  db.exec(CREATE_BLOCKS_TABLE_SQL)
-  db.exec(CREATE_BLOCKS_SYNCED_TABLE_SQL)
-  db.exec(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
-  for (const stmt of CLIENT_SCHEMA_STATEMENTS) db.exec(stmt)
-  if (coinSql !== null) {
-    db.exec('DROP TRIGGER IF EXISTS blocks_row_event_update')
-    db.exec(buildBlocksUpdateRowEventTriggerSql(coinSql))
-  }
-  return db
-}
-
-const historyDb = (db: DatabaseSync): RowEventsHistoryDb => ({
-  getAll: <T,>(sql: string, params: unknown[] = []) =>
-    Promise.resolve(db.prepare(sql).all(...(params as (string | number)[])) as T[]),
-})
-
 const runSequence = async (cmds: Cmd[], coinSql: string | null): Promise<void> => {
-  const db = setupDb(coinSql)
+  const harness = setupRowEventsDb()
+  if (coinSql !== null) harness.installUpdateTrigger(coinSql)
+  const db = harness.db
   try {
     const model = new Map<string, StorageRow>()
     const expected: ExpectedEvent[] = []
@@ -286,7 +247,7 @@ const runSequence = async (cmds: Cmd[], coinSql: string | null): Promise<void> =
 
     // ── oracles over the finished log ──
     const events = db.prepare('SELECT id, block_id, kind, before_json, after_json, v, full FROM row_events ORDER BY id')
-      .all() as unknown as EventRow[]
+      .all() as unknown as RowEventRecord[]
     expect(events.length).toBe(expected.length)
 
     const fullKeys = [...DOMAIN_KEYS].sort()
@@ -317,10 +278,10 @@ const runSequence = async (cmds: Cmd[], coinSql: string | null): Promise<void> =
       }
 
       // I1/I2: reconstruction matches the model's timeline exactly.
-      expect(await stateAt(historyDb(db), e.id)).toEqual(exp.state)
+      expect(await stateAt(harness.history, e.id)).toEqual(exp.state)
     }
   } finally {
-    db.close()
+    harness.close()
   }
 }
 
