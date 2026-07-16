@@ -51,6 +51,7 @@ import {
   type TxDb,
 } from './txEngine'
 import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
+import { propertySchemaResolverForWorkspace } from './propertySchemaResolution'
 import type { BlockCache } from '@/data/blockCache'
 import type {PropertyDefinitionRegistrySnapshot} from '@/data/propertyDefinitionRegistry'
 
@@ -251,6 +252,17 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   // the list at commit time into command_events.mutator_calls.
   const mutatorCalls: MutatorCallRecord[] = []
   const meta = newTxMeta({txId, scope, source, user, description})
+  // Workspace-bound schema-name resolution for same-tx processors — the same
+  // tx-start-captured identity primitive TxImpl resolves through (its private
+  // `propertySchemaResolverFor`), rebuilt here from the identical inputs so
+  // both surfaces see one registry snapshot per tx.
+  const resolvePropertySchemaName = (workspaceId: string, name: string) =>
+    propertySchemaResolverForWorkspace(
+      propertyDefinitionRegistryForWorkspace(workspaceId),
+      workspaceId,
+      propertySeedNameCounts,
+      propertySchemaWorkspaceId === null || workspaceId === propertySchemaWorkspaceId,
+    ).resolve(name)
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
   const value = await db.writeTransaction(async (txDb): Promise<R> => {
@@ -328,7 +340,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
             changedRows,
             emittedEvents,
           },
-          {tx, db: txDb, propertySchemas},
+          {tx, db: txDb, propertySchemas, resolvePropertySchemaName},
         )
       }
     }

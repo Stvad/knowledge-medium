@@ -140,6 +140,12 @@ export const bootstrapWorkspace = async ({
   // own rows. Marker-gated once per workspace, deferred off this critical path.
   repo.scheduleWorkspaceRefBackfill(workspaceId)
 
+  // One-time catch-up derive of the LOCAL `reference_target_id` column for
+  // rows that predate it (PR #288 slice A). Marker-gated per workspace,
+  // deferred off this critical path; placed after `whenPropertyDefinitionsReady`
+  // above so the `[[name]]` tier resolves against the primed name-winner map.
+  repo.scheduleReferenceTargetDerivePass(workspaceId)
+
   // One-time post-upgrade recovery for the deterministic-id shadow: clients that
   // skip-staled the server's authoritative row under the old reconcile gate
   // consumed its change-queue entry, so a normal startup never re-evaluates it.

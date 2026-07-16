@@ -64,7 +64,7 @@ import {
 } from '@/data/api'
 import { isValidSeededDefinition } from '@/data/definitionSeeds'
 import {
-  BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
   parseBlockRow,
   type BlockRow,
@@ -93,6 +93,12 @@ export interface TxDb {
 
 const updatePatchChangesBlock = (before: BlockData, patch: BlockDataPatch): boolean => {
   if (patch.content !== undefined && patch.content !== before.content) return true
+  if (
+    patch.referenceTargetId !== undefined &&
+    patch.referenceTargetId !== (before.referenceTargetId ?? null)
+  ) {
+    return true
+  }
   if (
     patch.references !== undefined &&
     !jsonValuesEqual(before.references, normalizeReferences(patch.references))
@@ -221,7 +227,10 @@ export interface TxImplContext {
   newId: () => string
 }
 
-const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+// Live `blocks`-table column list: storage columns + local-only derived
+// columns (`reference_target_id`). Everything this engine touches is the
+// live table, never `blocks_synced`.
+const COLUMN_NAMES = BLOCKS_TABLE_COLUMN_NAMES
 const COLUMN_LIST = COLUMN_NAMES.join(', ')
 const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 
@@ -423,6 +432,9 @@ export class TxImpl implements Tx {
       ...beforeData,
       deleted: false,
       ...(patch?.content !== undefined ? {content: patch.content} : {}),
+      ...(patch?.referenceTargetId !== undefined
+        ? {referenceTargetId: patch.referenceTargetId}
+        : {}),
       // Reference-array canonicalization runs as a same-tx processor
       // (`core.normalizeReferences`) after the user fn returns —
       // see src/data/internals/normalizeReferencesProcessor.ts.
@@ -431,9 +443,10 @@ export class TxImpl implements Tx {
       ...this.metadataPatch(id, beforeData, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET deleted = 0, content = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET deleted = 0, content = ?, reference_target_id = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
+        after.referenceTargetId ?? null,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -455,15 +468,19 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
+      ...(patch.referenceTargetId !== undefined
+        ? {referenceTargetId: patch.referenceTargetId}
+        : {}),
       // See note on `restore` above re: same-tx normalization.
       ...(patch.references !== undefined ? {references: patch.references} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(id, before, opts?.skipMetadata),
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET content = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET content = ?, reference_target_id = ?, references_json = ?, properties_json = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         after.content,
+        after.referenceTargetId ?? null,
         JSON.stringify(after.references),
         JSON.stringify(after.properties),
         after.updatedAt,
@@ -853,9 +870,14 @@ export class TxImpl implements Tx {
       updatedBy: userId,
     }
     await this.ctx.txDb.execute(
-      `UPDATE blocks SET parent_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
+      `UPDATE blocks SET parent_id = ?, reference_target_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, user_updated_at = ?, updated_by = ? WHERE id = ?`,
       [
         target.parentId,
+        // Undo replay must restore the local derived column too: same-tx
+        // processors are skipped on replay (`isReplay`), so nothing
+        // re-derives it — the snapshot is the only source (invariants
+        // index, PR #288: "undo restores what processors won't re-derive").
+        target.referenceTargetId ?? null,
         target.orderKey,
         target.content,
         JSON.stringify(target.properties),
@@ -962,6 +984,7 @@ export class TxImpl implements Tx {
       id,
       workspaceId: data.workspaceId,
       parentId: data.parentId,
+      referenceTargetId: data.referenceTargetId ?? null,
       orderKey: data.orderKey,
       content: data.content ?? '',
       properties: data.properties ?? {},

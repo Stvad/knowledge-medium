@@ -22,8 +22,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
-  BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
+  blockToSyncedRowParams,
 } from '@/data/blockSchema'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { materializeStagingRows, type Materializability } from './materialize.js'
@@ -80,10 +81,9 @@ const derivedState = async (db: TestDb['db'], id: string) => ({
   )).length === 1,
 })
 
-const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
 const INSERT_BLOCK_SQL =
-  `INSERT INTO blocks (${BLOCK_COLUMN_NAMES.join(', ')}) ` +
-  `VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})`
+  `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+  `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
 
 /** Reference path: a plain direct write into `blocks` — the canonical
  *  derived-index state the observer must reproduce, independent of any
@@ -93,7 +93,7 @@ const directWrite = (db: TestDb['db'], b: BlockData) =>
 
 /** New path: stage into `blocks_synced`, then materialize via the observer core. */
 const stageAndMaterialize = async (db: TestDb['db'], b: BlockData) => {
-  await db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(b))
+  await db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(b))
   return materializeStagingRows(
     db,
     { upserted: [b.id], removed: [] },

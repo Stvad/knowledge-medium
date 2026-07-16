@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { ChangeScope, type BlockReference } from '@/data/api'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
-import { BLOCKS_SYNCED_RAW_TABLE, blockToRowParams } from '@/data/blockSchema'
+import { BLOCKS_SYNCED_RAW_TABLE, blockToSyncedRowParams } from '@/data/blockSchema'
 import { Repo } from '@/data/repo'
 import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -535,7 +535,7 @@ describe('backlinksDataExtension query', () => {
     // A concurrent client adds a reference src → target. It arrives via the
     // Layout B sync path: staged into blocks_synced, materialized by the
     // observer. A newer updated_at wins the LWW gate (real server writes do).
-    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams({
+    await env.h.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams({
       id: 'src', workspaceId: WS, parentId: null, orderKey: 'key-src',
       content: '', properties: {}, references: [{id: 'target', alias: 'T'}],
       createdAt: 0, updatedAt: 9_000_000_000_000, userUpdatedAt: 9_000_000_000_000, createdBy: 'remote', updatedBy: 'remote', deleted: false,

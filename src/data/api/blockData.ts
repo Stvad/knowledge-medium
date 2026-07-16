@@ -22,6 +22,15 @@ export interface BlockData {
   id: string
   workspaceId: string
   parentId: string | null
+  /** Non-null when the block's whole content is exactly one reference token
+   *  (`((uuid))` / `[[alias]]`) — the resolved target block id; for property
+   *  field rows this is the schema definition block's `fieldId`. LOCAL-only
+   *  derived state: never synced, re-derived per device by
+   *  `core.deriveReferenceTarget` (same tx) and the sync materializer
+   *  (arrival). Optional-in: hand-built literals may omit it; rows parsed
+   *  from storage always carry `string | null` (`parseBlockRow` normalizes
+   *  absence to `null`), so treat `undefined` as `null`. */
+  referenceTargetId?: string | null
   orderKey: string
   content: string
   /** Codec-encoded property values keyed by `PropertySchema.name`.
@@ -65,7 +74,7 @@ export interface SubtreeRow extends BlockData {
  *  its own raw-row applier driven by snapshots. See spec §4.1.1. */
 export type BlockDataPatch = Partial<Pick<
   BlockData,
-  'content' | 'properties' | 'references'
+  'content' | 'referenceTargetId' | 'properties' | 'references'
 >>
 
 /** Canonical form for a `BlockReference[]`. Sorted by
@@ -118,6 +127,12 @@ export interface NewBlockData {
   id?: string
   workspaceId: string
   parentId: string | null
+  /** Pre-resolved local derived column (see `BlockData.referenceTargetId`).
+   *  Machinery that creates reference rows with a known target (property
+   *  field-row materialization) passes it so the row is recognizable in the
+   *  same tx even when name resolution would miss; the derive processor
+   *  keeps it consistent with content afterwards. */
+  referenceTargetId?: string | null
   orderKey: string
   content?: string
   properties?: Record<string, unknown>

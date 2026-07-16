@@ -28,6 +28,7 @@ import {
   type AnySameTxProcessor,
 } from '@/data/api'
 import { BLOCK_TYPE_KERNEL_PROCESSORS } from './blockTypeTypeifyProcessor'
+import { DERIVE_REFERENCE_TARGET_PROCESSOR } from './referenceTargetProcessor'
 
 const referencesEqual = (
   a: ReturnType<typeof normalizeReferences>,
@@ -58,6 +59,10 @@ export const NORMALIZE_REFERENCES_PROCESSOR = defineSameTxProcessor({
 })
 
 export const KERNEL_SAME_TX_PROCESSORS: ReadonlyArray<AnySameTxProcessor> = [
+  // Derives the local `reference_target_id` column from content. First so
+  // later processors in the same pass (slice B's property-children
+  // projection watches `referenceTargetId`) see the stamped column.
+  DERIVE_REFERENCE_TARGET_PROCESSOR,
   NORMALIZE_REFERENCES_PROCESSOR,
   // Runs ahead of the alias plugin's content<->alias sync (kernel
   // processors precede plugin ones), so a freshly-tagged block-type

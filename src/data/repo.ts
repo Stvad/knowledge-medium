@@ -58,7 +58,12 @@ import {
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import { devAssertionsEnabled } from './internals/devAssertions'
 import type { BlockCache } from '@/data/blockCache'
-import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
+import {
+  BLOCKS_TABLE_COLUMN_NAMES,
+  buildQualifiedBlockColumnsSql,
+  parseBlockRow,
+  type BlockRow,
+} from '@/data/blockSchema'
 import { kernelDataExtension } from './kernelDataExtension'
 import {
   systemPagesFacet,
@@ -98,7 +103,14 @@ import {
   RECONCILE_RESCAN_MARKER_PREFIX,
   SELECT_RECONCILE_RESCAN_MARKER_SQL,
   RECORD_RECONCILE_RESCAN_MARKER_SQL,
+  REFERENCE_TARGET_DERIVE_MARKER_PREFIX,
+  SELECT_REFERENCE_TARGET_DERIVE_MARKERS_SQL,
+  RECORD_REFERENCE_TARGET_DERIVE_MARKER_SQL,
 } from './internals/clientSchema'
+import {
+  deriveReferenceTargetId,
+  type ReferenceTargetLookups,
+} from './internals/referenceTargetProcessor'
 import { PendingIdleJobs, MarkerStore } from './internals/idleMarkerJobs'
 import {
   parseAliasCollisionError,
@@ -113,6 +125,7 @@ import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import {
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
+  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCK_BY_ID_SQL,
 } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
@@ -498,6 +511,13 @@ export class Repo {
   /** In-flight one-time reconcile-rescan runs — drained by
    *  `awaitReconcileRescans()`, same pattern. */
   private readonly reconcileRescanJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
+  /** Lazy marker mirror for the one-time LOCAL `reference_target_id` derive
+   *  pass (rows keyed `reference_target_derive:<ws>:v1`) — constructor-built
+   *  like its siblings. */
+  private readonly referenceTargetDeriveMarkers: MarkerStore
+  /** In-flight reference-target derive passes — drained by
+   *  `awaitReferenceTargetDerive()`, same pattern. */
+  private readonly referenceTargetDeriveJobs = new PendingIdleJobs((fn) => scheduleDeepIdle(fn, CATCHUP_DEEP_IDLE))
   /** In-flight property-seed materialization passes (§4.3 of the schema-
    *  unification design) — drained by `awaitSeedMaterialization()`. Unlike its
    *  siblings the pass is create/restore-only + idempotent rather than
@@ -722,6 +742,12 @@ export class Repo {
       SELECT_WORKSPACE_BACKFILL_MARKERS_SQL,
       RECORD_WORKSPACE_BACKFILL_MARKER_SQL,
     )
+    this.referenceTargetDeriveMarkers = new MarkerStore(
+      this.db,
+      REFERENCE_TARGET_DERIVE_MARKER_PREFIX,
+      SELECT_REFERENCE_TARGET_DERIVE_MARKERS_SQL,
+      RECORD_REFERENCE_TARGET_DERIVE_MARKER_SQL,
+    )
     this.syncObserverDeps = opts.syncObserverDeps
     this.cache = opts.cache
     this.user = opts.user
@@ -832,15 +858,40 @@ export class Repo {
    *  flushing. */
   startSyncObserver(options?: SyncObserverOptions): BlocksSyncedObserver {
     if (this.syncObserver) this.syncObserver.dispose()
+    // Production passes the §6 mode/key resolver (initRepo). Tests omit it
+    // and fall back to plaintext copy-through with no key — the historical
+    // behavior, so non-e2ee tests are unaffected.
+    const policyDeps = this.syncObserverDeps
+      ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null }
     this.syncObserver = startBlocksSyncedObserver({
       db: this.db,
       cache: this.cache,
       handleStore: this.handleStore,
-      // Production passes the §6 mode/key resolver (initRepo). Tests omit it
-      // and fall back to plaintext copy-through with no key — the historical
-      // behavior, so non-e2ee tests are unaffected.
-      deps: this.syncObserverDeps
-        ?? { getMaterializability: (): Materializability => 'copy', getCek: async () => null },
+      deps: {
+        ...policyDeps,
+        // Derive-at-arrival seam (PR #288 slice A): always attached — the
+        // LOCAL `reference_target_id` column must track content for
+        // sync-applied rows on every device, e2ee included (derivation runs
+        // over decrypted content). Resolution mirrors
+        // `core.deriveReferenceTarget`: schema-name winner map first, then
+        // the `block_aliases` index read on the open write tx (so
+        // same-window alias/definition arrivals resolve).
+        referenceTargetLookups: policyDeps.referenceTargetLookups
+          ?? (tx => ({
+            resolveSchemaFieldId: (workspaceId, name) => {
+              const resolution = this.propertySchemaResolverFor(workspaceId).resolve(name)
+              return resolution.status === 'resolved' ? resolution.schema.fieldId : null
+            },
+            aliasTargetId: async (alias, workspaceId) => {
+              if (alias === '' || workspaceId === '') return null
+              const row = await tx.getOptional<{id: string}>(
+                SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+                [workspaceId, alias],
+              )
+              return row?.id ?? null
+            },
+          })),
+      },
       getInvalidationRules: () => this.invalidationRules,
       onCycleDetected: options?.onCycleDetected,
       throttleMs: options?.throttleMs,
@@ -1375,6 +1426,8 @@ export class Repo {
       (ws, freshlyCreated) => this.scheduleWorkspaceSeedMaterialization(ws, freshlyCreated)
     const scheduleReconcileRescan: Repo['scheduleReconcileRescan'] = (ws) =>
       this.scheduleReconcileRescan(ws)
+    const scheduleReferenceTargetDerivePass: Repo['scheduleReferenceTargetDerivePass'] = (ws) =>
+      this.scheduleReferenceTargetDerivePass(ws)
     // Field-assigning members: run with the facade as `this`, the
     // assignment would create a shadow property on the facade and the
     // real repo would never see it (silent state divergence). Delegate
@@ -1396,6 +1449,7 @@ export class Repo {
       addType, removeType, toggleType, setBlockTypes,
       scheduleWorkspaceBackfills, scheduleWorkspaceRefBackfill,
       scheduleWorkspaceSeedMaterialization, scheduleReconcileRescan,
+      scheduleReferenceTargetDerivePass,
       setActiveWorkspaceId, setReadOnly, undo, redo,
       startSyncObserver, stopSyncObserver, resetMetrics,
     })
@@ -2321,6 +2375,123 @@ export class Repo {
         )
       }
     }
+  }
+
+  /**
+   * One-time-per-workspace catch-up derive of the LOCAL `reference_target_id`
+   * column (PR #288 slice A). The column is derived per device and never
+   * synced, so rows that predate it — an upgrading device's whole DB, or a
+   * fresh device's rows synced before the schema registry primed — sit at
+   * NULL until this pass sweeps them; from then on the same-tx processor
+   * (local writes) and the materializer's derive-at-arrival (sync writes)
+   * maintain it incrementally.
+   *
+   * Deferred off the workspace-open critical path (`scheduleDeepIdle`, same
+   * scheme as its sibling passes) and marker-gated once per workspace.
+   * Call after `whenPropertyDefinitionsReady` — the `[[name]]` tier resolves
+   * against the workspace's name-winner map, so deriving before the registry
+   * primes would mis-derive schema names as plain aliases. NOT gated on
+   * writability: the writes are local bookkeeping (source-NULL raw UPDATEs of
+   * a never-uploaded column), safe in a read-only workspace.
+   */
+  scheduleReferenceTargetDerivePass(workspaceId: string): void {
+    if (!workspaceId) return
+    this.referenceTargetDeriveJobs.schedule(() =>
+      this.runReferenceTargetDerivePass(workspaceId),
+    )
+  }
+
+  /** Test helper — drains derive passes whose deferral timer has fired.
+   *  Mirror of `awaitWorkspaceBackfills`. */
+  async awaitReferenceTargetDerive(): Promise<void> {
+    await this.referenceTargetDeriveJobs.drain()
+  }
+
+  private async runReferenceTargetDerivePass(workspaceId: string): Promise<void> {
+    const markerSuffix = `${workspaceId}:v1`
+    if (await this.referenceTargetDeriveMarkers.has(markerSuffix)) return
+    // The name tier needs the workspace's faithful registry snapshot; if the
+    // user switched away before the deferred job ran, skip WITHOUT the marker
+    // so the next open retries.
+    const registry = this._propertyDefinitionRegistry
+    if (!registry || registry.workspaceId !== workspaceId) return
+
+    // Candidate prefilter in SQL (cheap LIKEs over one workspace, one-time);
+    // the real grammar check is `parseExactReferenceBlockContent` inside
+    // `deriveReferenceTargetId`. Deleted rows are included deliberately: a
+    // tombstone restored later arrives content-unchanged, so nothing would
+    // re-derive it. `reference_target_id IS NULL` keeps the pass strictly
+    // additive — it never second-guesses a processor- or arrival-derived
+    // value.
+    const candidates = await this.db.getAll<BlockRow>(
+      `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks
+        WHERE workspace_id = ?
+          AND reference_target_id IS NULL
+          AND (
+            (TRIM(content) LIKE '((%' AND TRIM(content) LIKE '%))')
+            OR (TRIM(content) LIKE '[[%' AND TRIM(content) LIKE '%]]')
+          )`,
+      [workspaceId],
+    )
+
+    const lookups: ReferenceTargetLookups = {
+      resolveSchemaFieldId: (rowWorkspaceId, name) => {
+        const resolution = this.propertySchemaResolverFor(rowWorkspaceId).resolve(name)
+        return resolution.status === 'resolved' ? resolution.schema.fieldId : null
+      },
+      aliasTargetId: async (alias, aliasWorkspaceId) => {
+        if (alias === '' || aliasWorkspaceId === '') return null
+        const row = await this.db.getOptional<{id: string}>(
+          SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+          [aliasWorkspaceId, alias],
+        )
+        return row?.id ?? null
+      },
+    }
+
+    const updates: {row: BlockRow; targetId: string}[] = []
+    for (const row of candidates) {
+      const derived = await deriveReferenceTargetId(row.content, workspaceId, lookups)
+      // Column is already NULL, so unresolved (`undefined`) and non-reference
+      // (`null`) alike mean "nothing to write".
+      if (typeof derived === 'string') updates.push({row, targetId: derived})
+    }
+
+    // Chunked raw writes, materializer-style: source-NULL (upload triggers
+    // skip; row_events tags 'sync'), no repo.tx — a tx would advance
+    // `updated_at` (the LWW row-version) for a purely local derivation.
+    const CHUNK = 200
+    for (let i = 0; i < updates.length; i += CHUNK) {
+      const chunk = updates.slice(i, i + CHUNK)
+      await this.db.writeTransaction(async tx => {
+        await tx.execute('UPDATE tx_context SET source = NULL WHERE id = 1')
+        for (const {row, targetId} of chunk) {
+          await tx.execute(
+            'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
+            [targetId, row.id],
+          )
+        }
+      })
+      // Explicit fan-out (PR #288 §11 implementation note): `updated_at` is
+      // deliberately unchanged, so the cache's `applyIfNewer` LWW gate would
+      // reject the repair and row-version-driven invalidation sees nothing.
+      // Refresh already-cached snapshots directly (never populate cold rows)
+      // and notify handles.
+      const snapshots = new Map(chunk.map(({row, targetId}) => {
+        const before = parseBlockRow(row)
+        return [row.id, {before, after: {...before, referenceTargetId: targetId}}] as const
+      }))
+      for (const {after} of snapshots.values()) {
+        if (after && this.cache.getSnapshot(after.id) !== undefined) {
+          this.cache.setSnapshot(after)
+        }
+      }
+      this.handleStore.invalidate(
+        snapshotsToChangeNotification(snapshots, this.invalidationRules),
+      )
+    }
+
+    await this.referenceTargetDeriveMarkers.set(markerSuffix)
   }
 
   /**

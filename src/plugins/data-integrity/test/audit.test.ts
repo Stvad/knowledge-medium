@@ -28,8 +28,9 @@ import {
 } from '../store'
 import {
   BLOCKS_SYNCED_RAW_TABLE,
-  BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   blockToRowParams,
+  blockToSyncedRowParams,
 } from '@/data/blockSchema'
 import { encodeForWire, type Materializability } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
@@ -223,9 +224,9 @@ describe('runConsistencyAudit — property_ref_at_rest catastrophe floor', () =>
 describe('runConsistencyAudit — e2ee encryption-awareness', () => {
   const WS = 'ws-e2ee'
   const STAMP = 1700000000000
-  const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
   const INSERT_BLOCK_SQL =
-    `INSERT INTO blocks (${COLUMN_NAMES.join(', ')}) VALUES (${COLUMN_NAMES.map(() => '?').join(', ')})`
+    `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+    `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
 
   const block = (overrides: Partial<BlockData> = {}): BlockData => ({
     id: 'b1',
@@ -262,7 +263,7 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     meta: BlockData,
     wire: { content: string; properties_json: string; references_json: string },
   ): Promise<void> => {
-    const params = blockToRowParams(meta)
+    const params = blockToSyncedRowParams(meta)
     params[4] = wire.content
     params[5] = wire.properties_json
     params[6] = wire.references_json
@@ -319,7 +320,7 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
     const server = block({ id: 'encp', content: 'enc:v1: DIFFERENT server text' })
     await seedLocal(local)
     // Plaintext staging row (NOT sealed) — content is prefix-shaped real text.
-    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToRowParams(server))
+    await sharedDb.db.execute(BLOCKS_SYNCED_RAW_TABLE.put.sql, blockToSyncedRowParams(server))
 
     const result = await runConsistencyAudit(sharedDb.db, WS, 0, {
       decrypt: decryptDeps(key, 'copy'), // workspace confirmed plaintext
@@ -436,8 +437,9 @@ describe('runConsistencyAudit — e2ee encryption-awareness', () => {
 // These are the rich superset; the lean cadence run must NOT include them.
 describe('runConsistencyAudit — full (on-demand) deep checks', () => {
   const WS = 'ws-full'
-  const COLS = BLOCK_STORAGE_COLUMNS.map((c) => c.name)
-  const INSERT = `INSERT INTO blocks (${COLS.join(', ')}) VALUES (${COLS.map(() => '?').join(', ')})`
+  const INSERT =
+    `INSERT INTO blocks (${BLOCKS_TABLE_COLUMN_NAMES.join(', ')}) ` +
+    `VALUES (${BLOCKS_TABLE_COLUMN_NAMES.map(() => '?').join(', ')})`
   const mk = (o: Partial<BlockData> = {}): BlockData => ({
     id: 'b',
     workspaceId: WS,

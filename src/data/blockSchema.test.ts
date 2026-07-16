@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  BLOCK_LOCAL_COLUMNS,
   BLOCK_STORAGE_COLUMNS,
   blockToRowParams,
   parseBlockRow,
@@ -11,6 +12,10 @@ const fixture: BlockData = {
   id: 'b1',
   workspaceId: 'ws1',
   parentId: 'b0',
+  // Set explicitly (rather than left undefined) so `toEqual` against
+  // `parseBlockRow`'s output below matches: parseBlockRow always normalizes
+  // this LOCAL-only column to `null` (PR #288 slice A), never `undefined`.
+  referenceTargetId: null,
   orderKey: 'a0',
   content: 'hello',
   properties: {alias: ['Inbox']},
@@ -23,16 +28,19 @@ const fixture: BlockData = {
   deleted: false,
 }
 
-// Build the row exactly as production binds it: column BLOCK_STORAGE_COLUMNS[i]
-// receives blockToRowParams()[i]. txEngine's INSERT and the blocks_synced
-// raw-table `put` both build their column list from BLOCK_STORAGE_COLUMNS order
-// and bind these params positionally, so zipping the two here (rather than
-// hard-coding tuple indexes) makes every round-trip below a guard on that
-// order ↔ params invariant — a reorder/added column lands values under the
-// wrong column name and fails the decode.
+// Build the row exactly as production binds it: column
+// [...BLOCK_STORAGE_COLUMNS, ...BLOCK_LOCAL_COLUMNS][i] receives
+// blockToRowParams()[i]. txEngine's INSERT into `blocks` binds storage +
+// local columns in that order (matching `BLOCKS_TABLE_COLUMN_NAMES`); the
+// blocks_synced raw-table `put` binds storage columns only (`blockToSyncedRowParams`,
+// covered separately). Zipping the two here (rather than hard-coding tuple
+// indexes) makes every round-trip below a guard on that order ↔ params
+// invariant — a reorder/added column lands values under the wrong column
+// name and fails the decode.
+const ROW_COLUMNS = [...BLOCK_STORAGE_COLUMNS, ...BLOCK_LOCAL_COLUMNS]
 const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow => {
   const row: Record<string, unknown> = {}
-  BLOCK_STORAGE_COLUMNS.forEach((column, index) => {
+  ROW_COLUMNS.forEach((column, index) => {
     row[column.name] = params[index]
   })
   return row as unknown as BlockRow
@@ -40,13 +48,13 @@ const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow =>
 
 describe('BLOCK_STORAGE_COLUMNS', () => {
   // The column set + ORDER is guarded against blockToRowParams by the
-  // BLOCK_STORAGE_COLUMNS-zipped round-trip below (a reorder mis-binds and
-  // fails the decode); the count guard here catches an added/removed column
-  // that the round-trip's named decode would otherwise skip. A literal copy of
-  // the name list would only restate the source, so it's gone — but the legacy
+  // ROW_COLUMNS-zipped round-trip below (a reorder mis-binds and fails the
+  // decode); the count guard here catches an added/removed column that the
+  // round-trip's named decode would otherwise skip. A literal copy of the
+  // name list would only restate the source, so it's gone — but the legacy
   // *name* guards stay (the round-trip can't catch a renamed-back column).
-  it('binds exactly one positional param per storage column', () => {
-    expect(blockToRowParams(fixture)).toHaveLength(BLOCK_STORAGE_COLUMNS.length)
+  it('binds exactly one positional param per blocks-table column (storage + local)', () => {
+    expect(blockToRowParams(fixture)).toHaveLength(ROW_COLUMNS.length)
   })
 
   it('never reintroduces legacy / renamed columns', () => {

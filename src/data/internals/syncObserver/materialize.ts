@@ -29,11 +29,16 @@
 
 import {
   BLOCK_STORAGE_COLUMNS,
+  BLOCKS_TABLE_COLUMN_NAMES,
   parseBlockRow,
   type BlockRow,
 } from '@/data/blockSchema.js'
 import type { BlockData } from '@/data/api'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline.js'
+import {
+  deriveReferenceTargetId,
+  type ReferenceTargetLookups,
+} from '@/data/internals/referenceTargetProcessor.js'
 import {
   decideStagingRow,
 } from './reconcile.js'
@@ -88,10 +93,25 @@ type RowsReader = {
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
 }
 
+/** SQL surface the derive-at-arrival lookups get — the open Phase-2 write
+ *  tx, so alias reads see the rows this very window just upserted. */
+export interface DeriveTxReader {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+}
+
 export interface MaterializeDeps {
   readonly getMaterializability: GetMaterializability
   /** Workspace-key lookup, threaded to {@link decodeFromWire} for decrypt. */
   readonly getCek: GetCek
+  /** Derive-at-arrival seam (PR #288 slice A): build the reference-target
+   *  lookups bound to this write tx. Sync-applied rows never pass through
+   *  `repo.tx`, so `core.deriveReferenceTarget` can't stamp the LOCAL
+   *  `reference_target_id` column for them — the materializer re-derives it
+   *  for content-changed arrivals, inside the same write tx and before the
+   *  invalidation fan-out, so recognition never lags reader visibility.
+   *  Optional so storage-only harness tests skip derivation. */
+  readonly referenceTargetLookups?: (tx: DeriveTxReader) => ReferenceTargetLookups
 }
 
 /** The staging-table delta to process: ids whose staging row changed, and ids
@@ -205,8 +225,11 @@ const readBlocksByIds = async (
   const out = new Map<string, BlockRow>()
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize)
+    // Full live-table list (includes local-only columns): the before-rows
+    // both gate the write and carry `reference_target_id` into the
+    // invalidation `before` snapshots + the preserve-on-arrival path.
     const rows = await db.getAll<BlockRow>(
-      `SELECT ${COLUMN_NAMES.join(', ')} FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
+      `SELECT ${BLOCKS_TABLE_COLUMN_NAMES.join(', ')} FROM blocks WHERE id IN (${buildInClause(chunk.length)})`,
       chunk,
     )
     for (const row of rows) out.set(row.id, row)
@@ -371,6 +394,46 @@ export const materializeStagingRows = async (
       } else {
         // A local edit landed between Phase 1 and the lock — it wins.
         skippedStale.push(plaintext.id)
+      }
+    }
+
+    // ── Derive-at-arrival: stamp the LOCAL `reference_target_id` for
+    // content-changed arrivals (PR #288 slice A). Runs AFTER every upsert in
+    // the window so a definition/alias target arriving alongside its
+    // reference rows resolves (the alias index triggers fired on the upserts
+    // above), and INSIDE this write tx — strictly before `applyOutcome`'s
+    // invalidation fan-out, so readers never see a content change whose
+    // column lags. The UPSERT never touches the column (it's outside
+    // `UPDATE_ASSIGNMENTS`), so unchanged-content arrivals keep the local
+    // value; the snapshots must carry the final value either way — the
+    // staging row has no such column, so `parseBlockRow(plaintext)` above
+    // said `null` regardless of what the table holds.
+    if (deps.referenceTargetLookups) {
+      const lookups = deps.referenceTargetLookups(tx)
+      for (const id of applied) {
+        const snap = snapshots.get(id)
+        if (!snap?.after) continue
+        const before = snap.before
+        const currentColumn = before?.referenceTargetId ?? null
+        // Deleted arrivals derive too: a content edit that syncs while the
+        // row is tombstoned would otherwise leave a stale column that a
+        // later content-unchanged restore never repairs.
+        const contentChanged = before === null || before.content !== snap.after.content
+        const derived = contentChanged
+          ? (await deriveReferenceTargetId(
+              snap.after.content, snap.after.workspaceId, lookups,
+            )) ?? null
+          : currentColumn
+        if (derived !== currentColumn) {
+          await tx.execute(
+            'UPDATE blocks SET reference_target_id = ? WHERE id = ?',
+            [derived, id],
+          )
+        }
+        snapshots.set(id, {
+          before,
+          after: {...snap.after, referenceTargetId: derived},
+        })
       }
     }
 

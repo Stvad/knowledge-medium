@@ -39,12 +39,15 @@ import {
   BLOCKS_SYNCED_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_SYNCED_TABLE_SQL,
+  CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  ensureBlockLocalColumns,
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
   RECONCILE_RESCAN_MARKER_PREFIX,
+  REFERENCE_TARGET_DERIVE_MARKER_PREFIX,
   REPROJECT_REF_MARKER_PREFIX,
   WORKSPACE_BACKFILL_MARKER_PREFIX,
   backfillBlockAliasesIfEmpty,
@@ -108,6 +111,10 @@ const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
   await db.execute(CREATE_BLOCKS_SYNCED_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  // No-op on a fresh table (CREATE carries the local columns) — mirrors the
+  // production upgrade ordering so the harness exercises the same path.
+  await ensureBlockLocalColumns(db)
+  await db.execute(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   await db.execute(CREATE_WORKSPACES_TABLE_SQL)
   await db.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await db.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
@@ -152,6 +159,8 @@ const getTemplateFingerprint = (): string => {
   hash.update(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  hash.update('\0')
+  hash.update(CREATE_BLOCKS_REFERENCE_TARGET_PARENT_INDEX_SQL)
   hash.update('\0')
   hash.update(CREATE_WORKSPACES_TABLE_SQL)
   hash.update('\0')
@@ -311,6 +320,9 @@ export const resetTestDb = async (db: PowerSyncDatabase): Promise<void> => {
       )
       await tx.execute(
         `DELETE FROM client_schema_state WHERE key LIKE '${RECONCILE_RESCAN_MARKER_PREFIX}%'`,
+      )
+      await tx.execute(
+        `DELETE FROM client_schema_state WHERE key LIKE '${REFERENCE_TARGET_DERIVE_MARKER_PREFIX}%'`,
       )
     }
     // Restart AUTOINCREMENT counters (e.g. ps_crud.id) so per-test row-id
