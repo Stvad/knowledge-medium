@@ -181,13 +181,14 @@
 <header class="doc-header">
   <h1>row_events: compact local history with sampled anchors</h1>
   <p class="subtitle">
-    Keep the full per-row history log, shrink it ~3&times;: invertible
+    Keep the full per-row history log, shrink it: invertible
     changed-columns events (before + after per changed field) with sampled
-    full-snapshot anchors, provenance-gated logging for
-    bulk derivation bursts, sync-applied events kept (compact) for local
-    self-sufficiency, and a reconstruction-lossless migration of the existing
-    ~1.17M full-snapshot events — followed by the VACUUM that actually returns
-    the bytes.
+    full-snapshot anchors, provenance-gated logging for bulk derivation
+    bursts (and, pending O6, UI-state churn), sync-applied events kept
+    (compact) for local self-sufficiency, and a reconstruction-lossless,
+    backup-prompted migration of the existing ~1.9M full-snapshot events —
+    followed by the VACUUM that actually returns the bytes. Measured (§12):
+    ~2.1&times; on the standing stock, ~4–5&times; on organic edit traffic.
   </p>
 </header>
 
@@ -226,6 +227,10 @@
   never pruned; events shrink. Two format decisions revised 2026-07-15 per user
   calls: sync events kept for every workspace (§6, former O1), and invertible
   patches + sampled anchors adopted over the deterministic probe (§4, O5).
+  §12's arithmetic was re-grounded 2026-07-15 against live measurements of two
+  client instances of the same workspace via the agent bridge (a 63-day dev
+  profile, 1.94M events, and a 23-day prod profile, 401k events); measured
+  numbers are labeled as such.
   <strong>Last verified against code:</strong> 2026-07-15.
 </aside>
 
@@ -261,7 +266,9 @@
     <li><strong>Derived writes log normally in compact form; only enumerated
       one-shot bulk bursts skip</strong>, via a tx-scoped
       <code>tx_context.history_mode</code> opt-in — provenance-keyed, never
-      column-keyed (§5).</li>
+      column-keyed; hard deletes never skip (§5). A same-mechanism default for
+      UI-state churn — measured at roughly half of a working device's update
+      events — is proposed pending a user call (<a href="#s16">O6</a>).</li>
     <li><strong>Sync-applied events are kept, compact, for every workspace</strong>
       (user call 2026-07-15, superseding an earlier per-workspace-mode drop):
       local history stays self-sufficient instead of leaning on a server read
@@ -270,9 +277,11 @@
       sync from raw writes, now for truthful labeling only.</li>
     <li><strong>Triggers remain the writer</strong>; bodies are generated from a
       single column spec shared with the existing snapshot/upload projections (§7).</li>
-    <li><strong>The migration is reconstruction-lossless</strong>: chunked,
-      resumable via the format tag itself, sampling anchors at cadence <em>and at
-      chain discontinuities</em>, so every state derivable today stays derivable (§8).</li>
+    <li><strong>The migration is reconstruction-lossless and
+      backup-prompted</strong>: chunked, resumable via the format tag itself,
+      sampling anchors at cadence <em>and at chain discontinuities</em>, so
+      every state derivable today stays derivable — and it arms only after the
+      user has been prompted with a full DB export (§8).</li>
     <li><strong>One-time full VACUUM</strong> (deep-idle + manual command), not
       <code>incremental_vacuum</code> — in-place row rewrites leave half-full pages
       only a rebuild compacts (§9).</li>
@@ -298,10 +307,13 @@ future deletion would not return OPFS bytes.
 
 <ul>
   <li><strong>It is already the biggest thing in the database.</strong>
-    ~1.17M events &times; ~2&nbsp;KB on a dev instance
-    (<code>docs/row-events-retention.md:4</code>) ≈ 2+&nbsp;GB of OPFS for a
-    ~300–350k-block workspace — history bytes rivaling or exceeding live-data
-    bytes, on devices where OPFS quota is finite.</li>
+    Measured live 2026-07-15 (§12): the long-lived dev instance holds 1.94M
+    events carrying 1.92&nbsp;GB of payload inside a 4.42&nbsp;GB OPFS file,
+    for a ~345k-block workspace — history bytes exceeding live-data bytes, on
+    devices where OPFS quota is finite. (The earlier
+    ~1.17M&nbsp;&times;&nbsp;~2&nbsp;KB figure from
+    <code>docs/row-events-retention.md:4</code> had grown ~65% by measurement
+    time.)</li>
   <li><strong>PR #288 multiplies it.</strong> The properties-as-blocks backfill
     creates ~650k rows through <code>repo.tx</code> per workspace (its §12 and
     measurement section; the spike took 5–10 minutes largely paying
@@ -312,8 +324,9 @@ future deletion would not return OPFS bytes.
   <li><strong>Every fresh device pays on first sync.</strong> The observer
     materializes each downloaded block into <code>blocks</code>
     (<code>materialize.ts:365</code>), firing the INSERT trigger once per block:
-    ~350k full-snapshot <code>create</code> events (~350&nbsp;MB) per device,
-    recording rows the server already has. (§6 keeps these — an accepted cost
+    ~345k full-snapshot <code>create</code> events (~205&nbsp;MB measured on
+    the fresh prod instance, §12) per device, recording rows the server
+    already has. (§6 keeps these — an accepted cost
     of self-sufficient local history; creates are inherently full, so v2
     doesn't shrink them either.)</li>
 </ul>
@@ -561,6 +574,21 @@ superseding the deterministic predecessor-probe design — its record is in
     nature.</li>
 </ul>
 
+<p>
+"Never references predecessors" (below, and §8.2) is a statement about
+<em>dependence</em>, not just stored pointers: an event's payload is defined
+against the row states the write itself transitioned — the trigger's own OLD
+and NEW at fire time — never against another event's content or format. The
+only cross-row relationship in the log is position (<code>id</code> order),
+which readers use to know <em>where</em> to walk, not to make any event
+meaningful. The old design lacked exactly this: its after-only compact events
+were interpretable only relative to the predecessor's reconstruction, so the
+trigger had to read the predecessor and promote on v1/missing — a row-to-row
+data dependency that priced every gap class and every rewrite.
+Self-containedness costs nothing at write time because the trigger already
+holds OLD and NEW.
+</p>
+
 <p>What the deleted probe machinery used to buy, and why it is no longer
 needed:</p>
 
@@ -661,7 +689,9 @@ the classic checkpoint-interval tradeoff:
   <li><strong>Cost is linear in p.</strong> An anchor adds Δ ≈ 1.6&nbsp;KB over
     a compact event (~2&nbsp;KB full pair vs ~0.4&nbsp;KB patch pair).
     Per-update overhead = p·Δ: ~64&nbsp;B (+16%) at 1/25, ~25&nbsp;B (+6%) at
-    1/64, ~13&nbsp;B (+3%) at 1/128.</li>
+    1/64, ~13&nbsp;B (+3%) at 1/128. (Measured full pairs run 1.4–2.4&nbsp;KB
+    — §12 — so Δ and the amortized cost land up to ~30% lower; the conclusion
+    only strengthens.)</li>
   <li><strong>Read latency does not bind.</strong> Expected point-lookup walk
     ~1/(2p) events at microseconds each; even 1/p in the several hundreds
     keeps far-past lookups sub-millisecond, and the common recent-history
@@ -687,6 +717,17 @@ constant lives in the trigger SQL, re-installed every boot
 readers key on <code>full</code>, never on cadence. Revisit with history-UI
 telemetry — observed walk lengths are the one number that settles this
 empirically.
+</p>
+
+<p>
+<em>Measured reality check (2026-07-15, §12):</em> the per-block event
+distribution is flat-plus-spiky — mean 2.9 events per ever-logged block on the
+dev instance, yet maxima of 8,082 (dev) and 14,702 (prod — a single UI-state
+panel block, §5.3), with only ~80 blocks above 64 events. For 99.99% of blocks
+anchors never fire and never matter: their walks terminate at a create or the
+live row within a handful of events. Anchors are in practice a hot-block
+mechanism — which is exactly where the loss-window bound and integrity
+checkpoints are worth paying for. p = 1/64 stands.
 </p>
 
 <h2 id="s5">5. Derived-write logging — analysis and recommendation</h2>
@@ -729,9 +770,9 @@ machinery misbehaves. Options considered:
       props backfill, the arrival catch-up bulk pass, and future whole-table
       column backfills. Justification: their writes are fully derivable (field
       rows mirror cell values whose own edit history <em>is</em> logged), each
-      burst still leaves a <code>command_events</code> row per tx, and invariant
-      I1 guarantees the first later edit of any exempted row rebuilds a full
-      base.</li>
+      burst still leaves a <code>command_events</code> row per tx, and the
+      §4.3 newer-side walk brackets the gap — §5.2 states precisely what a
+      skip does and does not give up.</li>
   </ul>
 </div>
 
@@ -759,6 +800,74 @@ This is the tx-scoped, concurrency-safe generalization of the existing
 <code>withTriggerSuspended</code> bracket (<code>clientSchema.ts:1187-1200</code>) —
 which stays bootstrap-only, because dropping a trigger is DB-global and would
 also unlog concurrent writers mid-session.
+</p>
+
+<h3>5.2 What a skip costs history — and what stays rederivable</h3>
+
+<p>
+The instinct behind keeping sync events (§6) — history is most valuable when
+self-sufficient — applies here too, so it is worth being precise about what a
+<code>'skip'</code> burst gives up under the §4 format:
+</p>
+
+<ul>
+  <li><strong>Net outcomes stay reconstructable from local history alone — no
+    re-derivation needed.</strong> The backward walk from the live row (§4.3)
+    un-applies every <em>logged</em> event; un-applying all logged events of a
+    skip-created row therefore lands exactly on the state the burst left
+    behind. The "rederivable from the source blocks' own logged history"
+    argument in the table above is true, but it is not what carries the
+    property — the walk's bracketing does, and that holds even if the
+    derivation code has changed since.</li>
+  <li><strong>What is genuinely not recorded:</strong> intermediate states
+    <em>within</em> the gap (a burst that writes the same row twice collapses
+    to its net effect), and per-write attribution/timing inside it —
+    <code>command_events</code> keeps the tx-level record (which pass ran,
+    when, how many writes), not row-level values.</li>
+  <li><strong>Hard deletes never skip.</strong> A hard delete inside a
+    <code>'skip'</code> tx would erase both newer-side terminators at once —
+    the live row is gone and no delete event (full before) exists — leaving
+    every older state of that block unreconstructable and breaking
+    <a href="#invariants">I2</a>. The delete trigger therefore carries no
+    <code>history_mode</code> gate at all: the enumerated bursts are
+    create/update-shaped, and a purge that wants silence is a design change
+    that must renegotiate I2 explicitly, not a flag to set. Cost owned: bulk
+    cleanups pay a tombstone per row — the dev instance's 317k
+    machine-deleted blocks cost ~194&nbsp;MB of delete events (measured,
+    §12), the price of "every deleted block's last state survives
+    locally".</li>
+</ul>
+
+<h3>5.3 Measured: UI-state churn dominates organic updates (proposed — O6)</h3>
+
+<p>
+Live measurement (2026-07-15, §12) surfaced a third write class this section's
+draft missed. On the 23-day-old prod instance, the top four blocks by event
+count are all panel/UI-state blocks (<code>types: ["panel"]</code> — focused
+block, scroll position, editor selection), together accounting for ~26k of
+~55k update events: <strong>roughly half of a working device's update traffic
+is selection/scroll churn</strong>, topped by a single panel block with 14,702
+events in three weeks. These writes rewrite the whole <code>properties</code>
+value each time, so compact v2 patches only shrink them ~1.7&times; — the
+changed "field" is the properties object itself.
+</p>
+
+<p>
+The class is already provenance-tagged: these writes go through
+<code>repo.tx</code> with <code>ChangeScope.UiState = 'local-ui'</code>
+("Selection / focus / chrome state", explicitly <em>not undoable</em> —
+<code>changeScope.ts</code>), and <code>tx_context.scope</code> is already
+populated per tx (<code>commitPipeline.ts:263-264</code>).
+<strong>Proposal (<a href="#s16">O6</a>):</strong> the commit pipeline
+defaults <code>history_mode = 'skip'</code> for UiState-scoped txs unless the
+caller overrides — policy in one TS site, the trigger keeps its single
+NULL-safe gate, I4 intact (scope is provenance, not columns). Undo never
+needs these events (the scope is not undoable by definition), and a
+history/time-travel UI for scroll positions is meaningless. Caveats owned:
+scope does not travel over sync, so other devices' UI-state churn still logs
+on arrival as compact properties-pair patches (the identical-echo share is
+absorbed by the no-op skip); and if panel state moves into per-field blocks in
+the #288 world, the patches get small and this default can be revisited.
 </p>
 
 <h2 id="s6">6. Sync-source logging: kept for every workspace (revised)</h2>
@@ -830,9 +939,9 @@ records those changes. Read against
   access story, not a local-history substitute.
   <br>Consequences owned:
   <ul>
-    <li><strong>Fresh-device first sync logs ~350k full creates
-      (~350&nbsp;MB/device)</strong> — creates are inherently full, v2 cannot
-      shrink them (§12). This was the second-largest byte win of the earlier
+    <li><strong>Fresh-device first sync logs ~345k full creates
+      (~205&nbsp;MB/device, measured — §12)</strong> — creates are inherently
+      full, v2 cannot shrink them. This was the second-largest byte win of the earlier
       draft; deliberately given back.</li>
     <li><strong>#288's backfill arrival burst logs on receiving devices</strong>
       (~650k full creates ≈ ~230&nbsp;MB one-time per device) unless #288 adds
@@ -867,7 +976,11 @@ only the row_events triggers' <em>label projection</em> reads
 (<code>clientSchema.ts:422</code>) retires in favor of a truthful three-way
 <code>source</code> tag — <code>'user'</code> (repo.tx), <code>'sync'</code>
 (marker present), <code>'raw'</code> (neither — the unguarded paths, always
-logged, I3). Existing v1 rows keep their historical 'sync' ambiguity.
+logged, I3). Existing v1 rows keep their historical 'sync' ambiguity — and
+stock rows also carry legacy source strings from retired <code>TxSource</code>
+values (the dev instance holds ~11k <code>'local-ephemeral'</code> events,
+§12), so readers must treat <code>source</code> as an open set, not a closed
+three-value enum; the three-way tag governs new writes only.
 </p>
 
 <p>
@@ -924,7 +1037,7 @@ an open write tx, so an app-layer event writer could be atomic. What decides it:
   <a href="#invariants">I6</a>).
 </div>
 
-<h2 id="s8">8. Migrating the existing ~1.17M events</h2>
+<h2 id="s8">8. Migrating the existing ~1.9M events</h2>
 
 <p>
 Required, not optional: the stock of old full-snapshot events is where the
@@ -989,6 +1102,19 @@ block with any <code>v IS NULL</code> event:
 <h3>8.2 Resumability, scheduling, coexistence</h3>
 
 <ul>
+  <li><strong>Backup before the first destructive chunk (user call
+    2026-07-15).</strong> The rewrite is the one sanctioned mutation of
+    history (I7) and it runs in place on live user data — so on each device
+    the rewriter <em>arms only after</em> the user has been prompted to take a
+    full database backup: the existing export machinery
+    (<code>src/utils/exportSqliteDb.ts</code> — the same flow PR #281's
+    corruption recovery uses for its pre-reset download), surfaced via the
+    db-maintenance command. Acknowledgment (or explicit decline) is recorded
+    in <code>client_schema_state</code>
+    (<code>row_events_migration_backup_ack</code>); the idle job checks it
+    before claiming its first block. I5's equivalence tests make the rewrite
+    safe in expectation; the backup makes it safe in fact. The export is
+    multi-GB on the big instances — hence prompted, never silent.</li>
   <li><strong>Progress marker is the format tag.</strong>
     <code>WHERE v IS NULL</code> is the work queue; a partial index
     <code>ON row_events(block_id) WHERE v IS NULL</code> makes claiming the next
@@ -1188,36 +1314,76 @@ costs more moving parts, bounds memory, never touches the live file.
 <h2 id="s12">12. Storage arithmetic</h2>
 
 <p>
-Worked against the dev instance (~1.17M events ≈ ~2.2&nbsp;GB at ~2&nbsp;KB
-mean; ~350k blocks). Event-mix assumption, stated not measured: ~30% create
-(first sync + organic), ~65% update, ~5% delete — consistency check:
-0.35M&times;1&nbsp;KB + 0.76M&times;2&nbsp;KB + 0.06M&times;1&nbsp;KB ≈
-1.9&nbsp;GB ≈ observed. Compact update sizes assume ~3 changed fields ×
-two sides (invertible patches, §4.1) ≈ 400&nbsp;B (content edits: content +
-stamps + author).
+Measured live 2026-07-15 via the agent bridge, on two client instances of the
+same ~345k-block workspace. Byte figures are payload bytes
+(<code>length(before_json)+length(after_json)</code>); files are bigger — row
+and index B-trees add ~15–20%, and <code>blocks</code>/<code>blocks_synced</code>
+share the file.
 </p>
 
 <div class="table-scroll">
 <table>
-  <thead><tr><th>Component</th><th>Today (v1)</th><th>After (v2)</th></tr></thead>
+  <thead><tr><th>Measured</th><th>dev (63 days old)</th><th>prod (23 days old)</th></tr></thead>
   <tbody>
-    <tr><td>Existing creates (0.35M — full by nature)</td><td>~350&nbsp;MB</td><td>~350&nbsp;MB (unchanged)</td></tr>
-    <tr><td>Existing updates (0.76M)</td><td>~1.5&nbsp;GB</td><td>~300&nbsp;MB compact (invertible patches) + ~30&nbsp;MB sampled/discontinuity anchors ≈ <strong>330&nbsp;MB</strong></td></tr>
-    <tr><td>Existing deletes (0.06M)</td><td>~60&nbsp;MB</td><td>~60&nbsp;MB</td></tr>
-    <tr><td><strong>Stock total</strong></td><td><strong>~1.9–2.2&nbsp;GB</strong></td><td><strong>~0.75&nbsp;GB → ~1.2–1.5&nbsp;GB reclaimed at VACUUM (~3&times;)</strong></td></tr>
-    <tr><td>Fresh device, first sync (350k blocks)</td><td>~350&nbsp;MB</td><td>~350&nbsp;MB (kept — §6 revised; creates are full in v2 too)</td></tr>
+    <tr><td>OPFS file / row_events payload</td><td>4.42&nbsp;GB / 1.92&nbsp;GB</td><td>1.64&nbsp;GB / 0.33&nbsp;GB</td></tr>
+    <tr><td>Events</td><td>1,941,061</td><td>401,051</td></tr>
+    <tr><td>Mix: create / update / hard-delete / soft-delete</td><td>34% / 49% / 16% / 0.1%</td><td>86% / 13.6% / 0 / 0.3%</td></tr>
+    <tr><td>…of updates: identical no-ops</td><td><strong>35%</strong> (340k, 381&nbsp;MB)</td><td>1.3%</td></tr>
+    <tr><td>Mean event payload</td><td>~1.0&nbsp;KB (creates ~0.6, updates ~1.4)</td><td>~0.8&nbsp;KB (updates ~2.4)</td></tr>
+    <tr><td>Real updates: changed fields / patch-pair bytes (1/37 sample)</td><td>2.31 fields / ~406&nbsp;B</td><td>—</td></tr>
+    <tr><td>Events per ever-logged block: mean / max / &gt;64</td><td>2.9 / 8,082 / 80 blocks</td><td>1.16 / 14,702 / 50 blocks</td></tr>
+    <tr><td><code>source</code> split</td><td>sync 70%, user 30%, legacy local-ephemeral 0.6%</td><td>sync 88% (first sync), user 12%</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>What the measurements validated, corrected, and added:</p>
+
+<ul>
+  <li><strong>Validated: the ~400&nbsp;B invertible patch.</strong> Real
+    (non-no-op) updates change 2.31 fields on average; measured changed-pair
+    bytes ≈ 406 against the assumed ~400.</li>
+  <li><strong>Corrected: the stock is creates+deletes-heavy, not
+    update-heavy.</strong> The assumed 30/65/5 mix is really 34/49/16 on dev
+    (the 16% is 317k hard-deleted machine-created blocks — full by nature) and
+    86/14/0 on the fresh prod client. Full-by-nature events are the
+    incompressible floor, and it is much higher than assumed: the stock
+    shrinks ~2.1&times;, not ~3&times;.</li>
+  <li><strong>Added: the no-op skip is a first-class win on machine-written
+    instances.</strong> 35% of all dev updates are identical echoes
+    (381&nbsp;MB); v2 never writes them (migration turns the stock ones into
+    ~60&nbsp;B timing stubs). On the organic prod instance no-ops are 1.3% —
+    the skip is about machinery, not typing.</li>
+  <li><strong>Added: UI-state churn is ~half of organic update traffic</strong>
+    (§5.3/O6) — and shrinks only ~1.7&times; under compact patches, since each
+    write replaces the whole properties value. The scope-keyed skip, not the
+    format, is the lever for that class.</li>
+</ul>
+
+<div class="table-scroll">
+<table>
+  <thead><tr><th>Component (dev instance, measured)</th><th>Today (v1)</th><th>After (v2)</th></tr></thead>
+  <tbody>
+    <tr><td>Creates (662k — full by nature)</td><td>384&nbsp;MB</td><td>384&nbsp;MB (unchanged)</td></tr>
+    <tr><td>Real updates (620k)</td><td>~960&nbsp;MB</td><td>~280&nbsp;MB patches + ~16&nbsp;MB sampled/discontinuity anchors</td></tr>
+    <tr><td>No-op updates (340k)</td><td>381&nbsp;MB</td><td>~20&nbsp;MB timing stubs; new ones never written</td></tr>
+    <tr><td>Hard + soft deletes (318k — full by nature)</td><td>196&nbsp;MB</td><td>196&nbsp;MB (unchanged)</td></tr>
+    <tr><td><strong>Stock payload total</strong></td><td><strong>1.92&nbsp;GB</strong></td><td><strong>~0.9&nbsp;GB (~2.1&times;) → ~1.2&nbsp;GB of file reclaimed at VACUUM</strong></td></tr>
+    <tr><td>Fresh device, first sync (345k blocks — measured on prod)</td><td>~205&nbsp;MB</td><td>~205&nbsp;MB (kept — §6; creates are full in v2 too)</td></tr>
     <tr><td>#288 backfill, authoring device (~650k creates)</td><td>~230&nbsp;MB</td><td><strong>0</strong> (§5/G1)</td></tr>
     <tr><td>#288 backfill, per receiving device</td><td>~230&nbsp;MB</td><td>~230&nbsp;MB unless #288 adds an arrival exemption (§11 G2)</td></tr>
-    <tr><td>Ongoing: one content edit</td><td>~4&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~9&times;)</td></tr>
-    <tr><td>Ongoing: property edit in props-world (2–3 writes)</td><td>~4–6&nbsp;KB</td><td>~0.9&nbsp;KB</td></tr>
+    <tr><td>Ongoing: one organic content edit (measured mean full pair)</td><td>~2.1&nbsp;KB</td><td>~0.45&nbsp;KB incl. amortized anchor (~4–5&times;)</td></tr>
+    <tr><td>Ongoing: one UI-state panel write</td><td>~2.4&nbsp;KB</td><td>~1.4&nbsp;KB as a patch (~1.7&times;) — or <strong>0</strong> locally under O6</td></tr>
   </tbody>
 </table>
 </div>
 
 <p>
-The bound that does <em>not</em> improve: creates and e2ee first-sync remain
-full snapshots — inherent to "history is kept" (a create <em>is</em> its
-snapshot). Indexes also shrink with the §3 change (smaller entries, and
+The bound that does <em>not</em> improve: creates and deletes remain full
+snapshots — inherent to "history is kept" (a create <em>is</em> its snapshot;
+a delete's before is the tombstone). On a fresh device those are ~86% of
+events, so v2's stock win there is small and accrues over time with update
+traffic. Indexes also shrink with the §3 change (smaller entries, and
 <code>(created_at DESC)</code> entries are unchanged but the table they point
 into is smaller).
 </p>
@@ -1235,27 +1401,32 @@ into is smaller).
         changed-field patches on both sides, projected-field diffs,
         identical-update skip, one-coin p=1/64 anchor sampling — no probe, no
         index prerequisite, §4.1); <code>stateAt</code> reader utility (§4.3);
-        tests pinning I1/I2/I4/I6. All new events compact from here.</td>
+        tests pinning I1/I2/I4/I6 — the I1/I2 properties as a fast-check
+        stateful fuzz suite (note below). All new events compact from
+        here.</td>
       <td>—</td>
     </tr>
     <tr>
       <td><strong>B — provenance + sync policy</strong></td>
       <td><code>tx_context.history_mode</code> + <code>RepoTxOptions.historyMode</code>
-        plumbing (NULL-safe WHEN gate — §6.2 review rules);
+        plumbing (NULL-safe WHEN gate on create/update only — the delete
+        trigger carries no <code>history_mode</code> gate, §5.2);
         <code>tx_context.apply_kind</code> sync marker + the truthful three-way
         <code>source</code> tag (§6.2 — labeling only; the policy table and
-        drop gates left with the §6 revision); tests pinning I1-under-exemption
-        and I3 (incl. raw-write labeling + logging).</td>
+        drop gates left with the §6 revision); the UiState-scope skip default
+        if O6 is approved (§5.3); tests pinning I1-under-exemption, I3 (incl.
+        raw-write labeling + logging), and delete-always-logs — plus the
+        fuzzed writer-interleaving suite (note below).</td>
       <td><strong>Unblocks #288 slice C</strong> (G1–G3)</td>
     </tr>
     <tr>
       <td><strong>C — stock migration</strong></td>
-      <td>§8 idle rewriter (per-block, discontinuity-anchoring), partial work
-        index, completion marker, <code>(block_id, id)</code> reader/rewriter
-        index add + explicit ANALYZE
-        (<code>(block_id, created_at DESC)</code> is retained per §3 —
-        revisit only with measurements); equivalence test (I5) + resumability
-        test (interrupt mid-chunk, rerun, byte-identical outcome).</td>
+      <td>§8 idle rewriter (per-block, discontinuity-anchoring) armed behind
+        the backup prompt (§8.2), partial work index, completion marker,
+        <code>(block_id, id)</code> reader/rewriter index add + explicit
+        ANALYZE (<code>(block_id, created_at DESC)</code> is retained per §3 —
+        revisit only with measurements); fuzzed equivalence suite (I5) +
+        resumability under random interruption (note below).</td>
       <td>Requires A. Gates D.</td>
     </tr>
     <tr>
@@ -1268,6 +1439,32 @@ into is smaller).
   </tbody>
 </table>
 </div>
+
+<p>
+<strong>Test tier (user call 2026-07-15): the invariant properties ship as
+fast-check fuzz suites</strong>, following <code>docs/fuzzing.md</code>
+conventions and the shared harness from the fuzzing-infrastructure work
+(<code>fuzzKernelHarness</code>/<code>statefulFuzzGuard</code>; fixed-seed
+smoke tier inside <code>yarn run check</code>, random-seed deep runs via
+<code>yarn fuzz</code> + the nightly workflow, repro via
+<code>FUZZ_SEED</code>/<code>FUZZ_PATH</code>). Slice A: a stateful suite
+drives random edit sequences (create / update / no-op update / soft-delete /
+restore / hard-delete, projected-field edits) against a model oracle —
+<code>stateAt</code> at every event must equal the model's timeline (I1/I2),
+and every event must pass the shape property (equal key sets, both sides
+agreeing with <code>full</code> — the §4.1 one-coin trap). Because anchors
+carry no correctness weight, every oracle is anchor-agnostic — SQLite's
+unseedable <code>random()</code> cannot break seed reproducibility of a
+failure's <em>semantics</em> — but the suite also runs deterministic
+p&nbsp;=&nbsp;1 and p&nbsp;=&nbsp;0 trigger variants so both the full and the
+compact path are exercised on every seed. Slice B adds fuzzed interleavings
+of user / sync-applied / raw / <code>'skip'</code> writers (oracle: exactly
+the skip-tx create/update events are absent, delete events always present,
+labels truthful — I3/I4). Slice C's I5 equivalence suite is the same
+generator aimed at v1 histories (deliberate gaps, pre-log openings, no-op
+runs): migrate, then <code>stateAt</code> must be identical for every event —
+under random interruption/resume points.
+</p>
 
 <h2 id="invariants">14. Invariants index</h2>
 
@@ -1295,7 +1492,10 @@ into is smaller).
         reconstruction walk terminates: at the live <code>blocks</code> row, a
         hard-delete event (full before), or an anchor. Readers never assume a
         cadence — only the <code>full</code> flag; anchors bound the expected
-        walk/loss window (~1/p, p99 ≈ 4.6/p) without carrying correctness.</td>
+        walk/loss window (~1/p, p99 ≈ 4.6/p) without carrying correctness.
+        Corollary (§5.2): hard deletes are never
+        <code>history_mode</code>-exempt — a skipped hard delete would erase
+        both terminators at once.</td>
       <td><a href="#s4">§4.3/4.4</a></td>
       <td>Readers; §8 rewriter</td>
       <td>Property test: random edit sequences incl. hard-deletes and
@@ -1462,6 +1662,17 @@ into is smaller).
     undo befores stored directly, unconditional soundness under every gap
     class. Sampling probability: O3 → §4.4 (default p = 1/64, rarer than the
     original 1-in-50 frame, per the loss-window derivation).</li>
+  <li><strong>O6 — default <code>history_mode = 'skip'</code> for
+    UiState-scoped writes?</strong> Measured (§5.3): roughly half of a working
+    device's update events are panel selection/scroll churn that compact
+    patches barely shrink (~1.7&times;); the class is enumerable, already
+    provenance-tagged (<code>ChangeScope.UiState</code>), and explicitly not
+    undoable. Lean: yes — skip by default, overridable per tx, accepting that
+    sync-applied echoes of other devices' UI state still log (scope does not
+    travel over sync; the no-op skip absorbs the identical share). Flagged for
+    the user's call under the history-self-sufficiency steer: this is the one
+    place the doc proposes not logging a user-visible surface's state — though
+    the "history" at stake is scroll positions and focus, not knowledge.</li>
 </ol>
 
 <hr>
