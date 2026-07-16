@@ -225,7 +225,7 @@
 <body>
 <main>
   <aside class="doc-status">
-    <strong>Status: design proposal</strong> &middot; high-level plan, not implemented. Treat code and tests as authoritative; verify load-bearing claims before implementation. <strong>Last verified against code:</strong> 2026-07-06.
+    <strong>Status: design proposal</strong> &middot; high-level plan, not implemented. Treat code and tests as authoritative; verify load-bearing claims before implementation. <strong>Last verified against code:</strong> 2026-07-16.
   </aside>
 
   <h1>Block Range Annotations Design</h1>
@@ -272,7 +272,7 @@
     </tr>
     <tr>
       <td>Sync</td>
-      <td>Current generated PowerSync config streams <code>workspaces</code>, <code>workspace_members</code>, and <code>blocks</code>. See <a href="../powersync/sync-config.yaml">powersync/sync-config.yaml</a>.</td>
+      <td>The generated PowerSync config defines one stream (<code>workspace_data</code>) covering <code>workspaces</code>, <code>workspace_members</code>, and <code>blocks</code> — blocks staged e2ee as <code>blocks_synced</code> and materialized client-side. See <a href="../powersync/sync-config.yaml">powersync/sync-config.yaml</a>.</td>
       <td>Block-backed threads avoid a first-pass sync/E2EE table migration.</td>
     </tr>
   </table>
@@ -301,9 +301,9 @@
   <p>Each comment thread root is a block with a dedicated type, a deterministic annotation-container parent, and a small property payload.</p>
 
   <pre><code>parentId: "annotation-container-for-workspace"
-types: ["annotation:thread"]
 content: ""
 properties: {
+  "types": ["annotation:thread"],   // blocks have no top-level types field; types live in the `types` property (typesProp)
   "annotation:kind": "comment",
   "annotation:status": "open",
   "annotation:targetBlocks": ["block-a"],
@@ -341,6 +341,8 @@ children: first visible comment block, then reply blocks</code></pre>
   <h2>Thread Placement And Lifecycle</h2>
   <p>Thread roots need a tree location because they are normal blocks. The recommended v1 shape is one annotation-owned container per workspace, with thread roots as children and replies as descendants of the thread root. The target relationship is expressed only through <code>annotation:targetBlocks</code>, not through the outline parent.</p>
 
+  <p>The container should reuse the existing system-page machinery, not a hand-rolled get-or-create: register an ensure through <code>systemPagesFacet</code> and mint at the deterministic <code>uuidv5(workspaceId, namespace)</code> id the way <code>getOrCreateKernelPage</code> does (see <a href="../src/data/kernelPage.ts">kernelPage.ts</a>), so two offline clients converge on one container (<code>systemMint</code> pristine rows plus PUT/PATCH fusion). Two deliberate differences from kernel pages: the annotation container gets <em>no alias and no page type</em>, keeping it out of page autocomplete and alias listings; and its ensure must restore a soft-deleted container the way <code>getOrCreateKernelPage</code> does — plain <code>tx.createOrGet</code> throws on a tombstone, and a permanently deleted container must never brick comment creation.</p>
+
   <table>
     <tr>
       <th>Concern</th>
@@ -351,20 +353,24 @@ children: first visible comment block, then reply blocks</code></pre>
       <td>Annotation container subtrees are hidden from ordinary page/outline rendering and opened only through annotation surfaces.</td>
     </tr>
     <tr>
+      <td>Other enumerating surfaces</td>
+      <td>There is no central hidden-subtree seam today, and comment children are normal blocks with content: quick-find content search (<code>core.searchByContent</code> is workspace-wide FTS with no exclusion hook), recents (<code>core.recentBlocks</code>), breadcrumbs, and backlink group context each enumerate blocks independently. V1 should add one shared query-filter helper keyed on the container/thread marker and route these surfaces through it. Any surface not routed through the seam leaks annotation internals — an ongoing cost of the threads-are-blocks decision (see Storage Options).</td>
+    </tr>
+    <tr>
       <td>Export and copy</td>
-      <td>Default content export/copy excludes annotation container subtrees. A later explicit "include comments" mode can serialize them alongside target anchors.</td>
+      <td>Today only subtree copy and the debug DB export exist; subtree copy starts from a user-selected block, so the container is naturally excluded. Exclusion of annotation subtrees is a policy for future exporters, not existing machinery to patch. A later explicit "include comments" mode can serialize threads alongside target anchors.</td>
     </tr>
     <tr>
       <td>Target deletion</td>
-      <td>Do not cascade-delete threads automatically. If all target blocks are deleted, hide the thread from normal annotation surfaces and expose it through a workspace-level orphaned/resolved-comments affordance that scans the annotation container instead of starting from a live target block.</td>
+      <td>Do not cascade-delete threads automatically. If all target blocks are deleted, hide the thread from normal annotation surfaces and expose it through a workspace-level orphaned/resolved-comments affordance that scans the annotation container instead of starting from a live target block. Restoring a target un-orphans the thread naturally: property-derived refs are preserved on target deletion, so discovery is liveness-at-read-time.</td>
     </tr>
     <tr>
       <td>Thread deletion</td>
-      <td>Deleting a thread deletes its block subtree and removes its projected target refs. Resolving a thread only changes <code>annotation:status</code>.</td>
+      <td>Deleting a thread deletes its block subtree. No separate ref-clearing write is needed or wanted: the <code>block_references</code> triggers already de-index soft-deleted sources and re-index on restore, so an explicit ref-removal write would only break undo/restore symmetry. Resolving a thread only changes <code>annotation:status</code>.</td>
     </tr>
     <tr>
       <td>Comment child deletion</td>
-      <td>An open thread must have at least one visible comment child. Deleting the last visible comment should delete the thread root subtree, resolve it, or be disallowed by the annotation UI; do not leave an open metadata root with target refs and no visible body.</td>
+      <td>Deleting the last visible comment deletes the thread root subtree (the inverse of the create flow). This is a UI-level rule, not a data invariant: sync, agents, and generic block surfaces can still produce an open thread root with zero visible children, so annotation surfaces must tolerate and hide such threads rather than assume at least one comment child exists.</td>
     </tr>
     <tr>
       <td>Multi-block comments</td>
@@ -439,19 +445,26 @@ children: first visible comment block, then reply blocks</code></pre>
   <p>Resolved ranges feed decorations. Stale anchors still keep the thread attached to their target blocks, but no text highlight is shown for the stale segment until it is repaired.</p>
 
   <h2>Anchor Maintenance</h2>
-  <p>For a first implementation, anchors can be repaired lazily at render time and persisted only when the user edits or explicitly repairs a stale anchor. A later pass can add automatic remapping on block content edits.</p>
+  <p>For a first implementation, anchors can be repaired lazily at render time and persisted only when the user explicitly repairs a stale anchor. A later pass can add automatic remapping on block content edits. Persisting a repair must be snapshot-atomic: read the target block's content inside the persisting transaction and compute offsets, <code>exact</code>, and <code>contentHash</code> from that one snapshot. Persisting render-time offsets against content re-read at write time can produce a hash-valid anchor with wrong offsets — which step 1 of resolution would then trust indefinitely.</p>
 
   <p>V1 resolution state should be derived: resolving an anchor returns <code>resolved</code> or <code>stale</code>, but the app persists only explicit user actions such as repair, resolve, reopen, accept, or reject. Do not persist routine stale resolver output as thread state unless a later design introduces an explicit invalidation field with clear write rules.</p>
 
-  <p>Structural edits should have an explicit v1 fallback. Moving, indenting, outdenting, or reordering a block preserves the block id and content, so block-local anchors should survive and only render-surface visibility may change. Splitting or merging can move selected text to a different block id; until split/merge retargeting exists, affected segments resolve as stale.</p>
+  <p>Structural edits should have an explicit v1 fallback. Moving, indenting, outdenting, or reordering a block preserves the block id and content, so block-local anchors should survive and only render-surface visibility may change. Splitting can move selected text to a different block id; until split retargeting exists, affected segments resolve as stale. Merging is handled by the annotation merge processor below.</p>
 
-  <p>Merge handling needs special care because the generic reference retargeting processor rewrites stored <code>BlockReference</code> entries but does not update annotation properties or anchor payloads. Merge invariant: projected refs, <code>annotation:targetBlocks</code>, and anchor segment <code>blockId</code>s must stay aligned. Annotation code should either opt <code>annotation:targetBlocks</code> refs out of generic merge retargeting, or add an annotation same-transaction merge processor that retargets <code>annotation:targetBlocks</code> and retargets or leaves affected anchor segments resolving as stale atomically.</p>
+  <p>Merge handling needs special care because half-measures provably flip-flop. The generic retargeting processor (<a href="../src/plugins/references/mergeRetargetProcessor.ts">mergeRetargetProcessor.ts</a>) rewrites every stored <code>BlockReference</code> pointing at the merged-away block — including the thread root's projected <code>annotation:targetBlocks</code> ref — but never touches annotation properties or anchor payloads, and it has no opt-out seam. Reference projection is recompute-authoritative for property-derived refs, so the next property write on the thread root (a resolve, a repair) reprojects from the stale property value and flips the projected ref back to the dead block id: the comment silently vanishes from the merged block, arbitrarily long after the merge. Merge invariant: projected refs, <code>annotation:targetBlocks</code>, and anchor segment <code>blockId</code>s must stay aligned. The v1 decision is an annotation same-transaction merge processor that retargets <code>annotation:targetBlocks</code>, the projected refs, and every affected anchor segment's <code>blockId</code> together — preserving the mirror invariant — with retargeted segments then resolving against the merged content normally (stale if the selected text did not survive the merge). This ships in the same slice as comment creation, not as later hardening: every merge between the two shipping corrupts thread targeting.</p>
 
   <p>If automatic remapping is needed, prefer a bounded same-transaction processor. Same-tx processors run inside the user's write transaction and can amend writes atomically, so an undo step can cover both the content edit and anchor update. See <a href="../src/data/api/sameTxProcessor.ts">sameTxProcessor.ts</a>.</p>
 
   <div class="warn">
     <strong>Latency guard:</strong> automatic remapping must stay bounded. If a block has too many annotation segments, or repair is ambiguous, the processor should stop early and leave affected segments resolving as stale rather than making content saves feel slow.
   </div>
+
+  <h2>Concurrency And Sync Merge</h2>
+  <p>Sync merges concurrent writes column-LWW per row: the server RPC coalesces each changed column independently, and per-key <code>properties_json</code> merge is deliberately out of scope there (see <a href="../supabase/migrations/20260527180103_add_apply_block_patches_rpc.sql">apply_block_patches</a> and the plan it references). Locally, every property write replaces the whole properties map. This design therefore concentrates several independently-mutable concerns — kind, status, target refs, anchor, patch — in one column of one row, and concurrent writers lose updates wholesale: if client A resolves a thread while client B, offline or concurrent, repairs the same thread's anchor, whichever <code>properties_json</code> lands later wins the entire map. The resolution is silently reopened, or the repair silently reverted. A repair racing a suggestion accept can revert <code>annotation:status</code> from <code>accepted</code> while the content replacement stays applied.</p>
+
+  <p>V1 policy: accept and document LWW for annotation metadata, and minimize automatic writers so the races stay rare — lazy repair persisted only on explicit user action is part of this, and any automatic remapping processor widens the contention surface and must be weighed against it. Two mitigating facts: because the whole map is one column, target refs, anchor, and status can never <em>tear</em> against each other through sync — the failure mode is lost updates, not torn state; and thread roots are low-traffic compared to content blocks. If annotation contention becomes real, the graduation paths are the per-key properties merge plan referenced by the RPC, or the synced annotations table from Storage Options.</p>
+
+  <p>A related consistency caveat: rows composed from sync are materialized outside <code>repo.tx</code>, so reference projection never runs on remote changes, and the server can merge <code>properties_json</code> from one writer with <code>references_json</code> from another. Projected refs and <code>annotation:targetBlocks</code> can therefore disagree on every client until the next local content/properties write to the thread root triggers reprojection. The refs-mirror-property invariant is eventually consistent — converged only by local write-path reprojection — and query helpers and tests must not assume it holds at every instant.</p>
 
   <h2>UI Model</h2>
   <p>The UI should present comments as a layer over normal blocks, not as extra inline markdown syntax.</p>
@@ -479,7 +492,7 @@ children: first visible comment block, then reply blocks</code></pre>
     </tr>
     <tr>
       <td>Backlinks view</td>
-      <td>Comment threads should not pollute the default linked references view. Current backlinks queries include all <code>sourceField</code> values. Flat and grouped backlinks can suppress dedicated annotation-thread sources with a built-in <code>referencedBy.sourceField</code> exclusion, but inline backlink counts and any mixed-source edge semantics still need query/API work. The comments section separately queries <code>sourceField = "annotation:targetBlocks"</code>.</td>
+      <td>Thread-root refs should not pollute the default linked references view. Current backlinks queries include all <code>sourceField</code> values; flat and grouped backlinks can suppress annotation-thread sources with a built-in <code>referencedBy.sourceField</code> exclusion, but inline backlink counts and any mixed-source edge semantics still need query/API work. The comments section separately queries <code>sourceField = "annotation:targetBlocks"</code>. Note the exclusion covers <em>only</em> the thread root's projected refs: a wikilink or <code>((ref))</code> typed inside a comment body is an ordinary content ref, indistinguishable from outline refs, and will surface in the target's linked references — with grouped backlinks rendering its ancestor chain up through the annotation container — and <code>[[New Page]]</code> in a comment mints a real page. V1 policy: comment-body refs are real graph edges and may appear (a comment referencing a block is a genuine mention); suppressing them would need a new inside-annotation-container ancestor predicate in the query layer, deferred until the behavior proves confusing. Group-context rendering of thread ancestors goes through the hiding seam.</td>
     </tr>
     <tr>
       <td>Resolved comments</td>
@@ -504,7 +517,9 @@ children: first visible comment block, then reply blocks</code></pre>
   }
 }</code></pre>
 
-  <p>Accepting a suggestion should re-resolve the anchor, apply the replacement to the resolved anchor range, verify that the current text still matches the expected deleted text, then perform a normal block content update and mark the suggestion accepted in the same user-visible operation. If the target block is mounted in edit mode, accept must be editor-mediated: dispatch the replacement into the mounted CodeMirror document and coordinate or cancel any stale debounced commit, or introduce an awaited editor commit API that can persist the editor document plus suggestion status in the same undoable operation. A repo-only write is not enough because the uncontrolled editor can later flush stale text over it. The patch payload should not carry independent coordinates that can drift from the anchor. Rejection only changes suggestion status.</p>
+  <p>Accepting a suggestion should re-resolve the anchor, apply the replacement to the resolved anchor range, verify that the current text still matches the expected deleted text, then perform a normal block content update and mark the suggestion accepted in the same user-visible operation. If the target block is mounted in edit mode, accept must be editor-mediated: dispatch the replacement into the mounted CodeMirror document and coordinate or cancel any stale debounced commit, or introduce an awaited editor commit API that can persist the editor document plus suggestion status in the same undoable operation. A repo-only write is not enough because the uncontrolled editor can later flush stale text over it. The two options are not equivalent for undo: dispatch-plus-cancel persists content through the editor's own commit in a separate transaction from the status write, so only the awaited commit API — or wrapping both writes in the existing <code>repo.undoGroup</code> facade — yields one undo step. The patch payload should not carry independent coordinates that can drift from the anchor. Rejection only changes suggestion status.</p>
+
+  <p>These mitigations are local-only by construction. If <em>another client</em> has the target block mounted in edit mode, its editor holds pre-accept text, defers external content while its user types, and its next debounced full-content commit overwrites the applied replacement — while <code>annotation:status</code> stays <code>accepted</code>. The same holds for any concurrent offline edit of the target block. V1 accepts this as ordinary content LWW, but should persist the expected post-accept content (or its hash) in <code>annotation:patch</code> so annotation surfaces can detect and flag an accepted suggestion that is no longer in effect, instead of silently misreporting it; re-verification and repair stay manual.</p>
 
   <div class="note">
     <strong>Scope recommendation:</strong> start with single-block replace suggestions. Multi-block structural suggestions should wait until there is a clear operation model for block splitting, merging, and subtree edits.
@@ -521,7 +536,7 @@ children: first visible comment block, then reply blocks</code></pre>
     <tr>
       <td>Thread blocks with anchor property</td>
       <td>Uses existing block sync, undo, E2EE, deletion, and child replies. Queryable through refList backlinks once reference projection is handled.</td>
-      <td>Anchor payload is less queryable than a table; thread metadata updates rewrite the thread block properties; ordinary backlink/export/count surfaces need explicit annotation exclusions.</td>
+      <td>Anchor payload is less queryable than a table; thread metadata shares one properties column, so concurrent annotation actions merge LWW (see Concurrency And Sync Merge); every block-enumerating surface (backlinks, search, recents, counts, export) needs explicit annotation exclusions, and unpatched surfaces leak.</td>
       <td>Recommended v1.</td>
     </tr>
     <tr>
@@ -548,16 +563,17 @@ children: first visible comment block, then reply blocks</code></pre>
   <h3>V1 comments</h3>
   <ol>
     <li>Define annotation schemas: thread type, annotation container type, target <code>refList</code> property, anchor payload property, status/kind properties.</li>
-    <li>Add the annotation container lifecycle and filter it from ordinary outline rendering, export, and copy flows.</li>
+    <li>Add the annotation container lifecycle (<code>systemPagesFacet</code> ensure, kernel-page-style deterministic id, no alias, no page type) plus the shared hiding seam, and route outline rendering, search, recents, and copy flows through it.</li>
     <li>Add annotation UI lifecycle rules for first/last visible comment child deletion.</li>
     <li>Add creation writes that keep target refs discoverable immediately or explicitly wait for reference projection convergence.</li>
     <li>Add anchor utilities: create segments from CodeMirror selection, resolve segment against block content, return stale resolver results, and repair by exact/context search.</li>
+    <li>Add the annotation merge processor (same-transaction) that retargets <code>annotation:targetBlocks</code>, projected refs, and anchor segment <code>blockId</code>s together — this ships with creation, per Anchor Maintenance.</li>
     <li>Add query helpers for "annotation threads targeting block X" via the existing reference index and <code>sourceField</code>.</li>
     <li>Extend backlinks behavior so default flat backlinks, grouped backlinks, and inline counts can suppress annotation-thread sources.</li>
     <li>Add read-mode markers and, where rendered text can be mapped back to raw offsets, inline highlights over resolved ranges.</li>
     <li>Add edit-mode highlights through a CodeMirror decoration extension.</li>
     <li>Add create-comment flow from an edit-mode selection and render a minimal thread panel.</li>
-    <li>Add resolve/reopen actions, stale-anchor UI, merge handling that keeps annotation target refs/properties/anchors consistent, and a workspace-level orphan query over the annotation container.</li>
+    <li>Add resolve/reopen actions, stale-anchor UI, and a workspace-level orphan query over the annotation container.</li>
   </ol>
 
   <h3>Later suggestions</h3>
@@ -571,15 +587,15 @@ children: first visible comment block, then reply blocks</code></pre>
     <li>Unit-test non-ASCII content so offsets are validated as CodeMirror/JavaScript string positions, not UTF-8 byte offsets.</li>
     <li>Unit-test target-block invariants: <code>annotation:targetBlocks</code> mirrors segment block ids unless an explicit block-level anchor kind is introduced.</li>
     <li>Unit-test anchor creation rejects collapsed selections and empty <code>exact</code> text.</li>
-    <li>Unit-test structural edit policy: moves preserve block-local anchors; split and merge either retarget or resolve affected segments as stale without drifting target refs from annotation properties.</li>
+    <li>Unit-test structural edit policy: moves preserve block-local anchors; splits resolve affected segments as stale; the merge processor retargets property, projected refs, and segment <code>blockId</code>s together.</li>
     <li>Unit-test multi-block segment utilities later, when there is a block-range selection model that does not require a rendered browser selection.</li>
     <li>Data tests should verify annotation thread creation projects or writes <code>annotation:targetBlocks</code> refs before query helpers depend on <code>block_references</code>.</li>
     <li>Data tests should cover deleting and restoring the last target block, including workspace-level orphan discovery through the annotation container.</li>
-    <li>Lifecycle tests should cover deleting the first and last visible comment child from an open thread.</li>
+    <li>Lifecycle tests should cover deleting the first comment child, the last-comment-deletes-thread rule, and tolerance of externally-produced zero-children threads.</li>
     <li>Backlink tests should verify default flat/grouped backlinks and inline counts exclude annotation threads while the annotation query includes them by <code>sourceField</code>.</li>
     <li>Data tests should share one DB per file and reset between tests, matching the project testing convention.</li>
     <li>Component tests should cover create-comment from a selected range, highlight rendering, thread opening, and stale fallback.</li>
-    <li>Suggestion tests should verify accept rejects stale or mismatched text instead of applying a blind replacement, handles active edit-mode buffers without stale debounced overwrites, keeps the editor document and persisted content aligned, updates suggestion status, and produces one undo step.</li>
+    <li>Suggestion tests should verify accept rejects stale or mismatched text instead of applying a blind replacement, handles active edit-mode buffers without stale debounced overwrites, keeps the editor document and persisted content aligned, updates suggestion status, produces one undo step, and flags an accepted suggestion whose expected post-accept content no longer matches.</li>
   </ul>
 
   <h2>Open Questions</h2>
