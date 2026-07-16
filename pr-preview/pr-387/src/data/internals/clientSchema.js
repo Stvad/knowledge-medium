@@ -185,7 +185,7 @@ ${w.map(t=>`          CASE WHEN ${t.changed} THEN '$.${t.key}' ELSE '$.__noop' E
       ${O},
       NEW.id,
       CASE
-        WHEN OLD.deleted = 0 AND NEW.deleted = 1 THEN 'soft-delete'
+        WHEN NOT OLD.deleted AND NEW.deleted THEN 'soft-delete'
         ELSE 'update'
       END,
       CASE WHEN ${t} THEN ${T(`OLD`)} ELSE ${E(`OLD`)} END,
