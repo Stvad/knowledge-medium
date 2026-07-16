@@ -1,5 +1,4 @@
 import type {AnyPropertySchema, TypeContribution} from '@/data/api'
-import {typeDefinitionBlockId} from '@/data/definitionSeeds'
 import type {TypeDefinitionMetadata} from '@/data/typeDefinitionMetadata'
 import type {TypeSeedDeclaration} from '@/data/typeSeeds'
 
@@ -101,12 +100,16 @@ const indexSeedsByKey = (
  * rows carry fresh uuid ids (`typeId === blockId`), no two published entries
  * ever contend for one `typeId` — the §7 earliest-`createdAt` winner-resolution
  * the property registry needs for name collisions has no analog here once claims
- * are bound to declarations. Two remaining seed-authoring/corruption hazards are
- * failed closed: two seeds claiming one membership `id` (keep the first, warn —
- * `typeSeedsFacet` is a list so the collision stays observable rather than a
- * silent last-wins hijack), and a non-seed row squatting a seed's deterministic
- * backing id (leave the seed backing-block-less so `getTypeBlockId` never hands
- * a repair consumer a poisoned row). */
+ * are bound to declarations. Two seed-authoring/corruption hazards fail closed:
+ * two seeds claiming one membership `id` (keep the first, warn — `typeSeedsFacet`
+ * is a list so the collision stays observable rather than a silent last-wins
+ * hijack), and binding a seed to a non-seed block — `blockIdByTypeId` is
+ * populated ONLY from an actual valid mirror row (step 2), never predictively
+ * from the deterministic id, since the pure registry can't prove that id is
+ * unoccupied (a non-`block-type` or projector-dropped block there never appears
+ * in `projectedDefinitions`). An unmaterialized seed is therefore
+ * backing-block-less (`getTypeBlockId` → undefined until bootstrap materializes
+ * it), never pointing a repair consumer at a possibly-poisoned row. */
 export const buildTypeDefinitionRegistry = (
   args: BuildTypeDefinitionRegistryArgs,
 ): TypeDefinitionRegistrySnapshot => {
@@ -115,7 +118,9 @@ export const buildTypeDefinitionRegistry = (
   const typesById = new Map<string, TypeContribution>()
   const blockIdByTypeId = new Map<string, string>()
 
-  // 1. Declared seeds — authoritative, present even without a backing row.
+  // 1. Declared seeds — authoritative contribution, present even without a
+  //    materialized row. Dedup by membership id (fail closed). blockIdByTypeId
+  //    is deferred to step 2, bound only from an actual valid mirror.
   const seedKeyById = new Map<string, string>()
   for (const seed of seedsByKey.values()) {
     const priorKey = seedKeyById.get(seed.id)
@@ -128,22 +133,6 @@ export const buildTypeDefinitionRegistry = (
     }
     seedKeyById.set(seed.id, seed.seedKey)
     typesById.set(seed.id, seedContribution(seed))
-
-    // Bind the deterministic backing id only when it is free (not yet
-    // materialized) or already holds a valid mirror of THIS seed. A non-seed
-    // ("poisoned") occupant — one whose validated /type/ provenance is absent or
-    // for another key — leaves the seed backing-block-less rather than pointing
-    // `getTypeBlockId` at a row that failed seeded identity.
-    const backingId = typeDefinitionBlockId(args.workspaceId, seed.seedKey)
-    const occupant = args.projectedDefinitions.get(backingId)
-    if (!occupant || occupant.metadata.seedKey === seed.seedKey) {
-      blockIdByTypeId.set(seed.id, backingId)
-    } else {
-      console.warn(
-        `[buildTypeDefinitionRegistry] seed ${seed.id} backing block ${backingId} ` +
-        `is occupied by a non-seed row; leaving the seed backing-block-less`,
-      )
-    }
   }
 
   // 2. Projected block rows.

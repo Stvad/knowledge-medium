@@ -49,16 +49,18 @@ describe('buildTypeDefinitionRegistry', () => {
     expect(reg.definitionsByBlockId.size).toBe(2)
   })
 
-  it('synthesizes a declared seed even with no materialized row', () => {
+  it('synthesizes a declared seed even with no materialized row (backing-block-less)', () => {
     // A fresh/read-only client has the code declaration but no backing block yet;
-    // the built-in type must still be present, at its deterministic backing id.
+    // the built-in type must still be present. blockIdByTypeId stays UNBOUND
+    // until a real mirror materializes — the registry never predictively points
+    // it at the deterministic id (which might be occupied by a non-seed block).
     const reg = buildTypeDefinitionRegistry({
       workspaceId: WS,
       projectedDefinitions: new Map(),
       seeds: [seedType({seedKey: PAGE_KEY, revision: 1, id: 'page', label: 'Page'})],
     })
     expect(reg.typesById.get('page')).toMatchObject({id: 'page', label: 'Page'})
-    expect(reg.blockIdByTypeId.get('page')).toBe(typeDefinitionBlockId(WS, PAGE_KEY))
+    expect(reg.blockIdByTypeId.has('page')).toBe(false)
   })
 
   it('binds a materialized seed mirror to its declared id, ignoring a drifted stored claim', () => {
@@ -165,7 +167,6 @@ describe('buildTypeDefinitionRegistry', () => {
       ],
     })
     expect(reg.typesById.get('page')).toMatchObject({label: 'Real Page'})
-    expect(reg.blockIdByTypeId.get('page')).toBe(typeDefinitionBlockId(WS, PAGE_KEY))
   })
 
   it('does not bind a seed to a non-seed row squatting its deterministic backing id', () => {
