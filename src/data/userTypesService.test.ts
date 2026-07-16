@@ -116,10 +116,19 @@ describe('UserTypesService subscription', () => {
     expect(env.service.getTypeBlockId(id)).toBe(id)
   })
 
-  it('lifts hide-from-completion onto the contribution', async () => {
+  it('lifts hide-from-completion onto the contribution and republishes on change', async () => {
     env = await setup()
     const id = await createBlockTypeBlock(env.repo, {label: 'Auto', hideFromCompletion: true})
     expect(env.repo.types.get(id)).toMatchObject({hideFromCompletion: true})
+    // Flipping the flag must clear it on the contribution — pins the
+    // hideFromCompletion arm of the contributionsEqual dedup (else the republish
+    // would be suppressed and the type would stay hidden from completion).
+    await env.repo.tx(async tx => {
+      await tx.setProperty(id, blockTypeHideFromCompletionProp, false)
+    }, {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => {
+      expect(env.repo.types.get(id)?.hideFromCompletion).toBeUndefined()
+    }, {timeout: SUBSCRIPTION_TIMEOUT_MS})
   })
 
   it('lifts hide-from-block-display and color onto the contribution, and republishes on change', async () => {
