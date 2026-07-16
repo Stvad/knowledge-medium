@@ -192,18 +192,19 @@ describe('parseBlockRow / blockToRowParams (blockSchema.ts)', () => {
   }
 
   it('blockToRowParams -> parseBlockRow round-trips an arbitrary BlockData', () => {
-    // QUARANTINED from the deep tier (issue #391) — `quarantinedFuzzParams`, not
-    // `fuzzParams`. The deep tier's warmed JIT trips a V8 `JSON.parse` miscompile
-    // on this pure `JSON.stringify`/`JSON.parse` round-trip: one specific
-    // fast-check-generated input (seed -915705129, ~run 20420) decodes a `"`
-    // property key to `\`. It's an engine bug, not a blockSchema defect — the
-    // functions are correct by construction, the reported counterexample passes
-    // in isolation, a standalone `node` parses the exact string correctly, and a
-    // same-shape hand-built string parses fine. Deep-fuzzing a JSON round-trip
-    // adds ~nothing (its logic is exercised by the bounded sample), so we pin it
-    // rather than let the engine bug flip the nightly red. Restore `fuzzParams`
-    // once the upstream fix lands. See docs/fuzzing.md → "counterexample passes
-    // on replay".
+    // QUARANTINED from the deep tier (issue #391; upstream nodejs/node#64546) —
+    // `quarantinedFuzzParams`, not `fuzzParams`. A V8 `JSON.parse` engine bug
+    // miscodes this pure `JSON.stringify`/`JSON.parse` round-trip: one specific
+    // fast-check-generated input (seed -915705129, run 20420) decodes a `"`
+    // property key to `\`. Not a blockSchema defect — the functions are correct
+    // by construction; the same bytes parse fine in a cold process and the
+    // reported counterexample passes in isolation. It reproduces on Node 24
+    // (V8 13.6) AND 26 (V8 14.6), deterministically under `node --predictable`,
+    // and is not fixed upstream. Deep-fuzzing a JSON round-trip adds ~nothing
+    // (its logic is exercised by the bounded sample), so we pin it rather than
+    // let the engine bug flip the nightly red. Restore `fuzzParams` once the
+    // upstream fix lands (and ships in a Node we run). See docs/fuzzing.md →
+    // "counterexample passes on replay".
     fc.assert(
       fc.property(blockDataArb, blockData => {
         const decoded = parseBlockRow(rowFromParams(blockToRowParams(blockData)))
