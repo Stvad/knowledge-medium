@@ -70,6 +70,7 @@ import {
   drain,
   idSelArb,
   kernelOpArb,
+  sweepDerivedIndexes,
   sweepStructuralInvariants,
   type KernelOpSpec,
 } from '@/data/test/fuzzKernelHarness'
@@ -148,77 +149,12 @@ interface RawRow {
   workspace_id: string
 }
 
-/** Incremental-vs-recompute differential for a trigger-maintained
- *  derived index: the table's current rows must equal re-running the
- *  trigger's own SELECT over all live blocks. Reports both directions
- *  so a failure shows what's missing AND what's stale. */
-const expectMirror = async (
-  db: TestDb['db'], label: string, actualSql: string, expectedSql: string,
-): Promise<void> => {
-  const missing = await db.getAll(`${expectedSql} EXCEPT ${actualSql}`)
-  const extra = await db.getAll(`${actualSql} EXCEPT ${expectedSql}`)
-  expect({missing, extra}, `${label} index vs recompute`).toEqual({missing: [], extra: []})
-}
-
-const sweepDerivedIndexes = async (db: TestDb['db']): Promise<void> => {
-  // block_aliases — recompute mirrors blocks_alias_insert/update
-  // (clientSchema.ts): live blocks' properties_json $.alias text
-  // elements, alias_lower = LOWER(alias). DISTINCT matches the
-  // INSERT OR IGNORE (block_id, alias) PK dedup.
-  await expectMirror(db, 'block_aliases',
-    'SELECT block_id, alias, alias_lower, workspace_id FROM block_aliases',
-    `SELECT DISTINCT b.id, je.value, LOWER(je.value), b.workspace_id
-       FROM blocks b, json_each(b.properties_json, '$.alias') AS je
-      WHERE b.deleted = 0 AND typeof(je.value) = 'text'`)
-
-  // block_types — same shape over $.types (blocks_type_* triggers).
-  await expectMirror(db, 'block_types',
-    'SELECT block_id, type, workspace_id FROM block_types',
-    `SELECT DISTINCT b.id, je.value, b.workspace_id
-       FROM blocks b, json_each(b.properties_json, '$.types') AS je
-      WHERE b.deleted = 0 AND typeof(je.value) = 'text'`)
-
-  // block_references — recompute mirrors blocks_references_insert/update
-  // (references localSchema.ts): one row per (source, target, alias,
-  // sourceField-or-'') tuple of every live block's references_json.
-  await expectMirror(db, 'block_references',
-    'SELECT source_id, target_id, alias, source_field, workspace_id FROM block_references',
-    `SELECT DISTINCT b.id, json_extract(je.value, '$.id'), json_extract(je.value, '$.alias'),
-            COALESCE(json_extract(je.value, '$.sourceField'), ''), b.workspace_id
-       FROM blocks b, json_each(b.references_json) AS je
-      WHERE b.deleted = 0
-        AND typeof(json_extract(je.value, '$.id')) = 'text'
-        AND typeof(json_extract(je.value, '$.alias')) = 'text'
-        AND (json_type(je.value, '$.sourceField') IS NULL
-             OR typeof(json_extract(je.value, '$.sourceField')) = 'text')`)
-
-  // blocks_fts — one row per live non-empty-content block
-  // (blocks_fts_* triggers). EXCEPT is set-based, so also pin the row
-  // count: a double-insert of an identical row would otherwise hide.
-  await expectMirror(db, 'blocks_fts',
-    'SELECT block_id, content, workspace_id FROM blocks_fts',
-    `SELECT id, content, workspace_id FROM blocks WHERE deleted = 0 AND content != ''`)
-  const [ftsCount, liveCount] = await Promise.all([
-    db.getAll<{n: number}>('SELECT COUNT(*) AS n FROM blocks_fts'),
-    db.getAll<{n: number}>(`SELECT COUNT(*) AS n FROM blocks WHERE deleted = 0 AND content != ''`),
-  ])
-  expect(ftsCount[0].n, 'blocks_fts row count').toBe(liveCount[0].n)
-
-  // Every FTS row's rowid must map back to its own block_id, and the
-  // rowid map (kept across soft-deletes by design) must never point at
-  // a block that doesn't exist at all.
-  const badJoins = await db.getAll<{block_id: string}>(
-    `SELECT f.block_id FROM blocks_fts f
-       LEFT JOIN blocks_fts_rowids r ON r.fts_rowid = f.rowid
-      WHERE r.block_id IS NULL OR r.block_id != f.block_id`,
-  )
-  expect(badJoins, 'blocks_fts rowid mapping').toEqual([])
-  const orphanRowids = await db.getAll<{block_id: string}>(
-    `SELECT r.block_id FROM blocks_fts_rowids r
-      WHERE NOT EXISTS (SELECT 1 FROM blocks b WHERE b.id = r.block_id)`,
-  )
-  expect(orphanRowids, 'blocks_fts_rowids orphan').toEqual([])
-}
+/** `sweepDerivedIndexes` (block_aliases/block_types/block_references/
+ *  blocks_fts vs a from-scratch recompute) now lives in
+ *  `@/data/test/fuzzKernelHarness` (Batch 3) so `twoRepoConvergence` can
+ *  reuse it — see its docblock there for the workspace-agnostic-recompute
+ *  argument for why that's safe to share across suites with different
+ *  workspace counts. */
 
 /** SUBTREE_SQL-vs-JS-walk differential for one workspace's rooted
  *  subtree. Also the workspace-uniformity check: `live` is filtered to

@@ -42,24 +42,29 @@
  * source considers every position in that span part of an unclosed
  * bracket sequence it owns.
  *
- * ──── KNOWN LEAD, hand-confirmed against the real module before writing
- * this file (see scratch notes) ────
+ * ──── FIXED: found by this suite, hand-confirmed against the real
+ * module before writing this file (see scratch notes) ────
  *
  * `text = ']] [[ #tag'`, `pos = 10`, `trigger = '#'`:
- * `matchCharTrigger` returns `{from: 6, query: 'tag'}`, but
+ * `matchCharTrigger` used to return `{from: 6, query: 'tag'}`, but
  * `beforeCursor.match(/\[\[([^\]]*?)$/)` matches at index 3 (the second
  * `[[`), claiming span `[3, 10)` — which contains `from = 6`. Root
- * cause: `isInsideUnclosedWikilink` (triggerMatch.ts:55-68) counts `[[`
- * and `]]` occurrences as a flat pair-count (`opens > closes`) rather
- * than tracking whether the LAST bracket pair before `triggerPos` is an
- * unmatched open. The leading, unmatched `]]` here increments `closes`
- * and cancels out the LATER, also-unmatched `[[` in the count, so
- * `opens (1) > closes (1)` is false even though position 6 sits inside
- * a genuinely-unclosed `[[` span. This is a real product bug (the
- * module's own stated invariant, triggerMatch.ts:14-16, disagrees with
- * the code) — production code is NOT touched here per fuzzing.md's
- * oracle discipline; the suite is expected to fail on it and the
- * failure is reported prominently rather than weakened away.
+ * cause: `isInsideUnclosedWikilink` (triggerMatch.ts:55-68, pre-fix)
+ * counted `[[` and `]]` occurrences as a flat pair-count (`opens >
+ * closes`) rather than tracking whether the LAST bracket pair before
+ * `triggerPos` is an unmatched open. The leading, unmatched `]]` there
+ * incremented `closes` and cancelled out the LATER, also-unmatched
+ * `[[` in the count, so `opens (1) > closes (1)` was false even though
+ * position 6 sits inside a genuinely-unclosed `[[` span. This was a
+ * real product bug (the module's own stated invariant,
+ * triggerMatch.ts:14-16, disagreed with the code). Fixed in
+ * `triggerMatch.ts` by rewriting `isInsideUnclosedWikilink` to the
+ * anchored regex `/\[\[[^\]]*$/` (mirroring the sibling wikilink
+ * matcher exactly, instead of pair-counting). The counterexample above
+ * is mixed into the generator below (`knownLeadCaseArb`) with nonzero
+ * weight, so the fixed smoke seed deterministically re-runs it on every
+ * invocation — this suite now doubles as the regression pin for that
+ * bug, not just the suite that found it.
  *
  * ──── Generators ────
  *

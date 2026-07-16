@@ -116,6 +116,22 @@ export interface FakeSyncServer {
 
 const COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
 
+/** `apply_block_creates` (20260709000000, ~L99-117) INSERTs every column
+ *  explicitly, so an absent JSON key becomes an explicit SQL NULL. That
+ *  23502-violates every one of these columns even though some declare a SQL
+ *  DEFAULT (consolidated initial, ~L509-521, e.g. `content ... DEFAULT ''
+ *  NOT NULL`) — a DEFAULT only fires when the column is OMITTED from the
+ *  INSERT's column list, not when NULL is explicitly supplied, and this RPC
+ *  always supplies a value. Excluded on purpose: `parent_id` (nullable,
+ *  no NOT NULL), `user_updated_at` (nullable — the clamp trigger backfills
+ *  it from `updated_at` when NULL, 20260612000000 L48-50), and `deleted`
+ *  (the RPC itself does `COALESCE((c->>'deleted')::boolean, false)` rather
+ *  than relying on the column DEFAULT). */
+const REQUIRED_CREATE_FIELDS = [
+  'workspace_id', 'order_key', 'content', 'properties_json', 'references_json',
+  'created_at', 'updated_at', 'created_by', 'updated_by',
+] as const
+
 /** Server row → the positional param list `BLOCKS_SYNCED_RAW_TABLE.put`
  *  expects (BLOCK_STORAGE_COLUMNS order, `deleted` as 0/1). */
 const rowParams = (row: ServerBlockRow): unknown[] =>
@@ -150,19 +166,33 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
           touch(id)
           continue
         }
+        // Real Postgres raises 23502 (NOT NULL violation) here instead of
+        // silently defaulting — see REQUIRED_CREATE_FIELDS above for why an
+        // absent key isn't the same as an omitted column server-side. A
+        // regression that drops a column from the upload payload (e.g. an
+        // upload-trigger change) must fail loud here instead of quarantining
+        // silently in prod.
+        const missing = REQUIRED_CREATE_FIELDS.filter(
+          key => payload[key] === undefined || payload[key] === null,
+        )
+        if (missing.length > 0) {
+          throw new Error(
+            `fakeSyncServer: apply_block_creates 23502 — missing required field(s) ${JSON.stringify(missing)} for ${id}`,
+          )
+        }
         const row: ServerBlockRow = {
           id,
           workspace_id: payload.workspace_id as string,
           parent_id: (payload.parent_id ?? null) as string | null,
           order_key: payload.order_key as string,
-          content: (payload.content ?? '') as string,
-          properties_json: (payload.properties_json ?? '{}') as string,
-          references_json: (payload.references_json ?? '[]') as string,
+          content: payload.content as string,
+          properties_json: payload.properties_json as string,
+          references_json: payload.references_json as string,
           created_at: payload.created_at as number,
           updated_at: payload.updated_at as number,
           user_updated_at: (payload.user_updated_at ?? null) as number | null,
-          created_by: (payload.created_by ?? null) as string | null,
-          updated_by: (payload.updated_by ?? null) as string | null,
+          created_by: payload.created_by as string,
+          updated_by: payload.updated_by as string,
           deleted: asBool(payload.deleted ?? false),
         }
         clampCommon(row) // INSERT path: future-clamp only — no floor, no bump.
@@ -172,12 +202,27 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
     },
 
     async applyPatches(patches) {
-      // Mirror the RPC's whole-call atomicity: scan for missing ids FIRST
-      // (the real loop collects them and raises P0002, rolling back the
-      // whole RPC tx) so a bad patch can't half-apply the batch.
+      // Mirror the RPC's whole-call atomicity: scan for missing ids AND
+      // illegal workspace_id changes FIRST — the real loop collects missing
+      // ids and raises P0002, and `blocks_prevent_workspace_change` raises a
+      // BEFORE UPDATE trigger error the moment such a row is touched; either
+      // way Postgres rolls back the whole RPC transaction. Doing both checks
+      // before any row in `rows`/`versions` is mutated keeps the fake
+      // atomic too — the real bug this fixes: the checks used to run inside
+      // the per-patch loop, so a mid-batch workspace_id-change rejection
+      // left earlier patches in the same batch already applied (non-atomic,
+      // unlike Postgres).
       const missing = patches.filter(p => !rows.has(p.id)).map(p => p.id)
       if (missing.length > 0) {
         throw new Error(`fakeSyncServer: apply_block_patches P0002 — missing ids ${JSON.stringify(missing)}`)
+      }
+      const workspaceChange = patches.find(({ id, payload }) => {
+        const old = rows.get(id)!
+        return payload.workspace_id != null && payload.workspace_id !== old.workspace_id
+      })
+      if (workspaceChange) {
+        // blocks_prevent_workspace_change — workspace_id is immutable.
+        throw new Error(`fakeSyncServer: workspace_id change rejected for ${workspaceChange.id}`)
       }
       for (const { id, payload } of patches) {
         const old = rows.get(id)!
@@ -189,10 +234,6 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
         if ('parent_id' in payload) next.parent_id = (payload.parent_id ?? null) as string | null
         const coalesce = <K extends keyof ServerBlockRow>(key: K, v: unknown): void => {
           if (v !== undefined && v !== null) next[key] = v as ServerBlockRow[K]
-        }
-        if (payload.workspace_id != null && payload.workspace_id !== old.workspace_id) {
-          // blocks_prevent_workspace_change — workspace_id is immutable.
-          throw new Error(`fakeSyncServer: workspace_id change rejected for ${id}`)
         }
         coalesce('order_key', payload.order_key)
         coalesce('content', payload.content)
@@ -242,6 +283,11 @@ export const createFakeSyncServer = (opts: { now: () => number }): FakeSyncServe
 
     rows: () =>
       [...rows.values()]
+        // JS `<`/`>` compares UTF-16 code units; SQLite's default BINARY
+        // collation (what `ORDER BY id` on the real device DBs uses)
+        // compares UTF-8 bytes — the two orders diverge only for non-ASCII
+        // ids, which this fuzz universe never mints ('root', `a-gen-*`,
+        // `b-gen-*`).
         .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
         .map(row => Object.fromEntries(COLUMN_NAMES.map(name =>
           [name, name === 'deleted' ? (row.deleted ? 1 : 0) : row[name as keyof ServerBlockRow]]))),

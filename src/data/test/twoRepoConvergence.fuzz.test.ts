@@ -20,9 +20,11 @@
  *    `BLOCKS_SYNCED_RAW_TABLE.put` (verbatim rows, exactly what PowerSync
  *    does — sync-config selects all 13 columns untransformed), firing the
  *    real change-capture queue triggers.
- *  - materialize: the test's `drain()` replicates `drainQueueOnce`'s
+ *  - materialize: the test's `drain()` calls the shared
+ *    `drainStagingWindowOnce` helper (`syncObserver/test/harness.ts`, also
+ *    used by `materializeStateful.fuzz.test.ts`) — mirrors `drainQueueOnce`'s
  *    single-window core (`syncObserver/observer.ts:186-220` — queue read,
- *    latest-op-per-id dedup, `materializeStagingRows`, consume seqs) and
+ *    latest-op-per-id dedup, `materializeStagingRows`, consume seqs) — and
  *    then runs the production cache/handle invalidation
  *    (`applySyncInvalidation`) exactly like the observer's `applyOutcome`
  *    (`observer.ts:167-172`) — the observer itself stays off because its
@@ -76,6 +78,15 @@
  * server at s' = max(u, old+1) ≥ u carrying that same write — and any
  * LATER foreign write bumps strictly past s'. undo/redo are excluded
  * from the op set (per-workspace managers have no cross-device meaning).
+ * Case (b)'s "s' ≥ u carrying that same write" step itself rests on an
+ * unstated premise: every reachable kernel PATCH changes at least one
+ * content column (the `updatePatchChangesBlock` no-op gate,
+ * `txEngine.ts:94-109` — a metadata-only `tx.update` returns before any
+ * write or upload), so the server always +1-bumps past `old.updated_at`
+ * for a content-changing patch. A future harness op that emitted a
+ * metadata-only PATCH (bypassing that gate) would open a SECOND
+ * equal-stamp-divergent-content door — a floor without a bump — distinct
+ * from issue #381.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -87,6 +98,7 @@ import {
   assertLegalKernelRejection,
   idSelArb,
   kernelOpArb,
+  sweepDerivedIndexes,
   type KernelOpSpec,
 } from '@/data/test/fuzzKernelHarness'
 import { createFakeSyncServer, type FakeSyncServer } from '@/data/test/fakeSyncServer'
@@ -94,10 +106,10 @@ import {
   __applyCompactedBlockOperationsForTest,
   __runUploadLoopForTest,
 } from '@/services/powersync'
-import { materializeStagingRows } from '@/data/internals/syncObserver/materialize.js'
 import { applySyncInvalidation } from '@/data/internals/syncObserver/invalidate.js'
-import { constMat, noKey } from '@/data/internals/syncObserver/test/harness.js'
+import { constMat, drainStagingWindowOnce, noKey } from '@/data/internals/syncObserver/test/harness.js'
 import { ChangeScope } from '@/data/api'
+import { BLOCK_STORAGE_COLUMNS } from '@/data/blockSchema'
 import type { Repo } from '@/data/repo'
 import type { BlockCache } from '@/data/blockCache'
 
@@ -118,22 +130,13 @@ interface Device {
 
 const materializeDeps = { getMaterializability: constMat('copy'), getCek: noKey }
 
-/** Single-window queue drain + production invalidation — see the module
- *  docblock for why this replicates `drainQueueOnce`'s core instead of
- *  starting the (timer-driven) observer. */
+/** Single-window queue drain + production invalidation, via the shared
+ *  `drainStagingWindowOnce` helper — see the module docblock for why this
+ *  replicates `drainQueueOnce`'s core instead of starting the
+ *  (timer-driven) observer. */
 const drain = async (device: Device): Promise<void> => {
-  const rows = await device.db.getAll<{ seq: number; id: string; op: 'upsert' | 'delete' }>(
-    'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq',
-  )
-  if (rows.length === 0) return
-  const maxSeq = rows.at(-1)!.seq
-  const opById = new Map<string, 'upsert' | 'delete'>()
-  for (const row of rows) opById.set(row.id, row.op)
-  const upserted: string[] = []
-  const removed: string[] = []
-  for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
-  const outcome = await materializeStagingRows(device.db, { upserted, removed }, materializeDeps)
-  await device.db.execute('DELETE FROM blocks_synced_changes WHERE seq <= ?', [maxSeq])
+  const outcome = await drainStagingWindowOnce(device.db, materializeDeps)
+  if (outcome === null) return
   // Production pairing (observer.ts:167-172): every materialize window is
   // followed by the LWW cache write + handle invalidation, so the repo's
   // cache/handles never go stale against the sync-applied rows.
@@ -214,13 +217,11 @@ afterAll(async () => {
  *  — `statefulFuzzGuard`, docs/fuzzing.md §6. */
 const guard = statefulFuzzGuard()
 
+// Derived from BLOCK_STORAGE_COLUMNS (not hand-duplicated) so a future 14th
+// synced column is automatically compared instead of silently skipped.
+const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(c => c.name)
 const allBlockColumns = (db: TestDb['db']) =>
-  db.getAll(
-    `SELECT id, workspace_id, parent_id, order_key, content, properties_json,
-            references_json, created_at, updated_at, user_updated_at,
-            created_by, updated_by, deleted
-       FROM blocks ORDER BY id`,
-  )
+  db.getAll(`SELECT ${BLOCK_COLUMN_NAMES.join(', ')} FROM blocks ORDER BY id`)
 
 const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => {
   await resetTestDb(dbA.db)
@@ -307,6 +308,14 @@ const runCase = async ({ steps }: { steps: readonly Step[] }): Promise<void> => 
     expect(device.cursor, 'delivery cursor caught up to the server version').toBe(server.version())
   }
 
+  // Sync-materialization is a different write shape than kernel txs and
+  // could desync a trigger-maintained derived index (block_references/
+  // block_aliases/block_types/blocks_fts) while the 13-column `blocks`
+  // comparison below stays green. Reuse repoMutators' sweep (workspace-
+  // agnostic recompute — see its docblock in fuzzKernelHarness.ts — so it
+  // transfers unchanged to this suite's one-workspace, ROOT-pinned pool).
+  for (const device of devices) await sweepDerivedIndexes(device.db)
+
   const [rowsA, rowsB] = [await allBlockColumns(dbA.db), await allBlockColumns(dbB.db)]
   expect(rowsA, 'device A == device B after quiescence').toEqual(rowsB)
   expect(rowsA, 'devices == server ground truth after quiescence').toEqual(server.rows())
@@ -320,4 +329,52 @@ describe('two-repo sync convergence (issue #372 Batch 3)', () => {
       fuzzParams(8),
     )
   }, fuzzTestTimeout())
+})
+
+// Non-fuzz pin: in the convergence universe above, per-device id generators
+// (`a-gen-*` / `b-gen-*`) mean createRows never actually collides — the
+// insert-or-TOUCH branch (fakeSyncServer.ts, mirroring apply_block_creates'
+// ON CONFLICT DO UPDATE) is dead code there. This canary exercises it
+// directly so the #244 phantom-reconcile mechanism it exists to model stays
+// covered even though no generated fuzz case can reach it.
+describe('fakeSyncServer — insert-or-TOUCH canary (issue #244 phantom-reconcile)', () => {
+  it('createRows for an existing id preserves content, bumps the version, and re-delivers on the next deliverTo', async () => {
+    let serverClock = 1_800_000_000_000
+    const server = createFakeSyncServer({ now: () => ++serverClock })
+    const original = {
+      id: 'canary', workspace_id: WS, parent_id: null, order_key: 'a0',
+      content: 'original', properties_json: '{}', references_json: '[]',
+      created_at: 1_700_000_000_000, updated_at: 1_700_000_000_000,
+      user_updated_at: 1_700_000_000_000, created_by: 'user-a', updated_by: 'user-a',
+      deleted: false,
+    }
+    await server.createRows([original])
+    const versionAfterInsert = server.version()
+
+    // A racing create for the SAME id (a different device that lost the
+    // race) — the server must preserve the original row, not overwrite it.
+    await server.createRows([{ ...original, content: 'racing-client-content', updated_by: 'user-b' }])
+    expect(server.version(), 'insert-or-TOUCH still bumps the version (a WAL write, even though no column changed)')
+      .toBeGreaterThan(versionAfterInsert)
+    expect(
+      server.rows().find(r => r.id === 'canary')?.content,
+      'the touch discards the racing content — the server row is untouched',
+    ).toBe('original')
+
+    // Redelivery: a device whose cursor was already caught up to the
+    // pre-touch version must still receive the row on the next deliverTo —
+    // the WAL-write echo the #244 fix exists to produce, so the racing
+    // client's local phantom gets reconciled against the authoritative row.
+    const testDb = await createTestDb()
+    try {
+      const cursor = await server.deliverTo(testDb.db, versionAfterInsert)
+      expect(cursor).toBe(server.version())
+      const delivered = await testDb.db.getAll<{ id: string; content: string }>(
+        'SELECT id, content FROM blocks_synced WHERE id = ?', ['canary'],
+      )
+      expect(delivered).toEqual([{ id: 'canary', content: 'original' }])
+    } finally {
+      await testDb.cleanup()
+    }
+  })
 })

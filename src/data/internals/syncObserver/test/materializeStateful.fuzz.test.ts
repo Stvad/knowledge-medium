@@ -9,14 +9,19 @@
  *
  * `materializeStagingRows` is exercised directly (never `startBlocksSyncedObserver`
  * — its onChange/throttle timers are nondeterministic and would break fc
- * replay/shrinking). The test's own `doFlush()` reads the REAL trigger-maintained
+ * replay/shrinking). The test's own `doFlush()` calls the shared
+ * `drainStagingWindowOnce` helper (`./harness.js`, also used by
+ * `twoRepoConvergence.fuzz.test.ts`), which reads the REAL trigger-maintained
  * `blocks_synced_changes` queue, dedups latest-op-per-id, and calls
- * `materializeStagingRows` ONCE per flush (a single window) — replicating the
+ * `materializeStagingRows` ONCE per flush (a single window) — mirroring the
  * per-window core of `drainQueueOnce` (`../observer.ts:186-220`: read the queue
  * ordered by seq, `opById.set` per-id dedup at :204-208, `applyWindow` at :210,
  * then `DELETE ... WHERE seq <= maxSeq` at :215). Unlike `drainQueueOnce` this
  * suite does NOT loop over multiple chunk-bounded windows for one flush — that
  * multi-window backlog behavior is `observer.test.ts`'s job, not this file's.
+ * `doFlush()` itself layers only the differential-model assertions and the
+ * `readChunkSize` passthrough on top of the shared drain (including its
+ * `null` empty-queue return).
  * `doDrainWs()` mirrors `drainWorkspace`/`materializeWorkspace` (`../observer.ts:223-244`):
  * re-materialize every currently-staged id of one workspace, `removed: []`.
  *
@@ -117,7 +122,7 @@ import {
 } from '@/sync/transform.js'
 import { generateWorkspaceKeyBytes, importWorkspaceKey } from '@/sync/crypto/workspaceKey.js'
 import { BLOCK_STORAGE_COLUMNS, blockToRowParams } from '@/data/blockSchema.js'
-import { setupObserverTestDb, stagingCiphertextParams } from './harness.js'
+import { drainStagingWindowOnce, setupObserverTestDb, stagingCiphertextParams } from './harness.js'
 import type { BlockData } from '@/data/api'
 
 type WsId = 'ws-copy' | 'ws-e2ee' | 'ws-locked'
@@ -126,7 +131,7 @@ const STAMPS = [0, 1, 2, 3, 5, 8, 1_000_000] as const
 /** Sentinel for a staged e2ee row that was staged with garbage ciphertext
  *  (well-formed `enc:v1:` envelope prefix, undecryptable) — never a value
  *  `nextContent()` can produce, so equality is safe. */
-const GARBAGE_MARKER = ' GARBAGE '
+const GARBAGE_MARKER = '\0GARBAGE\0'
 
 const blockId = (ws: WsId, idIdx: number): string => `${ws}-b${idIdx}`
 
@@ -284,24 +289,13 @@ const runCase = async ({ ops, readChunkSize }: {
   }
 
   const doFlush = async (): Promise<void> => {
-    const rows = await env.db.getAll<{ seq: number; id: string; op: 'upsert' | 'delete' }>(
-      'SELECT seq, id, op FROM blocks_synced_changes ORDER BY seq',
-    )
-    if (rows.length === 0) {
+    const outcome = await drainStagingWindowOnce(env.db, deps, { readChunkSize })
+    if (outcome === null) {
       expect(mirror.delta.size, 'no queued db changes ⟹ mirror delta must also be empty').toBe(0)
       await assertBlocksSnapshot()
       expect(await queueLen()).toBe(0)
       return
     }
-    const maxSeq = rows.at(-1)!.seq
-    const opById = new Map<string, 'upsert' | 'delete'>()
-    for (const row of rows) opById.set(row.id, row.op)
-    const upserted: string[] = []
-    const removed: string[] = []
-    for (const [id, op] of opById) (op === 'upsert' ? upserted : removed).push(id)
-
-    const outcome = await materializeStagingRows(env.db, { upserted, removed }, deps, { readChunkSize })
-    await env.db.execute('DELETE FROM blocks_synced_changes WHERE seq <= ?', [maxSeq])
 
     const applied: string[] = []
     const deferred: string[] = []

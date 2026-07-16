@@ -46,7 +46,7 @@
  * 3. Positive control: a directly-overridden action always ends up with
  *    exactly its override's binding, regardless of any collision
  *    (applyKeybindingOverrides.ts:8-12,112-130 — rule 1 always wins and
- *    is untouched by the bug below).
+ *    was untouched by the bug described below, which affected rule 2).
  * 4. The differential this suite exists for: no action that did NOT
  *    receive a direct override may keep a default chord that
  *    canonically collides — via `canonicalizeChord`, not raw string
@@ -55,31 +55,32 @@
  *    overlap per keybindingConflicts.ts's exported `contextsOverlap`,
  *    same rule as applyKeybindingOverrides.ts:44-45).
  *
- * ──── KNOWN ISSUE (fuzz): real product bug, confirmed ────
+ * ──── FIXED (fuzz): real product bug, found by this suite ────
  *
- * Property 4 is RED. `applyKeybindingOverrides.ts` builds and queries
- * `claimedByChord` using the RAW chord string as the map key —
- * `claimedByChord.set(chord, ...)` / `.get(chord)` at lines 85-97 and
- * 138 — never calling `canonicalizeChord`. `findKeybindingConflicts`
- * (the sibling module implementing the *same* documented collision
- * notion) explicitly canonicalizes first (keybindingConflicts.ts:54:
- * `const key = canonicalizeChord(chord)`) for exactly this reason,
- * per its own comment: "alias-equivalent chords (`Cmd+K` and `$mod+k`,
- * or a reordered `Shift+$mod+k`) land together" (keybindingConflicts.ts:
- * 46-47).
+ * Property 4 was RED at authoring time. `applyKeybindingOverrides.ts`
+ * built and queried `claimedByChord` using the RAW chord string as the
+ * map key — `claimedByChord.set(chord, ...)` / `.get(chord)` at what
+ * were then lines 85-97 and 138 — never calling `canonicalizeChord`.
+ * `findKeybindingConflicts` (the sibling module implementing the *same*
+ * documented collision notion) explicitly canonicalizes first
+ * (keybindingConflicts.ts:54: `const key = canonicalizeChord(chord)`)
+ * for exactly this reason, per its own comment: "alias-equivalent
+ * chords (`Cmd+K` and `$mod+k`, or a reordered `Shift+$mod+k`) land
+ * together" (keybindingConflicts.ts:46-47).
  *
- * Net effect: if an override claims a chord for action B using a
+ * Net effect: if an override claimed a chord for action B using a
  * different spelling than action A's default (case/order/alias — e.g.
- * default `Cmd+K`, override `$mod+K`), A's default survives
+ * default `Cmd+K`, override `$mod+K`), A's default survived
  * unstripped, and — since `findKeybindingConflicts` runs on the
  * post-override *effective* action list and correctly canonicalizes —
- * the settings UI's own conflict detector then reports A and B as
- * conflicting on that chord. That is precisely the state rule 2 exists
+ * the settings UI's own conflict detector then reported A and B as
+ * conflicting on that chord. That was precisely the state rule 2 exists
  * to prevent (`applyKeybindingOverrides.ts:14-20`): "any *other* action
  * A whose default binding includes [the claimed chord] ... loses that
  * chord."
  *
- * Minimal repro (verified by hand before writing the generators below):
+ * Minimal repro (hand-verified before writing the generators below,
+ * pre-fix):
  *   actions: [{id: 'a', context: 'normal-mode', defaultBinding: {keys: 'Cmd+K'}},
  *             {id: 'b', context: 'normal-mode', defaultBinding: {keys: 'ctrl+x'}}]
  *   overrides: [{actionId: 'b', context: 'normal-mode', source: 'user-prefs',
@@ -91,13 +92,12 @@
  *     → one conflict, chord 'Cmd+K', actions ['a','b']
  *       (the exact "both survive and collide" state rule 2 forbids)
  *
- * Suspected fix: canonicalize both sides of the `claimedByChord`
- * index/lookup in `applyKeybindingOverrides.ts` (the `chord` keys at
- * lines ~90-97 when building the map, and the `chord` lookup at line
- * ~138), the same way `findKeybindingConflicts` does — bucket by
- * `canonicalizeChord(chord)` instead of the raw string. Per house rule
- * this suite does NOT apply that fix; production code is untouched and
- * property 4 is left red as the regression pin.
+ * Fixed in `applyKeybindingOverrides.ts` (commit 4cae0fc2): both sides
+ * of the `claimedByChord` index/lookup are now keyed by
+ * `canonicalizeChord(chord)` instead of the raw string, the same way
+ * `findKeybindingConflicts` does. Property 4 is green and now doubles
+ * as the regression pin for this bug — a future red run here is a real
+ * regression, not a documented known-red.
  */
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
@@ -365,11 +365,11 @@ describe('applyKeybindingOverrides', () => {
 
   // ──── Property 4: the differential this suite exists for ────
   //
-  // KNOWN ISSUE (fuzz): RED — real product bug, see the docblock at the
-  // top of this file for the confirmed root cause, minimal repro, and
-  // suspected fix. Left red per house rule (docs/fuzzing.md "Adding a
-  // suite" §4): do not weaken the property, do not touch production
-  // code; the orchestrator adjudicates and fixes.
+  // FIXED (fuzz): was RED at authoring — real product bug, see the
+  // docblock at the top of this file for the confirmed root cause,
+  // minimal repro, and the fix (applyKeybindingOverrides.ts, commit
+  // 4cae0fc2: `claimedByChord` now keys by `canonicalizeChord(chord)`).
+  // Green since; now the regression pin for that bug.
   it('no non-directly-overridden action keeps a default chord that canonically collides with an override-claimed chord in an overlapping context (applyKeybindingOverrides.ts:14-20; canonical + overlap rule per keybindingConflicts.ts:46-58,31-32)', () => {
     fc.assert(
       fc.property(caseArb, ({genActions, overrides}) => {

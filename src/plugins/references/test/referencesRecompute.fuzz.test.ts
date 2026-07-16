@@ -68,7 +68,7 @@ import { fuzzParams, fuzzTestTimeout, statefulFuzzGuard } from '@/test/fuzz'
 import { createTestDb, resetTestDb, type TestDb } from '@/data/test/createTestDb'
 import { createTestRepo } from '@/data/test/createTestRepo'
 import { assertLegalKernelRejection, pick, pickNonRoot } from '@/data/test/fuzzKernelHarness'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, ProcessorRejection } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { definitionSeedsFacet } from '@/data/facets.js'
 import { refTestSeed } from './refTestSeeds.ts'
@@ -308,8 +308,14 @@ const sweepAliasBindings = async (
     let refs: Array<{id?: string; alias?: string; sourceField?: string}>
     try {
       refs = JSON.parse(row.references_json)
-    } catch {
-      continue
+    } catch (e) {
+      // A processor bug that writes corrupt references_json must fail
+      // loudly, not silently exempt the block from the sweep. Ids in
+      // this suite are synthetic test ids — safe to print.
+      expect.fail(
+        `sweepAliasBindings: block ${row.id} has unparseable references_json `
+        + `(${String(e)}): ${row.references_json}`,
+      )
     }
     for (const ref of refs) {
       if (ref.sourceField !== undefined) continue
@@ -578,6 +584,73 @@ describe('references pipeline sequences', () => {
       await flush()
       const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
       expect(inspected, 'sweep inspected at least one alias binding').toBeGreaterThan(0)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  // Deterministic canary for the bug this suite's stable-wrong-binding
+  // sweep found (docblock above `sweepAliasBindings`): `claimLiteralDateAliases`
+  // (referencesProcessor.ts) makes the resolved date target CLAIM each
+  // long-form literal spelling that bound to it, giving the binding the
+  // same `block_aliases_workspace_alias_unique` exclusivity a plain-alias
+  // seat gets. Pins the fix end-to-end: (a) the ISO target claims the
+  // long-form literal, (b) claiming that same literal on a different
+  // block is then rejected by the uniqueness trigger, (c) the sweep
+  // stays green. Before the fix, (b) would have SUCCEEDED — leaving two
+  // live blocks disagreeing about who owns the literal, which is exactly
+  // the stable-wrong-binding class `sweepAliasBindings` polices — so a
+  // regression here would show up as this test's own (b) assertion
+  // failing, not as a sweep finding (the sweep only catches it once a
+  // second writer has actually raced in and won).
+  it('date target claims its long-form literal spelling, blocking a later collision', async () => {
+    await guard.barrier()
+    vi.useFakeTimers({shouldAdvanceTime: true})
+    try {
+      const {repo, flush} = await buildEnv()
+      const LITERAL = 'January 5th, 2026'
+      const ISO = '2026-01-05'
+      const dailyId = dailyNoteBlockId(WS, ISO)
+
+      // (a) Parse a long-form date literal wikilink — resolves to the
+      // ISO daily-note target and claims the literal spelling on it.
+      await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: `[[${LITERAL}]]`,
+      })
+      await flush()
+      const claim = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?',
+        [WS, LITERAL],
+      )
+      expect(claim?.block_id, 'ISO target claimed the long-form literal alias').toBe(dailyId)
+
+      // (b) A different block trying to claim the same literal must be
+      // rejected by the alias-uniqueness trigger — the claim from (a)
+      // makes the literal exclusive, same as a plain-alias seat.
+      const other = await repo.mutate.createChild({
+        parentId: ROOT, position: {kind: 'last'}, content: 'other block',
+      })
+      await flush()
+      let caught: unknown
+      try {
+        await repo.mutate.setProperty({id: other, schema: aliasesProp, value: [LITERAL]})
+      } catch (e) {
+        caught = e
+      }
+      expect(caught, 'claiming an already-claimed date literal is rejected').toBeInstanceOf(ProcessorRejection)
+      expect((caught as ProcessorRejection).code).toBe('alias.collision')
+      // The rejected tx rolled back entirely — `other` never claimed it.
+      const otherClaim = await sharedDb.db.getOptional<{block_id: string}>(
+        'SELECT block_id FROM block_aliases WHERE workspace_id = ? AND alias = ?',
+        [WS, LITERAL],
+      )
+      expect(otherClaim?.block_id, 'literal stays claimed by the ISO target').toBe(dailyId)
+
+      // (c) The sweep (and full audit) stay green over the settled state.
+      await auditOrFail(sharedDb.db, repo)
+      const {inspected} = await sweepAliasBindings(sharedDb.db, WS)
+      expect(inspected, 'sweep inspected the long-form date binding').toBeGreaterThan(0)
     } finally {
       vi.clearAllTimers()
       vi.useRealTimers()
