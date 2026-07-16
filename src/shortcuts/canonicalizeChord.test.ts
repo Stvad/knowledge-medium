@@ -53,6 +53,33 @@ describe('canonicalizeChord', () => {
     expect(canonicalizeChord('s', 'hold')).not.toBe(canonicalizeChord('s', 'keyup'))
     expect(canonicalizeChord('s')).toBe('s')
   })
+
+  it('preserves case for event.code-only keys so mis-cased overrides do not forge a collision', () => {
+    // `Digit1`/`Period`/`Space`/`KeyA`/`Numpad3` dispatch ONLY through
+    // tinykeys' case-sensitive `event.code` comparison (their event.key is
+    // '1'/'.'/' '/'a'/'3'), so a lowercase spelling fires nothing. Folding
+    // them would (a) let a dead `Control+Shift+digit1` strip the working
+    // `Control+Shift+Digit1` default and (b) is meaningless — they must
+    // stay exact-cased and in their own bucket.
+    expect(canonicalizeChord('Control+Shift+Digit1')).toBe('Control+Shift+Digit1')
+    expect(canonicalizeChord('Control+Shift+Digit1'))
+      .not.toBe(canonicalizeChord('Control+Shift+digit1'))
+    expect(canonicalizeChord('$mod+Shift+Period')).toBe('$mod+Shift+Period')
+    expect(canonicalizeChord('Space')).toBe('Space')
+    expect(canonicalizeChord('KeyA')).toBe('KeyA')
+    expect(canonicalizeChord('Numpad3')).toBe('Numpad3')
+  })
+
+  it('still folds case for logical keys that dispatch via event.key', () => {
+    // Named keys whose event.key equals the code (Enter/ArrowUp/F2/Escape…)
+    // match tinykeys' case-INSENSITIVE event.key path, so mis-cased
+    // spellings still fire and must share one bucket — fold them.
+    expect(canonicalizeChord('ArrowUp')).toBe(canonicalizeChord('arrowup'))
+    expect(canonicalizeChord('Shift+Enter')).toBe(canonicalizeChord('Shift+enter'))
+    expect(canonicalizeChord('F2')).toBe(canonicalizeChord('f2'))
+    // …and single-character keys as before.
+    expect(canonicalizeChord('$mod+K')).toBe(canonicalizeChord('$mod+k'))
+  })
 })
 
 describe('matchesMouseEvent', () => {

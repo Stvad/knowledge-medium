@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Fuzz suite for `diffQueryRows` (src/watchers.ts:165-192) — the
+ * Fuzz suite for `diffQueryRows` (src/queryDiff.ts:59-86) — the
  * union-cursor dedup that decides which query-watcher rows are "new"
  * (and therefore trigger a billed agent run). See `src/test/fuzz.ts` for
  * smoke/deep tier mechanics and `docs/fuzzing.md` for conventions. This
@@ -9,32 +9,36 @@
  * first, this suite generalizes it with randomized batch sequences and
  * an independent reference model instead of hand-picked cases.
  *
- * `diffQueryRows` is pure and synchronous — no DB, no `Math.random`, no
- * `Date.now()` — so there is no shared mutable state across fast-check
- * cases and no `statefulFuzzGuard` is needed (unlike the DB-backed
- * stateful suites in `src/data/test/*.fuzz.test.ts`).
+ * `diffQueryRows` lives in `queryDiff.ts`, split out of `watchers.ts` so
+ * this suite imports the pure logic WITHOUT `watchers.ts`'s `./config.js`
+ * → `@knowledge-medium/agent-cli/*` chain (untracked dist, unresolvable
+ * on a pre-build CI runner — see queryDiff.ts's header). It is pure and
+ * synchronous — no DB, no `Math.random`, no `Date.now()` — so there is no
+ * shared mutable state across fast-check cases and no `statefulFuzzGuard`
+ * is needed (unlike the DB-backed stateful suites in
+ * `src/data/test/*.fuzz.test.ts`).
  *
  * ──── Contract, grounded at the cited lines ────
  *
- * `diffQueryRows(rows, prevIds)` (watchers.ts:165-192):
+ * `diffQueryRows(rows, prevIds)` (queryDiff.ts:59-86):
  *  - rows without a usable string `id` are dropped and counted in
- *    `invalidRows` (:129-133, :168-171) — not exercised by name here,
+ *    `invalidRows` (:23-27, :62-66) — not exercised by name here,
  *    already covered by `watchers.test.ts:208-212`; this suite only
  *    generates rows with a valid `id`.
  *  - a `valid.length > MAX_CURSOR_IDS` result set is refused outright:
- *    `newRows: []`, cursor untouched (:174-176) — already covered by
+ *    `newRows: []`, cursor untouched (:68-70) — already covered by
  *    `watchers.test.ts:192-206`; not re-exercised here (this suite's
  *    small id universe can never reach the cap on its own; property 2
  *    below constructs an oversized-*cursor*, not an oversized *rows*
  *    array, which is a different code path).
  *  - `prevIds === null` is the first-run baseline: establishes the
- *    cursor from the current valid ids WITHOUT firing (:178-180).
+ *    cursor from the current valid ids WITHOUT firing (:72-74).
  *  - otherwise `newRows` is exactly the valid rows whose id is not in
- *    the `prevIds` set (:182-183), and the returned cursor is the union
+ *    the `prevIds` set (:76-77), and the returned cursor is the union
  *    `prevIds ∪ currentIds`, with currently-visible ids placed LAST so
- *    that truncation to `MAX_CURSOR_IDS` (:190) only ever drops ids that
- *    have left the result set (:184-190 comment + implementation) —
- *    "Oldest ids are forgotten past this" (:145-147 doc comment on
+ *    that truncation to `MAX_CURSOR_IDS` (:84) only ever drops ids that
+ *    have left the result set (:78-84 comment + implementation) —
+ *    "Oldest ids are forgotten past this" (:39-41 doc comment on
  *    `MAX_CURSOR_IDS`).
  *
  * ──── Properties ────
@@ -46,23 +50,23 @@
  *    INDEPENDENT `Set<string>` "ever-seen" mirror maintained purely in
  *    the test (not derived from the function's own dedup logic). Per
  *    step:
- *      (a) first call -> `newRows === []` (baseline, :178-180). A false
+ *      (a) first call -> `newRows === []` (baseline, :72-74). A false
  *          positive here would replay a watcher's entire backlog as new
  *          triggers on first tick.
  *      (b) `newRows` (as an id set) === this batch's ids MINUS the
- *          independent mirror (:182-183) — checked as an exact set
+ *          independent mirror (:76-77) — checked as an exact set
  *          equality (not a subset check), so it catches BOTH directions:
  *          an id present that shouldn't be = a duplicate billed run; an
  *          id missing that should be there = a missed trigger.
  *      (c) every currently-visible id survives into `diff.seenIds`
- *          (:184-190) — the anti-re-fire/anti-re-bill invariant: losing
+ *          (:78-84) — the anti-re-fire/anti-re-bill invariant: losing
  *          a visible id here re-fires (and re-bills) it on the very next
  *          poll.
  *      (d) `diff.seenIds.length <= MAX_CURSOR_IDS` always holds (trivial
  *          at this universe size — real eviction is exercised by
  *          property 2).
  * 2. Eviction-preference property: directly targets the `MAX_CURSOR_IDS`
- *    doc claim ("oldest ids are forgotten", :145-147) that property 1's
+ *    doc claim ("oldest ids are forgotten", :39-41) that property 1's
  *    small universe can never reach. Builds a `prevIds` cursor of
  *    EXACTLY `MAX_CURSOR_IDS` ids: an `old-*` prefix (won't appear in
  *    this step's rows) followed by a `keep-*` suffix (will still be
@@ -82,21 +86,21 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 import { fuzzParams, fuzzTestTimeout } from '@/test/fuzz'
-import { diffQueryRows, MAX_CURSOR_IDS } from '../src/watchers'
+import { diffQueryRows, MAX_CURSOR_IDS } from '../src/queryDiff'
 
 // ──── property 1: small-universe sequential churn ────
 
 /** A batch of "rows" for one poll: a subarray of the shared universe
  *  (unique ids, order-preserving — like a real query result), turned
  *  into minimal `{id}` rows (extra fields aren't relevant to any of the
- *  oracles here; `rowId` only reads `.id`, watchers.ts:129-133). */
+ *  oracles here; `rowId` only reads `.id`, queryDiff.ts:23-27). */
 const batchesArb = fc.integer({min: 10, max: 30}).chain(universeSize => {
   const universe = Array.from({length: universeSize}, (_, i) => `id-${i}`)
   return fc.array(fc.subarray(universe), {minLength: 1, maxLength: 15})
 })
 
 describe('diffQueryRows — sequential churn over a small id universe', () => {
-  it('newRows tracks an independent ever-seen mirror; visible ids never evicted; cursor stays bounded (watchers.ts:165-192)', () => {
+  it('newRows tracks an independent ever-seen mirror; visible ids never evicted; cursor stays bounded (queryDiff.ts:59-86)', () => {
     fc.assert(
       fc.property(batchesArb, batches => {
         let prevIds: string[] | null = null
@@ -107,22 +111,22 @@ describe('diffQueryRows — sequential churn over a small id universe', () => {
           const diff = diffQueryRows(rows, prevIds)
 
           if (prevIds === null) {
-            // (a) first-run baseline never fires (watchers.ts:178-180).
+            // (a) first-run baseline never fires (queryDiff.ts:72-74).
             expect(diff.newRows).toEqual([])
           } else {
             // (b) exact set equality against the independent mirror
-            // (watchers.ts:182-183) — catches false-new AND lost-new.
+            // (queryDiff.ts:76-77) — catches false-new AND lost-new.
             const expectedNew = new Set(batch.filter(id => !everSeen.has(id)))
             expect(new Set(diff.newRows.map(row => row.id))).toEqual(expectedNew)
             expect(diff.newRows.length).toBe(expectedNew.size)
           }
 
           // (c) every currently-visible id survives the cursor — the
-          // anti-re-fire/anti-re-bill invariant (watchers.ts:184-190).
+          // anti-re-fire/anti-re-bill invariant (queryDiff.ts:78-84).
           const seenSet = new Set(diff.seenIds)
           for (const id of batch) expect(seenSet.has(id)).toBe(true)
 
-          // (d) cursor never exceeds the retention bound (watchers.ts:148,
+          // (d) cursor never exceeds the retention bound (queryDiff.ts:42,
           // vacuous at this universe size — property 2 forces real
           // eviction).
           expect(diff.seenIds.length).toBeLessThanOrEqual(MAX_CURSOR_IDS)
@@ -149,7 +153,7 @@ const evictionCaseArb = fc.record({
 })
 
 describe('diffQueryRows — eviction preference under MAX_CURSOR_IDS overflow', () => {
-  it('evicts exactly the oldest non-visible ids, keeps every visible id, and holds the cursor at the cap (watchers.ts:145-147, 184-190)', () => {
+  it('evicts exactly the oldest non-visible ids, keeps every visible id, and holds the cursor at the cap (queryDiff.ts:39-41, 78-84)', () => {
     fc.assert(
       fc.property(evictionCaseArb, ({keepCount, newCount}) => {
         const oldCount = MAX_CURSOR_IDS - keepCount
@@ -176,7 +180,7 @@ describe('diffQueryRows — eviction preference under MAX_CURSOR_IDS overflow', 
         expect(new Set(diff.newRows.map(row => row.id))).toEqual(new Set(newIds))
 
         // Eviction preference: independently reasoned from the doc
-        // comment's FIFO claim (:145-147) — the oldest `newCount` ids of
+        // comment's FIFO claim (:39-41) — the oldest `newCount` ids of
         // the non-visible `old-*` prefix are dropped, the newer `old-*`
         // suffix survives. NOT re-deriving the target's own
         // `.slice(-MAX_CURSOR_IDS)` call. `oldIds` has no duplicates, so
